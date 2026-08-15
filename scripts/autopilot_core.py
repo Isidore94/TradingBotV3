@@ -35,7 +35,7 @@ import tempfile
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, MutableMapping
 
 import focus_adoption_gate
 import prev_day_gate
@@ -2311,22 +2311,128 @@ def _save_auto_populate_pending(path: Path, payload: Mapping[str, Any]) -> None:
         pass
 
 
+#: How long a stored gate verdict stays usable at adoption time. The staging
+#: refresh runs every AUTO_POPULATE_REFRESH_MINUTES, so 1.5x that tolerates one
+#: missed refresh and refuses anything older. The Alert Center adopts on the GUI
+#: thread and a staged pick is on no watchlist yet, so BounceBot holds no bars
+#: for it - the stored verdict is how adoption re-checks without its own fetch.
+FOCUS_GATE_VERDICT_MAX_AGE_MINUTES = int(AUTO_POPULATE_REFRESH_MINUTES * 1.5)
+
+
+def _restamp_or_evict_pending_picks(
+    pending: MutableMapping[str, Any],
+    profiles: Mapping[str, Mapping[str, Any]] | None,
+    daily_context: Mapping[str, Any] | None,
+    moment: datetime,
+    *,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, list[str]]:
+    """Re-run the adoption gate over the queue: evict failures, stamp survivors.
+
+    Trader rule 2026-08-14: "while a pick sits in the pending queue, if it falls
+    back through VWAP or the previous-day extreme it is removed from the queue."
+    Eviction is silent to the trader by their own wording; the reason goes to the
+    log, because a pick that vanishes has to be explainable afterwards.
+
+    An evicted pick may re-propose later the same day if it re-qualifies (trader
+    decision 2026-08-15). The queue is meant to say what qualifies NOW, not what
+    once did - a name that pulled back at 10:00 and broke out cleanly at 13:00 is
+    the setup, not the noise.
+
+    Survivors carry the fresh verdict so adoption can re-check it without its own
+    market-data fetch. Fails open on missing evidence: with no profiles or no
+    daily store there is nothing to measure against, and an unmeasurable queue is
+    not an empty one - the verdict simply ages and adoption refuses on staleness.
+    """
+    evicted: dict[str, list[str]] = {"long": [], "short": []}
+    if not profiles or not daily_context:
+        return evicted
+    stamp = moment.isoformat(timespec="seconds")
+    for side in ("long", "short"):
+        side_pending = pending["pending"].get(side) or {}
+        for sym in list(side_pending):
+            ctx = daily_context.get(sym)
+            profile = profiles.get(sym)
+            if not isinstance(ctx, Mapping) or not isinstance(profile, Mapping):
+                continue  # nothing measured this pass; the stamp ages instead
+            entry = side_pending.get(sym)
+            if not isinstance(entry, dict):
+                continue
+            passes, reason = candidate_focus_gate_verdict(side, profile, ctx)
+            if passes:
+                entry["gate_state"] = focus_adoption_gate.OPEN
+                entry["gate_reason"] = reason
+                entry["gate_checked_at"] = stamp
+                continue
+            side_pending.pop(sym, None)
+            evicted[side].append(f"{sym} ({reason})")
+    if log:
+        for side in ("long", "short"):
+            names = evicted[side]
+            if names:
+                log(
+                    f"Focus gate evicted {len(names)} staged {side} pick(s): "
+                    f"{', '.join(names[:8])}{'...' if len(names) > 8 else ''}"
+                )
+    return evicted
+
+
+def pending_pick_gate_ok(
+    entry: Mapping[str, Any] | None,
+    now: datetime | None = None,
+    *,
+    max_age_minutes: int = FOCUS_GATE_VERDICT_MAX_AGE_MINUTES,
+) -> tuple[bool, str]:
+    """(ok, reason) for adopting one staged pick, from its stored verdict.
+
+    Refuses a failing verdict, a missing one, and a stale one. Missing is
+    refused for the same reason UNKNOWN fails everywhere else in this gate: a
+    pick nothing has measured is not a pick something has approved.
+    """
+    if not isinstance(entry, Mapping):
+        return False, "no staged record"
+    state = str(entry.get("gate_state") or "")
+    if state != focus_adoption_gate.OPEN:
+        return False, str(entry.get("gate_reason") or "never passed the Focus gate")
+    raw = str(entry.get("gate_checked_at") or "")
+    if not raw:
+        return False, "no gate check recorded"
+    try:
+        checked = datetime.fromisoformat(raw)
+    except ValueError:
+        return False, "unreadable gate timestamp"
+    age = ((now or datetime.now()) - checked).total_seconds() / 60.0
+    if age > float(max_age_minutes) or age < 0:
+        return False, f"gate check is {age:.0f} min old (limit {max_age_minutes})"
+    return True, str(entry.get("gate_reason") or "passed the Focus gate")
+
+
 def stage_auto_populate_candidates(
     candidates: Mapping[str, list[dict[str, Any]]],
     env_key: str,
     *,
+    profiles: Mapping[str, Mapping[str, Any]] | None = None,
+    daily_context: Mapping[str, Any] | None = None,
     pending_path: Path = AUTO_POPULATE_PENDING_FILE,
     membership_path: Path = AUTO_POPULATE_MEMBERSHIP_FILE,
     longs_path: Path = LONGS_FILE,
     shorts_path: Path = SHORTS_FILE,
     now: datetime | None = None,
+    log: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """DESK mode: queue the picks for chart approval instead of writing them.
+    """Queue the picks for adoption instead of writing them to the watchlists.
 
-    Nothing touches longs.txt/shorts.txt here - the trader approves or passes
-    each pick off its chart in the Alert Center. A symbol proposes at most once
-    per day (pending or already decided), day-cut names stay out, and anything
-    already on either watchlist is never proposed.
+    Used by every mode the trader can be in - DESK adopts from the queue almost
+    immediately, AWAY and EVENING hold it until the flip back (packet R1).
+
+    Nothing touches longs.txt/shorts.txt here. A symbol proposes at most once
+    per day while it stays queued or decided, day-cut names stay out, and
+    anything already on either watchlist is never proposed.
+
+    Each pass first re-runs the adoption gate over everything already queued
+    (packet R2): picks that have fallen back through VWAP or the previous-day
+    extreme are evicted, and survivors are re-stamped with a fresh verdict that
+    adoption reads instead of fetching its own bars.
     """
     moment = now or datetime.now()
     today_iso = moment.date().isoformat()
@@ -2334,6 +2440,12 @@ def stage_auto_populate_candidates(
     with _AUTO_POPULATE_LOCK:
         membership = _load_auto_populate_membership(membership_path, today_iso)
         pending = _load_auto_populate_pending(pending_path, today_iso)
+        # Before anything is added: re-verify what is already queued, so `queued`
+        # below reflects the post-eviction truth and an evicted name is free to
+        # re-propose in this same pass if it now qualifies again.
+        evicted = _restamp_or_evict_pending_picks(
+            pending, profiles, daily_context, moment, log=log
+        )
         listed = {
             str(s).strip().upper()
             for path in (longs_path, shorts_path)
@@ -2349,7 +2461,13 @@ def stage_auto_populate_candidates(
             for side in ("long", "short")
             for sym in pending["pending"].get(side, {})
         }
-        summary: dict[str, Any] = {"env": env_key, "mode": "staged", "caps": (long_cap, short_cap)}
+        summary: dict[str, Any] = {
+            "env": env_key,
+            "mode": "staged",
+            "caps": (long_cap, short_cap),
+            "evicted": evicted,
+        }
+        stamp = moment.isoformat(timespec="seconds")
         for side, cap in (("long", long_cap), ("short", short_cap)):
             rows = candidates.get(f"{side}s") or []
             cut = {str(s).strip().upper() for s in membership["cut"].get(side, [])}
@@ -2361,11 +2479,18 @@ def stage_auto_populate_candidates(
                 sym = str(row.get("symbol") or "").strip().upper()
                 if not sym or sym in cut or sym in listed or sym in decided or sym in queued:
                     continue
+                # Everything reaching here already cleared the gate at candidate
+                # build in this same pass, so the verdict is stamped now rather
+                # than left for the next refresh - otherwise a pick staged at
+                # 09:00 could not be adopted until 09:30.
                 side_pending[sym] = {
                     "reason": str(row.get("reason") or ""),
                     "score": float(row.get("score") or 0.0),
                     "staged_at": moment.strftime("%H:%M:%S"),
                     "env": env_key,
+                    "gate_state": focus_adoption_gate.OPEN,
+                    "gate_reason": "passed the Focus gate at candidate build",
+                    "gate_checked_at": stamp,
                 }
                 queued.add(sym)
                 staged.append(sym)
@@ -2527,7 +2652,14 @@ def refresh_auto_populated_watchlists(
     if stage_only:
         # DESK mode: the trader is at the desk - picks queue for chart
         # approval instead of landing on the watchlists unseen.
-        summary = stage_auto_populate_candidates(candidates, env_key, now=moment)
+        summary = stage_auto_populate_candidates(
+            candidates,
+            env_key,
+            profiles=profiles,
+            daily_context=daily_context,
+            now=moment,
+            log=log,
+        )
     else:
         summary = apply_auto_populated_watchlists(
             candidates,

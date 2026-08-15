@@ -36,7 +36,7 @@ exception in **every** mode, unchanged.
 |---|---|---|---|---|
 | Scheduled Master AVWAP swing slots | no | yes (in-window) | yes (in-window) | **early slot + strength checks only, then none** |
 | Open watchlist self-build | no | yes (in-window) | yes (in-window) | **no — skipped, no sticky marker** |
-| BounceBot sweep | no | yes (in-window) | yes (in-window) | **UNRESOLVED — see §9** |
+| BounceBot sweep | no | yes (in-window) | yes (in-window) | **yes — unchanged (§9)** |
 | Live alerts served in the GUI (toast/sound emphasis) | — | yes | **no — queue silently in Alert Center for return** | **no — same rule as AWAY** |
 | Auto picks adopted into M5 Focus | no | yes (via staging + adoption gate) | **never** | **never; adoption happens on the flip to DESK** |
 | Swing push + D1 events push (phone) | no | no | yes (existing policy) | no |
@@ -231,29 +231,29 @@ threshold test push). CLAUDE.md/AGENTS.md, `docs/AWAY_SCANNER_RUNBOOK.md`, and
 - Should the SPY alarm also cover a fast intraday reversal (e.g. crosses back
   through ±1%)? Not in v1; revisit after the first live EVENING week.
 
-## 9. Unresolved — EVENING and the BounceBot sweep
+## 9. SETTLED — EVENING leaves the BounceBot sweep running
 
-The §1 matrix originally read "early morning only, then quiet" for a single
-combined "self-build / sweep" cell. The build split them, because they are not
-one behaviour:
+**Trader decision, 2026-08-15.** The §1 matrix originally read "early morning
+only, then quiet" for a single combined "self-build / sweep" cell. Those are two
+behaviours, and the trader split them explicitly:
 
-- The **open watchlist self-build** is now skipped in EVENING. Built, tested.
-- The **BounceBot M5 sweep** still runs on its own window (`bouncebot_scanning_due`,
-  06:00–13:30) in EVENING, exactly as in DESK and AWAY. **Not built, deliberately
-  not guessed.**
+> "'No new scans' means the scheduled swing scans and watchlist builds, which
+> you already stopped. The sweep is what fills the alert queue and feeds the
+> strength checks, and it already pauses itself at close+30."
 
-Pausing the sweep after the early block would also stop the alert stream that
-the same matrix says EVENING should *queue*, and would remove the live prices
-the 07:00/07:15/07:30 strength-persistence checks read. Those two cells
-contradict each other, so the build implemented the one that is unambiguous
-(queue quietly) and left this one for the trader.
+So:
 
-**Recommendation: leave the sweep running.** EVENING's stated job is to have the
-day ready on waking and to wake the trader if the market moves; a running sweep
-serves the first (the strength checks) and costs nothing the trader can hear now
-that the beep is suppressed. The trader wakes at 07:00–07:30 and flips to DESK,
-so "EVENING all day" is an edge case already covered by the slot refusals.
-Decide before the EVENING live proof is recorded as passed.
+- The **open watchlist self-build** is skipped in EVENING (built, tested).
+- The **scheduled swing slots** past the early one are refused (built, tested).
+- The **BounceBot M5 sweep** keeps running on its own window
+  (`bouncebot_scanning_due`, 06:00–13:30), exactly as in DESK and AWAY.
+  **No code change — this is the settled behaviour, not an omission.**
+
+The reasoning that made it obvious once stated: pausing the sweep would stop the
+alert stream the same matrix says EVENING should *queue*, and would remove the
+live prices the 07:00/07:15/07:30 strength-persistence checks read. The sweep is
+also already self-limiting at close+30, so "EVENING all day" costs nothing the
+trader can hear now that the beep is suppressed.
 
 ## 8. Build-time decisions (trader, 2026-08-15)
 

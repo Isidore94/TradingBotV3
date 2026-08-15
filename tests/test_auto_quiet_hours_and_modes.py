@@ -757,7 +757,18 @@ def test_away_and_evening_refuse_to_adopt_staged_picks(monkeypatch, tmp_path, mo
         "autopilot_core.load_auto_populate_pending_picks",
         lambda *_a, **_k: {
             "date": "2026-07-02",
-            "pending": {"long": {"NVDA": {"reason": "PDH break", "score": 1.4}}},
+            "pending": {
+                "long": {
+                    "NVDA": {
+                        "reason": "PDH break",
+                        "score": 1.4,
+                        # This test is about the mode gate, so the pick carries
+                        # a passing, current verdict from the staging refresh.
+                        "gate_state": "open",
+                        "gate_checked_at": datetime.now().isoformat(timespec="seconds"),
+                    }
+                }
+            },
         },
     )
     panel._poll_auto_pick_pending()
@@ -768,3 +779,62 @@ def test_away_and_evening_refuse_to_adopt_staged_picks(monkeypatch, tmp_path, mo
     panel._auto_mode_cached = None
     panel._poll_auto_pick_pending()
     assert adopted == ["NVDA"]
+
+
+@pytest.mark.parametrize("mode", ["AWAY", "EVENING"])
+def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
+    monkeypatch, tmp_path, mode
+):
+    """R1 left this drain un-revalidated and said so; R2 closes it.
+
+    A pick can sit in the queue for a whole AWAY day, so the flip back to DESK
+    adopts only what the staging refresh most recently verified.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 7, 2, 11, 0)
+    fresh = (now - timedelta(minutes=5)).isoformat(timespec="seconds")
+    stale = (now - timedelta(hours=3)).isoformat(timespec="seconds")
+
+    panel = _panel(monkeypatch, mode)
+    panel._auto_pick_pending_path = tmp_path / "pending.json"
+    adopted: list[str] = []
+    panel._adopt_auto_pick_into_focus = lambda *a, **k: adopted.append(a[0]) or True  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "autopilot_core.load_auto_populate_pending_picks",
+        lambda *_a, **_k: {
+            "date": "2026-07-02",
+            "pending": {
+                "long": {
+                    "GOOD": {"reason": "PDH break", "gate_state": "open", "gate_checked_at": fresh},
+                    "STALE": {"reason": "PDH break", "gate_state": "open", "gate_checked_at": stale},
+                    "FAILED": {"reason": "PDH break", "gate_state": "closed",
+                               "gate_reason": "not above session VWAP", "gate_checked_at": fresh},
+                    "UNVERIFIED": {"reason": "PDH break"},
+                }
+            },
+        },
+    )
+    # Freeze the clock the gate check reads by capturing the real function
+    # first, then patching the name to call it with a fixed `now`.
+    import autopilot_core
+
+    real_gate_ok = autopilot_core.pending_pick_gate_ok
+    monkeypatch.setattr(
+        "autopilot_core.pending_pick_gate_ok",
+        lambda entry, *_a, **_k: real_gate_ok(entry, now),
+    )
+
+    # Away/Evening refuse outright and mark nothing seen.
+    panel._poll_auto_pick_pending()
+    assert adopted == []
+    assert not panel._auto_picks_enqueued
+
+    # The flip to DESK adopts only the pick whose verdict is fresh AND passing.
+    monkeypatch.setattr("autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: "DESK")
+    panel._auto_mode_cached = None
+    panel._poll_auto_pick_pending()
+    assert adopted == ["GOOD"]
+    # The refused three were not marked seen, so the next refresh can re-stamp
+    # or evict them rather than the desk losing them silently.
+    assert {key[2] for key in panel._auto_picks_enqueued} == {"GOOD"}

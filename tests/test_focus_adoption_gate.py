@@ -213,3 +213,163 @@ def test_a_profile_without_bars_carries_no_vwap():
 
     metrics = core._intraday_extreme_metrics([], now=None)
     assert metrics["completed_session_vwap"] is None
+
+
+# ---------------------------------------------------------------------------
+# Staging: evict what has fallen back, stamp what still qualifies
+# ---------------------------------------------------------------------------
+
+
+def _staged(tmp_path, profiles, context, candidates, *, now, log=None):
+    import autopilot_core as core
+
+    return core.stage_auto_populate_candidates(
+        candidates,
+        "neutral_chop",
+        profiles=profiles,
+        daily_context=context,
+        pending_path=tmp_path / "pending.json",
+        membership_path=tmp_path / "membership.json",
+        longs_path=tmp_path / "longs.txt",
+        shorts_path=tmp_path / "shorts.txt",
+        now=now,
+        log=log,
+    )
+
+
+def _pending(tmp_path, now):
+    """The queue is day-scoped, so it must be read on the same clock it was
+    written on - otherwise every fixture reads as yesterday's leftovers."""
+    import autopilot_core as core
+
+    return core.load_auto_populate_pending_picks(tmp_path / "pending.json", now=now)
+
+
+PASSING = {"last_complete": 103.0, "completed_session_vwap": 101.0}
+FAILING = {"last_complete": 103.0, "completed_session_vwap": 104.0}
+CTX = {"AAA": {"prev_high": 100.5, "prev_low": 98.0}}
+ROWS = {"longs": [{"symbol": "AAA", "reason": "fixture", "score": 2.0}], "shorts": []}
+
+
+def test_a_staged_pick_carries_a_fresh_gate_verdict(tmp_path):
+    from datetime import datetime
+
+    moment = datetime(2026, 7, 2, 9, 0)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=moment)
+    entry = _pending(tmp_path, moment)["pending"]["long"]["AAA"]
+    assert entry["gate_state"] == "open"
+    assert entry["gate_checked_at"] == moment.isoformat(timespec="seconds")
+
+
+def test_a_queued_pick_that_falls_back_through_vwap_is_evicted(tmp_path):
+    from datetime import datetime, timedelta
+
+    moment = datetime(2026, 7, 2, 9, 0)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=moment)
+    assert "AAA" in _pending(tmp_path, moment)["pending"]["long"]
+
+    lines: list[str] = []
+    # Half an hour later it is back under VWAP: out of the queue, with a reason.
+    summary = _staged(
+        tmp_path, {"AAA": FAILING}, CTX, {"longs": [], "shorts": []},
+        now=moment + timedelta(minutes=30), log=lines.append,
+    )
+    assert "AAA" not in _pending(tmp_path, moment + timedelta(minutes=30))["pending"]["long"]
+    assert summary["evicted"]["long"] == ["AAA (not above session VWAP)"]
+    assert any("evicted" in line and "AAA" in line for line in lines)
+
+
+def test_an_evicted_pick_may_re_propose_when_it_qualifies_again(tmp_path):
+    """Trader decision 2026-08-15: the queue says what qualifies NOW.
+
+    A name that pulled back mid-morning and broke out cleanly in the afternoon
+    is the setup, not the noise.
+    """
+    from datetime import datetime, timedelta
+
+    moment = datetime(2026, 7, 2, 9, 0)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=moment)
+    _staged(tmp_path, {"AAA": FAILING}, CTX, {"longs": [], "shorts": []}, now=moment + timedelta(minutes=30))
+    assert "AAA" not in _pending(tmp_path, moment + timedelta(minutes=30))["pending"]["long"]
+
+    later = moment + timedelta(hours=4)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=later)
+    entry = _pending(tmp_path, later)["pending"]["long"]["AAA"]
+    assert entry["gate_checked_at"] == later.isoformat(timespec="seconds")
+
+
+def test_a_surviving_pick_is_restamped_rather_than_left_to_age(tmp_path):
+    from datetime import datetime, timedelta
+
+    moment = datetime(2026, 7, 2, 9, 0)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=moment)
+    later = moment + timedelta(minutes=30)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, {"longs": [], "shorts": []}, now=later)
+    entry = _pending(tmp_path, later)["pending"]["long"]["AAA"]
+    assert entry["gate_checked_at"] == later.isoformat(timespec="seconds")
+
+
+def test_missing_evidence_never_empties_the_queue(tmp_path):
+    """An unmeasurable queue is not an empty one - the verdict ages instead."""
+    from datetime import datetime, timedelta
+
+    moment = datetime(2026, 7, 2, 9, 0)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=moment)
+    for profiles, context in (({}, CTX), ({"AAA": PASSING}, {}), (None, None)):
+        _staged(
+            tmp_path, profiles, context, {"longs": [], "shorts": []},
+            now=moment + timedelta(minutes=30),
+        )
+        assert "AAA" in _pending(tmp_path, moment)["pending"]["long"]
+    # ... and the stamp did not advance, so adoption still ages it out.
+    entry = _pending(tmp_path, moment)["pending"]["long"]["AAA"]
+    assert entry["gate_checked_at"] == moment.isoformat(timespec="seconds")
+
+
+# ---------------------------------------------------------------------------
+# Adoption reads the stored verdict
+# ---------------------------------------------------------------------------
+
+
+def test_adoption_accepts_only_a_fresh_passing_verdict():
+    from datetime import datetime, timedelta
+
+    from autopilot_core import FOCUS_GATE_VERDICT_MAX_AGE_MINUTES, pending_pick_gate_ok
+
+    now = datetime(2026, 7, 2, 11, 0)
+    fresh = {"gate_state": "open", "gate_reason": "ok", "gate_checked_at": (now - timedelta(minutes=5)).isoformat()}
+    assert pending_pick_gate_ok(fresh, now)[0]
+
+    stale = dict(fresh, gate_checked_at=(now - timedelta(minutes=FOCUS_GATE_VERDICT_MAX_AGE_MINUTES + 1)).isoformat())
+    ok, reason = pending_pick_gate_ok(stale, now)
+    assert not ok and "old" in reason
+
+    failing = dict(fresh, gate_state="closed", gate_reason="not above session VWAP")
+    ok, reason = pending_pick_gate_ok(failing, now)
+    assert not ok and reason == "not above session VWAP"
+
+
+def test_adoption_refuses_a_pick_nothing_has_measured():
+    """Missing is refused for the same reason UNKNOWN fails everywhere else."""
+    from datetime import datetime
+
+    from autopilot_core import pending_pick_gate_ok
+
+    now = datetime(2026, 7, 2, 11, 0)
+    assert not pending_pick_gate_ok(None, now)[0]
+    assert not pending_pick_gate_ok({}, now)[0]
+    assert not pending_pick_gate_ok({"gate_state": "open"}, now)[0]
+    assert not pending_pick_gate_ok({"gate_state": "open", "gate_checked_at": "nonsense"}, now)[0]
+    # A stamp from the future is not fresh, it is a broken clock.
+    assert not pending_pick_gate_ok(
+        {"gate_state": "open", "gate_checked_at": datetime(2026, 7, 2, 23, 0).isoformat()}, now
+    )[0]
+
+
+def test_the_verdict_window_tolerates_exactly_one_missed_refresh():
+    from autopilot_core import (
+        AUTO_POPULATE_REFRESH_MINUTES,
+        FOCUS_GATE_VERDICT_MAX_AGE_MINUTES,
+    )
+
+    assert FOCUS_GATE_VERDICT_MAX_AGE_MINUTES == int(AUTO_POPULATE_REFRESH_MINUTES * 1.5)

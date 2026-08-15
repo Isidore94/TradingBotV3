@@ -1625,6 +1625,7 @@ class AlertCenterPanel(QFrame):
             return
         day = str(payload.get("date") or "")
         adopted: list[str] = []
+        refused: list[str] = []
         for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
             entries = payload.get("pending", {}).get(side_key) or {}
             for symbol, entry in entries.items():
@@ -1634,8 +1635,22 @@ class AlertCenterPanel(QFrame):
                 key = (day, side_key, symbol)
                 if key in self._auto_picks_enqueued:
                     continue
-                self._auto_picks_enqueued.add(key)
                 entry = entry if isinstance(entry, dict) else {}
+                # The adoption-time re-check (packet R2). A pick can sit in the
+                # queue for a whole AWAY day, so what qualified when it was
+                # staged may not qualify now. The verdict is stored by the
+                # 30-minute staging refresh rather than measured here: this runs
+                # on the GUI thread, and a staged pick is on no watchlist yet,
+                # so BounceBot holds no bars for it.
+                #
+                # A refusal deliberately does NOT mark the pick seen. The next
+                # refresh either re-stamps it (it qualifies again) or evicts it,
+                # so a stale verdict costs one cycle rather than the pick.
+                ok, gate_reason = self._pending_pick_gate_ok(entry)
+                if not ok:
+                    refused.append(f"{symbol} ({gate_reason})")
+                    continue
+                self._auto_picks_enqueued.add(key)
                 reason = str(entry.get("reason") or "auto-populate pick")
                 score = entry.get("score")
                 if self._adopt_auto_pick_into_focus(symbol, side_key, entry, reason):
@@ -1657,12 +1672,34 @@ class AlertCenterPanel(QFrame):
                         payload={"auto_pick": dict(entry), "auto_pick_side": side_key},
                     )
                 )
+        if refused:
+            # Logged, not surfaced: the trader asked for eviction to be silent,
+            # and a refusal is the same event one step later. It has to be
+            # reconstructable afterwards, which is what the log is for.
+            logging.info(
+                "Focus gate refused %d staged pick(s) at adoption: %s",
+                len(refused),
+                ", ".join(refused[:8]),
+            )
         if adopted:
             self.statusChanged.emit(
                 f"{len(adopted)} auto pick(s) added to M5 Focus for today "
                 f"({', '.join(adopted[:8])}{'...' if len(adopted) > 8 else ''}) - "
                 "prune with Review ▶ on the Focus board."
             )
+
+    @staticmethod
+    def _pending_pick_gate_ok(entry: dict) -> tuple[bool, str]:
+        """Thin wrapper so the import stays local to the poll (headless paths
+        construct this panel without `autopilot_core` on the path)."""
+        try:
+            from autopilot_core import pending_pick_gate_ok
+
+            return pending_pick_gate_ok(entry)
+        except Exception:
+            # Fail CLOSED: an unverifiable pick is not an approved pick.
+            logging.warning("Focus gate check unavailable; refusing adoption.", exc_info=True)
+            return False, "gate check unavailable"
 
     def _adopt_auto_pick_into_focus(
         self, symbol: str, side: str, entry: dict, reason: str
