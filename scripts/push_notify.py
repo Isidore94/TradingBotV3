@@ -101,22 +101,38 @@ def send_push(
     config: Mapping[str, str] | None = None,
     opener: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """POST one notification; never raises. ``{"ok": bool, "error": str}``.
+    """POST one notification; never raises. ``{"ok", "error", "kind"}``.
 
     ``ok`` False with ``error`` "" means pushes are simply not configured -
     callers may treat that as a silent no-op rather than a failure.
+
+    ``kind`` says what actually happened, which retrying callers need because
+    the three failures are not interchangeable:
+
+    - ``unconfigured`` - nothing was transmitted. Safe to retry immediately;
+      there is no chance a notification is already on its way.
+    - ``delivered``    - the server accepted it.
+    - ``rejected``     - the server answered and said no. Definite: retrying
+      cannot duplicate anything, but it will probably fail the same way.
+    - ``ambiguous``    - a timeout or transport error AFTER the request went
+      out. The notification may or may not have arrived, so an immediate retry
+      risks waking the trader twice for one move. Back off instead.
     """
     config = config if config is not None else load_push_config()
     request = build_push_request(title, message, config=config, priority=priority, tags=tags)
     if request is None:
-        return {"ok": False, "error": ""}
+        return {"ok": False, "error": "", "kind": "unconfigured"}
     opener = opener or urllib.request.urlopen
     try:
         with opener(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             status = int(getattr(response, "status", 200) or 200)
         if 200 <= status < 300:
-            return {"ok": True, "error": ""}
-        return {"ok": False, "error": f"ntfy returned HTTP {status}"}
+            return {"ok": True, "error": "", "kind": "delivered"}
+        return {
+            "ok": False,
+            "error": f"ntfy returned HTTP {status}",
+            "kind": "rejected",
+        }
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
@@ -125,8 +141,15 @@ def send_push(
         except Exception:
             detail = ""
         error = f"ntfy HTTP {exc.code}" + (f": {detail}" if detail else "")
-        logging.warning("Push notification failed: %s", error)
-        return {"ok": False, "error": error}
+        logging.warning("Push notification rejected: %s", error)
+        return {"ok": False, "error": error, "kind": "rejected"}
     except Exception as exc:
-        logging.warning("Push notification failed: %r", exc)
-        return {"ok": False, "error": repr(exc)}
+        # Timeouts and transport errors land here. The request was already on
+        # the wire, so whether it arrived is genuinely unknown - which is a
+        # different operational problem from a server saying no, and is logged
+        # as such.
+        logging.warning(
+            "Push notification outcome UNKNOWN (may or may not have been delivered): %r",
+            exc,
+        )
+        return {"ok": False, "error": repr(exc), "kind": "ambiguous"}

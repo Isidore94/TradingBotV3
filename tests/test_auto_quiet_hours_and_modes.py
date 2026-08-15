@@ -171,6 +171,7 @@ def _bare_service(*, profile=AUTO_PROFILE_DESK, enabled=True, state=None):
     service._universe_rebuild_running = False
     service._universe_last_attempt = None
     service._auto_window_open = None
+    service._spy_alarm_sending = False
     service._scan_service = None
     service._logged: list[str] = []
     service._log = service._logged.append  # type: ignore[method-assign]
@@ -521,8 +522,26 @@ class _Bar:
         self.dt = dt if dt is not None else THURSDAY.replace(hour=9, minute=30)
 
 
+class _Immediate:
+    """Run a worker's target inline, so the send is testable without threads.
+
+    The alarm send moved onto a worker in R2.1 (a blocking HTTPS POST must not
+    sit on the GUI thread); these tests still want it to have finished by the
+    time they assert.
+    """
+
+    def __init__(self, *_args, target=None, args=(), **_kwargs):
+        self._target = target
+        self._args = args
+
+    def start(self):
+        if self._target is not None:
+            self._target(*self._args)
+
+
 def _alarm_service(monkeypatch, *, profile=AUTO_PROFILE_EVENING, bars=(_Bar(103.0),), prev=100.0):
     service = _bare_service(profile=profile)
+    monkeypatch.setattr("threading.Thread", _Immediate)
     service._d1_events_pending = deque(maxlen=_MAX_PENDING_D1_EVENTS)
     bot = type("Bot", (), {"_spy_session_bars": lambda self, cached_only=False: (list(bars), prev)})()
     service._current_bot = lambda: bot  # type: ignore[method-assign]
@@ -865,3 +884,140 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
     # The refused four were not marked seen, so the next refresh can re-stamp
     # or evict them rather than the desk losing them silently.
     assert {key[2] for key in panel._auto_picks_enqueued} == {"GOOD"}
+
+
+# ---------------------------------------------------------------------------
+# Alarm delivery policy (R2.1 item 3)
+# ---------------------------------------------------------------------------
+
+
+class _Outcome:
+    """A send_push stand-in that reports a chosen outcome kind."""
+
+    def __init__(self, kind):
+        self.kind = kind
+        self.calls = 0
+
+    def __call__(self, *_args, **_kwargs):
+        self.calls += 1
+        if self.kind == "delivered":
+            return {"ok": True, "error": "", "kind": "delivered"}
+        return {"ok": False, "error": f"simulated {self.kind}", "kind": self.kind}
+
+
+def test_the_send_happens_off_the_gui_thread(monkeypatch):
+    """A blocking HTTPS POST on the tick froze the desk for the request
+    timeout, every tick, in the mode where the trader is asleep."""
+    sent = _Sent()
+    monkeypatch.setattr(push_notify, "send_push", sent)
+    service = _alarm_service(monkeypatch)
+
+    spawned: list[str] = []
+
+    class _Recorder(_Immediate):
+        def __init__(self, *args, name="", **kwargs):
+            spawned.append(name)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr("threading.Thread", _Recorder)
+    service._maybe_push_spy_alarm(THURSDAY.replace(hour=7))
+    assert spawned == ["evening-spy-alarm"]
+    assert len(sent.calls) == 1
+
+
+def test_only_one_alarm_send_is_in_flight_at_a_time(monkeypatch):
+    sent = _Sent()
+    monkeypatch.setattr(push_notify, "send_push", sent)
+    service = _alarm_service(monkeypatch)
+    service._spy_alarm_sending = True
+    service._maybe_push_spy_alarm(THURSDAY.replace(hour=7))
+    assert sent.calls == [], "a hung ntfy must not stack one send per tick"
+
+
+def test_attempts_and_deliveries_are_recorded_separately(monkeypatch):
+    """The five-minute repeat clock reads deliveries; the backoff reads
+    attempts. Conflating them lets a broken ntfy either spam or go silent."""
+    rejected = _Outcome("rejected")
+    monkeypatch.setattr(push_notify, "send_push", rejected)
+    service = _alarm_service(monkeypatch)
+    service._maybe_push_spy_alarm(THURSDAY.replace(hour=7))
+
+    assert service._state["spy_alarm_last_attempt"], "the attempt was recorded"
+    assert not service._state.get("spy_alarm_last_sent"), "nothing was delivered"
+    assert service._state["spy_alarm_failures"] == 1
+
+
+def test_a_failed_attempt_backs_off_and_a_delivery_clears_it(monkeypatch):
+    rejected = _Outcome("rejected")
+    monkeypatch.setattr(push_notify, "send_push", rejected)
+    service = _alarm_service(monkeypatch)
+    start = THURSDAY.replace(hour=7)
+    service._maybe_push_spy_alarm(start)
+    assert rejected.calls == 1
+
+    # 30 seconds later - the tick cadence - is far too soon.
+    service._maybe_push_spy_alarm(start + timedelta(seconds=30))
+    assert rejected.calls == 1, "the 30-second tick must not become a retry storm"
+
+    # A minute later is the floor, so the next attempt goes.
+    service._maybe_push_spy_alarm(start + timedelta(seconds=61))
+    assert rejected.calls == 2
+
+    # Now it succeeds: the failure count clears so the next move is not
+    # penalised by an outage that has ended.
+    delivered = _Outcome("delivered")
+    monkeypatch.setattr(push_notify, "send_push", delivered)
+    service._maybe_push_spy_alarm(start + timedelta(seconds=200))
+    assert service._state["spy_alarm_failures"] == 0
+    assert service._state["spy_alarm_last_sent"]
+
+
+def test_the_backoff_is_capped_at_one_attempt_every_five_minutes(monkeypatch):
+    service = _alarm_service(monkeypatch)
+    service._state["spy_alarm_last_attempt"] = THURSDAY.replace(hour=7).isoformat()
+    for failures, expected_wait in ((1, 60), (2, 120), (3, 240), (4, 300), (9, 300)):
+        service._state["spy_alarm_failures"] = failures
+        moment = THURSDAY.replace(hour=7) + timedelta(seconds=expected_wait - 1)
+        assert service._spy_alarm_attempt_due(moment) is False, failures
+        moment = THURSDAY.replace(hour=7) + timedelta(seconds=expected_wait)
+        assert service._spy_alarm_attempt_due(moment) is True, failures
+
+
+def test_an_ambiguous_timeout_is_logged_as_unknown_not_as_a_rejection(monkeypatch):
+    """The push may already be on the phone, so an immediate retry could wake
+    the trader twice for one move."""
+    monkeypatch.setattr(push_notify, "send_push", _Outcome("ambiguous"))
+    service = _alarm_service(monkeypatch)
+    service._maybe_push_spy_alarm(THURSDAY.replace(hour=7))
+
+    text = " ".join(service._logged)
+    assert "UNKNOWN" in text and "duplicate" in text
+    assert "REJECTED" not in text
+    assert not service._state.get("spy_alarm_last_sent")
+    assert service._state["spy_alarm_failures"] == 1
+
+
+def test_an_unconfigured_phone_is_not_a_delivery_failure(monkeypatch):
+    """Nothing was transmitted, so it must not push the backoff out - there is
+    simply no phone to send to."""
+    monkeypatch.setattr(push_notify, "push_configured", lambda: True)
+    monkeypatch.setattr(push_notify, "send_push", _Outcome("unconfigured"))
+    service = _alarm_service(monkeypatch)
+    service._maybe_push_spy_alarm(THURSDAY.replace(hour=7))
+    assert service._state.get("spy_alarm_failures", 0) == 0
+
+
+def test_send_push_classifies_its_outcomes():
+    """The classification the retry policy depends on."""
+    import urllib.error
+
+    def rejecting(*_a, **_k):
+        raise urllib.error.HTTPError("u", 429, "Too Many Requests", {}, None)
+
+    def timing_out(*_a, **_k):
+        raise TimeoutError("read timed out")
+
+    config = {"topic": "tradingbotv3-test", "server": "https://ntfy.sh"}
+    assert push_notify.send_push("t", "m", config=config, opener=rejecting)["kind"] == "rejected"
+    assert push_notify.send_push("t", "m", config=config, opener=timing_out)["kind"] == "ambiguous"
+    assert push_notify.send_push("t", "m", config={})["kind"] == "unconfigured"

@@ -187,6 +187,10 @@ class AutopilotService(QObject):
         #: Same idea for the quiet-hours window, so the Auto Pilot log records
         #: each crossing once instead of once every 30 seconds.
         self._auto_window_open: bool | None = None
+        #: One Evening SPY alarm send at a time. The send is a blocking HTTPS
+        #: POST on a worker; without this a hung ntfy would stack one thread
+        #: per 30-second tick.
+        self._spy_alarm_sending = False
 
         if bounce_service is not None:
             bounce_service.alertReceived.connect(self._on_alert)
@@ -482,8 +486,12 @@ class AutopilotService(QObject):
                 "picks_scored_at": None,
                 # Explicit rather than merely absent: this is what day-rolls
                 # the Evening SPY alarm, so last night's stamp can never
-                # suppress this morning's first alarm.
+                # suppress this morning's first alarm. The attempt clock and
+                # failure count roll with it - yesterday's broken ntfy must not
+                # start this morning already backed off.
                 "spy_alarm_last_sent": None,
+                "spy_alarm_last_attempt": None,
+                "spy_alarm_failures": 0,
                 # What Auto Pilot itself wrote survives the day roll - it is
                 # how tomorrow's build tells its own picks from the trader's.
                 "autopilot_written": self._state.get("autopilot_written") or {"longs": [], "shorts": []},
@@ -1889,6 +1897,8 @@ class AutopilotService(QObject):
         """
         if self.auto_mode != AUTO_PROFILE_EVENING:
             return
+        if self._spy_alarm_sending:
+            return  # one send in flight; a slow ntfy must not stack alarms
         try:
             from project_paths import get_local_setting
 
@@ -1932,26 +1942,110 @@ class AutopilotService(QObject):
                 day_pct, last_sent, now, threshold_pct=threshold
             ):
                 return
+            if not self._spy_alarm_attempt_due(now):
+                return
+            # Everything above is a cheap local read. The SEND is a blocking
+            # HTTPS POST with a timeout, and it used to run right here on the
+            # GUI thread - so a hung ntfy froze the desk for the request
+            # timeout, every tick, in the mode where the trader is asleep and
+            # cannot see it. It goes to a worker now, single-flight, so a slow
+            # send delays the next attempt instead of stacking sends.
+            self._spy_alarm_sending = True
+            self._state["spy_alarm_last_attempt"] = now.isoformat(timespec="seconds")
+            self._save_state()
             direction = "UP" if day_pct >= 0 else "DOWN"
-            result = push_notify.send_push(
-                f"SPY {day_pct:+.2f}% - market is moving",
-                (
-                    f"SPY is {direction} {abs(day_pct):.2f}% on the day at "
-                    f"{now.strftime('%H:%M')}.\n"
-                    f"Evening wake alarm (threshold ±{threshold:.2f}%). It repeats "
-                    "every 5 minutes until you flip Auto Pilot out of EVENING."
-                ),
-                priority="urgent",
-                tags="rotating_light",
+            title = f"SPY {day_pct:+.2f}% - market is moving"
+            message = (
+                f"SPY is {direction} {abs(day_pct):.2f}% on the day at "
+                f"{now.strftime('%H:%M')}.\n"
+                f"Evening wake alarm (threshold ±{threshold:.2f}%). It repeats "
+                "every 5 minutes until you flip Auto Pilot out of EVENING."
             )
-            # Stamp only a delivered push: an ntfy failure must not silence the
-            # alarm for the next five minutes.
+            threading.Thread(
+                target=self._send_spy_alarm,
+                args=(title, message, day_pct),
+                name="evening-spy-alarm",
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            self._spy_alarm_sending = False
+            self._log(f"Evening SPY alarm failed: {exc}")
+
+    def _send_spy_alarm(self, title: str, message: str, day_pct: float) -> None:
+        """Deliver one alarm off the GUI thread and record what happened.
+
+        Three outcomes, treated differently because they are different:
+
+        - delivered: stamp `spy_alarm_last_sent`, which is what the five-minute
+          repeat clock reads, and clear the failure count.
+        - rejected: the server answered and said no. Definite, so nothing was
+          delivered - but retrying immediately would just fail again, so it
+          backs off.
+        - ambiguous: a timeout or transport error after the request went out.
+          The push may already be on the trader's phone. Retrying immediately
+          could wake them twice for one move, so this backs off too, and is
+          logged as unknown rather than as a failure.
+
+        Follows the service's existing worker convention (the watchlist build
+        does the same): the worker owns the state it writes here, and the tick
+        never touches these keys.
+        """
+        try:
+            result = push_notify.send_push(
+                title, message, priority="urgent", tags="rotating_light"
+            )
+            kind = str(result.get("kind") or ("delivered" if result.get("ok") else "rejected"))
             if result.get("ok"):
-                self._state["spy_alarm_last_sent"] = now.isoformat(timespec="seconds")
+                self._state["spy_alarm_last_sent"] = datetime.now().isoformat(timespec="seconds")
+                self._state["spy_alarm_failures"] = 0
                 self._save_state()
                 self._log(f"Evening SPY alarm sent: SPY {day_pct:+.2f}% on the day.")
+                return
+            if kind == "unconfigured":
+                # Nothing was transmitted, so this is not a delivery failure and
+                # must not push the backoff out - there is simply no phone
+                # configured to send to.
+                return
+            failures = int(self._state.get("spy_alarm_failures") or 0) + 1
+            self._state["spy_alarm_failures"] = failures
+            self._save_state()
+            if kind == "ambiguous":
+                self._log(
+                    f"Evening SPY alarm outcome UNKNOWN (attempt {failures}) - it may "
+                    f"have reached the phone: {result.get('error')}. Backing off rather "
+                    "than risking a duplicate wake-up."
+                )
+            else:
+                self._log(
+                    f"Evening SPY alarm REJECTED (attempt {failures}): {result.get('error')}"
+                )
         except Exception as exc:
-            self._log(f"Evening SPY alarm failed: {exc}")
+            self._log(f"Evening SPY alarm send failed: {exc}")
+        finally:
+            self._spy_alarm_sending = False
+
+    def _spy_alarm_attempt_due(self, now: datetime) -> bool:
+        """Backoff between ATTEMPTS, separate from the five-minute repeat.
+
+        The repeat clock counts delivered alarms; this counts attempts, so a
+        broken ntfy cannot turn a 30-second tick into a 30-second retry storm.
+        Floor 60s, doubling, capped at one attempt per five minutes - the same
+        ceiling as the repeat itself, so a failing alarm never sends faster
+        than a working one.
+        """
+        raw = str(self._state.get("spy_alarm_last_attempt") or "")
+        if not raw:
+            return True
+        try:
+            last_attempt = datetime.fromisoformat(raw)
+        except ValueError:
+            return True
+        failures = int(self._state.get("spy_alarm_failures") or 0)
+        if failures <= 0:
+            return True
+        backoff = min(300.0, 60.0 * (2 ** (failures - 1)))
+        elapsed = (now - last_attempt).total_seconds()
+        return elapsed >= backoff or elapsed < 0
 
     def _spy_alarm_last_sent(self) -> datetime | None:
         """Last delivered alarm, or None. Day-rolls with the state file, so a
@@ -2019,6 +2113,8 @@ class AutopilotService(QObject):
                 "wrapup_done_at": None,
                 "picks_scored_at": None,
                 "spy_alarm_last_sent": None,
+                "spy_alarm_last_attempt": None,
+                "spy_alarm_failures": 0,
                 "autopilot_written": previous.get("autopilot_written") or {"longs": [], "shorts": []},
             }
         payload.setdefault("slots_done", [])
@@ -2029,6 +2125,8 @@ class AutopilotService(QObject):
         payload.setdefault("suggested_at", None)
         payload.setdefault("picks_scored_at", None)
         payload.setdefault("spy_alarm_last_sent", None)
+        payload.setdefault("spy_alarm_last_attempt", None)
+        payload.setdefault("spy_alarm_failures", 0)
         payload.setdefault("autopilot_written", {"longs": [], "shorts": []})
         return payload
 
