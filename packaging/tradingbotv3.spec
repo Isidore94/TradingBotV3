@@ -66,7 +66,18 @@ datas = [
     # market_prep/config_loader.py resolves CONFIG_DIR as
     # Path(__file__).parents[1] / "config", which lands at the bundle root.
     (str(ROOT / "config"), "config"),
+    # Settings > Testing Plan renders this markdown file at runtime. It lives
+    # OUTSIDE scripts/, so the package-asset sweep below never sees it and the
+    # spec-drift test (which only walks scripts/) cannot guard it either -
+    # hence the explicit rule and the hard failure underneath.
+    (str(ROOT / "docs" / "DESK_TESTING_PLAN.md"), "docs"),
 ]
+_TESTING_PLAN = ROOT / "docs" / "DESK_TESTING_PLAN.md"
+if not _TESTING_PLAN.is_file():
+    raise SystemExit(
+        "spec error: docs/DESK_TESTING_PLAN.md not found - Settings > Testing Plan "
+        "would ship showing 'plan file not found' on the trader's desk"
+    )
 
 # PyInstaller bundles .py only. Modules reach their own assets through
 # __file__-relative paths — ui/theme.py loads theme.qss with

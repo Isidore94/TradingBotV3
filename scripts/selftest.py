@@ -158,10 +158,29 @@ def _check_chart_level_payload() -> None:
         raise RuntimeError("prev-day levels did not build from bars alone")
 
 
+def _check_testing_plan() -> None:
+    """Settings > Testing Plan renders a markdown file from OUTSIDE scripts/.
+
+    That places it beyond the spec's package-asset sweep and beyond the drift
+    test, which only walks scripts/ - so an explicit `datas` rule is the only
+    thing bundling it, and this is the only check that would notice the rule
+    being lost. A frozen desk missing it shows "plan file not found" on the one
+    page the trader opens when nothing else is behaving.
+    """
+    from ui.widgets.testing_plan_view import resolve_testing_plan_path
+
+    path = resolve_testing_plan_path()
+    if not path.is_file():
+        raise RuntimeError(f"the testing plan is not in this build ({path})")
+    if len(path.read_text(encoding="utf-8").strip()) < 500:
+        raise RuntimeError(f"the testing plan bundled empty or truncated ({path})")
+
+
 #: (name, callable) - asset loads and behavioural probes, run after imports.
 ASSET_CHECKS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("ui/theme.qss", _check_stylesheet),
     ("ui/annotations/vocabularies/veto_reasons_v*.json", _check_veto_vocabulary),
+    ("docs/DESK_TESTING_PLAN.md", _check_testing_plan),
     ("setup claim registry", _check_setup_claims),
     ("frozen sys.path assumptions", _check_frozen_path_assumptions),
     ("chart level payload", _check_chart_level_payload),

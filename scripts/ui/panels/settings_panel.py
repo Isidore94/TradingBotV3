@@ -155,6 +155,13 @@ class SettingsPanel(QFrame):
             self.settings_tabs.addTab(_scrollable_tab(self._build_bounce_section()), "BounceBot")
         if self.desk_link_service is not None:
             self.settings_tabs.addTab(_scrollable_tab(self._build_desk_link_section()), "Desk Link")
+        # Always present: the testing plan is the one page the trader may need
+        # at 6am on a morning when nothing else is behaving. Display only - it
+        # renders a markdown file and owns no timer, state or engine hook.
+        from ui.widgets.testing_plan_view import TestingPlanView
+
+        self.testing_plan_view = TestingPlanView()
+        self.settings_tabs.addTab(self.testing_plan_view, "Testing Plan")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)

@@ -17,13 +17,18 @@ elapsed evidence lane that can run in parallel.
 | Active packet | **R2 M5 FOCUS GATING AND STRENGTH BOARD** (`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`) — code complete, deterministic gate green, **four live proofs owed** |
 | Branch | **`phase05-r2-focus-gating-strength-board`**, cut from `phase05-r1-auto-modes-quiet-hours` with the R1.1 repair merged forward; pushed. Merging it brings the testing week, R1, R1.1 and R2 together |
 | Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
-| State | **Green: 2868 passed / 19 subtests / smoke 7/7 / source selftest 30/30**, all exit 0. **The FROZEN selftest has not been run on this stack** — `dist/` still holds the 2026-08-13 build. Nothing observed live yet |
+| State | **Green: 2882 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0 — the frozen runs are real and dated 2026-08-15 (see below). Nothing observed live yet |
 | Next action | **The Monday sequence below.** The trader runs the R1 quiet-boot proof himself on the evening of 2026-08-15; everything else waits for Monday's real session |
 | Do not start yet | **R3 and later Phase 0.5 packets** — the 2026-08-15 redirects were given packet by packet for R1 and R2 only and do not carry forward. Also Phase 1 cleanup and any Phase 2+ item |
 
 ## Monday sequence — 2026-08-17
 
 Do these in order. **Nothing merges until (a) and (b) both pass.**
+
+**The trader can read all of this on the desk**: Settings ▸ Testing Plan renders
+`docs/DESK_TESTING_PLAN.md`, a plain-language version of the same sequence. That
+file restates the proofs below for a human reader and **must be updated in the
+same pass whenever they change**.
 
 ### (a) Run the live proofs on THIS build, during the real session
 
@@ -61,10 +66,10 @@ readable and lets a single step be reverted.
 
 | Gate | Command | Expected |
 |---|---|---|
-| Full suite | `.venv\Scripts\python.exe -m pytest tests/ -q` | **2868 passed / 19 subtests**, exit 0 — check pytest's own exit code, not a piped tail |
+| Full suite | `.venv\Scripts\python.exe -m pytest tests/ -q` | **2882 passed / 19 subtests**, exit 0 — check pytest's own exit code, not a piped tail |
 | Smoke | `.venv\Scripts\python.exe scripts/smoke_check.py` | **7/7**, exit 0 |
-| Frozen rebuild | `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` | exit 0, ~4 min unattended |
-| Frozen selftest | `dist\TradingBotV3\TradingBotV3.exe --selftest` | **30/30**, exit 0, output ending `(frozen)` |
+| Frozen rebuild | `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` | exit 0, ~4 min unattended. **Already green 2026-08-15 10:27** — repeat only if code lands after that |
+| Frozen selftest | `dist\TradingBotV3\TradingBotV3.exe --selftest` | **31/31**, exit 0, output ending `(frozen)`. **Already green 2026-08-15 10:27** |
 
 **Is a packaging trigger pending? No — but rebuild anyway.** Checked all five
 triggers across the whole stack (`e18757e..HEAD`): no new third-party dependency,
@@ -77,12 +82,62 @@ because CLAUDE.md mandates one before every merge to `main`, and because:
 
 > **Correction, 2026-08-15:** every "frozen selftest 30/30" recorded for R1, R1.1
 > and R2 was actually the **source** selftest (`launch_gui.py --selftest`, whose
-> output carries no `(frozen)` suffix). `dist/` still holds the **2026-08-13**
-> build, which predates all three packets. **The frozen selftest has never been
-> run on this stack.** Monday's rebuild is its first real exercise, and it is the
-> gate that has historically caught what the suite could not — it found the
+> output carries no `(frozen)` suffix), against a `dist/` built 2026-08-13 that
+> predated all three packets. **Resolved the same day — see the frozen rebuild
+> below.** Re-run it at merge time only if code lands after that rebuild: this is
+> the gate that has historically caught what the suite could not, finding the
 > `ai_jobs` roster clash on 2026-08-09 and the `-c` scan-spawn defect on
 > 2026-08-13.
+
+### Frozen rebuild and REAL frozen selftest — 2026-08-15
+
+Two rebuilds, both green. The first was the run three packets of notes had
+mislabeled; the second was forced by a genuine packaging trigger (below).
+
+| # | Time | Result |
+|---|---|---|
+| 1 | 09:58 | `selftest OK: **30/30** checks passed **(frozen)**`, exit 0 |
+| 2 | 10:27 | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — **current** |
+
+**31, not 30, and that is the point.** The Testing Plan tab renders
+`docs/DESK_TESTING_PLAN.md`, a runtime asset that lives **outside `scripts/`**.
+The spec's package-asset sweep only mirrors files inside `FIRST_PARTY_PACKAGES`,
+and `test_packaging_spec_drift.py` only walks `scripts/` — so **neither would
+have noticed it going missing**, and the frozen desk would have shipped showing
+"plan file not found" on the one page the trader opens when nothing else is
+behaving. Three things now guard it: an explicit `datas` rule with a hard
+`SystemExit` if the file is absent at build time, a new selftest asset check
+(the 31st), and a test asserting the spec rule still exists. Confirmed present
+in the bundle at `dist/TradingBotV3/_internal/docs/DESK_TESTING_PLAN.md`.
+
+That trigger is trigger 2 in the CLAUDE.md list ("new non-`.py` runtime asset"),
+plus trigger 5 (`__file__`-relative resolution — the view resolves through
+`sys._MEIPASS` when frozen, since a frozen build has no `scripts/` tree to walk
+up from).
+
+| Check | Result |
+|---|---|
+| `pyinstaller .\packaging\tradingbotv3.spec --noconfirm` | **exit 0** |
+| `dist\TradingBotV3\TradingBotV3.exe --selftest` | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 |
+
+The `(frozen)` suffix is the whole point: the source selftest prints the same
+count without it, which is how three packets of notes recorded a run that had
+never happened. Any future entry claiming a frozen result must quote the suffix.
+
+What this build collected: `ui` 109 submodules, `bounce_bot_lib` 12,
+`master_avwap_lib` 26, `market_prep` 23, `diagnostics` 6, `research_warehouse`
+19, `desk_link` 7, `duckdb` 39, plus the three package assets
+(`veto_reasons_v1.json`, `theme.qss`, `exploration_cohort.txt`). R2's two new
+top-level modules (`focus_adoption_gate`, `strength_scan`) and its two new UI
+modules are in the bundle and import cleanly under it — which is what this run
+was needed to prove and no packaging-trigger analysis could.
+
+The desk was running from source, so nothing had to be closed. `dist/` and
+`build/` are gitignored, so this is verification only and never a commit
+artifact.
+
+**This satisfies the frozen gate for the current tree.** Re-run it at merge time
+only if code lands after 2026-08-15 10:27.
 
 ### Known blocker for the merge gate — a pre-existing flaky test
 

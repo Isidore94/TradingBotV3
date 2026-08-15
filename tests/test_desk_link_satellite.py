@@ -618,10 +618,13 @@ def test_settings_categories_are_separate_scroll_safe_tabs(monkeypatch):
         desk_link_service=desk_link,
     )
     try:
+        # Testing Plan is appended last and is always present - it is a
+        # read-only viewer, so it has no service to be conditional on, and the
+        # Desk Link tab keeps index 2 below.
         assert [
             panel.settings_tabs.tabText(index)
             for index in range(panel.settings_tabs.count())
-        ] == ["General", "BounceBot", "Desk Link"]
+        ] == ["General", "BounceBot", "Desk Link", "Testing Plan"]
 
         panel.resize(1100, 480)
         panel.show()

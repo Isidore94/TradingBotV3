@@ -230,6 +230,39 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-15 — a Testing Plan tab, and the packaging trap it nearly walked into
+
+`IMPLEMENTED` + `GREEN`. Documentation-and-viewer work; no engine touched.
+
+`docs/DESK_TESTING_PLAN.md` is a plain-language runbook of the current testing
+sequence — tonight's quiet-boot check, Monday's six live proofs, then the
+after-close checklist, rebuild and merge. Every step gives when to do it, what
+to click, the exact log line or screen element that means it worked, what bad
+looks like, and what to copy to the AI if it fails. It restates
+`CURRENT_CHECKPOINT.md`'s owed proofs for a human reader and carries a header
+line requiring it to be updated in the same pass whenever those change.
+
+Settings gains a **Testing Plan** tab rendering that file read-only, with a
+Refresh button and the file's last-modified time. It owns no timer, writes no
+state and touches no engine. A missing, unreadable or empty file says so
+plainly and shows **no cached copy** — a stale runbook read as current would
+have the trader checking for log lines the build no longer prints.
+
+**The packaging trap.** The plan is a runtime asset living **outside
+`scripts/`**, and nothing existing would have caught that. The spec's
+package-asset sweep only mirrors files inside `FIRST_PARTY_PACKAGES`, and
+`test_packaging_spec_drift.py` only walks `scripts/`. The frozen desk would
+have shipped showing "plan file not found" on the one page the trader opens
+when nothing else is behaving — the same shape as the two defects that reached
+the desk before (the `ai_jobs` roster clash and the `-c` scan spawn). Now
+guarded three ways: an explicit `datas` rule with a hard `SystemExit` if the
+file is absent at build time, a new selftest asset check, and a test asserting
+the spec rule still exists. The view resolves through `sys._MEIPASS` when
+frozen, since a frozen build has no `scripts/` tree to walk up from.
+
+The frozen selftest is therefore **31/31**, not 30/30 — the new check is the
+31st, and it was verified by an actual rebuild rather than assumed.
+
 ### 2026-08-15 — packet R2: the M5 Focus adoption gate and the strength board
 
 `IMPLEMENTED` + `GREEN`; **not** `LIVE_VALIDATED` — the four live proofs in
