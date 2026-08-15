@@ -184,8 +184,45 @@ board's names roughly match the TC2000 scan's character (~20–40/side).
 
 ## 9. Open questions
 
-- Whether the yfinance 5m batch over ~1,500 symbols every 15 min is fast enough on
-  the desk (measure on first build; degrade to 20–30 min or a filtered subset if
-  needed — a measured decision, not a design change).
-- Whether RVOL should be a board column in v1 (cheap if the bars are already
-  fetched) — decide at build time.
+- ~~Whether the yfinance 5m batch over ~1,500 symbols every 15 min is fast enough
+  on the desk~~ — **MEASURED 2026-08-15, see §10. 27.6 s. The 15-minute default
+  stands.**
+- ~~Whether RVOL should be a board column in v1~~ — **Answered 2026-08-15:** yes,
+  but computed for the survivors only (~20–40/side), which is the "handful"
+  scale `fetch_session_rvol` documents as safe. Its `period=1mo, interval=5m`
+  fetch is far heavier than the board's and its own docstring forbids running it
+  over the whole universe.
+
+## 10. Transport measurement — 2026-08-15, this desk
+
+Measured with the exact transport the board uses: the `fetch_intraday_profiles`
+batching pattern, `AUTOPILOT_OPEN_SCAN_CHUNK_SIZE` = 150, `_default_downloader`,
+over all 1,506 symbols of `universe_all.txt`.
+
+| period | total | chunks | median chunk | slowest chunk | usable symbols | median bars |
+|---|---:|---:|---:|---:|---:|---:|
+| `1d` | **17.6 s** | 11 | 1.5 s | 2.2 s | 1,503 / 1,506 | — |
+| `5d` | **27.6 s** | 11 | 1.7 s | 2.7 s | 1,503 / 1,506 | 390 |
+
+**`5d` is the one that matters, and it is what the board fetches.** The formula
+needs 50 completed M5 bars for SMA50 and ATR50, and a `1d` window holds about 78
+bars for a *full* session — so at 07:00 PT, half an hour after the open, it holds
+six. Every symbol would be unmeasurable for the first four hours of exactly the
+session the trader is trading. With `5d`, **100% of symbols carry ≥50 bars**
+(median 390, minimum 334) from the first bar of the day. Spanning sessions is
+also correct rather than merely convenient: TC2000's M5 SMA50 spans them too,
+and `session_vwap_series` restarts per date regardless, so the VWAP filter is
+unaffected by the longer window.
+
+**Cadence decision: keep the spec's 15-minute default** (`§B.3.2`,
+settings-tunable). 27.6 s is ~3% of a 15-minute interval. The three failures are
+delisted tickers (`JHG`, `LC`, `SEM`) the universe build has not yet dropped, not
+a transport problem.
+
+**Caveat on the number.** Measured on a Saturday, so Yahoo is less loaded than at
+09:35 ET and the response is Friday's completed session. Treat 27.6 s as the
+floor, not the worst case. The margin absorbs it: even a 5× market-hours
+slowdown is ~2.3 min of a 15-minute interval. If a live session ever shows the
+refresh overrunning, the single-flight owner means a slow pass delays the next
+one rather than overlapping it, and the cadence setting moves without a code
+change. Re-measure during market hours on the first live board session.
