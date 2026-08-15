@@ -25,8 +25,15 @@ elapsed evidence lane that can run in parallel.
 
 ### Release candidate
 
-**`bf1ab89`** on `phase05-r2-focus-gating-strength-board` is the build Monday
-tests. Everything below was verified against exactly that tree.
+Monday tests **the tip of `phase05-r2-focus-gating-strength-board`**. The last
+commit that changed code or tests is **`bf1ab89`**; anything after it on this
+branch is documentation, so the running behaviour Monday exercises is exactly
+the tree the three gates below were run against.
+
+Stated that way on purpose: naming a fixed SHA here would be wrong the moment
+this file is edited again, and a stale "release candidate" line is worse than
+none. **The rule is: if a commit changes code or tests, all three gates re-run
+and this section is updated.**
 
 | Check | Result | When |
 |---|---|---|
