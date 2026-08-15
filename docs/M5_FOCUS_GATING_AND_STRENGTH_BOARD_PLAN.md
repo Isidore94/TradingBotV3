@@ -7,7 +7,7 @@ order, then directed to build ahead of P0.7 (the same redirect R1 got).
 Built on branch `phase05-r2-focus-gating-strength-board` (cut from R1, with the
 R1.1 repair merged forward). Ask-first approval was taken for every fenced file
 in §6 before the first edit. Deterministic verification: **2865 passed / 19
-subtests, smoke 7/7, frozen selftest 30/30**, all exit 0. The §8 live proofs are
+subtests, smoke 7/7, source selftest 30/30**, all exit 0. The §8 live proofs are
 **owed** — nothing here has been observed on a live session.
 
 ## 2026-08-15 trader decisions recorded here

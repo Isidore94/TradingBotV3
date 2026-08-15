@@ -16,7 +16,7 @@ cached tape pre-open and would have woken the trader falsely; a post-window
 relaunch left slots pending and silently cancelled the after-close wrap-up;
 EVENING adopted picks immediately against every stated rule; and the legacy Tk
 GUI raised NameError at construction after §3.5 removed a helper it used.
-Verification after the repair: **2785 passed / 19 subtests, smoke 7/7, frozen
+Verification after the repair: **2785 passed / 19 subtests, smoke 7/7, source
 selftest 30/30**, all exit 0. The §6 live proofs are **still owed** — none has
 been attempted, and the first two would have failed as written before this pass.
 

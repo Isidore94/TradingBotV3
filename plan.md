@@ -291,7 +291,7 @@ are listed in `CURRENT_CHECKPOINT.md`.
    the BounceBot scan window, see the spec §8), and the shared-scan/dead-Drive
    removal. Spec: `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`.
    Branch `phase05-r1-auto-modes-quiet-hours`; deterministic gate green
-   (2773 passed / 19 subtests, smoke 7/7, frozen selftest 30/30, all exit 0);
+   (2773 passed / 19 subtests, smoke 7/7, source selftest 30/30, all exit 0);
    CLAUDE.md/AGENTS.md push policy, both runbooks, the first-session checklist
    and decision 0015 reconciled.
    **Remaining — the spec §6 live proofs, none yet run:** a ~21:00 boot that
@@ -308,7 +308,7 @@ are listed in `CURRENT_CHECKPOINT.md`.
    `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`.
    Branch `phase05-r2-focus-gating-strength-board` (cut from R1, R1.1 merged
    forward); deterministic gate green (2865 passed / 19 subtests, smoke 7/7,
-   frozen selftest 30/30, all exit 0). **This closes R1's recorded stale-drain
+   source selftest 30/30, all exit 0). **This closes R1's recorded stale-drain
    gap**: the AWAY/EVENING→DESK drain now adopts only what the most recent
    staging refresh verified.
    **Remaining — the spec §8 live proofs, none yet run:** one session showing a
