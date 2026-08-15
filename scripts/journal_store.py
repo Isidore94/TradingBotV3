@@ -786,6 +786,8 @@ class JournalStore:
 
             self.last_rekey = self._rekey_annotations(conn, carried, leg_payloads)
 
+        self.book_cad_values()
+
         if refresh_tags:
             self.refresh_auto_tags()
         return len(trade_payloads)
@@ -1469,6 +1471,55 @@ class JournalStore:
             "reconcile_status": reconcile_status,
             "anchor_execution_uid": str(trade.get("anchor_execution_uid") or ""),
         }
+
+    def book_cad_values(self) -> dict[str, int]:
+        """Convert every trade's net P&L to CAD from the **stored** rate table.
+
+        I5, and the reason it is a separate pass rather than part of assembly:
+        assembly is a pure function of executions and adjustments, and it must
+        stay that way. Booking reads ``fx_rates`` and never fetches - a rate
+        pulled at render time would make the same trade worth different amounts
+        on different days, which is not a tax figure.
+
+        A trade whose rate is not booked keeps ``net_pnl_cad = NULL``. That is
+        the "unconverted" state the UI renders explicitly; it is never 0, and
+        never the native number quietly relabelled.
+        """
+        summary = {"converted": 0, "unconverted": 0}
+        with self.connection() as conn:
+            rates = {
+                (str(row["rate_date"]), str(row["currency"]).upper()): (
+                    float(row["rate_to_cad"]),
+                    str(row["effective_date"] or row["rate_date"]),
+                )
+                for row in conn.execute("SELECT * FROM fx_rates")
+            }
+            for row in conn.execute(
+                "SELECT trade_id, trade_date, currency, net_pnl FROM trades"
+            ).fetchall():
+                trade_id = str(row["trade_id"])
+                currency = str(row["currency"] or "").upper()
+                trade_date = _date_text(row["trade_date"])
+                net_pnl = _coerce_float(row["net_pnl"])
+                if currency == "CAD":
+                    rate, effective = 1.0, trade_date
+                else:
+                    booked = rates.get((trade_date, currency))
+                    if booked is None:
+                        conn.execute(
+                            "UPDATE trades SET net_pnl_cad = NULL, fx_rate = NULL, fx_rate_date = '' "
+                            "WHERE trade_id = ?",
+                            (trade_id,),
+                        )
+                        summary["unconverted"] += 1
+                        continue
+                    rate, effective = booked
+                conn.execute(
+                    "UPDATE trades SET net_pnl_cad = ?, fx_rate = ?, fx_rate_date = ? WHERE trade_id = ?",
+                    (net_pnl * rate, rate, effective, trade_id),
+                )
+                summary["converted"] += 1
+        return summary
 
     def list_trades(
         self,

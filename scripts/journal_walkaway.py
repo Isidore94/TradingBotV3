@@ -31,9 +31,10 @@ import csv
 import logging
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from statistics import median
+from typing import Any
 
 import pandas as pd
 
@@ -397,7 +398,31 @@ def _history_period_for(positions: list[WalkawayPosition]) -> str:
     return "max"
 
 
-def run_walkaway_analysis(*, source: str = "both", write_outputs: bool = True) -> dict:
+def _within_window(position: Any, since: Any = None, until: Any = None) -> bool:
+    """Is this position inside an optional [since, until] window?
+
+    Additive for R7 (defaults preserve today's behaviour exactly); R8's
+    week-windowed walk-away is the consumer. A position whose date cannot be
+    read is kept, because dropping evidence on a parse failure is the wrong
+    direction for an analysis that is already about what was missed.
+    """
+    if since is None and until is None:
+        return True
+    raw = getattr(position, "entry_date", None) or getattr(position, "trade_date", None)
+    try:
+        when = date.fromisoformat(str(raw)[:10])
+    except (TypeError, ValueError):
+        return True
+    if since is not None and when < since:
+        return False
+    if until is not None and when > until:
+        return False
+    return True
+
+
+def run_walkaway_analysis(
+    *, source: str = "both", write_outputs: bool = True, since: Any = None, until: Any = None
+) -> dict:
     journal_positions: list[WalkawayPosition] = []
     focus_positions: list[WalkawayPosition] = []
     skipped_non_equity = 0
@@ -406,6 +431,8 @@ def run_walkaway_analysis(*, source: str = "both", write_outputs: bool = True) -
             journal_positions, skipped_non_equity = load_journal_positions()
         except Exception as exc:
             logging.warning("Journal positions unavailable (%s).", exc)
+    if since is not None or until is not None:
+        journal_positions = [p for p in journal_positions if _within_window(p, since, until)]
     if source in ("focus", "both"):
         try:
             focus_positions = load_focus_positions()

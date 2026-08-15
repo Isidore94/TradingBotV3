@@ -406,7 +406,7 @@
     "summary"
   ],
   "feature_version": "r7-step0-pre-assembly",
-  "intentional_difference": "R7 \u00a79 step 4 (assembly), trader-authorized 2026-08-15, reviewed by Fable. INTENDED, three changes: (1) CLOSED_PARTIAL exists, so the two half-exited positions - Questrade AAPL (120 of 150 sold) and the IBKR NVDA whose duplicate is not collapsed in this frozen input - stop reading as untouched OPEN trades; the summary gains partial_trades and needs_review_trades so the status counters still add up to the row count. (2) Every trade_id is re-derived from its opening execution's uid instead of a per-group sequence number, so all nine ids change once, here, and anchor_execution_uid is now populated. (3) reconcile_status is populated (all blank in this corpus - no case here oversells). NOT changed: every direction, quantity and P&L figure is identical, and the 18 legs and 14 opportunity events are byte-identical once the re-derived trade_id is set aside - verified by comparing both collections field by field before regenerating.",
+  "intentional_difference": "R7 \u00a79 step 8 (FX booking), trader-authorized 2026-08-15. INTENDED and confined to one row: the CAD trade SHOP.TO now books net_pnl_cad 490.10 at fx_rate 1.0 with fx_rate_date 2026-08-05, because CAD converts to CAD by identity and needs no observation. Every USD trade keeps net_pnl_cad NULL - the fixture books no rates, and NULL is the 'unconverted' state I5 requires rather than 0 or the native number relabelled. NOT changed: no P&L, quantity, status or id moved; legs, opportunity events and the summary are byte-identical.",
   "legs": [
     {
       "commission": 4.95,
@@ -942,11 +942,11 @@
       "currency": "CAD",
       "direction": "LONG",
       "fees": 0.0,
-      "fx_rate": null,
-      "fx_rate_date": "",
+      "fx_rate": 1.0,
+      "fx_rate_date": "2026-08-05",
       "gross_pnl": 500.0,
       "net_pnl": 490.1,
-      "net_pnl_cad": null,
+      "net_pnl_cad": 490.1,
       "opened_at": "2026-08-05T06:35:00-07:00",
       "pnl_usd": null,
       "quantity_closed": 100.0,

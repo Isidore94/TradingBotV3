@@ -134,7 +134,11 @@ def test_the_golden_still_contains_the_defects_r7_is_here_to_fix(golden):
     # renders as "unconverted" is the honest state until then (I5).
     shop = trades[("QUESTRADE", "SHOP.TO", "STK")]
     assert shop["currency"] == "CAD" and shop["pnl_usd"] is None
-    assert shop["net_pnl_cad"] is None and shop["fx_rate"] is None
+    # FIXED for CAD in step 8: it converts by identity. The USD trades stay
+    # NULL because this fixture books no rates, and NULL is the honest
+    # "unconverted" state (I5) rather than 0 or the native number relabelled.
+    assert shop["net_pnl_cad"] == shop["net_pnl"] and shop["fx_rate"] == 1.0
+    assert {t["net_pnl_cad"] for t in golden["trades"] if t["currency"] == "USD"} == {None}
 
     # No case in this frozen corpus oversells, so nothing here is NEEDS_REVIEW.
     # The synthetic-open path has its own tests in test_journal_assembly.py.

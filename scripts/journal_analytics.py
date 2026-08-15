@@ -377,8 +377,66 @@ def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> d
     }
 
 
+def resolve_pnl_key(trades: list[dict[str, Any]]) -> tuple[str, str]:
+    """Which P&L column may be summed, and what to tell the reader.
+
+    Root cause B8. ``_summary_for_rows`` defaulted to ``net_pnl``, which is the
+    trade's **native** currency, and then added a USD win to a CAD loss as if
+    they were the same number. For a Canadian trader filing Canadian tax that is
+    not a rounding error, it is a wrong total.
+
+    Three honest outcomes, and no fourth:
+
+    * one currency across the whole selection - sum ``net_pnl``, it means
+      something;
+    * mixed currencies and every trade converted - sum ``net_pnl_cad``;
+    * mixed currencies with anything unconverted - **refuse**. The caller gets
+      ``("", reason)`` and shows the reason instead of a number, because a total
+      that silently omits the unconverted rows is worse than no total.
+    """
+    currencies = {str(row.get("currency") or "").upper() for row in trades if row.get("currency")}
+    if len(currencies) <= 1:
+        return "net_pnl", ""
+    unconverted = [row for row in trades if row.get("net_pnl_cad") is None]
+    if unconverted:
+        missing = sorted({str(row.get("currency") or "?").upper() for row in unconverted})
+        return "", (
+            f"{len(unconverted)} of {len(trades)} trades have no booked FX rate "
+            f"({', '.join(missing)}); totals across currencies are not shown"
+        )
+    return "net_pnl_cad", "converted to CAD at each trade's booked rate"
+
+
+def _tags_for_row(row: dict[str, Any]) -> list[str]:
+    """Every setup tag on a trade, not just the first one.
+
+    ``_first_setup_tag`` kept only the leading tag, so a trade tagged
+    "avwap-reclaim; earnings-gap" counted entirely towards the first and not at
+    all towards the second - which quietly understated every setup that tends to
+    be named second.
+    """
+    text = str(row.get("setup_tags") or "").strip()
+    if not text:
+        return []
+    for separator in (";", ","):
+        if separator in text:
+            return [part.strip() for part in text.split(separator) if part.strip()]
+    return [text]
+
+
 def build_analytics_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
-    summary = {"overall": _summary_for_rows(trades), "groups": {}}
+    pnl_key, pnl_note = resolve_pnl_key(trades)
+    summary = {
+        "overall": _summary_for_rows(trades, pnl_key or "net_pnl"),
+        "groups": {},
+        "pnl_key": pnl_key,
+        "pnl_note": pnl_note,
+        "currencies": sorted({str(row.get("currency") or "").upper() for row in trades if row.get("currency")}),
+    }
+    if not pnl_key:
+        # Mixed currencies with unconverted rows: the per-group totals would be
+        # as meaningless as the overall one, so say why and stop.
+        summary["overall"] = {**summary["overall"], "net_pnl": None, "gross_win": None, "gross_loss": None}
     group_specs = {
         "setup": lambda row: _first_setup_tag(row.get("setup_tags") or row.get("auto_tag_summary")),
         "account": lambda row: str(row.get("account_label") or row.get("account_number") or "unknown"),
