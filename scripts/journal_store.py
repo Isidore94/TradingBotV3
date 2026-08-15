@@ -763,6 +763,175 @@ class JournalStore:
         }
     )
 
+    #: Every action the store will accept. An unknown action is refused at write
+    #: time rather than silently ignored at rebuild time - a correction the
+    #: trader believes they made, and which quietly does nothing, is worse than
+    #: one that was never accepted.
+    ADJUSTMENT_ACTIONS = frozenset(
+        {"VOID_EXECUTION", "EDIT_EXECUTION", "ADD_EXECUTION", "FORCE_CLOSE", "REASSIGN_GROUP", "SUPERSEDE"}
+    )
+
+    #: The one action assembly deliberately ignores. It exists because an undo
+    #: has to be a record - and a record spelled as one of the real actions is
+    #: not inert. Undoing a FORCE_CLOSE by appending another FORCE_CLOSE with an
+    #: empty payload closes the position all over again, which is exactly what
+    #: the first version of this code did and what its test caught.
+    INERT_ADJUSTMENT_ACTION = "SUPERSEDE"
+    ADJUSTMENT_TARGET_KINDS = frozenset({"EXECUTION", "TRADE_GROUP"})
+
+    #: Which target kind each action addresses. FORCE_CLOSE closes a position;
+    #: everything else edits a row.
+    ADJUSTMENT_TARGET_BY_ACTION = {
+        "VOID_EXECUTION": "EXECUTION",
+        "EDIT_EXECUTION": "EXECUTION",
+        "ADD_EXECUTION": "EXECUTION",
+        "REASSIGN_GROUP": "EXECUTION",
+        "FORCE_CLOSE": "TRADE_GROUP",
+        # SUPERSEDE inherits the kind of whatever it retires, so it is absent
+        # here and handled explicitly below.
+    }
+
+    def record_adjustment(
+        self,
+        *,
+        action: str,
+        target_uid: str,
+        reason: str,
+        payload: Mapping[str, Any] | None = None,
+        target_kind: str = "",
+        source: str = "gui",
+        supersedes: str = "",
+    ) -> dict[str, Any]:
+        """Append one correction. Nothing here is ever edited or deleted (I3).
+
+        ``reason`` is mandatory and may not be blank. A correction with no stated
+        reason is indistinguishable from a mistake six months later, and this
+        table is the audit trail behind a tax filing.
+
+        ``supersedes`` is how undo works: the old record stays and is marked as
+        superseded by this one, so it stops applying at the next rebuild without
+        ever leaving the history. Undoing an undo is another record.
+        """
+        normalized_action = str(action or "").strip().upper()
+        if normalized_action not in self.ADJUSTMENT_ACTIONS:
+            raise ValueError(f"unsupported adjustment action: {action!r}")
+        expected_kind = self.ADJUSTMENT_TARGET_BY_ACTION.get(normalized_action, "")
+        kind = str(target_kind or expected_kind).strip().upper()
+        if kind not in self.ADJUSTMENT_TARGET_KINDS:
+            raise ValueError(f"unsupported adjustment target kind: {target_kind!r}")
+        if expected_kind and kind != expected_kind:
+            raise ValueError(f"{normalized_action} targets {expected_kind}, not {kind}")
+        target = str(target_uid or "").strip()
+        if not target:
+            raise ValueError("target_uid is required")
+        cleaned_reason = str(reason or "").strip()
+        if not cleaned_reason:
+            raise ValueError("reason is required: an unexplained correction is not an audit trail")
+
+        row = {
+            "adjustment_id": uuid.uuid4().hex,
+            "target_kind": kind,
+            "target_uid": target,
+            "action": normalized_action,
+            "payload_json": _json_dumps(dict(payload or {})),
+            "reason": cleaned_reason,
+            "source": str(source or "").strip(),
+            "superseded_by": "",
+            "created_at": _now_iso(),
+        }
+        with self.connection() as conn:
+            if supersedes:
+                existing = conn.execute(
+                    "SELECT adjustment_id FROM trade_adjustments WHERE adjustment_id = ?",
+                    (str(supersedes),),
+                ).fetchone()
+                if existing is None:
+                    raise ValueError(f"cannot supersede unknown adjustment {supersedes!r}")
+            conn.execute(
+                """
+                INSERT INTO trade_adjustments(
+                    adjustment_id, target_kind, target_uid, action, payload_json, reason, source,
+                    superseded_by, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(
+                    row[key]
+                    for key in (
+                        "adjustment_id", "target_kind", "target_uid", "action", "payload_json",
+                        "reason", "source", "superseded_by", "created_at",
+                    )
+                ),
+            )
+            if supersedes:
+                conn.execute(
+                    "UPDATE trade_adjustments SET superseded_by = ? WHERE adjustment_id = ?",
+                    (row["adjustment_id"], str(supersedes)),
+                )
+        result = dict(row)
+        result["payload"] = json.loads(result["payload_json"])
+        return result
+
+    def undo_adjustment(self, adjustment_id: str, *, reason: str, source: str = "gui") -> dict[str, Any]:
+        """Retire an adjustment by appending the record that supersedes it.
+
+        Deliberately not a DELETE. What the trader corrected, and then
+        un-corrected, is part of the audit trail (I3).
+
+        The superseding record uses ``SUPERSEDE``, which assembly ignores. An
+        empty payload is not enough to make a record inert: an ``EDIT_EXECUTION``
+        that names no fields overlays nothing, but a ``FORCE_CLOSE`` with an
+        empty payload closes the position again. The first version of this
+        method did exactly that, and
+        ``test_a_force_close_can_be_undone_and_the_position_reopens`` is why it
+        does not now.
+        """
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM trade_adjustments WHERE adjustment_id = ?", (str(adjustment_id),)
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"unknown adjustment {adjustment_id!r}")
+        existing = _row_to_dict(row)
+        return self.record_adjustment(
+            action=self.INERT_ADJUSTMENT_ACTION,
+            target_kind=existing["target_kind"],
+            target_uid=existing["target_uid"],
+            payload={},
+            reason=reason,
+            source=source,
+            supersedes=str(adjustment_id),
+        )
+
+    def list_adjustments(
+        self, *, target_uid: str = "", include_superseded: bool = True, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """The audit trail, newest first, for the Health tab and the trade pane."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if str(target_uid or "").strip():
+            clauses.append("target_uid = ?")
+            params.append(str(target_uid).strip())
+        if not include_superseded:
+            clauses.append("COALESCE(superseded_by, '') = ''")
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(max(1, min(10000, int(limit))))
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM trade_adjustments {where} "
+                "ORDER BY created_at DESC, adjustment_id DESC LIMIT ?",
+                params,
+            ).fetchall()
+        result = []
+        for raw in rows:
+            row = _row_to_dict(raw)
+            try:
+                payload = json.loads(row.get("payload_json") or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            row["payload"] = payload if isinstance(payload, dict) else {}
+            result.append(row)
+        return result
+
     def list_active_adjustments(self) -> list[dict[str, Any]]:
         """Adjustments that still apply, oldest first.
 

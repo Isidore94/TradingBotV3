@@ -36,7 +36,8 @@ Each step is its own green commit, pushed. A step is not done until
 | 2 v3 migration + uid migration | **DONE** | `scripts/journal_migrate.py` + `tests/test_journal_migration.py` (26 tests); 2991 passed / smoke 7/7, exit 0 |
 | 3 Group-key normalization | **DONE** | `scripts/journal_identity.py` + `tests/test_journal_identity.py` (34 tests); 3025 passed / smoke 7/7, exit 0. Golden regenerated with a note: 10 trades → 9 |
 | 4 Assembly changes | **DONE** | `tests/test_journal_assembly.py` (19 tests); 3044 passed, exit 0. Golden regenerated with a note: statuses and trade ids change, no P&L moves |
-| 5–10 Adjustments, coverage, activities, FX, reconcile, nightly slot | pending | |
+| 5 Adjustments API | **DONE** | `tests/test_journal_adjustments.py` (16 tests); 3060 passed / smoke 7/7, exit 0 |
+| 6–10 Coverage ledger, activities/Flex, FX, reconcile, nightly slot | pending | |
 | 11–13 Journal UI | pending | |
 | 14 Governance close-out | pending | |
 
@@ -101,7 +102,7 @@ exist before deciding what a red run means.
 | When | What | Reproduced? |
 |---|---|---|
 | During step 3 | One full run exited **3** — a crash, not a test failure | No. Next run green |
-| During step 4 | `tests/test_desk_link_control.py::test_set_auto_mode_intent_round_trip_from_controller` **failed** | No. Green on 2 later full runs and 3/3 in isolation |
+| During step 4 | `tests/test_desk_link_control.py::test_set_auto_mode_intent_round_trip_from_controller` **failed** | No. **1 failure in 10 full-suite runs** on this branch; 3/3 in isolation |
 
 What is known: the Desk Link test drives a **real loopback TCP server** and
 polls `_pump_until` against a **20-second wall-clock deadline**. Twenty seconds
