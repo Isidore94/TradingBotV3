@@ -14,10 +14,10 @@ elapsed evidence lane that can run in parallel.
 | Field | Current value |
 |---|---|
 | Roadmap phase | **Phase 0.5 R1 + R1.1 + R2 built** (trader redirects 2026-08-15) — P0's live gates are unchanged and still owed |
-| Active packet | **R2 M5 FOCUS GATING AND STRENGTH BOARD** (`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`) — code complete, deterministic gate green, **four live proofs owed** |
+| Active packet | **R2 M5 FOCUS GATING AND STRENGTH BOARD** (`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`) — code complete through the **R2.2 review pass** below, deterministic gate green, **four live proofs owed** |
 | Branch | **`phase05-r2-focus-gating-strength-board`**, cut from `phase05-r1-auto-modes-quiet-hours` with the R1.1 repair merged forward; pushed. Merging it brings the testing week, R1, R1.1 and R2 together |
 | Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
-| State | **Green: 2913 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0, after the R2.1 repair pass. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
+| State | **Green: 2918 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0, after the R2.2 review pass. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
 | Next action | **The Monday sequence below.** The trader runs the R1 quiet-boot proof himself on the evening of 2026-08-15; everything else waits for Monday's real session |
 | Do not start yet | **R3 and later Phase 0.5 packets** — the 2026-08-15 redirects were given packet by packet for R1 and R2 only and do not carry forward. Also Phase 1 cleanup and any Phase 2+ item |
 
@@ -26,9 +26,10 @@ elapsed evidence lane that can run in parallel.
 ### Release candidate
 
 Monday tests **the tip of `phase05-r2-focus-gating-strength-board`**. The last
-commit that changed code or tests is **`bf1ab89`**; anything after it on this
-branch is documentation, so the running behaviour Monday exercises is exactly
-the tree the three gates below were run against.
+commit that changed code or tests is the **R2.2 item-3 commit** ("Write down what
+two bars of lag can still cost"); anything after it on this branch is
+documentation, so the running behaviour Monday exercises is exactly the tree the
+three gates below were run against.
 
 Stated that way on purpose: naming a fixed SHA here would be wrong the moment
 this file is edited again, and a stale "release candidate" line is worse than
@@ -37,14 +38,15 @@ and this section is updated.**
 
 | Check | Result | When |
 |---|---|---|
-| pytest | **2913 passed / 19 subtests**, exit 0 | 2026-08-15 |
-| smoke | **7/7**, exit 0 | 2026-08-15 |
-| frozen selftest | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 | 2026-08-15 11:0x |
+| pytest | **2918 passed / 19 subtests**, exit 0 | 2026-08-15, after R2.2 |
+| smoke | **7/7**, exit 0 | 2026-08-15, after R2.2 |
+| frozen selftest | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 | 2026-08-15, after R2.2 |
 
-If any commit lands after `bf1ab89`, it is a **new** release candidate and all
-three gates re-run. The frozen one is not optional: it is the gate that caught
-the `ai_jobs` roster clash and the `-c` scan-spawn defect when the suite could
-not.
+The R2.2 pass changed code, so it is a **new** release candidate and all three
+gates were re-run against it — including the frozen rebuild, even though no
+packaging trigger applied. The frozen one is never optional: it is the gate that
+caught the `ai_jobs` roster clash and the `-c` scan-spawn defect when the suite
+could not.
 
 ### Rollback points
 
@@ -56,6 +58,12 @@ not.
 
 Ancestry is linear — `main` → `testing-week` → R1 → R2 — so any of these is a
 clean checkout, not a revert.
+
+**The rolled-back build reports `selftest OK: 30/30`, not 31/31, and that is
+correct** — the 31st check is the one bundling `docs/DESK_TESTING_PLAN.md`, which
+did not exist at `e18757e`. `docs/DESK_TESTING_PLAN.md` §3.4 now says so in plain
+language, because a 6am reader watching the count drop would otherwise read a
+successful rollback as a broken one.
 
 ### Rollback drill — EXECUTED 2026-08-15
 
@@ -135,10 +143,10 @@ readable and lets a single step be reverted.
 
 | Gate | Command | Expected |
 |---|---|---|
-| Full suite | `.venv\Scripts\python.exe -m pytest tests/ -q` | **2913 passed / 19 subtests**, exit 0 — check pytest's own exit code, not a piped tail |
+| Full suite | `.venv\Scripts\python.exe -m pytest tests/ -q` | **2918 passed / 19 subtests**, exit 0 — check pytest's own exit code, not a piped tail |
 | Smoke | `.venv\Scripts\python.exe scripts/smoke_check.py` | **7/7**, exit 0 |
-| Frozen rebuild | `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` | exit 0, ~4 min unattended. **Already green 2026-08-15 10:27** — repeat only if code lands after that |
-| Frozen selftest | `dist\TradingBotV3\TradingBotV3.exe --selftest` | **31/31**, exit 0, output ending `(frozen)`. **Already green 2026-08-15 10:27** |
+| Frozen rebuild | `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` | exit 0, ~4 min unattended. **Already green after R2.2** — repeat only if code lands after that |
+| Frozen selftest | `dist\TradingBotV3\TradingBotV3.exe --selftest` | **31/31**, exit 0, output ending `(frozen)`. **Already green after R2.2** |
 
 **Is a packaging trigger pending? No — but rebuild anyway.** Checked all five
 triggers across the whole stack (`e18757e..HEAD`): no new third-party dependency,
@@ -229,6 +237,23 @@ before the edit; recorded as a warehouse build decision). Verified by 20
 consecutive passes of the previously flaky test plus a new deterministic
 reproducer that writes and reconciles back to back 25 times.
 
+### R2.2 review pass — 2026-08-15 (four items from the final external review)
+
+Four small items, each its own green commit. Two changed behaviour, one is
+documentation with a test that keeps it honest, one reconciled the desk runbook.
+
+| # | What | Where |
+|---|---|---|
+| 1 | **The flip drain is explicitly locked.** The AWAY/EVENING → DESK flip records its own moment; adoption refuses any verdict stamped before it (`pending_pick_gate_ok(..., not_before=)`). A failed re-verification now retries every 60 s, five times, instead of falling through to the ordinary stored-verdict drain — the 2-bar lag bound is defense in depth, no longer the only lock. Giving up after five is safe because the barrier holds and the 30-minute staging refresh stamps post-flip verdicts | `alert_center_panel.py`, `autopilot_core.py`, spec §11.1 |
+| 2 | **One 14:00 boundary.** `auto_scanning_due` used an inclusive datetime endpoint, `_auto_work_due`'s fallback used `hour < 14`; at 14:00:00.000000 they disagreed. Both now call `within_auto_scanning_window` over `auto_quiet_hours_fallback_window`, inclusive at both ends. Test pins the exact microsecond at both call sites and was verified to fail against the old spelling | `autopilot_core.py`, `autopilot_service.py`, R1 spec §4 |
+| 3 | **The two-bar tolerance is recorded as an accepted exposure**, with its backstop named: BounceBot's four-close triple-VWAP invalidation plus the desync repair removes a bad adoption within ~4 completed bars. A test pins both constants so the documented bound cannot quietly stop being true. No behaviour changed | `autopilot_core.py` comment, spec §11.2 |
+| 4 | **The runbook stopped contradicting this file.** It claimed 31/31 at 09:58 where this file says 30/30 — the checkpoint was right, provable from the build: the only selftest change since `e18757e` is the testing-plan asset check added at 10:38, so the runbook was claiming its own bundling was verified before the file existed. Also removed its stale "known flaky test, just re-run it" carve-out and added the rollback section with the 30/30 explanation | `docs/DESK_TESTING_PLAN.md` |
+
+**Not done, and deliberately:** item 3 offered `max_bar_lag = 1` as an
+alternative. The trader's note left that as their call, so the accepted-exposure
+documentation was built as written and the constant is unchanged. Switching it
+later is a one-line change plus the golden-fixture update.
+
 ### R2 live proofs owed
 
 None has run. From `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` §8:
@@ -252,7 +277,7 @@ None of these has run. Each is one observation on the desk:
 |---|---|
 | Quiet hours | Launch at ~21:00 on a weekday with Auto left ON. `autopilot.log` says `Auto Pilot is ON from saved state, but nothing starts yet`; no IB connect, no universe rebuild, no self-arm. A manual scan from the same desk still runs |
 | EVENING stop | An EVENING day: the open+30 slot and the 07:00/07:15/07:30 checks run, then one `Evening mode: swing slot(s) … not run` line per refused hourly slot and no further scan. The after-close wrap-up still fires |
-| AWAY discipline | An AWAY session: picks do not reach `longs.txt`/`shorts.txt`, alerts arrive silently while the feed and D1 badge fill, and the flip back to DESK adopts **only the picks whose gate verdict is current** — R2 changed this proof, so anything staged hours ago and no longer qualifying should be refused rather than adopted |
+| AWAY discipline | An AWAY session: picks do not reach `longs.txt`/`shorts.txt`, alerts arrive silently while the feed and D1 badge fill, and the flip back to DESK adopts **only picks re-measured since the flip** — R2 changed this proof and R2.2 tightened it, so anything staged hours ago and no longer qualifying is refused rather than adopted. If the re-check itself fails, the status line says `Retrying in 60s` and **nothing adopts** — that is also a pass |
 | SPY wake alarm | One real ±1% EVENING day, or force it by setting `push_evening_spy_alarm_pct` low: an urgent push, a repeat no sooner than 5 minutes, and silence after flipping out of EVENING |
 
 **~~Known limitation, deliberate~~ — CLOSED by R2 (2026-08-15).** The

@@ -308,9 +308,11 @@ are listed in `CURRENT_CHECKPOINT.md`.
    `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`.
    Branch `phase05-r2-focus-gating-strength-board` (cut from R1, R1.1 merged
    forward); deterministic gate green (2865 passed / 19 subtests, smoke 7/7,
-   source selftest 30/30 at the time, all exit 0). **This closes R1's recorded stale-drain
-   gap**: the AWAY/EVENING→DESK drain now adopts only what the most recent
-   staging refresh verified.
+   source selftest 30/30 at the time, all exit 0; the current baseline after the
+   R2.1 and R2.2 review passes is in `CURRENT_CHECKPOINT.md`). **This closes R1's
+   recorded stale-drain gap**: the AWAY/EVENING→DESK drain now adopts only
+   verdicts stamped after the flip itself, re-measured on the flip, with a
+   failed re-measurement retrying rather than falling through (R2.2).
    **Remaining — the spec §8 live proofs, none yet run:** one session showing a
    staged pick evicted for a VWAP/PDH fallback, one adoption-time refusal, one
    clean "Not today" scoped removal that leaves the trader's other entries

@@ -307,6 +307,9 @@ AUTO_QUIET_HOURS_POSTCLOSE_MINUTES = 60
 AUTO_QUIET_HOURS_FALLBACK_START_HOUR = 6
 AUTO_QUIET_HOURS_FALLBACK_END_HOUR = 14
 AUTO_QUIET_HOURS_FALLBACK_LABEL = "06:00-14:00"
+AUTO_QUIET_HOURS_SETTING = "qt_auto_quiet_hours"
+AUTO_QUIET_HOURS_PREOPEN_SETTING = "qt_auto_quiet_hours_preopen_minutes"
+AUTO_QUIET_HOURS_POSTCLOSE_SETTING = "qt_auto_quiet_hours_postclose_minutes"
 
 
 def auto_quiet_hours_fallback_window(now: datetime) -> tuple[datetime, datetime]:
@@ -338,9 +341,6 @@ def within_auto_scanning_window(now: datetime, start: datetime, end: datetime) -
     microsecond of automatic work is waste; refusing one is a missed start.
     """
     return start <= now <= end
-AUTO_QUIET_HOURS_SETTING = "qt_auto_quiet_hours"
-AUTO_QUIET_HOURS_PREOPEN_SETTING = "qt_auto_quiet_hours_preopen_minutes"
-AUTO_QUIET_HOURS_POSTCLOSE_SETTING = "qt_auto_quiet_hours_postclose_minutes"
 
 
 def auto_scanning_window(
