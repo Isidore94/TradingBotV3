@@ -17,7 +17,7 @@ elapsed evidence lane that can run in parallel.
 | Active packet | **R2 M5 FOCUS GATING AND STRENGTH BOARD** (`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`) — code complete through the **R2.2 review pass** below, deterministic gate green, **four live proofs owed** |
 | Branch | **`phase05-r2-focus-gating-strength-board`**, cut from `phase05-r1-auto-modes-quiet-hours` with the R1.1 repair merged forward; pushed. Merging it brings the testing week, R1, R1.1 and R2 together |
 | Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
-| State | **Green: 2918 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0, after the R2.2 review pass. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
+| State | **Green: 2919 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0, after the R2.2 review pass. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
 | Next action | **The Monday sequence below.** The trader runs the R1 quiet-boot proof himself on the evening of 2026-08-15; everything else waits for Monday's real session |
 | Do not start yet | **R3 and later Phase 0.5 packets** — the 2026-08-15 redirects were given packet by packet for R1 and R2 only and do not carry forward. Also Phase 1 cleanup and any Phase 2+ item |
 
@@ -26,10 +26,10 @@ elapsed evidence lane that can run in parallel.
 ### Release candidate
 
 Monday tests **the tip of `phase05-r2-focus-gating-strength-board`**. The last
-commit that changed code or tests is the **R2.2 item-3 commit** ("Write down what
-two bars of lag can still cost"); anything after it on this branch is
-documentation, so the running behaviour Monday exercises is exactly the tree the
-three gates below were run against.
+commit that changed code or tests is the R2.2 refinement **"Owe the second
+return its own measurement"**; anything after it on this branch is documentation,
+so the running behaviour Monday exercises is exactly the tree the three gates
+below were run against.
 
 Stated that way on purpose: naming a fixed SHA here would be wrong the moment
 this file is edited again, and a stale "release candidate" line is worse than
@@ -38,9 +38,9 @@ and this section is updated.**
 
 | Check | Result | When |
 |---|---|---|
-| pytest | **2918 passed / 19 subtests**, exit 0 | 2026-08-15, after R2.2 |
+| pytest | **2919 passed / 19 subtests**, exit 0 | 2026-08-15, after R2.2 |
 | smoke | **7/7**, exit 0 | 2026-08-15, after R2.2 |
-| frozen selftest | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 | 2026-08-15, after R2.2 |
+| frozen rebuild + selftest | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 | 2026-08-15, after R2.2 |
 
 The R2.2 pass changed code, so it is a **new** release candidate and all three
 gates were re-run against it — including the frozen rebuild, even though no
@@ -143,7 +143,7 @@ readable and lets a single step be reverted.
 
 | Gate | Command | Expected |
 |---|---|---|
-| Full suite | `.venv\Scripts\python.exe -m pytest tests/ -q` | **2918 passed / 19 subtests**, exit 0 — check pytest's own exit code, not a piped tail |
+| Full suite | `.venv\Scripts\python.exe -m pytest tests/ -q` | **2919 passed / 19 subtests**, exit 0 — check pytest's own exit code, not a piped tail |
 | Smoke | `.venv\Scripts\python.exe scripts/smoke_check.py` | **7/7**, exit 0 |
 | Frozen rebuild | `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` | exit 0, ~4 min unattended. **Already green after R2.2** — repeat only if code lands after that |
 | Frozen selftest | `dist\TradingBotV3\TradingBotV3.exe --selftest` | **31/31**, exit 0, output ending `(frozen)`. **Already green after R2.2** |
@@ -168,15 +168,21 @@ because CLAUDE.md mandates one before every merge to `main`, and because:
 
 ### Frozen rebuild and REAL frozen selftest — 2026-08-15
 
-Three rebuilds, all green. The first was the run three packets of notes had
-mislabeled; the second was forced by the testing-plan asset; the third is the
-release candidate `bf1ab89` after the R2.1 repair pass.
+Four rebuilds, all green. The first was the run three packets of notes had
+mislabeled; the second was forced by the testing-plan asset; the third was the
+R2.1 release candidate `bf1ab89`; the fourth is the R2.2 tip.
 
 | # | Time | Result |
 |---|---|---|
 | 1 | 09:58 | `selftest OK: **30/30** checks passed **(frozen)**`, exit 0 |
 | 2 | 10:27 | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 |
-| 3 | 11:0x | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — **current, on `bf1ab89`** |
+| 3 | 11:0x | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — on `bf1ab89` |
+| 4 | 13:0x | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — **current, on the R2.2 tip** |
+
+Rebuild 4 was run **without a packaging trigger**, because a code commit makes a
+new release candidate and CLAUDE.md requires a rebuild before merging to `main`.
+The count is unchanged at 31, which is the expected result: R2.2 added no
+dependency, asset, package or dynamic import.
 
 **31, not 30, and that is the point.** The Testing Plan tab renders
 `docs/DESK_TESTING_PLAN.md`, a runtime asset that lives **outside `scripts/`**.
@@ -211,12 +217,12 @@ top-level modules (`focus_adoption_gate`, `strength_scan`) and its two new UI
 modules are in the bundle and import cleanly under it — which is what this run
 was needed to prove and no packaging-trigger analysis could.
 
-The desk was running from source, so nothing had to be closed. `dist/` and
-`build/` are gitignored, so this is verification only and never a commit
-artifact.
+The desk was running from source, so nothing had to be closed — and no desk
+process was running at all for rebuild 4. `dist/` and `build/` are gitignored, so
+this is verification only and never a commit artifact.
 
-**This satisfies the frozen gate for the current tree.** Re-run it at merge time
-only if code lands after 2026-08-15 10:27.
+**This satisfies the frozen gate for the current tree** (rebuild 4, on the R2.2
+tip). Re-run it at merge time only if code lands after that.
 
 ### ~~Known blocker for the merge gate~~ — FIXED 2026-08-15
 
@@ -239,12 +245,13 @@ reproducer that writes and reconciles back to back 25 times.
 
 ### R2.2 review pass — 2026-08-15 (four items from the final external review)
 
-Four small items, each its own green commit. Two changed behaviour, one is
-documentation with a test that keeps it honest, one reconciled the desk runbook.
+Four items, each its own green commit, plus one refinement of item 1 found while
+reviewing it. Two changed behaviour, one is documentation with a test that keeps
+it honest, one reconciled the desk runbook.
 
 | # | What | Where |
 |---|---|---|
-| 1 | **The flip drain is explicitly locked.** The AWAY/EVENING → DESK flip records its own moment; adoption refuses any verdict stamped before it (`pending_pick_gate_ok(..., not_before=)`). A failed re-verification now retries every 60 s, five times, instead of falling through to the ordinary stored-verdict drain — the 2-bar lag bound is defense in depth, no longer the only lock. Giving up after five is safe because the barrier holds and the 30-minute staging refresh stamps post-flip verdicts | `alert_center_panel.py`, `autopilot_core.py`, spec §11.1 |
+| 1 | **The flip drain is explicitly locked.** The AWAY/EVENING → DESK flip records its own moment; adoption refuses any verdict stamped before it (`pending_pick_gate_ok(..., not_before=)`). A failed re-verification now retries every 60 s, five times, instead of falling through to the ordinary stored-verdict drain — the 2-bar lag bound is defense in depth, no longer the only lock. Giving up after five is safe because the barrier holds and the 30-minute staging refresh stamps post-flip verdicts. A follow-up commit closed the DESK → AWAY → DESK mid-flight case: an attempt remembers which flip it answers, so a newer return is owed its own measurement rather than inheriting one whose bars predate it | `alert_center_panel.py`, `autopilot_core.py`, spec §11.1 |
 | 2 | **One 14:00 boundary.** `auto_scanning_due` used an inclusive datetime endpoint, `_auto_work_due`'s fallback used `hour < 14`; at 14:00:00.000000 they disagreed. Both now call `within_auto_scanning_window` over `auto_quiet_hours_fallback_window`, inclusive at both ends. Test pins the exact microsecond at both call sites and was verified to fail against the old spelling | `autopilot_core.py`, `autopilot_service.py`, R1 spec §4 |
 | 3 | **The two-bar tolerance is recorded as an accepted exposure**, with its backstop named: BounceBot's four-close triple-VWAP invalidation plus the desync repair removes a bad adoption within ~4 completed bars. A test pins both constants so the documented bound cannot quietly stop being true. No behaviour changed | `autopilot_core.py` comment, spec §11.2 |
 | 4 | **The runbook stopped contradicting this file.** It claimed 31/31 at 09:58 where this file says 30/30 — the checkpoint was right, provable from the build: the only selftest change since `e18757e` is the testing-plan asset check added at 10:38, so the runbook was claiming its own bundling was verified before the file existed. Also removed its stale "known flaky test, just re-run it" carve-out and added the rollback section with the 30/30 explanation | `docs/DESK_TESTING_PLAN.md` |
