@@ -253,6 +253,24 @@ Two independent mechanisms now, and the separation is the point:
 
 The 2-bar lag bound stays as defense in depth rather than as the lock.
 
+### 2026-08-15 — R2.2: one quiet-hours boundary, one answer
+
+`IMPLEMENTED` + `GREEN`. Second of four items from the final external review pass.
+
+The quiet-hours gate had two fallback paths that spelled the same boundary
+differently: `auto_scanning_due` compared against an inclusive datetime endpoint,
+`AutopilotService._auto_work_due` used `hour < 14`. At exactly 14:00:00.000000 —
+the one instant where those differ — the same clock produced "inside" from one
+caller and "outside" from the other.
+
+Both now build the window with `auto_quiet_hours_fallback_window` and compare
+with `within_auto_scanning_window`, inclusive at both ends. Inclusive is the
+correct side: this gate is permissive everywhere else too (close + 60 minutes,
+widened to contain the sweep window, failing to a window rather than to
+silence), and one extra microsecond of automatic work is waste while one refused
+is a missed start. The new test pins the exact microsecond at both call sites,
+in the ordinary path and in both fallback branches.
+
 ### 2026-08-15 — a Testing Plan tab, and the packaging trap it nearly walked into
 
 `IMPLEMENTED` + `GREEN`. Documentation-and-viewer work; no engine touched.

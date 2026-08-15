@@ -1281,3 +1281,55 @@ def test_a_broken_gate_check_also_falls_back_rather_than_opening_the_day(monkeyp
 
     allowed, reason = service._auto_work_due(SATURDAY.replace(hour=9))
     assert not allowed and "weekend" in reason
+
+
+def test_both_gates_answer_the_14_00_boundary_the_same_way(monkeypatch):
+    """R2.2 item 2: one boundary, one answer, whichever caller asks.
+
+    `auto_scanning_due` compared against an inclusive datetime endpoint while
+    `AutopilotService._auto_work_due`'s fallback branch used `hour < 14`. At
+    exactly 14:00:00.000000 - the one instant where the two spellings differ -
+    the same clock produced "inside" from one and "outside" from the other.
+    Both now evaluate `core.within_auto_scanning_window` over
+    `core.auto_quiet_hours_fallback_window`, so there is nowhere left to differ.
+
+    The moment is pinned to the microsecond deliberately: a test written at
+    14:00 with a minute's slack would have passed against the old code too.
+    """
+    service = _bare_service()
+    boundary = THURSDAY.replace(hour=14, minute=0, second=0, microsecond=0)
+    just_after = boundary + timedelta(microseconds=1)
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("broken")
+
+    # 1. The ordinary path. Agreement is asserted without naming the answer,
+    #    because that half holds on a desk in any timezone and with quiet hours
+    #    configured either way; the Pacific session's own edge is pinned right
+    #    after it.
+    assert service._auto_work_due(boundary)[0] == core.auto_scanning_due(boundary)[0]
+    assert service._auto_work_due(just_after)[0] == core.auto_scanning_due(just_after)[0]
+    assert core.auto_scanning_due(boundary, quiet_hours=True, local_timezone_name=PACIFIC)[0]
+    assert not core.auto_scanning_due(
+        just_after, quiet_hours=True, local_timezone_name=PACIFIC
+    )[0]
+
+    # 2. The core fallback, reached when the session lookup is broken.
+    monkeypatch.setattr(core, "auto_scanning_window", explode)
+    assert core.auto_scanning_due(boundary, quiet_hours=True)[0], "inclusive at 14:00"
+    assert not core.auto_scanning_due(just_after, quiet_hours=True)[0]
+    assert service._auto_work_due(boundary)[0], "the service delegates to the same answer"
+
+    # 3. The service fallback, reached when the gate check itself is broken.
+    #    This is the branch that used to spell the boundary differently.
+    monkeypatch.setattr(core, "auto_scanning_due", explode)
+    allowed, reason = service._auto_work_due(boundary)
+    assert allowed and "fallback" in reason, "14:00:00.000000 is inside, both sides"
+    assert not service._auto_work_due(just_after)[0]
+
+    # And the shared predicate itself, stated once.
+    start, end = core.auto_quiet_hours_fallback_window(boundary)
+    assert (start.hour, end.hour) == (6, 14)
+    assert core.within_auto_scanning_window(boundary, start, end)
+    assert core.within_auto_scanning_window(start, start, end), "inclusive at the open too"
+    assert not core.within_auto_scanning_window(just_after, start, end)

@@ -208,6 +208,15 @@ wording, and `docs/EVENING_MODE_RUNBOOK.md` in the same commit.
   The asymmetry with `bouncebot_scanning_due`, which still fails fully open, is
   deliberate: an extra overnight *sweep* is wasted IB traffic, whereas an extra
   overnight *automatic-work* window is the whole apparatus starting up.
+- **One boundary, one answer** (added 2026-08-15, R2.2). Both fallback paths build
+  the window with `auto_quiet_hours_fallback_window` and compare with
+  `within_auto_scanning_window`, which is **inclusive at both ends**. Spelled out
+  separately they had drifted: an inclusive datetime endpoint in `auto_scanning_due`
+  against `hour < 14` in `AutopilotService._auto_work_due`, so at exactly
+  14:00:00.000000 the same clock produced "inside" from one gate and "outside" from
+  the other. Inclusive is the right side of that choice for the same reason the rest
+  of this gate is permissive — one extra microsecond of automatic work is waste, one
+  refused is a missed start.
 - One owner per timer: the SPY alarm and quiet-hours checks live inside the existing
   `AutopilotService._tick()`; no new timers.
 - Champion paths untouched; the alarm reads the champion SPY bars only.

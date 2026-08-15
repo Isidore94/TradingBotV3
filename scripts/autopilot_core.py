@@ -307,6 +307,37 @@ AUTO_QUIET_HOURS_POSTCLOSE_MINUTES = 60
 AUTO_QUIET_HOURS_FALLBACK_START_HOUR = 6
 AUTO_QUIET_HOURS_FALLBACK_END_HOUR = 14
 AUTO_QUIET_HOURS_FALLBACK_LABEL = "06:00-14:00"
+
+
+def auto_quiet_hours_fallback_window(now: datetime) -> tuple[datetime, datetime]:
+    """The fixed window every fallback path uses, built the same way once.
+
+    Two call sites reach the fallback - this module's own broken-session-lookup
+    branch and `AutopilotService._auto_work_due`'s broken-gate branch - and they
+    have to agree at the boundary. They spelled it differently before (R2.2 item
+    2): an inclusive datetime endpoint here against `hour < 14` there, which
+    disagreed at exactly 14:00:00.000000. One window function and one comparison
+    function now, so there is nowhere left for them to differ.
+    """
+    return (
+        now.replace(
+            hour=AUTO_QUIET_HOURS_FALLBACK_START_HOUR, minute=0, second=0, microsecond=0
+        ),
+        now.replace(
+            hour=AUTO_QUIET_HOURS_FALLBACK_END_HOUR, minute=0, second=0, microsecond=0
+        ),
+    )
+
+
+def within_auto_scanning_window(now: datetime, start: datetime, end: datetime) -> bool:
+    """Inclusive at BOTH ends - 14:00:00.000000 is inside a window ending 14:00.
+
+    Inclusive because the window is already the permissive side of every choice
+    this gate makes: it is close + 60 minutes, widened to contain the sweep
+    window, and it fails to a window rather than to silence. One extra
+    microsecond of automatic work is waste; refusing one is a missed start.
+    """
+    return start <= now <= end
 AUTO_QUIET_HOURS_SETTING = "qt_auto_quiet_hours"
 AUTO_QUIET_HOURS_PREOPEN_SETTING = "qt_auto_quiet_hours_preopen_minutes"
 AUTO_QUIET_HOURS_POSTCLOSE_SETTING = "qt_auto_quiet_hours_postclose_minutes"
@@ -393,14 +424,9 @@ def auto_scanning_due(
             "Quiet-hours window lookup failed; falling back to the fixed %s window.",
             AUTO_QUIET_HOURS_FALLBACK_LABEL,
         )
-        start = now.replace(
-            hour=AUTO_QUIET_HOURS_FALLBACK_START_HOUR, minute=0, second=0, microsecond=0
-        )
-        end = now.replace(
-            hour=AUTO_QUIET_HOURS_FALLBACK_END_HOUR, minute=0, second=0, microsecond=0
-        )
+        start, end = auto_quiet_hours_fallback_window(now)
         label = f"{AUTO_QUIET_HOURS_FALLBACK_LABEL} fallback"
-    if start <= now <= end:
+    if within_auto_scanning_window(now, start, end):
         return True, f"inside the {label} automatic-work window"
     return False, f"quiet hours - outside the {label} automatic-work window"
 

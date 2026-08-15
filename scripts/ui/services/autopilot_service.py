@@ -612,14 +612,17 @@ class AutopilotService(QObject):
             # broke. Apply the same fixed window rather than opening the day
             # completely (R2.1): a broken gate must not be able to wake the
             # desk at 21:00, which is the thing it was added to stop.
+            #
+            # The window and the comparison both come from `core` (R2.2 item 2).
+            # Spelled out locally, this branch used `hour < 14` while
+            # `auto_scanning_due` used an inclusive datetime endpoint, so the
+            # two gates disagreed at exactly 14:00:00.000000 - one boundary, two
+            # answers, depending on which caller asked.
             logging.exception("Quiet-hours check failed; using the fixed fallback window.")
             if moment.weekday() >= 5:
                 return False, "weekend - quiet hours until the next session"
-            inside = (
-                core.AUTO_QUIET_HOURS_FALLBACK_START_HOUR
-                <= moment.hour
-                < core.AUTO_QUIET_HOURS_FALLBACK_END_HOUR
-            )
+            start, end = core.auto_quiet_hours_fallback_window(moment)
+            inside = core.within_auto_scanning_window(moment, start, end)
             label = core.AUTO_QUIET_HOURS_FALLBACK_LABEL
             if inside:
                 return True, f"quiet-hours check failed; inside the {label} fallback window"
