@@ -1072,6 +1072,62 @@ def test_a_failed_flip_reverify_retries_instead_of_draining_stale_verdicts(
     assert adopted == ["NVDA"]
 
 
+def test_a_second_flip_mid_flight_still_gets_its_own_measurement(monkeypatch, tmp_path):
+    """A DESK -> AWAY -> DESK round trip while a re-measurement is in flight.
+
+    That run's bars predate the second return, so the barrier refuses everything
+    it stamped - correct, and fail-closed. But if its success also cleared the
+    debt, the queue would sit unadopted until the next 30-minute refresh with the
+    trader standing there. The attempt therefore remembers which flip it answers.
+    """
+    clock = {"now": datetime(2026, 7, 2, 11, 2)}
+    panel = _flip_harness(monkeypatch, tmp_path, clock)
+    mode = {"v": "AWAY"}
+    monkeypatch.setattr(
+        "autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: mode["v"]
+    )
+    adopted: list[str] = []
+    panel._adopt_auto_pick_into_focus = lambda *a, **k: adopted.append(a[0]) or True  # type: ignore[method-assign]
+
+    payload = _one_staged_pick(
+        clock["now"] - timedelta(minutes=20), datetime(2026, 7, 2, 11, 0)
+    )
+    monkeypatch.setattr(
+        "autopilot_core.load_auto_populate_pending_picks", lambda *_a, **_k: payload
+    )
+
+    def set_mode(value):
+        mode["v"] = value
+        panel._auto_mode_cached = None
+        panel._poll_auto_pick_pending()
+
+    def stamp(at):
+        payload["pending"]["long"]["NVDA"]["gate_checked_at"] = at.isoformat(
+            timespec="seconds"
+        )
+
+    calls = {"n": 0}
+
+    def reverify(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # The trader steps away and comes back while this one is in flight.
+            set_mode("AWAY")
+            clock["now"] += timedelta(minutes=1)
+            set_mode("DESK")
+            stamp(clock["now"] - timedelta(seconds=30))  # before that return
+            return
+        stamp(clock["now"])
+
+    monkeypatch.setattr("autopilot_core.reverify_pending_picks", reverify)
+
+    set_mode("AWAY")
+    set_mode("DESK")
+
+    assert calls["n"] == 2, "the second flip is owed a measurement of its own"
+    assert adopted == ["NVDA"]
+
+
 def test_the_flip_barrier_still_refuses_after_the_retries_give_up(monkeypatch, tmp_path):
     """The retry is the fast path; the barrier is the lock.
 

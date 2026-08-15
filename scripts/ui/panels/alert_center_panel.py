@@ -1816,6 +1816,12 @@ class AlertCenterPanel(QFrame):
         import threading
 
         self._reverify_running = True
+        # Which flip this attempt is answering. A DESK -> AWAY -> DESK round
+        # trip while it runs owes a NEW measurement, and this run's success
+        # must not clear that debt: its bars predate the second flip, so the
+        # barrier would refuse everything it stamped and the queue would sit
+        # unadopted until the next 30-minute refresh with the trader watching.
+        started_for = self._desk_flip_at
 
         def worker() -> None:
             outcome = "ok"
@@ -1835,7 +1841,11 @@ class AlertCenterPanel(QFrame):
                 # another attempt is owed, or it would drain in that gap.
                 if outcome == "ok":
                     self._reverify_failures = 0
-                    self._reverify_retry_at = None
+                    if self._desk_flip_at == started_for:
+                        self._reverify_retry_at = None
+                    else:
+                        # A newer flip landed mid-flight: owe it an attempt now.
+                        self._reverify_retry_at = datetime.now()
                 else:
                     self._reverify_failures += 1
                     self._reverify_retry_at = (

@@ -251,6 +251,10 @@ Two independent mechanisms now, and the separation is the point:
   post-flip verdicts and becomes the recovery. The status line says which of the
   two it is doing.
 
+A re-measurement also remembers which flip it answers, so a DESK → AWAY → DESK
+round trip mid-flight is still owed one of its own rather than inheriting a
+result whose bars predate the second return.
+
 The 2-bar lag bound stays as defense in depth rather than as the lock.
 
 ### 2026-08-15 — R2.2: the desk runbook stops contradicting the checkpoint

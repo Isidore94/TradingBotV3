@@ -291,6 +291,13 @@ Two independent mechanisms replace that:
   "retrying" from "waiting for the next refresh", because an attempt that
   silently stopped trying looks exactly like one that succeeded.
 
+A re-measurement also remembers **which flip it answers**. A DESK → AWAY → DESK
+round trip while one is in flight owes a new measurement: the in-flight run's
+bars predate the second return, so the barrier refuses everything it stamps
+(correct, and fail-closed) — but if its success also cleared the debt, the queue
+would sit unadopted until the next 30-minute refresh with the trader standing
+there.
+
 The 2-bar lag bound remains, now as defense in depth rather than as the lock.
 
 ### 11.2 The two-bar tolerance: accepted, with the backstop named (item 3)
