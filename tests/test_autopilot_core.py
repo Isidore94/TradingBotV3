@@ -243,9 +243,11 @@ def test_universe_staleness_rule():
 
 
 def test_autopilot_auto_arm_due_daily_hands_off_rules():
-    # The timezone is pinned because the arm rule now consults the quiet-hours
-    # window, which is derived from the session and therefore timezone-bound.
-    pacific = {"local_timezone_name": "America/Los_Angeles"}
+    # Timezone AND quiet hours are pinned because the arm rule now consults the
+    # quiet-hours window: the timezone because the window derives from the
+    # session, and the setting because a desk with quiet hours switched off
+    # would otherwise turn the 21:00 assertion below red.
+    pacific = {"local_timezone_name": "America/Los_Angeles", "quiet_hours": True}
     wednesday_early = datetime(2026, 7, 8, 6, 45)
     wednesday_late = datetime(2026, 7, 8, 7, 0)
     saturday = datetime(2026, 7, 11, 9, 0)

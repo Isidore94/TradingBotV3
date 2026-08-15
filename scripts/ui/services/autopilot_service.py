@@ -284,7 +284,7 @@ class AutopilotService(QObject):
         bot = self._current_bot()
         if bot is None:
             self._log("No BounceBot instance yet - starting it now.")
-            self._ensure_bot_running()
+            self._ensure_bot_running(force=True)  # trader pressed Reconnect
             return
         self._reconnect_running = True
         self._log("Manual IB reconnect requested...")
@@ -536,11 +536,21 @@ class AutopilotService(QObject):
         except Exception:
             logging.exception("Auto watchlist day-roll clear failed")
 
-    def _ensure_bot_running(self) -> None:
+    def _ensure_bot_running(self, *, force: bool = False) -> None:
         service = self._bounce_service
         if service is None:
             return
         if not service.running:
+            # Quiet hours belong HERE, not only at the __init__ resume. This is
+            # the one place automation starts BounceBot and the tick calls it
+            # every 30 seconds, so gating the boot alone made the refusal
+            # cosmetic: a 21:00 launch logged "nothing starts yet" and then
+            # connected to IB half a minute later. `force` is the manual
+            # carve-out - the desk's Reconnect button still works at any hour.
+            if not force:
+                allowed, _reason = self._auto_work_due()
+                if not allowed:
+                    return
             # BounceService owns the "may a startup begin?" decision: a tick
             # landing while a previous startup worker is still inside its IB
             # connect gets False back instead of a second worker (two
@@ -952,6 +962,7 @@ class AutopilotService(QObject):
             return
         allowed, _reason = self._auto_work_due(now)
         if not allowed:
+            self._resolve_slots_after_window(now)
             return
         slots = self._swing_slots(now)
         done = set(self._state.get("slots_done", []))
@@ -987,6 +998,41 @@ class AutopilotService(QObject):
             self._log(f"Catching up: {len(due)} swing slots due; running {slot} and marking {', '.join(due[:-1])} skipped.")
         update = core.slot_writes_setup_tracker(slot, reference=now)
         self._start_swing_scan(slot_label=slot, update_setup_tracker=update, mark_slots=due)
+
+    def _resolve_slots_after_window(self, now: datetime) -> None:
+        """Once the window has closed, resolve slots that never ran.
+
+        Same reasoning as Evening's refused slots: `after_close_wrapup_due`
+        requires EVERY slot to be done, so slots still pending after the window
+        closes - a desk that crashed, or slept through the close as this one did
+        for 4h39m on 2026-08-11 - would stay pending forever and silently cancel
+        the whole after-close wrap-up for the day.
+
+        Before the window opens nothing is resolved: those slots are still going
+        to run.
+        """
+        if now.weekday() >= 5:
+            return
+        try:
+            _start, end = core.auto_scanning_window(reference=now)
+        except Exception:
+            logging.exception("Quiet-hours window lookup failed; leaving slots pending.")
+            return
+        if now <= end:
+            return  # before/inside the window - nothing to resolve yet
+        slots = self._swing_slots(now)
+        done = set(self._state.get("slots_done", []))
+        pending = [slot for slot in slots if slot not in done]
+        if not pending:
+            return
+        done.update(pending)
+        self._state["slots_done"] = sorted(done)
+        self._save_state()
+        self._log(
+            f"Past the {end.strftime('%H:%M')} automatic-work window with "
+            f"{len(pending)} swing slot(s) never run ({', '.join(pending)}) - "
+            "marking them resolved so the after-close wrap-up still runs."
+        )
 
     def _evening_filter_slots(
         self, due: list[str], now: datetime, done: set[str]
@@ -1869,7 +1915,18 @@ class AutopilotService(QObject):
             spy_today, prev_close = bot._spy_session_bars(cached_only=True)
             if not spy_today or not prev_close:
                 return  # missing bars are uncertainty, never confirmation
-            day_pct = (spy_today[-1].close - prev_close) / prev_close * 100.0
+            # `_spy_session_bars` calls the LAST cached bar's date "today", so
+            # overnight it hands back yesterday's session in good faith. The
+            # sweep is paused outside the window, so on an Evening morning
+            # after a +/-1% day the cache still holds that move and this would
+            # wake the trader every five minutes over a tape that already
+            # closed. A bar older than today is stale data, not a move.
+            last_bar = spy_today[-1]
+            stamp = getattr(last_bar, "dt", None)
+            bar_date = stamp.date() if hasattr(stamp, "date") else None
+            if bar_date != now.date():
+                return
+            day_pct = (last_bar.close - prev_close) / prev_close * 100.0
             last_sent = self._spy_alarm_last_sent()
             if not core.spy_move_alarm_due(
                 day_pct, last_sent, now, threshold_pct=threshold

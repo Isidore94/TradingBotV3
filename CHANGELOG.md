@@ -229,6 +229,66 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-15 — R1.1: the repair pass an independent review demanded
+
+`IMPLEMENTED` + `GREEN`. Five code-verified defects from the R1 review, two of
+them blockers that would have made the owed live proofs fail as written.
+
+**The boot gate was cosmetic.** Quiet hours gated `AutopilotService.__init__`'s
+resume but not `_ensure_bot_running`, which the tick calls every 30 seconds — so
+a 21:00 launch logged "nothing starts yet" and connected BounceBot to IB half a
+minute later. The gate now lives inside `_ensure_bot_running`, the one place
+automation starts the bot, with `force=True` as the manual carve-out that
+`force_reconnect` passes. The original test missed it by stopping the timer
+before a tick could run; the new one runs a real tick with the clock frozen to a
+weekday 21:00.
+
+**The SPY alarm read yesterday's tape.** `_spy_session_bars` calls the last
+cached bar's date "today", and the sweep is paused overnight, so on an Evening
+morning after a ±1% day the cache still held that move — and the quiet window
+opens 30 minutes before the bell. The alarm now refuses a series whose last bar
+predates the day it is asked about. Roughly seven false urgent wake-ups per such
+morning, none of them ever sent, because the alarm had not yet run live.
+
+**A post-window relaunch silently cancelled the after-close wrap-up.** The quiet
+refusal in `_maybe_run_swing_slot` returned before any slot resolution, so slots
+still pending after the window closed — a crash, or the 4h39m machine sleep this
+desk had on 2026-08-11 — stayed pending forever and `after_close_wrapup_due`
+never fired. Slots are now resolved once the window closes, on the same
+reasoning as Evening's refused slots. Before the window opens nothing is
+resolved: those slots are still going to run.
+
+**EVENING adopted picks immediately**, against the spec, the CLAUDE.md matrix,
+the runbook and the CHANGELOG, all of which said it stages until the DESK flip.
+It now refuses like AWAY, and stops beeping too — closing the spec §1 alert cell
+the R1 build had left unimplemented. The trader is asleep; the SPY alarm is
+EVENING's deliberate wake channel.
+
+**The legacy Tk GUI died at construction.** Removing `get_shared_watchlist_paths`
+with the shared/local vocabulary left `master_avwap_lib.gui` — which copies
+legacy's globals wholesale — raising NameError. Invisible to the suite, which
+imports these modules but never constructs them, and to the import-only frozen
+self-test. New `tests/test_module_globals_resolve.py` statically resolves every
+global that four never-constructed legacy modules read; it was verified to fail
+on the un-fixed file before the fix went back in.
+
+Hardening in the same pass: a NaN threshold no longer bypasses the alarm's
+threshold test; the quiet-window ⊇ sweep-window containment is now structural
+(`auto_scanning_window` widens itself to contain `bouncebot_scan_window`, so two
+independent settings keys cannot be configured into contradiction);
+`autopilot_auto_arm_due` takes `quiet_hours` so its test no longer depends on a
+machine-local setting; the launch self-heal gate and the D1-feed beep site gained
+coverage; Qt tests skip rather than silently pass without PySide6; and the
+"an early close moves this window" docstring claim is corrected — no early-close
+modelling exists anywhere, which is pre-existing and fail-open.
+
+Recorded, not fixed: a corrupt `local_settings.json` still silently re-homes the
+store to `%LOCALAPPDATA%`. And whether EVENING should also pause the BounceBot
+sweep is now an explicit open question in the spec's new §9 rather than a
+silently unbuilt matrix cell — pausing it would also stop the alert stream the
+same matrix says EVENING should queue, and remove the prices the strength checks
+read, so the build implemented the unambiguous cell and left this one.
+
 ### 2026-08-15 — packet R1: quiet hours, the auto-mode matrix, and one scan
 
 `IMPLEMENTED` + `GREEN`; **not** `LIVE_VALIDATED` — the four live proofs in

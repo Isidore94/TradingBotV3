@@ -864,16 +864,18 @@ class AlertCenterPanel(QFrame):
         return mode
 
     def _alerts_may_sound(self) -> bool:
-        """The sound checkbox, and then the AWAY rule.
+        """The sound checkbox, and then the away-from-the-desk rule.
 
-        Trader rule 2026-08-14: AWAY queues alerts silently for the trader's
-        return. Only the sound is suppressed - the feed, the history and the D1
-        unread badge all keep filling, so the size of what accrued is the first
-        thing visible on sitting back down.
+        Trader rule 2026-08-14: AWAY and EVENING both queue alerts silently -
+        away, or asleep, there is nobody the sound could reach, and EVENING has
+        its own deliberate wake channel in the SPY alarm. Only the sound is
+        suppressed: the feed, the history and the D1 unread badge all keep
+        filling, so the size of what accrued is the first thing visible on
+        sitting back down.
         """
         if not self.sound_input.isChecked():
             return False
-        return self._auto_mode_now() != "AWAY"
+        return self._auto_mode_now() not in ("AWAY", "EVENING")
 
     def _relay_alert_popup(self, alert: BounceAlert, *, is_focus: bool) -> None:
         """Ship a self-contained chart popup to connected satellites.
@@ -1600,16 +1602,20 @@ class AlertCenterPanel(QFrame):
         With no Focus service (satellite, tests) this falls back to the old
         approval queue - the picks must not silently vanish.
 
-        AWAY refuses adoption outright (trader rule 2026-08-14). Nobody is at
-        the desk to prune, so a name adopted at 09:00 would alert unwatched all
-        day. Nothing is marked seen on a refusal, so the whole day's picks are
-        still pending when the trader flips back to DESK and the next poll
-        adopts them together - which is also where packet R2's freshness gate
-        will go, so stale picks get dropped rather than adopted.
+        AWAY and EVENING both refuse adoption outright (trader rule
+        2026-08-14). Nobody is at the desk to prune - away, or asleep - so a
+        name adopted at 09:00 would alert unwatched all day. Nothing is marked
+        seen on a refusal, so the whole day's picks are still pending when the
+        trader flips back to DESK and the next poll adopts them together -
+        which is also where packet R2's freshness gate will go, so stale picks
+        get dropped rather than adopted.
+
+        DESK keeps immediate adoption (2026-08-05 directive): the trader is
+        sitting there and culling is quicker than approving one at a time.
         """
         if self._auto_pick_pending_path is None:
             return
-        if self._auto_mode_now() == "AWAY":
+        if self._auto_mode_now() in ("AWAY", "EVENING"):
             return
         try:
             from autopilot_core import load_auto_populate_pending_picks

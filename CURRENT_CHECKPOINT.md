@@ -15,9 +15,9 @@ elapsed evidence lane that can run in parallel.
 |---|---|
 | Roadmap phase | **Phase 0.5 R1 built** (trader redirect 2026-08-15) — P0's live gates are unchanged and still owed |
 | Active packet | **R1 AUTO-MODE MATRIX AND QUIET HOURS** (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`) — code complete, deterministic gate green, **four live proofs owed** |
-| Branch | **`phase05-r1-auto-modes-quiet-hours`**, branched from `testing-week-2026-08-10` at `e18757e`; pushed. Two commits: `fbf8055` behaviour, `0127c8d` removal |
+| Branch | **`phase05-r1-auto-modes-quiet-hours`**, branched from `testing-week-2026-08-10` at `e18757e`; pushed. `fbf8055` behaviour, `0127c8d` removal, `16fe004` docs, `efb322d` review, plus the R1.1 repair. `phase05-r2-focus-gating-strength-board` is cut from it and holds R2's golden-fixture baseline |
 | Scope | `scripts/autopilot_core.py`, `scripts/ui/services/autopilot_service.py`, `scripts/ui/app.py`, `scripts/ui/panels/alert_center_panel.py`, `scripts/bounce_bot_lib/legacy.py` (behaviour); plus `scan_service.py`, `master_avwap_lib/{runner,legacy,gui}.py`, `scan_worker.py`, `project_paths.py`, `master_avwap_panel.py`, `gui_app/*`, `writer_lease.py`, `autopilot_panel.py`, `master_avwap_mini_pc.py` (removal). Ask-first approval taken before the first edit |
-| State | **Green: 2773 passed / 19 subtests / smoke 7/7 / frozen selftest 30/30**, all exit 0. Nothing observed live yet |
+| State | **Green after the R1.1 repair pass: 2785 passed / 19 subtests / smoke 7/7 / frozen selftest 30/30**, all exit 0. Nothing observed live yet |
 | Next action | Run the four R1 live proofs (below), then return to **P0.2–P0.6** and the ticker-briefs morning check |
 | Do not start yet | **R2 and later Phase 0.5 packets** — the trader's 2026-08-15 redirect covered R1 only; R2 waits for an explicit go. Also Phase 1 cleanup and any Phase 2+ item |
 
@@ -38,6 +38,9 @@ day's worth of picks can land at once and some will be stale until R2 lands. The
 trader accepted this on 2026-08-15 in preference to deferring the packet.
 
 ### R1 build review — 2026-08-15 (independent five-dimension review; findings code-verified)
+
+**All five findings are FIXED as of the R1.1 pass below.** The list is kept
+because the defects are the useful record, not the fact that they closed.
 
 Overall: the architecture is right, fail-open holds at every consumer, the manual
 carve-outs are real, the alarm's dedupe/day-roll/restart mechanics are solid, the
@@ -79,7 +82,38 @@ the following were verified against the code, not just claimed:
    construction raises NameError. One-line import fix. Invisible to the suite
    (tests import but never construct) and to the import-only frozen selftest.
 
-Cheap hardening to take in the same pass, or record as owed: NaN threshold
+### R1.1 repair pass — 2026-08-15 (all five findings closed)
+
+| # | Fix | Proof |
+|---|---|---|
+| 1 | Quiet hours moved **into** `_ensure_bot_running`, the one place automation starts the bot; `force=True` is the manual carve-out and `force_reconnect` passes it | `test_the_tick_cannot_undo_the_boot_refusal` runs a real tick with the clock frozen to a weekday 21:00; `test_the_reconnect_button_starts_the_bot_at_any_hour` |
+| 2 | The alarm refuses a SPY series whose last bar predates the day being asked about — stale cache is not a move | `test_yesterdays_cached_move_never_wakes_the_trader` (and the same +3% once today's tape prints it still fires) |
+| 3 | `_resolve_slots_after_window` marks still-pending slots done once the window closes, so the after-close wrap-up survives a crash or a long sleep. Before the window opens nothing is resolved | `test_slots_left_pending_past_the_window_are_resolved` |
+| 4 | `_poll_auto_pick_pending` refuses `("AWAY", "EVENING")`; EVENING also stops beeping, closing the spec §1 alert cell | `test_away_and_evening_refuse_to_adopt_staged_picks`, `test_evening_queues_alerts_without_a_sound` |
+| 5 | `gui.py` uses `LONGS_FILE, SHORTS_FILE` instead of the deleted helper | New `tests/test_module_globals_resolve.py` statically resolves every global four never-constructed legacy modules read — verified to fail on the un-fixed file before the fix went back in |
+
+Hardening taken in the same pass: NaN threshold guard on the alarm; the
+quiet-window ⊇ sweep-window containment is now **structural** (`auto_scanning_window`
+widens itself to contain `bouncebot_scan_window`, so two independent settings keys
+cannot contradict each other); `autopilot_auto_arm_due` takes `quiet_hours` and the
+arm test pins it, so a desk with quiet hours disabled no longer turns that test red;
+`MainWindow._self_heal_universe`'s gate and the D1-feed beep site now have coverage;
+the Qt tests **skip** instead of silently passing without PySide6; the false
+"an early close moves this window" docstring claim is corrected (no early-close
+modelling exists anywhere — pre-existing, and fail-open since the window is only
+ever too long).
+
+**Baseline after R1.1: 2785 passed / 19 subtests / smoke 7/7 / frozen selftest
+30/30**, all exit 0.
+
+Still owed, recorded not fixed: a corrupt `local_settings.json` silently re-homes
+the store to `%LOCALAPPDATA%` (wants one loud stderr line plus atomic settings
+writes); and the spec §1 EVENING **sweep** cell is now explicitly unresolved in
+that spec's new §9 rather than silently unbuilt — the recommendation there is to
+leave the sweep running, and the trader decides before the EVENING live proof is
+recorded as passed.
+
+Original hardening list from the review, for reference: NaN threshold
 bypasses the alarm's threshold test (guard `threshold != threshold` like
 `day_pct`); the quiet-window⊇sweep-window containment is enforced nowhere at
 runtime (two independent settings keys; clamp or log the contradiction);

@@ -7,9 +7,18 @@ trader on 2026-08-15 as the promotion of the 2026-08-14 wishlist entries; ranked
 **Built 2026-08-15** on branch `phase05-r1-auto-modes-quiet-hours`, two commits:
 the behaviour (§3.1–3.4) and the shared-scan removal (§3.5). The trader directed
 the build ahead of P0.7 and answered §7's open question and two build-time
-choices before any edit — see §8. Deterministic verification is green
-(2773 passed / 19 subtests, smoke 7/7, frozen selftest 30/30, all exit 0); the
-§6 live proofs are **still owed**.
+choices before any edit — see §8.
+
+**R1.1 repair pass, 2026-08-15.** An independent review found five code-verified
+defects, two of them blockers, and they are fixed: the tick re-connected
+BounceBot 30 s after the boot gate refused it; the SPY alarm read yesterday's
+cached tape pre-open and would have woken the trader falsely; a post-window
+relaunch left slots pending and silently cancelled the after-close wrap-up;
+EVENING adopted picks immediately against every stated rule; and the legacy Tk
+GUI raised NameError at construction after §3.5 removed a helper it used.
+Verification after the repair: **2785 passed / 19 subtests, smoke 7/7, frozen
+selftest 30/30**, all exit 0. The §6 live proofs are **still owed** — none has
+been attempted, and the first two would have failed as written before this pass.
 
 Build gates as originally written: no code from this spec lands before `plan.md`
 P0.7 (testing-week merge) completes — **superseded by the trader's explicit
@@ -26,9 +35,10 @@ exception in **every** mode, unchanged.
 | Behavior | OFF | DESK | AWAY | EVENING |
 |---|---|---|---|---|
 | Scheduled Master AVWAP swing slots | no | yes (in-window) | yes (in-window) | **early slot + strength checks only, then none** |
-| Open watchlist self-build / BounceBot sweep | no | yes (in-window) | yes (in-window) | early morning only, then quiet |
-| Live alerts served in the GUI (toast/sound emphasis) | — | yes | **no — queue silently in Alert Center for return** | queue |
-| Auto picks adopted into M5 Focus | no | yes (via staging + adoption gate) | **never** | **staged only; adoption happens on the flip to DESK** |
+| Open watchlist self-build | no | yes (in-window) | yes (in-window) | **no — skipped, no sticky marker** |
+| BounceBot sweep | no | yes (in-window) | yes (in-window) | **UNRESOLVED — see §9** |
+| Live alerts served in the GUI (toast/sound emphasis) | — | yes | **no — queue silently in Alert Center for return** | **no — same rule as AWAY** |
+| Auto picks adopted into M5 Focus | no | yes (via staging + adoption gate) | **never** | **never; adoption happens on the flip to DESK** |
 | Swing push + D1 events push (phone) | no | no | yes (existing policy) | no |
 | SPY ±1% wake alarm (phone, every 5 min) | no | no | no | **yes — new** |
 | Hourly `autopilot_today.txt` digest write | no | — (existing behavior) | yes | yes |
@@ -220,6 +230,30 @@ threshold test push). CLAUDE.md/AGENTS.md, `docs/AWAY_SCANNER_RUNBOOK.md`, and
   attention-demanding?~~ **Answered 2026-08-15 — see §8.1.**
 - Should the SPY alarm also cover a fast intraday reversal (e.g. crosses back
   through ±1%)? Not in v1; revisit after the first live EVENING week.
+
+## 9. Unresolved — EVENING and the BounceBot sweep
+
+The §1 matrix originally read "early morning only, then quiet" for a single
+combined "self-build / sweep" cell. The build split them, because they are not
+one behaviour:
+
+- The **open watchlist self-build** is now skipped in EVENING. Built, tested.
+- The **BounceBot M5 sweep** still runs on its own window (`bouncebot_scanning_due`,
+  06:00–13:30) in EVENING, exactly as in DESK and AWAY. **Not built, deliberately
+  not guessed.**
+
+Pausing the sweep after the early block would also stop the alert stream that
+the same matrix says EVENING should *queue*, and would remove the live prices
+the 07:00/07:15/07:30 strength-persistence checks read. Those two cells
+contradict each other, so the build implemented the one that is unambiguous
+(queue quietly) and left this one for the trader.
+
+**Recommendation: leave the sweep running.** EVENING's stated job is to have the
+day ready on waking and to wake the trader if the market moves; a running sweep
+serves the first (the strength checks) and costs nothing the trader can hear now
+that the beep is suppressed. The trader wakes at 07:00–07:30 and flips to DESK,
+so "EVENING all day" is an edge case already covered by the slot refusals.
+Decide before the EVENING live proof is recorded as passed.
 
 ## 8. Build-time decisions (trader, 2026-08-15)
 

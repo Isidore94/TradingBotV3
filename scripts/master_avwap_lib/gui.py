@@ -1037,7 +1037,11 @@ class MasterAvwapGUI:
 
     def refresh_tracker_storage_summary(self):
         details = get_tracker_storage_details()
-        shared_longs_path, shared_shorts_path = get_shared_watchlist_paths()
+        # LONGS_FILE/SHORTS_FILE directly, rather than the deleted
+        # `get_shared_watchlist_paths()` helper: it returned exactly this pair,
+        # and its removal with the shared/local vocabulary left this call site
+        # raising NameError at construction (packet R1.1).
+        shared_longs_path, shared_shorts_path = LONGS_FILE, SHORTS_FILE
         self.tracker_storage_dir = Path(details["data_dir"])
         self.tracker_storage_runtime_dir = Path(details["runtime_dir"])
         self.tracker_storage_settings_file = Path(details["settings_file"])

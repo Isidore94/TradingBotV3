@@ -18,8 +18,10 @@ this one deliberately mirrors; the push tests on `test_away_push_gating.py`.
 
 import os
 import sys
+
+import pytest
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -193,19 +195,135 @@ def _boot(monkeypatch, *, allowed: bool):
     monkeypatch.setattr(AutopilotService, "_log", lambda self, message: logged.append(message))
     service = AutopilotService(bounce)
     service._timer.stop()
-    return bounce, logged
+    return service, bounce, logged
 
 
 def test_a_late_boot_with_auto_left_on_starts_nothing(monkeypatch):
-    bounce, logged = _boot(monkeypatch, allowed=False)
+    _service, bounce, logged = _boot(monkeypatch, allowed=False)
     assert not bounce.started, "a 21:00 boot must not connect BounceBot to IB"
     assert any("nothing starts yet" in line for line in logged)
 
 
 def test_a_boot_inside_the_window_still_resumes(monkeypatch):
-    bounce, logged = _boot(monkeypatch, allowed=True)
+    _service, bounce, logged = _boot(monkeypatch, allowed=True)
     assert bounce.started
     assert any("resuming from saved state" in line for line in logged)
+
+
+def test_the_tick_cannot_undo_the_boot_refusal(monkeypatch):
+    """The 2026-08-15 review's first blocker.
+
+    Gating only the __init__ resume made the refusal cosmetic: the tick calls
+    `_ensure_bot_running` every 30 seconds with no clock check, so a 21:00
+    launch logged "nothing starts yet" and connected to IB half a minute
+    later. The original boot test never caught it because it stopped the timer
+    before a tick could run - so this one runs the tick itself.
+    """
+    service, bounce, _logged = _boot(monkeypatch, allowed=False)
+    # Everything the tick does apart from the bot start is out of scope here;
+    # `_ensure_bot_running` is deliberately left real.
+    for name in (
+        "_roll_day_state", "_apply_scan_window", "_apply_quiet_hours",
+        "_maybe_auto_arm", "_maybe_clear_stale_auto_lists",
+        "_maybe_add_near_extreme_names", "_maybe_score_picks_daily",
+        "_ensure_universe_fresh", "_maybe_build_watchlists",
+        "_maybe_run_swing_slot", "_maybe_run_wrapup", "_maybe_run_evening_prep",
+        "_maybe_hourly_away_report", "_maybe_push_d1_events",
+        "_maybe_push_spy_alarm", "status_snapshot",
+    ):
+        setattr(service, name, lambda *a, **k: {})
+    monkeypatch.setattr(core, "write_heartbeat", lambda **_k: None)
+    # A weekday, because the tick short-circuits on weekends and the real
+    # clock would otherwise decide whether this test proves anything.
+    monkeypatch.setattr(
+        "ui.services.autopilot_service.datetime",
+        type("D", (datetime,), {"now": staticmethod(lambda: THURSDAY.replace(hour=21))}),
+    )
+
+    service._tick()
+    assert not bounce.started, "the tick must not connect what the boot refused"
+
+    _pin_window(monkeypatch, True)
+    service._tick()
+    assert bounce.started, "and it must still connect once the window opens"
+
+
+def test_the_reconnect_button_starts_the_bot_at_any_hour(monkeypatch):
+    """`force` is the manual carve-out: quiet hours never gate the trader."""
+    service = _bare_service()
+    bounce = _FakeBounceService()
+    service._bounce_service = bounce
+    service._bot_start_deferred = False
+    service._reconnect_running = False
+    service._current_bot = lambda: None  # type: ignore[method-assign]
+    _pin_window(monkeypatch, False)
+    service.force_reconnect()
+    assert bounce.started
+
+
+def test_slots_left_pending_past_the_window_are_resolved(monkeypatch):
+    """Otherwise a crash or a long sleep silently cancels the wrap-up.
+
+    `after_close_wrapup_due` requires every slot to be done, so slots still
+    pending when the window closes would stay pending forever - and the desk
+    slept 4h39m through one session on 2026-08-11.
+    """
+    service = _bare_service()
+    service._scan_service = type("S", (), {"running": False})()
+    service._swing_slots = lambda _now: ["07:30", "09:00", "13:00"]  # type: ignore[method-assign]
+    service._state["slots_done"] = ["07:30"]
+    _pin_window(monkeypatch, False)
+    monkeypatch.setattr(
+        core, "auto_scanning_window", lambda **_k: (THURSDAY.replace(hour=6), THURSDAY.replace(hour=14))
+    )
+
+    # Before the window opens nothing is resolved - those slots still run.
+    service._maybe_run_swing_slot(THURSDAY.replace(hour=5))
+    assert service._state["slots_done"] == ["07:30"]
+
+    # Past the window they are, so the after-close wrap-up can still fire.
+    service._maybe_run_swing_slot(THURSDAY.replace(hour=15))
+    assert set(service._state["slots_done"]) == {"07:30", "09:00", "13:00"}
+    assert any("after-close wrap-up" in line for line in service._logged)
+
+
+def test_the_launch_universe_heal_is_gated_and_the_fresh_path_is_untouched(monkeypatch):
+    """MainWindow's self-heal fired 2.5 s after launch at any hour."""
+    try:
+        from PySide6.QtCore import QObject
+        from PySide6.QtWidgets import QApplication
+    except ModuleNotFoundError:  # pragma: no cover - PySide6 is on the desk
+        pytest.skip("PySide6 is not installed")
+    QApplication.instance() or QApplication([])
+    from ui.app import MainWindow
+
+    started: list[str] = []
+
+    # A real QObject, because the un-gated path parents a QTimer to it.
+    class _Window(QObject):
+        def __init__(self):
+            super().__init__()
+            self.universe_status = type(
+                "L", (), {"setText": lambda self, _t: None, "setStyleSheet": lambda self, _s: None}
+            )()
+            self._universe_poll = None
+
+        def _poll_universe_heal(self):  # the timer's slot; never fires here
+            pass
+
+    window = _Window()
+    monkeypatch.setattr(core, "universe_is_stale", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        "threading.Thread",
+        lambda *a, **k: started.append(k.get("name") or "thread") or type("T", (), {"start": lambda self: None})(),
+    )
+    monkeypatch.setattr(core, "auto_scanning_due", lambda *_a, **_k: (False, "quiet"))
+    MainWindow._self_heal_universe(window)
+    assert started == [], "a 21:00 launch must not sweep the universe"
+
+    monkeypatch.setattr(core, "auto_scanning_due", lambda *_a, **_k: (True, "open"))
+    MainWindow._self_heal_universe(window)
+    assert started == ["universe-self-heal"]
 
 
 def test_the_quiet_hours_crossing_is_logged_once_not_every_tick(monkeypatch):
@@ -396,8 +514,11 @@ class _Sent:
 
 
 class _Bar:
-    def __init__(self, close):
+    def __init__(self, close, dt=None):
         self.close = close
+        # Dated by default: the alarm refuses a series whose last bar predates
+        # the day it is asked about, so an undated bar is not a valid fixture.
+        self.dt = dt if dt is not None else THURSDAY.replace(hour=9, minute=30)
 
 
 def _alarm_service(monkeypatch, *, profile=AUTO_PROFILE_EVENING, bars=(_Bar(103.0),), prev=100.0):
@@ -448,6 +569,28 @@ def test_missing_spy_bars_never_wake_the_trader(monkeypatch):
     _alarm_service(monkeypatch, bars=())._maybe_push_spy_alarm(THURSDAY)
     _alarm_service(monkeypatch, prev=None)._maybe_push_spy_alarm(THURSDAY)
     assert sent.calls == []
+
+
+def test_yesterdays_cached_move_never_wakes_the_trader(monkeypatch):
+    """The 2026-08-15 review's second blocker.
+
+    `_spy_session_bars` calls the last cached bar's date "today", and the sweep
+    is paused overnight, so on an Evening morning after a big day the cache
+    still holds that move. The quiet window opens 30 minutes before the bell,
+    so without a date check the trader was woken every five minutes over a tape
+    that had already closed.
+    """
+    sent = _Sent()
+    monkeypatch.setattr(push_notify, "send_push", sent)
+    yesterday = THURSDAY.replace(hour=12) - timedelta(days=1)
+    service = _alarm_service(monkeypatch, bars=(_Bar(103.0, dt=yesterday),))
+    service._maybe_push_spy_alarm(THURSDAY.replace(hour=6, minute=5))
+    assert sent.calls == [], "a bar from a previous session is stale data, not a move"
+
+    # The same +3% once today's tape actually prints it does wake the trader.
+    fresh = _alarm_service(monkeypatch, bars=(_Bar(103.0),))
+    fresh._maybe_push_spy_alarm(THURSDAY.replace(hour=7))
+    assert len(sent.calls) == 1
 
 
 def test_the_kill_switch_silences_the_spy_alarm(monkeypatch):
@@ -509,9 +652,9 @@ def _panel(monkeypatch, mode):
 
         QApplication.instance() or QApplication([])
         from ui.panels.alert_center_panel import AlertCenterPanel
-    except ModuleNotFoundError as exc:  # pragma: no cover - PySide6 always present on the desk
+    except ModuleNotFoundError as exc:  # pragma: no cover - PySide6 is on the desk
         if exc.name == "PySide6":
-            return None
+            pytest.skip("PySide6 is not installed")
         raise
     panel = AlertCenterPanel()
     monkeypatch.setattr("autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: mode)
@@ -527,8 +670,6 @@ def _bounce_alert():
 
 def test_away_queues_alerts_without_a_sound(monkeypatch):
     panel = _panel(monkeypatch, "AWAY")
-    if panel is None:
-        return
     beeps: list[int] = []
     monkeypatch.setattr(
         "ui.panels.alert_center_panel.QApplication.beep", lambda: beeps.append(1)
@@ -539,10 +680,46 @@ def test_away_queues_alerts_without_a_sound(monkeypatch):
     assert len(panel._alerts) == 1, "the alert still queues for the trader's return"
 
 
+def test_evening_queues_alerts_without_a_sound(monkeypatch):
+    """Evening means the trader is asleep, so the desk stays quiet too.
+
+    The SPY wake alarm is Evening's deliberate wake channel; a beeping desk in
+    an empty room is not one. Spec section 1's matrix has said "queue" for the
+    Evening alert cell since 2026-08-14 - the R1 build only implemented AWAY.
+    """
+    panel = _panel(monkeypatch, "EVENING")
+    beeps: list[int] = []
+    monkeypatch.setattr(
+        "ui.panels.alert_center_panel.QApplication.beep", lambda: beeps.append(1)
+    )
+    panel.sound_input.setChecked(True)
+    panel.add_alert(_bounce_alert())
+    assert beeps == []
+    assert len(panel._alerts) == 1
+
+
+def test_the_d1_feed_beep_follows_the_same_rule(monkeypatch):
+    """The D1 feed has its own beep site; AWAY has to silence both."""
+    from ui.models.bounce import BounceAlert
+
+    upgrade = BounceAlert.from_callback(
+        "MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade [score=245]",
+        "d1_flag_long",
+    )
+    for mode, expected in (("DESK", [1]), ("AWAY", []), ("EVENING", [])):
+        panel = _panel(monkeypatch, mode)
+        beeps: list[int] = []
+        monkeypatch.setattr(
+            "ui.panels.alert_center_panel.QApplication.beep", lambda: beeps.append(1)
+        )
+        panel.sound_input.setChecked(True)
+        panel.add_alert(upgrade)
+        assert beeps == expected, f"{mode} D1 beep"
+        assert len(panel._d1_alerts) == 1, f"{mode} still queues the D1 alert"
+
+
 def test_desk_still_beeps(monkeypatch):
     panel = _panel(monkeypatch, "DESK")
-    if panel is None:
-        return
     beeps: list[int] = []
     monkeypatch.setattr(
         "ui.panels.alert_center_panel.QApplication.beep", lambda: beeps.append(1)
@@ -560,8 +737,6 @@ def test_an_unreadable_auto_mode_leaves_the_desk_loud(monkeypatch):
     the desk keeps beeping.
     """
     panel = _panel(monkeypatch, "DESK")
-    if panel is None:
-        return
     monkeypatch.setattr(
         "autopilot_core.read_auto_pilot_mode",
         lambda *_a, **_k: (_ for _ in ()).throw(OSError("state file gone")),
@@ -572,10 +747,9 @@ def test_an_unreadable_auto_mode_leaves_the_desk_loud(monkeypatch):
     assert panel._alerts_may_sound() is True
 
 
-def test_away_refuses_to_adopt_staged_picks(monkeypatch, tmp_path):
-    panel = _panel(monkeypatch, "AWAY")
-    if panel is None:
-        return
+@pytest.mark.parametrize("mode", ["AWAY", "EVENING"])
+def test_away_and_evening_refuse_to_adopt_staged_picks(monkeypatch, tmp_path, mode):
+    panel = _panel(monkeypatch, mode)
     panel._auto_pick_pending_path = tmp_path / "pending.json"
     adopted: list[str] = []
     panel._adopt_auto_pick_into_focus = lambda *a, **k: adopted.append(a[0]) or True  # type: ignore[method-assign]

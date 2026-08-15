@@ -223,8 +223,10 @@ def bouncebot_scan_window(
     """Naive local start/end of the window BounceBot's sweep may run in.
 
     The session bounds come from `market_session`, the one source of truth for
-    them, so a timezone or early-close change moves this window with everything
-    else instead of drifting away from it.
+    them, so a timezone change moves this window with everything else instead
+    of drifting away from it. Early closes are NOT modelled - the session
+    helper hardcodes regular hours - so a half-day still reports the regular
+    close. Fail-open: the window is too long, never too short.
     """
     session = get_market_session_window(
         reference=reference, local_timezone_name=local_timezone_name
@@ -307,9 +309,18 @@ def auto_scanning_window(
 ) -> tuple[datetime, datetime]:
     """Naive local start/end of the window automatic work may run in.
 
-    Like `bouncebot_scan_window`, the bounds come from `market_session` so an
-    early close or a timezone change moves this with everything else instead of
-    drifting away from it.
+    Like `bouncebot_scan_window`, the bounds come from `market_session`, so a
+    timezone change moves this with everything else instead of drifting away
+    from it. (Early closes are NOT modelled anywhere yet - the session helper
+    hardcodes regular hours - so a half-day still reports the regular close.
+    Pre-existing, and fail-open: the window is too long, never too short.)
+
+    The result is widened to CONTAIN the BounceBot sweep window. The containment
+    is what makes the two gates coherent - quiet hours decide whether BounceBot
+    may connect, and the sweep window decides whether it may sweep, so a quiet
+    window that opened later would strand the sweep with no connection. Both
+    windows have independent settings keys and could otherwise be configured
+    into that contradiction; widening here means they cannot be.
     """
     session = get_market_session_window(
         reference=reference, local_timezone_name=local_timezone_name
@@ -324,7 +335,14 @@ def auto_scanning_window(
             AUTO_QUIET_HOURS_POSTCLOSE_SETTING, AUTO_QUIET_HOURS_POSTCLOSE_MINUTES
         )
     )
-    return start, end
+    try:
+        sweep_start, sweep_end = bouncebot_scan_window(
+            reference=reference, local_timezone_name=local_timezone_name
+        )
+    except Exception:
+        logging.exception("Sweep-window lookup failed; quiet hours use their own bounds.")
+        return start, end
+    return min(start, sweep_start), max(end, sweep_end)
 
 
 def auto_scanning_due(
@@ -405,6 +423,8 @@ def spy_move_alarm_due(
         threshold = abs(float(threshold_pct))
     except (TypeError, ValueError):
         threshold = EVENING_SPY_ALARM_PCT
+    if threshold != threshold:  # NaN threshold would make every move qualify
+        threshold = EVENING_SPY_ALARM_PCT
     if move < threshold:
         return False
     if last_sent_at is None:
@@ -454,6 +474,7 @@ def autopilot_auto_arm_due(
     auto_arm_enabled: bool = True,
     arm_hour: int = AUTOPILOT_AUTO_ARM_HOUR,
     local_timezone_name: str | None = None,
+    quiet_hours: bool | None = None,
 ) -> bool:
     """True when the daily 07:00 self-arm should flip Auto Pilot ON.
 
@@ -468,7 +489,9 @@ def autopilot_auto_arm_due(
         return False
     if now.hour < int(arm_hour):
         return False
-    allowed, _ = auto_scanning_due(now, local_timezone_name=local_timezone_name)
+    allowed, _ = auto_scanning_due(
+        now, quiet_hours=quiet_hours, local_timezone_name=local_timezone_name
+    )
     if not allowed:
         return False
     return str(armed_date or "") != now.date().isoformat()
