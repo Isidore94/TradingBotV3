@@ -32,9 +32,18 @@ def _ctx(prev_high, prev_low, prev_close, adr):
     return {"prev_high": prev_high, "prev_low": prev_low, "prev_close": prev_close, "adr": adr}
 
 
-def _profile(last, *, at_high=0.0, at_low=0.0):
+def _profile(last, *, at_high=0.0, at_low=0.0, last_complete=None, vwap=None):
+    """One intraday profile row.
+
+    `last_complete` and `completed_session_vwap` are what the R2 M5 Focus
+    adoption gate reads; the aggregate fields keep their prior meaning. A
+    profile that does not say otherwise has its completed close equal to
+    `last`, which is what the pre-R2 fixtures assumed implicitly.
+    """
     return {
         "last": last,
+        "last_complete": last if last_complete is None else last_complete,
+        "completed_session_vwap": vwap,
         "day_high": last,
         "day_low": last,
         "time_at_high_frac": at_high,
@@ -715,7 +724,13 @@ def _pick_rows(long_syms=(), short_syms=()):
 def test_prev_day_extreme_gate_rule():
     """2026-07-31 trader rule: auto-pick longs must trade above the previous
     day's high, shorts below the previous day's low - across ALL discovery
-    families, not just the ADR-breakout builder."""
+    families, not just the ADR-breakout builder.
+
+    Every profile here is on the qualifying side of its own session VWAP, so
+    the previous-day extreme stays the only discriminator and this test keeps
+    proving exactly what it always proved. The VWAP half of the R2 gate gets
+    its own assertions at the end.
+    """
     from autopilot_core import filter_candidates_by_prev_day_extremes
 
     daily_context = {
@@ -725,10 +740,10 @@ def test_prev_day_extreme_gate_rule():
         "NOLEVELS": {"prev_high": None, "prev_low": None},
     }
     profiles = {
-        "ABOVE": _profile(101.0),
-        "INSIDE": _profile(99.0),
-        "BELOW": _profile(89.0),
-        "NOLEVELS": _profile(120.0),
+        "ABOVE": _profile(101.0, vwap=100.5),
+        "INSIDE": _profile(99.0, vwap=98.5),
+        "BELOW": _profile(89.0, vwap=89.5),
+        "NOLEVELS": _profile(120.0, vwap=119.0),
     }
     candidates = {
         "longs": [
@@ -752,6 +767,16 @@ def test_prev_day_extreme_gate_rule():
     ungated = filter_candidates_by_prev_day_extremes(candidates, profiles, {})
     assert ungated["longs"] == candidates["longs"]
     assert ungated["shorts"] == candidates["shorts"]
+
+    # 2026-08-14 (R2): the same rule now has a session-VWAP half. ABOVE still
+    # clears yesterday's high, but under VWAP it is no longer a pick.
+    under_vwap = dict(profiles, ABOVE=_profile(101.0, vwap=102.0))
+    gated = filter_candidates_by_prev_day_extremes(candidates, under_vwap, daily_context)
+    assert [row["symbol"] for row in gated["longs"]] == []
+    # ... and a symbol whose VWAP cannot be measured fails rather than passing.
+    no_vwap = dict(profiles, ABOVE=_profile(101.0, vwap=None))
+    gated = filter_candidates_by_prev_day_extremes(candidates, no_vwap, daily_context)
+    assert [row["symbol"] for row in gated["longs"]] == []
 
 
 def test_auto_populate_clock_gate_opens_at_seven():

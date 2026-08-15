@@ -37,6 +37,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+import focus_adoption_gate
 import prev_day_gate
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import (
@@ -1201,18 +1202,49 @@ def passes_prev_day_extreme_gate(
     )
 
 
+def candidate_focus_gate_verdict(
+    side: str,
+    profile: Mapping[str, Any] | None,
+    ctx: Mapping[str, Any] | None,
+) -> tuple[bool, str]:
+    """(passes, reason) for one candidate against the combined R2 gate.
+
+    Reads the last COMPLETED bar, not `last`. `last` is the forming bar, and a
+    pick admitted on a break that bar then closes back inside is exactly the
+    noise the trader asked this gate to remove (plan.md sec 5: completed bars
+    only for state transitions).
+    """
+    if not isinstance(ctx, Mapping):
+        return False, "no prior session to measure against"
+    price = profile.get("last_complete") if isinstance(profile, Mapping) else None
+    vwap = profile.get("completed_session_vwap") if isinstance(profile, Mapping) else None
+    return focus_adoption_gate.passes_focus_adoption_gate(
+        side, price, ctx.get("prev_high"), ctx.get("prev_low"), vwap
+    )
+
+
 def filter_candidates_by_prev_day_extremes(
     candidates: Mapping[str, list[dict[str, Any]]],
     profiles: Mapping[str, Mapping[str, Any]],
     daily_context: Mapping[str, Any] | None,
+    *,
+    log: Callable[[str], None] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Drop auto-populate candidate rows that have not broken yesterday's range.
+    """Drop auto-populate candidate rows that fail the M5 Focus adoption gate.
 
-    The ADR-breakout family requires the break by construction; this makes the
-    rule universal across the aggressive-extremes and RW/RS families too. Like
-    the daily-trend gate it fails OPEN only when no daily store is available at
-    all, so missing data never empties the lists; a symbol whose own price or
-    prior-day level is unknown fails (the break cannot be verified).
+    Trader rule 2026-08-14 (packet R2) extends the 2026-07-31 previous-day rule
+    with its session-VWAP half: a long must be above yesterday's high AND above
+    session VWAP, a short below both. The ADR-breakout family requires the
+    extreme break by construction; this makes the whole rule universal across
+    the aggressive-extremes and RW/RS families too.
+
+    Like the daily-trend gate it fails OPEN only when no daily store is
+    available at all, so missing data never empties the lists wholesale; a
+    symbol whose own completed price, prior-day level or session VWAP is
+    unknown fails individually, because none of those can be verified.
+
+    The name is kept for its callers; the gate it applies is now the combined
+    one in `focus_adoption_gate`.
     """
     if daily_context is None or not daily_context:
         return {key: list(value) for key, value in candidates.items()}
@@ -1220,13 +1252,23 @@ def filter_candidates_by_prev_day_extremes(
     for side_key, side in (("longs", "long"), ("shorts", "short")):
         rows = candidates.get(side_key) or []
         kept = []
+        refused: list[str] = []
         for row in rows:
             sym = str(row.get("symbol") or "").strip().upper()
             profile = profiles.get(sym) if isinstance(profiles, Mapping) else None
-            last = profile.get("last") if isinstance(profile, Mapping) else None
-            if passes_prev_day_extreme_gate(side, last, daily_context.get(sym)):
+            passes, reason = candidate_focus_gate_verdict(
+                side, profile, daily_context.get(sym)
+            )
+            if passes:
                 kept.append(row)
+            else:
+                refused.append(f"{sym} ({reason})")
         result[side_key] = kept
+        if refused and log:
+            log(
+                f"Focus gate refused {len(refused)} {side} candidate(s): "
+                f"{', '.join(refused[:8])}{'...' if len(refused) > 8 else ''}"
+            )
     for key, value in candidates.items():
         result.setdefault(key, value)
     return result
@@ -1414,6 +1456,7 @@ def _intraday_extreme_metrics(
         return {
             "feature_version": AGGRESSIVE_EXTREME_FEATURE_VERSION,
             "last_complete": None,
+            "completed_session_vwap": None,
             "completed_day_high": None,
             "completed_day_low": None,
             "completed_session_open": None,
@@ -1512,9 +1555,28 @@ def _intraday_extreme_metrics(
         health = "stale"
     else:
         health = "ok"
+    # Session VWAP over exactly these completed session bars, for the M5 Focus
+    # adoption gate (packet R2). `session_vwap_series` is the running-deviation
+    # variant every band consumer is calibrated to and it restarts on each date
+    # change, so the last value is this session's VWAP at the last completed
+    # bar - the same bar `last_complete` came from. Never BounceBot's dynamic
+    # or EOD VWAP: those blend prior sessions and answer a different question.
+    session_vwap: float | None = None
+    try:
+        from chart_snapshot import session_vwap_series
+
+        vwap_values = session_vwap_series(session_rows).get("vwap") or []
+        if vwap_values:
+            candidate_vwap = vwap_values[-1]
+            if candidate_vwap is not None and math.isfinite(float(candidate_vwap)):
+                session_vwap = float(candidate_vwap)
+    except Exception:
+        logging.debug("Session VWAP unavailable for this profile.", exc_info=True)
+
     return {
         "feature_version": AGGRESSIVE_EXTREME_FEATURE_VERSION,
         "last_complete": last_complete,
+        "completed_session_vwap": session_vwap,
         "completed_day_high": day_high,
         "completed_day_low": day_low,
         "completed_session_open": session_open,
@@ -2450,11 +2512,14 @@ def refresh_auto_populated_watchlists(
         aggressive,
         relative,
     )
-    # PDH/PDL break rule (trader directive 2026-07-31): every auto pick must
-    # be trading beyond yesterday's range - longs above the previous day's
-    # high, shorts below the previous day's low - regardless of which
-    # discovery family produced it.
-    candidates = filter_candidates_by_prev_day_extremes(candidates, profiles, daily_context)
+    # M5 Focus adoption gate (trader directives 2026-07-31 and 2026-08-14):
+    # every auto pick must be beyond yesterday's range AND on the right side of
+    # session VWAP - longs above the previous day's high and above VWAP, shorts
+    # below the previous day's low and below VWAP - regardless of which
+    # discovery family produced it. Measured on completed bars.
+    candidates = filter_candidates_by_prev_day_extremes(
+        candidates, profiles, daily_context, log=log
+    )
     # Daily-trend quality gate: no 1-day wonders (longs must hold above the daily
     # 15EMA/200SMA, shorts below the 15EMA/50SMA). Fails open if the daily store
     # is unavailable so the lists never empty on missing data.

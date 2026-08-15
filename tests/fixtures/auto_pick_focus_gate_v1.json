@@ -1,6 +1,6 @@
 {
   "schema": "auto_pick_focus_gate_v1",
-  "feature_version": "prev_day_extreme_only_v1",
+  "feature_version": "focus_adoption_gate_v1",
   "raw_input_keys": [
     "profiles",
     "daily_context",
@@ -11,15 +11,15 @@
   "as_of": "2026-08-15T10:00:00-07:00",
   "universe_version": "synthetic_focus_gate_v1",
   "provider_assumptions": "Synthetic regular-session M5 profiles. Every name shares one prior session (98.00-100.50) so the fixture isolates the gate rather than the levels. `last` is the forming-bar close the pre-R2 filter reads; `last_complete` and `completed_session_vwap` are carried but unused until the R2 gate lands.",
-  "intentional_difference": "Baseline: no intentional difference. This freezes the pre-R2 candidate filter (previous-day extreme only, measured on the forming-bar `last`) so the R2 combined gate's effect on candidate selection is a reviewable diff.",
+  "intentional_difference": "APPROVED CHANGE (packet R2 Part A, trader rule 2026-08-14). The candidate filter now applies the combined gate - previous-day extreme AND session VWAP - measured on the last COMPLETED M5 bar instead of the forming-bar `last`. Five of the seven baseline survivors are removed, each for a stated reason: LONG_PDH_BELOW_VWAP and SHORT_PDL_ABOVE_VWAP are beyond the extreme but on the wrong side of VWAP (the case the new half exists for); LONG_PDH_VWAP_UNKNOWN has no measurable VWAP and LONG_NO_COMPLETED_BAR has no completed bar, so both are UNKNOWN and UNKNOWN fails (plan.md sec 5); LONG_FORMING_ONLY_BREAK broke yesterday's high on the forming bar only, which is the noise the completed-bar rule removes. The two survivors qualify on both halves. No name that failed the baseline now passes - the gate only ever narrows.",
   "expected_keys": [
     "expected"
   ],
   "numeric_tolerance": 1e-09,
   "configuration": {
     "prev_day_extreme_gate": true,
-    "session_vwap_gate": false,
-    "price_field": "last"
+    "session_vwap_gate": true,
+    "price_field": "last_complete"
   },
   "profiles": {
     "LONG_PDH_ABOVE_VWAP": {
@@ -177,14 +177,9 @@
   },
   "expected": {
     "longs": [
-      "LONG_FORMING_ONLY_BREAK",
-      "LONG_NO_COMPLETED_BAR",
-      "LONG_PDH_ABOVE_VWAP",
-      "LONG_PDH_BELOW_VWAP",
-      "LONG_PDH_VWAP_UNKNOWN"
+      "LONG_PDH_ABOVE_VWAP"
     ],
     "shorts": [
-      "SHORT_PDL_ABOVE_VWAP",
       "SHORT_PDL_BELOW_VWAP"
     ]
   }
