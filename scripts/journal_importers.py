@@ -411,6 +411,34 @@ class QuestradeImporter:
         executions = payload.get("executions", []) if isinstance(payload, dict) else []
         return [dict(item) for item in executions if isinstance(item, dict)]
 
+    def get_positions(self, account_number: str) -> list[dict[str, Any]]:
+        """Current open positions, for reconciliation (R7 §9 step 9).
+
+        Read-only and point-in-time: nothing here is stored as an execution. A
+        position says where things stand; it is not a record of a trade, and as
+        a synthetic fill it would corrupt the P&L it exists to check.
+        """
+        payload = self._authorized_get(f"v1/accounts/{account_number}/positions")
+        rows = payload.get("positions", []) if isinstance(payload, dict) else []
+        result: list[dict[str, Any]] = []
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            result.append(
+                {
+                    "broker": "QUESTRADE",
+                    "account_number": str(account_number),
+                    "symbol": str(raw.get("symbol") or "").strip().upper(),
+                    "security_type": normalize_security_type(
+                        raw.get("securityType") or raw.get("symbolType")
+                    ),
+                    "currency": str(raw.get("currency") or "USD").strip().upper(),
+                    "quantity": _coerce_float(raw.get("openQuantity")),
+                    "raw_json": json.dumps(raw, sort_keys=True, default=str),
+                }
+            )
+        return result
+
     def get_activities(self, account_number: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for chunk_start, chunk_end in chunk_date_ranges(start_date, end_date, max_days=31):
