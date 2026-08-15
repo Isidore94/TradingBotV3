@@ -53,6 +53,13 @@ Markdown-only (verify with `git show --stat`); the R2.2 round's executable had
 been built 21 seconds *before* its tip, which is why the ordering is now
 recorded here explicitly rather than left derivable.
 
+**Clean-cache re-verification (2026-08-15, evening).** R7's close-out discovered
+that a PyInstaller rebuild can silently reuse cached modules (`build/` must be
+wiped for a roster change to register). Because the R2 candidate's 31/31 above
+predates that rule, the R2 checkout was re-verified with `build/` and `dist/`
+deleted first: full rebuild from tip `8d25c92` (Markdown-only after `90ba0d4`),
+frozen selftest **31/31, exit 0**. The gate stands on a clean build.
+
 The R2.3 fix changed code, so it is a **new** release candidate and all three
 gates were re-run against it — including the frozen rebuild, even though no
 packaging trigger applied. The frozen one is never optional: it is the gate that
