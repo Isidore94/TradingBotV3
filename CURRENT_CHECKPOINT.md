@@ -19,7 +19,8 @@ elapsed evidence lane that can run in parallel.
 | Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
 | State | **Green: 2921 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0, after the R2.3 fix. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
 | Next action | **The Monday sequence below.** The trader runs the R1 quiet-boot proof himself on the evening of 2026-08-15; everything else waits for Monday's real session |
-| Do not start yet | **R3 and later Phase 0.5 packets** — the 2026-08-15 redirects were given packet by packet for R1 and R2 only and do not carry forward. Also Phase 1 cleanup and any Phase 2+ item |
+| Do not start yet | **R3–R6** — their redirects were never given. **R7/R8 code** — specced 2026-08-15 (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`, `docs/WEEKEND_PREP_PLAN.md`, trader-authorized same day) but code starts only after the P0.7 merge, R7 first, branch from `main`. Also Phase 1 cleanup and any Phase 2+ item |
+| Doc-only addendum (2026-08-15, late) | Phase 0.5 gained packets **R7 (journal reliability + UX)** and **R8 (Weekend Prep)**: specs written, WISHLIST/plan.md/docs README reconciled (incl. the P3.3 nightly-journal-pull promotion into R7 and the P5.4 narrowing). **Markdown-only — the release candidate, gates, and baseline above are unchanged** |
 
 ## Merge safeguards — read before Monday
 

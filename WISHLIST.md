@@ -50,6 +50,8 @@ requirements live in `plan.md`.
 | Clean-machine recovery, installer, icon, and release polish | `ROADMAP` | P7.1–P7.2 |
 | Read-only additional broker/data adapters after provider consolidation | `ROADMAP` | P7.3 |
 | Trader refinement packets R1–R6 (the 2026-08-14 desk requests) | `ROADMAP` | Phase 0.5 |
+| Tax-grade journal reliability (both brokers) + TradesViz/TraderSync-style Journal tab | `ROADMAP` | Phase 0.5 R7 |
+| Weekend Prep guided routine with H1/D1/Monthly strength discovery and weekly auto-tag review | `ROADMAP` | Phase 0.5 R8 |
 
 ## Candidate user-experience integrations
 
@@ -125,7 +127,7 @@ Phase 0.5; specs live under `docs/` (see `docs/README.md`).
 | 1 | "Not today" on an automatic M5 Focus pick removes that M5 entry | `ROADMAP` | 0.5 R2 — scoped removal, made legal by a new auto-pick provenance sidecar |
 | 2 | Place symbol in Focus + mark "I like the stock" from the Alert screen | `ROADMAP` | 0.5 R4 — Add-to-Focus already exists there; LIKE capture is added |
 | 3 | AI jobs says "no arguments" at boot | `ROADMAP` | 0.5 R6a — a routine scheduled-task log line (`run_ai_jobs.ps1`); reword + a read-only Health row |
-| 4 | Auto journal function | `ROADMAP` | Existing gates, no new packet: nightly `journal_import` (LOCAL_AI sec 6.4c, still trader-gated on the 6.4b live proof) + P3.5 commentary journal |
+| 4 | Auto journal function | `ROADMAP` | Nightly `journal_import` slot promoted into 0.5 R7 on 2026-08-15 (supersedes the 6.4b-proof gate; recorded in the R7 spec §6); P3.5 commentary journal unchanged |
 | 5 | Chart Review functions on every chart | `ROADMAP` | 0.5 R4 — CaptureRail embedded on every chart surface |
 | 6 | Early-morning D1 gap looks inaccurately large; labeled Y axis | `ROADMAP` | 0.5 R4 — axis labels already exist; real cause is a thin Yahoo forming-bar fallback, fixed by source honesty |
 | 7 | Existing price alerts visible on charts | `ROADMAP` | 0.5 R4 — painted alerts/watches as a toggleable levels family |
@@ -142,6 +144,22 @@ Phase 0.5; specs live under `docs/` (see `docs/README.md`).
 | 18 | First-candle ORB candidates (gap-up HOD on candle one) | `ROADMAP` | 0.5 R5 — distinct from the existing delayed-ORB detectors |
 | 19 | LRSI crosses as their own M5 alert type | `ROADMAP` | 0.5 R5 |
 | 20 | Make the program less likely to bog down/crash/overload | `ROADMAP` | 0.5 R6b/c — evidence-ledger rotation (247 MB `technical_integrity_events.jsonl`), stall-watchdog diagnostic week |
+
+## Trader-entered ideas — 2026-08-15 (promoted same day into Phase 0.5 R7/R8)
+
+| # | Idea | Status | Where it landed |
+|---|---|---|---|
+| 21 | Journal misses trades / trades stuck open — tax-grade completeness from both brokers | `ROADMAP` | 0.5 R7 — Flex-primary IBKR, Questrade activities, coverage ledger + nightly self-heal, position reconciliation, identity fixes (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`) |
+| 22 | Journal tab like TradesViz/TraderSync: fast edits/notes, tagging, setup performance, walk-away | `ROADMAP` | 0.5 R7 — sub-tabs, corrections with audit trail, R-multiples with alert prefill, pyqtgraph analytics |
+| 23 | Per-account P&L with selectable accounts (tax-free vs taxable) + full commission/fee accounting | `ROADMAP` | 0.5 R7 — account tree grouped by tax status, never silently blended; Fees tab + export; CAD tax totals via booked BoC rates |
+| 24 | Weekend Prep tab: review the week, focus picks, walk-away, find strongest/weakest H1/D1/Monthly, journal tag review | `ROADMAP` | 0.5 R8 — guided 5-step routine, weekend strength boards on the R2 formula, week-ahead prep adoption (`docs/WEEKEND_PREP_PLAN.md`) |
+
+Trader answers that shaped R7/R8 (2026-08-15): journal first, weekend prep second;
+both brokers tax-grade; nightly auto-import + self-heal approved; native currency +
+CAD tax totals (BoC trade-date rate); R-multiples with alert prefill; charts +
+tables; guided routine over dashboard; one strength formula across H1/D1/Monthly;
+auto-tag review as the only v1 journal hook in Weekend Prep; adopt to swing Focus +
+watchlist; existing ~1,500 universe; spec now, code after the R2→main merge.
 
 Trader answers that shaped the designs (2026-08-15): demote + label, never hide;
 v1 extension rules = ATR-distance-from-EMA + outside-AVWAP-bands (the S/R-headroom

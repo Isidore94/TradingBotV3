@@ -50,6 +50,8 @@ status.
 | [`SWING_QUALITY_AND_FEEDBACK_PLAN.md`](SWING_QUALITY_AND_FEEDBACK_PLAN.md) | ACTIVE spec for Phase 0.5 R3: demote-and-label quality filter, pre-close honesty bundle (investigation record), dislike-feedback loop |
 | [`DESK_CHART_UNIFICATION_PLAN.md`](DESK_CHART_UNIFICATION_PLAN.md) | ACTIVE spec for Phase 0.5 R4: capture on every chart, painted armed alerts, forming-bar honesty, reviewed-today badge |
 | [`M5_SIGNAL_ENGINES_PLAN.md`](M5_SIGNAL_ENGINES_PLAN.md) | ACTIVE spec for Phase 0.5 R5: SMI/efficiency-LRSI/HA indicators, new M5 alert types, AnyBounceWatch, first-candle ORB |
+| [`JOURNAL_RELIABILITY_AND_UX_PLAN.md`](JOURNAL_RELIABILITY_AND_UX_PLAN.md) | ACTIVE spec for Phase 0.5 R7 (authorized 2026-08-15, not built): tax-grade broker import (Flex-primary IBKR, Questrade activities, coverage ledger + nightly self-heal, reconciliation, identity fixes) and the rebuilt Journal tab. §3 is the verified root-cause register |
+| [`WEEKEND_PREP_PLAN.md`](WEEKEND_PREP_PLAN.md) | ACTIVE spec for Phase 0.5 R8 (authorized 2026-08-15, not built): guided weekend routine, H1/D1/Monthly strength boards on the R2 formula, week-ahead prep adoption. §5 filter proposals await trader approval |
 | [`CHART_REVIEW_WORKSPACE_PLAN.md`](CHART_REVIEW_WORKSPACE_PLAN.md) | Chart Review schema, capture boundaries, and implementation record |
 | [`DURABILITY_CATCHUP_PLAN.md`](DURABILITY_CATCHUP_PLAN.md) | Built durability design and remaining live restart gate |
 | [`REVIEW_LEARNING_LOOP.md`](REVIEW_LEARNING_LOOP.md) | Review evidence, scoreboard, and annotation-only AI policy contract |

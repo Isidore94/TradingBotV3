@@ -214,7 +214,7 @@ where the phase says so; it never authorizes an early promotion.
 | Order | Build phase | Plain-English outcome |
 |---:|---|---|
 | **0 — NOW** | Validate and merge | Prove the testing-week build on the real desk and merge it safely |
-| **0.5** | Trader refinement packets | Build the trader's 2026-08-14 desk requests in ranked order (R1–R6) |
+| **0.5** | Trader refinement packets | Build the trader's 2026-08-14/15 desk requests in ranked order (R1–R8) |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
 | **3** | Evidence and capture | Mature warehouse/AI/shadow evidence and capture trader commentary honestly |
@@ -278,6 +278,11 @@ explicitly again for R2 — so both are built on their own branches ahead of the
 testing-week merge, and P0's live gates are unchanged and still owed. The redirect
 was packet-by-packet and does **not** carry forward: **R3 onward waits for the
 trader to say so.**
+
+On 2026-08-15 the trader added two new packets with their own explicit redirect:
+**R7 (journal reliability + UX)** and **R8 (Weekend Prep)**, specced the same day.
+Their redirect authorizes spec/documentation work immediately but code only
+**after the P0.7 merge**, R7 before R8. It does not authorize R3–R6.
 
 R2's branch is cut from R1's and carries the R1.1 repair, so merging R2 brings the
 testing week, R1, R1.1 and R2 together. The R1 and R2 live proofs are both owed and
@@ -357,11 +362,36 @@ are listed in `CURRENT_CHECKPOINT.md`.
    is a mapping, not new work**: the trader's ask resolves to the QUEUED nightly
    `journal_import` slot (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c — build
    only after the 6.4b live proof passes and the trader says go) plus the P3.5
-   commentary journal; no separate packet exists.
+   commentary journal; **the nightly slot half was promoted into R7 on
+   2026-08-15** — see item 7; P3.5 is unchanged.
+7. **R7 Journal reliability and UX (added 2026-08-15).** Tax-grade completeness
+   from both brokers: stable execution/trade identity (annotations survive
+   rebuilds), IBKR Flex as the primary historical source, wired Questrade
+   activities, per-chunk partial persistence, a date-coverage ledger with a
+   nightly `journal_import` runner slot that self-heals gaps (the promoted P3.3
+   slice), position reconciliation against both brokers with append-only
+   audit-trailed corrections, booked BoC CAD conversion, and the rebuilt Journal
+   tab (account/tax-status selection that never silently blends, date-range +
+   calendar + fees views, R-multiples with alert prefill, pyqtgraph analytics,
+   surfaced walk-away). Spec: `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`.
+   Dependencies: builds after the P0.7 merge, branch from `main`. Exit: the
+   spec's deterministic gates plus its live gates (coverage complete since
+   inception, statement reconciliation to the cent, one clean reconciliation
+   week, zero orphaned annotations, five nightly slot runs).
+8. **R8 Weekend Prep (added 2026-08-15).** A guided five-step weekend routine
+   (week in review, focus-pick review, week-windowed walk-away with the auto-tag
+   review, H1/D1/Monthly strength discovery on the R2 formula via a new pure
+   module — `strength_scan.py` untouched — and week-ahead prep adopting the
+   orphaned `market_prep` weekly engine), all manual-refresh with zero IB
+   traffic, adopt-to-swing-Focus routing through the existing membership-tracked
+   injection. Includes the standalone `app.py` nav-title bugfix as its first
+   commit. Spec: `docs/WEEKEND_PREP_PLAN.md`. Dependencies: after R7 (shares
+   `journal_feed`); discovery step blocked on the spec §5 filter approval.
+   Exit: the spec's deterministic gates plus its one-real-weekend live proof.
 
 Exit gate: each packet exits through its own spec; R1 and R2 land first per the
-trader's ranking. A packet's live gates may overlap the next packet's build only
-when no shared file is in flight.
+trader's ranking, then R7 before R8. A packet's live gates may overlap the next
+packet's build only when no shared file is in flight.
 
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
@@ -452,10 +482,11 @@ non-authoritative. Their analysis/cutover steps remain ordered here.
    **Still owed: live proof on the 2026-08-12 window**, and it is only interpretable
    once the desk stops sleeping — 4h39m of Modern Standby, trader-owned, ended the
    08-11 run. A night cut short by sleep is not evidence about this layer.
-   *Queued 2026-08-11 (trader-approved, deliberately not built):* the **nightly
-   journal pull** — a third `journal_import` runner slot ahead of `ai_summary`, spec
-   in `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c. Build only after the sec 6.4b
-   live proof passes and the trader says go.
+   *The nightly journal pull queued here 2026-08-11 was **promoted into Phase 0.5
+   R7 on 2026-08-15** (trader go recorded in
+   `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md` §6, which honors the sec 6.4c design
+   verbatim and supersedes the "after 6.4b proof" ordering). P3.3's remaining
+   scope is the fact-pack/enrichment/policy-draft work only.*
 4. **P3.4 Accumulate and audit promotion evidence.** Continue regime infrastructure
    toward 40 instrumented sessions, and SPY/Greatness toward their Section 7 floors.
    Freeze windows before inspecting outcomes.
@@ -500,7 +531,10 @@ passed its own manifest and rollback drill.
    stage, rank, freshness, and champion/challenger status.
 4. **P5.4 Complete lifecycle and journal linkage.** Join discovery, stages, reviews,
    Focus/watch actions, fills, no-trades, outcomes, screenshots, MFE/MAE, planned vs
-   actual risk, and after-close reconciliation.
+   actual risk, and after-close reconciliation. *Narrowed 2026-08-15: the fills
+   completeness, planned-risk capture, and broker after-close-reconciliation slice
+   moved to Phase 0.5 R7; P5.4 retains the lifecycle joins, screenshots, and
+   opportunity-identity linkage.*
 5. **P5.5 Build the Learning Center and controlled universe intake.** Keep objective
    edge, actionability, personal preference, execution, and discovery-source value
    separate; personalization may reorder only inside declared safe bands.
