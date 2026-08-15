@@ -481,6 +481,10 @@ class AlertCenterPanel(QFrame):
         # (date, side, symbol) triples already turned into a review chart, so
         # a pick the trader skipped is not re-queued on every poll tick.
         self._auto_picks_enqueued: set[tuple[str, str, str]] = set()
+        #: How the last adoption attempt ended: "adopted", "already_auto",
+        #: "already_trader_owned", or "failed". Only "adopted" means this desk
+        #: took ownership of the entry.
+        self._last_adoption_outcome = "adopted"
         # Focus-pick D1 interest flags: every Focus name is auto-watched for
         # the whole D1 event set (15EMA reject, 5d/20d extremes, SMA breaks,
         # AVWAPE touches). "SYM|kind" fires at most once per session; the
@@ -1680,7 +1684,12 @@ class AlertCenterPanel(QFrame):
                 reason = str(entry.get("reason") or "auto-populate pick")
                 score = entry.get("score")
                 if self._adopt_auto_pick_into_focus(symbol, side_key, entry, reason):
-                    adopted.append(symbol)
+                    # Only a real add counts as adopted. A name already in Focus
+                    # is resolved but was not taken over - saying "added" would
+                    # claim ownership of the trader's own pick in the status
+                    # line as well as in the sidecar.
+                    if getattr(self, "_last_adoption_outcome", "adopted") == "adopted":
+                        adopted.append(symbol)
                     continue
                 trigger = f"Auto pick ({side_label.lower()}): {reason}"
                 if score:
@@ -1797,33 +1806,67 @@ class AlertCenterPanel(QFrame):
     def _adopt_auto_pick_into_focus(
         self, symbol: str, side: str, entry: dict, reason: str
     ) -> bool:
-        """Add one staged pick to M5 Focus and retire its proposal. True on adopt.
+        """Add one staged pick to M5 Focus and retire its proposal.
+
+        Returns True when the proposal is RESOLVED - adopted, or found to be
+        the trader's already - so the caller knows not to queue a review alert.
+        `self._last_adoption_outcome` distinguishes the two for the status line.
 
         Writes through the STORE, not `FocusService.add`: the service logs every
         add to the trader-verdict feedback JSONL as a "like", and a machine
         adding 30 names is not the trader liking 30 names. The store's listener
         still fires focusChanged, so every surface refreshes, and the action is
         logged to the review-decision ledger instead.
+
+        **The marker is written only when `add()` actually added something.**
+        `add()` returns False for a name already on the list, and marking that
+        entry would relabel the TRADER's pick as machine-owned - after which
+        "Not today" and the desync repair could both remove it. The sequence is
+        real: AWAY stages SYM, the trader adds SYM by hand, the DESK flip
+        drains, and their entry silently changes owner. Absence of a marker is
+        what makes a name untouchable, so it is never written speculatively.
         """
+        self._last_adoption_outcome = "failed"
         store = getattr(self.focus_service, "store", None)
         if store is None:
             return False
         try:
-            store.add(symbol, side, "m5")
-            # Provenance (packet R2): this marker is the ONLY thing that makes
-            # the entry removable by "Not today" or by the desync repair. An
-            # entry without one is the trader's and is untouchable by both.
-            marker = getattr(store, "mark_auto_adopted", None)
-            if callable(marker):
-                marker(
-                    symbol,
-                    side,
-                    "m5",
-                    staged_at=str(entry.get("staged_at") or ""),
-                    reason=reason,
+            added = bool(store.add(symbol, side, "m5"))
+            marker_writer = getattr(store, "mark_auto_adopted", None)
+            if added:
+                # Provenance (packet R2): this marker is the ONLY thing that
+                # makes the entry removable by "Not today" or by the desync
+                # repair. An entry without one is the trader's, untouchable by
+                # both.
+                if callable(marker_writer):
+                    marker_writer(
+                        symbol,
+                        side,
+                        "m5",
+                        staged_at=str(entry.get("staged_at") or ""),
+                        reason=reason,
+                    )
+                self._last_adoption_outcome = "adopted"
+            else:
+                # Already on the list. If a marker exists it is a previous
+                # adoption of ours and stays as it is; if none exists the entry
+                # is the trader's and must not acquire one. Either way the
+                # proposal is finished - the name is already in Focus.
+                reader = getattr(store, "is_auto_adopted", None)
+                already_ours = bool(reader(symbol, side, "m5")) if callable(reader) else False
+                self._last_adoption_outcome = (
+                    "already_auto" if already_ours else "already_trader_owned"
                 )
+                if not already_ours:
+                    logging.info(
+                        "Auto pick %s (%s) is already YOUR Focus entry - proposal "
+                        "retired without claiming ownership.",
+                        symbol,
+                        side,
+                    )
         except Exception:
             logging.warning("Auto pick %s could not be added to Focus.", symbol, exc_info=True)
+            self._last_adoption_outcome = "failed"
             return False
         if self._auto_pick_pending_path is not None:
             try:
@@ -1835,13 +1878,20 @@ class AlertCenterPanel(QFrame):
                     symbol,
                     side,
                     True,
-                    decision_label="auto_focus",
+                    # The ledger records WHICH outcome retired the proposal, so
+                    # "the machine adopted it" and "it was already the trader's"
+                    # are never confused when reading back a session.
+                    decision_label=(
+                        "auto_focus"
+                        if self._last_adoption_outcome == "adopted"
+                        else f"auto_focus_{self._last_adoption_outcome}"
+                    ),
                     write_watchlist=False,
                     pending_path=self._auto_pick_pending_path,
                 )
             except Exception:
                 logging.warning(
-                    "Auto pick %s adopted into Focus but its proposal was not retired.",
+                    "Auto pick %s resolved into Focus but its proposal was not retired.",
                     symbol,
                     exc_info=True,
                 )
@@ -1849,7 +1899,11 @@ class AlertCenterPanel(QFrame):
             "auto_pick_auto_focus",
             symbol=symbol,
             side=side.upper(),
-            detail={"auto_pick": dict(entry), "reason": reason},
+            detail={
+                "auto_pick": dict(entry),
+                "reason": reason,
+                "outcome": self._last_adoption_outcome,
+            },
         )
         return True
 

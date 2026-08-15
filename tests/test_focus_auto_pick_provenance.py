@@ -357,3 +357,111 @@ def test_the_cut_side_is_the_only_side_touched(tmp_path, monkeypatch):
     panel._drain_focus_desync_requests()
     assert store.focus_symbols("long", "m5") == []
     assert store.focus_symbols("short", "m5") == ["NVDA"]
+
+
+# ---------------------------------------------------------------------------
+# The ownership collision (R2.1 blocker, external review 2026-08-15)
+# ---------------------------------------------------------------------------
+
+
+def test_adoption_never_relabels_a_name_the_trader_added_first(tmp_path, monkeypatch):
+    """The exact sequence the review found.
+
+    AWAY stages SYM. The trader adds SYM to M5 Focus by hand. The flip to DESK
+    drains the queue and adopts SYM - but `store.add` returns False because the
+    name is already there, and the old code wrote the marker anyway. Their entry
+    silently became machine-owned, after which "Not today" and the desync repair
+    could both delete it.
+    """
+    panel, store = _panel(tmp_path)
+    panel._auto_pick_pending_path = tmp_path / "pending.json"
+
+    # 1. The trader adds it themselves. No marker: it is theirs.
+    store.add("NVDA", "long", "m5")
+    assert store.is_auto_adopted("NVDA", "long", "m5") is False
+
+    # 2. The drain adopts the staged pick for the same symbol and side.
+    resolved = panel._adopt_auto_pick_into_focus(
+        "NVDA", "long", {"staged_at": "09:05:00"}, "PDH break"
+    )
+
+    # The proposal is resolved (nothing left to review) ...
+    assert resolved is True
+    # ... but ownership did NOT change hands.
+    assert panel._last_adoption_outcome == "already_trader_owned"
+    assert store.is_auto_adopted("NVDA", "long", "m5") is False
+
+    # 3. And the verbs that only touch machine picks still refuse it.
+    assert store.remove_if_auto_adopted("NVDA", "long", "m5") is False
+    assert store.focus_symbols("long", "m5") == ["NVDA"]
+
+
+def test_a_marker_is_never_written_over_an_unmarked_existing_entry(tmp_path):
+    """The general rule behind that sequence: `add()` returning False means
+    nothing was added, so nothing may be claimed."""
+    panel, store = _panel(tmp_path)
+    for side in ("long", "short"):
+        store.add("AMD", side, "m5")
+
+    for side in ("long", "short"):
+        panel._adopt_auto_pick_into_focus("AMD", side, {}, "whatever")
+        assert store.is_auto_adopted("AMD", side, "m5") is False
+
+    assert store.auto_pick_markers() == {}
+
+
+def test_a_genuinely_new_pick_is_still_adopted_and_marked(tmp_path):
+    """The fix must not stop real adoptions - that is the whole feature."""
+    panel, store = _panel(tmp_path)
+    resolved = panel._adopt_auto_pick_into_focus(
+        "TSLA", "long", {"staged_at": "09:05:00"}, "PDH break"
+    )
+    assert resolved is True
+    assert panel._last_adoption_outcome == "adopted"
+    assert store.is_auto_adopted("TSLA", "long", "m5") is True
+    assert store.remove_if_auto_adopted("TSLA", "long", "m5") is True
+
+
+def test_re_adopting_our_own_pick_keeps_the_existing_marker(tmp_path):
+    """A second drain of the same pick is a no-op, not a downgrade."""
+    panel, store = _panel(tmp_path)
+    panel._adopt_auto_pick_into_focus("TSLA", "long", {}, "PDH break")
+    first = store.auto_pick_marker("TSLA", "long", "m5")
+
+    panel._adopt_auto_pick_into_focus("TSLA", "long", {}, "PDH break")
+    assert panel._last_adoption_outcome == "already_auto"
+    assert store.auto_pick_marker("TSLA", "long", "m5") == first
+
+
+def test_the_status_line_does_not_claim_a_trader_owned_name(tmp_path, monkeypatch):
+    """"N auto pick(s) added" must count only names this desk actually took."""
+    panel, store = _panel(tmp_path)
+    panel._auto_pick_pending_path = tmp_path / "pending.json"
+    store.add("MINE", "long", "m5")
+
+    from datetime import datetime
+
+    fresh = datetime.now().isoformat(timespec="seconds")
+    monkeypatch.setattr(
+        "autopilot_core.load_auto_populate_pending_picks",
+        lambda *_a, **_k: {
+            "date": "2026-07-02",
+            "pending": {
+                "long": {
+                    "MINE": {"reason": "r", "gate_state": "open", "gate_checked_at": fresh},
+                    "THEIRS": {"reason": "r", "gate_state": "open", "gate_checked_at": fresh},
+                }
+            },
+        },
+    )
+    monkeypatch.setattr("autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: "DESK")
+    panel._auto_mode_cached = None
+
+    messages: list[str] = []
+    panel.statusChanged.connect(messages.append)
+    panel._poll_auto_pick_pending()
+
+    text = " ".join(messages)
+    assert "THEIRS" in text
+    assert "1 auto pick(s)" in text, "only the genuinely new one was added"
+    assert store.is_auto_adopted("MINE", "long", "m5") is False
