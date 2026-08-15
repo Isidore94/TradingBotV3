@@ -1,7 +1,7 @@
 # TradingBotV3 implemented history
 
 Last reconciled: **2026-08-15** from the working copy of
-`testing-week-2026-08-10`
+`phase05-r1-auto-modes-quiet-hours` (branched from `testing-week-2026-08-10`)
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -109,7 +109,21 @@ and green while its live or promotion gate remains open in `plan.md`.
   ntfy failure never eats the events. The Alert Center classifies (it owns the D1
   routing rules) and Auto Pilot aggregates and gates, so the phone and the D1 Focus
   feed cannot disagree. Machine-local kill switches: `push_away_swings`,
-  `push_away_d1_events`.
+  `push_away_d1_events`. **Extended 2026-08-14 (packet R1):** EVENING's SPY ±1%
+  wake alarm is the *second* deliberate exception — urgent, repeating every five
+  minutes while the move holds, stopping on the flip out of EVENING, kill switch
+  `push_evening_spy_alarm`.
+- Auto-mode matrix, 2026-08-14 (packet R1): discovery is identical in every mode;
+  what differs is who is present to act. DESK adopts staged picks immediately;
+  AWAY stages and never adopts and queues alerts silently (only the sound is
+  suppressed); EVENING runs its early block and then stops scanning entirely,
+  staging picks for the wake-up flip; OFF is the only mode that still
+  self-applies. Quiet hours confine every automatic starter to weekdays,
+  06:00–14:00 local; manual buttons are never gated.
+- One Master AVWAP scan action, 2026-08-15 (packet R1). The Shared/Local pair read
+  the identical two watchlist files, so `use_shared_watchlists` and the menu choice
+  it drove were removed across thirteen files. Cloud-drive *store discovery* went
+  with it (decision 0015 amendment); the mount-presence guard stays.
 
 ### Journal, explanations, and learning
 
@@ -215,6 +229,79 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-15 — packet R1: quiet hours, the auto-mode matrix, and one scan
+
+`IMPLEMENTED` + `GREEN`; **not** `LIVE_VALIDATED` — the four live proofs in
+`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` §6 are owed. Built on branch
+`phase05-r1-auto-modes-quiet-hours` after the trader directed R1 ahead of the
+P0.7 merge gate. Two commits: the behaviour, then the removal.
+
+**Quiet hours.** `autopilot_core.auto_scanning_window` / `auto_scanning_due`
+mirror the proven `bouncebot_scanning_due` pattern — pure window, reason string,
+weekend refusal, settings override, fail-open on an unanswerable session lookup —
+and now gate every automatic starter: the launch `_self_heal_universe` (which
+fired 2.5 s after launch and every 30 minutes with no clock check at all), the
+tick-loop universe heal, the boot resume that connected BounceBot to IB whenever
+Auto was left ON, the daily 07:00 self-arm (previously unbounded above, so a
+21:00 launch self-armed against a closed tape), the open watchlist build, and the
+swing slots. Manual work is gated nowhere; `force=True` is the carve-out.
+The window is 06:00–14:00 on a normal session and is deliberately a **superset**
+of the BounceBot scan window — a literal open-at-06:30 gate would refuse the IB
+connect at 06:10 while the sweep window said the sweep could run.
+
+**EVENING prepares the morning and stops.** The open+30 early slot, the
+07:00/07:15/07:30 strength checks and the briefing still run; every ordinary
+hourly slot is refused and named once in the log, and the open self-build is
+skipped without a sticky marker so the wake-up flip to DESK can still build.
+Refused slots are marked *done* rather than left pending, because
+`after_close_wrapup_due` requires every slot to be done and pending ones would
+have silently cancelled the after-close wrap-up for the day.
+
+**AWAY queues instead of adopting.** Auto-populate picks now stage in AWAY as
+they already did in DESK and EVENING; OFF is the only remaining self-applying
+mode. This reverses the 2026-08-05 rule for AWAY on the trader's reasoning:
+nobody is present to *prune*, so a pick applied at 09:00 alerted unwatched all
+day. The Alert Center refuses adoption while AWAY and marks nothing seen, so the
+whole day drains on the flip to DESK — the same point where packet R2 will add
+its freshness re-check. Alerts arrive without a sound; feed, history and the D1
+unread badge keep filling, and an unreadable mode file resolves to OFF so a
+broken read can never silence the desk.
+
+**EVENING's SPY ±1% wake alarm** — the second deliberate exception to the
+AWAY-only push rule, after the always-on price alerts. Reads the champion cached
+SPY bars, repeats every five minutes while the condition holds, stops on the flip
+out of EVENING, day-rolls its stamp in the Auto Pilot state file, and stamps only
+a delivered push. NaN is refused explicitly, because `nan < threshold` is False
+and no data at all would otherwise read as a 1% move. Kill switch
+`push_evening_spy_alarm`, threshold override `push_evening_spy_alarm_pct`.
+
+**One scan, not two.** `use_shared_watchlists` is gone from thirteen files and
+one run-manifest counter: both branches resolved to `(LONGS_FILE, SHORTS_FILE)`
+under the same label, so the Shared/Local choice the menu offered was never a
+choice. `ScanService.run_shared_watchlist_scan`/`run_local_watchlist_scan`
+collapse to `run_watchlist_scan`; the menu pair and the Ctrl+R "Run Shared Scan"
+action become one "Run Scan"; the `run_master_with_shared_watchlists` alias is
+gone; the scheduler's "shared-watchlist" wording and the false "local project
+watchlists" label are gone. The manifest counter had no consumer — checked before
+deleting. The job-ledger `config_hash` stays `"shared-v1"` deliberately: an
+opaque idempotency token, not user-facing text.
+
+**Cloud-drive store discovery removed.** `project_paths` probed `$GOOGLE_DRIVE`,
+`~/My Drive`, `~/Google Drive` and the macOS CloudStorage accounts *at import*
+and adopted the first writable one as the operational store whenever
+`shared_data_dir` was unset — inert on this desk only because that setting
+happens to be set, and directly against decision 0015. The fallback is now
+plainly local. The mount-presence guard is kept and renamed
+`_wait_for_shared_store` (decision 0015 blessed its macOS half), with the sync-
+client instructions removed from its messages. No path moved: the desk still
+resolves `C:\TradingBotData` from `local_config`. Decision 0015 carries a dated
+amendment explaining which half was harmless and which was not.
+
+Thirty-five new tests in `tests/test_auto_quiet_hours_and_modes.py`. Four
+existing tests asserted behaviour this packet reverses and were updated to the
+new rule rather than worked around; two more were inverted to prove cloud-drive
+discovery can no longer happen.
+
 ### 2026-08-15 — trader refinement packets promoted; after-close mechanism identified
 
 Documentation-only pass; no code, path, or test changed. The trader promoted the
@@ -237,7 +324,7 @@ behavior:
   "full honesty bundle" fix design; nothing is built yet.
 - **"Shared scan" is a proven no-op**: `use_shared_watchlists=True/False` resolve
   to the identical watchlist paths, so its removal (Phase 0.5 R1) is a dead-flag
-  cleanup, not a behavior change.
+  cleanup, not a behavior change. **Removed 2026-08-15** — see below.
 
 Running the frozen executable as the daily driver disabled the Master AVWAP D1
 swing scan completely, for two sessions, without any visible symptom.

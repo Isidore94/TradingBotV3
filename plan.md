@@ -266,22 +266,33 @@ in progress; their results gate later promotions, not the merge itself.
 ### Phase 0.5 — trader refinement packets (promoted 2026-08-15)
 
 The trader explicitly promoted the 2026-08-14 `WISHLIST.md` entries on 2026-08-15
-and ranked the build order (R1 first, then R2; R3–R6 behind them). Build work
-starts only after P0.7 merges; read-only investigation and documentation preceded
-it. Each packet has an ACTIVE specification under `docs/`; the file-scoped
-ask-first rule and the golden-fixture invariant bind at edit time, packet by
-packet. Phase 1 work may interleave only where a packet's own spec says the
-baseline item is a prerequisite (none currently does).
+and ranked the build order (R1 first, then R2; R3–R6 behind them). Each packet has
+a specification under `docs/`; the file-scoped ask-first rule and the golden-fixture
+invariant bind at edit time, packet by packet. Phase 1 work may interleave only
+where a packet's own spec says the baseline item is a prerequisite (none currently
+does).
 
-1. **R1 Auto-mode matrix and quiet hours.** Enforce the trader's OFF/DESK/AWAY/
-   EVENING semantics (AWAY queues and never adopts into M5 Focus; EVENING stops
-   scanning after its early block and gains the SPY ±1% wake alarm as the second
-   documented push exception), one fail-open 06:30–14:00 PT quiet-hours gate over
-   every automatic starter, and the shared-scan/dead-Drive removal (the
-   `use_shared_watchlists` flag is a proven no-op). Spec:
-   `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. Exit: mode truth-table tests plus
-   the four live proofs in the spec; CLAUDE.md/AGENTS.md push policy and both
-   runbooks reconciled.
+**Build-order note (2026-08-15).** The original gate read "build work starts only
+after P0.7 merges". The trader redirected on 2026-08-15 and directed R1 to be built
+immediately; R1 is therefore built on its own branch ahead of the testing-week
+merge, and P0's live gates are unchanged and still owed. A later packet does not
+inherit this redirect — R2 onward waits for the trader to say so.
+
+1. **R1 Auto-mode matrix and quiet hours. — BUILT 2026-08-15, live proof owed.**
+   Enforced the trader's OFF/DESK/AWAY/EVENING semantics (AWAY queues and never
+   adopts into M5 Focus; EVENING stops scanning after its early block and gained
+   the SPY ±1% wake alarm as the second documented push exception), one fail-open
+   quiet-hours gate over every automatic starter (06:00–14:00 PT — a superset of
+   the BounceBot scan window, see the spec §8), and the shared-scan/dead-Drive
+   removal. Spec: `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`.
+   Branch `phase05-r1-auto-modes-quiet-hours`; deterministic gate green
+   (2773 passed / 19 subtests, smoke 7/7, frozen selftest 30/30, all exit 0);
+   CLAUDE.md/AGENTS.md push policy, both runbooks, the first-session checklist
+   and decision 0015 reconciled.
+   **Remaining — the spec §6 live proofs, none yet run:** a ~21:00 boot that
+   provably starts nothing; an EVENING day whose log shows the early block and
+   then zero further slots; an AWAY session with picks staged-not-adopted and a
+   clean drain on return; and one SPY-alarm firing (real or forced threshold).
 2. **R2 M5 Focus adoption discipline and the M5 strength board.** The combined
    prev-day-extreme + session-VWAP gate applied at candidate build, staging
    refresh (queue eviction), and adoption; a provenance sidecar making auto picks

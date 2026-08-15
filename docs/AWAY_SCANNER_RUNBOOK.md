@@ -4,7 +4,8 @@ Document role: **active operator runbook**
 
 Topology: **single main desk**
 
-Last reconciled: **2026-08-10**
+Last reconciled: **2026-08-15** (packet R1: Away stages picks instead of applying
+them, and queues alerts without a sound).
 
 Current live-validation location: `plan.md` P0.3.
 
@@ -12,6 +13,23 @@ The Away profile changes scheduling and presentation; it does not place orders a
 does not use different scanner/scoring logic from Desk mode. The main desk is the only
 scan host and publisher. The former mini-PC writer handoff and Desk Link satellite
 procedures are retired.
+
+## What Away does with picks and alerts (trader rule 2026-08-14)
+
+Away keeps scanning, keeps building the watchlists and keeps writing the hourly
+digest. Two things changed on 2026-08-14:
+
+- **Auto-populate picks stage; they are never adopted while Away.** Until this
+  rule, Away wrote picks straight into `longs.txt`/`shorts.txt` on the reasoning
+  that nobody was present to approve them. Nobody is present to *prune* them
+  either, so a pick applied at 09:00 spent the whole day alerting on a name no
+  one had looked at. They now wait, and the flip back to DESK adopts the day's
+  picks into M5 Focus together. Packet R2 adds the freshness re-check that
+  drops the stale ones on the way through.
+- **Alerts queue without a sound.** The Alert Center feed, the history and the
+  D1 unread badge all keep filling — the badge is how you see at a glance what
+  accrued — but nothing beeps at an empty desk. Sound returns the moment the
+  mode is not AWAY, including if the state file becomes unreadable.
 
 ## What Away publishes
 
@@ -34,9 +52,10 @@ carries the **full favorite and high-conviction roster** (side-split, `near`
 excluded, built from the whole feed rather than the ranked picks), and a **second
 hourly push** names every stock that fired a D1 level or event alert since the
 previous one — new-since-last-push, silent on an empty hour. Both are **AWAY-only**:
-DESK, EVENING, and OFF push nothing. The Research/Focus price alerts are the single
-exception and still fire from every mode at `urgent`. Machine-local kill switches:
-`push_away_swings`, `push_away_d1_events`.
+DESK, EVENING, and OFF push nothing here. There are exactly two exceptions to the
+AWAY-only rule: the Research/Focus price alerts, which fire from every mode at
+`urgent`, and EVENING's SPY ±1% wake alarm (2026-08-14). Machine-local kill
+switches: `push_away_swings`, `push_away_d1_events`, `push_evening_spy_alarm`.
 
 ## One-time setup
 
@@ -60,7 +79,13 @@ modified.
 
 ## Before leaving the desk
 
-1. Verify the system clock and time zone.
+1. Verify the system clock and time zone. Since 2026-08-14 the clock also decides
+   whether automatic work may start at all: quiet hours confine it to weekdays,
+   06:00–14:00 local (session open−30m through close+60m). A desk launched
+   outside that window starts nothing until it opens — no universe rebuild, no
+   IB connect from saved Auto state, no self-arm — and says so in the Auto Pilot
+   log: `Auto Pilot is ON from saved state, but nothing starts yet`. That is the
+   gate working. Manual buttons still work at any hour.
 2. Launch only through:
 
    ```powershell

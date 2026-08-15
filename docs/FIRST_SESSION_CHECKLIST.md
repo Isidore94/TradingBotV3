@@ -6,7 +6,7 @@ Applies to: `plan.md` Section 6 and P0.2–P0.5
 
 Topology: **single main desk**
 
-Last reconciled: **2026-08-10**
+Last reconciled: **2026-08-15** (packet R1 rows added)
 
 This checklist turns an implemented/green build into real operational evidence. A
 deterministic test cannot satisfy a live row. Record failures and UNKNOWN states
@@ -77,6 +77,10 @@ Check each row from real behavior:
 | Price alert | actual/test push reaches ntfy; fire disarms only that side | |
 | Auto/Away | current verified digest publishes with correct section order | |
 | Phone pushes | AWAY only: swing push carries a roster matching the tracker's Favorite + High Conviction rows; D1 push names only that hour's events; DESK/EVENING/OFF push nothing while a price alert still fires | |
+| Quiet hours | a launch outside 06:00–14:00 on a weekday starts nothing — Auto Pilot logs `nothing starts yet`, no universe rebuild, no IB connect from saved state, no self-arm — and a manual scan still runs from the same desk | |
+| AWAY discipline | picks stage rather than reaching `longs.txt`/`shorts.txt`, alerts arrive with no sound but keep filling the feed and D1 badge, and the flip back to DESK adopts the day's picks | |
+| EVENING stop | the early open+30 slot and the 07:00/07:15/07:30 checks run, then the log names each refused hourly slot once and no further scan starts | |
+| EVENING SPY alarm | a real (or forced-threshold) ±1% move sends one urgent push, repeats at 5-minute spacing, and stops on the flip out of EVENING | |
 | Warehouse | live tee/Health tiles advance if enabled; disabled path is a no-op | |
 | GUI | no sustained event-loop stall or main-thread I/O regression | |
 

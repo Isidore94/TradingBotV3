@@ -71,6 +71,44 @@ change, and nothing to re-point during a live testing week.
   is a real gap, tracked as such rather than assumed solved.
 - macOS support keeps its CloudStorage mount-discovery code, which is now dead
   on this desk. It is harmless and stays until a macOS run is actually needed.
+  **Amended 2026-08-15 — see below: "discovery" was not in fact harmless.**
+
+## Amendment — 2026-08-15 (packet R1, `plan.md` Phase 0.5)
+
+Building R1 surfaced a distinction this record had collapsed. "CloudStorage
+mount-discovery code" was two mechanisms, not one, and only the second was
+harmless:
+
+1. **Store selection** — `_default_google_drive_shared_dir()` probed
+   `$GOOGLE_DRIVE`, `~/My Drive`, `~/Google Drive`, and every
+   `~/Library/CloudStorage/GoogleDrive-*` account, and returned the first
+   writable one as `PERSISTENT_DATA_DIR` with source `google_drive_default`.
+   That ran **at import**, on Windows as well as macOS. It was inert on this
+   desk only because `shared_data_dir` happens to be set; had that setting ever
+   been lost — exactly what happened to three other settings when the old
+   desktop was retired — the app would have silently adopted a sync folder as
+   its operational store. That directly contradicts Decision 1 ("no cloud sync
+   anywhere in the system") and was never the harmless part.
+
+   **Removed.** With no configured store, the fallback is now
+   `LOCAL_SETTINGS_DIR` (source `default_local`). Two tests in
+   `tests/test_project_paths.py` were inverted to assert a mounted Drive and a
+   CloudStorage account are ignored.
+
+2. **Mount presence** — `_unmounted_shared_anchor()` / the bounded startup wait
+   check that the *configured* store's mount exists before `mkdir` runs. This
+   is what the original consequence meant to keep, and it is genuinely useful:
+   creating the store on a missing mount forks it into a plain local folder
+   that silently shadows the real one.
+
+   **Kept**, including the macOS CloudStorage branch. Renamed
+   `_wait_for_shared_drive` → `_wait_for_shared_store`, and its messages no
+   longer instruct the operator to start GoogleDriveFS. A local home folder
+   returns immediately, so it costs the desk nothing; it earns its place only
+   if the store is ever pointed at a network or removable path.
+
+No path moved: the desk still resolves `C:\TradingBotData` from `local_config`.
 
 ## Status
 Accepted. Supersedes the cloud-sync premise of 0005; amends 0006 and 0014.
+Amended 2026-08-15 (Consequences, cloud-drive discovery removed).

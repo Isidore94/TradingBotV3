@@ -1,7 +1,8 @@
 # Auto EVENING mode - sleep-in runbook
 
-Document role: **active single-main operator runbook**. Last reconciled 2026-08-10.
-Current live-validation location: `plan.md` P0.3.
+Document role: **active single-main operator runbook**. Last reconciled 2026-08-15
+(packet R1: EVENING stops scanning after its early block, and gains the SPY
+wake alarm). Current live-validation location: `plan.md` P0.3.
 
 Purpose: get home at 23:30, sleep past the 06:30 open, and still wake to a
 phone that guards your positions and a desk that already did the morning's
@@ -12,11 +13,24 @@ work.
 - **Same discovery, zero recommendations.** Trading logic is identical to
   DESK: auto-populate picks stage silently in the Alert Center for chart
   approval. Nothing self-applies and nothing pings the desk while the mode is
-  on. Flip the mode off (to DESK or OFF) when you sit down to resume live
-  recommendations.
+  on. Flip the mode off (to DESK or OFF) when you sit down — that flip is also
+  what adopts the staged picks into M5 Focus.
 - **Early Master AVWAP run.** The swing scan gets an extra slot at open+30
   (07:00 on a normal session) instead of waiting for the usual open+60, so
   the best-D1 ranking is current when you arrive.
+- **Then it stops (new 2026-08-14, packet R1).** After the early slot, the
+  strength checks and the briefing, EVENING runs no ordinary hourly swing slot
+  and no open watchlist self-build for the rest of the day. The Auto Pilot log
+  names each refused slot once — `Evening mode: swing slot(s) 09:00 not run` —
+  so a quiet log is the mode working, not a broken scheduler. Flip to DESK to
+  resume the hourly schedule.
+- **SPY ±1% wake alarm (new 2026-08-14, packet R1).** If SPY is a full percent
+  from yesterday's close, the phone gets an urgent push and repeats every five
+  minutes until you flip out of EVENING. It reads the champion cached SPY bars;
+  missing bars mean silence, never a false alarm. Machine-local kill switch:
+  `push_evening_spy_alarm` (default on); threshold override:
+  `push_evening_spy_alarm_pct`. This is the second deliberate exception to the
+  AWAY-only push rule.
 - **Strength persistence checks at 07:00 / 07:15 / 07:30.** Every staged
   intraday pick is snapshotted against its HOD/LOD. A name still pressing its
   extreme at 07:30 is HELD; one that slipped is FADED and explicitly not
@@ -31,8 +45,9 @@ work.
   with the trader walking to this screen. The file and the desk announcement are
   unchanged.
 - **Price alerts push at urgent priority** (see below) so a level cross can
-  wake you. These are the ONE always-on phone channel: they fire in every Auto
-  mode, including OFF and EVENING, while every other ntfy push is AWAY-only.
+  wake you. They are the always-on phone channel: they fire in every Auto mode,
+  including OFF and EVENING. Together with the SPY wake alarm above, they are
+  the only two exceptions to the AWAY-only push rule.
 
 ## Night-before checklist
 
@@ -86,5 +101,8 @@ to subscribe to that server too; simply changing the desktop URL is not enough.
 - Slept to 07:30+? The briefing is final - read it in `evening_briefing.txt`,
   the phone report, or the Alert Center line, approve/pass the staged picks
   off their charts, then click the mode off EVENING.
+- **Flipping to DESK is what restarts the day.** It resumes the ordinary hourly
+  swing slots, adopts the staged picks into M5 Focus, and stops the SPY wake
+  alarm. Until you flip, EVENING stays in its post-briefing quiet.
 - At the desk before 07:00? Nothing is lost: the checks and early scan run on
   schedule anyway; switch to DESK whenever you want live flow back.

@@ -13,20 +13,47 @@ elapsed evidence lane that can run in parallel.
 
 | Field | Current value |
 |---|---|
-| Roadmap phase | **P0 — validate and merge the testing-week branch** |
-| Active packet | **TICKER-BRIEFS HARDENING — TB-0..TB-6** (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b; armed by the trader 2026-08-11, first-night repair TB-5/TB-6 built 2026-08-12) |
-| Scope | `scripts/ai_jobs/briefs.py`, `runner.py`, `ledger.py`, one additive helper in `scripts/ai_summary.py`, `scripts/register_ai_jobs_task.ps1`, `tests/test_ai_ticker_briefs.py`, `tests/test_ai_jobs_runner.py`. No detector, scoring, or alert file touched; output stays advisory-only |
-| State | **Integrated and green on `testing-week-2026-08-10`** (2727 passed / 19 subtests / smoke 7/7, both exit 0). **Live proof owed again: the 2026-08-12 22:00 window.** The 08-11 night proved TB-0, broke on TB-3, and exposed a task time limit that defeated its own concurrency guard plus 4h39m of machine sleep |
-| Side item landed | **Snapshot popup opens at desk height** (2026-08-11, trader ask) — UI geometry only, no detector/scoring/alert file touched; baseline unchanged at 2687 passed / smoke not re-run (no non-Qt path affected) |
-| Side item landed | **Phone push policy + two richer pushes** (2026-08-11, trader ask, design confirmed before editing per the ask-first rule) — AWAY is now the only mode that pushes (price alerts stay the always-on exception), the swing push carries the full favorite/high-conviction roster, and a second hourly push names the D1 level events since the last one. New baseline **2720 passed / 19 subtests / smoke 7/7**, both exit 0 |
-| Next action after this packet | **P0.2–P0.4** live gates, plus the ticker-briefs morning check below. P0.1 re-baseline is done |
-| Do not start yet | Phase 0.5 trader refinement packet **builds** (documentation/specs exist; code waits for P0.7), Phase 1 cleanup, or any Phase 2+ feature/foundation item |
+| Roadmap phase | **Phase 0.5 R1 built** (trader redirect 2026-08-15) — P0's live gates are unchanged and still owed |
+| Active packet | **R1 AUTO-MODE MATRIX AND QUIET HOURS** (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`) — code complete, deterministic gate green, **four live proofs owed** |
+| Branch | **`phase05-r1-auto-modes-quiet-hours`**, branched from `testing-week-2026-08-10` at `e18757e`; pushed. Two commits: `fbf8055` behaviour, `0127c8d` removal |
+| Scope | `scripts/autopilot_core.py`, `scripts/ui/services/autopilot_service.py`, `scripts/ui/app.py`, `scripts/ui/panels/alert_center_panel.py`, `scripts/bounce_bot_lib/legacy.py` (behaviour); plus `scan_service.py`, `master_avwap_lib/{runner,legacy,gui}.py`, `scan_worker.py`, `project_paths.py`, `master_avwap_panel.py`, `gui_app/*`, `writer_lease.py`, `autopilot_panel.py`, `master_avwap_mini_pc.py` (removal). Ask-first approval taken before the first edit |
+| State | **Green: 2773 passed / 19 subtests / smoke 7/7 / frozen selftest 30/30**, all exit 0. Nothing observed live yet |
+| Next action | Run the four R1 live proofs (below), then return to **P0.2–P0.6** and the ticker-briefs morning check |
+| Do not start yet | **R2 and later Phase 0.5 packets** — the trader's 2026-08-15 redirect covered R1 only; R2 waits for an explicit go. Also Phase 1 cleanup and any Phase 2+ item |
+
+### R1 live proofs owed
+
+None of these has run. Each is one observation on the desk:
+
+| Proof | What to look for |
+|---|---|
+| Quiet hours | Launch at ~21:00 on a weekday with Auto left ON. `autopilot.log` says `Auto Pilot is ON from saved state, but nothing starts yet`; no IB connect, no universe rebuild, no self-arm. A manual scan from the same desk still runs |
+| EVENING stop | An EVENING day: the open+30 slot and the 07:00/07:15/07:30 checks run, then one `Evening mode: swing slot(s) … not run` line per refused hourly slot and no further scan. The after-close wrap-up still fires |
+| AWAY discipline | An AWAY session: picks do not reach `longs.txt`/`shorts.txt`, alerts arrive silently while the feed and D1 badge fill, and the flip back to DESK adopts the day's picks in one go |
+| SPY wake alarm | One real ±1% EVENING day, or force it by setting `push_evening_spy_alarm_pct` low: an urgent push, a repeat no sooner than 5 minutes, and silence after flipping out of EVENING |
+
+**Known limitation, deliberate:** the AWAY→DESK drain adopts through today's
+un-revalidated path. Packet R2 adds the freshness gate at that same point, so a
+day's worth of picks can land at once and some will be stale until R2 lands. The
+trader accepted this on 2026-08-15 in preference to deferring the packet.
+
+### Previous packet — ticker-briefs hardening (TB-0..TB-6)
+
+| Field | Value |
+|---|---|
+| State | **Integrated and green on `testing-week-2026-08-10`**. **Live proof still owed: the 2026-08-12 22:00 window.** The 08-11 night proved TB-0, broke on TB-3, and exposed a task time limit that defeated its own concurrency guard plus 4h39m of machine sleep |
+| Side item landed | **Snapshot popup opens at desk height** (2026-08-11) — UI geometry only |
+| Side item landed | **Phone push policy + two richer pushes** (2026-08-11) — AWAY became the only pushing mode; R1 has since added EVENING's SPY alarm as the second exception |
 
 A newly arriving AI resumes the active packet if it is unfinished. If it is complete,
 it performs the stated next action. It does not select a different roadmap item
 without explicit trader direction.
 
 ## Planning pass — 2026-08-15 (documentation only)
+
+**Superseded the same day**: the trader then directed R1 to be built, and it was.
+See the active-work table above. This section is kept for the recon findings it
+records, which are still the current understanding.
 
 The trader promoted the 2026-08-14 `WISHLIST.md` entries and directed a build
 foundation for the next implementer. Recorded in this pass:
@@ -55,10 +82,14 @@ only after P0.7 merges.
 
 ## Branch
 
-- Branch: **`testing-week-2026-08-10`**
-- Current commit before this documentation pass: **`1f41af1`**
+- Working branch: **`phase05-r1-auto-modes-quiet-hours`** (R1; pushed to origin)
+- Parent: **`testing-week-2026-08-10`** at `e18757e`
 - Base: `main` at `7d85a27`
-- State: **not merged to `main`; no PR recorded**
+- State: **neither branch merged to `main`; no PR recorded**
+- The R1 branch is a strict superset of `testing-week-2026-08-10`, so the desk's
+  scheduled tasks that run from source are unaffected by a checkout. The standing
+  rule still holds: disarm the scheduled task before switching branches on the
+  desk.
 - Testing-week intent: Mon–Wed Auto/Away and baseline observation; Thu–Fri
   live-session validation; merge only after a `plan.md` Section 6 day passes.
 
@@ -496,13 +527,17 @@ JSON line, so line-based projection is still all-or-nothing for it.
 ## Immediate live gates
 
 - **P0.1:** ~~run the complete Windows automated gate~~ — **done 2026-08-10**
-  (2647 passed / smoke 7/7). Re-run before merge if further code lands.
+  (2647 passed / smoke 7/7), and **re-run 2026-08-15 on the R1 branch**
+  (2773 passed / 19 subtests / smoke 7/7 / frozen selftest 30/30, all exit 0).
+  Re-run again before merge if further code lands.
 - **P0.2–P0.4:** run the single-main session checklist, Away/ntfy validation, and
   observability rollover.
 - **P0.5:** run the durability mid-session restart/backfill drill.
 - **P0.6:** start Local-AI's five-session clock and the warehouse broker/live/pilot
   sequence.
 - **P0.7:** merge only after the live-validation day and applicable rechecks pass.
+  Two branches now queue for `main`: `testing-week-2026-08-10` and the R1 branch
+  built on top of it. Merging R1 carries the testing-week work with it.
 
 Do not add historical detail here. When a change lands, update `CHANGELOG.md`; when a
 gate remains, update `plan.md`.

@@ -1,13 +1,22 @@
 # Auto-mode matrix and quiet hours — packet R1
 
-Status: **ACTIVE specification** for `plan.md` Phase 0.5 **R1**. Authorized by the
+Status: **BUILT, live proof owed** — `plan.md` Phase 0.5 **R1**. Authorized by the
 trader on 2026-08-15 as the promotion of the 2026-08-14 wishlist entries; ranked
 **first** in the Phase 0.5 build order (trader answer, 2026-08-15).
 
-Build gates: no code from this spec lands before `plan.md` P0.7 (testing-week merge)
-completes. Every detector/scoring/alert-hosting file named here falls under the
-file-scoped ask-first rule at edit time. Current-state facts below were verified by
-read-only recon on 2026-08-15; re-verify line numbers before editing.
+**Built 2026-08-15** on branch `phase05-r1-auto-modes-quiet-hours`, two commits:
+the behaviour (§3.1–3.4) and the shared-scan removal (§3.5). The trader directed
+the build ahead of P0.7 and answered §7's open question and two build-time
+choices before any edit — see §8. Deterministic verification is green
+(2773 passed / 19 subtests, smoke 7/7, frozen selftest 30/30, all exit 0); the
+§6 live proofs are **still owed**.
+
+Build gates as originally written: no code from this spec lands before `plan.md`
+P0.7 (testing-week merge) completes — **superseded by the trader's explicit
+2026-08-15 redirect**. Every detector/scoring/alert-hosting file named here falls
+under the file-scoped ask-first rule at edit time; approval was taken before the
+first edit. Current-state facts below were verified by read-only recon on
+2026-08-15 and matched the code at build time.
 
 ## 1. The trader's mode semantics (2026-08-14, restated as a matrix)
 
@@ -207,8 +216,42 @@ threshold test push). CLAUDE.md/AGENTS.md, `docs/AWAY_SCANNER_RUNBOOK.md`, and
 
 ## 7. Open questions
 
-- AWAY "queue quietly": which exact presentation channels count as
-  attention-demanding (sound, toast, tab badge)? Decide with the trader at build
-  time; the queue/history behavior itself is settled above.
+- ~~AWAY "queue quietly": which exact presentation channels count as
+  attention-demanding?~~ **Answered 2026-08-15 — see §8.1.**
 - Should the SPY alarm also cover a fast intraday reversal (e.g. crosses back
   through ±1%)? Not in v1; revisit after the first live EVENING week.
+
+## 8. Build-time decisions (trader, 2026-08-15)
+
+Recon before the build found exactly three live presentation channels in
+`alert_center_panel.py`: `QApplication.beep()` on the main feed and on the D1
+feed, the D1 tab unread badge, and the Desk Link relay popup (dead since
+satellites were retired).
+
+1. **AWAY suppresses the beep only.** Feed, history and the D1 unread badge keep
+   filling — the badge is the "queue for return" surface the matrix asks for, and
+   its count is the first thing that tells the trader how much accrued. Built as
+   `AlertCenterPanel._alerts_may_sound()`, which reads the machine-local Auto
+   mode (5-second cache) and **fails loud**: an unreadable state file resolves to
+   OFF, so a broken read can never silence the desk.
+2. **The AWAY→DESK drain uses today's adoption path.** R2's freshness gate does
+   not exist yet, so on the flip the pending picks adopt as they do now. The poll
+   marks nothing seen while AWAY, so the whole day's picks are still pending when
+   the trader returns and one poll takes them all. R2 inserts its re-validation
+   at that same point. Accepted risk, stated: a full day of picks lands at once
+   and some will be stale until R2 lands.
+3. **Behaviour first, refactor second.** §3.1–3.4 landed as one reviewable
+   commit with its tests; §3.5's wide mechanical diff landed separately, so a
+   twenty-one-file removal never hid a behaviour change.
+
+Two things the build settled that the spec had left implied:
+
+- **The quiet-hours window is a superset of the BounceBot scan window**, so its
+  pre-open margin defaults to BounceBot's 30 minutes (06:00, not the 06:30 in
+  §1). A literal 06:30 gate would refuse the IB connect at 06:10 while
+  `bouncebot_scanning_due` said the sweep could run — a sweep with no connection
+  to run on. `test_the_quiet_window_contains_the_bouncebot_scan_window` pins it.
+- **EVENING's refused swing slots are marked DONE, not left pending.**
+  `after_close_wrapup_due` requires every slot to be done, so leaving them
+  pending would have silently cancelled the after-close wrap-up — universe
+  rebuild, learning refresh, integrity calibration — for the whole day.
