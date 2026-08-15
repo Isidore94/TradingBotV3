@@ -253,6 +253,25 @@ Two independent mechanisms now, and the separation is the point:
 
 The 2-bar lag bound stays as defense in depth rather than as the lock.
 
+### 2026-08-15 — R2.2: the desk runbook stops contradicting the checkpoint
+
+Documentation only. Fourth of four items from the final external review pass.
+
+`docs/DESK_TESTING_PLAN.md` claimed the 09:58 frozen build was **31/31**;
+`CURRENT_CHECKPOINT.md` recorded **30/30**. The checkpoint was right, and the
+evidence is in the build itself: the only selftest change between `e18757e` and
+now is the `docs/DESK_TESTING_PLAN.md` asset check, added by commit `619be55` at
+10:38 — so the runbook was claiming its own bundling had been verified before the
+file existed. The runbook now states both counts and why they differ.
+
+Two more contradictions closed in the same pass. Its merge section still told the
+trader that a `test_warehouse_seal.py` failure was expected and could be re-run
+past, three days after that defect was fixed and the checkpoint removed the
+rerun-until-green carve-out; it now says no failure is acceptable. And it gained a
+rollback section, because the rehearsed rollback to `e18757e` reports **30/30**,
+not 31/31 — a 6am reader had no way to know that the count going *down* is the
+count going back in time with everything else, rather than a broken rollback.
+
 ### 2026-08-15 — R2.2: the two-bar tolerance is accepted, and says so
 
 Documentation and one test; no behavior changed. Third of four items from the
@@ -295,7 +314,7 @@ in the ordinary path and in both fallback branches.
 `IMPLEMENTED` + `GREEN`. Documentation-and-viewer work; no engine touched.
 
 `docs/DESK_TESTING_PLAN.md` is a plain-language runbook of the current testing
-sequence — tonight's quiet-boot check, Monday's six live proofs, then the
+sequence — tonight's quiet-boot check, Monday's live proofs, then the
 after-close checklist, rebuild and merge. Every step gives when to do it, what
 to click, the exact log line or screen element that means it worked, what bad
 looks like, and what to copy to the AI if it fails. It restates

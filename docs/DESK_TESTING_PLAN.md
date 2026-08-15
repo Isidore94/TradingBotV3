@@ -590,8 +590,14 @@ look better — a wrong "pass" costs more than a recorded failure.
 
 ## 3.2 The frozen rebuild and its self-test
 
-**Already done and green as of 2026-08-15 09:58** —
-`selftest OK: 31/31 checks passed (frozen)`, exit 0. (The count rises as checks are added; the **`(frozen)`** suffix and exit 0 are what matter.)
+**Already done and green on 2026-08-15** —
+`selftest OK: 31/31 checks passed (frozen)`, exit 0, on the current build.
+
+Three rebuilds happened that day and **the count changed between them, which is
+correct**: the 09:58 build reported **30/30**, and the 10:27 and later builds
+report **31/31**. The 31st check is the one that makes sure *this very file* is
+inside the packaged app — it did not exist at 09:58. A changing count is normal
+as checks are added; the **`(frozen)`** suffix and exit 0 are what matter.
 
 You only need to repeat this if code changed after that. **Ask the AI: "has any
 code landed since the frozen rebuild? if so, rebuild and run the frozen
@@ -615,16 +621,42 @@ in a specific order, and the AI has the order and the gates written down.
 **GOOD:** the AI reports the merge done, plus a fresh full-test run, smoke check
 and — if any code moved — a fresh frozen self-test.
 
-### One thing that will probably go wrong, and is fine
+### ~~One thing that will probably go wrong~~ — no longer true
 
-There is a known flaky test:
-`test_warehouse_seal.py::test_stale_staged_files_are_quarantined_not_deleted`.
-It fails about half the time for a clock-precision reason on Windows, and it has
-nothing to do with any recent work.
+This section used to say `test_warehouse_seal.py` fails about half the time for
+a clock-precision reason, and that re-running it was fine. **That was fixed on
+2026-08-15** — it was a real defect, not flakiness, and it is gone.
 
-**If the test run fails and that is the only failure, it is not a reason to stop
-the merge.** Re-run it. If any *other* test fails, that is real — stop and tell
-the AI.
+**There is now no test allowed to fail.** If the run is not fully green, stop and
+tell the AI, whichever test it is. "Just re-run it" is no longer an answer.
+
+---
+
+## 3.4 If Monday goes badly — going back
+
+**WHEN:** only if the session shows something genuinely broken and you want the
+old build back for Tuesday.
+
+**DO:** **tell the AI: "roll back to the pre-R1 build."** Do not do it yourself
+while the desk is running — the 07:00 task has to be disarmed first, or it can
+start the app from a half-swapped folder. The AI has that order written down, and
+the whole path was rehearsed unattended on 2026-08-15.
+
+**GOOD:** the app starts and the self-test passes.
+
+**The one thing that will look wrong and is not:** the rolled-back build reports
+
+```
+selftest OK: 30/30 checks passed
+```
+
+**30, not 31 — and that is correct.** The 31st check is the one that makes sure
+this testing plan is inside the packaged app, and this file did not exist in the
+older build, so neither did the check. A lower count after a rollback is the
+count going back in time with everything else. It is *not* evidence of a broken
+rollback.
+
+**BAD:** any other number, a failure line, or a non-zero exit.
 
 ---
 
