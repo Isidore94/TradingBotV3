@@ -300,6 +300,13 @@ def bouncebot_scanning_due(
 # stranding the sweep with no connection to run on.
 AUTO_QUIET_HOURS_PREOPEN_MINUTES = BOUNCEBOT_SCAN_PREOPEN_MINUTES
 AUTO_QUIET_HOURS_POSTCLOSE_MINUTES = 60
+#: Where a broken session lookup lands: the default window, spelled out as
+#: fixed local hours so it needs nothing that could itself be broken. A weekday
+#: 06:00-14:00 is the ordinary window on a normal session, so the fallback
+#: behaves like a working clock rather than like no clock at all.
+AUTO_QUIET_HOURS_FALLBACK_START_HOUR = 6
+AUTO_QUIET_HOURS_FALLBACK_END_HOUR = 14
+AUTO_QUIET_HOURS_FALLBACK_LABEL = "06:00-14:00"
 AUTO_QUIET_HOURS_SETTING = "qt_auto_quiet_hours"
 AUTO_QUIET_HOURS_PREOPEN_SETTING = "qt_auto_quiet_hours_preopen_minutes"
 AUTO_QUIET_HOURS_POSTCLOSE_SETTING = "qt_auto_quiet_hours_postclose_minutes"
@@ -374,10 +381,25 @@ def auto_scanning_due(
         start, end = auto_scanning_window(
             reference=now, local_timezone_name=local_timezone_name
         )
+        label = f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
     except Exception:
-        logging.exception("Quiet-hours window lookup failed; allowing automatic work.")
-        return True, "session window unavailable; allowing automatic work"
-    label = f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+        # NOT fully open (R2.1). "Fail open" was the right instinct - a broken
+        # clock must never make the desk sit out a trading day - but taken
+        # literally it let a broken calendar wake the desk at 21:00, which is
+        # exactly what this gate exists to prevent. Falling back to the FIXED
+        # default window keeps both properties: the session still runs, and
+        # the night is still quiet.
+        logging.exception(
+            "Quiet-hours window lookup failed; falling back to the fixed %s window.",
+            AUTO_QUIET_HOURS_FALLBACK_LABEL,
+        )
+        start = now.replace(
+            hour=AUTO_QUIET_HOURS_FALLBACK_START_HOUR, minute=0, second=0, microsecond=0
+        )
+        end = now.replace(
+            hour=AUTO_QUIET_HOURS_FALLBACK_END_HOUR, minute=0, second=0, microsecond=0
+        )
+        label = f"{AUTO_QUIET_HOURS_FALLBACK_LABEL} fallback"
     if start <= now <= end:
         return True, f"inside the {label} automatic-work window"
     return False, f"quiet hours - outside the {label} automatic-work window"

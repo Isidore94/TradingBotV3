@@ -90,19 +90,54 @@ def test_the_setting_can_restore_round_the_clock_automatic_work():
     assert allowed and "around the clock" in reason
 
 
-def test_a_broken_session_lookup_fails_open(monkeypatch):
-    """A clock this cannot read must never be the reason the desk sits out a
-    trading day. Wasting an overnight rebuild is cheap; missing a session is
-    not."""
+def test_a_broken_session_lookup_falls_back_to_the_fixed_window(monkeypatch):
+    """Not fully open (R2.1).
+
+    "Fail open" was the right instinct - a clock this cannot read must never be
+    the reason the desk sits out a trading day - but taken literally it let a
+    broken calendar wake the desk at 21:00, which is the exact thing this gate
+    exists to prevent. The fallback is the FIXED default window, so the session
+    still runs and the night is still quiet.
+    """
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("no session data")
+
+    monkeypatch.setattr(core, "auto_scanning_window", explode)
+
+    def due(hour):
+        return core.auto_scanning_due(
+            THURSDAY.replace(hour=hour), quiet_hours=True, local_timezone_name=PACIFIC
+        )
+
+    # The session still runs on a broken clock ...
+    allowed, reason = due(9)
+    assert allowed and "fallback" in reason
+
+    # ... and the night still does not.
+    for hour in (2, 5, 21, 23):
+        allowed, reason = due(hour)
+        assert not allowed, f"a broken calendar must not wake the desk at {hour}:00"
+        assert "fallback" in reason
+
+    # The edges are the documented default window.
+    assert due(6)[0] is True
+    assert due(14)[0] is True
+    assert due(5)[0] is False
+
+
+def test_the_weekend_still_wins_over_a_broken_lookup(monkeypatch):
+    """The weekend check runs before the window, so a broken calendar cannot
+    turn Saturday into a trading day."""
 
     def explode(*_args, **_kwargs):
         raise RuntimeError("no session data")
 
     monkeypatch.setattr(core, "auto_scanning_window", explode)
     allowed, reason = core.auto_scanning_due(
-        THURSDAY.replace(hour=2), quiet_hours=True, local_timezone_name=PACIFIC
+        SATURDAY.replace(hour=9), quiet_hours=True, local_timezone_name=PACIFIC
     )
-    assert allowed and "unavailable" in reason
+    assert not allowed and "weekend" in reason
 
 
 def test_the_quiet_window_contains_the_bouncebot_scan_window():
@@ -1021,3 +1056,23 @@ def test_send_push_classifies_its_outcomes():
     assert push_notify.send_push("t", "m", config=config, opener=rejecting)["kind"] == "rejected"
     assert push_notify.send_push("t", "m", config=config, opener=timing_out)["kind"] == "ambiguous"
     assert push_notify.send_push("t", "m", config={})["kind"] == "unconfigured"
+
+
+def test_a_broken_gate_check_also_falls_back_rather_than_opening_the_day(monkeypatch):
+    """Belt and braces: if the check itself raises, the service applies the
+    same fixed window instead of letting everything run at any hour."""
+    service = _bare_service()
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("the gate itself is broken")
+
+    monkeypatch.setattr(core, "auto_scanning_due", explode)
+
+    allowed, reason = service._auto_work_due(THURSDAY.replace(hour=9))
+    assert allowed and "fallback" in reason
+
+    allowed, reason = service._auto_work_due(THURSDAY.replace(hour=21))
+    assert not allowed and "fallback" in reason
+
+    allowed, reason = service._auto_work_due(SATURDAY.replace(hour=9))
+    assert not allowed and "weekend" in reason

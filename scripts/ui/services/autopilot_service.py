@@ -603,11 +603,27 @@ class AutopilotService(QObject):
         day. Only automatic starters consult it - every manual button runs at
         any hour.
         """
+        moment = now or datetime.now()
         try:
-            return core.auto_scanning_due(now or datetime.now())
+            return core.auto_scanning_due(moment)
         except Exception:
-            logging.exception("Quiet-hours check failed; allowing automatic work.")
-            return True, "quiet-hours check failed; allowing automatic work"
+            # `auto_scanning_due` already falls back to the fixed window on a
+            # session-lookup failure, so reaching here means the check itself
+            # broke. Apply the same fixed window rather than opening the day
+            # completely (R2.1): a broken gate must not be able to wake the
+            # desk at 21:00, which is the thing it was added to stop.
+            logging.exception("Quiet-hours check failed; using the fixed fallback window.")
+            if moment.weekday() >= 5:
+                return False, "weekend - quiet hours until the next session"
+            inside = (
+                core.AUTO_QUIET_HOURS_FALLBACK_START_HOUR
+                <= moment.hour
+                < core.AUTO_QUIET_HOURS_FALLBACK_END_HOUR
+            )
+            label = core.AUTO_QUIET_HOURS_FALLBACK_LABEL
+            if inside:
+                return True, f"quiet-hours check failed; inside the {label} fallback window"
+            return False, f"quiet-hours check failed; outside the {label} fallback window"
 
     def _apply_quiet_hours(self, now: datetime) -> None:
         """Log each quiet-hours crossing once, never once per tick.
