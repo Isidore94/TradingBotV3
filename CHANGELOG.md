@@ -253,6 +253,25 @@ Two independent mechanisms now, and the separation is the point:
 
 The 2-bar lag bound stays as defense in depth rather than as the lock.
 
+### 2026-08-15 — R2.2: the two-bar tolerance is accepted, and says so
+
+Documentation and one test; no behavior changed. Third of four items from the
+final external review pass.
+
+`FOCUS_GATE_MAX_BAR_LAG = 2` lets a feed stalled by one or two bars adopt a name
+that crossed back through session VWAP in the bars nobody saw. That is a
+**trader-accepted exposure**, now written down in the constant's own comment and
+in `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` §11.2 rather than being
+inferable only from the code: `max_bar_lag = 1` would refuse ordinary late
+publication and have the desk declining most adoptions on a healthy feed.
+
+The bound is named with it. An adopted pick is injected into the watchlists, so
+BounceBot scans it; four completed M5 closes on the wrong side of
+session/dynamic/EOD VWAP file a desync request and the Alert Center removes the
+Focus entry — roughly four completed bars from adoption, unattended. A new test
+pins both constants together, so the documented bound cannot quietly stop being
+true.
+
 ### 2026-08-15 — R2.2: one quiet-hours boundary, one answer
 
 `IMPLEMENTED` + `GREEN`. Second of four items from the final external review pass.

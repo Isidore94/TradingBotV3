@@ -2522,6 +2522,23 @@ def _restamp_or_evict_pending_picks(
 #: Two bars is ten minutes of tape - against the 45-minute wall-clock bound
 #: alone, which allowed a verdict measured NINE bars ago (external review,
 #: 2026-08-15). Both bounds apply; this is the binding one.
+#:
+#: THE EXPOSURE THIS LEAVES, accepted by the trader 2026-08-15 (R2.2 item 3).
+#: A feed stalled by exactly one or two bars can adopt a name that crossed back
+#: through session VWAP inside the bars nobody saw. Ten minutes of tape is real
+#: money, and the residue is deliberate rather than overlooked: the alternative,
+#: max_bar_lag=1, refuses ordinary late publication and would have the desk
+#: declining most adoptions on a healthy feed - a gate that mostly says no is a
+#: gate the trader stops believing.
+#:
+#: THE BACKSTOP, named so this is a bounded exposure rather than a hope. An
+#: adopted pick is injected into longs.txt/shorts.txt, so BounceBot scans it
+#: from the next sweep: VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES = 4 completed
+#: M5 closes on the wrong side of session/dynamic/EOD VWAP files a desync
+#: request, and the Alert Center's 30-second poll removes the Focus entry. A
+#: name adopted on a stale verdict that never recovers is therefore gone within
+#: roughly four completed bars of adoption, without the trader doing anything.
+#: If this is ever tightened to 1, the golden fixture moves with it.
 FOCUS_GATE_MAX_BAR_LAG = 2
 M5_BAR_MINUTES = 5
 

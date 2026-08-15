@@ -292,3 +292,30 @@ Two independent mechanisms replace that:
   silently stopped trying looks exactly like one that succeeded.
 
 The 2-bar lag bound remains, now as defense in depth rather than as the lock.
+
+### 11.2 The two-bar tolerance: accepted, with the backstop named (item 3)
+
+`FOCUS_GATE_MAX_BAR_LAG = 2` is a **trader-accepted exposure**, not an oversight.
+Recorded here and in the constant's own comment so neither can drift from the
+other.
+
+**What it lets through.** A feed stalled by exactly one or two bars can adopt a
+name that crossed back through session VWAP inside the bars nobody saw. Ten
+minutes of tape is real money.
+
+**Why not 1.** yfinance routinely publishes the newest completed bar a minute or
+two late. At `max_bar_lag = 1` the desk would refuse most adoptions on a
+perfectly healthy feed, and a gate that mostly says no is a gate the trader stops
+believing. The choice is between a rare bad adoption and a routine bad refusal.
+
+**The backstop, which is what makes it bounded.** An adopted pick is injected
+into `longs.txt`/`shorts.txt`, so BounceBot scans it from the next sweep.
+`VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES = 4` completed M5 closes on the wrong
+side of session/dynamic/EOD VWAP files a desync request, and the Alert Center's
+30-second poll performs the removal (A.3.4). A name adopted on a stale verdict
+that never recovers is therefore gone within roughly **four completed bars** of
+adoption, with no action from the trader.
+
+**Reopen trigger.** If a live session shows an adoption that survived the feed
+stall and cost a trade, the change is `FOCUS_GATE_MAX_BAR_LAG = 1` plus the
+golden-fixture update that records what it newly refuses — not a new mechanism.

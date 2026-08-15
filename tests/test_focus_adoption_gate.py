@@ -392,6 +392,25 @@ def test_adoption_refuses_a_verdict_measured_too_many_bars_ago():
     assert FOCUS_GATE_MAX_BAR_LAG == 2
 
 
+def test_the_accepted_two_bar_exposure_still_has_the_backstop_it_names():
+    """R2.2 item 3: the tolerance is accepted BECAUSE something removes the
+    residue.
+
+    Two bars of lag can adopt a name that crossed back through VWAP in the
+    unseen bars. That is a trader-accepted exposure, bounded by BounceBot's
+    triple-VWAP invalidation removing the pick within roughly four completed
+    bars. If either constant moves, the documented bound in
+    `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` §11.2 and in
+    FOCUS_GATE_MAX_BAR_LAG's own comment is no longer the truth, and this test
+    is what says so.
+    """
+    from autopilot_core import FOCUS_GATE_MAX_BAR_LAG
+    from bounce_bot_lib.legacy import VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES
+
+    assert FOCUS_GATE_MAX_BAR_LAG == 2
+    assert VWAP_INVALIDATION_CONSECUTIVE_M5_CLOSES == 4
+
+
 def test_adoption_refuses_a_verdict_with_no_measured_bar_at_all():
     from datetime import datetime
 
