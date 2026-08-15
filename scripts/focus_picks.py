@@ -26,6 +26,7 @@ See plan.md, Milestone 8 (Human focus lists).
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import date, datetime
 from pathlib import Path
@@ -525,7 +526,20 @@ class FocusPickStore:
         if not defer_save:
             self._save_auto_picks()
 
-    def _load_auto_picks(self) -> dict[str, dict]:
+    def _load_auto_picks(self, today: date | None = None) -> dict[str, dict]:
+        """Markers for TODAY only, validated per entry (R2.1).
+
+        The day-roll clears markers when it runs, but it only runs when the
+        store notices the date changed - and the sidecar is a plain file that
+        can outlive that: restored from a backup, edited by hand, or written by
+        a process that died before `expire_m5_if_new_day` fired. A marker from
+        another session must never be trusted, because a stale marker is
+        precisely a licence to delete a name the trader typed this morning.
+
+        Each entry carries its own `session_date`, so validation happens per
+        marker rather than on the file's header alone: a half-rolled file
+        cannot smuggle yesterday's entries in under today's stamp.
+        """
         try:
             payload = json.loads(self._auto_pick_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -533,7 +547,30 @@ class FocusPickStore:
         if not isinstance(payload, dict):
             return {}
         picks = payload.get("picks")
-        return picks if isinstance(picks, dict) else {}
+        if not isinstance(picks, dict):
+            return {}
+        today_text = (today or date.today()).isoformat()
+        kept: dict[str, dict] = {}
+        dropped = 0
+        for key, marker in picks.items():
+            if not isinstance(marker, dict):
+                dropped += 1
+                continue
+            if str(marker.get("session_date") or "") != today_text:
+                dropped += 1
+                continue
+            kept[str(key)] = marker
+        if dropped:
+            # Loud, because a marker disappearing changes who owns an entry.
+            # Silently dropping them would look identical to the trader having
+            # typed those names, which is the safe direction but not one to
+            # take quietly.
+            logging.info(
+                "Focus provenance: ignored %d marker(s) not from today's session (%s).",
+                dropped,
+                today_text,
+            )
+        return kept
 
     def _save_auto_picks(self) -> None:
         try:

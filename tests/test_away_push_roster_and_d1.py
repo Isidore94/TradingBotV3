@@ -196,3 +196,29 @@ def test_an_event_without_a_label_still_names_the_symbol():
 def test_the_title_survives_the_ascii_only_push_header():
     title, _message = core.build_d1_events_push([_event("NVDA", "5d high")])
     assert title.encode("ascii", "replace").decode("ascii") == title
+
+
+def test_staged_picks_read_as_waiting_not_as_watched():
+    """R2.1 item 5. Since R2, AWAY/EVENING stage picks instead of writing them
+    to longs/shorts.txt - so a phone report that listed them under an Auto
+    Pilot heading would read as "the bot is watching these" when it is not."""
+    from autopilot_core import render_away_report
+
+    text = render_away_report(
+        {
+            "generated_at": "2026-07-02T10:00:00",
+            "staged_picks": {"long": ["NVDA", "AMD"], "short": ["SOXS"]},
+        }
+    )
+    assert "PICKS WAITING FOR YOU" in text
+    assert "NOT being scanned" in text
+    assert "NVDA, AMD" in text and "SOXS" in text
+    assert "switch Auto mode back to DESK" in text
+
+
+def test_the_waiting_section_is_absent_when_nothing_is_staged():
+    """Honest empty states: no heading rather than a heading over "(none)"."""
+    from autopilot_core import render_away_report
+
+    text = render_away_report({"generated_at": "2026-07-02T10:00:00"})
+    assert "PICKS WAITING FOR YOU" not in text

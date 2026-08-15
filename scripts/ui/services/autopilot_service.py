@@ -1718,6 +1718,12 @@ class AutopilotService(QObject):
                 "scorecard_line": self._scorecard_line,
                 "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
                 "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),
+                # Since R2, AWAY and EVENING STAGE their picks rather than
+                # writing them to longs/shorts.txt. Without this the phone
+                # report showed no trace of them at all, and the trader could
+                # reasonably read the day-trade lists as "everything the bot
+                # found" when several names were sitting in a queue instead.
+                "staged_picks": self._staged_pick_summary(),
                 "evening_briefing_lines": (
                     list(self._evening_briefing_lines)
                     if self.auto_mode == AUTO_PROFILE_EVENING
@@ -1898,6 +1904,24 @@ class AutopilotService(QObject):
                 self._d1_events_pending.clear()
         except Exception as exc:
             self._log(f"D1 events push failed: {exc}")
+
+    def _staged_pick_summary(self) -> dict[str, list[str]]:
+        """Today's queued picks, per side. Empty when nothing is waiting.
+
+        Read-only and best-effort: the report must publish even when the queue
+        cannot be read, because a missing section is a smaller problem than a
+        missing report.
+        """
+        try:
+            pending = core.load_auto_populate_pending_picks()
+        except Exception:
+            logging.debug("Staged picks unavailable for the report.", exc_info=True)
+            return {"long": [], "short": []}
+        queue = pending.get("pending") or {}
+        return {
+            side: sorted(str(sym).strip().upper() for sym in (queue.get(side) or {}))
+            for side in ("long", "short")
+        }
 
     def _maybe_push_spy_alarm(self, now: datetime) -> None:
         """EVENING only: phone the trader when SPY has moved a full percent.

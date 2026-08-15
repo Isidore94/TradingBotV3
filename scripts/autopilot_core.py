@@ -3571,6 +3571,24 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         if payload.get(key)
     ]
 
+    # Staged picks are WAITING, not being scanned. Saying so explicitly is the
+    # point: on the phone, a list of tickers under an Auto Pilot heading reads
+    # as "the bot is watching these", and in AWAY that is exactly wrong - they
+    # are queued until the trader returns to DESK and the gate re-checks them.
+    staged = payload.get("staged_picks") or {}
+    staged_long = [str(item) for item in (staged.get("long") or [])]
+    staged_short = [str(item) for item in (staged.get("short") or [])]
+    staged_sections: list[str] = []
+    if staged_long or staged_short:
+        staged_sections = [
+            "== PICKS WAITING FOR YOU (staged - NOT on any watchlist, NOT being scanned) ==",
+            f"Longs: {_tickers(staged_long)}",
+            f"Shorts: {_tickers(staged_short)}",
+            "These adopt into M5 Focus when you switch Auto mode back to DESK, and "
+            "only if they still pass the entry gate at that moment.",
+            "",
+        ]
+
     briefing_sections: list[str] = []
     briefing_lines = [str(line) for line in (payload.get("evening_briefing_lines") or []) if str(line).strip()]
     if briefing_lines:
@@ -3595,6 +3613,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         _tickers(payload.get("shorts", [])),
         f"TV paste: {_tv_line(payload.get('shorts', []))}",
         "",
+        *staged_sections,
         "== BOT PICKS - LONGS (autolongs.txt) ==",
         _tickers(payload.get("auto_longs", [])),
         f"TV paste: {_tv_line(payload.get('auto_longs', []))}",

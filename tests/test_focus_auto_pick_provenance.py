@@ -470,3 +470,74 @@ def test_the_status_line_does_not_claim_a_trader_owned_name(tmp_path, monkeypatc
     assert "THEIRS" in text
     assert "1 auto pick(s)" in text, "only the genuinely new one was added"
     assert store.is_auto_adopted("MINE", "long", "m5") is False
+
+
+# ---------------------------------------------------------------------------
+# Sidecar hardening (R2.1 item 5)
+# ---------------------------------------------------------------------------
+
+
+def test_a_marker_from_another_session_is_ignored_on_load(tmp_path):
+    """Validation on LOAD, not only on write.
+
+    The day-roll clears markers when it runs, but the sidecar is a plain file
+    that can outlive that run - restored from a backup, hand-edited, or written
+    by a process that died before the roll fired. A stale marker is precisely a
+    licence to delete a name the trader typed this morning.
+    """
+    import json
+
+    store = _store(tmp_path)
+    store.add("NVDA", "long", "m5")
+    store.mark_auto_adopted("NVDA", "long", "m5")
+
+    # Backdate the marker in place, leaving the file's own header current.
+    path = tmp_path / "focus_auto_picks.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for marker in payload["picks"].values():
+        marker["session_date"] = "2020-01-01"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = _store(tmp_path)
+    assert reopened.auto_pick_markers() == {}
+    assert reopened.remove_if_auto_adopted("NVDA", "long", "m5") is False
+    assert reopened.focus_symbols("long", "m5") == ["NVDA"], "the name survives"
+
+
+def test_a_half_rolled_file_cannot_smuggle_yesterdays_entries(tmp_path):
+    """Per-entry validation, not just the file header: a current header over
+    stale entries must not make those entries current."""
+    import json
+    from datetime import date
+
+    store = _store(tmp_path)
+    for symbol in ("TODAY", "STALE"):
+        store.add(symbol, "long", "m5")
+        store.mark_auto_adopted(symbol, "long", "m5")
+
+    path = tmp_path / "focus_auto_picks.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["market_date"] = date.today().isoformat()      # header says today
+    payload["picks"]["STALE|long"]["session_date"] = "2020-01-01"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = _store(tmp_path)
+    assert reopened.is_auto_adopted("TODAY", "long", "m5") is True
+    assert reopened.is_auto_adopted("STALE", "long", "m5") is False
+
+
+def test_a_malformed_marker_entry_is_ignored_not_trusted(tmp_path):
+    import json
+
+    store = _store(tmp_path)
+    store.add("NVDA", "long", "m5")
+    store.mark_auto_adopted("NVDA", "long", "m5")
+
+    path = tmp_path / "focus_auto_picks.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["picks"]["NVDA|long"] = "not a marker"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = _store(tmp_path)
+    assert reopened.auto_pick_markers() == {}
+    assert reopened.remove_if_auto_adopted("NVDA", "long", "m5") is False
