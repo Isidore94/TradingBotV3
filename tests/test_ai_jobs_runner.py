@@ -267,16 +267,30 @@ def test_force_overrides_the_window_and_the_completed_check(tmp_path):
     assert len(ran) == 2, "--force is the manual override for exactly this"
 
 
-def test_default_slate_registers_both_phase_1_jobs():
+def test_default_slate_registers_the_journal_pull_before_the_phase_1_jobs():
+    """R7 §9 step 10 put `journal_import` at the front, and it belongs there.
+
+    This asserted exactly ["ai_summary", "ticker_briefs"] until then. The
+    ordering rule in `default_slots` is "later phases append; they never
+    reorder these", and this is its one sanctioned exception
+    (`docs/LOCAL_AI_AUTOMATION_PLAN.md` §6.4c, promoted into R7 §6): both AI
+    jobs *read* the journal, so running them first means they read yesterday's.
+    The pull costs seconds against the briefs' hours, so going first spends
+    nothing.
+    """
     from ai_jobs import runner
 
     slots = runner.default_slots()
-    assert [slot.name for slot in slots] == ["ai_summary", "ticker_briefs"]
+    assert [slot.name for slot in slots] == ["journal_import", "ai_summary", "ticker_briefs"]
     assert all(slot.enabled for slot in slots)
     by_name = {slot.name: slot for slot in slots}
     # The long slot is capped; the cheap one keeps retrying all window.
     assert by_name["ticker_briefs"].max_attempts == 3
     assert by_name["ai_summary"].max_attempts == 0
+    # Seconds of work, so it reserves almost nothing - and it is capped, because
+    # a broker that is down stays down and should not spend the whole window.
+    assert by_name["journal_import"].reserve_minutes == 5.0
+    assert by_name["journal_import"].max_attempts == 3
 
 
 # ---------------------------------------------------------------------------

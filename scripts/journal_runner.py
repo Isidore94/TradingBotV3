@@ -13,6 +13,7 @@ from journal_importers import (
     IBKR_PORT_SETTING,
     QuestradeImporter,
     flex_cash_transactions,
+    flex_open_positions,
     flex_option_eae_executions,
     import_ibkr_executions,
     import_ibkr_flex_executions,
@@ -21,6 +22,8 @@ from journal_importers import (
     resolve_ibkr_client_id,
 )
 import journal_coverage
+import journal_fx
+import journal_reconcile
 from journal_store import JournalStore
 from project_paths import get_local_setting
 
@@ -228,6 +231,7 @@ def run_journal_backfill(
     store: JournalStore | None = None,
     include_questrade: bool = True,
     include_ibkr_flex: bool | None = None,
+    rebuild: bool = True,
 ) -> dict[str, Any]:
     """Pull the COMPLETE trade list: Questrade executions across the whole date
     range (chunked to its 31-day API limit) and the IBKR Flex Query statement
@@ -382,12 +386,17 @@ def run_journal_backfill(
         )
 
     trade_count = None
-    try:
-        trade_count = journal_store.rebuild_trades()
-        messages.append(f"rebuilt {trade_count} grouped trades")
-    except Exception as exc:
-        had_errors = True
-        messages.append(f"rebuild failed: {exc}")
+    # `rebuild=False` is for the nightly path, which heals its gaps first and
+    # then rebuilds once. Assembling here as well would build the journal twice
+    # a night, and the first of the two from a set of executions already known
+    # to have holes in it.
+    if rebuild:
+        try:
+            trade_count = journal_store.rebuild_trades()
+            messages.append(f"rebuilt {trade_count} grouped trades")
+        except Exception as exc:
+            had_errors = True
+            messages.append(f"rebuild failed: {exc}")
 
     return {
         "status": "FAILED" if had_errors else "OK",
@@ -399,13 +408,170 @@ def run_journal_backfill(
     }
 
 
+#: How many days back the nightly ranged pull re-reads. Seven, not one: a
+#: broker can amend or late-report a fill for days after the fact, and a nightly
+#: job that only ever looked at yesterday would never see the amendment.
+NIGHTLY_LOOKBACK_DAYS = 7
+
+
+def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: str = "nightly") -> dict[str, Any]:
+    """The overnight journal pull: import, heal, convert, rebuild, reconcile.
+
+    Spec §6, and the promotion of the queued P3.3 slice. The order is the order:
+    a rebuild before the self-heal would assemble a journal with known holes in
+    it, and a reconciliation before the rebuild would compare against trades
+    that the night's imports had already invalidated.
+
+    **A night with no executions is `ok`.** A quiet market is not a failure, and
+    a job that reported one would teach the trader to ignore it.
+
+    No new timer, no new thread, no new ntfy sender (I8). This runs inside the
+    existing `ai_jobs` runner slot and its only outputs are database rows and
+    the ledger entry the runner writes.
+    """
+    journal_store = store or JournalStore()
+    messages: list[str] = []
+    had_errors = False
+    end_date = date.today()
+    start_date = end_date - timedelta(days=NIGHTLY_LOOKBACK_DAYS)
+
+    backfill = run_journal_backfill(days=NIGHTLY_LOOKBACK_DAYS, store=journal_store, rebuild=False)
+    messages.extend(backfill.get("messages") or [])
+    had_errors = had_errors or backfill.get("status") == "FAILED"
+
+    # Self-heal before the rebuild: assembling a journal that is known to have
+    # holes in it produces trades that are wrong in a way no later step can see.
+    try:
+        healed = journal_coverage.self_heal(
+            journal_store,
+            lambda broker, account, day: _fetch_one_day(journal_store, broker, account, day),
+            today=end_date,
+        )
+        if healed["repaired"] or healed["failed"] or healed["exhausted"]:
+            messages.append(
+                f"self-heal repaired {len(healed['repaired'])}, failed {len(healed['failed'])}, "
+                f"exhausted {len(healed['exhausted'])}"
+            )
+    except Exception as exc:  # noqa: BLE001 - one bad night is not a broken journal
+        had_errors = True
+        messages.append(f"self-heal failed: {exc}")
+
+    try:
+        rates = journal_fx.ensure_rates(
+            journal_store, journal_fx.rates_needed_for_trades(journal_store)
+        )
+        if rates["booked"] or rates["errors"] or rates["unavailable"]:
+            messages.append(
+                f"fx booked {rates['booked']}"
+                + (f", carried back {rates['carried_back']}" if rates["carried_back"] else "")
+                + (f", {len(rates['unavailable'])} unavailable" if rates["unavailable"] else "")
+                + (f", {len(rates['errors'])} error(s)" if rates["errors"] else "")
+            )
+    except Exception as exc:  # noqa: BLE001 - unconverted is an honest state
+        messages.append(f"fx booking failed: {exc}")
+
+    trade_count = None
+    try:
+        trade_count = journal_store.rebuild_trades()
+        messages.append(f"rebuilt {trade_count} trades")
+        rekey = journal_store.last_rekey
+        if rekey.get("ambiguous") or rekey.get("orphaned"):
+            messages.append(
+                f"re-key needs review: {len(rekey.get('ambiguous') or [])} ambiguous, "
+                f"{len(rekey.get('orphaned') or [])} orphaned"
+            )
+    except Exception as exc:  # noqa: BLE001
+        had_errors = True
+        messages.append(f"rebuild failed: {exc}")
+
+    try:
+        report = journal_reconcile.reconcile(
+            journal_store, _broker_positions(journal_store, messages), trigger=trigger
+        )
+        messages.append(
+            f"reconciled {report['positions_checked']} position(s), "
+            f"{len(report['mismatched'])} mismatch(es)"
+        )
+    except Exception as exc:  # noqa: BLE001
+        had_errors = True
+        messages.append(f"reconcile failed: {exc}")
+
+    return {
+        "status": "FAILED" if had_errors else "OK",
+        "ok": not had_errors,
+        "trigger": trigger,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "trade_count": trade_count,
+        "messages": messages,
+    }
+
+
+def _fetch_one_day(journal_store: JournalStore, broker: str, account_number: str, day: date) -> int:
+    """Import a single (broker, account, day) for the self-heal callback.
+
+    IBKR is deliberately unsupported here: the socket sees only the current TWS
+    session, and a Flex pull is a whole-statement operation rather than a
+    per-day one. Raising says so, which marks the day FAILED with a readable
+    reason instead of pretending the gap was repaired.
+    """
+    if str(broker).upper() != "QUESTRADE":
+        raise RuntimeError(f"{broker} has no per-day fetch; its coverage comes from the Flex statement")
+    importer = QuestradeImporter()
+    total = 0
+    for chunk in importer.iter_execution_chunks(day, day):
+        if chunk["account_number"] != account_number:
+            continue
+        if "error" in chunk:
+            raise RuntimeError(chunk["error"])
+        journal_store.upsert_accounts("QUESTRADE", [chunk["account"]])
+        total += journal_store.upsert_executions(chunk["executions"])
+    return total
+
+
+def _broker_positions(journal_store: JournalStore, messages: list[str]) -> list[dict[str, Any]]:
+    """Current positions from every configured broker, for reconciliation.
+
+    A broker that cannot be reached contributes nothing and says so. It is not
+    scoped out of the comparison silently, because "the broker holds nothing"
+    and "we could not ask" must never look the same - the first is a mismatch
+    worth flagging and the second is not evidence at all.
+    """
+    positions: list[dict[str, Any]] = []
+    reachable: list[str] = []
+
+    importer = QuestradeImporter()
+    if importer.refresh_token or (importer.access_token and importer.api_server):
+        try:
+            for account in importer.get_accounts():
+                number = str(account.get("number") or account.get("accountNumber") or "").strip()
+                if number:
+                    positions.extend(importer.get_positions(number))
+            reachable.append("QUESTRADE")
+        except Exception as exc:  # noqa: BLE001
+            messages.append(f"Questrade positions unavailable: {exc}")
+
+    try:
+        statement = import_ibkr_flex_executions(with_metadata=True)
+        positions.extend(flex_open_positions(statement.get("open_positions") or []))
+        reachable.append("IBKR")
+    except Exception as exc:  # noqa: BLE001
+        messages.append(f"IBKR positions unavailable: {exc}")
+
+    _broker_positions.reachable = reachable  # type: ignore[attr-defined]
+    return positions
+
+
 def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="Journal import runner")
     parser.add_argument("--backfill-days", type=int, default=0, help="backfill this many days (0 = today only)")
+    parser.add_argument("--nightly", action="store_true", help="run the nightly slot's work once")
     args = parser.parse_args()
-    if args.backfill_days > 0:
+    if args.nightly:
+        result = run_nightly_journal_import(trigger="cli")
+    elif args.backfill_days > 0:
         result = run_journal_backfill(days=args.backfill_days)
     else:
         result = run_journal_import_for_date(date.today(), trigger="cli")

@@ -40,7 +40,9 @@ Each step is its own green commit, pushed. A step is not done until
 | 6 Coverage ledger + partial persistence + self-heal | **DONE** | `scripts/journal_coverage.py` + `tests/test_journal_coverage.py` (21 tests); 3081 passed / smoke 7/7, exit 0 |
 | 7 Activities + Flex OptionEAE/OpenPositions/CashTransactions | **DONE** | `tests/test_journal_cash_and_options.py` (25 tests); 3106 passed, exit 0 |
 | 8 FX booking + analytics currency honesty | **DONE** | `scripts/journal_fx.py` + `tests/test_journal_fx.py` (15 tests); 3121 passed, exit 0. Golden regenerated with a note: the CAD trade books by identity |
-| 9–10 Reconcile, nightly slot | pending | |
+| 9 Reconciliation against broker positions | **DONE** | `scripts/journal_reconcile.py` + `tests/test_journal_reconcile.py` (17 tests) |
+| 10 Nightly `journal_import` JobSlot | **DONE** | `run_nightly_journal_import` + `tests/test_journal_nightly_slot.py` (11 tests); **3149 passed / smoke 7/7 / source selftest 31/31**, all exit 0 |
+| 11–13 Journal UI | **next** — report to the trader first | |
 | 11–13 Journal UI | pending | |
 | 14 Governance close-out | pending | |
 
@@ -166,6 +168,24 @@ flake stays **unattributed**.
 **Do not treat either event as a known-flaky exemption on Monday.** P1.1 owns
 suite hermeticity; if this recurs, it is worth a bounded investigation before
 the merge rather than a re-run.
+
+**Packaging, checked at the step-10 boundary.** The five new top-level modules
+(`journal_identity`, `journal_migrate`, `journal_coverage`, `journal_fx`,
+`journal_reconcile`) are **modules, not packages**, and every one is statically
+reachable from the frozen entry point:
+`ui/services/journal_import_service.py` → `journal_runner` → `journal_coverage`
+/ `journal_fx` / `journal_reconcile` → `journal_store` → `journal_migrate` /
+`journal_identity`. The spec-drift test passes and the **source** selftest
+reports 31/31. **No packaging trigger fired**: no new third-party dependency
+(`journal_fx` uses `requests`, already pinned), no new non-`.py` runtime asset,
+no new top-level package, no dynamic string import, no `__file__`/`ROOT_DIR`
+change. The **frozen** rebuild + frozen selftest are still owed before the merge
+— CLAUDE.md requires them regardless of triggers, and they are the gate that has
+historically caught what the suite could not.
+
+**`ai_jobs` still is not in the frozen bundle**, and the new slot does not change
+that: `default_slots()` imports `journal_runner` lazily inside the function, so
+the roster/selftest disjointness rule is untouched.
 
 **Trader-present steps ahead — the build stops and asks at each** (spec §9):
 Flex token setup (§8) before step 7 goes live, account tax-status labeling after

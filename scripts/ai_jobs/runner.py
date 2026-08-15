@@ -344,10 +344,26 @@ def run_slots(
 
 
 def default_slots() -> list[JobSlot]:
-    """The Phase 1 slate. Later phases append; they never reorder these."""
+    """The Phase 1 slate, plus R7's journal pull at the front.
+
+    ``journal_import`` is deliberately **first**, and it is the one sanctioned
+    exception to "later phases append; they never reorder these"
+    (``docs/LOCAL_AI_AUTOMATION_PLAN.md`` §6.4c, promoted into R7 §6). The
+    summary and the ticker briefs read the journal; running them before the
+    night's trades are in it means they read yesterday's. It also costs seconds
+    rather than the briefs' hours, so putting it first spends nothing.
+    """
     from ai_jobs import briefs
+    from journal_runner import run_nightly_journal_import
 
     return [
+        JobSlot(
+            name="journal_import",
+            run=lambda **kwargs: run_nightly_journal_import(trigger="nightly"),
+            reserve_minutes=5.0,
+            description="Broker journal pull, gap self-heal, FX booking and reconciliation",
+            max_attempts=3,
+        ),
         JobSlot(
             name="ai_summary",
             run=briefs.run_daily_summary,
