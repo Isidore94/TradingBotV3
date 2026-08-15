@@ -62,9 +62,47 @@ def resolve_ibkr_client_id(value: Any | None = None) -> int:
     return client_id if client_id > 0 else IBKR_DEFAULT_CLIENT_ID
 
 
+#: IBKR's "client id is already in use" error.
+IBKR_CLIENT_ID_CONFLICT_CODE = 326
+
+
+def _ibkr_error_codes(message: Any) -> set[int]:
+    """The IBKR error codes named in a message, read as codes and not as digits.
+
+    :meth:`IBKRExecutionImporter.error` formats each entry as
+    ``"{code}[{reqId}]: {text}"`` and :meth:`~IBKRExecutionImporter.fetch`
+    joins the last few with ``"; "``, so the code is the leading integer of
+    each entry. Anything else in the message is prose and is not a code.
+    """
+    codes: set[int] = set()
+    for part in str(message or "").split(";"):
+        head = part.strip().split("[", 1)[0].strip()
+        if head.isdigit():
+            codes.add(int(head))
+    return codes
+
+
 def _is_ibkr_client_id_conflict(message: Any) -> bool:
+    """Is this the client-id conflict worth reconnecting on a different id for?
+
+    Root cause A10. The previous spelling was::
+
+        "326" in text or "client id" in text and "already in use" in text
+
+    which ``and``-binds-tighter-than-``or`` turns into a bare substring search
+    for ``"326"`` across the whole message. Every error whose text merely
+    contained those three digits - a fill at 326.50, request id 1326, error
+    code 2326 - was read as a client-id conflict, so ``import_ibkr_executions``
+    silently reconnected twice more on different client ids and then re-raised
+    the original, unrelated error three connections later.
+
+    A code is now matched as a code. The textual form is kept as a second,
+    independent route because it is the wording a human reads in TWS.
+    """
+    if IBKR_CLIENT_ID_CONFLICT_CODE in _ibkr_error_codes(message):
+        return True
     text = str(message or "").lower()
-    return "326" in text or "client id" in text and "already in use" in text
+    return "client id" in text and "already in use" in text
 
 
 def pacific_day_bounds(target_date: date | None = None) -> tuple[datetime, datetime]:
@@ -120,24 +158,90 @@ def _coerce_date(value: Any) -> date | None:
         return None
 
 
-def parse_broker_datetime(value: Any) -> datetime:
+class BrokerTimestampError(ValueError):
+    """A broker timestamp could not be parsed, and guessing was not allowed.
+
+    Root cause B5. The old parser answered ``pacific_now()`` for anything it did
+    not recognise, so an unreadable fill time became "whenever the import ran".
+    That is not a small error in this system: the timestamp decides the trade
+    date, the ordering that assembly nets positions in, and - because the uid
+    embedded it - the execution's identity. A stamped-now row silently lands on
+    the wrong tax day and nets against the wrong fills.
+
+    Import paths therefore parse in strict mode and quarantine the row with its
+    raw payload instead. Missing data is uncertainty, never confirmation.
+    """
+
+
+#: Formats IBKR and Questrade actually send, most specific first. ``%Y%m%d-%H:%M:%S``
+#: is ibapi 10.x's compact form; the double-space one is the older TWS spelling.
+_BROKER_DATETIME_FORMATS = (
+    "%Y%m%d  %H:%M:%S",
+    "%Y%m%d %H:%M:%S",
+    "%Y%m%d-%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d",
+    "%Y%m%d",
+)
+
+
+def _split_timezone_suffix(text: str) -> tuple[str, zoneinfo.ZoneInfo | None]:
+    """Peel an ibapi 10.x trailing timezone name off a timestamp.
+
+    ibapi 10.x reports execution times as ``"20260804 09:31:00 US/Eastern"``.
+    Nothing here understood that, so every socket fill fell through to the
+    stamped-now fallback - the whole day's fills landing at import time, in the
+    desk's timezone rather than the exchange's.
+    """
+    parts = text.rsplit(" ", 1)
+    if len(parts) != 2:
+        return text, None
+    head, suffix = parts[0].strip(), parts[1].strip()
+    if not head or not suffix or suffix[0].isdigit():
+        return text, None
+    try:
+        return head, zoneinfo.ZoneInfo(suffix)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, KeyError, OSError):
+        return text, None
+
+
+def parse_broker_datetime(value: Any, *, strict: bool = False) -> datetime:
+    """Parse a broker timestamp.
+
+    ``strict=True`` raises :class:`BrokerTimestampError` instead of falling back
+    to the current time. Import paths pass it; the default is unchanged so that
+    nothing outside this packet's scope changes behaviour.
+    """
     if isinstance(value, datetime):
         return value
     text = str(value or "").strip()
     if not text:
+        if strict:
+            raise BrokerTimestampError("broker timestamp is empty")
         return pacific_now()
-    normalized = text.replace("Z", "+00:00")
+
+    body, suffix_tz = _split_timezone_suffix(text)
+    fallback_tz = suffix_tz or zoneinfo.ZoneInfo(PACIFIC_TZ_NAME)
+
+    normalized = body.replace("Z", "+00:00")
     try:
-        return datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        pass
-    for fmt in ("%Y%m%d  %H:%M:%S", "%Y%m%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-        try:
-            parsed = datetime.strptime(text, fmt)
-            return parsed.replace(tzinfo=zoneinfo.ZoneInfo(PACIFIC_TZ_NAME))
-        except ValueError:
-            continue
-    return pacific_now()
+        parsed = None
+    if parsed is None:
+        for fmt in _BROKER_DATETIME_FORMATS:
+            try:
+                parsed = datetime.strptime(body, fmt)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
+        if strict:
+            raise BrokerTimestampError(f"unrecognized broker timestamp: {text!r}")
+        return pacific_now()
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=fallback_tz)
+    return parsed
 
 
 def normalize_side(value: Any) -> str:
@@ -187,9 +291,26 @@ def _execution_uid(prefix: str, *parts: Any) -> str:
     return f"{prefix}:{uuid.uuid4().hex}"
 
 
+def _quarantine_record(broker: str, reason: str, payload: Any) -> dict[str, Any]:
+    """One refused row, kept whole so it can be read and re-imported later.
+
+    A quarantined row is *not* imported. Keeping the raw payload is the point:
+    the alternative on offer was a row with an invented timestamp, which looks
+    like data and is not.
+    """
+    return {
+        "broker": str(broker or "").upper(),
+        "reason": str(reason),
+        "raw_json": json.dumps(payload, sort_keys=True, default=str),
+        "quarantined_at": pacific_now().isoformat(),
+    }
+
+
 class QuestradeImporter:
     def __init__(self, session: requests.Session | None = None) -> None:
         self.session = session or requests.Session()
+        #: Rows refused by strict parsing, with their raw payload (B5).
+        self.quarantined: list[dict[str, Any]] = []
 
     @property
     def refresh_token(self) -> str:
@@ -296,7 +417,8 @@ class QuestradeImporter:
 
     def normalize_execution(self, raw: dict[str, Any], account: dict[str, Any]) -> NormalizedExecution:
         timestamp = parse_broker_datetime(
-            raw.get("timestamp") or raw.get("executionTime") or raw.get("time") or raw.get("tradeDate")
+            raw.get("timestamp") or raw.get("executionTime") or raw.get("time") or raw.get("tradeDate"),
+            strict=True,
         )
         account_number = str(account.get("number") or account.get("accountNumber") or raw.get("accountNumber") or "").strip()
         account_type = str(account.get("type") or account.get("accountType") or "").strip()
@@ -351,8 +473,17 @@ class QuestradeImporter:
             if not account_number:
                 continue
             for raw in self.get_executions(account_number, start, end):
-                executions.append(self.normalize_execution(raw, account))
+                self._append_normalized(executions, raw, account)
         return executions, accounts
+
+    def _append_normalized(
+        self, executions: list[NormalizedExecution], raw: dict[str, Any], account: dict[str, Any]
+    ) -> None:
+        """Normalize one row, or quarantine it. One bad row is not a bad day."""
+        try:
+            executions.append(self.normalize_execution(raw, account))
+        except BrokerTimestampError as exc:
+            self.quarantined.append(_quarantine_record("QUESTRADE", str(exc), raw))
 
     def import_executions_for_range(
         self, start_date: date, end_date: date
@@ -371,7 +502,7 @@ class QuestradeImporter:
                 start = datetime.combine(chunk_start, datetime.min.time(), tzinfo=tz)
                 end = datetime.combine(chunk_end, datetime.max.time().replace(microsecond=0), tzinfo=tz)
                 for raw in self.get_executions(account_number, start, end):
-                    executions.append(self.normalize_execution(raw, account))
+                    self._append_normalized(executions, raw, account)
         return executions, accounts
 
 
@@ -384,6 +515,8 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
         self.executions: list[dict[str, Any]] = []
         self.commissions: dict[str, dict[str, Any]] = {}
         self.errors: list[str] = []
+        #: Rows refused by strict parsing, with their raw payload (B5).
+        self.quarantined: list[dict[str, Any]] = []
 
     def execDetails(self, reqId: int, contract: Contract, execution: Any) -> None:  # noqa: N802 - ibapi callback name
         self.executions.append({"contract": contract, "execution": execution})
@@ -419,17 +552,50 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
             filter_obj.acctCode = account
         self.exec_end.clear()
         self.reqExecutions(7001, filter_obj)
-        self.exec_end.wait(timeout=max(1.0, float(timeout_sec)))
+        wait_seconds = max(1.0, float(timeout_sec))
+        completed = self.exec_end.wait(timeout=wait_seconds)
         try:
             self.disconnect()
         finally:
             thread.join(timeout=2.0)
         if self.errors and not self.executions:
             raise RuntimeError("; ".join(self.errors[-3:]))
-        return [self.normalize_execution(item["contract"], item["execution"]) for item in self.executions]
+        if not completed:
+            # Root cause A4. Without execDetailsEnd there is no way to tell a
+            # complete answer from a truncated one, and the old code returned
+            # whatever had arrived as if it were the whole day. A short read
+            # that reports success is how days go missing quietly; raising
+            # makes the caller mark the day FAILED and retry it.
+            detail = f" Last errors: {'; '.join(self.errors[-3:])}." if self.errors else ""
+            raise RuntimeError(
+                f"IBKR execution request timed out after {wait_seconds:g}s without execDetailsEnd; "
+                f"{len(self.executions)} execution(s) had arrived but the set is not known to be "
+                f"complete.{detail}"
+            )
+        results: list[NormalizedExecution] = []
+        for item in self.executions:
+            try:
+                results.append(self.normalize_execution(item["contract"], item["execution"]))
+            except BrokerTimestampError as exc:
+                self.quarantined.append(
+                    _quarantine_record(
+                        "IBKR",
+                        str(exc),
+                        {
+                            "execId": str(getattr(item["execution"], "execId", "") or ""),
+                            "acctNumber": str(getattr(item["execution"], "acctNumber", "") or ""),
+                            "symbol": str(getattr(item["contract"], "symbol", "") or ""),
+                            "time": str(getattr(item["execution"], "time", "") or ""),
+                            "shares": getattr(item["execution"], "shares", None),
+                            "price": getattr(item["execution"], "price", None),
+                            "side": str(getattr(item["execution"], "side", "") or ""),
+                        },
+                    )
+                )
+        return results
 
     def normalize_execution(self, contract: Contract, execution: Any) -> NormalizedExecution:
-        timestamp = parse_broker_datetime(getattr(execution, "time", ""))
+        timestamp = parse_broker_datetime(getattr(execution, "time", ""), strict=True)
         exec_id = str(getattr(execution, "execId", "") or "")
         account_number = str(getattr(execution, "acctNumber", "") or "")
         security_type = str(getattr(contract, "secType", "") or "UNKNOWN").upper()
@@ -537,8 +703,16 @@ IBKR_FLEX_POLL_SECONDS = 5.0
 IBKR_FLEX_POLL_ATTEMPTS = 12
 
 
-def parse_ibkr_flex_statement(xml_text: str) -> list[NormalizedExecution]:
-    """Normalize <Trade>/<TradeConfirm> rows from a Flex statement XML."""
+def parse_ibkr_flex_statement(
+    xml_text: str, *, quarantine: list[dict[str, Any]] | None = None
+) -> list[NormalizedExecution]:
+    """Normalize <Trade>/<TradeConfirm> rows from a Flex statement XML.
+
+    Rows whose timestamp cannot be parsed are appended to ``quarantine`` with
+    their raw attributes and skipped, rather than imported at the current time
+    (B5). Passing no list means such a row is dropped, which is still better
+    than the invented timestamp it replaces.
+    """
     import xml.etree.ElementTree as ET
 
     root = ET.fromstring(xml_text)
@@ -552,7 +726,12 @@ def parse_ibkr_flex_statement(xml_text: str) -> list[NormalizedExecution]:
         if not symbol:
             continue
         raw_datetime = str(attrs.get("dateTime") or attrs.get("tradeDate") or "").replace(";", " ").strip()
-        timestamp = parse_broker_datetime(raw_datetime)
+        try:
+            timestamp = parse_broker_datetime(raw_datetime, strict=True)
+        except BrokerTimestampError as exc:
+            if quarantine is not None:
+                quarantine.append(_quarantine_record("IBKR", str(exc), attrs))
+            continue
         account_number = str(attrs.get("accountId") or "").strip()
         exec_id = str(attrs.get("ibExecID") or attrs.get("execId") or attrs.get("tradeID") or "").strip()
         quantity = _coerce_float(attrs.get("quantity"))
@@ -633,7 +812,10 @@ def import_ibkr_flex_executions(
 
 
 def manual_execution_from_fields(fields: dict[str, Any]) -> NormalizedExecution:
-    timestamp = parse_broker_datetime(fields.get("timestamp") or pacific_now())
+    # Strict: a hand-typed timestamp the parser cannot read must be refused at
+    # the dialog, not silently rewritten to the moment the trader pressed Save.
+    # A blank field still means "now", which is the dialog's documented default.
+    timestamp = parse_broker_datetime(fields.get("timestamp") or pacific_now(), strict=True)
     broker = str(fields.get("broker") or "MANUAL").strip().upper()
     account_number = str(fields.get("account_number") or "MANUAL").strip()
     symbol = str(fields.get("symbol") or "").strip().upper()

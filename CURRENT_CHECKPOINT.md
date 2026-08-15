@@ -32,7 +32,7 @@ Each step is its own green commit, pushed. A step is not done until
 | §9 step | State | Evidence |
 |---|---|---|
 | 0 Characterization fixture | **DONE** | `tests/fixtures/journal_rebuild_trades_v1.json` + `tests/test_journal_characterization.py`; 2931 passed, exit 0 |
-| 1 Hygiene (A10, B5, A4) | next | |
+| 1 Hygiene (A10, B5, A4) | **DONE** | `tests/test_journal_import_hygiene.py` (34 tests); 2965 passed, exit 0 |
 | 2 v3 migration + uid migration | pending | |
 | 3 Group-key normalization | pending | |
 | 4 Assembly changes | pending | |
@@ -46,6 +46,15 @@ does today, six known defects included, and it is regenerated only by
 `intentional_difference` field in the same commit. It was verified to fail: a
 trial `CLOSED_PARTIAL` status change turned three assertions red, and was
 reverted.
+
+**Step 1 finding — the ibapi timestamp gap is latent, not live.** The old parser
+did not understand ibapi **10.x**'s `"20260804 09:31:00 US/Eastern"` execution
+time and answered `pacific_now()` for it, which would have stamped every socket
+fill with the import time. The desk is unaffected today: `constraints.txt` pins
+**`ibapi==9.81.1.post1`**, whose `"20260804  09:31:00"` form the old parser did
+read. So this is a defect that fires on an ibapi upgrade, not one already in the
+live journal — recorded that way rather than as a live data-corruption finding.
+Verified by running the pre-fix module directly against both spellings.
 
 **Trader-present steps ahead — the build stops and asks at each** (spec §9):
 Flex token setup (§8) before step 7 goes live, account tax-status labeling after
