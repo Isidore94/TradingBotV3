@@ -1,7 +1,8 @@
 # TradingBotV3 implemented history
 
 Last reconciled: **2026-08-15** from the working copy of
-`phase05-r1-auto-modes-quiet-hours` (branched from `testing-week-2026-08-10`)
+`phase05-r2-focus-gating-strength-board` (cut from `phase05-r1-auto-modes-quiet-hours`,
+itself branched from `testing-week-2026-08-10`)
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -300,7 +301,7 @@ name any refusal with its reason.
 
 **Transport measured before the cadence was chosen** (spec §10): 27.6 s for all
 1,506 symbols at `period=5d`, 100% carrying ≥50 bars. `5d` rather than `1d`
-because SMA50/ATR50 need 50 completed bars and a `1d` window holds six at
+because ATR50 and C50 need 51 completed bars and a `1d` window holds six at
 07:00 PT — every symbol would be unmeasurable through the first four hours of
 the session being traded. Zero IB traffic, so the locked pacing budget is
 untouched. The 15-minute default stands with wide margin; the number was taken

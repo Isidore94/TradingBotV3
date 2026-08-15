@@ -3,15 +3,23 @@
 The trader's TC2000 scan, restated. Per symbol, on M5:
 
     strength = ( SUM over the last 12 completed bars of ((C/O) - 1) * 100 ) / 12
-               * ( (C + SMA50(C)) / 2 ) / ATR50
+               * ( (C + C50) / 2 ) / ATR50
 
-where `SMA50` is the 50-bar simple average of M5 closes and `ATR50` the 50-bar
-M5 average true range. Rank descending and keep the top 25%; mirror for shorts.
+where `C50` is **TC2000 displacement syntax: the close FIFTY BARS AGO**, and
+`ATR50` is the 50-bar M5 average true range. Rank descending and keep the top
+25%; mirror for shorts.
+
+`C50` is a single historical price, not an average. The first build read it as
+a 50-bar SMA because the spec restated it that way; the trader corrected it on
+2026-08-15 and TC2000 parity is the intent (see that plan's §B.1). The
+difference is real: an SMA smooths away the very displacement the price factor
+is asking about.
 
 The shape is "average per-bar body move, scaled by price level and divided by
 volatility": the first factor says how hard the last hour pushed, the price
-factor keeps a $400 name comparable to a $20 one, and ATR50 normalises so a
-quiet name that moves 1% ranks above a jumpy one that moves the same.
+factor keeps a $400 name comparable to a $20 one by anchoring on where it was
+an hour and a half back, and ATR50 normalises so a quiet name that moves 1%
+ranks above a jumpy one that moves the same.
 
 Pure arithmetic - no Qt, no network, no project imports. It deliberately does
 NOT touch `real_relative_strength`: that is a load-bearing, fenced engine
@@ -37,6 +45,7 @@ __all__ = [
     "STRENGTH_TOP_FRACTION",
     "atr",
     "build_strength_board",
+    "displaced_close",
     "ema",
     "percentile_cut",
     "score_symbol",
@@ -48,19 +57,21 @@ __all__ = [
 #: Bars in the body-move sum (the trader's "last 12 completed 5-minute bars" -
 #: one hour of tape).
 STRENGTH_BODY_BARS = 12
-#: Lookback for both SMA50 and ATR50.
+#: Lookback shared by ATR50 and the C50 displacement. Both need 51 bars - ATR
+#: because its first bar contributes no true range, C50 because the close fifty
+#: bars back is the fifty-first value - so one history check covers both.
 STRENGTH_ATR_PERIOD = 50
 #: The M5 EMA the trader filters on.
 STRENGTH_EMA_SPAN = 15
 #: Keep the strongest / weakest quarter of what was measurable.
 STRENGTH_TOP_FRACTION = 0.25
 #: Five days of 5m bars, NOT one. The formula needs 50 completed bars for
-#: SMA50/ATR50, and a 1d window holds about 78 bars for a FULL session - so at
+#: ATR50 and C50, and a 1d window holds about 78 bars for a FULL session - so at
 #: 07:00 PT it holds six, and every symbol would be unmeasurable for the first
 #: four hours of the session the trader is actually trading. Measured
 #: 2026-08-15: 5d gives every symbol >= 50 bars (median 390) and costs 27.6 s
 #: over the whole 1,506-symbol universe. Spanning sessions is also correct
-#: rather than merely convenient - TC2000's M5 SMA50 spans them too.
+#: rather than merely convenient - TC2000's M5 displacement and ATR span them too.
 STRENGTH_FETCH_PERIOD = "5d"
 
 
@@ -74,8 +85,10 @@ def _finite(value: Any) -> float | None:
 
 def sma(values: Sequence[float], period: int) -> float | None:
     """Simple average of the last ``period`` values, or None if there are not
-    that many. Not "as many as we have" - a 12-bar average called SMA50 would
-    silently rank a name that just listed against one with real history."""
+    that many. Not "as many as we have" - a 12-value average presented as a
+    50-value one would silently rank a name that just listed against one with
+    real history. Used by `atr`; the score's price factor uses
+    `displaced_close`, not this."""
     period = int(period)
     if period <= 0 or len(values) < period:
         return None
@@ -83,6 +96,26 @@ def sma(values: Sequence[float], period: int) -> float | None:
     if any(value is None or not math.isfinite(value) for value in window):
         return None
     return sum(window) / float(period)
+
+
+def displaced_close(values: Sequence[float], bars_ago: int) -> float | None:
+    """The close ``bars_ago`` bars back - TC2000's `C50` displacement syntax.
+
+    `C` is the current close, `C1` the close one bar ago, `C50` the close fifty
+    bars ago. So this is a single historical price, NOT an average of the last
+    fifty: the formula's price factor compares where the name is now with where
+    it was an hour and a half back, and averaging would smear exactly the
+    displacement it is asking about.
+
+    Needs ``bars_ago + 1`` values, which is the same 51 bars ATR50 needs (its
+    first bar contributes no true range), so the two refusals coincide rather
+    than one silently masking the other.
+    """
+    bars_ago = int(bars_ago)
+    if bars_ago < 0 or len(values) < bars_ago + 1:
+        return None
+    value = values[-(bars_ago + 1)]
+    return value if value is not None and math.isfinite(value) else None
 
 
 def true_ranges(bars: Sequence[Mapping[str, Any]]) -> list[float] | None:
@@ -148,11 +181,11 @@ def strength_score(
     closes = [_finite(bar.get("close")) for bar in bars]
     if any(close is None for close in closes):
         return None
-    average_close = sma(closes, atr_period)  # type: ignore[arg-type]
-    if average_close is None:
+    displaced = displaced_close(closes, atr_period)  # type: ignore[arg-type]
+    if displaced is None:
         return None
     last_close = closes[-1]
-    price_factor = (last_close + average_close) / 2.0  # type: ignore[operator]
+    price_factor = (last_close + displaced) / 2.0  # type: ignore[operator]
 
     volatility = atr(bars, atr_period)
     if volatility is None or volatility <= 0:

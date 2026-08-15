@@ -117,11 +117,24 @@ Per symbol on M5:
 
 ```
 strength = ( Σ over the last 12 completed M5 bars of ((C/O) - 1) * 100 ) / 12
-           * ( (C + SMA50(C)) / 2 ) / ATR50
+           * ( (C + C50) / 2 ) / ATR50
 ```
 
-with `SMA50` = 50-bar simple average of M5 closes and `ATR50` = 50-bar M5 ATR. Sort
-descending, keep the **top 25%**. Filters alongside: price above session VWAP,
+with `C50` = **the close 50 bars ago (TC2000 displacement syntax)** and `ATR50` =
+50-bar M5 ATR. Sort descending, keep the **top 25%**.
+
+> **Correction, 2026-08-15 — spec error, corrected by the trader.** This section
+> originally restated `C50` as "the 50-bar simple average of M5 closes". That was
+> wrong: `C50` is TC2000 displacement syntax for a single historical price, the
+> close fifty bars back. The first build implemented the spec faithfully and was
+> therefore wrong in the same way. **TC2000 parity is the intent**, and the code
+> now reads the displaced close. The two differ materially on any trending series
+> (on a strictly rising 0–99 series, the SMA of the last fifty values is 74.5
+> while the close fifty bars back is 49), and an average smooths away exactly the
+> displacement the price factor is asking about. The history refusal is unchanged
+> at 51 bars and now coincides exactly with ATR50's, whose first bar contributes
+> no true range — verified, and pinned by
+> `test_c50_and_atr50_refuse_at_the_same_history_length`. Filters alongside: price above session VWAP,
 20-day average daily volume > 1M shares, price > $5, market cap > $1B, has listed
 options, price above yesterday's HOD, price above the M5 15EMA. Inverted for
 shorts. Expected yield ~20–40 names per side; the trader dumps them into M5 Focus.
@@ -134,7 +147,8 @@ shorts. Expected yield ~20–40 names per side; the trader dumps them into M5 Fo
   SPY/sector/industry-excess — **structurally unrelated** to this formula — and
   only covers the curated watchlist union (~175 base symbols), never
   `universe_all.txt` (1,506 symbols, built 2026-08-13).
-- **No M5 SMA50 or ATR50 exists anywhere**; both are new pure calculations.
+- **No M5 ATR50 or bar-displacement helper exists anywhere**; both are new pure
+  calculations.
 - Filter availability: 15EMA-M5 and yesterday-HOD/LOD are live per scanned symbol
   (`legacy.py:2782, 9109-9115`); session VWAP exists as the unwired
   `session_vwap_series`; price/20d-volume/market-cap/optionable exist **only** in
@@ -152,7 +166,8 @@ shorts. Expected yield ~20–40 names per side; the trader dumps them into M5 Fo
 ### B.3 Design
 
 1. **New pure module** (e.g. `scripts/strength_scan.py`): the formula above plus
-   M5 SMA50/ATR50, computed on completed bars only, with hand-computed fixture
+   M5 ATR50 and the C50 displacement, computed on completed bars only, with
+   hand-computed fixture
    tests. It does **not** touch `real_relative_strength` (load-bearing, fenced) —
    the existing RS/RW board keeps working unchanged beside it.
 2. **Transport and cadence**: batched yfinance 5m fetch over `universe_all.txt`
@@ -227,12 +242,13 @@ over all 1,506 symbols of `universe_all.txt`.
 | `5d` | **27.6 s** | 11 | 1.7 s | 2.7 s | 1,503 / 1,506 | 390 |
 
 **`5d` is the one that matters, and it is what the board fetches.** The formula
-needs 50 completed M5 bars for SMA50 and ATR50, and a `1d` window holds about 78
+needs 51 completed M5 bars for ATR50 and C50, and a `1d` window holds about 78
 bars for a *full* session — so at 07:00 PT, half an hour after the open, it holds
 six. Every symbol would be unmeasurable for the first four hours of exactly the
 session the trader is trading. With `5d`, **100% of symbols carry ≥50 bars**
 (median 390, minimum 334) from the first bar of the day. Spanning sessions is
-also correct rather than merely convenient: TC2000's M5 SMA50 spans them too,
+also correct rather than merely convenient: TC2000's M5 displacement and ATR span
+them too,
 and `session_vwap_series` restarts per date regardless, so the VWAP filter is
 unaffected by the longer window.
 

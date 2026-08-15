@@ -19,6 +19,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from strength_scan import (  # noqa: E402
     STRENGTH_ATR_PERIOD,
     atr,
+    displaced_close,
     percentile_cut,
     sma,
     strength_score,
@@ -40,8 +41,9 @@ def _flat_bars(count, *, close=100.0, spread=1.0):
 
 
 def test_sma_refuses_a_window_it_cannot_fill():
-    """A 12-bar average called SMA50 would rank a fresh listing against a name
-    with real history."""
+    """Used by ATR50, not by the price factor. A 12-value average presented as
+    a 50-value one would rank a fresh listing against a name with real
+    history."""
     assert sma([1.0, 2.0, 3.0], 3) == 2.0
     assert sma([1.0, 2.0, 3.0], 4) is None
     assert sma([], 1) is None
@@ -66,6 +68,40 @@ def test_atr_needs_one_more_bar_than_its_period():
     assert atr(_flat_bars(51, spread=2.0), 50) == pytest.approx(2.0)
 
 
+def test_c50_is_the_close_fifty_bars_ago_not_an_average():
+    """The correction of 2026-08-15, pinned.
+
+    `C50` is TC2000 displacement syntax - one historical price, not a 50-bar
+    SMA. On a strictly rising series the two are far apart, which is exactly
+    why reading it as an average went unnoticed on flat fixtures: an SMA of
+    0..99's last fifty values is 74.5, while the close fifty bars back is 49.
+    """
+    closes = [float(index) for index in range(100)]
+    assert displaced_close(closes, 50) == 49.0
+    assert sma(closes, 50) == 74.5, "the value the first build used by mistake"
+
+
+def test_c50_and_atr50_refuse_at_the_same_history_length():
+    """One history check covers both, so neither can silently mask the other.
+
+    ATR50 needs 51 bars because its first bar contributes no true range; C50
+    needs 51 because the close fifty bars back is the fifty-first value.
+    """
+    for count in (49, 50):
+        bars = _flat_bars(count, spread=2.0)
+        assert atr(bars, 50) is None
+        assert displaced_close([bar["close"] for bar in bars], 50) is None
+    bars = _flat_bars(51, spread=2.0)
+    assert atr(bars, 50) is not None
+    assert displaced_close([bar["close"] for bar in bars], 50) is not None
+
+
+def test_a_displaced_close_refuses_bad_values():
+    assert displaced_close([], 0) is None
+    assert displaced_close([float("nan"), 1.0], 1) is None
+    assert displaced_close([1.0, 2.0, 3.0], 2) == 1.0
+
+
 # ---------------------------------------------------------------------------
 # The score
 # ---------------------------------------------------------------------------
@@ -82,22 +118,24 @@ def test_the_score_matches_a_hand_computed_series():
 
     51 flat bars at 100.00 with a 2.00 range (open == close == 100), then 12
     bars that each open at 100.00 and close at 101.00 with the same 2.00 range
-    (high 102, low 100).
+    (high 102, low 100). 63 bars in total.
 
     Body factor: each of the 12 bars gives (101/100 - 1) * 100 = 1.0, so the
         sum is 12.0 and the average is 1.0.
-    SMA50 of closes: the last 50 closes are the 12 at 101.00 plus the 38
-        remaining flat ones at 100.00 -> (12*101 + 38*100) / 50 = 100.24.
-    Price factor: (101.00 + 100.24) / 2 = 100.62.
+    C50: the close FIFTY BARS AGO, i.e. closes[-51] of 63 -> closes[12], which
+        is still inside the flat block, so C50 = 100.00. (Not an average: a
+        50-bar SMA here would be 100.24, and that is the error this test now
+        guards against.)
+    Price factor: (101.00 + 100.00) / 2 = 100.50.
     ATR50: every true range is 2.00 (each bar's high-low, which dominates the
         gap terms), so ATR50 = 2.00.
-    Score = 1.0 * 100.62 / 2.00 = 50.31.
+    Score = 1.0 * 100.50 / 2.00 = 50.25.
     """
     bars = _flat_bars(51, close=100.0, spread=2.0)
     bars += [
         {"open": 100.0, "high": 102.0, "low": 100.0, "close": 101.0} for _ in range(12)
     ]
-    assert strength_score(bars) == pytest.approx(50.31, abs=1e-9)
+    assert strength_score(bars) == pytest.approx(50.25, abs=1e-9)
 
 
 def test_a_falling_tape_scores_negative_and_mirrors():
@@ -107,9 +145,10 @@ def test_a_falling_tape_scores_negative_and_mirrors():
         {"open": 100.0, "high": 100.0, "low": 98.0, "close": 99.0} for _ in range(12)
     ]
     # Body: (99/100 - 1) * 100 = -1.0 per bar -> average -1.0.
-    # SMA50 = (12*99 + 38*100) / 50 = 99.76; price factor = (99 + 99.76)/2 = 99.38.
-    # Every true range is 2.00 -> ATR50 = 2.00. Score = -1.0 * 99.38 / 2.0.
-    assert strength_score(bars) == pytest.approx(-49.69, abs=1e-9)
+    # C50 = closes[-51] of 63 = closes[12] = 100.00, so the price factor is
+    # (99 + 100)/2 = 99.50. Every true range is 2.00 -> ATR50 = 2.00.
+    # Score = -1.0 * 99.50 / 2.00 = -49.75.
+    assert strength_score(bars) == pytest.approx(-49.75, abs=1e-9)
 
 
 def test_volatility_normalisation_ranks_the_quiet_mover_higher():
@@ -131,8 +170,9 @@ def test_volatility_normalisation_ranks_the_quiet_mover_higher():
 
 
 def test_price_level_keeps_a_cheap_and_an_expensive_name_comparable():
-    """Two names making the same percentage move rank in price order, which is
-    what the (C + SMA50)/2 factor is for - and neither is excluded."""
+    """Two names making the same percentage move rank together rather than by
+    share price, which is what the (C + C50)/2 factor is for - and neither is
+    excluded."""
 
     def name(level):
         spread = level * 0.02
@@ -165,7 +205,7 @@ def test_price_level_keeps_a_cheap_and_an_expensive_name_comparable():
 
 def test_short_history_scores_nothing_rather_than_something():
     assert strength_score(_flat_bars(11)) is None       # fewer than 12 body bars
-    assert strength_score(_flat_bars(50)) is None       # cannot fill SMA50/ATR50
+    assert strength_score(_flat_bars(50)) is None       # cannot reach C50 or ATR50
     assert strength_score(_flat_bars(51)) is not None
 
 
