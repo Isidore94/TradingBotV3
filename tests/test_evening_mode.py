@@ -46,9 +46,12 @@ def test_read_auto_pilot_mode_accepts_evening(tmp_path):
 
 def test_evening_stages_picks_like_desk():
     # The BounceBot gate reads the mode file and stages (never self-applies)
-    # for both DESK and EVENING - the "no recommendations while asleep" rule.
+    # for every mode the trader can be IN - DESK, AWAY and EVENING. Only OFF,
+    # the historical path, still applies directly. EVENING keeps its original
+    # reason ("no recommendations while asleep"); AWAY joined on 2026-08-14
+    # because nobody is there to prune a self-applied pick either.
     source = (SCRIPTS_DIR / "bounce_bot_lib" / "legacy.py").read_text(encoding="utf-8")
-    assert 'read_auto_pilot_mode() in ("DESK", "EVENING")' in source
+    assert 'read_auto_pilot_mode() in ("DESK", "AWAY", "EVENING")' in source
 
 
 def test_evening_hourly_report_publishes_like_away():

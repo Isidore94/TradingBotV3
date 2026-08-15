@@ -596,6 +596,16 @@ class MainWindow(QMainWindow):
         if not core.universe_is_stale(datetime.now()):
             self.universe_status.setText(_universe_status_text())
             return
+        # Quiet hours (packet R1): this self-heal fired 2.5 s after launch and
+        # every 30 minutes thereafter with no clock check at all, so booting the
+        # desk at 21:00 sent a yfinance sweep of the whole universe down the
+        # wire. The timer keeps ticking - the check is cheap - and the first
+        # heal lands when the window opens. The Universe builder button is
+        # manual and is deliberately not gated.
+        allowed, _reason = core.auto_scanning_due(datetime.now())
+        if not allowed:
+            self.universe_status.setText(_universe_status_text())
+            return
         self.universe_status.setText("Universe: stale - rebuilding...")
         self.universe_status.setStyleSheet("color: #E5C07B;")
         threading.Thread(

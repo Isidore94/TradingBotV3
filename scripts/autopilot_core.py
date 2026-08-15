@@ -125,6 +125,26 @@ def get_autopilot_swing_slots(
     return [slot.strftime("%H:%M") for slot in slots]
 
 
+def autopilot_evening_early_slot(
+    reference: datetime | None = None,
+    local_timezone_name: str | None = None,
+) -> str:
+    """Local HH:MM label of Evening mode's open+30 early swing slot.
+
+    Evening runs this one slot and then stops for the day (trader rule
+    2026-08-14), so the label has to be nameable on its own rather than only
+    as the first entry of a full slot list.
+    """
+    session = get_market_session_window(
+        reference=reference, local_timezone_name=local_timezone_name
+    )
+    open_naive = session.open_local.replace(tzinfo=None)
+    early = open_naive + timedelta(
+        minutes=AUTOPILOT_EVENING_EARLY_SCAN_AFTER_OPEN_MINUTES
+    )
+    return early.strftime("%H:%M")
+
+
 def slot_writes_setup_tracker(
     slot: str,
     reference: datetime | None = None,
@@ -255,6 +275,143 @@ def bouncebot_scanning_due(
     return False, f"outside the {label} scan window"
 
 
+# ---------------------------------------------------------------------------
+# Quiet hours (automatic work is confined to the session and its shoulders)
+# ---------------------------------------------------------------------------
+# Trader rule 2026-08-14 (packet R1): automatic work runs on weekdays from the
+# session open through one hour after the close, and at no other time. An app
+# boot outside the window starts nothing - no universe rebuild, no bar
+# fetching, no BounceBot IB connect from saved Auto state, no daily self-arm -
+# until either the window opens or the trader acts by hand.
+#
+# MANUAL WORK IS NEVER GATED. Only automatic starters consult this; every
+# trader-initiated button (manual scan, manual rebuild, manual resume) runs at
+# any hour, the same way the manual master-scan buttons already bypass the
+# Auto Pilot scheduler.
+#
+# The pre-open margin defaults to BounceBot's own warm-up rather than to zero.
+# This window has to be a SUPERSET of every window it gates or the gates
+# contradict one another: at 06:10 a zero-margin quiet-hours gate would refuse
+# the IB connect while `bouncebot_scanning_due` said the sweep could run,
+# stranding the sweep with no connection to run on.
+AUTO_QUIET_HOURS_PREOPEN_MINUTES = BOUNCEBOT_SCAN_PREOPEN_MINUTES
+AUTO_QUIET_HOURS_POSTCLOSE_MINUTES = 60
+AUTO_QUIET_HOURS_SETTING = "qt_auto_quiet_hours"
+AUTO_QUIET_HOURS_PREOPEN_SETTING = "qt_auto_quiet_hours_preopen_minutes"
+AUTO_QUIET_HOURS_POSTCLOSE_SETTING = "qt_auto_quiet_hours_postclose_minutes"
+
+
+def auto_scanning_window(
+    reference: datetime | None = None,
+    local_timezone_name: str | None = None,
+) -> tuple[datetime, datetime]:
+    """Naive local start/end of the window automatic work may run in.
+
+    Like `bouncebot_scan_window`, the bounds come from `market_session` so an
+    early close or a timezone change moves this with everything else instead of
+    drifting away from it.
+    """
+    session = get_market_session_window(
+        reference=reference, local_timezone_name=local_timezone_name
+    )
+    start = session.open_local.replace(tzinfo=None) - timedelta(
+        minutes=_scan_margin_minutes(
+            AUTO_QUIET_HOURS_PREOPEN_SETTING, AUTO_QUIET_HOURS_PREOPEN_MINUTES
+        )
+    )
+    end = session.close_local.replace(tzinfo=None) + timedelta(
+        minutes=_scan_margin_minutes(
+            AUTO_QUIET_HOURS_POSTCLOSE_SETTING, AUTO_QUIET_HOURS_POSTCLOSE_MINUTES
+        )
+    )
+    return start, end
+
+
+def auto_scanning_due(
+    now: datetime,
+    *,
+    quiet_hours: bool | None = None,
+    local_timezone_name: str | None = None,
+) -> tuple[bool, str]:
+    """Whether automatic work may start right now, plus a reason for the log.
+
+    Fails OPEN. A session lookup this cannot answer must never be the reason
+    the desk sits out a trading day: an extra overnight rebuild is waste, a
+    silent daytime refusal is a missed session.
+    """
+    if quiet_hours is None:
+        try:
+            from project_paths import get_local_setting
+
+            quiet_hours = bool(get_local_setting(AUTO_QUIET_HOURS_SETTING, True))
+        except Exception:
+            quiet_hours = True
+    if not quiet_hours:
+        return True, "quiet hours are disabled; automatic work runs around the clock"
+    if now.weekday() >= 5:
+        return False, "weekend - quiet hours until the next session"
+    try:
+        start, end = auto_scanning_window(
+            reference=now, local_timezone_name=local_timezone_name
+        )
+    except Exception:
+        logging.exception("Quiet-hours window lookup failed; allowing automatic work.")
+        return True, "session window unavailable; allowing automatic work"
+    label = f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}"
+    if start <= now <= end:
+        return True, f"inside the {label} automatic-work window"
+    return False, f"quiet hours - outside the {label} automatic-work window"
+
+
+# ---------------------------------------------------------------------------
+# Evening's SPY wake alarm
+# ---------------------------------------------------------------------------
+# Trader rule 2026-08-14: Evening is armed after a late shift, when the trader
+# sleeps through the open. Its second job - after having the day's trades ready
+# on waking - is to wake the trader if the market actually moves. This is the
+# SECOND deliberate exception to the AWAY-only phone-push rule; the first is
+# the always-on Research/Focus price alerts.
+EVENING_SPY_ALARM_PCT = 1.0
+EVENING_SPY_ALARM_REPEAT_SECONDS = 300
+EVENING_SPY_ALARM_SETTING = "push_evening_spy_alarm"
+EVENING_SPY_ALARM_PCT_SETTING = "push_evening_spy_alarm_pct"
+
+
+def spy_move_alarm_due(
+    day_pct: float | None,
+    last_sent_at: datetime | None,
+    now: datetime,
+    *,
+    threshold_pct: float = EVENING_SPY_ALARM_PCT,
+    repeat_seconds: int = EVENING_SPY_ALARM_REPEAT_SECONDS,
+) -> bool:
+    """Whether Evening's SPY alarm should phone right now.
+
+    Missing data is uncertainty, never confirmation (plan.md sec 5): an absent,
+    unreadable or NaN day-percent is silence, not an alarm. NaN is checked
+    explicitly because `nan < threshold` is False, so a NaN would otherwise
+    read as "past the threshold" and phone the trader awake over no data at
+    all.
+    """
+    if day_pct is None:
+        return False
+    try:
+        move = abs(float(day_pct))
+    except (TypeError, ValueError):
+        return False
+    if move != move:  # NaN
+        return False
+    try:
+        threshold = abs(float(threshold_pct))
+    except (TypeError, ValueError):
+        threshold = EVENING_SPY_ALARM_PCT
+    if move < threshold:
+        return False
+    if last_sent_at is None:
+        return True
+    return (now - last_sent_at).total_seconds() >= float(repeat_seconds)
+
+
 # Hands-off default (2026-07-09, user rule "everything automatic - all I do is
 # fill longs/shorts.txt"): Auto Pilot arms itself once per weekday at/after
 # this local hour. Arming once per day means a manual OFF sticks for the rest
@@ -296,13 +453,23 @@ def autopilot_auto_arm_due(
     armed_date: str | None,
     auto_arm_enabled: bool = True,
     arm_hour: int = AUTOPILOT_AUTO_ARM_HOUR,
+    local_timezone_name: str | None = None,
 ) -> bool:
-    """True when the daily 07:00 self-arm should flip Auto Pilot ON."""
+    """True when the daily 07:00 self-arm should flip Auto Pilot ON.
+
+    The arm hour is a floor, quiet hours are the ceiling: before packet R1 this
+    had no upper bound at all, so launching the desk at 21:00 on a weekday
+    self-armed Auto Pilot and set the whole automatic apparatus going against a
+    closed tape.
+    """
     if enabled or not auto_arm_enabled:
         return False
     if now.weekday() >= 5:
         return False
     if now.hour < int(arm_hour):
+        return False
+    allowed, _ = auto_scanning_due(now, local_timezone_name=local_timezone_name)
+    if not allowed:
         return False
     return str(armed_date or "") != now.date().isoformat()
 

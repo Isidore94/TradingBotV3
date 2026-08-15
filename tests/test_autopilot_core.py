@@ -243,25 +243,46 @@ def test_universe_staleness_rule():
 
 
 def test_autopilot_auto_arm_due_daily_hands_off_rules():
+    # The timezone is pinned because the arm rule now consults the quiet-hours
+    # window, which is derived from the session and therefore timezone-bound.
+    pacific = {"local_timezone_name": "America/Los_Angeles"}
     wednesday_early = datetime(2026, 7, 8, 6, 45)
     wednesday_late = datetime(2026, 7, 8, 7, 0)
     saturday = datetime(2026, 7, 11, 9, 0)
 
     # Before 07:00 -> not yet; at/after 07:00 on a weekday -> arm.
-    assert not core.autopilot_auto_arm_due(wednesday_early, enabled=False, armed_date=None)
-    assert core.autopilot_auto_arm_due(wednesday_late, enabled=False, armed_date=None)
+    assert not core.autopilot_auto_arm_due(
+        wednesday_early, enabled=False, armed_date=None, **pacific
+    )
+    assert core.autopilot_auto_arm_due(
+        wednesday_late, enabled=False, armed_date=None, **pacific
+    )
     # Launching at 10:30 arms immediately.
-    assert core.autopilot_auto_arm_due(datetime(2026, 7, 8, 10, 30), enabled=False, armed_date=None)
+    assert core.autopilot_auto_arm_due(
+        datetime(2026, 7, 8, 10, 30), enabled=False, armed_date=None, **pacific
+    )
     # Already ON, already armed today (manual OFF sticks), weekends, or the
     # setting disabled -> never arm.
-    assert not core.autopilot_auto_arm_due(wednesday_late, enabled=True, armed_date=None)
-    assert not core.autopilot_auto_arm_due(wednesday_late, enabled=False, armed_date="2026-07-08")
-    assert not core.autopilot_auto_arm_due(saturday, enabled=False, armed_date=None)
     assert not core.autopilot_auto_arm_due(
-        wednesday_late, enabled=False, armed_date=None, auto_arm_enabled=False
+        wednesday_late, enabled=True, armed_date=None, **pacific
+    )
+    assert not core.autopilot_auto_arm_due(
+        wednesday_late, enabled=False, armed_date="2026-07-08", **pacific
+    )
+    assert not core.autopilot_auto_arm_due(
+        saturday, enabled=False, armed_date=None, **pacific
+    )
+    assert not core.autopilot_auto_arm_due(
+        wednesday_late, enabled=False, armed_date=None, auto_arm_enabled=False, **pacific
     )
     # Yesterday's arm mark does not block today.
-    assert core.autopilot_auto_arm_due(wednesday_late, enabled=False, armed_date="2026-07-07")
+    assert core.autopilot_auto_arm_due(
+        wednesday_late, enabled=False, armed_date="2026-07-07", **pacific
+    )
+    # Quiet hours are the new ceiling: a 21:00 launch no longer self-arms.
+    assert not core.autopilot_auto_arm_due(
+        datetime(2026, 7, 8, 21, 0), enabled=False, armed_date=None, **pacific
+    )
 
 
 def test_after_close_wrapup_due_needs_all_slots_done():

@@ -989,8 +989,18 @@ def test_bot_loop_desk_mode_stages_and_clock_gate_holds(monkeypatch):
     legacy.BounceBot._maybe_refresh_auto_populated_watchlists(stub)
     assert calls == [("neutral_chop", True)]
 
-    # AWAY applies directly (stage_only False).
+    # AWAY stages too (trader rule 2026-08-14, packet R1). It used to apply
+    # directly on the reasoning that nobody was present to approve; the trader
+    # reversed that, because nobody is present to PRUNE either, and a pick that
+    # self-applied at 09:00 spends the whole day alerting on a name no one has
+    # looked at. The Alert Center adopts the staged picks on the flip to DESK.
     monkeypatch.setattr(core, "read_auto_pilot_mode", lambda: "AWAY")
+    stub._auto_populate_last_ts = 0.0
+    legacy.BounceBot._maybe_refresh_auto_populated_watchlists(stub)
+    assert calls[-1] == ("neutral_chop", True)
+
+    # OFF is the one remaining mode that still self-applies.
+    monkeypatch.setattr(core, "read_auto_pilot_mode", lambda: "OFF")
     stub._auto_populate_last_ts = 0.0
     legacy.BounceBot._maybe_refresh_auto_populated_watchlists(stub)
     assert calls[-1] == ("neutral_chop", False)

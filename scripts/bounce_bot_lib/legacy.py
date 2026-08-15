@@ -10959,12 +10959,18 @@ class BounceBot(EWrapper, EClient):
         # shifted sessions too.
         if not auto_populate_clock_open(datetime.now()):
             return
-        # DESK = trader at the desk: stage picks for chart approval in the
-        # Alert Center. EVENING = trader asleep during the open: stage too, so
-        # nothing self-applies or gets recommended until the trader wakes up
-        # and flips the mode. AWAY (and OFF, the historical path) applies
-        # directly.
-        stage_only = read_auto_pilot_mode() in ("DESK", "EVENING")
+        # Every mode the trader can be *in* stages; only OFF (the historical
+        # path) still applies directly.
+        #   DESK    - trader at the desk: stage for chart approval, adopted
+        #             into M5 Focus immediately by the Alert Center.
+        #   EVENING - trader asleep during the open: stage, adopt on the
+        #             wake-up flip to DESK.
+        #   AWAY    - trader rule 2026-08-14: nobody is present to prune, so a
+        #             self-applied pick would spend the day alerting on a name
+        #             no one has looked at. Stage instead and adopt on return.
+        #             This reverses the older "AWAY self-applies because nobody
+        #             is present to approve" rule.
+        stage_only = read_auto_pilot_mode() in ("DESK", "AWAY", "EVENING")
         env = self.get_market_environment()
         # A day that OPENED directional keeps that bias for discovery even
         # after the live label decays to neutral (2026-07-17 directive: the

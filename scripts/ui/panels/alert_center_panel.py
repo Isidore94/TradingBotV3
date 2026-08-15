@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import date, datetime
 from pathlib import Path
 
@@ -835,6 +836,45 @@ class AlertCenterPanel(QFrame):
             return True, f"{symbol} removed from Focus ({removed} entries)"
         return False, f"unknown intent action {action!r}"
 
+    #: The Auto mode is re-read from disk at most this often. Alerts arrive in
+    #: bursts, and each one asks; a JSON read per alert is cheap but pointless.
+    _AUTO_MODE_CACHE_SECONDS = 5.0
+
+    def _auto_mode_now(self) -> str:
+        """Machine-local Auto mode (OFF/DESK/AWAY/EVENING), briefly cached.
+
+        Read from the Auto Pilot state file rather than through a service
+        handle: that file is already the one shared truth every off-thread
+        reader uses, and this panel is constructed in contexts where no
+        AutopilotService exists (tests, the legacy path).
+        """
+        now = time.monotonic()
+        cached = getattr(self, "_auto_mode_cached", None)
+        if cached is not None and now - cached[0] < self._AUTO_MODE_CACHE_SECONDS:
+            return cached[1]
+        try:
+            from autopilot_core import read_auto_pilot_mode
+
+            mode = read_auto_pilot_mode()
+        except Exception:
+            # Fail LOUD: an unreadable mode must never be the reason the desk
+            # goes silent on the trader.
+            mode = "OFF"
+        self._auto_mode_cached = (now, mode)
+        return mode
+
+    def _alerts_may_sound(self) -> bool:
+        """The sound checkbox, and then the AWAY rule.
+
+        Trader rule 2026-08-14: AWAY queues alerts silently for the trader's
+        return. Only the sound is suppressed - the feed, the history and the D1
+        unread badge all keep filling, so the size of what accrued is the first
+        thing visible on sitting back down.
+        """
+        if not self.sound_input.isChecked():
+            return False
+        return self._auto_mode_now() != "AWAY"
+
     def _relay_alert_popup(self, alert: BounceAlert, *, is_focus: bool) -> None:
         """Ship a self-contained chart popup to connected satellites.
 
@@ -895,7 +935,7 @@ class AlertCenterPanel(QFrame):
         if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
             self._enqueue_review_alert(alert)
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
-            if self.sound_input.isChecked() and alert_should_sound(alert, is_focus=is_focus):
+            if self._alerts_may_sound() and alert_should_sound(alert, is_focus=is_focus):
                 QApplication.beep()
             self._relay_alert_popup(alert, is_focus=is_focus)
         self._emit_feed_status()
@@ -910,7 +950,7 @@ class AlertCenterPanel(QFrame):
         if alert.tag != "d1_focus_pin" and not self._d1_tab_is_current():
             self._d1_unread += 1
             self._refresh_d1_tab_label()
-        if self.sound_input.isChecked() and (
+        if self._alerts_may_sound() and (
             is_ready_d1_alert(alert) or self._alert_has_focus_privilege(alert)
         ):
             QApplication.beep()
@@ -1559,8 +1599,17 @@ class AlertCenterPanel(QFrame):
 
         With no Focus service (satellite, tests) this falls back to the old
         approval queue - the picks must not silently vanish.
+
+        AWAY refuses adoption outright (trader rule 2026-08-14). Nobody is at
+        the desk to prune, so a name adopted at 09:00 would alert unwatched all
+        day. Nothing is marked seen on a refusal, so the whole day's picks are
+        still pending when the trader flips back to DESK and the next poll
+        adopts them together - which is also where packet R2's freshness gate
+        will go, so stale picks get dropped rather than adopted.
         """
         if self._auto_pick_pending_path is None:
+            return
+        if self._auto_mode_now() == "AWAY":
             return
         try:
             from autopilot_core import load_auto_populate_pending_picks

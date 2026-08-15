@@ -80,31 +80,41 @@ def _enter_background_thread_mode() -> None:
 _MAX_REPORT_LOG_LINES = 30
 
 
-# Truthful Auto Mode semantics (plan.md sec 14.3 / Packet A):
+# Truthful Auto Mode semantics (trader rules 2026-08-14, packet R1; supersedes
+# the 2026-07-31 and 2026-08-05 adoption rules for AWAY and EVENING).
+#
+# The discovery logic is IDENTICAL in every mode. What changes is who is
+# present to act on it, and therefore what may self-apply and what may make a
+# noise. No mode is ever a different strategy.
+#
 # OFF     - no automatic user-facing list mutations, scans, or alerts.
 #           Optional shadow research (suggestion scans that write only the
 #           bot-owned autolongs/autoshorts lists) continues ONLY while the
 #           "collect research while Auto is off" setting is enabled.
-# DESK    - full automation; desktop notifications are the primary surface.
-#           The trader is at the desk, so auto-populate watchlist picks stage
-#           for chart approval in the Alert Center instead of self-applying
-#           (2026-07-31 directive) - a human-in-the-loop gate, not different
-#           discovery logic.
-# AWAY    - identical trading decisions and discovery; auto-populate picks
-#           self-apply (nobody is present to approve), and report cadence/
-#           notification presentation may differ. Never different strategy
-#           logic.
+# DESK    - full automation; the desk is the primary surface. Auto-populate
+#           picks stage and are adopted into M5 Focus immediately, for the
+#           trader to prune (2026-08-05 directive: culling is quicker than
+#           approving one at a time). No phone push except price alerts.
+# AWAY    - scans, builds watchlists and writes the hourly digest as always,
+#           and it is the only mode that phones the swing picks and D1 events.
+#           But nobody is at the desk, so: picks STAGE and are never adopted
+#           (a name adopted at 09:00 would alert unwatched all day), and live
+#           alerts queue SILENTLY - feed, history and the D1 unread badge all
+#           keep filling, only the sound is suppressed. The staged picks drain
+#           on the flip back to DESK.
 # EVENING - armed the night before a sleep-in morning (trader home at 23:30,
-#           at the desk 07:00-07:30). Identical discovery to DESK: picks stage
-#           for chart approval and are NEVER self-applied or pushed as trade
-#           recommendations while the mode is on. On top of that it runs the
-#           Master AVWAP swing scan one slot early (open+30 = 07:00 on a
-#           normal session), takes 07:00/07:15/07:30 strength-persistence
-#           checks on the staged intraday picks, and writes a morning
-#           briefing (market environment + best D1s + picks that stayed
-#           strong) so everything is ready the moment the trader sits down.
-#           Price-level alerts (Research -> Price Alerts) push to the phone
-#           at wake-the-trader priority while this profile is active.
+#           at the desk 07:00-07:30). It prepares the morning and then STOPS:
+#           the Master AVWAP swing scan runs one slot early (open+30 = 07:00
+#           on a normal session), the 07:00/07:15/07:30 strength-persistence
+#           checks run, and the morning briefing is written - after which no
+#           ordinary hourly slot and no open watchlist self-build runs at all.
+#           Picks stage and adopt on the wake-up flip to DESK. Price-level
+#           alerts push at wake-the-trader priority, and so does the SPY +/-1%
+#           wake alarm, the second deliberate exception to the AWAY-only push
+#           rule.
+#
+# Over all four, quiet hours (autopilot_core.auto_scanning_due) confine every
+# AUTOMATIC starter to the session window. Manual buttons are never gated.
 AUTO_MODE_OFF = "OFF"
 AUTO_PROFILE_DESK = "DESK"
 AUTO_PROFILE_AWAY = "AWAY"
@@ -174,6 +184,9 @@ class AutopilotService(QObject):
         #: first tick, so a desk started after hours pauses on that first tick
         #: rather than waiting for the next boundary.
         self._scan_window_open: bool | None = None
+        #: Same idea for the quiet-hours window, so the Auto Pilot log records
+        #: each crossing once instead of once every 30 seconds.
+        self._auto_window_open: bool | None = None
 
         if bounce_service is not None:
             bounce_service.alertReceived.connect(self._on_alert)
@@ -185,8 +198,19 @@ class AutopilotService(QObject):
         self._timer.start()
 
         if self._enabled:
-            self._log("Auto Pilot resuming from saved state (was ON at last shutdown).")
-            self._ensure_bot_running()
+            # Quiet hours (packet R1): a desk booted at 21:00 with Auto left ON
+            # used to connect BounceBot to IB right here. Nothing starts until
+            # the window opens; the tick loop picks it up from there.
+            allowed, reason = self._auto_work_due()
+            if allowed:
+                self._log("Auto Pilot resuming from saved state (was ON at last shutdown).")
+                self._ensure_bot_running()
+            else:
+                self._log(
+                    "Auto Pilot is ON from saved state, but nothing starts yet - "
+                    f"{reason}. BounceBot connects when the window opens; manual "
+                    "scans and rebuilds work now."
+                )
 
     # ------------------------------------------------------------------
     # Public control surface
@@ -400,6 +424,7 @@ class AutopilotService(QObject):
             # a Friday evening and while Auto Pilot is OFF, and neither of
             # those paths reaches _ensure_bot_running.
             self._apply_scan_window(now)
+            self._apply_quiet_hours(now)
             if now.weekday() >= 5:
                 today = now.date().isoformat()
                 if self._enabled and self._weekend_logged_date != today:
@@ -430,6 +455,7 @@ class AutopilotService(QObject):
             self._maybe_run_evening_prep(now)
             self._maybe_hourly_away_report(now)
             self._maybe_push_d1_events(now)
+            self._maybe_push_spy_alarm(now)
             core.write_heartbeat(
                 current_job=self._active_scan_slot or active_scan_label(),
                 next_job=str(self.status_snapshot().get("next_slot") or ""),
@@ -454,6 +480,10 @@ class AutopilotService(QObject):
                 "hod_added": [],
                 "wrapup_done_at": None,
                 "picks_scored_at": None,
+                # Explicit rather than merely absent: this is what day-rolls
+                # the Evening SPY alarm, so last night's stamp can never
+                # suppress this morning's first alarm.
+                "spy_alarm_last_sent": None,
                 # What Auto Pilot itself wrote survives the day roll - it is
                 # how tomorrow's build tells its own picks from the trader's.
                 "autopilot_written": self._state.get("autopilot_written") or {"longs": [], "shorts": []},
@@ -544,6 +574,42 @@ class AutopilotService(QObject):
             return True
         return allowed
 
+    # ------------------------------------------------------------------
+    # Quiet hours (packet R1): automatic work only inside the session window
+    # ------------------------------------------------------------------
+    def _auto_work_due(self, now: datetime | None = None) -> tuple[bool, str]:
+        """Quiet-hours verdict plus a reason fit for the Auto Pilot log.
+
+        Fails OPEN for the same reason `_scanning_allowed_now` does: a session
+        lookup this cannot answer must never be why the desk sits out a trading
+        day. Only automatic starters consult it - every manual button runs at
+        any hour.
+        """
+        try:
+            return core.auto_scanning_due(now or datetime.now())
+        except Exception:
+            logging.exception("Quiet-hours check failed; allowing automatic work.")
+            return True, "quiet-hours check failed; allowing automatic work"
+
+    def _apply_quiet_hours(self, now: datetime) -> None:
+        """Log each quiet-hours crossing once, never once per tick.
+
+        Announcement only - the refusals themselves live at each automatic
+        starter, so a single missed transition can never leave work running
+        that the gate would refuse.
+        """
+        allowed, reason = self._auto_work_due(now)
+        if allowed == self._auto_window_open:
+            return
+        self._auto_window_open = allowed
+        if allowed:
+            self._log(f"Automatic work resumed - {reason}.")
+        else:
+            self._log(
+                f"Automatic work paused - {reason}. Manual scans, watchlist "
+                "rebuilds and BounceBot resumes still work from the desk."
+            )
+
     def _apply_scan_window(self, now: datetime) -> None:
         """Pause or resume BounceBot's sweep on the session boundary.
 
@@ -588,6 +654,13 @@ class AutopilotService(QObject):
             return
         now = datetime.now()
         if not force:
+            # Quiet hours: `force` is the manual carve-out (rebuild_universe_now),
+            # so the trader's button still rebuilds at 21:00. An automatic heal
+            # would otherwise sweep the whole universe through yfinance at any
+            # hour of the night.
+            allowed, _reason = self._auto_work_due(now)
+            if not allowed:
+                return
             if not core.universe_is_stale(now):
                 return
             if (
@@ -628,10 +701,28 @@ class AutopilotService(QObject):
     def _maybe_build_watchlists(self, now: datetime) -> None:
         if self._building_watchlists or self._state.get("watchlist_built_at"):
             return
+        allowed, _reason = self._auto_work_due(now)
+        if not allowed:
+            return
         since_open = core.minutes_since_open(now)
         if since_open < core.AUTOPILOT_WATCHLIST_BUILD_AFTER_OPEN_MINUTES:
             return
         if since_open > core.AUTOPILOT_WATCHLIST_BUILD_DEADLINE_MINUTES:
+            return
+        if self._profile == AUTO_PROFILE_EVENING:
+            # Evening prepares the morning and then stops (trader rule
+            # 2026-08-14). Deliberately NOT recorded as `watchlist_built_at`:
+            # a skip marker would survive the wake-up flip to DESK and suppress
+            # the build for the rest of the morning, which is the one time the
+            # trader does want it.
+            today = now.date()
+            if getattr(self, "_evening_build_skip_logged_date", None) != today:
+                self._evening_build_skip_logged_date = today
+                self._log(
+                    "Evening mode: skipping the open watchlist self-build - Evening "
+                    "runs the early swing slot, the strength checks and the briefing, "
+                    "then stops. Flip to DESK to build."
+                )
             return
         # The build only makes sense off a fresh pool - wait for the rebuild.
         if self._universe_rebuild_running or core.universe_is_stale(now):
@@ -859,6 +950,9 @@ class AutopilotService(QObject):
     def _maybe_run_swing_slot(self, now: datetime) -> None:
         if self._scan_service.running:
             return
+        allowed, _reason = self._auto_work_due(now)
+        if not allowed:
+            return
         slots = self._swing_slots(now)
         done = set(self._state.get("slots_done", []))
         due = [
@@ -866,6 +960,9 @@ class AutopilotService(QObject):
             for slot in slots
             if slot not in done and datetime.combine(now.date(), _parse_slot(slot)) <= now
         ]
+        if not due:
+            return
+        due = self._evening_filter_slots(due, now, done)
         if not due:
             return
         slot = due[-1]
@@ -890,6 +987,40 @@ class AutopilotService(QObject):
             self._log(f"Catching up: {len(due)} swing slots due; running {slot} and marking {', '.join(due[:-1])} skipped.")
         update = core.slot_writes_setup_tracker(slot, reference=now)
         self._start_swing_scan(slot_label=slot, update_setup_tracker=update, mark_slots=due)
+
+    def _evening_filter_slots(
+        self, due: list[str], now: datetime, done: set[str]
+    ) -> list[str]:
+        """Evening runs the open+30 slot only; the rest are resolved, not run.
+
+        Trader rule 2026-08-14: Evening's job is to have the day ready on waking
+        and to wake the trader if the market moves - not to scan all day. The
+        refused slots are marked DONE rather than left pending on purpose. They
+        are not going to run, and `after_close_wrapup_due` requires every slot
+        to be done, so leaving them pending would silently cancel the after-close
+        wrap-up (universe rebuild, learning refresh, integrity calibration) for
+        the whole day.
+        """
+        if self._profile != AUTO_PROFILE_EVENING:
+            return due
+        try:
+            early = core.autopilot_evening_early_slot(now)
+        except Exception:
+            # Fail open, as everywhere else here: a session lookup this cannot
+            # answer must not be the reason a slot is silently dropped.
+            logging.exception("Evening early-slot lookup failed; running slots as scheduled.")
+            return due
+        refused = [slot for slot in due if slot != early]
+        if refused:
+            done.update(refused)
+            self._state["slots_done"] = sorted(done)
+            self._save_state()
+            self._log(
+                f"Evening mode: swing slot(s) {', '.join(refused)} not run - Evening "
+                f"scans the {early} early slot and the strength checks, then stops "
+                "for the day. Flip to DESK to resume the hourly schedule."
+            )
+        return [slot for slot in due if slot == early]
 
     def _start_swing_scan(self, *, slot_label: str, update_setup_tracker: bool, mark_slots: list[str]) -> None:
         if self._scan_service.running:
@@ -1698,6 +1829,85 @@ class AutopilotService(QObject):
         except Exception as exc:
             self._log(f"D1 events push failed: {exc}")
 
+    def _maybe_push_spy_alarm(self, now: datetime) -> None:
+        """EVENING only: phone the trader when SPY has moved a full percent.
+
+        The second deliberate exception to the AWAY-only push rule (the first is
+        the always-on Research/Focus price alerts). Evening exists because the
+        trader worked late and is asleep through the open; a tape that has
+        already moved 1% is the thing worth waking up for.
+
+        Repeats every five minutes while the condition holds - the alarm has to
+        survive being slept through - and stops the moment the trader flips out
+        of EVENING, which is the acknowledgement.
+        """
+        if self.auto_mode != AUTO_PROFILE_EVENING:
+            return
+        try:
+            from project_paths import get_local_setting
+
+            if not get_local_setting(core.EVENING_SPY_ALARM_SETTING, True):
+                return
+            threshold = get_local_setting(
+                core.EVENING_SPY_ALARM_PCT_SETTING, core.EVENING_SPY_ALARM_PCT
+            )
+            try:
+                threshold = float(threshold)
+            except (TypeError, ValueError):
+                threshold = core.EVENING_SPY_ALARM_PCT
+            # The alarm belongs to the session, not to the night before it.
+            allowed, _reason = self._auto_work_due(now)
+            if not allowed:
+                return
+            if not push_notify.push_configured():
+                return
+            bot = self._current_bot()
+            if bot is None:
+                return
+            # Champion data path, cached read only: this runs on the GUI thread
+            # and must never trigger an IB fetch. No shadow engine is involved.
+            spy_today, prev_close = bot._spy_session_bars(cached_only=True)
+            if not spy_today or not prev_close:
+                return  # missing bars are uncertainty, never confirmation
+            day_pct = (spy_today[-1].close - prev_close) / prev_close * 100.0
+            last_sent = self._spy_alarm_last_sent()
+            if not core.spy_move_alarm_due(
+                day_pct, last_sent, now, threshold_pct=threshold
+            ):
+                return
+            direction = "UP" if day_pct >= 0 else "DOWN"
+            result = push_notify.send_push(
+                f"SPY {day_pct:+.2f}% - market is moving",
+                (
+                    f"SPY is {direction} {abs(day_pct):.2f}% on the day at "
+                    f"{now.strftime('%H:%M')}.\n"
+                    f"Evening wake alarm (threshold ±{threshold:.2f}%). It repeats "
+                    "every 5 minutes until you flip Auto Pilot out of EVENING."
+                ),
+                priority="urgent",
+                tags="rotating_light",
+            )
+            # Stamp only a delivered push: an ntfy failure must not silence the
+            # alarm for the next five minutes.
+            if result.get("ok"):
+                self._state["spy_alarm_last_sent"] = now.isoformat(timespec="seconds")
+                self._save_state()
+                self._log(f"Evening SPY alarm sent: SPY {day_pct:+.2f}% on the day.")
+        except Exception as exc:
+            self._log(f"Evening SPY alarm failed: {exc}")
+
+    def _spy_alarm_last_sent(self) -> datetime | None:
+        """Last delivered alarm, or None. Day-rolls with the state file, so a
+        restart mid-Evening does not re-fire immediately and yesterday's stamp
+        can never suppress this morning's alarm."""
+        raw = str(self._state.get("spy_alarm_last_sent") or "")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+
     @Slot(str)
     def _on_connection_changed(self, message: str) -> None:
         message = str(message or "")
@@ -1751,6 +1961,7 @@ class AutopilotService(QObject):
                 "hod_added": [],
                 "wrapup_done_at": None,
                 "picks_scored_at": None,
+                "spy_alarm_last_sent": None,
                 "autopilot_written": previous.get("autopilot_written") or {"longs": [], "shorts": []},
             }
         payload.setdefault("slots_done", [])
@@ -1760,6 +1971,7 @@ class AutopilotService(QObject):
         payload.setdefault("wrapup_done_at", None)
         payload.setdefault("suggested_at", None)
         payload.setdefault("picks_scored_at", None)
+        payload.setdefault("spy_alarm_last_sent", None)
         payload.setdefault("autopilot_written", {"longs": [], "shorts": []})
         return payload
 
