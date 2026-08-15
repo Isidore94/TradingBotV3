@@ -16,6 +16,7 @@ from journal_importers import (
     import_ibkr_flex_executions,
     resolve_ibkr_client_id,
 )
+import journal_coverage
 from journal_store import JournalStore
 from project_paths import get_local_setting
 
@@ -188,19 +189,72 @@ def run_journal_backfill(
     if include_questrade and (
         qt_importer.refresh_token or (qt_importer.access_token and qt_importer.api_server)
     ):
-        run_id = journal_store.start_import_run("QUESTRADE_BACKFILL")
+        # A5: persist and mark coverage per (account, chunk). One failing chunk
+        # used to discard every execution the whole pull had already fetched.
+        chunk_failures = 0
+        chunk_count = 0
         try:
-            executions, accounts = qt_importer.import_executions_for_range(start_date, end_date)
-            journal_store.upsert_accounts("QUESTRADE", accounts)
-            count = journal_store.upsert_executions(executions)
-            journal_store.finish_import_run(
-                run_id, status="OK", imported_executions=count, message=f"{start_date}..{end_date}"
+            for chunk in qt_importer.iter_execution_chunks(start_date, end_date):
+                chunk_count += 1
+                account_number = chunk["account_number"]
+                run_id = journal_store.start_import_run(
+                    "QUESTRADE_BACKFILL",
+                    account_number=account_number,
+                    trigger="backfill",
+                    coverage_start=chunk["start"],
+                    coverage_end=chunk["end"],
+                )
+                if "error" in chunk:
+                    chunk_failures += 1
+                    had_errors = True
+                    journal_store.finish_import_run(
+                        run_id, status="FAILED", imported_executions=0, message=chunk["error"]
+                    )
+                    journal_coverage.mark_range(
+                        journal_store,
+                        broker="QUESTRADE",
+                        account_number=account_number,
+                        start=chunk["start"],
+                        end=chunk["end"],
+                        status=journal_coverage.FAILED,
+                        source="QT_API",
+                        import_run_id=run_id,
+                        message=chunk["error"],
+                    )
+                    messages.append(
+                        f"Questrade {account_number} {chunk['start']}..{chunk['end']} failed: {chunk['error']}"
+                    )
+                    continue
+                journal_store.upsert_accounts("QUESTRADE", [chunk["account"]])
+                count = journal_store.upsert_executions(chunk["executions"])
+                journal_store.finish_import_run(
+                    run_id,
+                    status="OK",
+                    imported_executions=count,
+                    message=f"{chunk['start']}..{chunk['end']}",
+                )
+                journal_coverage.mark_range(
+                    journal_store,
+                    broker="QUESTRADE",
+                    account_number=account_number,
+                    start=chunk["start"],
+                    end=chunk["end"],
+                    status=journal_coverage.COVERED,
+                    source="QT_API",
+                    import_run_id=run_id,
+                    message=f"{count} execution(s)",
+                )
+                total_imported += count
+            if qt_importer.quarantined:
+                messages.append(f"Questrade quarantined {len(qt_importer.quarantined)} unreadable row(s)")
+            messages.append(
+                f"Questrade backfill {total_imported} over {chunk_count} chunk(s)"
+                + (f", {chunk_failures} failed" if chunk_failures else "")
             )
-            total_imported += count
-            messages.append(f"Questrade backfill {count}")
         except Exception as exc:
+            # Only reachable before any chunk exists - account discovery itself
+            # failing. No day is marked, because none was attempted.
             had_errors = True
-            journal_store.finish_import_run(run_id, status="FAILED", imported_executions=0, message=str(exc))
             messages.append(f"Questrade backfill failed: {exc}")
     else:
         messages.append("Questrade backfill skipped (no token).")
@@ -211,9 +265,12 @@ def run_journal_backfill(
             and str(get_local_setting(IBKR_FLEX_QUERY_ID_SETTING, "") or "").strip()
         )
     if include_ibkr_flex:
-        run_id = journal_store.start_import_run("IBKR_FLEX")
+        run_id = journal_store.start_import_run(
+            "IBKR_FLEX", trigger="backfill", coverage_start=start_date, coverage_end=end_date
+        )
         try:
-            executions = import_ibkr_flex_executions()
+            statement = import_ibkr_flex_executions(with_metadata=True)
+            executions = statement["executions"]
             accounts = [
                 {"account_number": item.account_number, "account_label": item.account_label, "currency": item.currency}
                 for item in executions
@@ -223,6 +280,25 @@ def run_journal_backfill(
             journal_store.finish_import_run(run_id, status="OK", imported_executions=count, message="flex")
             total_imported += count
             messages.append(f"IBKR flex {count}")
+
+            # I2: coverage comes from the statement's own declared span, not
+            # from the range this function was asked for. A Flex query set to
+            # "last 365 days" does not prove anything about day 366, and the
+            # 365-day service cap means the two often disagree.
+            span_start = statement.get("from_date") or start_date
+            span_end = statement.get("to_date") or end_date
+            for account_number in sorted({item.account_number for item in executions}):
+                journal_coverage.mark_range(
+                    journal_store,
+                    broker="IBKR",
+                    account_number=account_number,
+                    start=span_start,
+                    end=span_end,
+                    status=journal_coverage.COVERED,
+                    source="IBKR_FLEX",
+                    import_run_id=run_id,
+                    message="flex statement span",
+                )
         except Exception as exc:
             had_errors = True
             journal_store.finish_import_run(run_id, status="FAILED", imported_executions=0, message=str(exc))

@@ -214,8 +214,9 @@ Fixes in dependency order (each a commit; see §9):
    indistinguishable from the execution alone — so it assembles as an ordinary
    short and is left to fix 9's reconciliation, where the broker reporting flat
    against a journal that says short is the evidence assembly cannot have.
-   Flagging every short would fill the review queue with correct trades. Reopen
-   this if the trader would rather see false flags than miss one.
+   Flagging every short would fill the review queue with correct trades.
+   **Trader-approved as built, 2026-08-15** — a decided narrowing, not an open
+   item.
 
 
    adjustments applied deterministically (VOID skips, EDIT overlays, ADD injects,
@@ -319,7 +320,20 @@ Models: `JournalTrade` += `net_pnl_cad`, `currency`, `reconcile_status`,
 `r_multiple`, `tax_status`; the table model gains currency-aware columns and a
 NEEDS_REVIEW row tint.
 
-## 8. Trader one-time setup (Flex runbook)
+## 8. Trader one-time setup (Flex runbook) — DONE 2026-08-15
+
+**Completed and live-verified by the trader.** The token and query id are in
+machine-local settings; a read-only verification returned **372 trades** over
+the 365-day window across **both** IBKR accounts, with all four sections
+present. Questrade's rotating-token chain is stored and authenticating, serving
+accounts TFSA 51830546 and Margin 29347316. The runbook below is kept for the
+next time a query has to be rebuilt.
+
+Two constraints remain while the live migration is still owed: **read-only
+against the brokers, and no writes to the live journal database**; and **no
+needless Questrade token refreshes** — the chain is single-use rotating and
+anchored on this desk.
+
 
 IBKR Account Management → Performance & Reports → Flex Queries → new **Activity
 Flex Query** with sections: **Trades** (execution level; include at minimum

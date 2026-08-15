@@ -499,6 +499,44 @@ class QuestradeImporter:
         except BrokerTimestampError as exc:
             self.quarantined.append(_quarantine_record("QUESTRADE", str(exc), raw))
 
+    def iter_execution_chunks(self, start_date: date, end_date: date):
+        """Yield one (account, chunk) result at a time, errors included.
+
+        Root cause A5: ``import_executions_for_range`` accumulated everything in
+        a local list and the caller wrote the store only after it returned, so a
+        single failing account or chunk threw away every execution the pull had
+        already fetched - including days that had succeeded. Yielding per chunk
+        lets the caller persist what worked and mark only the failed chunk's own
+        days FAILED.
+
+        Each item is a dict with ``account``, ``account_number``, ``start``,
+        ``end``, and either ``executions`` or ``error``. The generator never
+        raises for a chunk; the error is the payload.
+        """
+        accounts = self.get_accounts()
+        tz = zoneinfo.ZoneInfo(PACIFIC_TZ_NAME)
+        for account in accounts:
+            account_number = str(account.get("number") or account.get("accountNumber") or "").strip()
+            if not account_number:
+                continue
+            for chunk_start, chunk_end in chunk_date_ranges(start_date, end_date, max_days=31):
+                start = datetime.combine(chunk_start, datetime.min.time(), tzinfo=tz)
+                end = datetime.combine(chunk_end, datetime.max.time().replace(microsecond=0), tzinfo=tz)
+                item = {
+                    "account": account,
+                    "account_number": account_number,
+                    "start": chunk_start,
+                    "end": chunk_end,
+                }
+                try:
+                    executions: list[NormalizedExecution] = []
+                    for raw in self.get_executions(account_number, start, end):
+                        self._append_normalized(executions, raw, account)
+                    item["executions"] = executions
+                except Exception as exc:  # noqa: BLE001 - the error is the payload
+                    item["error"] = str(exc)
+                yield item
+
     def import_executions_for_range(
         self, start_date: date, end_date: date
     ) -> tuple[list[NormalizedExecution], list[dict[str, Any]]]:
@@ -720,6 +758,53 @@ IBKR_FLEX_POLL_SECONDS = 5.0
 IBKR_FLEX_POLL_ATTEMPTS = 12
 
 
+def parse_ibkr_flex_document(
+    xml_text: str, *, quarantine: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Everything a Flex statement carries, including what it says about itself.
+
+    The parser used to answer with executions alone, which left the coverage
+    ledger with nothing honest to write: a Flex query configured for "last 365
+    days" says nothing about day 366, and the web service caps at 365 days
+    regardless of what the caller asked for. ``from_date``/``to_date`` are read
+    from the ``FlexStatement`` element's own attributes, so coverage is marked
+    from what the statement actually spanned (I2).
+
+    Returns ``executions``, ``from_date``, ``to_date``, ``accounts``, and the
+    raw section rows for the sections R7 §9 step 7 consumes.
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml_text)
+    if root.tag == "FlexStatementResponse":
+        error = root.findtext("ErrorMessage") or "Flex service returned an error response."
+        raise RuntimeError(f"IBKR Flex error: {error}")
+
+    from_date = to_date = None
+    accounts: list[str] = []
+    for node in root.iter("FlexStatement"):
+        attrs = dict(node.attrib)
+        from_date = from_date or _coerce_date(str(attrs.get("fromDate") or "").replace(";", " ").strip()[:10])
+        to_date = to_date or _coerce_date(str(attrs.get("toDate") or "").replace(";", " ").strip()[:10])
+        account_id = str(attrs.get("accountId") or "").strip()
+        if account_id and account_id not in accounts:
+            accounts.append(account_id)
+
+    return {
+        "executions": parse_ibkr_flex_statement(xml_text, quarantine=quarantine),
+        "from_date": from_date,
+        "to_date": to_date,
+        "accounts": accounts,
+        # `if node.attrib` skips the section container. IBKR nests the OptionEAE
+        # rows inside an element of the same name, so an unfiltered iter() picks
+        # up the empty wrapper as a phantom row - which would have become a
+        # phantom option expiry once step 7 turns these into executions.
+        "option_eae": [dict(node.attrib) for node in root.iter("OptionEAE") if node.attrib],
+        "open_positions": [dict(node.attrib) for node in root.iter("OpenPosition") if node.attrib],
+        "cash_transactions": [dict(node.attrib) for node in root.iter("CashTransaction") if node.attrib],
+    }
+
+
 def parse_ibkr_flex_statement(
     xml_text: str, *, quarantine: list[dict[str, Any]] | None = None
 ) -> list[NormalizedExecution]:
@@ -788,7 +873,8 @@ def import_ibkr_flex_executions(
     token: str | None = None,
     query_id: str | None = None,
     session: requests.Session | None = None,
-) -> list[NormalizedExecution]:
+    with_metadata: bool = False,
+) -> list[NormalizedExecution] | dict[str, Any]:
     """Two-step Flex fetch: SendRequest -> poll GetStatement -> parse trades."""
     resolved_token = str(token or get_local_setting(IBKR_FLEX_TOKEN_SETTING, "") or "").strip()
     resolved_query = str(query_id or get_local_setting(IBKR_FLEX_QUERY_ID_SETTING, "") or "").strip()
@@ -827,7 +913,8 @@ def import_ibkr_flex_executions(
         if "<FlexStatementResponse" in last_text and "progress" in last_text.lower():
             time.sleep(IBKR_FLEX_POLL_SECONDS)
             continue
-        return parse_ibkr_flex_statement(last_text)
+        document = parse_ibkr_flex_document(last_text)
+        return document if with_metadata else document["executions"]
     raise RuntimeError("IBKR Flex statement was still generating after polling; try again shortly.")
 
 

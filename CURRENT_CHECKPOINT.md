@@ -37,7 +37,8 @@ Each step is its own green commit, pushed. A step is not done until
 | 3 Group-key normalization | **DONE** | `scripts/journal_identity.py` + `tests/test_journal_identity.py` (34 tests); 3025 passed / smoke 7/7, exit 0. Golden regenerated with a note: 10 trades → 9 |
 | 4 Assembly changes | **DONE** | `tests/test_journal_assembly.py` (19 tests); 3044 passed, exit 0. Golden regenerated with a note: statuses and trade ids change, no P&L moves |
 | 5 Adjustments API | **DONE** | `tests/test_journal_adjustments.py` (16 tests); 3060 passed / smoke 7/7, exit 0 |
-| 6–10 Coverage ledger, activities/Flex, FX, reconcile, nightly slot | pending | |
+| 6 Coverage ledger + partial persistence + self-heal | **DONE** | `scripts/journal_coverage.py` + `tests/test_journal_coverage.py` (21 tests); 3081 passed / smoke 7/7, exit 0 |
+| 7–10 Activities/Flex, FX, reconcile, nightly slot | pending | |
 | 11–13 Journal UI | pending | |
 | 14 Governance close-out | pending | |
 
@@ -66,23 +67,58 @@ column by column before regenerating. The note is in the fixture's
 `intentional_difference` field, and the generator now **refuses to write a
 changed golden without one**.
 
-**Step 4 narrowed one spec line, and it matters.** §5 fix 4 says a
-missing-opening-fill produces a `SYNTHETIC_OPEN` leg + `NEEDS_REVIEW`. Built as:
-**only the unambiguous case is flagged** — a fill that closes more than the
-journal knows is open, where the leftover is proof an opening fill is missing.
-A plain sell with no position is *genuinely* ambiguous (a real short entry, or a
-sale of shares bought before the import window), and nothing in the execution
-distinguishes them; flagging every short would make the review queue noise.
-That other half is caught by §9 step 9's reconciliation, where the broker
+**Step 4's narrowing — APPROVED by the trader 2026-08-15, closed.** §5 fix 4
+says a missing-opening-fill produces a `SYNTHETIC_OPEN` leg + `NEEDS_REVIEW`.
+Built as: **only the unambiguous case is flagged** — a fill that closes more
+than the journal knows is open, where the leftover is proof an opening fill is
+missing. A plain sell with no position is *genuinely* ambiguous (a real short
+entry, or a sale of shares bought before the import window), and nothing in the
+execution distinguishes them; flagging every short would make the review queue
+noise. That other half is caught by §9 step 9's reconciliation, where the broker
 reporting flat against a journal that says short is the proof this step cannot
-have. If the trader wants every un-opened short flagged instead, that is a
-one-line change plus a golden update.
+have. **This is a decided narrowing, not an open item** — do not re-litigate it
+or "restore" the broader reading.
 
 **The live journal DB has not been touched.** Everything above ran against
 fixture and temporary databases. `journal_migrate.py` defaults to a dry run
 against a throwaway copy, and a test asserts the live file is byte-identical
 afterwards and that no backup is taken (because nothing changed). The real
 migration is a trader-present step and waits for Monday.
+
+### Broker credentials — DONE and live-verified (trader, 2026-08-15)
+
+No longer waiting on the trader. Stored in machine-local settings and verified
+**read-only**:
+
+| Broker | State |
+|---|---|
+| IBKR Flex | `journal_ibkr_flex_token` / `journal_ibkr_flex_query_id` set. Verified: **372 trades**, 365-day window, **both accounts**, all four sections present (Trades, **OptionEAE**, **OpenPositions**, **CashTransactions**) |
+| Questrade | Rotating-token chain stored and anchored on this desk. Auth OK; accounts **TFSA 51830546** and **Margin 29347316** |
+
+Two standing constraints on this credential access, and they are not
+negotiable while the migration is still owed:
+
+- **Read-only against the live brokers, writes to fixture/temp DBs only.** Do
+  not run any `journal_runner` path that writes the live store.
+- **Do not trigger extra Questrade token refreshes.** The refresh chain is
+  single-use rotating and anchored on this desk; every needless refresh risks
+  breaking the trader's auth. Use only what a read-only verification needs.
+
+### Tax status — partly decided (trader, 2026-08-15)
+
+For the §9 step 11 labeling UI. The migration seeds `tax_status` from
+`account_type` and never overwrites a `trader`-sourced value (I7):
+
+| Account | Status |
+|---|---|
+| Questrade TFSA **51830546** | `TAX_FREE` |
+| Questrade Margin **29347316** | `TAXABLE` |
+| IBKR **U4867396** | **owed** — leave unlabeled |
+| IBKR **U5102524** | **owed** — leave unlabeled |
+
+**Do not guess the two IBKR accounts.** An unlabeled account renders as
+"Unlabeled" in the account tree, which is the honest state; a guessed tax
+status is a wrong number in a tax record.
 
 **Deferred out of step 3, deliberately — one spec conflict.** Spec §5 fix 3 puts
 "the manual-execution dialog gains real broker/account pickers" in this step,
@@ -118,9 +154,16 @@ innocent" is a plausible claim and not a proven one. One full run at the R2 tip
 was green — one run is not evidence of absence. No R7 file touches Qt, sockets,
 or Desk Link.
 
-**Do not treat either as a known-flaky exemption on Monday.** P1.1 owns suite
-hermeticity; if this recurs, it is worth a bounded investigation before the
-merge rather than a re-run.
+**Context for Monday's gate decision, not a licence to ignore a failure:**
+`tests/test_desk_link_control.py` guards **Desk Link, retired 2026-08-08**
+(`CHANGELOG.md`) and kept in-repo only pending the P1.5 cleanup. Nothing the
+desk runs today depends on it. That is worth knowing when weighing whether a
+red run blocks the merge — it is *not* a reason to re-run until green, and the
+flake stays **unattributed**.
+
+**Do not treat either event as a known-flaky exemption on Monday.** P1.1 owns
+suite hermeticity; if this recurs, it is worth a bounded investigation before
+the merge rather than a re-run.
 
 **Trader-present steps ahead — the build stops and asks at each** (spec §9):
 Flex token setup (§8) before step 7 goes live, account tax-status labeling after

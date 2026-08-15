@@ -365,11 +365,38 @@ class JournalStore:
                 # positions the migration just fixed.
                 self.rebuild_trades(refresh_tags=False)
 
-    def start_import_run(self, source: str) -> int:
+    def start_import_run(
+        self,
+        source: str,
+        *,
+        account_number: str = "",
+        trigger: str = "",
+        coverage_start: Any = "",
+        coverage_end: Any = "",
+    ) -> int:
+        """Open an import run, saying **which days** it intends to cover.
+
+        The span is the A6 fix. A run that recorded only "42 executions" could
+        not tell a day with no trades from a day nobody looked at, so a gap was
+        structurally undetectable and the failed EOD slot left holes nothing
+        went back for.
+        """
         with self.connection() as conn:
             cursor = conn.execute(
-                "INSERT INTO import_runs(source, status, started_at) VALUES(?, ?, ?)",
-                (source, "RUNNING", _now_iso()),
+                """
+                INSERT INTO import_runs(
+                    source, status, started_at, account_number, trigger, coverage_start, coverage_end
+                ) VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source,
+                    "RUNNING",
+                    _now_iso(),
+                    str(account_number or ""),
+                    str(trigger or ""),
+                    _date_text(coverage_start) if coverage_start else "",
+                    _date_text(coverage_end) if coverage_end else "",
+                ),
             )
             return int(cursor.lastrowid)
 
@@ -918,7 +945,7 @@ class JournalStore:
         with self.connection() as conn:
             rows = conn.execute(
                 f"SELECT * FROM trade_adjustments {where} "
-                "ORDER BY created_at DESC, adjustment_id DESC LIMIT ?",
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 params,
             ).fetchall()
         result = []
@@ -937,13 +964,20 @@ class JournalStore:
 
         A superseded record is history, not an instruction. That is how undo
         works here without deleting anything (I3).
+
+        Ordered by ``rowid`` after ``created_at``, not by ``adjustment_id``.
+        ``created_at`` has second precision, so two corrections made in the same
+        second tie - and the tiebreaker used to be a random uuid, which made the
+        order two same-second edits of the same field were applied in a coin
+        flip. ``rowid`` is insertion order, which is what "later wins" has to
+        mean. Found by ``test_the_trail_is_newest_first``.
         """
         with self.connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM trade_adjustments
                 WHERE COALESCE(superseded_by, '') = ''
-                ORDER BY created_at, adjustment_id
+                ORDER BY created_at, rowid
                 """
             ).fetchall()
         result = []
