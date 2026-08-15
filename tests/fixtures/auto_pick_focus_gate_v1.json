@@ -1,0 +1,191 @@
+{
+  "schema": "auto_pick_focus_gate_v1",
+  "feature_version": "prev_day_extreme_only_v1",
+  "raw_input_keys": [
+    "profiles",
+    "daily_context",
+    "candidates"
+  ],
+  "raw_input_sha256": "17c585693dc181086f7269cb92462e583fcb894b1a56c894c4026925c0c78295",
+  "acquired_at": "2026-08-15T10:00:00-07:00",
+  "as_of": "2026-08-15T10:00:00-07:00",
+  "universe_version": "synthetic_focus_gate_v1",
+  "provider_assumptions": "Synthetic regular-session M5 profiles. Every name shares one prior session (98.00-100.50) so the fixture isolates the gate rather than the levels. `last` is the forming-bar close the pre-R2 filter reads; `last_complete` and `completed_session_vwap` are carried but unused until the R2 gate lands.",
+  "intentional_difference": "Baseline: no intentional difference. This freezes the pre-R2 candidate filter (previous-day extreme only, measured on the forming-bar `last`) so the R2 combined gate's effect on candidate selection is a reviewable diff.",
+  "expected_keys": [
+    "expected"
+  ],
+  "numeric_tolerance": 1e-09,
+  "configuration": {
+    "prev_day_extreme_gate": true,
+    "session_vwap_gate": false,
+    "price_field": "last"
+  },
+  "profiles": {
+    "LONG_PDH_ABOVE_VWAP": {
+      "last": 103.0,
+      "last_complete": 102.8,
+      "completed_session_vwap": 101.0
+    },
+    "LONG_PDH_BELOW_VWAP": {
+      "last": 103.0,
+      "last_complete": 102.8,
+      "completed_session_vwap": 104.0
+    },
+    "LONG_NO_PDH": {
+      "last": 99.0,
+      "last_complete": 99.0,
+      "completed_session_vwap": 98.0
+    },
+    "LONG_PDH_VWAP_UNKNOWN": {
+      "last": 103.0,
+      "last_complete": 102.8,
+      "completed_session_vwap": null
+    },
+    "LONG_FORMING_ONLY_BREAK": {
+      "last": 103.0,
+      "last_complete": 100.2,
+      "completed_session_vwap": 99.0
+    },
+    "LONG_NO_COMPLETED_BAR": {
+      "last": 103.0,
+      "last_complete": null,
+      "completed_session_vwap": null
+    },
+    "SHORT_PDL_BELOW_VWAP": {
+      "last": 95.0,
+      "last_complete": 95.2,
+      "completed_session_vwap": 97.0
+    },
+    "SHORT_PDL_ABOVE_VWAP": {
+      "last": 95.0,
+      "last_complete": 95.2,
+      "completed_session_vwap": 94.0
+    },
+    "SHORT_NO_PDL": {
+      "last": 101.0,
+      "last_complete": 101.0,
+      "completed_session_vwap": 102.0
+    }
+  },
+  "daily_context": {
+    "LONG_PDH_ABOVE_VWAP": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    },
+    "LONG_PDH_BELOW_VWAP": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    },
+    "LONG_NO_PDH": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    },
+    "LONG_PDH_VWAP_UNKNOWN": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    },
+    "LONG_FORMING_ONLY_BREAK": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    },
+    "LONG_NO_COMPLETED_BAR": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    },
+    "SHORT_PDL_BELOW_VWAP": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    },
+    "SHORT_PDL_ABOVE_VWAP": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    },
+    "SHORT_NO_PDL": {
+      "prev_high": 100.5,
+      "prev_low": 98.0,
+      "prev_close": 99.5,
+      "adr": 2.0
+    }
+  },
+  "candidates": {
+    "longs": [
+      {
+        "symbol": "LONG_PDH_ABOVE_VWAP",
+        "reason": "fixture",
+        "score": 1.0
+      },
+      {
+        "symbol": "LONG_PDH_BELOW_VWAP",
+        "reason": "fixture",
+        "score": 1.0
+      },
+      {
+        "symbol": "LONG_NO_PDH",
+        "reason": "fixture",
+        "score": 1.0
+      },
+      {
+        "symbol": "LONG_PDH_VWAP_UNKNOWN",
+        "reason": "fixture",
+        "score": 1.0
+      },
+      {
+        "symbol": "LONG_FORMING_ONLY_BREAK",
+        "reason": "fixture",
+        "score": 1.0
+      },
+      {
+        "symbol": "LONG_NO_COMPLETED_BAR",
+        "reason": "fixture",
+        "score": 1.0
+      }
+    ],
+    "shorts": [
+      {
+        "symbol": "SHORT_PDL_BELOW_VWAP",
+        "reason": "fixture",
+        "score": 1.0
+      },
+      {
+        "symbol": "SHORT_PDL_ABOVE_VWAP",
+        "reason": "fixture",
+        "score": 1.0
+      },
+      {
+        "symbol": "SHORT_NO_PDL",
+        "reason": "fixture",
+        "score": 1.0
+      }
+    ]
+  },
+  "expected": {
+    "longs": [
+      "LONG_FORMING_ONLY_BREAK",
+      "LONG_NO_COMPLETED_BAR",
+      "LONG_PDH_ABOVE_VWAP",
+      "LONG_PDH_BELOW_VWAP",
+      "LONG_PDH_VWAP_UNKNOWN"
+    ],
+    "shorts": [
+      "SHORT_PDL_ABOVE_VWAP",
+      "SHORT_PDL_BELOW_VWAP"
+    ]
+  }
+}
