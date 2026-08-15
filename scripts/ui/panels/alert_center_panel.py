@@ -485,6 +485,12 @@ class AlertCenterPanel(QFrame):
         #: "already_trader_owned", or "failed". Only "adopted" means this desk
         #: took ownership of the entry.
         self._last_adoption_outcome = "adopted"
+        #: Auto mode as of the previous poll, so the flip back to DESK is
+        #: detectable. None until the first poll - a desk that starts in DESK
+        #: has not flipped and drains on the ordinary stored verdicts.
+        self._last_seen_auto_mode: str | None = None
+        #: Single flight for the flip-triggered re-measurement.
+        self._reverify_running = False
         # Focus-pick D1 interest flags: every Focus name is auto-watched for
         # the whole D1 event set (15EMA reject, 5d/20d extremes, SMA breaks,
         # AVWAPE touches). "SYM|kind" fires at most once per session; the
@@ -1645,7 +1651,19 @@ class AlertCenterPanel(QFrame):
         """
         if self._auto_pick_pending_path is None:
             return
-        if self._auto_mode_now() in ("AWAY", "EVENING"):
+        mode = self._auto_mode_now()
+        previous = getattr(self, "_last_seen_auto_mode", None)
+        self._last_seen_auto_mode = mode
+        if mode in ("AWAY", "EVENING"):
+            return
+        # The flip back to the desk. The queue may have been measured half an
+        # hour ago, so re-measure just those symbols before adopting anything
+        # (R2.1). The drain waits for that result: `_reverify_running` blocks
+        # this poll, and the worker re-enters it when the fresh verdicts land.
+        if previous in ("AWAY", "EVENING") and not self._reverify_running:
+            self._start_pending_reverify()
+            return
+        if self._reverify_running:
             return
         try:
             from autopilot_core import load_auto_populate_pending_picks
@@ -1722,6 +1740,50 @@ class AlertCenterPanel(QFrame):
                 f"({', '.join(adopted[:8])}{'...' if len(adopted) > 8 else ''}) - "
                 "prune with Review ▶ on the Focus board."
             )
+
+    def _start_pending_reverify(self) -> None:
+        """Re-measure the queued picks on a worker, then drain from that.
+
+        Off the GUI thread because it fetches bars. Single-flight: a second
+        flip while one is running is ignored rather than stacking fetches.
+
+        A failure leaves every pick staged and adopts nothing. The next
+        periodic staging refresh will re-stamp or evict them, so the cost of a
+        bad fetch is one cycle of delay - which is cheaper than adopting a
+        breakout that stopped being one twenty minutes ago.
+        """
+        import threading
+
+        self._reverify_running = True
+
+        def worker() -> None:
+            outcome = "ok"
+            try:
+                from autopilot_core import reverify_pending_picks
+
+                reverify_pending_picks(pending_path=self._auto_pick_pending_path)
+            except Exception as exc:
+                outcome = str(exc) or exc.__class__.__name__
+                logging.warning(
+                    "Pending-pick re-verification failed; picks stay staged.",
+                    exc_info=True,
+                )
+            finally:
+                self._reverify_running = False
+            if outcome == "ok":
+                # Re-enter the poll now that the verdicts are current. Queued
+                # onto the GUI thread: everything downstream touches widgets.
+                QTimer.singleShot(0, self._poll_auto_pick_pending)
+            else:
+                QTimer.singleShot(
+                    0,
+                    lambda: self.statusChanged.emit(
+                        "Auto picks left staged - could not re-check them against the "
+                        f"current tape ({outcome}). They adopt on the next refresh."
+                    ),
+                )
+
+        threading.Thread(target=worker, name="focus-pick-reverify", daemon=True).start()
 
     def _drain_focus_desync_requests(self) -> None:
         """Reconcile Focus with watchlist lines BounceBot's VWAP rule cut.

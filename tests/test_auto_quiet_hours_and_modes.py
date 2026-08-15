@@ -662,6 +662,20 @@ def _panel(monkeypatch, mode):
     return panel
 
 
+def _stub_reverify(panel):
+    """Make the flip-triggered re-measurement synchronous for tests.
+
+    The real one fetches bars on a worker and re-enters the poll when the
+    fresh verdicts land; here it just re-enters, so the deferral is exercised
+    without threads or a network.
+    """
+    def immediate():
+        panel._reverify_running = False
+        panel._poll_auto_pick_pending()
+
+    panel._start_pending_reverify = immediate  # type: ignore[method-assign]
+
+
 def _bounce_alert():
     from ui.models.bounce import BounceAlert
 
@@ -766,11 +780,15 @@ def test_away_and_evening_refuse_to_adopt_staged_picks(monkeypatch, tmp_path, mo
                         # a passing, current verdict from the staging refresh.
                         "gate_state": "open",
                         "gate_checked_at": datetime.now().isoformat(timespec="seconds"),
+                        "gate_bar_end": __import__("autopilot_core")
+                        .latest_completed_m5_end()
+                        .isoformat(),
                     }
                 }
             },
         },
     )
+    _stub_reverify(panel)
     panel._poll_auto_pick_pending()
     assert adopted == []
     # Nothing was marked seen, so the flip back to DESK still finds the pick.
@@ -792,9 +810,10 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
     """
     from datetime import datetime, timedelta
 
-    now = datetime(2026, 7, 2, 11, 0)
-    fresh = (now - timedelta(minutes=5)).isoformat(timespec="seconds")
+    now = datetime(2026, 7, 2, 11, 2)
+    fresh = (now - timedelta(minutes=1)).isoformat(timespec="seconds")
     stale = (now - timedelta(hours=3)).isoformat(timespec="seconds")
+    current_bar = datetime(2026, 7, 2, 11, 0).isoformat()
 
     panel = _panel(monkeypatch, mode)
     panel._auto_pick_pending_path = tmp_path / "pending.json"
@@ -806,11 +825,17 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
             "date": "2026-07-02",
             "pending": {
                 "long": {
-                    "GOOD": {"reason": "PDH break", "gate_state": "open", "gate_checked_at": fresh},
-                    "STALE": {"reason": "PDH break", "gate_state": "open", "gate_checked_at": stale},
+                    "GOOD": {"reason": "PDH break", "gate_state": "open",
+                             "gate_checked_at": fresh, "gate_bar_end": current_bar},
+                    "STALE": {"reason": "PDH break", "gate_state": "open",
+                              "gate_checked_at": stale, "gate_bar_end": current_bar},
                     "FAILED": {"reason": "PDH break", "gate_state": "closed",
-                               "gate_reason": "not above session VWAP", "gate_checked_at": fresh},
+                               "gate_reason": "not above session VWAP",
+                               "gate_checked_at": fresh, "gate_bar_end": current_bar},
                     "UNVERIFIED": {"reason": "PDH break"},
+                    "OLDBAR": {"reason": "PDH break", "gate_state": "open",
+                               "gate_checked_at": fresh,
+                               "gate_bar_end": datetime(2026, 7, 2, 10, 15).isoformat()},
                 }
             },
         },
@@ -825,6 +850,8 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
         lambda entry, *_a, **_k: real_gate_ok(entry, now),
     )
 
+    _stub_reverify(panel)
+
     # Away/Evening refuse outright and mark nothing seen.
     panel._poll_auto_pick_pending()
     assert adopted == []
@@ -834,7 +861,7 @@ def test_the_drain_re_checks_the_gate_and_drops_what_no_longer_qualifies(
     monkeypatch.setattr("autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: "DESK")
     panel._auto_mode_cached = None
     panel._poll_auto_pick_pending()
-    assert adopted == ["GOOD"]
-    # The refused three were not marked seen, so the next refresh can re-stamp
+    assert adopted == ["GOOD"], "OLDBAR is refused on its measured bar, not its clock"
+    # The refused four were not marked seen, so the next refresh can re-stamp
     # or evict them rather than the desk losing them silently.
     assert {key[2] for key in panel._auto_picks_enqueued} == {"GOOD"}

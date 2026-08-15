@@ -1852,6 +1852,28 @@ def test_snapshot_popup_buttons_route_to_alert_center(monkeypatch):
     dialog.close()
 
 
+
+def _measured_profiles(symbols):
+    """Profiles shaped like a real staging pass: a completed close above
+    yesterday's high, above session VWAP, stamped with the current bar."""
+    import autopilot_core as core
+
+    bar_end = core.latest_completed_m5_end().isoformat()
+    return {
+        symbol: {
+            "last": 103.0,
+            "last_complete": 103.0,
+            "completed_session_vwap": 101.0,
+            "as_of": bar_end,
+        }
+        for symbol in symbols
+    }
+
+
+def _measured_context(symbols):
+    return {symbol: {"prev_high": 100.5, "prev_low": 98.0} for symbol in symbols}
+
+
 def test_desk_auto_picks_land_in_m5_focus_for_today(tmp_path, monkeypatch):
     """2026-08-05: staged auto picks are ADOPTED into M5 Focus, not queued for
     one-at-a-time approval - "quicker than adding them in and then seeing
@@ -1884,6 +1906,11 @@ def test_desk_auto_picks_land_in_m5_focus_for_today(tmp_path, monkeypatch):
             "shorts": [{"symbol": "TSLA", "score": 1.6, "reason": "PDL break"}],
         },
         "neutral_chop",
+        # Production always stages from a measured pass; without profiles the
+        # picks would carry no measured bar and adoption would (correctly)
+        # refuse them, which is a different test than this one.
+        profiles=_measured_profiles(("NVDA", "TSLA")),
+        daily_context=_measured_context(("NVDA", "TSLA")),
         pending_path=pending_path,
         membership_path=membership_path,
         longs_path=tmp_path / "longs.txt",
@@ -1967,6 +1994,8 @@ def test_desk_auto_picks_chart_for_approval_without_a_focus_service(tmp_path, mo
             "shorts": [{"symbol": "TSLA", "score": 1.6, "reason": "PDL break"}],
         },
         "neutral_chop",
+        profiles=_measured_profiles(("NVDA", "TSLA")),
+        daily_context=_measured_context(("NVDA", "TSLA")),
         pending_path=pending_path,
         membership_path=tmp_path / "membership.json",
         longs_path=tmp_path / "longs.txt",

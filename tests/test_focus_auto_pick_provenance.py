@@ -441,15 +441,20 @@ def test_the_status_line_does_not_claim_a_trader_owned_name(tmp_path, monkeypatc
 
     from datetime import datetime
 
+    import autopilot_core
+
     fresh = datetime.now().isoformat(timespec="seconds")
+    bar = autopilot_core.latest_completed_m5_end().isoformat()
     monkeypatch.setattr(
         "autopilot_core.load_auto_populate_pending_picks",
         lambda *_a, **_k: {
             "date": "2026-07-02",
             "pending": {
                 "long": {
-                    "MINE": {"reason": "r", "gate_state": "open", "gate_checked_at": fresh},
-                    "THEIRS": {"reason": "r", "gate_state": "open", "gate_checked_at": fresh},
+                    "MINE": {"reason": "r", "gate_state": "open",
+                             "gate_checked_at": fresh, "gate_bar_end": bar},
+                    "THEIRS": {"reason": "r", "gate_state": "open",
+                               "gate_checked_at": fresh, "gate_bar_end": bar},
                 }
             },
         },

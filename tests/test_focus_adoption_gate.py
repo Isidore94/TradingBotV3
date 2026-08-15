@@ -336,17 +336,88 @@ def test_adoption_accepts_only_a_fresh_passing_verdict():
 
     from autopilot_core import FOCUS_GATE_VERDICT_MAX_AGE_MINUTES, pending_pick_gate_ok
 
-    now = datetime(2026, 7, 2, 11, 0)
-    fresh = {"gate_state": "open", "gate_reason": "ok", "gate_checked_at": (now - timedelta(minutes=5)).isoformat()}
+    now = datetime(2026, 7, 2, 11, 2)          # latest completed M5 bar ended 11:00
+    fresh = {
+        "gate_state": "open",
+        "gate_reason": "ok",
+        "gate_checked_at": (now - timedelta(minutes=1)).isoformat(),
+        "gate_bar_end": datetime(2026, 7, 2, 11, 0).isoformat(),
+    }
     assert pending_pick_gate_ok(fresh, now)[0]
 
-    stale = dict(fresh, gate_checked_at=(now - timedelta(minutes=FOCUS_GATE_VERDICT_MAX_AGE_MINUTES + 1)).isoformat())
+    stale = dict(
+        fresh,
+        gate_checked_at=(now - timedelta(minutes=FOCUS_GATE_VERDICT_MAX_AGE_MINUTES + 1)).isoformat(),
+    )
     ok, reason = pending_pick_gate_ok(stale, now)
     assert not ok and "old" in reason
 
     failing = dict(fresh, gate_state="closed", gate_reason="not above session VWAP")
     ok, reason = pending_pick_gate_ok(failing, now)
     assert not ok and reason == "not above session VWAP"
+
+
+def test_adoption_refuses_a_verdict_measured_too_many_bars_ago():
+    """The real staleness guard (R2.1).
+
+    45 minutes of wall clock is up to nine M5 bars - long enough for a breakout
+    to complete, fail and reverse - so the binding limit is which BAR was
+    measured, not when the clock was read.
+    """
+    from datetime import datetime, timedelta
+
+    from autopilot_core import FOCUS_GATE_MAX_BAR_LAG, pending_pick_gate_ok
+
+    now = datetime(2026, 7, 2, 11, 2)          # latest completed bar ended 11:00
+
+    def verdict(bar_end):
+        return {
+            "gate_state": "open",
+            "gate_reason": "ok",
+            # Wall clock deliberately current, so only the bar can fail it.
+            "gate_checked_at": now.isoformat(),
+            "gate_bar_end": bar_end.isoformat(),
+        }
+
+    assert pending_pick_gate_ok(verdict(datetime(2026, 7, 2, 11, 0)), now)[0], "current bar"
+    assert pending_pick_gate_ok(verdict(datetime(2026, 7, 2, 10, 50)), now)[0], "2 bars is the limit"
+
+    ok, reason = pending_pick_gate_ok(verdict(datetime(2026, 7, 2, 10, 45)), now)
+    assert not ok and "M5 bars ago" in reason
+
+    # The nine-bar case the review named: fresh clock, ancient tape.
+    ok, reason = pending_pick_gate_ok(verdict(datetime(2026, 7, 2, 10, 15)), now)
+    assert not ok and "9 M5 bars ago" in reason
+
+    assert FOCUS_GATE_MAX_BAR_LAG == 2
+
+
+def test_adoption_refuses_a_verdict_with_no_measured_bar_at_all():
+    from datetime import datetime
+
+    from autopilot_core import pending_pick_gate_ok
+
+    now = datetime(2026, 7, 2, 11, 2)
+    ok, reason = pending_pick_gate_ok(
+        {"gate_state": "open", "gate_checked_at": now.isoformat()}, now
+    )
+    assert not ok and "no measured bar" in reason
+
+    ok, reason = pending_pick_gate_ok(
+        {"gate_state": "open", "gate_checked_at": now.isoformat(), "gate_bar_end": "nonsense"},
+        now,
+    )
+    assert not ok and "unreadable measured-bar" in reason
+
+
+def test_the_latest_completed_bar_is_the_floor_not_the_current_one():
+    from datetime import datetime
+
+    from autopilot_core import latest_completed_m5_end
+
+    assert latest_completed_m5_end(datetime(2026, 7, 2, 11, 7, 30)) == datetime(2026, 7, 2, 11, 5)
+    assert latest_completed_m5_end(datetime(2026, 7, 2, 11, 5)) == datetime(2026, 7, 2, 11, 5)
+    assert latest_completed_m5_end(datetime(2026, 7, 2, 11, 4, 59)) == datetime(2026, 7, 2, 11, 0)
 
 
 def test_adoption_refuses_a_pick_nothing_has_measured():
@@ -373,3 +444,94 @@ def test_the_verdict_window_tolerates_exactly_one_missed_refresh():
     )
 
     assert FOCUS_GATE_VERDICT_MAX_AGE_MINUTES == int(AUTO_POPULATE_REFRESH_MINUTES * 1.5)
+
+
+# ---------------------------------------------------------------------------
+# The flip re-measures before it drains (R2.1)
+# ---------------------------------------------------------------------------
+
+
+def test_reverify_re_measures_only_the_queued_symbols(tmp_path):
+    """Not a discovery pass: it stages nothing and touches no watchlist, so it
+    cannot collide with BounceBot's ownership of the periodic refresh."""
+    from datetime import datetime
+
+    import autopilot_core as core
+
+    moment = datetime(2026, 7, 2, 11, 0)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=moment)
+
+    asked: list[list[str]] = []
+
+    def downloader(symbols, **_kwargs):
+        asked.append(list(symbols))
+        raise RuntimeError("stop here - the symbol list is what matters")
+
+    with pytest.raises(RuntimeError):
+        core.reverify_pending_picks(
+            pending_path=tmp_path / "pending.json", downloader=downloader, now=moment
+        )
+    assert asked == [["AAA"]], "only the queued pick, not the universe"
+
+
+def test_reverify_evicts_a_pick_that_has_gone_bad(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    import autopilot_core as core
+
+    moment = datetime(2026, 7, 2, 11, 0)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=moment)
+    assert "AAA" in _pending(tmp_path, moment)["pending"]["long"]
+
+    monkeypatch.setattr(core, "fetch_intraday_profiles", lambda *_a, **_k: {"AAA": FAILING})
+    monkeypatch.setattr(core, "load_daily_context", lambda *_a, **_k: CTX)
+    result = core.reverify_pending_picks(pending_path=tmp_path / "pending.json", now=moment)
+
+    assert result["evicted"]["long"] == ["AAA (not above session VWAP)"]
+    assert "AAA" not in _pending(tmp_path, moment)["pending"]["long"]
+
+
+def test_reverify_raises_rather_than_half_measuring(tmp_path, monkeypatch):
+    """A failure must leave the queue exactly as it was, so the caller can
+    leave the picks staged instead of adopting on partial evidence."""
+    from datetime import datetime
+
+    import autopilot_core as core
+
+    moment = datetime(2026, 7, 2, 11, 0)
+    _staged(tmp_path, {"AAA": PASSING}, CTX, ROWS, now=moment)
+    before = _pending(tmp_path, moment)["pending"]["long"]["AAA"]
+
+    monkeypatch.setattr(core, "fetch_intraday_profiles", lambda *_a, **_k: {})
+    with pytest.raises(RuntimeError):
+        core.reverify_pending_picks(pending_path=tmp_path / "pending.json", now=moment)
+
+    assert _pending(tmp_path, moment)["pending"]["long"]["AAA"] == before
+
+
+def test_an_empty_queue_needs_no_fetch(tmp_path):
+    from datetime import datetime
+
+    import autopilot_core as core
+
+    def explode(*_a, **_k):  # pragma: no cover - must never run
+        raise AssertionError("nothing queued, so nothing to fetch")
+
+    result = core.reverify_pending_picks(
+        pending_path=tmp_path / "pending.json",
+        downloader=explode,
+        now=datetime(2026, 7, 2, 11, 0),
+    )
+    assert result["symbols"] == 0
+
+
+def test_a_staged_pick_records_which_bar_it_was_measured_on(tmp_path):
+    """Without this the wall clock is the only freshness signal, and a stalled
+    feed looks current."""
+    from datetime import datetime
+
+    moment = datetime(2026, 7, 2, 11, 0)
+    profile = dict(PASSING, as_of="2026-07-02T10:55:00")
+    _staged(tmp_path, {"AAA": profile}, CTX, ROWS, now=moment)
+    entry = _pending(tmp_path, moment)["pending"]["long"]["AAA"]
+    assert entry["gate_bar_end"] == "2026-07-02T10:55:00"

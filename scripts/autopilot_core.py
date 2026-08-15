@@ -2450,6 +2450,10 @@ def _restamp_or_evict_pending_picks(
                 entry["gate_state"] = focus_adoption_gate.OPEN
                 entry["gate_reason"] = reason
                 entry["gate_checked_at"] = stamp
+                # WHICH bar was measured, not just when we looked. Wall-clock
+                # age cannot tell a verdict measured on the current bar from
+                # one measured nine bars ago on a stalled feed.
+                entry["gate_bar_end"] = str(profile.get("as_of") or "")
                 continue
             side_pending.pop(sym, None)
             evicted[side].append(f"{sym} ({reason})")
@@ -2464,17 +2468,45 @@ def _restamp_or_evict_pending_picks(
     return evicted
 
 
+#: How many completed M5 bars a verdict's measured bar may lag the latest one.
+#: NOT zero: yfinance routinely publishes the newest completed bar a minute or
+#: two late, so demanding the very latest would refuse almost every adoption.
+#: Two bars is ten minutes of tape - against the 45-minute wall-clock bound
+#: alone, which allowed a verdict measured NINE bars ago (external review,
+#: 2026-08-15). Both bounds apply; this is the binding one.
+FOCUS_GATE_MAX_BAR_LAG = 2
+M5_BAR_MINUTES = 5
+
+
+def latest_completed_m5_end(now: datetime | None = None) -> datetime:
+    """End of the most recent M5 bar that can possibly have completed.
+
+    10:07 -> 10:05. A bar stamped later than this has not finished, and a
+    verdict claiming to measure it is measuring a forming bar.
+    """
+    moment = now or datetime.now()
+    return moment.replace(
+        minute=(moment.minute // M5_BAR_MINUTES) * M5_BAR_MINUTES,
+        second=0,
+        microsecond=0,
+    )
+
+
 def pending_pick_gate_ok(
     entry: Mapping[str, Any] | None,
     now: datetime | None = None,
     *,
     max_age_minutes: int = FOCUS_GATE_VERDICT_MAX_AGE_MINUTES,
+    max_bar_lag: int = FOCUS_GATE_MAX_BAR_LAG,
 ) -> tuple[bool, str]:
     """(ok, reason) for adopting one staged pick, from its stored verdict.
 
-    Refuses a failing verdict, a missing one, and a stale one. Missing is
-    refused for the same reason UNKNOWN fails everywhere else in this gate: a
-    pick nothing has measured is not a pick something has approved.
+    Refuses a failing verdict, a missing one, a wall-clock-stale one, and one
+    whose MEASURED BAR is behind the tape. The bar check is the real guard:
+    45 minutes of wall clock is up to nine M5 bars, which is long enough for a
+    breakout to have completed, failed and reversed. Missing is refused for the
+    same reason UNKNOWN fails everywhere else here - a pick nothing has
+    measured is not a pick something has approved.
     """
     if not isinstance(entry, Mapping):
         return False, "no staged record"
@@ -2488,10 +2520,79 @@ def pending_pick_gate_ok(
         checked = datetime.fromisoformat(raw)
     except ValueError:
         return False, "unreadable gate timestamp"
-    age = ((now or datetime.now()) - checked).total_seconds() / 60.0
+    moment = now or datetime.now()
+    age = (moment - checked).total_seconds() / 60.0
     if age > float(max_age_minutes) or age < 0:
         return False, f"gate check is {age:.0f} min old (limit {max_age_minutes})"
+
+    bar_raw = str(entry.get("gate_bar_end") or "")
+    if not bar_raw:
+        return False, "no measured bar recorded"
+    try:
+        bar_end = datetime.fromisoformat(bar_raw)
+    except ValueError:
+        return False, "unreadable measured-bar timestamp"
+    latest = latest_completed_m5_end(moment)
+    lag_bars = (latest - bar_end).total_seconds() / (M5_BAR_MINUTES * 60.0)
+    if lag_bars > float(max_bar_lag):
+        return False, f"measured {lag_bars:.0f} M5 bars ago (limit {max_bar_lag})"
+    if lag_bars < -1:
+        # A bar from the future is a clock problem, not freshness.
+        return False, "measured bar is ahead of the tape"
     return True, str(entry.get("gate_reason") or "passed the Focus gate")
+
+
+def reverify_pending_picks(
+    *,
+    pending_path: Path = AUTO_POPULATE_PENDING_FILE,
+    downloader: Callable[..., Any] | None = None,
+    now: datetime | None = None,
+    log: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Re-measure ONLY the queued picks, right now. For the flip back to DESK.
+
+    The periodic staging refresh is a whole-universe pass on a 30-minute
+    cadence; on the AWAY/EVENING -> DESK flip the trader is standing there and
+    the queue may have been measured half an hour ago. This re-runs the gate
+    over just the pending symbols - typically a handful, capped by
+    `auto_populate_caps` - so the drain adopts against the current tape.
+
+    Deliberately NOT a discovery pass: it stages nothing new and touches no
+    watchlist, so it cannot collide with BounceBot's ownership of the periodic
+    refresh. It only evicts and re-stamps what is already queued.
+
+    Raises on a failed fetch rather than returning a half-measured queue. The
+    caller leaves the picks staged: missing one cycle costs a delay, adopting a
+    stale breakout costs money.
+    """
+    moment = now or datetime.now()
+    today_iso = moment.date().isoformat()
+    with _AUTO_POPULATE_LOCK:
+        pending = _load_auto_populate_pending(pending_path, today_iso)
+        symbols = sorted(
+            {
+                sym
+                for side in ("long", "short")
+                for sym in (pending["pending"].get(side) or {})
+            }
+        )
+    if not symbols:
+        return {"symbols": 0, "evicted": {"long": [], "short": []}, "refreshed": True}
+
+    profiles = fetch_intraday_profiles(symbols, downloader=downloader, now=moment, log=log)
+    if not profiles:
+        raise RuntimeError(f"no intraday profiles for the {len(symbols)} queued pick(s)")
+    daily_context = load_daily_context(symbols, reference_date=moment.date())
+    if not daily_context:
+        raise RuntimeError("no daily context to measure the queued picks against")
+
+    with _AUTO_POPULATE_LOCK:
+        pending = _load_auto_populate_pending(pending_path, today_iso)
+        evicted = _restamp_or_evict_pending_picks(
+            pending, profiles, daily_context, moment, log=log
+        )
+        _save_auto_populate_pending(pending_path, pending)
+    return {"symbols": len(symbols), "evicted": evicted, "refreshed": True}
 
 
 def stage_auto_populate_candidates(
@@ -2570,6 +2671,7 @@ def stage_auto_populate_candidates(
                 # build in this same pass, so the verdict is stamped now rather
                 # than left for the next refresh - otherwise a pick staged at
                 # 09:00 could not be adopted until 09:30.
+                staged_profile = (profiles or {}).get(sym) if profiles else None
                 side_pending[sym] = {
                     "reason": str(row.get("reason") or ""),
                     "score": float(row.get("score") or 0.0),
@@ -2578,6 +2680,11 @@ def stage_auto_populate_candidates(
                     "gate_state": focus_adoption_gate.OPEN,
                     "gate_reason": "passed the Focus gate at candidate build",
                     "gate_checked_at": stamp,
+                    "gate_bar_end": str(
+                        (staged_profile or {}).get("as_of") or ""
+                        if isinstance(staged_profile, Mapping)
+                        else ""
+                    ),
                 }
                 queued.add(sym)
                 staged.append(sym)
