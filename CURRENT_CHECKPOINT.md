@@ -14,10 +14,10 @@ elapsed evidence lane that can run in parallel.
 | Field | Current value |
 |---|---|
 | Roadmap phase | **Phase 0.5 R1 + R1.1 + R2 built** (trader redirects 2026-08-15) — P0's live gates are unchanged and still owed |
-| Active packet | **R2 M5 FOCUS GATING AND STRENGTH BOARD** (`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`) — code complete through the **R2.2 review pass** below, deterministic gate green, **four live proofs owed** |
+| Active packet | **R2 M5 FOCUS GATING AND STRENGTH BOARD** (`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`) — code complete through the **R2.3 fix** below, deterministic gate green, **four live proofs owed** |
 | Branch | **`phase05-r2-focus-gating-strength-board`**, cut from `phase05-r1-auto-modes-quiet-hours` with the R1.1 repair merged forward; pushed. Merging it brings the testing week, R1, R1.1 and R2 together |
 | Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
-| State | **Green: 2919 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0, after the R2.2 review pass. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
+| State | **Green: 2921 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0, after the R2.3 fix. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
 | Next action | **The Monday sequence below.** The trader runs the R1 quiet-boot proof himself on the evening of 2026-08-15; everything else waits for Monday's real session |
 | Do not start yet | **R3 and later Phase 0.5 packets** — the 2026-08-15 redirects were given packet by packet for R1 and R2 only and do not carry forward. Also Phase 1 cleanup and any Phase 2+ item |
 
@@ -26,23 +26,32 @@ elapsed evidence lane that can run in parallel.
 ### Release candidate
 
 Monday tests **the tip of `phase05-r2-focus-gating-strength-board`**. The last
-commit that changed code or tests is the R2.2 refinement **"Owe the second
-return its own measurement"**; anything after it on this branch is documentation,
-so the running behaviour Monday exercises is exactly the tree the three gates
+commit that changed code or tests is the R2.3 fix **"Give each return to the
+desk an identity its timestamp cannot collide"** (`90ba0d4`, committed
+2026-08-15 13:11:19 PT); anything after it on this branch is documentation, so
+the running behaviour Monday exercises is exactly the tree the three gates
 below were run against.
 
-Stated that way on purpose: naming a fixed SHA here would be wrong the moment
-this file is edited again, and a stale "release candidate" line is worse than
-none. **The rule is: if a commit changes code or tests, all three gates re-run
-and this section is updated.**
+Stated that way on purpose: the SHA above is re-stated **only** because the
+external provenance check needs commit time and executable mtime side by side.
+**The rule is unchanged: if a commit changes code or tests, all three gates
+re-run and this whole section is updated — a stale line here is worse than
+none.**
 
 | Check | Result | When |
 |---|---|---|
-| pytest | **2919 passed / 19 subtests**, exit 0 | 2026-08-15, after R2.2 |
-| smoke | **7/7**, exit 0 | 2026-08-15, after R2.2 |
-| frozen rebuild + selftest | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 | 2026-08-15, after R2.2 |
+| pytest | **2921 passed / 19 subtests**, exit 0 | 2026-08-15, after R2.3 |
+| smoke | **7/7**, exit 0 | 2026-08-15, after R2.3 |
+| frozen rebuild + selftest | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 | 2026-08-15, after R2.3 |
 
-The R2.2 pass changed code, so it is a **new** release candidate and all three
+**Provenance, on its face:** last code commit `90ba0d4` at **13:11:19 PT**;
+`dist\TradingBotV3\TradingBotV3.exe` mtime **13:13:54 PT** — the executable
+postdates the last code commit. Commits after `90ba0d4` on this branch are
+Markdown-only (verify with `git show --stat`); the R2.2 round's executable had
+been built 21 seconds *before* its tip, which is why the ordering is now
+recorded here explicitly rather than left derivable.
+
+The R2.3 fix changed code, so it is a **new** release candidate and all three
 gates were re-run against it — including the frozen rebuild, even though no
 packaging trigger applied. The frozen one is never optional: it is the gate that
 caught the `ai_jobs` roster clash and the `-c` scan-spawn defect when the suite
@@ -168,21 +177,24 @@ because CLAUDE.md mandates one before every merge to `main`, and because:
 
 ### Frozen rebuild and REAL frozen selftest — 2026-08-15
 
-Four rebuilds, all green. The first was the run three packets of notes had
+Five rebuilds, all green. The first was the run three packets of notes had
 mislabeled; the second was forced by the testing-plan asset; the third was the
-R2.1 release candidate `bf1ab89`; the fourth is the R2.2 tip.
+R2.1 release candidate `bf1ab89`; the fourth was the R2.2 tip — built 21
+seconds before its final commit, which the external review correctly refused as
+provenance; the fifth is the current R2.3 candidate, built after `90ba0d4`.
 
 | # | Time | Result |
 |---|---|---|
 | 1 | 09:58 | `selftest OK: **30/30** checks passed **(frozen)**`, exit 0 |
 | 2 | 10:27 | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 |
 | 3 | 11:0x | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — on `bf1ab89` |
-| 4 | 13:0x | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — **current, on the R2.2 tip** |
+| 4 | 13:0x | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — superseded: exe predated its tip by 21 s |
+| 5 | 13:13 | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — **current, after code commit `90ba0d4` (13:11:19)** |
 
-Rebuild 4 was run **without a packaging trigger**, because a code commit makes a
-new release candidate and CLAUDE.md requires a rebuild before merging to `main`.
-The count is unchanged at 31, which is the expected result: R2.2 added no
-dependency, asset, package or dynamic import.
+Rebuilds 4 and 5 were run **without a packaging trigger**, because a code commit
+makes a new release candidate and CLAUDE.md requires a rebuild before merging to
+`main`. The count is unchanged at 31, which is the expected result: neither R2.2
+nor R2.3 added a dependency, asset, package or dynamic import.
 
 **31, not 30, and that is the point.** The Testing Plan tab renders
 `docs/DESK_TESTING_PLAN.md`, a runtime asset that lives **outside `scripts/`**.
