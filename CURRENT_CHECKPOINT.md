@@ -37,6 +37,63 @@ un-revalidated path. Packet R2 adds the freshness gate at that same point, so a
 day's worth of picks can land at once and some will be stale until R2 lands. The
 trader accepted this on 2026-08-15 in preference to deferring the packet.
 
+### R1 build review — 2026-08-15 (independent five-dimension review; findings code-verified)
+
+Overall: the architecture is right, fail-open holds at every consumer, the manual
+carve-outs are real, the alarm's dedupe/day-roll/restart mechanics are solid, the
+shared-scan parity claim is proven against the base commit, no existing test was
+weakened, and CLAUDE.md/AGENTS.md are byte-identical. But an **R1.1 fix pass is
+required before the live proofs are attempted and before R2 stacks on top** —
+the following were verified against the code, not just claimed:
+
+1. **BLOCKER — the boot gate is defeated by the tick.** `_tick` calls
+   `self._ensure_bot_running()` ungated (`autopilot_service.py:450`), so a 21:00
+   boot with Auto left ON logs "nothing starts yet" and then connects BounceBot
+   to IB 30 seconds later. Live proof #1 above will fail as written; every doc
+   stating "no IB connect until the window opens" currently describes behavior
+   the code does not have. The suite stayed green because the boot test stops
+   the timer before a tick can run — the fix needs a test that runs a tick.
+2. **BLOCKER — the EVENING SPY alarm fires on YESTERDAY's move pre-open.**
+   `_maybe_push_spy_alarm` (`autopilot_service.py:1869-1872`) trusts
+   `_spy_session_bars(cached_only=True)` with no bar-date check, and its only
+   session gate is the quiet window, which opens 30 minutes before the open. On
+   any EVENING morning after a ±1% day, ~7 false urgent wake-ups fire on stale
+   data before the first new-session bar (all night if quiet hours are disabled).
+   Fix at the data read: refuse a series whose last bar predates `now.date()`.
+   Every alarm test stubs `_spy_session_bars`; add one with stale-dated bars.
+3. **IMPORTANT — a post-14:00 relaunch silently cancels the after-close
+   wrap-up.** The quiet refusal in `_maybe_run_swing_slot`
+   (`autopilot_service.py:953-955`) returns before any slot resolution, so slots
+   still pending after 14:00 (crash or sleep before the close slot — a 4h39m
+   sleep happened on this desk 2026-08-11) stay pending forever and
+   `after_close_wrapup_due` never fires that day. Same rationale as the EVENING
+   marked-done decision; apply it on the post-window side.
+4. **IMPORTANT — EVENING picks still adopt into M5 Focus immediately.**
+   `_poll_auto_pick_pending` refuses only AWAY
+   (`alert_center_panel.py:1612`); the spec §1/§3.3, CLAUDE.md matrix, EVENING
+   runbook, and CHANGELOG all state EVENING stages until the DESK flip. Make the
+   code match the documented rule.
+5. **IMPORTANT — the legacy Tk GUI dies at construction.** `gui.py:1040` still
+   calls `get_shared_watchlist_paths`, which the removal deleted from
+   `legacy.py`'s import block; `gui.py` acquires its globals from `legacy`, so
+   construction raises NameError. One-line import fix. Invisible to the suite
+   (tests import but never construct) and to the import-only frozen selftest.
+
+Cheap hardening to take in the same pass, or record as owed: NaN threshold
+bypasses the alarm's threshold test (guard `threshold != threshold` like
+`day_pct`); the quiet-window⊇sweep-window containment is enforced nowhere at
+runtime (two independent settings keys; clamp or log the contradiction);
+`test_autopilot_auto_arm_due_daily_hands_off_rules` reads the machine-local
+`qt_auto_quiet_hours` setting and goes red on any desk that disables quiet hours
+(pin `quiet_hours=True`); `MainWindow._self_heal_universe`'s gate and the D1-feed
+beep site have zero coverage; five Qt tests silently pass (not skip) without
+PySide6; the spec §1 matrix retains two EVENING cells (sweep "then quiet",
+alerts "queue") the build never implemented and §8 never settled — reconcile or
+build; a corrupt `local_settings.json` still silently re-homes the store to
+`%LOCALAPPDATA%` (one loud stderr line + atomic settings writes); the
+"early close moves this window" docstring/CHANGELOG claim is false —
+`get_market_session_window` hardcodes regular hours (pre-existing, fail-open).
+
 ### Previous packet — ticker-briefs hardening (TB-0..TB-6)
 
 | Field | Value |
