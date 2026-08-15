@@ -14,12 +14,12 @@ elapsed evidence lane that can run in parallel.
 | Field | Current value |
 |---|---|
 | Roadmap phase | **Phase 0.5 R1 + R1.1 + R2 built; R7 in progress** (trader redirects 2026-08-15) — P0's live gates are unchanged and still owed |
-| **Active packet** | **R7 JOURNAL RELIABILITY AND UX** (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`) — building in its §9 commit order. Progress: **step 0 done**. R2 below is code-complete and waiting on its four live proofs; it is no longer the build item |
+| **Active packet** | **R7 JOURNAL RELIABILITY AND UX — CODE COMPLETE** (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`). All fifteen §9 steps built, each its own green commit. **Six live gates plus four trader-present steps are owed, and none may start before Monday's validation day.** R1/R2's eight live proofs are unchanged and also still owed |
 | **Working branch** | **`phase05-r7-journal-reliability-ux`**, cut from the R2 tip `8d25c92`. **Built in a linked worktree at `..\TradingBotV3-r7` — the main `C:\Users\Aaron\TradingBotV3` checkout stays on the R2 branch, because the desk's scheduled task runs the desk from it.** Run tests with the main repo's venv python and the worktree as cwd |
 | Previous branch | **`phase05-r2-focus-gating-strength-board`**, cut from `phase05-r1-auto-modes-quiet-hours` with the R1.1 repair merged forward; pushed. Merging it brings the testing week, R1, R1.1 and R2 together — and R7 on top of that |
 | Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
-| State | **Green on the R7 branch: 2931 passed / 19 subtests**, exit 0 (2921 at the R2 tip + 10 from step 0). Smoke and the frozen selftest are unchanged from R2 and are re-run before any merge. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
-| Next action | **R7 §9 step 1** (hygiene: A10 precedence, B5 strict timestamps, A4 timeout). **Monday's sequence below is unchanged and still owed** — R7 does not replace it, and R7's own live migration/backfill wait for it |
+| State | **Green on the R7 branch: 3203 passed / 19 subtests / smoke 7/7 / FROZEN selftest 45/45 `(frozen)`**, all exit 0, checked by their own exit codes. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
+| Next action | **Monday's sequence below, unchanged.** R7 adds nothing to it and replaces none of it. R7's own trader-present finale (live migration, full backfill, tax labeling, reconciliation week) starts only **after** Monday's validation day passes. **R8 is NOT authorized** — its spec §5 discovery filters still need the trader's written approval |
 | Do not start yet | **R3–R6** — their redirects were never given. **R8 code** — waits for R7's build to complete (then branch from the R7 tip). Also Phase 1 cleanup and any Phase 2+ item |
 | Doc-only addendum (2026-08-15, late) | Phase 0.5 gained packets **R7 (journal reliability + UX)** and **R8 (Weekend Prep)**: specs written, WISHLIST/plan.md/docs README reconciled (incl. the P3.3 nightly-journal-pull promotion into R7 and the P5.4 narrowing). **Markdown-only — the release candidate, gates, and baseline above are unchanged** |
 | **R7 redirect (2026-08-15, second of the day)** | The trader explicitly authorized **R7 code to start now**, ahead of the P0.7 merge: branch **`phase05-r7-journal-reliability-ux` cut from the R2 tip** — same redirect pattern as R1/R2, recorded in `plan.md` Phase 0.5 preamble and the R7 spec header. Rationale: R7/R8 touch journal/weekend surfaces, not the scanning/alerting/Focus path Monday's proofs cover. **The desk keeps running the R2 branch via the scheduled task until the validation day passes — do not switch the desk branch without disarming that task.** R1/R2's eight live proofs remain owed and are inherited by the eventual stack merge. R7's own trader-present steps (live DB migration, full backfill) must NOT run on the desk before Monday's validation passes |
@@ -45,9 +45,13 @@ Each step is its own green commit, pushed. A step is not done until
 | 11 Shell + shared header + Trades tab | **DONE** | `ui/panels/journal/` package; `tests/test_journal_feed.py` (29) + `tests/test_qt_journal_panel.py` (25) |
 | 12 Calendar + Analytics | **DONE** | pyqtgraph equity curve, month grid + year heatmap, walk-away in a worker |
 | 13 Health + Fees | **DONE** | coverage grid, reconciliation confirm flow, FX coverage, Flex/backfill controls (closes A1/A9); **3203 passed / smoke 7/7 / source selftest 31/31**, all exit 0 |
-| 14 Governance close-out | **next** — includes the frozen rebuild + frozen selftest | |
+| 14 Governance close-out | **DONE** | Frozen rebuild + `selftest OK: 45/45 (frozen)`, exit 0; CHANGELOG, `docs/README.md`, `WISHLIST.md`, `plan.md`, this file and `docs/DESK_TESTING_PLAN.md` reconciled |
 | 11–13 Journal UI | pending | |
 | 14 Governance close-out | pending | |
+
+**R7's build is complete. Do not start R8** (`docs/WEEKEND_PREP_PLAN.md`) — its
+§5 discovery filters still need the trader's written approval, and its branch is
+cut from the R7 tip when that arrives.
 
 **The golden fixture is the packet's spine.** It freezes what `rebuild_trades`
 does today, six known defects included, and it is regenerated only by
@@ -200,16 +204,65 @@ historically caught what the suite could not.
 that: `default_slots()` imports `journal_runner` lazily inside the function, so
 the roster/selftest disjointness rule is untouched.
 
-**Trader-present steps ahead — the build stops and asks at each** (spec §9):
-Flex token setup (§8) before step 7 goes live, account tax-status labeling after
-step 11, the first live migration + full backfill, and the reconciliation-week
-sign-off. **The live migration and full backfill do not run on the desk before
-Monday's validation day passes** — everything until then is built against
-fixture and copied DBs.
+### The R7 finale — trader-present, and all of it after Monday
+
+Nothing below has happened. The build is complete; this is the part that needs
+the trader and real data, in this order:
+
+| # | Step | Note |
+|---|---|---|
+| 1 | **Read the migration dry-run report** — `python scripts/journal_migrate.py` (dry run is the default; it copies the DB to a temp file and leaves the live one byte-identical) | Look at the duplicate collapses and the annotation-orphan count before anything is applied |
+| 2 | **Apply the migration** — `--apply` | Takes an automatic timestamped file backup beside the DB first. This is when the four confirmed tax statuses land |
+| 3 | **Full backfill** — Journal ▸ Health ▸ backfill, or `journal_runner --backfill-days 365` | Flex caps at 365 days; older history needs the one-time Flex file import (spec §8) |
+| 4 | **Spot-audit ≥10 trades against statements**, then reconcile trade counts and commissions to **one monthly statement per broker, to the cent** | This is the gate that decides whether the journal is tax-grade |
+| 5 | **One clean reconciliation week** on both brokers | Every mismatch fixed upstream or explained by an adjustment record |
+| 6 | **≥5 consecutive nightly `journal_import` ledger entries** with coverage advancing and at least one observed self-heal | |
+
+**Questrade env-var cleanup**, if `QUESTRADE_REFRESH_TOKEN` is still set: local
+settings win, but the env var is a first-boot seed only and a stale copy can be
+mistaken for the live rotating token. The Health tab warns when it sees one.
+
+**Nothing in R7's build touched the live journal database.** Every test ran
+against fixture and temporary stores; `journal_migrate.py` defaults to a dry run
+against a throwaway copy, and a test asserts the live file is byte-identical
+afterwards.
 
 ## Merge safeguards — read before Monday
 
-### Release candidate
+### R7 release candidate — `fe4fe73`
+
+**`phase05-r7-journal-reliability-ux` at `fe4fe73` is a named release candidate**,
+verified by all three gates on the tree that produced it:
+
+| Check | Result | Command |
+|---|---|---|
+| pytest | **3203 passed / 19 subtests**, exit 0 | `.venv\Scripts\python.exe -m pytest tests/ -q` |
+| smoke | **7/7**, exit 0 | `.venv\Scripts\python.exe scripts/smoke_check.py` |
+| frozen rebuild + selftest | **`selftest OK: 45/45 checks passed (frozen)`**, exit 0 | `pyinstaller .\packaging\tradingbotv3.spec --noconfirm` then `dist\TradingBotV3\TradingBotV3.exe --selftest` |
+
+**Rollback for R7 alone: `3339dd9`** — the step-10 tip, the last commit before
+the Journal UI was rebuilt. Everything earlier in the stack keeps its own
+rollback points in the table further down; the R7 branch is a strict superset of
+the R2 tip `8d25c92`, so backing R7 out entirely is a checkout of that.
+
+**The frozen build was made from the worktree** (`..\TradingBotV3-r7`), so its
+`dist/` is the worktree's and the desk's own `dist/` — the R2 release candidate
+it has been running — was never touched.
+
+#### What the frozen run caught, and it is not nothing
+
+Three rebuilds were needed. The first two reported **31/31**, the pre-existing
+roster, passing with R7 code in the bundle. Extending
+`selftest.LAZY_ENGINE_MODULES` by fourteen journal modules **did not change the
+frozen count** until `build/` was deleted — a PyInstaller rebuild had silently
+reused the cached module. That is exactly the failure shape that let "frozen
+selftest 30/30" be recorded three times during R1/R2 for runs that never
+happened. **Treat a frozen count that does not move after a roster change as a
+stale build, not as a passing gate.** The clean rebuild reports 45/45, and `ui`
+collects **117** submodules against 109 before — the new `ui/panels/journal/`
+package.
+
+### Previous release candidate (R1/R2)
 
 Monday tests **the tip of `phase05-r2-focus-gating-strength-board`**. The last
 commit that changed code or tests is the R2.3 fix **"Give each return to the

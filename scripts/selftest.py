@@ -67,6 +67,28 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # only entry point is scripts/run_ai_jobs.py, a scheduled CLI run from the
     # repo checkout, so the frozen exe cannot import it and must not be asked
     # to. test_selftest_modules_are_actually_bundled keeps the two in step.
+    # The journal (R7). Five of these are top-level modules the frozen desk only
+    # ever reaches through a chain of imports - ui.services.journal_feed and
+    # ui.services.journal_import_service pull in journal_runner, which pulls in
+    # the rest. That chain is exactly the kind PyInstaller can follow and a
+    # future refactor can quietly break: the old Journal panel imported
+    # journal_import_service directly and the rebuilt one does not, so the only
+    # thing keeping journal_runner in the bundle now is a function-level import.
+    # Naming them here makes the frozen run prove it instead of inferring it.
+    "journal_store",
+    "journal_identity",
+    "journal_migrate",
+    "journal_coverage",
+    "journal_fx",
+    "journal_reconcile",
+    "journal_runner",
+    "journal_importers",
+    "journal_analytics",
+    "journal_walkaway",
+    "ui.services.journal_feed",
+    "ui.panels.journal_panel",
+    "ui.panels.journal.trades_tab",
+    "ui.panels.journal.health_tab",
     # shadow/evidence engines
     "market_state",
     "greatness_monitor",

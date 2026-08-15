@@ -369,7 +369,8 @@ are listed in `CURRENT_CHECKPOINT.md`.
    only after the 6.4b live proof passes and the trader says go) plus the P3.5
    commentary journal; **the nightly slot half was promoted into R7 on
    2026-08-15** — see item 7; P3.5 is unchanged.
-7. **R7 Journal reliability and UX (added 2026-08-15).** Tax-grade completeness
+7. **R7 Journal reliability and UX. — BUILT 2026-08-15, live gates owed.**
+   Tax-grade completeness
    from both brokers: stable execution/trade identity (annotations survive
    rebuilds), IBKR Flex as the primary historical source, wired Questrade
    activities, per-chunk partial persistence, a date-coverage ledger with a
@@ -379,11 +380,29 @@ are listed in `CURRENT_CHECKPOINT.md`.
    tab (account/tax-status selection that never silently blends, date-range +
    calendar + fees views, R-multiples with alert prefill, pyqtgraph analytics,
    surfaced walk-away). Spec: `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`.
-   Dependencies: authorized to build now on `phase05-r7-journal-reliability-ux`
-   cut from the R2 tip (trader redirect 2026-08-15, second of the day; see the
-   preamble). Exit: the spec's deterministic gates plus its live gates (coverage
-   complete since inception, statement reconciliation to the cent, one clean
-   reconciliation week, zero orphaned annotations, five nightly slot runs).
+   Built on `phase05-r7-journal-reliability-ux`, cut from the R2 tip (trader
+   redirect 2026-08-15, second of the day; see the preamble), in the spec's §9
+   commit order. **Deterministic gates green: 3203 passed / 19 subtests, smoke
+   7/7, frozen selftest 45/45 `(frozen)`, all exit 0.**
+
+   **Owed, and none of it can start before Monday's validation day:** the
+   trader-present finale — the live schema v2→v3 migration (dry-run report
+   reviewed first, automatic file backup), the full backfill, account tax-status
+   labeling applied to the live store, and reconciliation-week sign-off — then
+   the spec's six live gates: coverage COVERED-or-NO_SESSION for every session
+   day since inception, trade counts and commissions reconciling to one monthly
+   statement per broker **to the cent**, one clean reconciliation week on both
+   brokers, zero orphaned annotations (permanent SQL test), CAD totals
+   spot-checked against published BoC rates for three dates, and ≥5 consecutive
+   nightly `journal_import` ledger entries with coverage advancing and at least
+   one observed self-heal.
+
+   Two decisions taken at build time and recorded in the spec rather than left
+   implicit: §5 fix 4's narrowing (only the unambiguous oversell is flagged;
+   the naked sell is resolved by step 9's reconciliation) — **trader-approved as
+   built** — and §4's three identity choices (the short `QT`/`IBKR` uid token,
+   source precedence enforced at import time as well as in the migration, and a
+   deterministic surrogate for a row with no execution id).
 8. **R8 Weekend Prep (added 2026-08-15).** A guided five-step weekend routine
    (week in review, focus-pick review, week-windowed walk-away with the auto-tag
    review, H1/D1/Monthly strength discovery on the R2 formula via a new pure
@@ -396,7 +415,8 @@ are listed in `CURRENT_CHECKPOINT.md`.
    Exit: the spec's deterministic gates plus its one-real-weekend live proof.
 
 Exit gate: each packet exits through its own spec; R1 and R2 land first per the
-trader's ranking, then R7 before R8. A packet's live gates may overlap the next
+trader's ranking, then R7 before R8. **R7's code is complete**; what remains for
+it is live evidence, which is why it does not close the phase on its own. A packet's live gates may overlap the next
 packet's build only when no shared file is in flight.
 
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline

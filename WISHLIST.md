@@ -50,7 +50,7 @@ requirements live in `plan.md`.
 | Clean-machine recovery, installer, icon, and release polish | `ROADMAP` | P7.1–P7.2 |
 | Read-only additional broker/data adapters after provider consolidation | `ROADMAP` | P7.3 |
 | Trader refinement packets R1–R6 (the 2026-08-14 desk requests) | `ROADMAP` | Phase 0.5 |
-| Tax-grade journal reliability (both brokers) + TradesViz/TraderSync-style Journal tab | `ROADMAP` | Phase 0.5 R7 |
+| Tax-grade journal reliability (both brokers) + TradesViz/TraderSync-style Journal tab | `BUILT` | Phase 0.5 R7 — built 2026-08-15, deterministic gates green; the spec's six live gates are owed and start after Monday's validation day |
 | Weekend Prep guided routine with H1/D1/Monthly strength discovery and weekly auto-tag review | `ROADMAP` | Phase 0.5 R8 |
 
 ## Candidate user-experience integrations
@@ -127,7 +127,7 @@ Phase 0.5; specs live under `docs/` (see `docs/README.md`).
 | 1 | "Not today" on an automatic M5 Focus pick removes that M5 entry | `ROADMAP` | 0.5 R2 — scoped removal, made legal by a new auto-pick provenance sidecar |
 | 2 | Place symbol in Focus + mark "I like the stock" from the Alert screen | `ROADMAP` | 0.5 R4 — Add-to-Focus already exists there; LIKE capture is added |
 | 3 | AI jobs says "no arguments" at boot | `ROADMAP` | 0.5 R6a — a routine scheduled-task log line (`run_ai_jobs.ps1`); reword + a read-only Health row |
-| 4 | Auto journal function | `ROADMAP` | Nightly `journal_import` slot promoted into 0.5 R7 on 2026-08-15 (supersedes the 6.4b-proof gate; recorded in the R7 spec §6); P3.5 commentary journal unchanged |
+| 4 | Auto journal function | `BUILT` | Nightly `journal_import` slot **built 2026-08-15** as the first JobSlot in the `ai_jobs` slate (R7 §6); five live runs owed. P3.5 commentary journal unchanged and still ROADMAP |
 | 5 | Chart Review functions on every chart | `ROADMAP` | 0.5 R4 — CaptureRail embedded on every chart surface |
 | 6 | Early-morning D1 gap looks inaccurately large; labeled Y axis | `ROADMAP` | 0.5 R4 — axis labels already exist; real cause is a thin Yahoo forming-bar fallback, fixed by source honesty |
 | 7 | Existing price alerts visible on charts | `ROADMAP` | 0.5 R4 — painted alerts/watches as a toggleable levels family |

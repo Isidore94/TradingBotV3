@@ -1,8 +1,9 @@
 # TradingBotV3 implemented history
 
 Last reconciled: **2026-08-15** from the working copy of
-`phase05-r2-focus-gating-strength-board` (cut from `phase05-r1-auto-modes-quiet-hours`,
-itself branched from `testing-week-2026-08-10`)
+`phase05-r7-journal-reliability-ux` (cut from `phase05-r2-focus-gating-strength-board`,
+itself cut from `phase05-r1-auto-modes-quiet-hours`, itself branched from
+`testing-week-2026-08-10`)
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -128,6 +129,20 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### Journal, explanations, and learning
 
+- **Tax-grade journal (R7, 2026-08-15).** Stable `BROKER:account:exec_id`
+  execution identity; one security-type vocabulary across both brokers; anchored
+  `trade_id` with an annotation re-key pass and `trade_aliases`;
+  `CLOSED_PARTIAL` and a `SYNTHETIC_OPEN` marker instead of a fabricated inverse
+  position; append-only `trade_adjustments` corrections re-applied at every
+  rebuild; an `import_coverage` ledger with a bounded nightly self-heal; IBKR
+  Flex as the primary history source including OptionEAE, OpenPositions and
+  CashTransactions; Questrade activities and a trade-day cross-check; Bank of
+  Canada FX booked once per (date, currency); reconciliation against both
+  brokers' reported positions with trader-confirmed force-closes; a nightly
+  `journal_import` slot at the front of the `ai_jobs` slate; and a five-tab
+  Journal (Trades, Calendar, Analytics, Health, Fees) over one shared
+  tax-grouped header.
+
 - Journal schema v2 with append-only opportunity lifecycle events, idempotent broker
   Taken/Closed imports, structured reviews, free-form notes, tags, and analytics.
 - Deterministic novice explanations across Setup Tracker, Day Trade Tracker, and
@@ -229,6 +244,97 @@ and green while its live or promotion gate remains open in `plan.md`.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
+
+### 2026-08-15 — packet R7: the tax-grade journal
+
+`IMPLEMENTED` + `GREEN`. Live gates owed — see `plan.md` Phase 0.5 R7 and
+`CURRENT_CHECKPOINT.md`. Built on `phase05-r7-journal-reliability-ux`, cut from
+the R2 tip by the trader's second redirect of 2026-08-15, in the spec's §9
+commit order (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`).
+
+The trader's report was two sentences: *"the journal misses trades, has trades
+open — not acceptable; I need this for tax purposes too."* The register in the
+spec's §3 found eighteen distinct causes behind them. What follows is what was
+built, not what was intended.
+
+**Identity (B4, B3, B6).** `execution_uid` stopped embedding the symbol and the
+timestamp, so the same IBKR fill arriving over the socket during the session and
+again in that night's Flex statement is one execution instead of two — the
+mechanism that opened a ten-share position as twenty and left it open forever.
+A new `journal_identity` module owns one security-type vocabulary shared by both
+brokers, the assembler and the migration, so a position spelled `STOCK` by one
+import and `NASDAQ` by another (Questrade's `listingExchange` fallback) is one
+position again. `trade_id` is anchored to its opening execution rather than a
+per-group sequence, and a re-key pass plus `trade_aliases` carries annotations
+onto rebuilt trades — I4, which did not hold before and now has a permanent
+zero-orphan test.
+
+**Completeness (A3, A5, A6, A7, I2).** `import_coverage` records which
+(broker, account, day) an import actually spanned, so a day nobody imported and
+a day with no trades stopped being the same absence of rows. The Questrade pull
+persists per (account, chunk), so one failing chunk no longer discards fills
+already fetched. `journal_coverage.self_heal` repairs oldest first, bounded at
+62 days a night and 5 attempts a day. The IBKR socket marks no coverage at all —
+it sees only the current TWS session — and Flex marks from the statement's own
+declared span. Option expiries, exercises and assignments now arrive as the
+fills they really are, which is what finally closes an option that expired
+worthless; dividends, interest, fees and FX land in `cash_transactions` and
+deliberately never near `raw_executions`.
+
+**Corrections (B7, I3).** `trade_adjustments` is an append-only audit trail with
+a mandatory reason, re-applied on every rebuild so a correction survives the
+next import. VOID, EDIT, ADD, REASSIGN_GROUP and FORCE_CLOSE, with undo as a
+superseding record rather than a delete.
+
+**Currency (B8, I5).** Rates are booked once per (date, currency) from the Bank
+of Canada, never fetched at render, with weekend and holiday carry-back recorded
+in `effective_date`. An unconverted trade is NULL — not zero, and not the native
+number relabelled — and a mixed-currency total with anything unconverted is
+**refused** with a reason rather than shown wrong.
+
+**Reconciliation (B1, B2).** `journal_reconcile` compares the journal's net-open
+against both brokers' reported positions. A journal-open-but-broker-flat
+position produces a *suggested* force-close that the trader confirms; the
+suggestion is stored outside `trade_adjustments` precisely so it cannot apply
+itself.
+
+**The nightly slot (I8).** `journal_import` is the first `JobSlot` in the
+`ai_jobs` slate — the one sanctioned exception to the slate's no-reorder rule,
+because both AI jobs read the journal. No new timer, no new thread, no new ntfy
+sender, and a test asserts that against the parsed source.
+
+**The Journal tab.** A shell over Trades, Calendar, Analytics, Health and Fees,
+all reading through `ui.services.journal_feed` and none holding a store. The
+shared header groups accounts by tax treatment and badges a blended selection
+(I6). Health carries the coverage grid, the reconciliation confirm flow, and the
+Flex token/query-id fields plus a backfill button — closing A1 and A9, where the
+only complete import path was a CLI the trader never ran.
+
+#### Defects found while building, each by a test
+
+Recorded because they are the useful part of the record, not because they closed.
+
+| # | Defect | Where it would have shown |
+|---|---|---|
+| 1 | The store's multiplier rule read `security_type` verbatim, so it knew `"OPT"` and missed Questrade's `"Option"` | **Every Questrade option trade's P&L was out by 100×** |
+| 2 | The activities cross-check ran before the chunk was marked COVERED | A COVERED mark painted over the disagreement it had just found |
+| 3 | The Flex parser counted the `OptionEAE` section container as a row (IBKR nests same-named elements) | A phantom option expiry, once those rows became executions |
+| 4 | `list_active_adjustments` broke `created_at` ties by random uuid, and `created_at` is second-precision | Which of two same-second corrections won was a coin flip |
+| 5 | `undo_adjustment` reused the real actions with an empty payload, on the theory that empty is inert | True for EDIT, false for FORCE_CLOSE: undoing a force-close left it force-closed |
+| 6 | Per-group analytics summed native P&L under a converted headline | A breakdown that disagreed with the total directly above it |
+| 7 | The nightly path rebuilt twice, the first time from executions already known to have holes | Wasted work, and a journal assembled from a state it was about to repair |
+
+#### Frozen packaging
+
+Three rebuilds. The first two reported **31/31 (frozen)** — the pre-existing
+roster, passing with R7 code in the bundle. Extending `selftest.LAZY_ENGINE_MODULES`
+by the fourteen journal modules did not change the frozen count until `build/`
+was cleared, which is a finding in its own right: **a PyInstaller rebuild can
+silently reuse a cached module**, and that is precisely the failure mode that let
+"frozen selftest 30/30" be recorded three times in R1/R2 for runs that had never
+happened. The clean rebuild reports **`selftest OK: 45/45 checks passed
+(frozen)`**, exit 0, and `ui` collects 117 submodules against 109 before, which
+is the new `ui/panels/journal/` package.
 
 ### 2026-08-15 — R2.3: a flip's identity is a counter, never its timestamp
 

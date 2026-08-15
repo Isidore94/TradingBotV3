@@ -88,6 +88,41 @@ manual scan ran.
 
 ---
 
+# 1b. The journal is rebuilt, and it has NOT touched your data yet
+
+### WHEN
+
+Any time. This is a read-only look, and it is deliberately the only thing R7
+asks of you before Monday.
+
+### DO
+
+Open the desk, go to **Journal**. There are five tabs now instead of one page:
+Trades, Calendar, Analytics, Health, Fees.
+
+Click **Health**.
+
+### GOOD
+
+The Health tab loads and shows a coverage grid, an import-run list, and broker
+sync fields including the IBKR Flex token and query id. It is allowed to look
+empty or patchy — the journal has not been migrated or backfilled yet, and an
+honest empty grid is the correct state.
+
+### BAD
+
+The tab fails to open, or any tab raises. That is a real problem and worth
+stopping for.
+
+### DO NOT, YET
+
+Do **not** run the migration, the full backfill, or "Backfill gaps". Those are
+the trader-present steps and they wait until after Monday's validation day
+passes. The migration takes an automatic file backup and there is a dry-run
+report to read first; none of that is a reason to run it early.
+
+---
+
 # 2. Monday during the session
 
 These checks need a live market. You do not need to do them all in one day —
