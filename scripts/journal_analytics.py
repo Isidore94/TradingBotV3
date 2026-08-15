@@ -453,10 +453,21 @@ def build_analytics_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
             buckets[key_fn(row)].append(row)
         rows = []
         for label, bucket_rows in buckets.items():
-            item = _summary_for_rows(bucket_rows)
+            # The same column the overall total used. A per-group breakdown that
+            # summed native P&L under a CAD headline would disagree with the
+            # number above it, which is B8 back again one row down.
+            item = _summary_for_rows(bucket_rows, pnl_key or "net_pnl")
+            if not pnl_key:
+                item = {**item, "net_pnl": None, "gross_win": None, "gross_loss": None}
             item["label"] = label
             rows.append(item)
-        rows.sort(key=lambda item: (-int(item.get("closed", 0)), -abs(float(item.get("net_pnl", 0.0) or 0.0)), str(item["label"])))
+        rows.sort(
+            key=lambda item: (
+                -int(item.get("closed", 0)),
+                -abs(float(item.get("net_pnl") or 0.0)),
+                str(item["label"]),
+            )
+        )
         summary["groups"][group_name] = rows
     return summary
 

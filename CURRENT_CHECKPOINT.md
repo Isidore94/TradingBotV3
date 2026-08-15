@@ -42,7 +42,10 @@ Each step is its own green commit, pushed. A step is not done until
 | 8 FX booking + analytics currency honesty | **DONE** | `scripts/journal_fx.py` + `tests/test_journal_fx.py` (15 tests); 3121 passed, exit 0. Golden regenerated with a note: the CAD trade books by identity |
 | 9 Reconciliation against broker positions | **DONE** | `scripts/journal_reconcile.py` + `tests/test_journal_reconcile.py` (17 tests) |
 | 10 Nightly `journal_import` JobSlot | **DONE** | `run_nightly_journal_import` + `tests/test_journal_nightly_slot.py` (11 tests); **3149 passed / smoke 7/7 / source selftest 31/31**, all exit 0 |
-| 11–13 Journal UI | **next** — report to the trader first | |
+| 11 Shell + shared header + Trades tab | **DONE** | `ui/panels/journal/` package; `tests/test_journal_feed.py` (29) + `tests/test_qt_journal_panel.py` (25) |
+| 12 Calendar + Analytics | **DONE** | pyqtgraph equity curve, month grid + year heatmap, walk-away in a worker |
+| 13 Health + Fees | **DONE** | coverage grid, reconciliation confirm flow, FX coverage, Flex/backfill controls (closes A1/A9); **3203 passed / smoke 7/7 / source selftest 31/31**, all exit 0 |
+| 14 Governance close-out | **next** — includes the frozen rebuild + frozen selftest | |
 | 11–13 Journal UI | pending | |
 | 14 Governance close-out | pending | |
 
@@ -117,12 +120,22 @@ For the §9 step 11 labeling UI. The migration seeds `tax_status` from
 |---|---|
 | Questrade TFSA **51830546** | `TAX_FREE` |
 | Questrade Margin **29347316** | `TAXABLE` |
-| IBKR **U4867396** | **owed** — leave unlabeled |
-| IBKR **U5102524** | **owed** — leave unlabeled |
+| IBKR **U4867396** | `TAX_FREE` — TFSA, **currently unfunded and deliberately kept** |
+| IBKR **U5102524** | `TAXABLE` — margin |
 
-**Do not guess the two IBKR accounts.** An unlabeled account renders as
-"Unlabeled" in the account tree, which is the honest state; a guessed tax
-status is a wrong number in a tax record.
+**All four confirmed by the trader 2026-08-15** and recorded in
+`journal_migrate.TRADER_CONFIRMED_TAX_STATUS` as `tax_status_source='trader'`,
+because a statement from the person who opened the account is a different kind
+of fact from an inference off an account-type string — and only one of them may
+never be overwritten (I7).
+
+**U4867396 stays labeled while unfunded.** A zero balance is not zero history,
+and an account that drops out of the tax grouping is an account whose past
+trades quietly stop being counted.
+
+An account nobody has decided about still stays blank and lands in the account
+tree's own "Unlabeled" group. A guessed tax status is a wrong number in a tax
+record.
 
 **Deferred out of step 3, deliberately — one spec conflict.** Spec §5 fix 3 puts
 "the manual-execution dialog gains real broker/account pickers" in this step,
