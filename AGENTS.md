@@ -155,6 +155,7 @@ rebuilding is verification only, and skipping it can never leave the tree broken
 - `GUI_PRODUCT_PLAN.md` — historical consumer GUI product design reference.
 - `docs/decisions/` — backfilled decision records; read before changing a library, storage, or architecture choice.
 - `docs/REVIEW_LEARNING_LOOP.md` — how the AI reads review artifacts and writes `review_policy.json`.
+- Phase 0.5 trader refinement packets (promoted 2026-08-15; build only after P0.7): `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` (R1), `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` (R2), `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md` (R3, incl. the completed after-close scan investigation), `docs/DESK_CHART_UNIFICATION_PLAN.md` (R4), `docs/M5_SIGNAL_ENGINES_PLAN.md` (R5).
 - `docs/ULTIMATE_SETUP_DATABASE_PLAN.md` — LOCKED implementation plan for the DAS research warehouse (capture policy + IB pacing budget, 13-table schemas, Phases 0-8 build order, 28 locked decisions in its Section 23 — do not re-litigate them; open items live only in its confirmation register).
 - `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md` — the warehouse builder decision log (BD-01…): every implementation choice the locked plan left open, with rationale and reopen triggers. Read before changing warehouse internals; add a BD entry when you make a new one. `docs/RESEARCH_WAREHOUSE_ERD.md` is its dataset/identity map.
 - `docs/SETUPS_MAJOR.md` / `docs/SETUPS_TEST.md` — AI-stated understanding of the production setups and the study/research setups, under trader review; fold corrections back in.

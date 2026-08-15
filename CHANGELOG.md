@@ -1,6 +1,6 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-12** from the working copy of
+Last reconciled: **2026-08-15** from the working copy of
 `testing-week-2026-08-10`
 
 Authoritative for: **what exists and the historical sequence of revisions**
@@ -215,7 +215,29 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
-### 2026-08-13 — the frozen desk could not scan
+### 2026-08-15 — trader refinement packets promoted; after-close mechanism identified
+
+Documentation-only pass; no code, path, or test changed. The trader promoted the
+2026-08-14 wishlist entries into `plan.md` **Phase 0.5** (packets R1–R6, ranked
+R1 auto-modes/quiet-hours first, R2 Focus-gating/strength-board second) with five
+ACTIVE specifications added under `docs/` and indexed in `docs/README.md`. Code
+for these packets starts only after P0.7 merges.
+
+Two findings from the read-only recon are recorded as knowledge about implemented
+behavior:
+
+- **Why Master AVWAP setups "totally change after the close."** The live scan
+  applies no completed-bar guard to the daily frame, so AVWAP/sigma bands, ATR20,
+  binary bounce/cross gating, two candle-shape score penalties, and an 18-point
+  volume-thrust bonus (whose full-day-average denominator makes it structurally
+  near-unfireable intraday) all move with today's forming D1 bar; the setup
+  tracker is then written at 12:00 PT and wiped/rewritten when the 13:00 slot
+  finishes ~13:20-13:28. Full mechanism list with evidence:
+  `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md` §4. The trader authorized the
+  "full honesty bundle" fix design; nothing is built yet.
+- **"Shared scan" is a proven no-op**: `use_shared_watchlists=True/False` resolve
+  to the identical watchlist paths, so its removal (Phase 0.5 R1) is a dead-flag
+  cleanup, not a behavior change.
 
 Running the frozen executable as the daily driver disabled the Master AVWAP D1
 swing scan completely, for two sessions, without any visible symptom.

@@ -1,6 +1,6 @@
 # TradingBotV3 remaining roadmap
 
-Last reconciled: **2026-08-10**
+Last reconciled: **2026-08-15**
 
 Authoritative for: **work that is not finished, validation gates, promotion rules,
 and execution order**
@@ -214,6 +214,7 @@ where the phase says so; it never authorizes an early promotion.
 | Order | Build phase | Plain-English outcome |
 |---:|---|---|
 | **0 — NOW** | Validate and merge | Prove the testing-week build on the real desk and merge it safely |
+| **0.5** | Trader refinement packets | Build the trader's 2026-08-14 desk requests in ranked order (R1–R6) |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
 | **3** | Evidence and capture | Mature warehouse/AI/shadow evidence and capture trader commentary honestly |
@@ -261,6 +262,75 @@ Exit gate: the branch is green, one real session is documented, the application 
 operationally safe on the single-main topology, and `main` contains the validated
 build. The Local-AI, warehouse, regime, SPY, and Greatness evidence clocks may remain
 in progress; their results gate later promotions, not the merge itself.
+
+### Phase 0.5 — trader refinement packets (promoted 2026-08-15)
+
+The trader explicitly promoted the 2026-08-14 `WISHLIST.md` entries on 2026-08-15
+and ranked the build order (R1 first, then R2; R3–R6 behind them). Build work
+starts only after P0.7 merges; read-only investigation and documentation preceded
+it. Each packet has an ACTIVE specification under `docs/`; the file-scoped
+ask-first rule and the golden-fixture invariant bind at edit time, packet by
+packet. Phase 1 work may interleave only where a packet's own spec says the
+baseline item is a prerequisite (none currently does).
+
+1. **R1 Auto-mode matrix and quiet hours.** Enforce the trader's OFF/DESK/AWAY/
+   EVENING semantics (AWAY queues and never adopts into M5 Focus; EVENING stops
+   scanning after its early block and gains the SPY ±1% wake alarm as the second
+   documented push exception), one fail-open 06:30–14:00 PT quiet-hours gate over
+   every automatic starter, and the shared-scan/dead-Drive removal (the
+   `use_shared_watchlists` flag is a proven no-op). Spec:
+   `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. Exit: mode truth-table tests plus
+   the four live proofs in the spec; CLAUDE.md/AGENTS.md push policy and both
+   runbooks reconciled.
+2. **R2 M5 Focus adoption discipline and the M5 strength board.** The combined
+   prev-day-extreme + session-VWAP gate applied at candidate build, staging
+   refresh (queue eviction), and adoption; a provenance sidecar making auto picks
+   the only legally removable entries; the scoped "Not today" verb; the
+   triple-VWAP/Focus desync repair; and the TC2000-parity strength scanner over
+   `universe_all.txt` via batched yfinance with one-click add-to-Focus. Spec:
+   `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`. Exit: gate/eviction live
+   proofs and a trader-confirmed board session.
+3. **R3 Swing-quality demotion, pre-close honesty, and the dislike-feedback
+   loop.** Demote-and-label (never hide) overextended swing rows using the
+   trader's two v1 rules, the RVOL field + daytrade carve-out annotation, the
+   reviewed-today badge from recorded decisions, structured dislike reasons
+   counted by the review-learning scoreboard, and the authorized full-honesty
+   pre-close bundle (tracker writes once post-close, a 12:45 PT slot,
+   forming/completed stamps, STABLE+PREVIEW split, time-normalized volume
+   thrust). The after-close investigation is COMPLETE — mechanisms recorded in
+   the spec. Spec: `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md`. Exit: fixtures
+   first, then the spec's one-week desk gates.
+4. **R4 Desk chart unification.** CaptureRail (veto/like/note) on every chart
+   surface, review/watch wiring for the RS/RW and Industry panels, Alert Center
+   LIKE, armed price alerts and D1 watches painted as a toggleable levels family,
+   the forming-bar source honesty fix for the early-morning gap distortion, and
+   the reviewed-today badge rendered everywhere. The labeled Y axis already
+   exists — recorded as answered. Spec: `docs/DESK_CHART_UNIFICATION_PLAN.md`.
+5. **R5 M5 signal engines.** New pure indicator modules (TC2000-parity SMI,
+   efficiency-LRSI under a non-colliding name, Heikin-Ashi reversal), the LRSI
+   cross alert type, the HA+SMI+LRSI confluence alert (Focus-scoped), the
+   first-candle ORB candidate flow, the AnyBounceWatch multi-level armed watch
+   (including the new prior-anchor AVWAP line in the D1 scan output), and a
+   shared completed-bars helper. Golden fixtures gate live wiring; packaging and
+   frozen selftest update when `scripts/indicators` gains its first importer.
+   Spec: `docs/M5_SIGNAL_ENGINES_PLAN.md`.
+6. **R6 Small operational wins.** (a) AI-jobs visibility: reword the routine
+   "(no arguments)" line in `scripts/run_ai_jobs.ps1` and add a read-only System
+   Health row over `job_ledger.jsonl`/the dated log — the batch layer is never
+   hosted in the GUI. (b) Evidence-ledger rotation: session-scoped rotation for
+   `technical_integrity_events.jsonl` (~247 MB, fully re-parsed each boot)
+   preserving its replay contract, then audit the other JSONL ledgers via the
+   existing footprint check; `technical_integrity.py` is scoring-adjacent —
+   ask first. (c) A bounded stall-watchdog diagnostic week (`ui_stall_watchdog`
+   setting only) before prioritizing any worker-offload work. (d) **Auto journal
+   is a mapping, not new work**: the trader's ask resolves to the QUEUED nightly
+   `journal_import` slot (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c — build
+   only after the 6.4b live proof passes and the trader says go) plus the P3.5
+   commentary journal; no separate packet exists.
+
+Exit gate: each packet exits through its own spec; R1 and R2 land first per the
+trader's ranking. A packet's live gates may overlap the next packet's build only
+when no shared file is in flight.
 
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 

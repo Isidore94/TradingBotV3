@@ -1,6 +1,6 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-08-10**
+Last reconciled: **2026-08-15**
 
 Start here when a supporting detail is not in the four root documents. This index
 classifies every maintained Markdown document so a historical plan cannot be mistaken
@@ -44,6 +44,11 @@ status.
 | [`RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`](RESEARCH_WAREHOUSE_BUILD_DECISIONS.md) | Builder decisions and current warehouse live/human open items |
 | [`RESEARCH_WAREHOUSE_ERD.md`](RESEARCH_WAREHOUSE_ERD.md) | Warehouse dataset identity and read contract |
 | [`LOCAL_AI_AUTOMATION_PLAN.md`](LOCAL_AI_AUTOMATION_PLAN.md) | Local-AI implementation specification; Phase 2 redesign and later phases remain |
+| [`AUTO_MODES_AND_QUIET_HOURS_PLAN.md`](AUTO_MODES_AND_QUIET_HOURS_PLAN.md) | ACTIVE spec for Phase 0.5 R1: mode matrix, quiet hours, shared-scan removal, EVENING SPY wake alarm |
+| [`M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`](M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md) | ACTIVE spec for Phase 0.5 R2: adoption gate/eviction, auto-pick provenance, TC2000-parity strength board |
+| [`SWING_QUALITY_AND_FEEDBACK_PLAN.md`](SWING_QUALITY_AND_FEEDBACK_PLAN.md) | ACTIVE spec for Phase 0.5 R3: demote-and-label quality filter, pre-close honesty bundle (investigation record), dislike-feedback loop |
+| [`DESK_CHART_UNIFICATION_PLAN.md`](DESK_CHART_UNIFICATION_PLAN.md) | ACTIVE spec for Phase 0.5 R4: capture on every chart, painted armed alerts, forming-bar honesty, reviewed-today badge |
+| [`M5_SIGNAL_ENGINES_PLAN.md`](M5_SIGNAL_ENGINES_PLAN.md) | ACTIVE spec for Phase 0.5 R5: SMI/efficiency-LRSI/HA indicators, new M5 alert types, AnyBounceWatch, first-candle ORB |
 | [`CHART_REVIEW_WORKSPACE_PLAN.md`](CHART_REVIEW_WORKSPACE_PLAN.md) | Chart Review schema, capture boundaries, and implementation record |
 | [`DURABILITY_CATCHUP_PLAN.md`](DURABILITY_CATCHUP_PLAN.md) | Built durability design and remaining live restart gate |
 | [`REVIEW_LEARNING_LOOP.md`](REVIEW_LEARNING_LOOP.md) | Review evidence, scoreboard, and annotation-only AI policy contract |

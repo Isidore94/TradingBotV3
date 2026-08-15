@@ -20,11 +20,38 @@ elapsed evidence lane that can run in parallel.
 | Side item landed | **Snapshot popup opens at desk height** (2026-08-11, trader ask) — UI geometry only, no detector/scoring/alert file touched; baseline unchanged at 2687 passed / smoke not re-run (no non-Qt path affected) |
 | Side item landed | **Phone push policy + two richer pushes** (2026-08-11, trader ask, design confirmed before editing per the ask-first rule) — AWAY is now the only mode that pushes (price alerts stay the always-on exception), the swing push carries the full favorite/high-conviction roster, and a second hourly push names the D1 level events since the last one. New baseline **2720 passed / 19 subtests / smoke 7/7**, both exit 0 |
 | Next action after this packet | **P0.2–P0.4** live gates, plus the ticker-briefs morning check below. P0.1 re-baseline is done |
-| Do not start yet | Phase 1 cleanup or any Phase 2+ feature/foundation item |
+| Do not start yet | Phase 0.5 trader refinement packet **builds** (documentation/specs exist; code waits for P0.7), Phase 1 cleanup, or any Phase 2+ feature/foundation item |
 
 A newly arriving AI resumes the active packet if it is unfinished. If it is complete,
 it performs the stated next action. It does not select a different roadmap item
 without explicit trader direction.
+
+## Planning pass — 2026-08-15 (documentation only)
+
+The trader promoted the 2026-08-14 `WISHLIST.md` entries and directed a build
+foundation for the next implementer. Recorded in this pass:
+
+- **`plan.md` Phase 0.5 (R1–R6)** inserted with the trader's ranked order
+  (R1 auto modes/quiet hours first, R2 Focus gating + strength board second) and
+  five ACTIVE specs under `docs/` (indexed in `docs/README.md`).
+- Eight trader decisions captured in the specs and `WISHLIST.md` (demote+label
+  never hide; v1 extension rules; existing universe; build order; full pre-close
+  honesty bundle; prior-anchor AVWAP line; checked = recorded decisions;
+  Not-today removes just the M5 entry).
+- **After-close investigation COMPLETE** (read-only): the live Master AVWAP scan
+  scores today's forming D1 bar (no completed-bar guard in `runner.py`), and the
+  setup tracker is written at 12:00 PT then wiped and rewritten by the ~13:24
+  close-slot finish. Mechanisms with file:line evidence are in
+  `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md` §4. No fix is built.
+- Verification: Markdown-only pass — link resolution, `git diff --check`,
+  control-document consistency. The recorded automated baseline (2738 passed /
+  19 subtests / smoke 7/7 / frozen selftest 30/30) is **unchanged**.
+- Housekeeping note: untracked `desk_report.xml` at the repo root is generated
+  pytest JUnit output from the 2026-08-09 desk gate — left untracked; P1.5 owns
+  gitignoring desk JUnit artifacts.
+
+The active build item above (P0 live gates) is unchanged; Phase 0.5 code starts
+only after P0.7 merges.
 
 ## Branch
 
