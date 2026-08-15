@@ -141,6 +141,9 @@ def test_focus_picks_is_top_level_app_page():
         "Trading Desk",
         "Chart Review",
         "Focus Picks",
+        # The M5 strength board sits next to Focus Picks because that is where
+        # its output goes (packet R2 Part B).
+        "Strength Board",
         "Journal",
         "Universe",
         "Research",

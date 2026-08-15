@@ -39,9 +39,11 @@ from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
 from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
+from ui.panels.strength_board_panel import StrengthBoardPanel
 from ui.panels.trading_desk import TradingDeskPanel
 from ui.panels.universe_panel import UniversePanel
 from ui import theme
+from ui.services.strength_board_service import StrengthBoardService
 from ui.state import VALID_UI_SCALES, UiState
 from ui.theme import apply_theme
 from ui.widgets.price_alert_toast import PriceAlertToastManager
@@ -162,6 +164,14 @@ class MainWindow(QMainWindow):
 
         # No focus_service here, deliberately: Chart Review is analysis-only.
         # Its captures must never add a symbol to Focus or any watchlist.
+        # M5 strength board (packet R2 Part B). The service owns the data and
+        # its single-flight refresh; the panel only shows it and routes adds
+        # through the Part A adoption gate.
+        self.strength_board_service = StrengthBoardService(self)
+        self.strength_board_panel = StrengthBoardPanel(
+            service=self.strength_board_service,
+            focus_service=self.trading_panel.focus_service,
+        )
         self.chart_review_panel = ChartReviewPanel(
             bot_provider=self.trading_panel.bounce_panel.service.current_bot
         )
@@ -170,6 +180,7 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.trading_panel)
         self.pages.addWidget(self.chart_review_panel)
         self.pages.addWidget(self.trading_panel.focus_picks_panel)
+        self.pages.addWidget(self.strength_board_panel)
         self.pages.addWidget(self.journal_panel)
         self.pages.addWidget(self.universe_panel)
         self.pages.addWidget(self.research_panel)
@@ -258,6 +269,7 @@ class MainWindow(QMainWindow):
             ("Trading Desk", "mdi.chart-timeline-variant"),
             ("Chart Review", "mdi.chart-line"),
             ("Focus Picks", "mdi.star-outline"),
+            ("Strength Board", "mdi.trending-up"),
             ("Journal", "mdi.notebook-outline"),
             ("Universe", "mdi.earth"),
             ("Research", "mdi.flask-outline"),
