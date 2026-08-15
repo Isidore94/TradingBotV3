@@ -48,6 +48,34 @@ class FocusService(QObject):
     def remove(self, symbol, side, category="m5") -> bool:
         return self._store.remove(symbol, side, category)
 
+    def is_auto_adopted(self, symbol, side, category="m5") -> bool:
+        """True only for an entry the machine adopted. Absence of a marker
+        reads as user-entered, which is what keeps automatic removal off the
+        trader's own names."""
+        return self._store.is_auto_adopted(symbol, side, category)
+
+    def remove_if_auto_adopted(
+        self, symbol, side, category="m5", *, reason="", origin="auto_pick"
+    ) -> bool:
+        """The scoped removal behind "Not today" and the desync repair.
+
+        Exactly one M5 entry on one side; never the swing entry, never the other
+        side, and never a name without an auto marker. Records the verdict so
+        the review-learning scoreboard sees which auto picks the trader threw
+        back - a dislike with a reason is the useful half of the loop.
+        """
+        removed = self._store.remove_if_auto_adopted(symbol, side, category)
+        if removed:
+            self.record_feedback(
+                symbol,
+                side,
+                "not_today",
+                category=category,
+                origin=origin,
+                reason=str(reason or ""),
+            )
+        return removed
+
     def remove_everywhere(self, symbol, *, origin="", context="") -> int:
         removed = self._store.remove_everywhere(symbol)
         if removed:

@@ -9,7 +9,7 @@ category, raw alert text / setup row summary) to reason about.
 
 Row shape:
     {"ts": "...", "trade_date": "YYYY-MM-DD", "symbol": "NVDA", "side": "LONG",
-     "verdict": "like" | "dislike" | "unfavorite",
+     "verdict": "like" | "dislike" | "unfavorite" | "not_today",
      "category": "swing" | "m5" | "",
      "origin": "h1" | "d1" | "m5" | "setups" | "manual" | "",
      "reason": "<why the trader disliked it>",
@@ -30,13 +30,17 @@ from typing import Any
 from project_paths import PICK_FEEDBACK_FILE
 
 
-PICK_VERDICTS = ("like", "dislike", "unfavorite")
-# "chart_review" is the Chart Review workspace's capture rail. Like every
-# other origin it is descriptive only - `record_pick_feedback` accepts any
-# string - but the human-focus snapshot turns it into the cohort suffix
-# `focus_swing_chart_review`, so the list is the documentation of what those
-# cohort names mean.
-PICK_ORIGINS = ("h1", "d1", "m5", "setups", "manual", "chart_review")
+# "not_today" (packet R2) is narrower than "dislike": the trader is throwing
+# back ONE auto-adopted M5 pick for ONE session, not saying the name is bad.
+# Keeping them distinct matters to the review-learning scoreboard - counting a
+# same-day pass as a dislike would teach it the wrong lesson about the name.
+PICK_VERDICTS = ("like", "dislike", "unfavorite", "not_today")
+# "chart_review" is the Chart Review workspace's capture rail; "auto_pick" is a
+# machine-staged pick the trader ruled on. Like every other origin they are
+# descriptive only - `record_pick_feedback` accepts any string - but the
+# human-focus snapshot turns them into cohort suffixes such as
+# `focus_swing_chart_review`, so the list documents what those names mean.
+PICK_ORIGINS = ("h1", "d1", "m5", "setups", "manual", "chart_review", "auto_pick")
 
 
 def _trade_date_text() -> str:

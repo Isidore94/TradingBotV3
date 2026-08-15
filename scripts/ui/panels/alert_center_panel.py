@@ -1468,7 +1468,28 @@ class AlertCenterPanel(QFrame):
             armed_d1_events=self.armed_d1_event_kinds(alert.symbol),
             guidance_text=guidance.summary_text(),
             in_focus=self._alert_is_focus(alert),
+            auto_adopted=self._alert_is_auto_adopted(alert),
         )
+
+    def _alert_is_auto_adopted(self, alert: BounceAlert) -> bool:
+        """Whether this chart's name is an M5 Focus entry the machine adopted.
+
+        Absence of a marker - including no focus service at all - reads as
+        user-entered, which is what keeps the scoped removal off the trader's
+        own names.
+        """
+        service = self.focus_service
+        if service is None or not alert.symbol:
+            return False
+        checker = getattr(service, "is_auto_adopted", None)
+        if not callable(checker):
+            return False
+        try:
+            side = str(alert.side or "").strip().lower()
+            sides = ("long", "short") if side not in ("long", "short") else (side,)
+            return any(checker(alert.symbol, one, "m5") for one in sides)
+        except Exception:
+            return False
 
     def _skip_review_alert(self, alert: BounceAlert) -> None:
         if (
@@ -1717,6 +1738,18 @@ class AlertCenterPanel(QFrame):
             return False
         try:
             store.add(symbol, side, "m5")
+            # Provenance (packet R2): this marker is the ONLY thing that makes
+            # the entry removable by "Not today" or by the desync repair. An
+            # entry without one is the trader's and is untouchable by both.
+            marker = getattr(store, "mark_auto_adopted", None)
+            if callable(marker):
+                marker(
+                    symbol,
+                    side,
+                    "m5",
+                    staged_at=str(entry.get("staged_at") or ""),
+                    reason=reason,
+                )
         except Exception:
             logging.warning("Auto pick %s could not be added to Focus.", symbol, exc_info=True)
             return False
@@ -2840,17 +2873,64 @@ class AlertCenterPanel(QFrame):
             )
             self._advance_review_queue()
             return
+        # An M5 Focus entry the machine adopted can be thrown back (packet R2).
+        # A name the trader typed falls through to the quiet feed-only verb
+        # below - `remove_if_auto_adopted` refuses it, and that refusal is the
+        # never-auto-remove-user-names invariant doing its job.
+        dropped = self._drop_auto_adopted_pick(alert)
         self._record_review_event(
             "remove_today",
             alert=alert,
             dwell_ms=self._review_dwell_ms(alert.symbol),
             queue_len=len(self._review_queue),
+            detail={"auto_pick_dropped": dropped} if dropped else None,
         )
         self._ignore_alert_symbol(alert.symbol)
+        if dropped:
+            self.statusChanged.emit(
+                f"✕ {alert.symbol}: auto pick dropped from M5 Focus for today "
+                "(your own picks and the swing list are untouched)."
+            )
+            return
         self.statusChanged.emit(
             f"{alert.symbol}: removed from Alert Center processing for today. "
             "BounceBot scanning and watchlists are unchanged."
         )
+
+    def _drop_auto_adopted_pick(self, alert: BounceAlert) -> str:
+        """Scoped removal of an auto-adopted M5 entry. Returns the side, or "".
+
+        Only the side the chart is about; with no side on the alert, only a
+        side that actually carries a marker. Never both blindly - "Not today"
+        on a long chart must not silently drop a short entry the trader is
+        still holding.
+        """
+        service = self.focus_service
+        if service is None or not alert.symbol:
+            return ""
+        remover = getattr(service, "remove_if_auto_adopted", None)
+        if not callable(remover):
+            return ""
+        side = str(alert.side or "").strip().lower()
+        sides = (side,) if side in ("long", "short") else ("long", "short")
+        for one in sides:
+            try:
+                if remover(
+                    alert.symbol,
+                    one,
+                    "m5",
+                    reason="not today",
+                    origin="auto_pick",
+                ):
+                    return one
+            except Exception:
+                logging.warning(
+                    "Scoped removal of %s failed; Focus is unchanged.",
+                    alert.symbol,
+                    exc_info=True,
+                )
+                return ""
+        return ""
 
     def _ignore_alert_symbol(self, symbol: str) -> None:
         self._refresh_ignored_market_date()

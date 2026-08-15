@@ -90,6 +90,25 @@ def _m5_state_path_for(focus_longs_path: Path) -> Path:
     return Path(focus_longs_path).with_name("focus_m5_state.json")
 
 
+# ------------------------------------------------------- auto-pick provenance
+# The focus files are plain text, one ticker per line, and that format is not
+# changing - the trader edits them by hand and every reader in the repo parses
+# them that way. So provenance rides beside them in a sidecar (packet R2).
+#
+# It exists to make ONE invariant structural instead of aspirational: a name
+# the trader typed is never removed by an automatic path (plan.md sec 5). With
+# no per-entry origin, an auto-adopted pick and a hand-typed name are the same
+# line in the same file, so no removal verb could be written safely at all.
+# Absence of a marker means user-entered - the safe default, and the one every
+# pre-R2 file gets for free.
+#
+# Day-scoped like the m5 list itself: markers clear with the picks they
+# describe, so yesterday's marker can never authorize removing a name the
+# trader typed this morning.
+def _auto_pick_state_path_for(focus_longs_path: Path) -> Path:
+    return Path(focus_longs_path).with_name("focus_auto_picks.json")
+
+
 def _read_m5_market_date(path: Path) -> str | None:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -153,6 +172,8 @@ class FocusPickStore:
         }
         self._membership_path = Path(membership_path)
         self._m5_state_path = _m5_state_path_for(focus_longs_path)
+        self._auto_pick_path = _auto_pick_state_path_for(focus_longs_path)
+        self._auto_picks: dict[str, dict] = {}
         self._lists: dict[str, dict[str, list[str]]] = {
             category: {"long": [], "short": []} for category in FOCUS_CATEGORIES
         }
@@ -166,6 +187,7 @@ class FocusPickStore:
             for side, path in self._focus_paths[category].items():
                 self._lists[category][side] = read_watchlist_symbols(path)
         self._membership = self._load_membership()
+        self._auto_picks = self._load_auto_picks()
         # m5 is a day-trade list: a new calendar day starts it empty. This
         # runs on every store construction (GUI start each morning), so the
         # clear also physically un-injects yesterday's picks from
@@ -196,6 +218,12 @@ class FocusPickStore:
             self._write_focus(side, "m5")
         if removed:
             self._save_membership()
+        # The markers describe picks that no longer exist. Keeping them would
+        # let yesterday's provenance authorize removing a name the trader types
+        # this morning, which is the one thing the sidecar exists to prevent.
+        if self._auto_picks:
+            self._auto_picks = {}
+            self._save_auto_picks()
         _write_m5_market_date(self._m5_state_path, today_text)
         if removed:
             self._notify()
@@ -313,8 +341,79 @@ class FocusPickStore:
         self._lists[category][side] = [item for item in self._lists[category][side] if item != sym]
         self._write_focus(side, category)
         self._uninject_from_shared(sym, side, category)
+        self._forget_auto_marker(sym, side, category)
         self._notify()
         return True
+
+    # -------------------------------------------------- auto-pick provenance
+    def mark_auto_adopted(
+        self,
+        symbol: object,
+        side: object,
+        category: object = "m5",
+        *,
+        staged_at: str = "",
+        reason: str = "",
+    ) -> None:
+        """Record that THIS store adopted a pick automatically.
+
+        Called only by the auto-adoption path. Nothing else may write a marker:
+        the marker is what makes an entry removable by an automatic verb, so
+        handing it out freely would defeat the invariant it protects.
+        """
+        side = normalize_focus_side(side)
+        category = normalize_focus_category(category)
+        sym = normalize_symbol(symbol)
+        if not sym:
+            return
+        self._auto_picks[_membership_key(sym, side, category)] = {
+            "symbol": sym,
+            "side": side,
+            "category": category,
+            "session_date": date.today().isoformat(),
+            "staged_at": str(staged_at or ""),
+            "reason": str(reason or ""),
+            "adopted_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        self._save_auto_picks()
+
+    def auto_pick_marker(
+        self, symbol: object, side: object, category: object = "m5"
+    ) -> dict | None:
+        """The marker for one entry, or None when the trader owns it."""
+        sym = normalize_symbol(symbol)
+        if not sym:
+            return None
+        try:
+            side = normalize_focus_side(side)
+            category = normalize_focus_category(category)
+        except ValueError:
+            return None
+        marker = self._auto_picks.get(_membership_key(sym, side, category))
+        return dict(marker) if isinstance(marker, dict) else None
+
+    def is_auto_adopted(self, symbol: object, side: object, category: object = "m5") -> bool:
+        """True only for an entry this store adopted automatically.
+
+        A missing marker reads as user-entered. That is the safe default and the
+        one every focus file written before packet R2 gets for free.
+        """
+        return self.auto_pick_marker(symbol, side, category) is not None
+
+    def remove_if_auto_adopted(
+        self, symbol: object, side: object, category: object = "m5"
+    ) -> bool:
+        """Scoped removal of ONE auto-adopted entry. True when it was removed.
+
+        Refuses anything without a marker, so no automatic path and no
+        "Not today" verb can reach a name the trader typed. Deliberately not
+        `remove_everywhere`: the trader's rule is that this touches exactly the
+        one M5 entry on that one side, never the swing entry and never the
+        other side.
+        """
+        if not self.is_auto_adopted(symbol, side, category):
+            return False
+        return self.remove(symbol, side, category)
 
     def remove_everywhere(self, symbol: object) -> int:
         """Unfavorite: drop a symbol from every category/side it appears in.
@@ -332,9 +431,11 @@ class FocusPickStore:
                 self._lists[category][side] = [item for item in self._lists[category][side] if item != sym]
                 self._write_focus(side, category)
                 self._uninject_from_shared(sym, side, category, defer_membership_save=True)
+                self._forget_auto_marker(sym, side, category, defer_save=True)
                 removed += 1
         if removed:
             self._save_membership()
+            self._save_auto_picks()
             self._notify()
         return removed
 
@@ -347,7 +448,9 @@ class FocusPickStore:
             return 0
         for sym in symbols:
             self._uninject_from_shared(sym, side, category, defer_membership_save=True)
+            self._forget_auto_marker(sym, side, category, defer_save=True)
         self._save_membership()
+        self._save_auto_picks()
         self._lists[category][side] = []
         self._write_focus(side, category)
         self._notify()
@@ -411,6 +514,48 @@ class FocusPickStore:
         except OSError:
             # Another process or AV scan can briefly lock files; membership is best-effort.
             pass
+
+    def _forget_auto_marker(
+        self, symbol: str, side: str, category: str, *, defer_save: bool = False
+    ) -> None:
+        """A marker outlives nothing. Once the entry is gone the marker goes
+        with it, so re-adding the name by hand starts it as the trader's."""
+        if self._auto_picks.pop(_membership_key(symbol, side, category), None) is None:
+            return
+        if not defer_save:
+            self._save_auto_picks()
+
+    def _load_auto_picks(self) -> dict[str, dict]:
+        try:
+            payload = json.loads(self._auto_pick_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        picks = payload.get("picks")
+        return picks if isinstance(picks, dict) else {}
+
+    def _save_auto_picks(self) -> None:
+        try:
+            self._auto_pick_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._auto_pick_path.with_name(self._auto_pick_path.name + ".tmp")
+            tmp.write_text(
+                json.dumps(
+                    {"market_date": date.today().isoformat(), "picks": self._auto_picks},
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            os.replace(tmp, self._auto_pick_path)
+        except OSError:
+            # Best-effort, like the membership file: a lost write costs a
+            # marker, and a lost marker means the entry reads as the trader's -
+            # which is the safe direction to fail.
+            pass
+
+    def auto_pick_markers(self) -> dict[str, dict]:
+        return dict(self._auto_picks)
 
     def membership(self) -> dict[str, dict]:
         return dict(self._membership)

@@ -234,6 +234,7 @@ class AlertChartReview(QWidget):
         armed_d1_events: Iterable[str] = (),
         guidance_text: str = "",
         in_focus: bool = False,
+        auto_adopted: bool = False,
     ) -> None:
         self.alert = alert
         guidance_text = str(guidance_text or "").strip()
@@ -306,12 +307,27 @@ class AlertChartReview(QWidget):
                 "its focus-injected watchlist entries go with it). The symbol "
                 "itself is not muted - ordinary alerts still show."
             )
-            self.remove_today_button.setText("✕ Not today")
-            self.remove_today_button.setToolTip(
-                "Done with this name for the day: removed from today's Alert "
-                "Center feed and chart queue. Focus membership, the BounceBot "
-                "scanner and the watchlists are untouched."
-            )
+            if auto_adopted:
+                # The machine put this name here, so "Not today" can throw it
+                # back. The label says so, because the same button on a name
+                # the trader typed does something different and quieter - one
+                # click must never mean two things with nothing on screen to
+                # tell them apart (packet R2, trader decision 2026-08-15).
+                self.remove_today_button.setText("✕ Not today - drop pick")
+                self.remove_today_button.setToolTip(
+                    "Throw this AUTO pick back: its M5 Focus entry goes (and "
+                    "the watchlist line it injected), and the name leaves "
+                    "today's feed. Only this M5 entry on this side - a swing "
+                    "entry, the other side, and anything you added yourself "
+                    "are untouched. Recorded as a not-today verdict."
+                )
+            else:
+                self.remove_today_button.setText("✕ Not today")
+                self.remove_today_button.setToolTip(
+                    "Done with this name for the day: removed from today's Alert "
+                    "Center feed and chart queue. Focus membership, the BounceBot "
+                    "scanner and the watchlists are untouched."
+                )
         else:
             self.focus_button.setToolTip(
                 "File this pick into Focus (it gets the heavier alert "
