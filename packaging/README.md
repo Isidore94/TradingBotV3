@@ -49,7 +49,7 @@ After every required rebuild, run:
 dist\TradingBotV3\TradingBotV3.exe --selftest
 ```
 
-Current expected result: `selftest OK: 29/29 checks passed (frozen)`.
+Current expected result: `selftest OK: 31/31 checks passed (frozen)`. The count grows whenever a check is added, so treat the number as a floor to re-read here rather than a constant: it was 29 before `scan_worker` (2026-08-13) and 30 before the testing-plan asset (2026-08-15). What matters is the **`(frozen)` suffix** and exit 0 - the source selftest prints the same count without it, which is how three packets of notes once recorded a frozen run that never happened.
 
 ### Things that will bite you
 
@@ -72,7 +72,7 @@ Current expected result: `selftest OK: 29/29 checks passed (frozen)`.
   `PermissionError: [WinError 5]` on something like
   `_internal\charset_normalizer\md.cp312-win_amd64.pyd`. Close the desk first.
   The partial `rmtree` left the existing bundle intact when this happened on
-  2026-08-13 (frozen selftest still 29/29 afterwards), but do not rely on that —
+  2026-08-13 (the frozen selftest passed afterwards), but do not rely on that —
   verify with `--selftest` before trusting a bundle a failed build touched.
 - **Never let a frozen run insert `<ROOT_DIR>/scripts` onto `sys.path`.**
   `ROOT_DIR` is `sys._MEIPASS` when frozen, and PyInstaller's importer claims any

@@ -218,3 +218,51 @@ pass is the labeled exception.
   membership anyway).
 - Sequencing of 4.3.5 (volume-thrust) — it changes which names carry an 18-pt
   bonus; the trader may want to see a week of stamped evidence first.
+
+
+## Amendment — 2026-08-15 (R2.1 item 7, external review)
+
+Two conditions bind R3 before any of its classifier work can change what the
+trader sees.
+
+### A `would_demote` shadow week runs BEFORE any row moves
+
+R3's quality classifier must not demote a live row on the day it lands. It runs
+in shadow first: for a **full week of sessions** it records a `would_demote`
+verdict and its reason per row, changes nothing, and **no row leaves S/A tier or
+the Best Swing Trades list** during that week. The trader reads the shadow
+output and confirms the calls are ones they would have made.
+
+This is the same discipline plan.md sec 7 applies to every challenger, and it
+matters more here than usual: demotion is subtractive. A shadow week that
+over-demotes is a spreadsheet to argue with; a live one is setups the trader
+never saw, and they cannot review what was removed before they looked.
+
+Only after the trader accepts the shadow week may demote-and-label affect
+presentation - and even then it **labels rather than hides**, per the
+2026-08-14 decision already recorded above.
+
+### Fixture rules: flat series only where flatness IS the case
+
+The R2 packet learned this the expensive way. Its strength formula read `C50`
+as a 50-bar average instead of the close 50 bars back, and **every fixture
+passed**, because they were built on flat bars where an average and a displaced
+close are identical. The error survived precisely the tests meant to catch it.
+
+R3's fixtures must therefore include, for every rule with a threshold:
+
+- **a trending series** (up and down), where an average and a displacement, or a
+  smoothed and an unsmoothed input, give visibly different answers;
+- **a gap** across a session boundary, so a rule that silently spans sessions is
+  distinguishable from one that does not;
+- **NaN and missing bars** in the middle of the window, not only at the edges;
+- **a forming-versus-completed pair** - the same series evaluated one bar early
+  and one bar late - so completed-bar handling is proven rather than assumed;
+- **mutation-seeded counterexamples**: for each threshold, a fixture that fails
+  if the comparison is flipped, off by one, or applied to the wrong field. A
+  fixture that still passes under a deliberately broken implementation is not
+  evidence.
+
+A flat series is legitimate **only** where flatness is the property under test
+(for example "a motionless name is unmeasurable, not weak"). Anywhere else it
+is a fixture that cannot fail.

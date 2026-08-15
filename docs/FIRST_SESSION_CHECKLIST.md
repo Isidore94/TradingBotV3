@@ -6,7 +6,7 @@ Applies to: `plan.md` Section 6 and P0.2–P0.5
 
 Topology: **single main desk**
 
-Last reconciled: **2026-08-15** (packet R1 rows added)
+Last reconciled: **2026-08-15** (packet R1 and R2 rows added)
 
 This checklist turns an implemented/green build into real operational evidence. A
 deterministic test cannot satisfy a live row. Record failures and UNKNOWN states
@@ -53,7 +53,7 @@ Then:
    dist\TradingBotV3\TradingBotV3.exe --selftest
    ```
 
-   Current expected result: `selftest OK: 29/29 checks passed (frozen)`.
+   Current expected result: `selftest OK: 31/31 checks passed (frozen)`. The count grows whenever a check is added, so treat the number as a floor to re-read here rather than a constant: it was 29 before `scan_worker` (2026-08-13) and 30 before the testing-plan asset (2026-08-15). What matters is the **`(frozen)` suffix** and exit 0 - the source selftest prints the same count without it, which is how three packets of notes once recorded a frozen run that never happened.
 7. Launch with `launch_gui.py`; verify one process only.
 8. Capture the initial System Health page. UNKNOWN is acceptable before the first
    instrumented event but must not be silently rolled up as HEALTHY.
@@ -81,6 +81,10 @@ Check each row from real behavior:
 | AWAY discipline | picks stage rather than reaching `longs.txt`/`shorts.txt`, alerts arrive with no sound but keep filling the feed and D1 badge, and the flip back to DESK adopts the day's picks | |
 | EVENING stop | the early open+30 slot and the 07:00/07:15/07:30 checks run, then the log names each refused hourly slot once and no further scan starts | |
 | EVENING SPY alarm | a real (or forced-threshold) ±1% move sends one urgent push, repeats at 5-minute spacing, and stops on the flip out of EVENING | |
+| Focus gate | at least one staged pick evicted for a VWAP/PDH fallback, and one refused at adoption; both name a reason in the log | |
+| Pick ownership | a name YOU added by hand that the machine also staged stays yours: no auto marker, and "Not today" refuses to remove it | |
+| Stale drain | a flip back to DESK after a long AWAY stretch re-measures before adopting; picks measured more than 2 M5 bars ago are refused, not adopted | |
+| Strength board | ~20-40 names a side; refresh completes; a row that has fallen back is refused at click time with its reason | |
 | Warehouse | live tee/Health tiles advance if enabled; disabled path is a no-op | |
 | GUI | no sustained event-loop stall or main-thread I/O regression | |
 
@@ -150,6 +154,8 @@ if restart persistence is part of the packet.
 | Chart freshness/paint lines | | |
 | Price-alert delivery | | |
 | Verified Away publication | | |
+| Focus gate + ownership | | |
+| Strength board session | | |
 | Durability restart/backfill | | |
 | Warehouse live path | | |
 | Clean shutdown/restart | | |

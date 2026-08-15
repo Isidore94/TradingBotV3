@@ -200,3 +200,27 @@ def test_the_frozen_root_is_used_when_frozen(monkeypatch, tmp_path):
 
     monkeypatch.delattr(sys, "_MEIPASS", raising=False)
     assert testing_plan_view.resolve_testing_plan_path() == PLAN_PATH
+
+
+def test_the_plan_carries_the_provocations(monkeypatch):
+    """R2.1 item 7: the adversarial checks, each targeting something that has
+    already gone wrong or is one mistake from going wrong."""
+    text = PLAN_PATH.read_text(encoding="utf-8")
+    for topic, why in (
+        ("steal one of your picks", "the ownership-collision blocker"),
+        ("gone stale in the queue", "the near-45-minute stale-verdict flip"),
+        ("focus_auto_picks.json", "sidecar delete/corrupt/restart"),
+        ("five-second mode-cache race", "the DESK->AWAY beep window"),
+        ("Break the phone push", "ntfy hang/reject/backoff"),
+        ("failed data chunk", "a failed Yahoo chunk"),
+        ("by symbol list, not by feel", "TC2000 comparison by exported sets"),
+    ):
+        assert topic in text, f"the plan never covers {why}"
+
+
+def test_the_tc2000_comparison_asks_for_lists_not_impressions():
+    """"The character looked off" points at nothing; a list of misses points
+    at a specific filter."""
+    text = PLAN_PATH.read_text(encoding="utf-8")
+    assert "both symbol lists" in text.lower() or "both lists" in text.lower()
+    assert "which names does TC2000 have that the board" in text

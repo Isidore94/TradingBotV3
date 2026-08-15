@@ -90,8 +90,12 @@ manual scan ran.
 
 # 2. Monday during the session
 
-These six checks need a live market. You do not need to do them all in one day —
+These checks need a live market. You do not need to do them all in one day —
 but each one needs the market open, so they cannot be done over the weekend.
+
+**2.1–2.7 are the ordinary checks**: does the desk do the right thing on a
+normal day. **2.8 is the provocations**: does it do the right thing when the
+day goes wrong. Do the ordinary ones first.
 
 Some need a specific Auto mode. The mode button is in the status bar at the
 bottom of the desk; clicking it cycles **OFF → DESK → AWAY → EVENING → OFF**.
@@ -383,6 +387,177 @@ your judgement on whether the names look like your TC2000 scan.
 
 ---
 
+---
+
+# 2.8 Provocations — try to break it on purpose
+
+Everything above checks that the desk does the right thing when the day goes
+normally. These check what it does when the day does not. They come from an
+outside review of the code, and each one targets something that has either
+already gone wrong once or is one small mistake away from going wrong.
+
+Do as many as you have appetite for. Each is short. **None of them can lose
+money** — the worst case is a name you have to re-add by hand.
+
+---
+
+## 2.8a Can the machine steal one of your picks?
+
+**The defect this hunts:** the machine used to be able to relabel a name YOU
+added as machine-owned, after which its own cleanup could delete it. Fixed —
+this is the check that it stays fixed.
+
+**DO**
+1. Wait until the machine has staged some picks (AWAY or EVENING, any session).
+2. Pick one of the staged names — or if you cannot see them, pick any symbol
+   the bot is likely to stage.
+3. Add that same symbol to **M5 Focus yourself**, by hand, on the same side.
+4. Flip to **DESK** so the queue drains.
+5. Open that name's chart in the Alert Center.
+
+**GOOD** — the middle button reads plain **`✕ Not today`**, *not*
+`✕ Not today - drop pick`. The name is still yours. Clicking it clears the feed
+and leaves the name in Focus.
+
+**BAD** — the button reads `- drop pick`, or clicking it removes your name from
+Focus. **That is serious; stop and report it.**
+
+**Copy to the AI:** the symbol, which side, what the button said.
+
+---
+
+## 2.8b A pick that has gone stale in the queue
+
+**The question:** if picks sit in the queue a long time, does the flip back
+re-check them against the current tape, or adopt what was true an hour ago?
+
+**DO**
+1. Leave the desk in **AWAY** for at least 45 minutes of live market — longer
+   is better.
+2. Flip to **DESK**.
+3. Watch the Alert Center status line, then read `trading_bot.log` (Ctrl+End).
+
+**GOOD** — some picks are refused, with reasons naming either VWAP/yesterday's
+level or the measured bar:
+
+```
+Focus gate refused 3 staged pick(s) at adoption: ABCD (measured 9 M5 bars ago (limit 2)), ...
+```
+
+Adopting *fewer* names than were queued is the correct outcome.
+
+**BAD** — every queued pick adopted with no refusals after a long AWAY stretch,
+or picks adopted whose charts clearly no longer qualify.
+
+---
+
+## 2.8c Delete the provenance file while the desk is running
+
+**The question:** if the file recording which picks are the machine's goes
+missing, does the desk fail toward *your* ownership?
+
+**DO**
+1. With picks in M5 Focus, delete
+   `C:\TradingBotData\focus_auto_picks.json`.
+2. Close and reopen the desk.
+3. Open a previously auto-adopted pick's chart.
+
+**GOOD** — the button reads plain `✕ Not today`. With no marker, every entry
+reads as yours and nothing automatic can remove it. Losing the file makes the
+desk *more* cautious, never less.
+
+**BAD** — anything disappearing from Focus by itself, or the `- drop pick`
+label surviving the file's deletion.
+
+**Variation worth doing:** instead of deleting it, open it in Notepad and
+corrupt it (delete a brace). Same expected outcome.
+
+---
+
+## 2.8d The five-second mode-cache race
+
+**The defect this hunts:** the desk re-reads the Auto mode at most every five
+seconds. Flip DESK → AWAY and an alert arriving in that window can still beep.
+
+**DO**
+1. In **DESK** with sound on, flip to **AWAY**.
+2. Listen for the next five to ten seconds.
+
+**GOOD** — at most one beep in the first ~5 seconds, then silence.
+
+**BAD** — beeping continuing well past ten seconds in AWAY.
+
+This is a known, bounded five-second lag rather than a bug — report it only if
+the silence never arrives.
+
+---
+
+## 2.8e Break the phone push on purpose
+
+**The question:** when ntfy misbehaves, does the alarm back off, or does it
+hammer / go silent forever?
+
+**DO** — pick whichever is easiest:
+- turn off wifi on the desk for a few minutes during an EVENING test with the
+  threshold forced low; **or**
+- set the ntfy topic in Settings to nonsense, run the alarm, then set it back.
+
+**GOOD** — `autopilot.log` shows attempts **slowing down**, not repeating every
+30 seconds:
+
+```
+Evening SPY alarm outcome UNKNOWN (attempt 1) - it may have reached the phone: ...
+Evening SPY alarm REJECTED (attempt 2): ntfy HTTP 404
+```
+
+The gap between attempts grows to a maximum of one every five minutes. When you
+fix it, the next alarm sends normally.
+
+**BAD** — an attempt every 30 seconds, or nothing ever retrying once the
+connection is back.
+
+**Copy to the AI:** all `Evening SPY alarm` lines and what you broke.
+
+---
+
+## 2.8f A failed data chunk
+
+**The question:** when Yahoo fails part of a fetch, does the desk lose that
+chunk or the whole board?
+
+**DO** — during a strength-board refresh, briefly drop wifi, then restore it
+and press **Refresh** again.
+
+**GOOD** — the status line shows a lower `measurable` count, or says the refresh
+failed while **still showing the previous board**. A failed refresh must never
+blank the board.
+
+**BAD** — an empty board with no explanation, or a status line claiming a
+successful refresh with no names.
+
+---
+
+## 2.8g TC2000 versus the board — by symbol list, not by feel
+
+**The question:** does the board actually reproduce your scan? "Looks about
+right" is not an answer anyone can act on.
+
+**DO**
+1. At the same moment, run your TC2000 scan and refresh the strength board.
+2. Export or copy **both symbol lists** — TC2000's, and the board's (use
+   double-click or copy the visible names).
+3. Save them somewhere as two plain lists, noting the time.
+
+**GOOD** — a large overlap. Some difference is expected; this is a
+re-implementation, not the same product.
+
+**What to report:** the two lists, plus the time. The useful questions are
+answerable only from the sets: *which names does TC2000 have that the board
+misses*, and *which does the board invent*. A list of misses points at a
+specific filter; "the character looked off" points at nothing.
+
+**Copy to the AI:** both lists as text, the time, and the side.
+
 # 3. Monday after the close
 
 ## 3.1 The first-session checklist
@@ -405,7 +580,7 @@ look better — a wrong "pass" costs more than a recorded failure.
 ## 3.2 The frozen rebuild and its self-test
 
 **Already done and green as of 2026-08-15 09:58** —
-`selftest OK: 30/30 checks passed (frozen)`, exit 0.
+`selftest OK: 31/31 checks passed (frozen)`, exit 0. (The count rises as checks are added; the **`(frozen)`** suffix and exit 0 are what matter.)
 
 You only need to repeat this if code changed after that. **Ask the AI: "has any
 code landed since the frozen rebuild? if so, rebuild and run the frozen
