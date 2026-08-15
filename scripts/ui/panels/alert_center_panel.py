@@ -689,6 +689,11 @@ class AlertCenterPanel(QFrame):
         # DESK-mode auto picks ride the same 30s tick: the staging file is a
         # cheap local read and a new pick is not latency-critical.
         self._watch_timer.timeout.connect(self._poll_auto_pick_pending)
+        # Rides the same timer rather than owning one: both drain a file the
+        # engine wrote, and one owner per timer (plan.md sec 5). Unlike
+        # adoption this runs in EVERY mode - a Focus entry whose scan line was
+        # cut is wrong on the board whether the trader is at the desk or not.
+        self._watch_timer.timeout.connect(self._drain_focus_desync_requests)
         self._watch_timer.start()
         # A refetch finishes off-thread; repaint the moment it lands rather
         # than waiting up to 30s for the next tick. Qt queues this across the
@@ -1707,6 +1712,73 @@ class AlertCenterPanel(QFrame):
                 f"{len(adopted)} auto pick(s) added to M5 Focus for today "
                 f"({', '.join(adopted[:8])}{'...' if len(adopted) > 8 else ''}) - "
                 "prune with Review ▶ on the Focus board."
+            )
+
+    def _drain_focus_desync_requests(self) -> None:
+        """Reconcile Focus with watchlist lines BounceBot's VWAP rule cut.
+
+        The triple-VWAP invalidation deletes a raw watchlist line without
+        telling `FocusPickStore`, so a Focus-listed name could sit on the board
+        looking healthy while nothing scanned it (packet R2 A.3.4).
+
+        Two branches, and the difference is the whole point:
+
+        - the machine's own pick is removed from Focus, scoped to that one M5
+          entry, so the board stops showing a pick that has been invalidated;
+        - a name the TRADER typed is left exactly where it is and the mismatch
+          is surfaced instead. Silently deleting it would be the automatic
+          removal of a user-entered name that plan.md sec 5 forbids, and
+          silently keeping it would leave them trusting a dead entry.
+        """
+        service = self.focus_service
+        if service is None:
+            return
+        try:
+            from autopilot_core import take_focus_desync_requests
+
+            requests = take_focus_desync_requests()
+        except Exception:
+            return
+        if not requests:
+            return
+        dropped: list[str] = []
+        stranded: list[str] = []
+        for row in requests:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            side = str(row.get("side") or "").strip().lower()
+            if not symbol or side not in ("long", "short"):
+                continue
+            try:
+                if not service.is_focus(symbol, side, "m5"):
+                    continue  # not a Focus name; the cut needs no reconciling
+                if service.remove_if_auto_adopted(
+                    symbol, side, "m5", reason="triple-VWAP invalidation", origin="auto_pick"
+                ):
+                    dropped.append(symbol)
+                    logging.info(
+                        "Focus desync: auto pick %s (%s) removed - %s",
+                        symbol, side, row.get("reason") or "watchlist line cut",
+                    )
+                else:
+                    stranded.append(f"{symbol} ({side})")
+                    logging.warning(
+                        "Focus desync: %s (%s) is YOUR Focus pick and its watchlist "
+                        "line was cut by %s - it is no longer being scanned. Left in "
+                        "Focus; re-add it to the watchlist to resume scanning.",
+                        symbol, side, row.get("reason") or "the VWAP rule",
+                    )
+            except Exception:
+                logging.warning("Focus desync handling failed for %s.", symbol, exc_info=True)
+        if stranded:
+            self.statusChanged.emit(
+                f"⚠ {', '.join(stranded[:6])}{'...' if len(stranded) > 6 else ''}: "
+                "your Focus pick(s) lost their watchlist line to the VWAP rule and "
+                "are no longer being scanned. Still in Focus - re-add to resume."
+            )
+        elif dropped:
+            self.statusChanged.emit(
+                f"{len(dropped)} invalidated auto pick(s) removed from M5 Focus "
+                f"({', '.join(dropped[:8])}{'...' if len(dropped) > 8 else ''})."
             )
 
     @staticmethod

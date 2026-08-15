@@ -257,3 +257,103 @@ def test_the_button_says_which_action_it_will_take(tmp_path):
     store.mark_auto_adopted("NVDA", "long", "m5")
     panel.chart_review.set_alert(alert, in_focus=True, auto_adopted=True)
     assert panel.chart_review.remove_today_button.text() == "✕ Not today - drop pick"
+
+
+# ---------------------------------------------------------------------------
+# The triple-VWAP / Focus desync repair (A.3.4)
+# ---------------------------------------------------------------------------
+
+
+def _desync_path(tmp_path, monkeypatch):
+    path = tmp_path / "focus_desync_requests.json"
+    import autopilot_core as core
+
+    monkeypatch.setattr(core, "FOCUS_DESYNC_REQUEST_FILE", path)
+    return path
+
+
+def test_the_bot_files_a_request_instead_of_touching_the_store(tmp_path, monkeypatch):
+    """One owner per mutable store: the bot cannot write Focus itself."""
+    import autopilot_core as core
+
+    _desync_path(tmp_path, monkeypatch)
+    core.record_focus_desync("NVDA", "long", reason="triple-VWAP invalidation")
+
+    taken = core.take_focus_desync_requests()
+    assert [(row["symbol"], row["side"]) for row in taken] == [("NVDA", "long")]
+    # Draining is destructive: re-applying a cut after the trader re-added the
+    # name by hand would be exactly the automatic removal this design prevents.
+    assert core.take_focus_desync_requests() == []
+
+
+def test_requests_are_day_scoped(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+
+    import autopilot_core as core
+
+    _desync_path(tmp_path, monkeypatch)
+    yesterday = datetime.now() - timedelta(days=1)
+    core.record_focus_desync("NVDA", "long", now=yesterday)
+    assert core.take_focus_desync_requests() == []
+
+
+def test_an_invalidated_auto_pick_leaves_focus(tmp_path, monkeypatch):
+    import autopilot_core as core
+
+    panel, store = _panel(tmp_path)
+    _desync_path(tmp_path, monkeypatch)
+    store.add("NVDA", "long", "m5")
+    store.mark_auto_adopted("NVDA", "long", "m5")
+    core.record_focus_desync("NVDA", "long")
+
+    panel._drain_focus_desync_requests()
+    assert store.focus_symbols("long", "m5") == []
+
+
+def test_a_trader_typed_pick_is_left_alone_and_surfaced(tmp_path, monkeypatch):
+    """Neither silently deleted nor silently trusted."""
+    import autopilot_core as core
+
+    panel, store = _panel(tmp_path)
+    _desync_path(tmp_path, monkeypatch)
+    store.add("NVDA", "long", "m5")  # no marker: the trader's
+    core.record_focus_desync("NVDA", "long")
+
+    messages: list[str] = []
+    panel.statusChanged.connect(messages.append)
+    panel._drain_focus_desync_requests()
+
+    assert store.focus_symbols("long", "m5") == ["NVDA"], "never auto-removed"
+    assert any("no longer being scanned" in text for text in messages)
+
+
+def test_a_cut_for_a_name_not_in_focus_changes_nothing(tmp_path, monkeypatch):
+    import autopilot_core as core
+
+    panel, store = _panel(tmp_path)
+    _desync_path(tmp_path, monkeypatch)
+    store.add("AMD", "long", "m5")
+    store.mark_auto_adopted("AMD", "long", "m5")
+    core.record_focus_desync("NVDA", "long")
+
+    messages: list[str] = []
+    panel.statusChanged.connect(messages.append)
+    panel._drain_focus_desync_requests()
+
+    assert store.focus_symbols("long", "m5") == ["AMD"]
+    assert messages == []
+
+
+def test_the_cut_side_is_the_only_side_touched(tmp_path, monkeypatch):
+    import autopilot_core as core
+
+    panel, store = _panel(tmp_path)
+    _desync_path(tmp_path, monkeypatch)
+    for side in ("long", "short"):
+        store.add("NVDA", side, "m5")
+        store.mark_auto_adopted("NVDA", side, "m5")
+    core.record_focus_desync("NVDA", "long")
+
+    panel._drain_focus_desync_requests()
+    assert store.focus_symbols("long", "m5") == []
+    assert store.focus_symbols("short", "m5") == ["NVDA"]

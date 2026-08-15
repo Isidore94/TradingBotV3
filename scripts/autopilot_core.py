@@ -49,6 +49,7 @@ from project_paths import (
     AUTOPILOT_STATE_FILE,
     LONGS_FILE,
     MASTER_AVWAP_DAILY_BARS_DIR,
+    RUNTIME_DATA_DIR,
     SHORTS_FILE,
     UNIVERSE_ALL_FILE,
     UNIVERSE_LONGS_FILE,
@@ -2167,6 +2168,92 @@ def _save_auto_populate_membership(path: Path, payload: Mapping[str, Any]) -> No
         Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     except OSError:
         pass
+
+
+#: Requests from BounceBot's triple-VWAP invalidation that a Focus entry be
+#: reconciled. BounceBot cuts the watchlist line on a worker thread (and can run
+#: headless), but `FocusPickStore` is the GUI's mutable store and plan.md sec 5
+#: gives every mutable store exactly one owner. So the bot files a request here
+#: and the Alert Center's poll performs the removal - one owner, and the record
+#: simply waits if no GUI is running.
+FOCUS_DESYNC_REQUEST_FILE = RUNTIME_DATA_DIR / "focus_desync_requests.json"
+
+
+def record_focus_desync(
+    symbol: str,
+    side: str,
+    *,
+    reason: str = "",
+    path: Path = FOCUS_DESYNC_REQUEST_FILE,
+    now: datetime | None = None,
+) -> None:
+    """Note that a watchlist line was cut out from under a possible Focus pick.
+
+    Day-scoped, like the blacklist it rides beside: a request that nothing
+    drained by the end of the day describes a watchlist state that no longer
+    exists.
+    """
+    sym = str(symbol or "").strip().upper()
+    side = "short" if str(side or "").lower().startswith("short") else "long"
+    if not sym:
+        return
+    moment = now or datetime.now()
+    today_iso = moment.date().isoformat()
+    with _AUTO_POPULATE_LOCK:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict) or payload.get("date") != today_iso:
+            payload = {"date": today_iso, "requests": []}
+        requests = payload.setdefault("requests", [])
+        if not any(
+            isinstance(row, Mapping) and row.get("symbol") == sym and row.get("side") == side
+            for row in requests
+        ):
+            requests.append(
+                {
+                    "symbol": sym,
+                    "side": side,
+                    "reason": str(reason or "triple-VWAP invalidation"),
+                    "cut_at": moment.isoformat(timespec="seconds"),
+                }
+            )
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def take_focus_desync_requests(
+    path: Path = FOCUS_DESYNC_REQUEST_FILE,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Read and CLEAR today's requests. Yesterday's read as empty.
+
+    Draining is destructive on purpose: a request describes one cut, and
+    re-applying it after the trader has re-added the name by hand would be the
+    automatic removal this whole design exists to prevent.
+    """
+    today_iso = (now or datetime.now()).date().isoformat()
+    with _AUTO_POPULATE_LOCK:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        if not isinstance(payload, dict) or payload.get("date") != today_iso:
+            return []
+        requests = [row for row in (payload.get("requests") or []) if isinstance(row, Mapping)]
+        if requests:
+            try:
+                Path(path).write_text(
+                    json.dumps({"date": today_iso, "requests": []}, indent=2), encoding="utf-8"
+                )
+            except OSError:
+                pass
+        return [dict(row) for row in requests]
 
 
 def record_auto_watchlist_cut(

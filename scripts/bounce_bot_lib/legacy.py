@@ -11076,6 +11076,17 @@ class BounceBot(EWrapper, EClient):
         except Exception:
             pass
         try:
+            from autopilot_core import record_focus_desync
+
+            # The cut line may belong to an M5 Focus pick, which would leave
+            # the Focus board showing a name that is no longer being scanned
+            # (packet R2). This loop cannot fix that itself: it runs on a
+            # worker thread and `FocusPickStore` is the GUI's store, with one
+            # owner by invariant. File the request; the Alert Center drains it.
+            record_focus_desync(symbol, direction, reason="triple-VWAP invalidation")
+        except Exception:
+            pass
+        try:
             with open(filename, 'r') as f:
                 symbols = f.read().splitlines()
             symbols = [s for s in symbols if s.strip() != symbol]
