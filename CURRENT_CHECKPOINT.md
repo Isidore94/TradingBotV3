@@ -17,9 +17,71 @@ elapsed evidence lane that can run in parallel.
 | Active packet | **R2 M5 FOCUS GATING AND STRENGTH BOARD** (`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`) — code complete, deterministic gate green, **four live proofs owed** |
 | Branch | **`phase05-r2-focus-gating-strength-board`**, cut from `phase05-r1-auto-modes-quiet-hours` with the R1.1 repair merged forward; pushed. Merging it brings the testing week, R1, R1.1 and R2 together |
 | Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
-| State | **Green: 2882 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0 — the frozen runs are real and dated 2026-08-15 (see below). Nothing observed live yet |
+| State | **Green: 2913 passed / 19 subtests / smoke 7/7 / FROZEN selftest 31/31**, all exit 0, after the R2.1 repair pass. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
 | Next action | **The Monday sequence below.** The trader runs the R1 quiet-boot proof himself on the evening of 2026-08-15; everything else waits for Monday's real session |
 | Do not start yet | **R3 and later Phase 0.5 packets** — the 2026-08-15 redirects were given packet by packet for R1 and R2 only and do not carry forward. Also Phase 1 cleanup and any Phase 2+ item |
+
+## Merge safeguards — read before Monday
+
+### Release candidate
+
+**`bf1ab89`** on `phase05-r2-focus-gating-strength-board` is the build Monday
+tests. Everything below was verified against exactly that tree.
+
+| Check | Result | When |
+|---|---|---|
+| pytest | **2913 passed / 19 subtests**, exit 0 | 2026-08-15 |
+| smoke | **7/7**, exit 0 | 2026-08-15 |
+| frozen selftest | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 | 2026-08-15 11:0x |
+
+If any commit lands after `bf1ab89`, it is a **new** release candidate and all
+three gates re-run. The frozen one is not optional: it is the gate that caught
+the `ai_jobs` roster clash and the `-c` scan-spawn defect when the suite could
+not.
+
+### Rollback points
+
+| Point | SHA | What it is |
+|---|---|---|
+| Pre-R1 | **`e18757e`** | Tip of `testing-week-2026-08-10`. The build that ran the desk before any Phase 0.5 work |
+| Pre-everything | **`7d85a27`** | `main`. Last known-good merged trunk |
+| Pre-R2 | `4389961` | Tip of R1+R1.1, if only R2 needs backing out |
+
+Ancestry is linear — `main` → `testing-week` → R1 → R2 — so any of these is a
+clean checkout, not a revert.
+
+### Rollback drill — EXECUTED 2026-08-15
+
+Run once, unattended, with no desk process running:
+
+| Step | Result |
+|---|---|
+| Disarm `TradingBotV3 0700 Launch` | `Ready` → `Disabled` |
+| Check out the pre-R1 rollback SHA `e18757e` | clean, no conflicts |
+| Verify the rolled-back build starts | `selftest OK: 30/30 checks passed`, exit 0 (30 not 31: the testing-plan check did not exist at that SHA — the count moving is *correct*) |
+| Return to the release candidate | back at `bf1ab89`, `selftest OK: 31/31` |
+| Re-arm the launch task | `Disabled` → `Ready` |
+
+All three TradingBotV3 tasks confirmed `Ready` afterwards (`0700 Launch`,
+`AI Jobs`, `Push cold data to DAS`).
+
+**What the drill did NOT prove:** a full GUI launch. The selftest is the
+designed proxy — it imports every lazily-loaded engine and loads every
+`__file__`-relative asset with no window and no network — but it is not a
+double-click. If the trader wants that certainty before Monday, one manual
+launch at `e18757e` is the missing step; the mechanical path around it is
+proven.
+
+**The order matters and is the point:** disarm first. The launch task starts
+the desk from source, so checking out another SHA while it is armed can have
+the task launch a half-swapped tree.
+
+### Live proofs are UNKNOWN until observed
+
+Nothing in the tables below has been run on a live session. They are
+**UNKNOWN**, and UNKNOWN is a result — `plan.md` sec 6 requires recording it as
+such. A green test suite does not upgrade any of them, and none may be written
+as PASS in `CHANGELOG.md` without preserved real-session evidence.
 
 ## Monday sequence — 2026-08-17
 
@@ -66,7 +128,7 @@ readable and lets a single step be reverted.
 
 | Gate | Command | Expected |
 |---|---|---|
-| Full suite | `.venv\Scripts\python.exe -m pytest tests/ -q` | **2882 passed / 19 subtests**, exit 0 — check pytest's own exit code, not a piped tail |
+| Full suite | `.venv\Scripts\python.exe -m pytest tests/ -q` | **2913 passed / 19 subtests**, exit 0 — check pytest's own exit code, not a piped tail |
 | Smoke | `.venv\Scripts\python.exe scripts/smoke_check.py` | **7/7**, exit 0 |
 | Frozen rebuild | `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` | exit 0, ~4 min unattended. **Already green 2026-08-15 10:27** — repeat only if code lands after that |
 | Frozen selftest | `dist\TradingBotV3\TradingBotV3.exe --selftest` | **31/31**, exit 0, output ending `(frozen)`. **Already green 2026-08-15 10:27** |
@@ -91,13 +153,15 @@ because CLAUDE.md mandates one before every merge to `main`, and because:
 
 ### Frozen rebuild and REAL frozen selftest — 2026-08-15
 
-Two rebuilds, both green. The first was the run three packets of notes had
-mislabeled; the second was forced by a genuine packaging trigger (below).
+Three rebuilds, all green. The first was the run three packets of notes had
+mislabeled; the second was forced by the testing-plan asset; the third is the
+release candidate `bf1ab89` after the R2.1 repair pass.
 
 | # | Time | Result |
 |---|---|---|
 | 1 | 09:58 | `selftest OK: **30/30** checks passed **(frozen)**`, exit 0 |
-| 2 | 10:27 | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — **current** |
+| 2 | 10:27 | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 |
+| 3 | 11:0x | `selftest OK: **31/31** checks passed **(frozen)**`, exit 0 — **current, on `bf1ab89`** |
 
 **31, not 30, and that is the point.** The Testing Plan tab renders
 `docs/DESK_TESTING_PLAN.md`, a runtime asset that lives **outside `scripts/`**.
@@ -139,25 +203,24 @@ artifact.
 **This satisfies the frozen gate for the current tree.** Re-run it at merge time
 only if code lands after 2026-08-15 10:27.
 
-### Known blocker for the merge gate — a pre-existing flaky test
+### ~~Known blocker for the merge gate~~ — FIXED 2026-08-15
 
 `tests/test_warehouse_seal.py::test_stale_staged_files_are_quarantined_not_deleted`
-fails intermittently and **will** intermittently fail (a) above. Measured
-2026-08-15: **3 failures in 6 runs** on the tree *without* R2's correction, so it
-is unrelated to any Phase 0.5 work — the checkpoint's older "observed once" note
-understated it.
+no longer fails intermittently, and the merge gate has **no rerun-until-green
+carve-out**. Any test failure on Monday is a real failure.
 
-Diagnosed, not fixed (it is warehouse code and P1.1 owns hermeticity):
-`store.reconcile` computes `cutoff = utc_now()` and skips any incoming file whose
-`st_mtime > cutoff`. With `incoming_grace_seconds=0` the test writes a file
-microseconds before that comparison, and Windows' ~15.6 ms system-clock
-granularity can round `utc_now()` *below* the file's finer NTFS mtime — so a file
-just written reads as "from the future" and is never quarantined. A clock-
-granularity race, not a load race, which is why it reproduces in isolation.
+It was never flakiness. `reconcile` compared `st_mtime > cutoff` where
+`cutoff = utc_now() - grace`, and Windows' system clock ticks about every
+15.6 ms while NTFS stamps mtimes far more finely — so `utc_now()` could round
+BELOW the mtime of a file written microseconds earlier, and that file read as
+"from the future" and was never quarantined. The earlier "timing-sensitive
+under suite load" note was wrong: load was never the variable, and it
+reproduced in isolation at 3 failures in 6 runs.
 
-**At the merge gate:** a failure in this one test is not a reason to hold the
-merge. Re-run the suite; confirm the *only* failure is this test; record both
-runs. Any other failure is a real one.
+Fixed in `store.py` with a 50 ms clock-granularity slack (trader-approved
+before the edit; recorded as a warehouse build decision). Verified by 20
+consecutive passes of the previously flaky test plus a new deterministic
+reproducer that writes and reconciles back to back 25 times.
 
 ### R2 live proofs owed
 
@@ -686,12 +749,8 @@ Still open on the desk, not blocking the week:
 
 - `technical_integrity_events.jsonl` is ~247 MB and is never pruned (~10 MB/session).
 - Off-site backup: cloud sync was the only off-site Class A copy (decision 0015).
-- ~~One flaky test observed once (2026-08-10, late)~~ **- re-measured
-  2026-08-15 and it is far more frequent than "once": 3 failures in 6 runs, and
-  it reproduces IN ISOLATION.** `test_warehouse_seal.py::test_stale_staged_files_are_quarantined_not_deleted`.
-  The original "timing-sensitive under suite load" hypothesis was wrong - load
-  is not the variable. Diagnosis and the merge-gate handling are in the Monday
-  sequence above. Still a P1.1 candidate; deliberately not repaired here.
+- ~~One flaky test~~ **FIXED 2026-08-15.** `test_stale_staged_files_are_quarantined_not_deleted` was never flaky: `reconcile` compared a file's mtime against a coarser system clock, so a file written microseconds earlier read as "from the future". Both earlier notes here were wrong - it was not "observed once" (3 in 6) and not load-
+  related (it reproduced in isolation). See the merge-safeguards section above.
 
 ## URGENT — the frozen desk cannot scan (found and fixed 2026-08-13)
 
