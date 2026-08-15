@@ -229,6 +229,83 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-15 — packet R2: the M5 Focus adoption gate and the strength board
+
+`IMPLEMENTED` + `GREEN`; **not** `LIVE_VALIDATED` — the four live proofs in
+`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` §8 are owed. Built on branch
+`phase05-r2-focus-gating-strength-board` (cut from R1, R1.1 merged forward) on
+the trader's second explicit redirect ahead of P0.7.
+
+**One gate, three call sites.** `scripts/focus_adoption_gate.py` holds the
+combined rule — beyond yesterday's extreme AND on the right side of session
+VWAP — and it runs at candidate build, at every staging refresh, and again at
+adoption. Session VWAP comes from `chart_snapshot.session_vwap_series` over the
+completed bars of the current session, carried on the profile as
+`completed_session_vwap`; BounceBot's dynamic and EOD VWAP are deliberately not
+used because they blend prior sessions and answer a different question.
+
+The gate reads `last_complete`, not `last`. The previous filter measured the
+prev-day break on the **forming** bar, so a pick could be admitted on a break
+that bar then closed back inside. The golden fixture landed first and recorded
+the effect: five of its seven baseline survivors now fail, each for a stated
+reason, and nothing that failed the baseline now passes — the gate only
+narrows.
+
+**The queue is re-checked, not trusted.** Each 30-minute refresh re-runs the
+gate over everything already staged: picks that have fallen back are evicted
+with a logged reason, survivors are re-stamped. An evicted pick may re-propose
+the same day if it re-qualifies — the queue says what qualifies now, not what
+once did, and a name that pulled back at 10:00 and broke out at 13:00 is the
+setup rather than the noise.
+
+**Adoption reads a stored verdict** rather than measuring its own: the Alert
+Center runs on the GUI thread and a staged pick is on no watchlist, so
+BounceBot holds no bars for it. Failing, missing and >45-minute-old verdicts
+are all refused, and a refusal does not mark the pick seen, so a stale verdict
+costs one cycle rather than the pick. **This closes the stale-drain gap R1
+recorded as an accepted limitation.**
+
+**Focus entries now have an origin.** `focus_auto_picks.json` rides beside the
+plain-text focus files (which do not change — the trader edits them by hand)
+and marks only what the machine adopted. Absence of a marker reads as
+user-entered, so every pre-R2 file is protected by default and a lost or
+corrupt sidecar fails toward "the trader owns it". This is what makes
+"user-entered names are never automatically removed" structural instead of
+aspirational: without a per-entry origin, no removal verb could be written
+safely at all.
+
+**"Not today" says which of its two jobs it will do.** On an auto-adopted entry
+it reads `✕ Not today - drop pick` and removes that one M5 entry on that one
+side; on anything else it keeps its quieter feed-only meaning. The verdict is
+recorded as `not_today`, not `dislike` — a same-day pass is not "this name is
+bad", and the review-learning scoreboard must not learn that.
+
+**The triple-VWAP desync is repaired by request, not by a second writer.**
+BounceBot cuts a watchlist line on a worker thread, so it files a day-scoped
+request and the Alert Center's existing poll performs the removal — one owner
+per mutable store. The machine's own pick is removed; a name the trader typed
+is left alone and the mismatch surfaced, because deleting it would break the
+invariant and keeping it quietly would leave them trusting an entry nothing
+scans.
+
+**The strength board.** `scripts/strength_scan.py` implements the trader's
+TC2000 formula (12-bar body sum × price level ÷ ATR50) with hand-computed
+fixtures, plus the percentile cut and the VWAP/15EMA/prev-extreme filters. It
+does not touch `real_relative_strength`; the existing RS/RW board is unchanged
+beside it. `StrengthBoardService` owns one single-flight refresh on R1's
+quiet-hours window and keeps the last good board through a failure;
+`StrengthBoardPanel` is a new top-level desk page next to Focus Picks, with
+per-row and side-aware adds that re-run the adoption gate at click time and
+name any refusal with its reason.
+
+**Transport measured before the cadence was chosen** (spec §10): 27.6 s for all
+1,506 symbols at `period=5d`, 100% carrying ≥50 bars. `5d` rather than `1d`
+because SMA50/ATR50 need 50 completed bars and a `1d` window holds six at
+07:00 PT — every symbol would be unmeasurable through the first four hours of
+the session being traded. Zero IB traffic, so the locked pacing budget is
+untouched. The 15-minute default stands with wide margin; the number was taken
+on a Saturday and is recorded as a floor, to be re-measured live.
+
 ### 2026-08-15 — R1.1: the repair pass an independent review demanded
 
 `IMPLEMENTED` + `GREEN`. Five code-verified defects from the R1 review, two of

@@ -273,10 +273,15 @@ where a packet's own spec says the baseline item is a prerequisite (none current
 does).
 
 **Build-order note (2026-08-15).** The original gate read "build work starts only
-after P0.7 merges". The trader redirected on 2026-08-15 and directed R1 to be built
-immediately; R1 is therefore built on its own branch ahead of the testing-week
-merge, and P0's live gates are unchanged and still owed. A later packet does not
-inherit this redirect — R2 onward waits for the trader to say so.
+after P0.7 merges". The trader redirected twice on 2026-08-15 — first for R1, then
+explicitly again for R2 — so both are built on their own branches ahead of the
+testing-week merge, and P0's live gates are unchanged and still owed. The redirect
+was packet-by-packet and does **not** carry forward: **R3 onward waits for the
+trader to say so.**
+
+R2's branch is cut from R1's and carries the R1.1 repair, so merging R2 brings the
+testing week, R1, R1.1 and R2 together. The R1 and R2 live proofs are both owed and
+are listed in `CURRENT_CHECKPOINT.md`.
 
 1. **R1 Auto-mode matrix and quiet hours. — BUILT 2026-08-15, live proof owed.**
    Enforced the trader's OFF/DESK/AWAY/EVENING semantics (AWAY queues and never
@@ -293,14 +298,27 @@ inherit this redirect — R2 onward waits for the trader to say so.
    provably starts nothing; an EVENING day whose log shows the early block and
    then zero further slots; an AWAY session with picks staged-not-adopted and a
    clean drain on return; and one SPY-alarm firing (real or forced threshold).
-2. **R2 M5 Focus adoption discipline and the M5 strength board.** The combined
-   prev-day-extreme + session-VWAP gate applied at candidate build, staging
-   refresh (queue eviction), and adoption; a provenance sidecar making auto picks
-   the only legally removable entries; the scoped "Not today" verb; the
-   triple-VWAP/Focus desync repair; and the TC2000-parity strength scanner over
-   `universe_all.txt` via batched yfinance with one-click add-to-Focus. Spec:
-   `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`. Exit: gate/eviction live
-   proofs and a trader-confirmed board session.
+2. **R2 M5 Focus adoption discipline and the M5 strength board. — BUILT
+   2026-08-15, live proof owed.** The combined prev-day-extreme + session-VWAP
+   gate applied at candidate build, staging refresh (queue eviction), and
+   adoption; a provenance sidecar making auto picks the only legally removable
+   entries; the scoped "Not today" verb; the triple-VWAP/Focus desync repair;
+   and the TC2000-parity strength scanner over `universe_all.txt` via batched
+   yfinance with one-click add-to-Focus. Spec:
+   `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`.
+   Branch `phase05-r2-focus-gating-strength-board` (cut from R1, R1.1 merged
+   forward); deterministic gate green (2865 passed / 19 subtests, smoke 7/7,
+   frozen selftest 30/30, all exit 0). **This closes R1's recorded stale-drain
+   gap**: the AWAY/EVENING→DESK drain now adopts only what the most recent
+   staging refresh verified.
+   **Remaining — the spec §8 live proofs, none yet run:** one session showing a
+   staged pick evicted for a VWAP/PDH fallback, one adoption-time refusal, one
+   clean "Not today" scoped removal that leaves the trader's other entries
+   intact, and a board session the trader confirms matches the TC2000 scan's
+   character (~20–40/side). Re-measure the board fetch during market hours on
+   that session (spec §10 recorded 27.6 s on a Saturday — a floor, not a worst
+   case). RVOL-for-survivors is specified but deliberately not built; decide it
+   on that session.
 3. **R3 Swing-quality demotion, pre-close honesty, and the dislike-feedback
    loop.** Demote-and-label (never hide) overextended swing rows using the
    trader's two v1 rules, the RVOL field + daytrade carve-out annotation, the

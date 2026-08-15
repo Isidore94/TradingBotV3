@@ -1,19 +1,41 @@
 # M5 Focus adoption discipline and the M5 strength board — packet R2
 
-Status: **ACTIVE specification** for `plan.md` Phase 0.5 **R2**. Authorized by the
-trader on 2026-08-15; ranked **second** in the Phase 0.5 build order.
+Status: **BUILT 2026-08-15, live proof owed** — `plan.md` Phase 0.5 **R2**.
+Authorized by the trader on 2026-08-15; ranked **second** in the Phase 0.5 build
+order, then directed to build ahead of P0.7 (the same redirect R1 got).
 
-Build gates: nothing lands before `plan.md` P0.7 completes. Ask-first applies at
-edit time to every fenced file in section 6. Re-verify recon line numbers before
-editing.
+Built on branch `phase05-r2-focus-gating-strength-board` (cut from R1, with the
+R1.1 repair merged forward). Ask-first approval was taken for every fenced file
+in §6 before the first edit. Deterministic verification: **2865 passed / 19
+subtests, smoke 7/7, frozen selftest 30/30**, all exit 0. The §8 live proofs are
+**owed** — nothing here has been observed on a live session.
 
 ## 2026-08-15 trader decisions recorded here
 
-- Strength-board universe: **the existing universe** (`universe_all.txt`, ~1,500
+- Strength-board universe: **the existing universe** (`universe_all.txt`, 1,506
   names) — not a new broader US universe build.
 - "Not today" on an auto-adopted M5 Focus pick removes **exactly that M5 entry for
   that side** — never the swing-category entry, never the other side, never a
   user-typed name.
+- **Adoption-time gate reads a stored verdict** written by the 30-minute staging
+  refresh, refusing anything failing, missing, or older than 45 min (1.5× the
+  refresh cadence). The Alert Center adopts on the GUI thread and a staged pick
+  is on no watchlist yet, so BounceBot holds no bars for it.
+- **The desync repair is a request, not a direct write.** BounceBot files it;
+  the Alert Center's existing poll performs the removal, preserving one owner
+  per mutable store.
+- **A user-typed name whose scan line was cut is surfaced, never removed** —
+  Alert Center status line plus the log.
+- **An evicted pick may re-propose the same day if it re-qualifies.** The queue
+  says what qualifies now, not what once did.
+- **"Not today" carries a distinct label on an auto pick** (`✕ Not today - drop
+  pick`) so one click never means two things.
+- **RVOL: survivors only**, never the whole universe — `fetch_session_rvol`
+  needs `period=1mo, interval=5m` and its own docstring forbids universe-wide
+  use. *(Not built in this packet; the column is deferred to the first live
+  board session, when the trader can say whether they miss it.)*
+- **The gate reads `last_complete`, both halves.** Confirmed by the trader
+  2026-08-15: completed bars only. The golden fixture records the narrowing.
 
 ## Part A — auto M5 Focus pick gating and eviction
 

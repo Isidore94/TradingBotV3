@@ -13,13 +13,28 @@ elapsed evidence lane that can run in parallel.
 
 | Field | Current value |
 |---|---|
-| Roadmap phase | **Phase 0.5 R1 built** (trader redirect 2026-08-15) — P0's live gates are unchanged and still owed |
-| Active packet | **R1 AUTO-MODE MATRIX AND QUIET HOURS** (`docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`) — code complete, deterministic gate green, **four live proofs owed** |
-| Branch | **`phase05-r1-auto-modes-quiet-hours`**, branched from `testing-week-2026-08-10` at `e18757e`; pushed. `fbf8055` behaviour, `0127c8d` removal, `16fe004` docs, `efb322d` review, plus the R1.1 repair. `phase05-r2-focus-gating-strength-board` is cut from it and holds R2's golden-fixture baseline |
-| Scope | `scripts/autopilot_core.py`, `scripts/ui/services/autopilot_service.py`, `scripts/ui/app.py`, `scripts/ui/panels/alert_center_panel.py`, `scripts/bounce_bot_lib/legacy.py` (behaviour); plus `scan_service.py`, `master_avwap_lib/{runner,legacy,gui}.py`, `scan_worker.py`, `project_paths.py`, `master_avwap_panel.py`, `gui_app/*`, `writer_lease.py`, `autopilot_panel.py`, `master_avwap_mini_pc.py` (removal). Ask-first approval taken before the first edit |
-| State | **Green after the R1.1 repair pass: 2785 passed / 19 subtests / smoke 7/7 / frozen selftest 30/30**, all exit 0. Nothing observed live yet |
-| Next action | Run the four R1 live proofs (below), then return to **P0.2–P0.6** and the ticker-briefs morning check |
-| Do not start yet | **R2 and later Phase 0.5 packets** — the trader's 2026-08-15 redirect covered R1 only; R2 waits for an explicit go. Also Phase 1 cleanup and any Phase 2+ item |
+| Roadmap phase | **Phase 0.5 R1 + R1.1 + R2 built** (trader redirects 2026-08-15) — P0's live gates are unchanged and still owed |
+| Active packet | **R2 M5 FOCUS GATING AND STRENGTH BOARD** (`docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`) — code complete, deterministic gate green, **four live proofs owed** |
+| Branch | **`phase05-r2-focus-gating-strength-board`**, cut from `phase05-r1-auto-modes-quiet-hours` with the R1.1 repair merged forward; pushed. Merging it brings the testing week, R1, R1.1 and R2 together |
+| Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
+| State | **Green: 2865 passed / 19 subtests / smoke 7/7 / frozen selftest 30/30**, all exit 0. Nothing observed live yet |
+| Next action | Run the R1 and R2 live proofs below (trader is running the R1 quiet-boot proof the evening of 2026-08-15; the rest on Monday), then return to **P0.2–P0.6** |
+| Do not start yet | **R3 and later Phase 0.5 packets** — the 2026-08-15 redirects were given packet by packet for R1 and R2 only and do not carry forward. Also Phase 1 cleanup and any Phase 2+ item |
+
+### R2 live proofs owed
+
+None has run. From `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` §8:
+
+| Proof | What to look for |
+|---|---|
+| Eviction | One staged pick evicted for falling back through VWAP or the previous-day extreme: `Focus gate evicted N staged long pick(s): SYM (not above session VWAP)` in the Auto Pilot log. Silent on the desk by design — the log is the record |
+| Adoption refusal | One pick refused at adoption, in `trading_bot.log`: `Focus gate refused N staged pick(s) at adoption`. A verdict older than 45 min reads `gate check is NN min old` |
+| Scoped "Not today" | On an auto-adopted M5 entry the button reads `✕ Not today - drop pick` and removes only that entry; the trader's own picks, the swing list and the other side are all still there afterwards. On a name the trader typed the button keeps its old feed-only wording and Focus is untouched |
+| Strength board | A board session the trader confirms matches the TC2000 scan's character (~20–40/side). **Re-measure the fetch during market hours** — §10's 27.6 s was taken on a Saturday and is a floor, not a worst case. Decide the RVOL column then; it is specified but deliberately not built |
+
+**Deferred deliberately:** RVOL for the surviving ~20–40 rows a side. Specified
+in §9, not built — the trader decides on the first live board session whether
+they miss it, and the fetch is cheap only at survivor scale.
 
 ### R1 live proofs owed
 
@@ -29,13 +44,14 @@ None of these has run. Each is one observation on the desk:
 |---|---|
 | Quiet hours | Launch at ~21:00 on a weekday with Auto left ON. `autopilot.log` says `Auto Pilot is ON from saved state, but nothing starts yet`; no IB connect, no universe rebuild, no self-arm. A manual scan from the same desk still runs |
 | EVENING stop | An EVENING day: the open+30 slot and the 07:00/07:15/07:30 checks run, then one `Evening mode: swing slot(s) … not run` line per refused hourly slot and no further scan. The after-close wrap-up still fires |
-| AWAY discipline | An AWAY session: picks do not reach `longs.txt`/`shorts.txt`, alerts arrive silently while the feed and D1 badge fill, and the flip back to DESK adopts the day's picks in one go |
+| AWAY discipline | An AWAY session: picks do not reach `longs.txt`/`shorts.txt`, alerts arrive silently while the feed and D1 badge fill, and the flip back to DESK adopts **only the picks whose gate verdict is current** — R2 changed this proof, so anything staged hours ago and no longer qualifying should be refused rather than adopted |
 | SPY wake alarm | One real ±1% EVENING day, or force it by setting `push_evening_spy_alarm_pct` low: an urgent push, a repeat no sooner than 5 minutes, and silence after flipping out of EVENING |
 
-**Known limitation, deliberate:** the AWAY→DESK drain adopts through today's
-un-revalidated path. Packet R2 adds the freshness gate at that same point, so a
-day's worth of picks can land at once and some will be stale until R2 lands. The
-trader accepted this on 2026-08-15 in preference to deferring the packet.
+**~~Known limitation, deliberate~~ — CLOSED by R2 (2026-08-15).** The
+AWAY/EVENING→DESK drain no longer adopts an un-revalidated backlog: every staged
+pick carries a gate verdict from the most recent 30-minute refresh, and adoption
+refuses anything failing, missing, or older than 45 minutes. The AWAY live proof
+below is written against that behaviour, not the R1 behaviour it replaced.
 
 ### R1 build review — 2026-08-15 (independent five-dimension review; findings code-verified)
 
