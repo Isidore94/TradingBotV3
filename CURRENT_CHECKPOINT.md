@@ -34,7 +34,7 @@ Each step is its own green commit, pushed. A step is not done until
 | 0 Characterization fixture | **DONE** | `tests/fixtures/journal_rebuild_trades_v1.json` + `tests/test_journal_characterization.py`; 2931 passed, exit 0 |
 | 1 Hygiene (A10, B5, A4) | **DONE** | `tests/test_journal_import_hygiene.py` (34 tests); 2965 passed, exit 0 |
 | 2 v3 migration + uid migration | **DONE** | `scripts/journal_migrate.py` + `tests/test_journal_migration.py` (26 tests); 2991 passed / smoke 7/7, exit 0 |
-| 3 Group-key normalization | pending | |
+| 3 Group-key normalization | **DONE** | `scripts/journal_identity.py` + `tests/test_journal_identity.py` (34 tests); 3025 passed / smoke 7/7, exit 0. Golden regenerated with a note: 10 trades → 9 |
 | 4 Assembly changes | pending | |
 | 5–10 Adjustments, coverage, activities, FX, reconcile, nightly slot | pending | |
 | 11–13 Journal UI | pending | |
@@ -70,6 +70,22 @@ fixture and temporary databases. `journal_migrate.py` defaults to a dry run
 against a throwaway copy, and a test asserts the live file is byte-identical
 afterwards and that no backup is taken (because nothing changed). The real
 migration is a trader-present step and waits for Monday.
+
+**Deferred out of step 3, deliberately — one spec conflict.** Spec §5 fix 3 puts
+"the manual-execution dialog gains real broker/account pickers" in this step,
+but that dialog exists **only in the legacy Tk tab** (`scripts/journal_tab.py`),
+which spec §7 says stays untouched — and the Qt panel has no manual-entry dialog
+at all yet. The data layer already accepts a real broker/account
+(`manual_execution_from_fields` honours them), so the missing half is purely
+UI and belongs to the Qt Trades tab in **step 11**. Recorded rather than
+silently skipped.
+
+**One suite run exited 3 (a crash, not a failure) during step 3, then passed on
+re-run.** This is the documented Qt/worker-thread hazard in `tests/conftest.py`
+("12/12 is a real improvement over 8/10 but it is not a proof of thread
+safety"); the leaked `run_strategy` worker threads it names are the suspected
+cause. It is **not** attributable to R7 — no R7 file touches Qt — but it is
+recorded here because a crash is not a pass, and P1.1 owns the fix.
 
 **Trader-present steps ahead — the build stops and asks at each** (spec §9):
 Flex token setup (§8) before step 7 goes live, account tax-status labeling after

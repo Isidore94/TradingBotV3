@@ -54,6 +54,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from journal_identity import (
+    classify_execution_source,
+    contract_multiplier,
+    stable_execution_uid,
+)
+
+__all__ = [
+    "JOURNAL_SCHEMA_VERSION_V3",
+    "MigrationReport",
+    "SOURCE_RANK",
+    "backup_database",
+    "canonical_execution_uid",
+    "classify_execution_source",
+    "contract_multiplier",
+    "migrate_to_v3",
+    "read_schema_version",
+    "run_migration",
+    "stable_execution_uid",
+]
+
 JOURNAL_SCHEMA_VERSION_V3 = 3
 
 #: Which row wins when two collapse onto one uid. Flex beats socket because it
@@ -295,84 +315,6 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 # ---------------------------------------------------------------------------
 # Identity
 # ---------------------------------------------------------------------------
-
-
-def classify_execution_source(row: dict[str, Any]) -> str:
-    """Which importer wrote this row, read from the shape of its raw payload.
-
-    Nothing recorded the source before v3, so it has to be inferred - and the
-    collapse rule depends on telling a Flex row from a socket row. The shapes
-    are distinct enough to be safe: the socket importer writes a nested
-    ``{"contract": ..., "execution": ...}`` object, Flex writes the statement's
-    flat attributes, and Questrade writes the API's own JSON.
-    """
-    broker = str(row.get("broker") or "").upper()
-    try:
-        raw = json.loads(row.get("raw_json") or "{}")
-    except (json.JSONDecodeError, TypeError):
-        raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
-
-    if broker == "IBKR":
-        if "contract" in raw and "execution" in raw:
-            return "IBKR_SOCKET"
-        if raw.keys() & {"ibExecID", "tradePrice", "assetCategory", "accountId", "tradeID"}:
-            return "IBKR_FLEX"
-        return ""
-    if broker == "QUESTRADE":
-        return "QT_API"
-    if broker == "MANUAL":
-        return "MANUAL"
-    return ""
-
-
-def contract_multiplier(row: dict[str, Any]) -> float:
-    """The contract multiplier, from the raw payload or the security type.
-
-    Deliberately the same rule as ``journal_store._contract_multiplier``; this
-    copy exists so the migration does not have to import the store (which
-    imports this module).
-    """
-    try:
-        raw = json.loads(row.get("raw_json") or "{}")
-    except (json.JSONDecodeError, TypeError):
-        raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
-    candidates = [raw.get("multiplier")]
-    contract = raw.get("contract")
-    if isinstance(contract, dict):
-        candidates.append(contract.get("multiplier"))
-    for candidate in candidates:
-        try:
-            value = float(candidate)
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
-            return value
-    if str(row.get("security_type") or "").upper() in {"OPT", "OPTION", "OPTIONS", "FOP"}:
-        return 100.0
-    return 1.0
-
-
-def stable_execution_uid(prefix: str, account_number: str, exec_id: Any, *fallback_parts: Any) -> str:
-    """``PREFIX:account:exec_id``, with a deterministic surrogate when there is no exec id.
-
-    Dropping the symbol and timestamp from the uid removes the accidental
-    uniqueness they used to provide, so a broker row with no execution id can no
-    longer be allowed a random uuid - it would re-import as a new execution
-    every night and double the position by a different route than B4 did. The
-    surrogate hashes the fields that identify the fill instead.
-    """
-    prefix = str(prefix or "").strip().upper()
-    account = str(account_number or "").strip()
-    cleaned_id = str(exec_id or "").strip()
-    if cleaned_id:
-        return f"{prefix}:{account}:{cleaned_id}"
-    blob = "|".join(str(part or "") for part in fallback_parts)
-    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
-    return f"{prefix}:{account}:auto-{digest}"
 
 
 def canonical_execution_uid(row: dict[str, Any]) -> tuple[str | None, str]:

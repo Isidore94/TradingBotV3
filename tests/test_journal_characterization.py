@@ -100,29 +100,32 @@ def test_the_golden_still_contains_the_defects_r7_is_here_to_fix(golden):
     assert nvda["status"] == "OPEN"
 
     # B2 (§9 step 4) - a closing sell with no opening buy fabricates a short.
-    amd = trades[("QUESTRADE", "AMD", "STOCK")]
+    amd = trades[("QUESTRADE", "AMD", "STK")]
     assert amd["direction"] == "SHORT" and amd["quantity_opened"] == 100.0
     assert amd["status"] == "OPEN"
 
-    # B3 (§9 step 3) - the `listingExchange` fallback splits one AMZN position
-    # into two groups that can never net against each other.
-    assert ("QUESTRADE", "AMZN", "STOCK") in trades
-    assert ("QUESTRADE", "AMZN", "NASDAQ") in trades
+    # B3, FIXED in §9 step 3 - the `listingExchange` fallback used to split this
+    # AMZN position into a "STOCK" half and a "NASDAQ" half that could never net.
+    # It is one closed trade now, and every security type reads canonically.
+    assert {t["security_type"] for t in golden["trades"]} <= {"STK", "OPT"}
+    amzn = trades[("QUESTRADE", "AMZN", "STK")]
+    assert amzn["status"] == "CLOSED" and amzn["quantity_closed"] == 25.0
 
-    # B3 (§9 step 3) - a manual fill is keyed broker="MANUAL" and so orphans
-    # itself from the Questrade AAPL position it belongs to.
+    # B3, still open (§9 step 5) - a manual fill is keyed broker="MANUAL" and so
+    # orphans itself from the Questrade AAPL position it belongs to. No
+    # classifier can fix that one; it needs a REASSIGN_GROUP adjustment.
     assert ("MANUAL", "AAPL", "STK") in trades
 
     # B1 (§9 step 4) - CLOSED_PARTIAL does not exist; a partially exited trade
     # is indistinguishable from an untouched one.
     assert {t["status"] for t in golden["trades"]} <= {"OPEN", "CLOSED"}
-    aapl = trades[("QUESTRADE", "AAPL", "STOCK")]
+    aapl = trades[("QUESTRADE", "AAPL", "STK")]
     assert aapl["quantity_closed"] == 120.0 and aapl["status"] == "OPEN"
 
     # B8 (§9 step 8) - a CAD trade still carries no comparable P&L. Since step 2
     # the column exists; nothing books it until the FX step, and a NULL that
     # renders as "unconverted" is the honest state until then (I5).
-    shop = trades[("QUESTRADE", "SHOP.TO", "STOCK")]
+    shop = trades[("QUESTRADE", "SHOP.TO", "STK")]
     assert shop["currency"] == "CAD" and shop["pnl_usd"] is None
     assert shop["net_pnl_cad"] is None and shop["fx_rate"] is None
 

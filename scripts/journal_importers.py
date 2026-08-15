@@ -14,7 +14,7 @@ import zoneinfo
 
 import requests
 
-from journal_migrate import stable_execution_uid
+from journal_identity import normalize_security_type, stable_execution_uid
 from project_paths import get_local_setting, save_local_setting
 
 
@@ -428,8 +428,14 @@ class QuestradeImporter:
         account_number = str(account.get("number") or account.get("accountNumber") or raw.get("accountNumber") or "").strip()
         account_type = str(account.get("type") or account.get("accountType") or "").strip()
         account_label = str(account.get("name") or account.get("description") or account_type or account_number).strip()
-        symbol = str(raw.get("symbol") or raw.get("symbolName") or raw.get("underlyingSymbol") or "").strip().upper()
-        security_type = str(raw.get("securityType") or raw.get("symbolType") or raw.get("listingExchange") or "UNKNOWN").strip().upper()
+        # `underlyingSymbol` is deliberately not a fallback here: for an option
+        # execution it names the *stock*, which would file the option into the
+        # stock's position and net two different instruments together (B3).
+        symbol = str(raw.get("symbol") or raw.get("symbolName") or "").strip().upper()
+        # `listingExchange` is deliberately not a fallback either. It is where
+        # the instrument trades, never what it is, and using it split one AMZN
+        # position into a "STOCK" half and a "NASDAQ" half that could never net.
+        security_type = normalize_security_type(raw.get("securityType") or raw.get("symbolType"))
         currency = str(raw.get("currency") or account.get("currency") or "USD").strip().upper()
         side = normalize_side(raw.get("side") or raw.get("action"))
         quantity = abs(_coerce_float(raw.get("quantity") or raw.get("shares")))
@@ -606,7 +612,7 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
         timestamp = parse_broker_datetime(getattr(execution, "time", ""), strict=True)
         exec_id = str(getattr(execution, "execId", "") or "")
         account_number = str(getattr(execution, "acctNumber", "") or "")
-        security_type = str(getattr(contract, "secType", "") or "UNKNOWN").upper()
+        security_type = normalize_security_type(getattr(contract, "secType", ""))
         symbol = str(
             (getattr(contract, "localSymbol", "") if security_type in {"OPT", "FOP", "WAR"} else "")
             or getattr(contract, "symbol", "")
@@ -758,7 +764,7 @@ def parse_ibkr_flex_statement(
                 account_label=account_number or "IBKR",
                 account_type="",
                 symbol=symbol,
-                security_type=str(attrs.get("assetCategory") or "STK").strip().upper(),
+                security_type=normalize_security_type(attrs.get("assetCategory") or "STK"),
                 currency=str(attrs.get("currency") or "USD").strip().upper(),
                 side=side,
                 quantity=abs(quantity),
@@ -842,7 +848,7 @@ def manual_execution_from_fields(fields: dict[str, Any]) -> NormalizedExecution:
         account_label=str(fields.get("account_label") or account_number).strip(),
         account_type=str(fields.get("account_type") or "").strip(),
         symbol=symbol,
-        security_type=str(fields.get("security_type") or "STK").strip().upper(),
+        security_type=normalize_security_type(fields.get("security_type") or "STK"),
         currency=str(fields.get("currency") or "USD").strip().upper(),
         side=normalize_side(fields.get("side")),
         quantity=abs(_coerce_float(fields.get("quantity"))),

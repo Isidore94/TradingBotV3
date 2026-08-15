@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from journal_analytics import AutoTagger
+from journal_identity import contract_multiplier as _contract_multiplier_shared, group_key
 from journal_migrate import (
     SOURCE_RANK,
     MigrationReport,
@@ -123,22 +124,14 @@ def _signed_quantity(row: dict[str, Any]) -> float:
 
 
 def _contract_multiplier(row: dict[str, Any]) -> float:
-    security_type = str(row.get("security_type") or "").upper()
-    raw = {}
-    try:
-        raw = json.loads(row.get("raw_json") or "{}")
-    except Exception:
-        raw = {}
-    for candidate in (
-        raw.get("multiplier") if isinstance(raw, dict) else None,
-        (raw.get("contract") or {}).get("multiplier") if isinstance(raw, dict) and isinstance(raw.get("contract"), dict) else None,
-    ):
-        value = _coerce_float(candidate, default=0.0)
-        if value > 0:
-            return value
-    if security_type in {"OPT", "OPTION", "OPTIONS"}:
-        return 100.0
-    return 1.0
+    """The contract multiplier. One definition, shared with the migration.
+
+    This used to be a second copy of the rule that read ``security_type``
+    verbatim, so it recognised "OPT"/"OPTION"/"OPTIONS" and missed "Option",
+    "EquityOption" and every futures option. It now normalizes first, like
+    everything else that reads a security type since R7 §9 step 3.
+    """
+    return _contract_multiplier_shared(row)
 
 
 def _hash_id(*parts: Any) -> str:
@@ -498,11 +491,21 @@ class JournalStore:
         return len(rows)
 
     def _load_raw_executions(self) -> list[dict[str, Any]]:
+        """Every execution, ordered so each position's fills arrive in time order.
+
+        ``security_type`` is deliberately absent from the ORDER BY since R7 §9
+        step 3. The group key normalizes it, so two rows spelling the same
+        instrument differently ("STOCK" and the "NASDAQ" that Questrade's
+        listingExchange fallback produced) now land in one group - and sorting by
+        the un-normalized spelling would have handed that group its fills in
+        spelling order rather than time order. Assembly nets in the order it is
+        given, so that would have silently changed which fill closed which.
+        """
         with self.connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM raw_executions
-                ORDER BY broker, account_number, symbol, security_type, currency, timestamp, execution_uid
+                ORDER BY broker, account_number, symbol, currency, timestamp, execution_uid
                 """
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
@@ -511,14 +514,7 @@ class JournalStore:
         executions = self._load_raw_executions()
         grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
         for row in executions:
-            key = (
-                str(row.get("broker") or ""),
-                str(row.get("account_number") or ""),
-                str(row.get("symbol") or ""),
-                str(row.get("security_type") or ""),
-                str(row.get("currency") or ""),
-            )
-            grouped.setdefault(key, []).append(row)
+            grouped.setdefault(group_key(row), []).append(row)
 
         trade_payloads = []
         leg_payloads = []
