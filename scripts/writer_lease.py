@@ -1,4 +1,4 @@
-"""Layer 3: cross-machine writer protection for shared Drive exports.
+"""Layer 3: cross-machine writer protection for home-folder exports.
 
 WHAT THIS IS - AND WHAT IT IS NOT (plan.md sec 4)
 -------------------------------------------------

@@ -115,7 +115,6 @@ def test_mini_pc_shared_scan_delegates_to_master_avwap_outputs(monkeypatch):
     # include_theta was removed from run_master (theta is unconditional with
     # deferred enrichment); passing it crashed every scheduled scan.
     assert calls["kwargs"] == {
-        "use_shared_watchlists": True,
         "update_setup_tracker": False,
         "require_ib_for_setup_tracker": True,
     }

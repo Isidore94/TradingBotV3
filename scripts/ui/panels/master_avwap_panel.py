@@ -129,7 +129,7 @@ class MasterAvwapPanel(QWidget):
         self.scheduler_active_slot = ""
         self.scheduler_day = ""
         self.scheduler_slots_state: dict[str, str] = {}
-        self.scheduler_note = "Hourly shared-watchlist scheduler is off."
+        self.scheduler_note = "Hourly scan scheduler is off."
         self.scheduler_covered_slots: list[str] = []
         self.external_scheduler_owner = ""
 
@@ -171,9 +171,9 @@ class MasterAvwapPanel(QWidget):
             "Run a scan to see setups",
             "Master AVWAP results will appear here as sortable rows with side, score, "
             "bucket, support stack, and D1 sector/industry RS/RW context.",
-            "Run Shared Scan",
+            "Run Scan",
         )
-        self.empty_state.action_button.clicked.connect(self.run_shared_scan)
+        self.empty_state.action_button.clicked.connect(self.run_scan)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.empty_state)
@@ -317,8 +317,7 @@ class MasterAvwapPanel(QWidget):
         self.overflow_button = QPushButton("⋯")
         self.overflow_button.setToolTip("Scans, scheduler, copy lists and extra filters")
         menu = QMenu(self.overflow_button)
-        menu.addAction("Run Shared Scan", self.run_shared_scan)
-        menu.addAction("Run Local Scan", self.run_local_scan)
+        menu.addAction("Run Scan", self.run_scan)
         menu.addAction("Refresh from reports", self.refresh_from_reports)
         menu.addSeparator()
         self._scheduler_action = menu.addAction("Start Scheduler", self.toggle_scheduler)
@@ -509,11 +508,8 @@ class MasterAvwapPanel(QWidget):
         if signatures != getattr(self, "_report_signatures", {}):
             self.refresh_from_reports(emit_empty=False)
 
-    def run_shared_scan(self) -> None:
-        self.scan_service.run_shared_watchlist_scan()
-
-    def run_local_scan(self) -> None:
-        self.scan_service.run_local_watchlist_scan()
+    def run_scan(self) -> None:
+        self.scan_service.run_watchlist_scan()
 
     def toggle_scheduler(self) -> None:
         if self.external_scheduler_owner:
@@ -523,9 +519,9 @@ class MasterAvwapPanel(QWidget):
             return
         self.scheduler_enabled = not self.scheduler_enabled
         note = (
-            "Hourly shared-watchlist scheduler started."
+            "Hourly scan scheduler started."
             if self.scheduler_enabled
-            else "Hourly shared-watchlist scheduler stopped."
+            else "Hourly scan scheduler stopped."
         )
         self._refresh_scheduler_status(note=note)
         self.statusChanged.emit(note)
@@ -566,7 +562,7 @@ class MasterAvwapPanel(QWidget):
         self.scheduler_note = (
             "Scheduler ready for today's market window."
             if self.scheduler_enabled
-            else "Hourly shared-watchlist scheduler is off."
+            else "Hourly scan scheduler is off."
         )
         return True
 
@@ -615,7 +611,7 @@ class MasterAvwapPanel(QWidget):
         )
         self.scheduler_status_label.setText(
             (
-                f"Hourly shared-watchlist scheduler: {state} | "
+                f"Hourly scan scheduler: {state} | "
                 f"Market session: {session.session_label} | "
                 f"Today's slots: {', '.join(schedule) if schedule else 'None'} | Stop at: {stop_at}\n"
                 f"Next slot: {next_slot or 'None'} | Completed: {len(completed)} | "
@@ -654,7 +650,7 @@ class MasterAvwapPanel(QWidget):
 
         due_slots = self._due_scheduler_slots(now)
         if due_slots:
-            self._start_scheduled_shared_scan(due_slots[-1], due_slots)
+            self._start_scheduled_scan(due_slots[-1], due_slots)
             return
 
         next_slot = self._next_scheduler_slot(now)
@@ -662,11 +658,11 @@ class MasterAvwapPanel(QWidget):
             note=(
                 f"Waiting for next hourly slot {next_slot}."
                 if next_slot
-                else "No pending hourly shared-watchlist slots remain for today."
+                else "No pending hourly scan slots remain for today."
             )
         )
 
-    def _start_scheduled_shared_scan(self, trigger_slot: str, covered_slots: list[str]) -> None:
+    def _start_scheduled_scan(self, trigger_slot: str, covered_slots: list[str]) -> None:
         self.scheduler_active_slot = trigger_slot
         self.scheduler_covered_slots = list(covered_slots)
         coverage = (
@@ -674,8 +670,8 @@ class MasterAvwapPanel(QWidget):
             if len(covered_slots) > 1
             else ""
         )
-        label = f"Running scheduled shared-watchlist scan for {trigger_slot}{coverage}..."
-        if not self.scan_service.run_shared_watchlist_scan(label, scheduled_slot=trigger_slot):
+        label = f"Running scheduled scan for {trigger_slot}{coverage}..."
+        if not self.scan_service.run_watchlist_scan(label, scheduled_slot=trigger_slot):
             rejection = self.scan_service.last_rejection_reason
             if rejection == "scheduled slot already completed":
                 for slot in self.scheduler_covered_slots:
@@ -705,13 +701,13 @@ class MasterAvwapPanel(QWidget):
         self.scheduler_covered_slots = []
         note = (
             (
-                f"Scheduled shared-watchlist scan for {trigger_slot} completed; "
+                f"Scheduled scan for {trigger_slot} completed; "
                 f"one scan covered {covered_count} due slots."
                 if covered_count > 1
-                else f"Scheduled shared-watchlist scan for {trigger_slot} completed."
+                else f"Scheduled scan for {trigger_slot} completed."
             )
             if success
-            else f"Scheduled shared-watchlist scan for {trigger_slot} failed: {error_text}"
+            else f"Scheduled scan for {trigger_slot} failed: {error_text}"
         )
         self._refresh_scheduler_status(note=note)
 

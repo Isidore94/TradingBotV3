@@ -225,7 +225,6 @@ class MasterAvwapGUI:
             textvariable=self.shared_scheduler_button_var,
             command=self.toggle_shared_watchlist_scheduler,
         ).pack(side="left", padx=4)
-        ttk.Button(toolbar, text="Run Local Watchlist Scan", command=self.run_local_watchlist_scan_once).pack(side="left", padx=4)
 
         ttk.Label(
             self.root,
@@ -3103,11 +3102,11 @@ class MasterAvwapGUI:
 
         self.notebook.select(self.avwap_tab)
         self.shared_scheduler_active_slot = trigger_slot
-        running_msg = f"Running scheduled shared-watchlist scan for {trigger_slot}..."
+        running_msg = f"Running scheduled scan for {trigger_slot}..."
         started = self._run_background(
-            run_master_with_shared_watchlists,
+            run_master,
             running_msg,
-            f"Scheduled shared-watchlist scan for {trigger_slot} complete.",
+            f"Scheduled scan for {trigger_slot} complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_theta_output_view(),
@@ -3209,9 +3208,9 @@ class MasterAvwapGUI:
     def run_master_once(self):
         self.notebook.select(self.avwap_tab)
         self._run_background(
-            run_master_with_shared_watchlists,
-            "Running Master AVWAP scan from shared home-folder longs.txt / shorts.txt...",
-            "Shared-watchlist Master AVWAP scan complete.",
+            run_master,
+            "Running Master AVWAP scan from the home folder longs.txt / shorts.txt...",
+            "Master AVWAP scan complete.",
             done_callback=lambda: (
                 self.refresh_avwap_output_view(),
                 self.refresh_theta_output_view(),
@@ -3221,18 +3220,9 @@ class MasterAvwapGUI:
         )
 
     def run_local_watchlist_scan_once(self):
-        self.notebook.select(self.avwap_tab)
-        self._run_background(
-            run_master,
-            "Running Master AVWAP scan from local project watchlists...",
-            "Local-watchlist Master AVWAP scan complete.",
-            done_callback=lambda: (
-                self.refresh_avwap_output_view(),
-                self.refresh_theta_output_view(),
-                self.refresh_market_prep_view(),
-                self._mark_setup_tracker_view_stale(),
-            ),
-        )
+        # Kept as a name only: "local" and "shared" scans read the identical
+        # two files, so this is the same scan (packet R1).
+        self.run_master_once()
 
     def backfill_setup_tracker_history(self):
         try:

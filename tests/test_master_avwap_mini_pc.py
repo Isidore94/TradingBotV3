@@ -29,7 +29,6 @@ class MasterAvwapMiniPCTests(unittest.TestCase):
         self.assertEqual(scan_result, {"setup_tracker_updated": True})
         self.assertEqual(run_master.call_count, 1)
         kwargs = run_master.call_args.kwargs
-        self.assertTrue(kwargs["use_shared_watchlists"])
         self.assertFalse(kwargs["update_setup_tracker"])
         self.assertTrue(kwargs["require_ib_for_setup_tracker"])
         self.assertNotIn("include_theta", kwargs)

@@ -29,7 +29,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 
 def _payload(**kwargs) -> str:
-    spec = {"use_shared_watchlists": False, "update_setup_tracker": None}
+    spec = {"update_setup_tracker": None}
     spec.update(kwargs)
     return json.dumps(spec, sort_keys=True)
 
@@ -60,24 +60,27 @@ def test_a_malformed_payload_refuses_rather_than_guessing(bad):
 
 
 def test_the_worker_dispatches_each_branch(monkeypatch):
+    """Two branches now, not three.
+
+    There used to be a shared/local pair in front of the tracker-writing call,
+    and both ran the identical scan over the identical files (packet R1). What
+    is left is the distinction that was always real: let the scanner decide
+    whether to write the setup tracker, or tell it explicitly.
+    """
     import scan_worker
 
     calls: list[tuple[str, dict]] = []
     module = type(sys)("master_avwap_lib.runner")
     module.run_master = lambda **kw: calls.append(("run_master", kw))
-    module.run_master_with_shared_watchlists = lambda **kw: calls.append(("shared", kw))
     monkeypatch.setitem(sys.modules, "master_avwap_lib.runner", module)
 
-    scan_worker.run(_payload(use_shared_watchlists=True))
-    scan_worker.run(_payload(use_shared_watchlists=False))
+    scan_worker.run(_payload())
     scan_worker.run(_payload(update_setup_tracker=True))
 
-    assert calls[0] == ("shared", {})
-    assert calls[1] == ("run_master", {})
-    assert calls[2] == (
+    assert calls[0] == ("run_master", {})
+    assert calls[1] == (
         "run_master",
         {
-            "use_shared_watchlists": True,
             "update_setup_tracker": True,
             "require_ib_for_setup_tracker": True,
         },
@@ -96,7 +99,7 @@ def test_a_frozen_build_never_passes_dash_c_to_its_own_executable(monkeypatch):
 
     assert "-c" not in command, "this is the defect: the app parses -c as its own CLI"
     assert command[1] == scan_service.SCAN_WORKER_FLAG
-    assert json.loads(command[2])["use_shared_watchlists"] is False
+    assert json.loads(command[2])["update_setup_tracker"] is None
 
 
 def test_a_source_build_still_uses_the_interpreter_form(monkeypatch):
@@ -127,7 +130,7 @@ def test_the_frozen_flag_is_answered_before_the_desk_argument_parser(monkeypatch
     monkeypatch.setattr(sys, "argv", ["TradingBotV3.exe", "--run-scan", _payload()])
 
     assert launch_gui.main() == 0
-    assert json.loads(seen[0])["use_shared_watchlists"] is False
+    assert json.loads(seen[0])["update_setup_tracker"] is None
 
 
 def test_the_marker_has_one_definition():
@@ -156,15 +159,12 @@ def test_the_source_spawn_really_starts_a_child_and_prints_the_marker(tmp_path):
             """
             def run_master(**kwargs):
                 print("ran run_master", kwargs)
-
-            def run_master_with_shared_watchlists(**kwargs):
-                print("ran shared", kwargs)
             """
         ),
         encoding="utf-8",
     )
 
-    command = scan_worker_command_for_source(scan_service, _payload(use_shared_watchlists=True))
+    command = scan_worker_command_for_source(scan_service, _payload())
     env = {
         **_clean_env(),
         "PYTHONPATH": os.pathsep.join([str(tmp_path), str(SCRIPTS_DIR)]),
@@ -173,7 +173,7 @@ def test_the_source_spawn_really_starts_a_child_and_prints_the_marker(tmp_path):
         command, capture_output=True, text=True, timeout=120, env=env, cwd=str(ROOT_DIR)
     )
     assert result.returncode == 0, result.stderr
-    assert "ran shared" in result.stdout
+    assert "ran run_master" in result.stdout
     assert scan_service._SCAN_OK_MARKER in result.stdout
 
 

@@ -556,7 +556,6 @@ class RunnerCatchupInvocationTests(unittest.TestCase):
         ):
             return runner._maybe_run_setup_tracker_catchup(
                 update_setup_tracker=update_setup_tracker,
-                use_shared_watchlists=True,
                 now=now or datetime(2026, 8, 7, 10, 30),
             )
 
@@ -575,7 +574,6 @@ class RunnerCatchupInvocationTests(unittest.TestCase):
         self.assertEqual(call["lookback_sessions"], 2)
         # The cap is what keeps the recovery on completed bars only.
         self.assertEqual(call["end_date"], SESSION_D)
-        self.assertTrue(call["use_shared_watchlists"])
         # Recovery restores a vintage; it never retunes live scoring.
         self.assertIs(call["run_scoring_side_effects"], False)
 

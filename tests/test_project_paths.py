@@ -26,15 +26,22 @@ def _load_project_paths(monkeypatch, tmp_path, *, google_drive_root: Path | None
     return module
 
 
-def test_default_persistent_dir_prefers_google_drive(monkeypatch, tmp_path):
+def test_a_mounted_cloud_drive_is_never_adopted_as_the_store(monkeypatch, tmp_path):
+    """Decision 0015: cloud sync is no part of this system.
+
+    This used to be `test_default_persistent_dir_prefers_google_drive`, and it
+    passed because an unset `shared_data_dir` made the app adopt whatever sync
+    folder happened to be mounted as its operational store. Packet R1 removed
+    that discovery: the fallback is plainly local, and a mounted Drive is
+    ignored even when $GOOGLE_DRIVE points straight at it.
+    """
     drive_root = tmp_path / "My Drive"
     module = _load_project_paths(monkeypatch, tmp_path, google_drive_root=drive_root)
 
-    expected = drive_root / "Trading" / "TradingBot"
-    assert module.PERSISTENT_DATA_DIR == expected
-    assert module.FOCUS_LONGS_FILE == expected / "focus_longs.txt"
-    assert module.FOCUS_SHORTS_FILE == expected / "focus_shorts.txt"
-    assert module.PERSISTENT_DATA_DIR_SOURCE == "google_drive_default"
+    assert module.PERSISTENT_DATA_DIR != drive_root / "Trading" / "TradingBot"
+    assert module.PERSISTENT_DATA_DIR == module.LOCAL_SETTINGS_DIR
+    assert module.PERSISTENT_DATA_DIR_SOURCE == "default_local"
+    assert not hasattr(module, "_default_google_drive_shared_dir")
 
 
 def _legacy_migration_fixture(tmp_path):
@@ -121,7 +128,13 @@ def test_localappdata_env_still_wins_over_everything(monkeypatch, tmp_path):
     assert (tmp_path / "home" / "AppData" / "Local" / "TradingBotV3" / "longs.txt").exists()
 
 
-def test_default_persistent_dir_finds_macos_cloudstorage_mount(monkeypatch, tmp_path):
+def test_a_macos_cloudstorage_mount_is_never_adopted_as_the_store(monkeypatch, tmp_path):
+    """The macOS half of the same removal.
+
+    Decision 0015 blessed keeping the CloudStorage *mount check* in
+    `_unmounted_shared_anchor` - that guards against forking the store onto a
+    missing mount. It did not bless discovery, which silently chose the store.
+    """
     home = tmp_path / "home"
     mount = home / "Library" / "CloudStorage" / "GoogleDrive-trader@example.com" / "My Drive"
     mount.mkdir(parents=True)
@@ -130,12 +143,11 @@ def test_default_persistent_dir_finds_macos_cloudstorage_mount(monkeypatch, tmp_
     monkeypatch.setenv("USERPROFILE", str(home))
     module = _load_project_paths(monkeypatch, tmp_path)
 
-    expected = mount / "Trading" / "TradingBot"
-    assert module.PERSISTENT_DATA_DIR == expected
-    assert module.PERSISTENT_DATA_DIR_SOURCE == "google_drive_default"
+    assert module.PERSISTENT_DATA_DIR != mount / "Trading" / "TradingBot"
+    assert module.PERSISTENT_DATA_DIR_SOURCE == "default_local"
 
 
-def test_saved_storage_dir_still_overrides_google_drive(monkeypatch, tmp_path):
+def test_saved_storage_dir_decides_the_store(monkeypatch, tmp_path):
     localappdata = tmp_path / "localappdata"
     settings_dir = localappdata / "TradingBotV3"
     settings_dir.mkdir(parents=True)
@@ -153,18 +165,18 @@ def test_saved_storage_dir_still_overrides_google_drive(monkeypatch, tmp_path):
     assert module.PERSISTENT_DATA_DIR_SOURCE == "local_config"
 
 
-def test_wait_for_shared_drive_fails_clearly_when_drive_missing(monkeypatch, tmp_path):
+def test_wait_for_shared_store_fails_clearly_when_the_mount_is_missing(monkeypatch, tmp_path):
     import pytest
 
     module = _load_project_paths(monkeypatch, tmp_path, google_drive_root=tmp_path / "My Drive")
 
     # Mounted/local anchors: no wait, no error.
-    module._wait_for_shared_drive(tmp_path / "anything", "test")
+    module._wait_for_shared_store(tmp_path / "anything", "test")
 
     # Unmounted shared store + fail-fast: a clear actionable error, not a
-    # mkdir traceback (and never a silent local fallback). Windows simulates
-    # a missing drive letter; POSIX simulates a macOS CloudStorage mount that
-    # is absent because the Drive client is not running.
+    # mkdir traceback (and never a silent local fallback). Windows simulates a
+    # missing drive letter; POSIX simulates the absent macOS CloudStorage mount
+    # that decision 0015 blessed keeping the check for.
     if sys.platform == "win32":
         target = next(
             (Path(f"{letter}:/") for letter in "QWXYZ" if not Path(f"{letter}:/").exists()),
@@ -181,11 +193,14 @@ def test_wait_for_shared_drive_fails_clearly_when_drive_missing(monkeypatch, tmp
         target = home / "Library" / "CloudStorage" / "GoogleDrive-trader@example.com" / "My Drive" / "Trading"
     monkeypatch.setenv("TRADINGBOTV3_DRIVE_WAIT_SECONDS", "0")
     with pytest.raises(RuntimeError) as excinfo:
-        module._wait_for_shared_drive(target, "test_config")
+        module._wait_for_shared_store(target, "test_config")
     message = str(excinfo.value)
-    assert "not mounted" in message
-    assert "Google Drive" in message
+    assert "unavailable" in message
+    assert str(target) in message, "the message must name the store it could not reach"
     assert "local fallback is refused" in message
+    # The message no longer tells the trader to start a sync client that is no
+    # part of this system (decision 0015).
+    assert "Google Drive" not in message
 
 
 # --- orphaned atomic-write staging files ----------------------------------

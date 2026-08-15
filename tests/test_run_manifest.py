@@ -88,14 +88,17 @@ def test_run_master_writes_manifest_even_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_run_master_impl", boom)
 
     with pytest.raises(RuntimeError, match="scan exploded"):
-        runner.run_master(use_shared_watchlists=True)
+        runner.run_master()
 
     manifests = load_recent_manifests(tmp_path, limit=5)
     assert len(manifests) == 1
     manifest = manifests[0]
     assert manifest["status"] == "failed"
     assert "scan exploded" in manifest["error"]
-    assert manifest["counters"]["use_shared_watchlists"] is True
+    # The `use_shared_watchlists` counter was retired with the flag (packet
+    # R1). Nothing consumed it; `update_setup_tracker` is the counter the
+    # after-close audit actually reads.
+    assert "use_shared_watchlists" not in manifest["counters"]
     assert get_active_recorder() is None
 
 
@@ -137,7 +140,7 @@ def test_run_master_uses_parent_scheduler_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADINGBOT_RUN_TRIGGER", "Auto Pilot swing scan (11:00)")
     monkeypatch.setattr(runner, "_run_master_impl", lambda **kwargs: {})
 
-    runner.run_master(use_shared_watchlists=True)
+    runner.run_master()
 
     manifest = load_recent_manifests(tmp_path, limit=1)[0]
     assert manifest["run_id"] == "master_scan-parent-linked"

@@ -50,7 +50,6 @@ def parse_payload(payload: str | Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(spec, Mapping):
         raise ValueError(f"scan worker payload must be an object, got {type(spec).__name__}")
     return {
-        "use_shared_watchlists": bool(spec.get("use_shared_watchlists")),
         # None is meaningful: it selects the caller-chooses-the-entry-point
         # branch, which is not the same as "do not update the tracker".
         "update_setup_tracker": (
@@ -67,16 +66,12 @@ def run(payload: str | Mapping[str, Any] | None) -> int:
     faulthandler.enable()
     spec = parse_payload(payload)
 
-    from master_avwap_lib.runner import run_master, run_master_with_shared_watchlists
+    from master_avwap_lib.runner import run_master
 
     if spec["update_setup_tracker"] is None:
-        if spec["use_shared_watchlists"]:
-            run_master_with_shared_watchlists()
-        else:
-            run_master()
+        run_master()
     else:
         run_master(
-            use_shared_watchlists=True,
             update_setup_tracker=spec["update_setup_tracker"],
             require_ib_for_setup_tracker=True,
         )

@@ -116,15 +116,27 @@ class ScanService(QObject):
     def last_rejection_reason(self) -> str:
         return self._last_rejection_reason
 
-    def run_shared_watchlist_scan(
+    #: Job-ledger idempotency token. Deliberately unchanged when the shared/
+    #: local vocabulary was retired in packet R1: this is an opaque key, not
+    #: user-facing text, and renaming it would orphan every in-flight ledger
+    #: row on the changeover day for no gain.
+    _SCAN_CONFIG_HASH = "shared-v1"
+
+    def run_watchlist_scan(
         self,
-        label: str = "Running shared-watchlist Master AVWAP scan...",
+        label: str = "Running Master AVWAP scan...",
         *,
         scheduled_slot: str = "",
     ) -> bool:
+        """The one Master AVWAP scan.
+
+        This used to be a Shared/Local pair. Both ran the identical scan over
+        the identical two files - `resolve_scan_watchlist_paths` returned
+        `(LONGS_FILE, SHORTS_FILE)` either way - so the choice the menu offered
+        the trader was never a choice at all.
+        """
         return self._start(
             lambda: _run_master_scan_subprocess(
-                use_shared_watchlists=True,
                 run_id=self._active_run_id,
                 trigger=self._active_label,
                 on_process_started=self._record_worker_pid,
@@ -133,27 +145,13 @@ class ScanService(QObject):
             job_type="swing_scan" if scheduled_slot else "manual_master_scan",
             job_slot=scheduled_slot,
             dedupe=bool(scheduled_slot),
-            config_hash="shared-v1",
-        )
-
-    def run_local_watchlist_scan(self) -> bool:
-        return self._start(
-            lambda: _run_master_scan_subprocess(
-                use_shared_watchlists=False,
-                run_id=self._active_run_id,
-                trigger=self._active_label,
-                on_process_started=self._record_worker_pid,
-            ),
-            "Running local-watchlist Master AVWAP scan...",
-            job_type="manual_master_scan",
-            config_hash="local-v1",
+            config_hash=self._SCAN_CONFIG_HASH,
         )
 
     def run_autopilot_scan(self, *, update_setup_tracker: bool, label: str, slot_label: str) -> bool:
-        """Shared-watchlist scan with an explicit tracker-write decision (Auto Pilot slots)."""
+        """The same scan with an explicit tracker-write decision (Auto Pilot slots)."""
         return self._start(
             lambda: _run_master_scan_subprocess(
-                use_shared_watchlists=True,
                 update_setup_tracker=update_setup_tracker,
                 run_id=self._active_run_id,
                 trigger=self._active_label,
@@ -163,7 +161,7 @@ class ScanService(QObject):
             job_type="swing_scan" if not str(slot_label).startswith("manual ") else "manual_master_scan",
             job_slot=str(slot_label),
             dedupe=not str(slot_label).startswith("manual "),
-            config_hash="shared-v1",
+            config_hash=self._SCAN_CONFIG_HASH,
         )
 
     def _start(
@@ -516,7 +514,6 @@ def scan_worker_command(payload: str) -> list[str]:
 
 def _run_master_scan_subprocess(
     *,
-    use_shared_watchlists: bool,
     update_setup_tracker: bool | None = None,
     run_id: str = "",
     trigger: str = "",
@@ -525,7 +522,6 @@ def _run_master_scan_subprocess(
     """Run scanner work outside the Qt process so native faults do not close the GUI."""
     payload = json.dumps(
         {
-            "use_shared_watchlists": bool(use_shared_watchlists),
             "update_setup_tracker": (
                 None if update_setup_tracker is None else bool(update_setup_tracker)
             ),
@@ -548,7 +544,10 @@ def _run_master_scan_subprocess(
         on_process_started=on_process_started,
     )
     return {
-        "watchlist_label": "home folder watchlists + swing watchlists" if use_shared_watchlists else "local project watchlists",
+        # There is one set of watchlists. The old "local project watchlists"
+        # label was attached to a branch that read the identical two files, so
+        # it named a distinction that never existed (packet R1).
+        "watchlist_label": "home folder watchlists + swing watchlists",
         "subprocess_stdout": stdout_text,
         "run_id": str(run_id or ""),
     }

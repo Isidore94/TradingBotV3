@@ -464,9 +464,9 @@ class MainWindow(QMainWindow):
         self.trading_panel.master_panel.set_external_scheduler_owner(owner)
 
     def _bind_shortcuts(self) -> None:
-        run_action = QAction("Run Shared Scan", self)
+        run_action = QAction("Run Scan", self)
         run_action.setShortcut(QKeySequence("Ctrl+R"))
-        run_action.triggered.connect(self.trading_panel.master_panel.run_shared_scan)
+        run_action.triggered.connect(self.trading_panel.master_panel.run_scan)
         self.addAction(run_action)
 
         focus_action = QAction("Focus Setup Filter", self)

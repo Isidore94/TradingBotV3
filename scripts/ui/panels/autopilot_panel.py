@@ -32,7 +32,7 @@ class AutopilotPanel(QFrame):
         subtitle = QLabel(
             "Unattended trading day: swing scans at open+1h then hourly from the first full hour "
             "(tracker writes in the final-hour runs), self-built longs/shorts from the open's gaps "
-            "and RS/RW vs SPY, near-HOD adds on regime pauses, and a phone digest on the shared Drive."
+            "and RS/RW vs SPY, near-HOD adds on regime pauses, and a phone digest in the home folder."
         )
         subtitle.setWordWrap(True)
 

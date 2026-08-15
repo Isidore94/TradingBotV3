@@ -56,7 +56,6 @@ from master_avwap import (
     MasterAvwapGUI,
     build_combined_avwap_output_text,
     run_master,
-    run_master_with_shared_watchlists,
 )
 from gui_output import (
     MAIN_GUI_OUTPUT_DEBOUNCE_MS,

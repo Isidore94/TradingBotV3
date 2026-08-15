@@ -126,7 +126,7 @@ SHADOW_RESEARCH_SETTING = "autopilot_shadow_research"
 class AutopilotService(QObject):
     """Unattended mini-PC mode: schedules swing scans, self-builds the
     BounceBot watchlists at the open, folds near-HOD names in on regime
-    pauses, and keeps the shared-Drive away report fresh. All heavy work runs
+    pauses, and keeps the away report fresh. All heavy work runs
     off the GUI thread; this object only orchestrates."""
 
     logMessage = Signal(str)
@@ -522,7 +522,7 @@ class AutopilotService(QObject):
     def _maybe_clear_stale_auto_lists(self, now: datetime) -> None:
         """Empty autolongs/autoshorts once per new session so BounceBot never
         chases yesterday's bot picks. mtime-guarded: if any machine already
-        wrote them today (shared Drive), they are today's picks - keep them."""
+        wrote them today, they are today's picks - keep them."""
         today = now.date()
         if getattr(self, "_auto_lists_cleared_date", None) == today:
             return
@@ -785,7 +785,7 @@ class AutopilotService(QObject):
                     # placed (plan.md sec 5).
                     self._log(
                         "Shared watchlists not updated: this machine is not the "
-                        "designated writer for shared Drive state."
+                        "designated writer for the home folder."
                     )
                     return
                 self._state["autopilot_written"] = {"longs": list(longs), "shorts": list(shorts)}

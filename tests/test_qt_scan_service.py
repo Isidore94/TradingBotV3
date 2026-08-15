@@ -48,7 +48,7 @@ def test_master_scan_subprocess_uses_child_python(monkeypatch):
 
     monkeypatch.setattr(scan_service.subprocess, "Popen", FakeProc)
 
-    result = scan_service._run_master_scan_subprocess(use_shared_watchlists=True)
+    result = scan_service._run_master_scan_subprocess()
 
     assert captured["args"][:2] == [sys.executable, "-c"]
     assert captured["kwargs"]["cwd"] == str(ROOT_DIR)
@@ -74,7 +74,7 @@ def test_master_scan_subprocess_reports_child_failure(monkeypatch):
     monkeypatch.setattr(scan_service.subprocess, "Popen", FakeProc)
 
     try:
-        scan_service._run_master_scan_subprocess(use_shared_watchlists=False)
+        scan_service._run_master_scan_subprocess()
     except RuntimeError as exc:
         assert "exited with code 3221225477" in str(exc)
         assert "Fatal Python error" in str(exc)

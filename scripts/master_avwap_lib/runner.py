@@ -110,16 +110,11 @@ def _sanitize_existing_avwap_signal_rows(frame):
     return cleaned, dropped
 
 
-def run_master_with_shared_watchlists():
-    return run_master(use_shared_watchlists=True)
-
-
 def _maybe_run_setup_tracker_catchup(
     *,
     update_setup_tracker: bool | None,
     longs_path=None,
     shorts_path=None,
-    use_shared_watchlists: bool = False,
     now=None,
 ) -> dict:
     """Refresh a stale setup tracker before the scan runs (durability 2.1).
@@ -174,7 +169,6 @@ def _maybe_run_setup_tracker_catchup(
             lookback_sessions=lookback,
             longs_path=longs_path,
             shorts_path=shorts_path,
-            use_shared_watchlists=use_shared_watchlists,
             end_date=end_date,
             # Recovery only: restore the tracker vintage a missed after-close
             # run would have produced. An unattended catch-up minutes before a
@@ -435,7 +429,6 @@ def _schedule_deferred_theta_enrichment(
 def _run_master_impl(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
-    use_shared_watchlists: bool = False,
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
 ):
@@ -445,7 +438,6 @@ def _run_master_impl(
     long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
         longs_path=longs_path,
         shorts_path=shorts_path,
-        use_shared_watchlists=use_shared_watchlists,
     )
     logging.info(
         f"Running Master AVWAP scan using {watchlist_label}: "
@@ -547,7 +539,6 @@ def _run_master_impl(
         update_setup_tracker=update_setup_tracker,
         longs_path=longs_path,
         shorts_path=shorts_path,
-        use_shared_watchlists=use_shared_watchlists,
     )
     _phase_t = _log_phase_duration("setup tracker staleness catch-up", _phase_t)
 
@@ -2590,7 +2581,6 @@ def main():
 def run_master(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
-    use_shared_watchlists: bool = False,
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
 ):
@@ -2603,7 +2593,9 @@ def run_master(
         trigger=str(os.environ.get("TRADINGBOT_RUN_TRIGGER") or "unspecified"),
         run_id=str(os.environ.get("TRADINGBOT_RUN_ID") or ""),
     )
-    recorder.set_counter("use_shared_watchlists", bool(use_shared_watchlists))
+    # The `use_shared_watchlists` counter was retired with the flag in packet
+    # R1. Nothing read it: `autopilot_core` reads only `update_setup_tracker`
+    # and `setup_tracker_updated`, and no audit consumes it.
     recorder.set_counter("update_setup_tracker", update_setup_tracker)
     set_active_recorder(recorder)
     # Provider counters are per-run: begin_run opens a fresh isolated bucket
@@ -2618,7 +2610,6 @@ def run_master(
         result = _run_master_impl(
             longs_path=longs_path,
             shorts_path=shorts_path,
-            use_shared_watchlists=use_shared_watchlists,
             update_setup_tracker=update_setup_tracker,
             require_ib_for_setup_tracker=require_ib_for_setup_tracker,
         )
@@ -2663,7 +2654,6 @@ run_anchor_watchlist_scan = _legacy.run_anchor_watchlist_scan
 
 __all__ = [
     "run_master",
-    "run_master_with_shared_watchlists",
     "run_anchor_watchlist_scan",
     "launch_gui",
     "main",

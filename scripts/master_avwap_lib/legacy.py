@@ -126,7 +126,6 @@ from project_paths import (
     APP_LOG_BACKUP_COUNT,
     SafeRotatingFileHandler,
     get_local_setting,
-    get_shared_watchlist_paths,
     get_tracker_storage_details,
     open_path_in_file_manager,
     save_tracker_storage_dir,
@@ -1992,27 +1991,28 @@ def ensure_theta_option_data_client(ib: IBApi | None) -> tuple[IBApi | None, boo
 def resolve_scan_watchlist_paths(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
-    use_shared_watchlists: bool = False,
 ) -> tuple[Path, Path, str]:
+    """The watchlists a scan reads: the caller's pair, or the home folder's.
+
+    There used to be a `use_shared_watchlists` switch here. Both of its
+    branches returned `(LONGS_FILE, SHORTS_FILE)` under the same label - a
+    "shared" scan and a "local" scan read the identical two files - so it was
+    removed with the rest of the shared/local vocabulary in packet R1. There
+    has only ever been one home folder.
+    """
     if longs_path is not None and shorts_path is not None:
         return Path(longs_path), Path(shorts_path), "custom watchlists"
-    if use_shared_watchlists:
-        shared_longs_path, shared_shorts_path = get_shared_watchlist_paths()
-        return shared_longs_path, shared_shorts_path, "home folder watchlists"
     return LONGS_FILE, SHORTS_FILE, "home folder watchlists"
 
 
 def resolve_master_scan_watchlist_paths(
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
-    use_shared_watchlists: bool = False,
 ) -> tuple[list[Path], list[Path], str]:
     if longs_path is not None and shorts_path is not None:
         return [Path(longs_path)], [Path(shorts_path)], "custom watchlists"
 
-    base_longs_path, base_shorts_path, _ = resolve_scan_watchlist_paths(
-        use_shared_watchlists=use_shared_watchlists,
-    )
+    base_longs_path, base_shorts_path, _ = resolve_scan_watchlist_paths()
     # The self-built universe is always scanned; longs.txt / shorts.txt stay the
     # trader's intraday M5 RS/RW dumps and layer on top of it.
     return (
@@ -15682,7 +15682,6 @@ def warm_durable_bar_stores(
 def warm_durable_stores_for_watchlists(
     ib: IBApi | None = None,
     *,
-    use_shared_watchlists: bool = True,
     include_daily: bool = True,
     include_intraday: bool = True,
     daily_days: int | None = None,
@@ -15693,9 +15692,7 @@ def warm_durable_stores_for_watchlists(
     Connects an IBKR daily-data client when one is not supplied (falling back to
     Yahoo if IB is unavailable), warms, and disconnects what it connected.
     """
-    long_paths, short_paths, label = resolve_master_scan_watchlist_paths(
-        use_shared_watchlists=use_shared_watchlists
-    )
+    long_paths, short_paths, label = resolve_master_scan_watchlist_paths()
     optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE}
     longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
     shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
@@ -23011,7 +23008,6 @@ def backfill_setup_tracker_from_recent_sessions(
     lookback_sessions: int = 5,
     longs_path: Path | None = None,
     shorts_path: Path | None = None,
-    use_shared_watchlists: bool = False,
     end_date: date | None = None,
     run_scoring_side_effects: bool = True,
 ) -> dict:
@@ -23038,7 +23034,6 @@ def backfill_setup_tracker_from_recent_sessions(
     long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
         longs_path=longs_path,
         shorts_path=shorts_path,
-        use_shared_watchlists=use_shared_watchlists,
     )
     optional_paths = {SWING_LONGS_FILE, SWING_SHORTS_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE}
     longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
@@ -30802,7 +30797,7 @@ def format_market_prep_payload_report(payload: dict | None) -> str:
 
     return "\n".join(lines).rstrip()
 
-from .runner import run_master, run_master_with_shared_watchlists
+from .runner import run_master
 
 
 # ============================================================================

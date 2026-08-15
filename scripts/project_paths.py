@@ -18,11 +18,12 @@ from pathlib import Path
 class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
     """RotatingFileHandler that tolerates a locked target file on rollover.
 
-    On Windows, files inside a Google Drive / OneDrive sync folder are frequently
-    held open by the sync client, so the ``os.rename`` in ``doRollover`` raises
-    PermissionError (WinError 32). The stock handler then re-raises that on every
-    subsequent record, flooding the console with rollover tracebacks. This keeps
-    writing to the current file and backs off, retrying the rotation later.
+    On Windows a log file can be held open by another process - historically a
+    sync client, today an antivirus scanner or a tailing editor - so the
+    ``os.rename`` in ``doRollover`` raises PermissionError (WinError 32). The
+    stock handler then re-raises that on every subsequent record, flooding the
+    console with rollover tracebacks. This keeps writing to the current file and
+    backs off, retrying the rotation later.
     """
 
     _ROLLOVER_BACKOFF_SECONDS = 60.0
@@ -147,56 +148,6 @@ def _load_local_settings() -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-def _is_writable_dir(path: Path) -> bool:
-    """True only for an existing directory we can actually create files in.
-
-    macOS Drive File Stream exposes the *account* root (the parent of
-    "My Drive") as a read-only directory, so a plain ``exists()`` probe
-    happily selects it and every mkdir under it dies with EACCES.
-    """
-    try:
-        return path.is_dir() and os.access(path, os.W_OK)
-    except OSError:
-        return False
-
-
-def _default_google_drive_shared_dir() -> Path | None:
-    """Return the app's shared Google Drive folder when Drive is mounted."""
-
-    roots: list[Path] = []
-    env_value = os.environ.get("GOOGLE_DRIVE")
-    if env_value:
-        env_root = Path(env_value).expanduser()
-        roots.extend([env_root, env_root / "My Drive"])
-
-    home = Path.home()
-    roots.extend(
-        [
-            home / "My Drive",
-            # ~/Google Drive is the account root on macOS (a symlink into
-            # Library/CloudStorage) but the sync folder itself on Windows, so
-            # try the "My Drive" child before falling back to the root.
-            home / "Google Drive" / "My Drive",
-            home / "Google Drive",
-        ]
-    )
-    # Drive File Stream mounts each signed-in account under
-    # ~/Library/CloudStorage on macOS; the optional ~/Google Drive symlink may
-    # be missing entirely. Sorted so a multi-account machine resolves
-    # deterministically. Deliberately no platform gate: the directory simply
-    # does not exist elsewhere, and the probe stays uniformly testable.
-    try:
-        accounts = sorted((home / "Library" / "CloudStorage").glob("GoogleDrive-*"))
-    except OSError:
-        accounts = []
-    roots.extend(account / "My Drive" for account in accounts)
-
-    for root in roots:
-        if _is_writable_dir(root):
-            return root / "Trading" / "TradingBot"
-    return None
-
-
 def _resolve_persistent_data_dir() -> tuple[Path, str]:
     env_value = os.environ.get("TRADINGBOTV3_DATA_DIR")
     if env_value:
@@ -207,10 +158,12 @@ def _resolve_persistent_data_dir() -> tuple[Path, str]:
     if isinstance(config_value, str) and config_value.strip():
         return Path(config_value).expanduser(), "local_config"
 
-    google_drive_dir = _default_google_drive_shared_dir()
-    if google_drive_dir is not None:
-        return google_drive_dir, "google_drive_default"
-
+    # No cloud-drive auto-discovery (decision 0015, amended by packet R1).
+    # This used to probe ~/Google Drive, ~/My Drive, $GOOGLE_DRIVE and the macOS
+    # CloudStorage accounts and adopt the first writable one as the operational
+    # store. Cloud sync is no part of this system, so an unset `shared_data_dir`
+    # has to land somewhere plainly local rather than quietly inside whatever
+    # sync folder happens to be mounted.
     return LOCAL_SETTINGS_DIR, "default_local"
 
 
@@ -220,11 +173,17 @@ PERSISTENT_DATA_DIR, PERSISTENT_DATA_DIR_SOURCE = _resolve_persistent_data_dir()
 def _unmounted_shared_anchor(path: Path) -> Path | None:
     """Return the mount point startup must wait on, or None when none is missing.
 
-    Windows: the shared store's drive letter (Google Drive mounts G: late at
-    boot). macOS: the File Provider mount under ``~/Library/CloudStorage``
-    (``GoogleDrive-<account>``), which likewise only exists while the Drive
-    client is running - mkdir would otherwise fork the store into a plain
-    local folder.
+    Generic on Windows: the configured store's drive letter or UNC root. A
+    plain local home folder - what the desk actually uses - always has its
+    anchor present, so this costs nothing there; it earns its place only if the
+    store is ever pointed at a network or removable path.
+
+    macOS keeps the File Provider mount check under ``~/Library/CloudStorage``,
+    which decision 0015 explicitly blessed retaining until a macOS run is
+    actually needed.
+
+    Either way the point is the same: mkdir onto a missing mount would fork the
+    store into a plain local folder that silently shadows the real one.
     """
     anchor = Path(path.anchor) if path.anchor else None
     if anchor is not None and str(anchor) not in ("", ".") and not anchor.exists():
@@ -242,19 +201,21 @@ def _unmounted_shared_anchor(path: Path) -> Path | None:
     return None
 
 
-def _wait_for_shared_drive(path: Path, source: str) -> None:
+def _wait_for_shared_store(path: Path, source: str) -> None:
     """Bounded wait for the shared store's mount point to appear.
 
-    Google Drive mounts G: (or the macOS CloudStorage folder) late at boot,
-    so an auto-started GUI can race it and die in ``_ensure_directories``
-    with a bare mkdir traceback. Waiting (default 120s,
-    TRADINGBOTV3_DRIVE_WAIT_SECONDS to change, 0 = fail fast) rides out the
-    normal mount delay; if the drive never appears the failure is a clear,
-    actionable message instead.
+    A network or removable store can come up late at boot, so an auto-started
+    GUI can race it and die in ``_ensure_directories`` with a bare mkdir
+    traceback. Waiting (default 120s, TRADINGBOTV3_DRIVE_WAIT_SECONDS to
+    change, 0 = fail fast) rides out the normal delay; if the mount never
+    appears the failure is a clear, actionable message instead.
+
+    A local store returns immediately - its anchor is always present - so this
+    is a no-op on the desk.
 
     Deliberately NO silent local fallback: the shared store carries the
-    tracker, watchlists, and outcome history that every machine syncs through
-    Drive - quietly writing them to a local folder would fork that state.
+    tracker, watchlists and outcome history, and quietly writing them to a
+    different folder would fork that state.
     """
     anchor = _unmounted_shared_anchor(path)
     if anchor is None:
@@ -265,9 +226,9 @@ def _wait_for_shared_drive(path: Path, source: str) -> None:
         wait_seconds = 120.0
     if wait_seconds > 0:
         print(
-            f"[TradingBotV3] Shared data drive {anchor} is not mounted yet "
+            f"[TradingBotV3] Shared data store mount {anchor} is not available yet "
             f"(store: {path}, configured via {source}). Waiting up to "
-            f"{int(wait_seconds)}s for Google Drive to mount...",
+            f"{int(wait_seconds)}s for it to appear...",
             file=sys.stderr,
             flush=True,
         )
@@ -275,18 +236,18 @@ def _wait_for_shared_drive(path: Path, source: str) -> None:
         while time.monotonic() < deadline:
             time.sleep(2.0)
             if anchor.exists():
-                print(f"[TradingBotV3] Drive {anchor} mounted - continuing startup.", file=sys.stderr, flush=True)
+                print(f"[TradingBotV3] Mount {anchor} is available - continuing startup.", file=sys.stderr, flush=True)
                 return
     raise RuntimeError(
-        f"Shared data drive {anchor} is not mounted, so the shared store at {path} is unreachable "
-        f"(configured via {source}). Start Google Drive (GoogleDriveFS) and relaunch - or point the app "
-        "elsewhere via the TRADINGBOTV3_DATA_DIR environment variable or 'shared_data_dir' in "
-        "local_settings.json. A silent local fallback is refused on purpose: it would fork the shared "
-        "tracker/watchlist state across machines. TRADINGBOTV3_DRIVE_WAIT_SECONDS adjusts the wait (0 = fail fast)."
+        f"Shared data store mount {anchor} is unavailable, so the store at {path} is unreachable "
+        f"(configured via {source}). Bring the mount up and relaunch - or point the app elsewhere via "
+        "the TRADINGBOTV3_DATA_DIR environment variable or 'shared_data_dir' in local_settings.json. "
+        "A silent local fallback is refused on purpose: it would fork the tracker/watchlist state. "
+        "TRADINGBOTV3_DRIVE_WAIT_SECONDS adjusts the wait (0 = fail fast)."
     )
 
 
-_wait_for_shared_drive(PERSISTENT_DATA_DIR, PERSISTENT_DATA_DIR_SOURCE)
+_wait_for_shared_store(PERSISTENT_DATA_DIR, PERSISTENT_DATA_DIR_SOURCE)
 
 SHARED_HOME_DIR = PERSISTENT_DATA_DIR
 DATA_DIR = PERSISTENT_DATA_DIR / "data"
@@ -510,10 +471,9 @@ INDUSTRY_INTRADAY_RS_STATE_FILE = RUNTIME_DATA_DIR / "industry_intraday_rs_snaps
 MASTER_AVWAP_MARKET_PREP_REPORT_FILE = REPORTS_DIR / "master_avwap_market_prep.txt"
 EARNINGS_ANCHOR_CANDIDATES_REPORT_FILE = REPORTS_DIR / "earnings_anchor_candidates.txt"
 
-# Auto Pilot (unattended mini-PC mode). The report is the away-from-desk digest
-# and lives at the top of the shared Drive folder so it's one tap in the Drive
-# mobile app; scheduler state + activity log are per-machine so two machines
-# never fight over them through cloud sync.
+# Auto Pilot. The report is the away-from-desk digest and lives at the top of
+# the home folder; scheduler state + activity log are per-machine, so two
+# machines could never fight over them.
 AUTOPILOT_REPORT_FILE = SHARED_HOME_DIR / "autopilot_today.txt"
 AUTOPILOT_STATE_FILE = LOCAL_MACHINE_CACHE_DIR / "autopilot_state.json"
 AUTOPILOT_LOG_FILE = LOCAL_LOG_DIR / "autopilot.log"
@@ -552,7 +512,6 @@ def get_tracker_storage_details() -> dict[str, str]:
     source_labels = {
         "environment": "Environment variable",
         "local_config": "Saved local setting",
-        "google_drive_default": "Google Drive default",
         "default_local": "Default local storage",
     }
     return {
