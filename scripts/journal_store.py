@@ -523,6 +523,84 @@ class JournalStore:
                 )
         return len(rows)
 
+    def upsert_cash_transactions(self, rows: Iterable[Mapping[str, Any]]) -> int:
+        """Store fees, dividends, interest and FX - the money that is not a trade.
+
+        Kept out of ``raw_executions`` on purpose. These rows move cash but do
+        not open or close a position, and letting one into assembly would invent
+        a trade out of a dividend. The Fees view and the tax totals read them
+        from here (§9 step 13).
+        """
+        stored = [dict(row) for row in rows]
+        with self.connection() as conn:
+            for row in stored:
+                conn.execute(
+                    """
+                    INSERT INTO cash_transactions(
+                        txn_uid, broker, account_number, txn_date, activity_type, description,
+                        symbol, amount, currency, raw_json, imported_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(txn_uid) DO UPDATE SET
+                        broker = excluded.broker,
+                        account_number = excluded.account_number,
+                        txn_date = excluded.txn_date,
+                        activity_type = excluded.activity_type,
+                        description = excluded.description,
+                        symbol = excluded.symbol,
+                        amount = excluded.amount,
+                        currency = excluded.currency,
+                        raw_json = excluded.raw_json,
+                        imported_at = excluded.imported_at
+                    """,
+                    (
+                        str(row.get("txn_uid") or ""),
+                        str(row.get("broker") or "").upper(),
+                        str(row.get("account_number") or ""),
+                        _date_text(row.get("txn_date")),
+                        str(row.get("activity_type") or "OTHER").upper(),
+                        str(row.get("description") or ""),
+                        str(row.get("symbol") or "").upper(),
+                        _coerce_float(row.get("amount")),
+                        str(row.get("currency") or "USD").upper(),
+                        str(row.get("raw_json") or "{}"),
+                        _now_iso(),
+                    ),
+                )
+        return len(stored)
+
+    def list_cash_transactions(
+        self,
+        *,
+        broker: str = "",
+        account_number: str = "",
+        date_from: Any = None,
+        date_to: Any = None,
+        activity_type: str = "",
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if str(broker or "").strip():
+            clauses.append("broker = ?")
+            params.append(str(broker).upper())
+        if str(account_number or "").strip():
+            clauses.append("account_number = ?")
+            params.append(str(account_number))
+        if date_from is not None:
+            clauses.append("txn_date >= ?")
+            params.append(_date_text(date_from))
+        if date_to is not None:
+            clauses.append("txn_date <= ?")
+            params.append(_date_text(date_to))
+        if str(activity_type or "").strip():
+            clauses.append("activity_type = ?")
+            params.append(str(activity_type).upper())
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        with self.connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM cash_transactions {where} ORDER BY txn_date, txn_uid", params
+            ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def _load_raw_executions(self) -> list[dict[str, Any]]:
         """Every execution, ordered so each position's fills arrive in time order.
 

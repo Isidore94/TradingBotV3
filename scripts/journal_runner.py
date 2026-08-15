@@ -12,8 +12,12 @@ from journal_importers import (
     IBKR_HOST_SETTING,
     IBKR_PORT_SETTING,
     QuestradeImporter,
+    flex_cash_transactions,
+    flex_option_eae_executions,
     import_ibkr_executions,
     import_ibkr_flex_executions,
+    normalize_questrade_activity,
+    questrade_trade_activity_dates,
     resolve_ibkr_client_id,
 )
 import journal_coverage
@@ -166,6 +170,58 @@ def run_journal_import_for_date(
     }
 
 
+def _import_questrade_activities(
+    journal_store: JournalStore,
+    importer: Any,
+    chunk: dict[str, Any],
+    *,
+    messages_out: list[str],
+) -> None:
+    """Pull one chunk's activities alongside its executions (A7).
+
+    Additive and non-fatal: activities are fees, dividends, interest and FX,
+    plus a completeness cross-check. A broker that answers executions but not
+    activities must not turn a good chunk into a failed one, so this records the
+    problem and returns.
+    """
+    try:
+        activities = importer.get_activities(chunk["account_number"], chunk["start"], chunk["end"])
+    except Exception as exc:  # noqa: BLE001 - additive; never fails the chunk
+        messages_out.append(f"Questrade activities {chunk['account_number']} skipped: {exc}")
+        return
+    rows = []
+    for raw in activities:
+        row = normalize_questrade_activity(raw, chunk["account"])
+        if row is not None:
+            rows.append(row)
+    if rows:
+        journal_store.upsert_cash_transactions(rows)
+        messages_out.append(f"Questrade cash rows {len(rows)}")
+
+    # The cross-check: a day the activities endpoint calls a trading day, on
+    # which executions returned nothing, means the journal is missing trades
+    # there. Saying so is the point - the executions endpoint stays
+    # authoritative and nothing is imported from here.
+    traded = questrade_trade_activity_dates(activities)
+    imported = {str(item.get("trade_date") or "")[:10] for item in chunk.get("executions") or []}
+    missing = sorted(day for day in traded if day.isoformat() not in imported)
+    if missing:
+        messages_out.append(
+            f"Questrade {chunk['account_number']}: activities report trades on "
+            f"{', '.join(day.isoformat() for day in missing)} that executions did not return"
+        )
+        for day in missing:
+            journal_coverage.mark_coverage(
+                journal_store,
+                broker="QUESTRADE",
+                account_number=chunk["account_number"],
+                day=day,
+                status=journal_coverage.FAILED,
+                source="QT_API",
+                message="activities report trades the executions endpoint did not return",
+            )
+
+
 def run_journal_backfill(
     *,
     days: int = 365,
@@ -244,6 +300,12 @@ def run_journal_backfill(
                     import_run_id=run_id,
                     message=f"{count} execution(s)",
                 )
+                # After the chunk is marked, never before: the cross-check below
+                # can downgrade a day to FAILED, and marking COVERED afterwards
+                # would paint over exactly the disagreement it just found.
+                _import_questrade_activities(
+                    journal_store, qt_importer, chunk, messages_out=messages
+                )
                 total_imported += count
             if qt_importer.quarantined:
                 messages.append(f"Questrade quarantined {len(qt_importer.quarantined)} unreadable row(s)")
@@ -270,7 +332,17 @@ def run_journal_backfill(
         )
         try:
             statement = import_ibkr_flex_executions(with_metadata=True)
-            executions = statement["executions"]
+            # Option expiries, exercises and assignments are fills too. Without
+            # them an option that expired worthless has no closing execution and
+            # the position stays open forever (A7).
+            eae = flex_option_eae_executions(statement.get("option_eae") or [])
+            executions = list(statement["executions"]) + eae
+            cash_rows = flex_cash_transactions(statement.get("cash_transactions") or [])
+            if cash_rows:
+                journal_store.upsert_cash_transactions(cash_rows)
+                messages.append(f"IBKR cash rows {len(cash_rows)}")
+            if eae:
+                messages.append(f"IBKR option expiries/assignments {len(eae)}")
             accounts = [
                 {"account_number": item.account_number, "account_label": item.account_label, "currency": item.currency}
                 for item in executions

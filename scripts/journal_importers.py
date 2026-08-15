@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import threading
@@ -9,6 +10,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 import zoneinfo
 
@@ -916,6 +918,252 @@ def import_ibkr_flex_executions(
         document = parse_ibkr_flex_document(last_text)
         return document if with_metadata else document["executions"]
     raise RuntimeError("IBKR Flex statement was still generating after polling; try again shortly.")
+
+
+# ---------------------------------------------------------------------------
+# Cash transactions and option lifecycle events (R7 §9 step 7, root cause A7)
+# ---------------------------------------------------------------------------
+#
+# Neither broker's non-trade activity reached the journal. `get_activities` was
+# written and never called, and the Flex parser read only Trade/TradeConfirm -
+# so option expiries, assignments, dividends, interest and fees were invisible.
+# The expiry gap is the one that shows up as a stuck-open trade: an option that
+# expired worthless has no closing fill, so the position stays open forever with
+# no execution that could ever close it.
+
+#: Questrade activity types -> the cash_transactions vocabulary. Anything
+#: unrecognized becomes OTHER and keeps its raw payload, because a broker adding
+#: a new activity type must not lose the row.
+ACTIVITY_TYPE_MAP = {
+    "DIVIDEND": "DIVIDEND",
+    "DIVIDENDS": "DIVIDEND",
+    "DEPOSITS": "OTHER",
+    "WITHDRAWALS": "OTHER",
+    "TRANSFERS": "OTHER",
+    "INTEREST": "INTEREST",
+    "FEES AND REBATES": "FEE",
+    "FEESANDREBATES": "FEE",
+    "FX CONVERSION": "FX",
+    "FXCONVERSION": "FX",
+    "OTHER": "OTHER",
+    "CORPORATE ACTIONS": "OTHER",
+    # IBKR Flex spellings, so both brokers land in one vocabulary.
+    "BROKER INTEREST PAID": "INTEREST",
+    "BROKER INTEREST RECEIVED": "INTEREST",
+    "WITHHOLDING TAX": "FEE",
+    "PAYMENT IN LIEU OF DIVIDENDS": "DIVIDEND",
+    "COMMISSION ADJUSTMENTS": "FEE",
+    "OTHER FEES": "FEE",
+}
+
+
+def classify_activity_type(value: Any) -> str:
+    """Map a broker's activity label onto the cash_transactions vocabulary."""
+    text = str(value or "").strip().upper()
+    if not text:
+        return "OTHER"
+    compact = text.replace("_", " ").replace("-", " ")
+    return ACTIVITY_TYPE_MAP.get(compact, ACTIVITY_TYPE_MAP.get(compact.replace(" ", ""), "OTHER"))
+
+
+def _cash_txn_uid(broker: str, account_number: str, *parts: Any) -> str:
+    """A stable id for a cash row, since neither broker reliably supplies one.
+
+    Same reasoning as ``stable_execution_uid``: without a deterministic key the
+    nightly import re-inserts the same dividend every night.
+    """
+    blob = "|".join(str(part or "") for part in parts)
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
+    return f"{str(broker or '').upper()}:{str(account_number or '')}:cash-{digest}"
+
+
+def normalize_questrade_activity(raw: dict[str, Any], account: dict[str, Any]) -> dict[str, Any] | None:
+    """One Questrade activity as a cash_transactions row, or None to skip it.
+
+    Trade-type activities are **skipped**: the executions endpoint is
+    authoritative for trades (spec §5), and importing them here as well would
+    double-count every fill. Their value is as a completeness cross-check, which
+    is what `questrade_trade_activity_dates` below extracts.
+    """
+    activity_type = str(raw.get("type") or "").strip()
+    if activity_type.upper() in {"TRADES", "TRADE"}:
+        return None
+    account_number = str(
+        account.get("number") or account.get("accountNumber") or raw.get("accountNumber") or ""
+    ).strip()
+    when = raw.get("settlementDate") or raw.get("tradeDate") or raw.get("transactionDate")
+    txn_date = _coerce_date(when)
+    if txn_date is None:
+        return None
+    symbol = str(raw.get("symbol") or "").strip().upper()
+    amount = _coerce_float(raw.get("netAmount"), default=_coerce_float(raw.get("grossAmount")))
+    description = str(raw.get("description") or activity_type).strip()
+    return {
+        "txn_uid": _cash_txn_uid(
+            "QUESTRADE", account_number, txn_date.isoformat(), activity_type, symbol, amount, description
+        ),
+        "broker": "QUESTRADE",
+        "account_number": account_number,
+        "txn_date": txn_date.isoformat(),
+        "activity_type": classify_activity_type(activity_type),
+        "description": description,
+        "symbol": symbol,
+        "amount": amount,
+        "currency": str(raw.get("currency") or account.get("currency") or "USD").strip().upper(),
+        "raw_json": json.dumps(raw, sort_keys=True, default=str),
+    }
+
+
+def questrade_trade_activity_dates(activities: Iterable[dict[str, Any]]) -> set[date]:
+    """Days on which the activities endpoint says a trade happened.
+
+    Cross-check only. If a day appears here and the executions endpoint returned
+    nothing for it, the journal is missing trades on that day and the coverage
+    ledger should not be calling it COVERED - which is a thing the reconciliation
+    step can act on, and a thing nothing could see before.
+    """
+    days: set[date] = set()
+    for raw in activities:
+        if str(raw.get("type") or "").strip().upper() not in {"TRADES", "TRADE"}:
+            continue
+        when = _coerce_date(raw.get("tradeDate") or raw.get("transactionDate") or raw.get("settlementDate"))
+        if when is not None:
+            days.add(when)
+    return days
+
+
+def flex_cash_transactions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """IBKR Flex CashTransaction rows as cash_transactions rows."""
+    result: list[dict[str, Any]] = []
+    for attrs in rows:
+        account_number = str(attrs.get("accountId") or "").strip()
+        when = _coerce_date(str(attrs.get("dateTime") or attrs.get("settleDate") or "").replace(";", " ")[:10])
+        if when is None:
+            continue
+        amount = _coerce_float(attrs.get("amount"))
+        description = str(attrs.get("description") or attrs.get("type") or "").strip()
+        symbol = str(attrs.get("symbol") or "").strip().upper()
+        result.append(
+            {
+                "txn_uid": _cash_txn_uid(
+                    "IBKR",
+                    account_number,
+                    when.isoformat(),
+                    attrs.get("type"),
+                    symbol,
+                    amount,
+                    attrs.get("transactionID") or description,
+                ),
+                "broker": "IBKR",
+                "account_number": account_number,
+                "txn_date": when.isoformat(),
+                "activity_type": classify_activity_type(attrs.get("type")),
+                "description": description,
+                "symbol": symbol,
+                "amount": amount,
+                "currency": str(attrs.get("currency") or "USD").strip().upper(),
+                "raw_json": json.dumps(attrs, sort_keys=True, default=str),
+            }
+        )
+    return result
+
+
+def flex_option_eae_executions(
+    rows: Iterable[dict[str, Any]], *, quarantine: list[dict[str, Any]] | None = None
+) -> list[NormalizedExecution]:
+    """Option expiries, exercises and assignments as the fills they really are.
+
+    An option that expired worthless has no trade and therefore no closing fill,
+    so the journal held the position open forever with nothing that could ever
+    close it - one of the concrete "trades stuck open" the trader reported.
+    IBKR reports the event in the OptionEAE section; turning it into a normal
+    execution is what lets ordinary assembly close the position.
+
+    ``tradePrice`` is 0 for an expiry, which is correct: the option really did
+    become worthless, and the whole premium is the loss.
+    """
+    executions: list[NormalizedExecution] = []
+    for attrs in rows:
+        symbol = str(attrs.get("symbol") or "").strip().upper()
+        account_number = str(attrs.get("accountId") or "").strip()
+        raw_datetime = str(attrs.get("date") or attrs.get("dateTime") or "").replace(";", " ").strip()
+        if not symbol:
+            continue
+        try:
+            timestamp = parse_broker_datetime(raw_datetime, strict=True)
+        except BrokerTimestampError as exc:
+            if quarantine is not None:
+                quarantine.append(_quarantine_record("IBKR", str(exc), attrs))
+            continue
+        quantity = _coerce_float(attrs.get("quantity"))
+        if abs(quantity) <= 0:
+            continue
+        transaction_type = str(attrs.get("transactionType") or "").strip()
+        executions.append(
+            NormalizedExecution(
+                execution_uid=stable_execution_uid(
+                    "IBKR",
+                    account_number,
+                    attrs.get("transactionID") or attrs.get("tradeID"),
+                    symbol,
+                    timestamp.isoformat(),
+                    transaction_type,
+                    quantity,
+                ),
+                source="IBKR_FLEX",
+                broker="IBKR",
+                account_number=account_number,
+                account_label=account_number or "IBKR",
+                account_type="",
+                symbol=symbol,
+                security_type=normalize_security_type(attrs.get("assetCategory") or "OPT"),
+                currency=str(attrs.get("currency") or "USD").strip().upper(),
+                # A negative quantity reduces the position, whichever side it
+                # was held from, so the side follows the sign and assembly nets
+                # it exactly like any other fill.
+                side="SELL" if quantity < 0 else "BUY",
+                quantity=abs(quantity),
+                price=_coerce_float(attrs.get("tradePrice") or attrs.get("markPrice")),
+                timestamp=timestamp.isoformat(),
+                trade_date=timestamp.date().isoformat(),
+                commission=abs(_coerce_float(attrs.get("commisionsAndTax") or attrs.get("commission"))),
+                fees=0.0,
+                gross_amount=None,
+                net_amount=_coerce_float(attrs.get("proceeds")) if attrs.get("proceeds") is not None else None,
+                order_id="",
+                exchange_exec_id=str(attrs.get("transactionID") or "").strip(),
+                raw_json=json.dumps({**attrs, "_source_section": "OptionEAE"}, sort_keys=True, default=str),
+            )
+        )
+    return executions
+
+
+def flex_open_positions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Broker-reported open positions - reconciliation input, never executions.
+
+    Spec §5 fix 7 is explicit that these are not stored as executions. A
+    position is a statement of where things stand, not a record of a trade; the
+    moment it became a synthetic fill it would corrupt the P&L it is supposed to
+    check.
+    """
+    positions: list[dict[str, Any]] = []
+    for attrs in rows:
+        symbol = str(attrs.get("symbol") or "").strip().upper()
+        quantity = _coerce_float(attrs.get("position"))
+        if not symbol:
+            continue
+        positions.append(
+            {
+                "broker": "IBKR",
+                "account_number": str(attrs.get("accountId") or "").strip(),
+                "symbol": symbol,
+                "security_type": normalize_security_type(attrs.get("assetCategory") or "STK"),
+                "currency": str(attrs.get("currency") or "USD").strip().upper(),
+                "quantity": quantity,
+                "raw_json": json.dumps(attrs, sort_keys=True, default=str),
+            }
+        )
+    return positions
 
 
 def manual_execution_from_fields(fields: dict[str, Any]) -> NormalizedExecution:

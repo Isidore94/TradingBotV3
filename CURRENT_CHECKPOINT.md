@@ -38,7 +38,8 @@ Each step is its own green commit, pushed. A step is not done until
 | 4 Assembly changes | **DONE** | `tests/test_journal_assembly.py` (19 tests); 3044 passed, exit 0. Golden regenerated with a note: statuses and trade ids change, no P&L moves |
 | 5 Adjustments API | **DONE** | `tests/test_journal_adjustments.py` (16 tests); 3060 passed / smoke 7/7, exit 0 |
 | 6 Coverage ledger + partial persistence + self-heal | **DONE** | `scripts/journal_coverage.py` + `tests/test_journal_coverage.py` (21 tests); 3081 passed / smoke 7/7, exit 0 |
-| 7–10 Activities/Flex, FX, reconcile, nightly slot | pending | |
+| 7 Activities + Flex OptionEAE/OpenPositions/CashTransactions | **DONE** | `tests/test_journal_cash_and_options.py` (25 tests); 3106 passed, exit 0 |
+| 8–10 FX, reconcile, nightly slot | pending | |
 | 11–13 Journal UI | pending | |
 | 14 Governance close-out | pending | |
 
