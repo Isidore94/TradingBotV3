@@ -119,11 +119,16 @@ def test_the_golden_still_contains_the_defects_r7_is_here_to_fix(golden):
     aapl = trades[("QUESTRADE", "AAPL", "STOCK")]
     assert aapl["quantity_closed"] == 120.0 and aapl["status"] == "OPEN"
 
-    # B8 (§9 step 8) - no CAD conversion exists, so a CAD trade carries no
-    # comparable P&L at all.
+    # B8 (§9 step 8) - a CAD trade still carries no comparable P&L. Since step 2
+    # the column exists; nothing books it until the FX step, and a NULL that
+    # renders as "unconverted" is the honest state until then (I5).
     shop = trades[("QUESTRADE", "SHOP.TO", "STOCK")]
     assert shop["currency"] == "CAD" and shop["pnl_usd"] is None
-    assert "net_pnl_cad" not in shop
+    assert shop["net_pnl_cad"] is None and shop["fx_rate"] is None
+
+    # §9 step 4 will fill these; step 2 only created them.
+    assert {t["anchor_execution_uid"] for t in golden["trades"]} == {""}
+    assert {t["reconcile_status"] for t in golden["trades"]} == {""}
 
 
 def test_annotations_are_orphaned_by_a_rebuild(tmp_path):
@@ -189,11 +194,18 @@ def test_annotations_are_orphaned_by_a_rebuild(tmp_path):
     assert len(orphans) == 1
 
 
-def test_a_fresh_store_starts_at_schema_v2(tmp_path):
-    """The migration in §9 step 2 starts from here: v2, no coverage ledger."""
+def test_a_fresh_store_arrives_at_schema_v3(tmp_path):
+    """Changed in §9 step 2: a new store is created at v3, not migrated into it.
+
+    This asserted v2 and the absence of the five new tables until the migration
+    landed. It is kept rather than deleted because "a brand-new database needs no
+    migration and no backup" is a real property worth pinning - the backup path
+    is skipped exactly when there is nothing to lose.
+    """
     store = JournalStore(tmp_path / "trade_journal.sqlite3")
     with store.connection() as conn:
         version = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()[0]
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert version == "2"
-    assert not tables & {"import_coverage", "fx_rates", "trade_adjustments", "trade_aliases", "cash_transactions"}
+    assert version == "3"
+    assert tables >= {"import_coverage", "fx_rates", "trade_adjustments", "trade_aliases", "cash_transactions"}
+    assert list(tmp_path.glob("*.bak-*")) == [], "a new database has nothing to back up"

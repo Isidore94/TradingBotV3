@@ -59,7 +59,9 @@ def test_opportunity_lifecycle_is_append_only_and_filterable(tmp_path):
 
     with pytest.raises(ValueError):
         store.record_opportunity_event(opportunity_id="opp-1", event_type="MADE_UP")
-    assert JOURNAL_SCHEMA_VERSION == 2
+    # Bumped to 3 by R7 §9 step 2 (schema v2 -> v3). The opportunity-event
+    # contract this test covers is unchanged by that migration.
+    assert JOURNAL_SCHEMA_VERSION == 3
 
 
 def test_trade_rebuild_adds_taken_and_closed_once(tmp_path):

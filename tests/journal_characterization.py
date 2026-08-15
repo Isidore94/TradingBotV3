@@ -428,9 +428,18 @@ def _generate(tmp_dir: Path) -> dict[str, Any]:
     return capture_rebuild_output(store)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Regenerate the golden fixture. See this module's docstring first."""
+    import argparse
     import tempfile
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--note",
+        default="",
+        help="why the expected output changed. Required whenever it did.",
+    )
+    args = parser.parse_args(argv)
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from conftest import FIXTURES_DIR, _canonical_json, validate_fixture_contract
@@ -445,6 +454,19 @@ def main() -> int:
 
     path = FIXTURES_DIR / f"{FIXTURE_NAME}.json"
     previous = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+    # The trader's standing rule for golden fixtures, enforced here rather than
+    # left to whoever regenerates: expected output may change, but not quietly.
+    changed = [key for key in ("trades", "legs", "opportunity_events", "summary")
+               if key in previous and previous[key] != captured[key]]
+    if changed and not args.note.strip():
+        print(
+            "REFUSED: the expected output changed in section(s) "
+            f"{', '.join(changed)} and no --note was given.\n"
+            "Re-run with --note \"why this changed and who approved it\".",
+            file=sys.stderr,
+        )
+        return 1
     payload: dict[str, Any] = {
         "schema": "journal_rebuild_trades/v1",
         "feature_version": previous.get("feature_version") or "r7-step0-pre-assembly",
@@ -457,7 +479,7 @@ def main() -> int:
         "acquired_at": previous.get("acquired_at") or "2026-08-15T14:00:00-07:00",
         "as_of": "2026-08-05T13:00:00-07:00",
         "numeric_tolerance": 0.0,
-        "intentional_difference": previous.get("intentional_difference") or "",
+        "intentional_difference": args.note.strip() or previous.get("intentional_difference") or "",
         "raw_input_keys": ["executions"],
         "expected_keys": ["trades", "legs", "opportunity_events", "summary"],
         "executions": CHARACTERIZATION_EXECUTIONS,

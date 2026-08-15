@@ -12,11 +12,25 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from journal_analytics import AutoTagger
+from journal_migrate import (
+    SOURCE_RANK,
+    MigrationReport,
+    backup_database,
+    migrate_to_v3,
+    read_schema_version,
+)
 from project_paths import JOURNAL_DB_FILE, JOURNAL_EXPORT_DIR
 
 
-JOURNAL_SCHEMA_VERSION = 2
+JOURNAL_SCHEMA_VERSION = 3
 EPSILON = 0.0000001
+
+#: ``SOURCE_RANK`` as a SQL expression over the stored row, so the upsert can
+#: refuse to let a poorer source overwrite a richer one. Built from the map
+#: rather than typed out twice, so the two can never disagree.
+_SOURCE_RANK_SQL = "(CASE raw_executions.source " + " ".join(
+    f"WHEN '{name}' THEN {rank}" for name, rank in sorted(SOURCE_RANK.items()) if name
+) + " ELSE 0 END)"
 
 OPPORTUNITY_EVENT_TYPES = {
     "SEEN",
@@ -136,6 +150,8 @@ class JournalStore:
     def __init__(self, db_path: Path = JOURNAL_DB_FILE) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        #: The v2 -> v3 report, when this construction performed the migration.
+        self.last_migration: MigrationReport | None = None
         self.initialize_schema()
 
     def connect(self) -> sqlite3.Connection:
@@ -154,6 +170,23 @@ class JournalStore:
             conn.close()
 
     def initialize_schema(self) -> None:
+        """Create the base tables, then migrate to the current schema version.
+
+        The version is read **before** anything is created, because that read is
+        the only way to tell a pre-existing v2 database (which must be backed up
+        before its execution uids are collapsed) from a database this call is
+        about to create for the first time (which has nothing to lose).
+        """
+        pre_existing = self.db_path.is_file() and self.db_path.stat().st_size > 0
+        prior_version: int | None = None
+        if pre_existing:
+            with self.connection() as conn:
+                prior_version = read_schema_version(conn)
+            # A non-empty file with no recorded version is a v2 database from
+            # before the version row existed. Treat it as v2 and back it up.
+            if prior_version is None:
+                prior_version = 2
+
         with self.connection() as conn:
             conn.executescript(
                 """
@@ -310,10 +343,28 @@ class JournalStore:
                     ON opportunity_events(substr(occurred_at, 1, 10), event_type);
                 """
             )
-            conn.execute(
-                "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-                ("schema_version", str(JOURNAL_SCHEMA_VERSION)),
-            )
+
+        needs_migration = prior_version is None or int(prior_version) < JOURNAL_SCHEMA_VERSION
+        report = MigrationReport(db_path=str(self.db_path), from_version=prior_version)
+        if pre_existing and prior_version is not None and int(prior_version) < JOURNAL_SCHEMA_VERSION:
+            report.backup_path = str(backup_database(self.db_path, prior_version))
+
+        with self.connection() as conn:
+            migrate_to_v3(conn, report=report)
+
+        if needs_migration:
+            self.last_migration = report
+            with self.connection() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
+                    ("last_migration_report", _json_dumps(report.as_dict())),
+                )
+            if report.rebuild_required:
+                # Collapsing duplicate executions invalidates every derived
+                # trade and leg. Rebuilding here rather than leaving it to the
+                # next import is what stops the Journal tab showing the doubled
+                # positions the migration just fixed.
+                self.rebuild_trades(refresh_tags=False)
 
     def start_import_run(self, source: str) -> int:
         with self.connection() as conn:
@@ -366,17 +417,32 @@ class JournalStore:
         return len(rows)
 
     def upsert_executions(self, executions: Iterable[Any]) -> int:
+        """Insert or refresh executions, keyed by ``execution_uid``.
+
+        Since v3 the uid no longer embeds the symbol and timestamp, so the same
+        broker fill arriving over the IBKR socket and again in that night's Flex
+        statement lands on one row instead of two (B4). That makes the question
+        "which one wins?" real, and the answer is the same one the migration
+        uses: the richer source. A desk-hours socket import may not overwrite the
+        commissions, fees and netCash a Flex row already carries, and the
+        ``WHERE`` clause below is what enforces it in the database rather than in
+        whichever caller happens to run last.
+        """
         rows = [item.as_row() if hasattr(item, "as_row") else dict(item) for item in executions]
         with self.connection() as conn:
             for row in rows:
+                source = str(row.get("source") or "").upper()
+                multiplier = row.get("multiplier")
+                if multiplier is None:
+                    multiplier = _contract_multiplier(row)
                 conn.execute(
-                    """
+                    f"""
                     INSERT INTO raw_executions(
                         execution_uid, broker, account_number, account_label, account_type, symbol,
                         security_type, currency, side, quantity, price, timestamp, trade_date,
                         commission, fees, gross_amount, net_amount, order_id, exchange_exec_id,
-                        raw_json, imported_at
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        raw_json, imported_at, source, multiplier
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(execution_uid) DO UPDATE SET
                         broker = excluded.broker,
                         account_number = excluded.account_number,
@@ -397,7 +463,10 @@ class JournalStore:
                         order_id = excluded.order_id,
                         exchange_exec_id = excluded.exchange_exec_id,
                         raw_json = excluded.raw_json,
-                        imported_at = excluded.imported_at
+                        imported_at = excluded.imported_at,
+                        source = excluded.source,
+                        multiplier = excluded.multiplier
+                    WHERE {_SOURCE_RANK_SQL} <= ?
                     """,
                     (
                         row.get("execution_uid"),
@@ -421,6 +490,9 @@ class JournalStore:
                         str(row.get("exchange_exec_id") or ""),
                         str(row.get("raw_json") or "{}"),
                         _now_iso(),
+                        source,
+                        float(multiplier),
+                        SOURCE_RANK.get(source, 0),
                     ),
                 )
         return len(rows)

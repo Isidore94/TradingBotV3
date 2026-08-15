@@ -152,6 +152,27 @@ Identity fixes:
   (IBKR_FLEX > IBKR_SOCKET, detected from raw_json shape; Questrade keeps newest
   `imported_at`), reports every kept/dropped uid. Doubled socket+Flex positions
   collapse here.
+
+  Three choices this left open, **decided at build time (§9 step 2, 2026-08-15)**
+  and recorded here because each is load-bearing:
+
+  1. **`BROKER` in a uid is the token the importers already emit** — `QT`,
+     `IBKR`, or the manual broker string — not the long `QUESTRADE` spelling of
+     the `broker` column. Rewriting `QT` to `QUESTRADE` would churn every
+     Questrade uid for no gain and invalidate every uid a human has already read
+     in a report.
+  2. **The same source-precedence rule runs at import time, not only in the
+     migration.** Once the uid stops embedding the timestamp, a desk-hours socket
+     import and that night's Flex pull land on the *same row*, so "which wins" is
+     a live question and not only a one-time one. `upsert_executions` refuses to
+     let a poorer source overwrite a richer one, so a socket import can never
+     erase the commissions, fees and netCash a Flex row already carries.
+  3. **A broker row with no execution id gets a deterministic surrogate** —
+     `PREFIX:account:auto-<sha256 of symbol|timestamp|qty|price>` — not a random
+     uuid. Dropping symbol+timestamp removed the accidental uniqueness they used
+     to supply; a random uuid would re-import the same fill as a new execution
+     every night and double the position by a second route.
+
 - **trade_id anchored to the opening execution uid**, plus a re-key pass inside
   `rebuild_trades`: snapshot annotated trade_ids + their leg uid sets before the
   DELETE; after assembly, map old→new by largest execution-uid overlap; UPDATE

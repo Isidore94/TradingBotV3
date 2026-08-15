@@ -14,6 +14,7 @@ import zoneinfo
 
 import requests
 
+from journal_migrate import stable_execution_uid
 from project_paths import get_local_setting, save_local_setting
 
 
@@ -279,16 +280,20 @@ class NormalizedExecution:
     order_id: str = ""
     exchange_exec_id: str = ""
     raw_json: str = "{}"
+    #: Which importer produced this row (raw_executions.source, schema v3).
+    source: str = ""
 
     def as_row(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def _execution_uid(prefix: str, *parts: Any) -> str:
-    cleaned = [str(part or "").strip() for part in parts if str(part or "").strip()]
-    if cleaned:
-        return f"{prefix}:{':'.join(cleaned)}"
-    return f"{prefix}:{uuid.uuid4().hex}"
+# ``_execution_uid`` lived here and built the v2 identity - prefix, account,
+# exec id, symbol, timestamp - which is exactly the spelling that made one
+# broker fill dedupe as two (B4). It is deleted rather than deprecated: leaving
+# a function that spells the old identity next to the one that spells the new
+# one is an invitation to call the wrong one. ``stable_execution_uid`` in
+# ``journal_migrate`` is now the single definition, shared with the migration
+# so the two can never drift.
 
 
 def _quarantine_record(broker: str, reason: str, payload: Any) -> dict[str, Any]:
@@ -442,7 +447,10 @@ class QuestradeImporter:
         gross_amount = raw.get("grossAmount") if "grossAmount" in raw else None
         net_amount = raw.get("netAmount") if "netAmount" in raw else None
         return NormalizedExecution(
-            execution_uid=_execution_uid("QT", account_number, execution_id or order_id, symbol, timestamp.isoformat()),
+            execution_uid=stable_execution_uid(
+                "QT", account_number, execution_id or order_id, symbol, timestamp.isoformat(), quantity, price
+            ),
+            source="QT_API",
             broker="QUESTRADE",
             account_number=account_number,
             account_label=account_label,
@@ -610,7 +618,10 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
         if not currency:
             currency = str(commission_report.get("currency") or "USD").upper()
         return NormalizedExecution(
-            execution_uid=_execution_uid("IBKR", account_number, exec_id, symbol, timestamp.isoformat()),
+            execution_uid=stable_execution_uid(
+                "IBKR", account_number, exec_id, symbol, timestamp.isoformat()
+            ),
+            source="IBKR_SOCKET",
             broker="IBKR",
             account_number=account_number,
             account_label=account_number or "IBKR",
@@ -738,7 +749,10 @@ def parse_ibkr_flex_statement(
         side = normalize_side(attrs.get("buySell") or ("BUY" if quantity >= 0 else "SELL"))
         executions.append(
             NormalizedExecution(
-                execution_uid=_execution_uid("IBKR", account_number, exec_id, symbol, timestamp.isoformat()),
+                execution_uid=stable_execution_uid(
+                    "IBKR", account_number, exec_id, symbol, timestamp.isoformat()
+                ),
+                source="IBKR_FLEX",
                 broker="IBKR",
                 account_number=account_number,
                 account_label=account_number or "IBKR",
@@ -821,7 +835,8 @@ def manual_execution_from_fields(fields: dict[str, Any]) -> NormalizedExecution:
     symbol = str(fields.get("symbol") or "").strip().upper()
     execution_id = str(fields.get("execution_id") or uuid.uuid4().hex).strip()
     return NormalizedExecution(
-        execution_uid=_execution_uid(broker, account_number, execution_id),
+        execution_uid=stable_execution_uid(broker, account_number, execution_id),
+        source="MANUAL",
         broker=broker,
         account_number=account_number,
         account_label=str(fields.get("account_label") or account_number).strip(),

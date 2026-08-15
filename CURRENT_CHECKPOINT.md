@@ -33,7 +33,7 @@ Each step is its own green commit, pushed. A step is not done until
 |---|---|---|
 | 0 Characterization fixture | **DONE** | `tests/fixtures/journal_rebuild_trades_v1.json` + `tests/test_journal_characterization.py`; 2931 passed, exit 0 |
 | 1 Hygiene (A10, B5, A4) | **DONE** | `tests/test_journal_import_hygiene.py` (34 tests); 2965 passed, exit 0 |
-| 2 v3 migration + uid migration | pending | |
+| 2 v3 migration + uid migration | **DONE** | `scripts/journal_migrate.py` + `tests/test_journal_migration.py` (26 tests); 2991 passed / smoke 7/7, exit 0 |
 | 3 Group-key normalization | pending | |
 | 4 Assembly changes | pending | |
 | 5–10 Adjustments, coverage, activities, FX, reconcile, nightly slot | pending | |
@@ -55,6 +55,21 @@ fill with the import time. The desk is unaffected today: `constraints.txt` pins
 read. So this is a defect that fires on an ibapi upgrade, not one already in the
 live journal — recorded that way rather than as a live data-corruption finding.
 Verified by running the pre-fix module directly against both spellings.
+
+**Step 2 changed the golden once, on the record.** Schema v3 adds five columns
+to every trade row (`net_pnl_cad`, `fx_rate`, `fx_rate_date`,
+`reconcile_status`, `anchor_execution_uid`), all NULL or empty until steps 4, 8
+and 9 populate them. **No assembled value moved**: legs, opportunity events and
+the summary are byte-identical and every shared trade column matches, verified
+column by column before regenerating. The note is in the fixture's
+`intentional_difference` field, and the generator now **refuses to write a
+changed golden without one**.
+
+**The live journal DB has not been touched.** Everything above ran against
+fixture and temporary databases. `journal_migrate.py` defaults to a dry run
+against a throwaway copy, and a test asserts the live file is byte-identical
+afterwards and that no backup is taken (because nothing changed). The real
+migration is a trader-present step and waits for Monday.
 
 **Trader-present steps ahead — the build stops and asks at each** (spec §9):
 Flex token setup (§8) before step 7 goes live, account tax-status labeling after
