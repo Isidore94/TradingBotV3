@@ -194,8 +194,20 @@ wording, and `docs/EVENING_MODE_RUNBOOK.md` in the same commit.
 
 ## 4. Invariants and fenced files
 
-- Fail-open on session-lookup failure everywhere: a broken clock must never sit out
-  a trading day (matches `bouncebot_scanning_due`).
+- **Fail-open, but not fully open** (amended 2026-08-15, R2.1). A broken clock must
+  never be the reason the desk sits out a trading day — but taken literally, "fail
+  open" returned True at any hour, so a broken calendar could wake the desk at
+  21:00: a universe rebuild, an IB connect and a self-arm against a closed tape,
+  which is precisely what this gate exists to prevent. On a session-lookup failure
+  `auto_scanning_due` now falls back to the **fixed weekday 06:00–14:00 local
+  window**, spelled out as plain hours so it depends on nothing that could itself be
+  broken. Both properties hold: the session still runs, and the night stays quiet.
+  The weekend check runs before the window, so a broken calendar cannot turn Saturday
+  into a trading day either, and `AutopilotService._auto_work_due` applies the same
+  fallback if the check itself raises.
+  The asymmetry with `bouncebot_scanning_due`, which still fails fully open, is
+  deliberate: an extra overnight *sweep* is wasted IB traffic, whereas an extra
+  overnight *automatic-work* window is the whole apparatus starting up.
 - One owner per timer: the SPY alarm and quiet-hours checks live inside the existing
   `AutopilotService._tick()`; no new timers.
 - Champion paths untouched; the alarm reads the champion SPY bars only.
