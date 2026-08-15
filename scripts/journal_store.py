@@ -429,6 +429,10 @@ class JournalStore:
                         currency = excluded.currency,
                         raw_json = excluded.raw_json,
                         updated_at = excluded.updated_at
+                        -- I7: `tax_status` and `tax_status_source` are absent
+                        -- from this statement on purpose. They are trader-owned,
+                        -- so an import refreshing an account's label from the
+                        -- broker must leave them exactly as the trader set them.
                     """,
                     (
                         str(broker or "").upper(),
@@ -522,6 +526,57 @@ class JournalStore:
                     ),
                 )
         return len(rows)
+
+    TAX_STATUSES = ("TAXABLE", "TAX_FREE", "TAX_DEFERRED")
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        """Every known account with its tax status, for the account tree (I6)."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM accounts ORDER BY broker, account_number"
+            ).fetchall()
+        accounts = []
+        for raw in rows:
+            row = _row_to_dict(raw)
+            row["tax_status"] = str(row.get("tax_status") or "").upper()
+            row["tax_status_source"] = str(row.get("tax_status_source") or "").lower()
+            accounts.append(row)
+        return accounts
+
+    def set_account_tax_status(
+        self, broker: str, account_number: str, tax_status: str, *, source: str = "trader"
+    ) -> None:
+        """Label an account's tax treatment. Trader-owned, so nothing else writes it.
+
+        A blank status is allowed and means "unlabeled", which is the honest
+        state for an account nobody has decided about - the account tree shows
+        it in its own group rather than guessing, because a guessed tax status
+        is a wrong number in a tax record.
+        """
+        normalized = str(tax_status or "").strip().upper()
+        if normalized and normalized not in self.TAX_STATUSES:
+            raise ValueError(f"unsupported tax status: {tax_status!r}")
+        with self.connection() as conn:
+            updated = conn.execute(
+                "UPDATE accounts SET tax_status = ?, tax_status_source = ?, updated_at = ? "
+                "WHERE broker = ? AND account_number = ?",
+                (normalized, str(source or "").lower(), _now_iso(),
+                 str(broker or "").upper(), str(account_number or "")),
+            ).rowcount
+            if not updated:
+                # An account the trader labels before its first import still has
+                # to keep the label - the import upsert never clobbers a
+                # trader-sourced value (I7).
+                conn.execute(
+                    """
+                    INSERT INTO accounts(
+                        broker, account_number, account_label, account_type, currency,
+                        raw_json, updated_at, tax_status, tax_status_source
+                    ) VALUES(?, ?, ?, '', '', '{}', ?, ?, ?)
+                    """,
+                    (str(broker or "").upper(), str(account_number or ""), str(account_number or ""),
+                     _now_iso(), normalized, str(source or "").lower()),
+                )
 
     def upsert_cash_transactions(self, rows: Iterable[Mapping[str, Any]]) -> int:
         """Store fees, dividends, interest and FX - the money that is not a trade.
@@ -1528,9 +1583,17 @@ class JournalStore:
         broker: str | None = None,
         account: str | None = None,
         symbol: str | None = None,
+        date_from: str | date | None = None,
+        date_to: str | date | None = None,
     ) -> list[dict[str, Any]]:
         clauses = []
         params: list[Any] = []
+        if date_from:
+            clauses.append("trade_date >= ?")
+            params.append(_date_text(date_from))
+        if date_to:
+            clauses.append("trade_date <= ?")
+            params.append(_date_text(date_to))
         if trade_date:
             date_value = _date_text(trade_date)
             clauses.append("(substr(opened_at, 1, 10) = ? OR substr(closed_at, 1, 10) = ? OR trade_date = ?)")
@@ -1548,7 +1611,9 @@ class JournalStore:
         with self.connection() as conn:
             rows = conn.execute(
                 f"""
-                SELECT t.*, COALESCE(a.setup_tags, '') AS setup_tags, COALESCE(a.notes, '') AS notes
+                SELECT t.*, COALESCE(a.setup_tags, '') AS setup_tags, COALESCE(a.notes, '') AS notes,
+                       a.planned_entry AS planned_entry, a.planned_stop AS planned_stop,
+                       a.planned_risk AS planned_risk, COALESCE(a.risk_source, '') AS risk_source
                 FROM trades t
                 LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id
                 {where_sql}
@@ -1562,6 +1627,46 @@ class JournalStore:
             trade.update(regime)
             trade["display_tags"] = trade.get("setup_tags") or trade.get("auto_tag_summary") or ""
         return trades
+
+    def save_risk_fields(
+        self,
+        trade_id: str,
+        *,
+        planned_entry: float | None = None,
+        planned_stop: float | None = None,
+        planned_risk: float | None = None,
+        risk_source: str = "manual",
+    ) -> None:
+        """Store the plan behind a trade. Trader-owned; no import path writes it.
+
+        These live on ``trade_annotations`` rather than ``trades`` for one
+        reason: that table survives a rebuild and carries its own re-key pass,
+        so the risk a trader typed is not thrown away the next time a backfill
+        re-assembles the trade (I4, I7).
+        """
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO trade_annotations(
+                    trade_id, setup_tags, notes, updated_at,
+                    planned_entry, planned_stop, planned_risk, risk_source
+                ) VALUES(?, '', '', ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_id) DO UPDATE SET
+                    updated_at = excluded.updated_at,
+                    planned_entry = excluded.planned_entry,
+                    planned_stop = excluded.planned_stop,
+                    planned_risk = excluded.planned_risk,
+                    risk_source = excluded.risk_source
+                """,
+                (
+                    str(trade_id),
+                    _now_iso(),
+                    None if planned_entry is None else float(planned_entry),
+                    None if planned_stop is None else float(planned_stop),
+                    None if planned_risk is None else float(planned_risk),
+                    str(risk_source or ""),
+                ),
+            )
 
     def list_trade_legs(self, trade_id: str) -> list[dict[str, Any]]:
         with self.connection() as conn:
@@ -1594,6 +1699,8 @@ class JournalStore:
                     setup_tags = excluded.setup_tags,
                     notes = excluded.notes,
                     updated_at = excluded.updated_at
+                    -- planned_entry/stop/risk are absent on purpose: saving a
+                    -- note must not erase the plan the trader typed earlier.
                 """,
                 (trade_id, str(setup_tags or "").strip(), str(notes or "").strip(), _now_iso()),
             )

@@ -64,6 +64,7 @@ __all__ = [
     "JOURNAL_SCHEMA_VERSION_V3",
     "MigrationReport",
     "SOURCE_RANK",
+    "TRADER_CONFIRMED_TAX_STATUS",
     "backup_database",
     "canonical_execution_uid",
     "classify_execution_source",
@@ -180,6 +181,22 @@ NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     ("trade_annotations", "planned_risk", "REAL"),
     ("trade_annotations", "risk_source", "TEXT NOT NULL DEFAULT ''"),
 )
+
+#: Accounts whose tax status the trader has stated, keyed (BROKER, account).
+#: Confirmed 2026-08-15 for all four. These are recorded as ``trader``-sourced
+#: rather than ``auto`` because they are a statement of fact from the person who
+#: opened the accounts, not an inference from an account-type string - and the
+#: difference matters, since nothing may ever overwrite a ``trader`` value (I7).
+#:
+#: U4867396 is currently unfunded and is deliberately kept and labeled: a zero
+#: balance is not zero history, and an account that drops out of the tax
+#: grouping is an account whose past trades quietly stop being counted.
+TRADER_CONFIRMED_TAX_STATUS: dict[tuple[str, str], str] = {
+    ("QUESTRADE", "51830546"): "TAX_FREE",
+    ("QUESTRADE", "29347316"): "TAXABLE",
+    ("IBKR", "U4867396"): "TAX_FREE",
+    ("IBKR", "U5102524"): "TAXABLE",
+}
 
 #: Questrade account_type -> tax status. Spec §4; only ever seeds a blank value,
 #: and never overwrites one the trader set (I7).
@@ -524,7 +541,30 @@ def _seed_tax_status(conn: sqlite3.Connection, report: MigrationReport) -> None:
     if not _table_exists(conn, "accounts"):
         return
     for row in [dict(item) for item in conn.execute("SELECT * FROM accounts")]:
-        if str(row.get("tax_status") or "").strip():
+        broker = str(row.get("broker") or "").upper()
+        account_number = str(row.get("account_number") or "")
+        current = str(row.get("tax_status") or "").strip()
+        current_source = str(row.get("tax_status_source") or "").strip().lower()
+
+        confirmed = TRADER_CONFIRMED_TAX_STATUS.get((broker, account_number), "")
+        if confirmed:
+            # A stated fact outranks an inference, and outranks a stale `auto`
+            # guess from an earlier run. It still never overwrites a different
+            # `trader` value - if the trader has since said something else on
+            # this desk, that is the newer statement (I7).
+            if current_source == "trader" and current and current != confirmed:
+                continue
+            if current == confirmed and current_source == "trader":
+                continue
+            conn.execute(
+                "UPDATE accounts SET tax_status = ?, tax_status_source = 'trader' "
+                "WHERE broker = ? AND account_number = ?",
+                (confirmed, row.get("broker"), row.get("account_number")),
+            )
+            report.tax_status_seeded += 1
+            continue
+
+        if current:
             continue
         account_type = str(row.get("account_type") or "").strip().upper()
         seeded = TAX_STATUS_BY_ACCOUNT_TYPE.get(account_type, "")
