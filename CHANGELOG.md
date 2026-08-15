@@ -230,6 +230,34 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-15 — R2.3: a flip's identity is a counter, never its timestamp
+
+The final external review round reproduced one defect on the R2.2 tip: two
+DESK returns inside the same second shared their second-floored `_desk_flip_at`,
+which was also the re-verification attempt's identity — so an in-flight run
+begun for the first return could satisfy the second return's debt, and its
+same-second stamp then passed the verdict barrier without a post-flip
+measurement (`reverify_calls=1`, adoption on unseen tape). The mode button
+cycles through the modes, so two same-second DESK entries are a normal rapid-
+click gesture, not a race.
+
+- The flip's identity is now `_desk_flip_generation`, a counter incremented on
+  every DESK return; a finishing worker satisfies only its own generation.
+  `_desk_flip_at` remains solely the verdict `not_before` barrier — the two
+  jobs are now carried by two fields because one field provably could not do
+  both.
+- The failure side got the same treatment: a superseded run's failure no
+  longer spends the newer flip's retry budget — the newer return owes its own
+  attempt with its full allowance, matching how the success side already
+  refused to let an old run answer a new debt.
+- Two new tests run the round trip with the clock deliberately frozen inside
+  one second; the same-second test was verified to fail against the un-fixed
+  code (the external reviewer's exact reproduction) before the fix landed.
+- Also from that round: the frozen executable had been built 21 seconds
+  before the tip it claimed to represent. The rebuild now happens after the
+  last code commit, and the checkpoint records commit time and executable
+  mtime side by side so the ordering is visible on its face.
+
 ### 2026-08-15 — R2.2: the drain waits for a measurement taken since you came back
 
 `IMPLEMENTED` + `GREEN`. First of four items from the final external review pass.

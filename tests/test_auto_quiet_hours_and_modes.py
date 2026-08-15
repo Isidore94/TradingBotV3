@@ -1171,6 +1171,129 @@ def test_the_flip_barrier_still_refuses_after_the_retries_give_up(monkeypatch, t
     panel._poll_auto_pick_pending()
     assert adopted == []
 
+
+def test_two_desk_returns_in_one_second_each_get_their_own_measurement(
+    monkeypatch, tmp_path
+):
+    """R2.3: the flip's identity is a generation counter, never its timestamp.
+
+    The mode button CYCLES, so reaching a target mode means clicking through
+    the others quickly - two DESK returns inside one second are a normal
+    gesture, not a race. The barrier timestamp is floored to the second, so
+    both returns share it; when it was also the attempt's identity, the
+    older in-flight run's success cleared the newer flip's debt and its
+    same-second stamp sailed past the barrier (external review, 2026-08-15:
+    reverify_calls=1, adopted=['NVDA']). The second return must be owed its
+    own measurement.
+    """
+    clock = {"now": datetime(2026, 7, 2, 11, 2)}
+    panel = _flip_harness(monkeypatch, tmp_path, clock)
+    mode = {"v": "AWAY"}
+    monkeypatch.setattr(
+        "autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: mode["v"]
+    )
+    adopted: list[str] = []
+    panel._adopt_auto_pick_into_focus = lambda *a, **k: adopted.append(a[0]) or True  # type: ignore[method-assign]
+
+    payload = _one_staged_pick(
+        clock["now"] - timedelta(minutes=20), datetime(2026, 7, 2, 11, 0)
+    )
+    monkeypatch.setattr(
+        "autopilot_core.load_auto_populate_pending_picks", lambda *_a, **_k: payload
+    )
+
+    def set_mode(value):
+        mode["v"] = value
+        panel._auto_mode_cached = None
+        panel._poll_auto_pick_pending()
+
+    def stamp(at):
+        payload["pending"]["long"]["NVDA"]["gate_checked_at"] = at.isoformat(
+            timespec="seconds"
+        )
+
+    calls = {"n": 0}
+
+    def reverify(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # The round trip lands INSIDE the same second as the first flip -
+            # the clock deliberately does not move. The stamp below is this
+            # run's own measurement: same second, so the timestamp barrier
+            # cannot refuse it. Only the generation debt can.
+            set_mode("AWAY")
+            set_mode("DESK")
+        stamp(clock["now"])
+
+    monkeypatch.setattr("autopilot_core.reverify_pending_picks", reverify)
+
+    set_mode("AWAY")
+    set_mode("DESK")
+
+    assert calls["n"] == 2, "the same-second return is owed its own measurement"
+    assert adopted == ["NVDA"], "and the fresh measurement then drains normally"
+
+
+def test_a_superseded_runs_failure_does_not_spend_the_new_flips_budget(
+    monkeypatch, tmp_path
+):
+    """R2.3: a failure belonging to an older flip is not the newer flip's.
+
+    The flip handler resets the failure count when a new return lands; a
+    superseded run's failure arriving afterwards must not eat into the fresh
+    budget. The newer flip gets its full FLIP_REVERIFY_MAX_ATTEMPTS, so the
+    total is one superseded attempt plus the whole new allowance.
+    """
+    from ui.panels.alert_center_panel import FLIP_REVERIFY_MAX_ATTEMPTS
+
+    clock = {"now": datetime(2026, 7, 2, 11, 2)}
+    panel = _flip_harness(monkeypatch, tmp_path, clock)
+    mode = {"v": "AWAY"}
+    monkeypatch.setattr(
+        "autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: mode["v"]
+    )
+    adopted: list[str] = []
+    panel._adopt_auto_pick_into_focus = lambda *a, **k: adopted.append(a[0]) or True  # type: ignore[method-assign]
+
+    payload = _one_staged_pick(
+        clock["now"] - timedelta(minutes=20), datetime(2026, 7, 2, 11, 0)
+    )
+    monkeypatch.setattr(
+        "autopilot_core.load_auto_populate_pending_picks", lambda *_a, **_k: payload
+    )
+
+    def set_mode(value):
+        mode["v"] = value
+        panel._auto_mode_cached = None
+        panel._poll_auto_pick_pending()
+
+    calls = {"n": 0}
+
+    def reverify(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # A newer flip supersedes this run mid-flight; then this run fails.
+            set_mode("AWAY")
+            set_mode("DESK")
+        raise RuntimeError("feed down")
+
+    monkeypatch.setattr("autopilot_core.reverify_pending_picks", reverify)
+
+    set_mode("AWAY")
+    set_mode("DESK")
+    assert calls["n"] == 1
+    assert panel._reverify_failures == 0, "the superseded failure spent nothing"
+    assert panel._reverify_retry_at is not None, "and the new flip is owed now"
+
+    for _ in range(FLIP_REVERIFY_MAX_ATTEMPTS + 3):
+        panel._poll_auto_pick_pending()
+        clock["now"] += timedelta(seconds=61)
+
+    assert calls["n"] == 1 + FLIP_REVERIFY_MAX_ATTEMPTS, (
+        "the newer flip got its whole budget"
+    )
+    assert adopted == [], "nothing ever drained on a pre-flip verdict"
+
     # The ordinary staging refresh is the recovery - its stamp is post-flip.
     payload["pending"]["long"]["NVDA"]["gate_checked_at"] = clock["now"].isoformat(
         timespec="seconds"

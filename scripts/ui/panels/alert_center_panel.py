@@ -509,6 +509,15 @@ class AlertCenterPanel(QFrame):
         #: None on a desk that has not flipped - it drains on the ordinary
         #: stored verdicts, which is what DESK has always done.
         self._desk_flip_at: datetime | None = None
+        #: Which DESK return the owed re-verification answers. Incremented on
+        #: every flip back to DESK, and it - not `_desk_flip_at` - is the
+        #: identity a finishing worker compares against. The timestamp cannot
+        #: be the identity: it is floored to the second (that is the resolution
+        #: the verdict barrier needs), so two DESK returns inside one second
+        #: would share it, and an in-flight run's success would clear the
+        #: newer flip's debt (external review, 2026-08-15). A counter has no
+        #: such collision.
+        self._desk_flip_generation = 0
         #: Set when a flip re-verification is OWED: the drain adopts nothing
         #: until it succeeds. Carries the earliest moment the next attempt may
         #: start, so a failure retries on a later poll instead of falling
@@ -1703,6 +1712,12 @@ class AlertCenterPanel(QFrame):
         # stalled feed and an adoption.
         if previous in ("AWAY", "EVENING"):
             self._desk_flip_at = datetime.now().replace(microsecond=0)
+            # The generation is the flip's identity; the floored timestamp
+            # above is only the verdict barrier. Kept separate deliberately -
+            # two flips inside one second share a timestamp but never a
+            # generation, so an older in-flight run can never answer for the
+            # newer return.
+            self._desk_flip_generation += 1
             self._reverify_failures = 0
             self._reverify_retry_at = datetime.now()
         if self._reverify_running:
@@ -1821,7 +1836,10 @@ class AlertCenterPanel(QFrame):
         # must not clear that debt: its bars predate the second flip, so the
         # barrier would refuse everything it stamped and the queue would sit
         # unadopted until the next 30-minute refresh with the trader watching.
-        started_for = self._desk_flip_at
+        # The generation counter is the identity, never the flip timestamp -
+        # two returns inside one second share the (second-floored) timestamp,
+        # and comparing it let the older run clear the newer debt.
+        started_for = self._desk_flip_generation
 
         def worker() -> None:
             outcome = "ok"
@@ -1839,13 +1857,21 @@ class AlertCenterPanel(QFrame):
                 # Bookkeeping BEFORE the single-flight flag drops: a poll that
                 # sees `_reverify_running` False has to already see whether
                 # another attempt is owed, or it would drain in that gap.
+                stale_run = self._desk_flip_generation != started_for
                 if outcome == "ok":
                     self._reverify_failures = 0
-                    if self._desk_flip_at == started_for:
-                        self._reverify_retry_at = None
-                    else:
+                    if stale_run:
                         # A newer flip landed mid-flight: owe it an attempt now.
                         self._reverify_retry_at = datetime.now()
+                    else:
+                        self._reverify_retry_at = None
+                elif stale_run:
+                    # This failure belongs to a superseded flip. The newer
+                    # return owes its own attempt with its own full budget -
+                    # the flip handler already reset the failure count, and
+                    # spending it here would shorten a debt this run was
+                    # never answering.
+                    self._reverify_retry_at = datetime.now()
                 else:
                     self._reverify_failures += 1
                     self._reverify_retry_at = (
