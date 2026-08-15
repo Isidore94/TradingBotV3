@@ -76,6 +76,9 @@ RETIRED_RETENTION_DAYS = 30
 # A staged part file older than this is a crashed write, not a live one. The
 # build job holds a single-flight lock, so the window is generous on purpose.
 INCOMING_STALE_SECONDS = 3600
+#: Slack for the system clock being coarser than filesystem timestamps, so a
+#: file cannot be "newer than now" by clock resolution alone. See `reconcile`.
+CLOCK_GRANULARITY_SECONDS = 0.05
 
 QUARANTINE_NAIVE_TIMESTAMP = "NAIVE_TIMESTAMP"
 QUARANTINE_PARTITION_KEY = "PARTITION_KEY_UNRESOLVED"
@@ -710,7 +713,20 @@ class ResearchStore:
             if not (self.root / relative).exists():
                 result.missing_live_files.append(relative)
 
-        cutoff = (utc_now() - timedelta(seconds=incoming_grace_seconds)).timestamp()
+        # The clock is coarser than the filesystem. Windows' system clock ticks
+        # about every 15.6 ms while NTFS stamps mtimes far more finely, so
+        # `utc_now()` can round BELOW the mtime of a file written microseconds
+        # earlier - and that file then reads as "from the future" and is never
+        # quarantined. Harmless against the 3600 s default grace, but with
+        # `incoming_grace_seconds=0` it made the outcome a coin flip (measured
+        # 3 failures in 6 runs on this desk, reproducing in isolation, 2026-08-15).
+        #
+        # Widening by one clock tick fixes the real bug rather than the symptom:
+        # a file written in the same tick as the check IS stale and should be
+        # quarantined. 50 ms is inconsequential beside any real grace period.
+        cutoff = (
+            utc_now() - timedelta(seconds=incoming_grace_seconds)
+        ).timestamp() + CLOCK_GRANULARITY_SECONDS
         if self.incoming_dir.exists():
             for path in sorted(self.incoming_dir.iterdir()):
                 if not path.is_file() or path.stat().st_mtime > cutoff:

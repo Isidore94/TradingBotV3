@@ -474,3 +474,25 @@ def test_the_supersession_exemption_is_a_deliberate_hand_maintained_pin(store):
     for name in ("setup_occurrence", "anchor_instance", "bar_m5", "bar_d1"):
         assert set(DATASETS[name].grain) & revision_columns
         assert name not in SUPERSEDING_DATASETS
+
+
+def test_a_file_written_in_the_same_clock_tick_is_still_stale(store):
+    """The clock is coarser than the filesystem (R2.1 item 6).
+
+    Windows' system clock ticks about every 15.6 ms while NTFS stamps mtimes
+    far more finely, so `utc_now()` can round below the mtime of a file written
+    microseconds earlier - and that file then read as "from the future" and was
+    never quarantined. This was a 3-in-6 coin flip on the desk, reproducing in
+    isolation, and it is a real (if tiny) correctness bug: a file written in the
+    same tick as a zero-grace check IS stale.
+
+    Writing and reconciling back to back is the reproducer; before the fix this
+    assertion failed roughly half the time.
+    """
+    store.incoming_dir.mkdir(parents=True, exist_ok=True)
+    for index in range(25):
+        orphan = store.incoming_dir / f"same-tick-{index}.parquet"
+        orphan.write_bytes(b"partial write")
+        result = store.reconcile(incoming_grace_seconds=0)
+        assert orphan.name in result.stale_incoming, f"attempt {index}"
+        assert not orphan.exists(), "quarantined, not left behind"

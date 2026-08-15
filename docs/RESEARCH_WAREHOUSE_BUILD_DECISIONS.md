@@ -1820,3 +1820,30 @@ reviewer can spot-check them quickly:
    (Phase 5).
 7. The shared IB pacer never delays or queues champion traffic, and capture
    errors never count against the champion Yahoo circuit breaker (Phase 3/3b).
+
+## BD-XX — reconcile tolerates the system clock being coarser than the filesystem
+
+**Date:** 2026-08-15 (R2.1 item 6, trader-approved before the edit)
+
+**Decision.** `WarehouseStore.reconcile` widens its incoming-file cutoff by
+`CLOCK_GRANULARITY_SECONDS = 0.05` so a file cannot be judged "newer than now"
+by clock resolution alone.
+
+**Why.** Windows' system clock ticks about every 15.6 ms while NTFS stamps
+mtimes far more finely, so `utc_now()` could round *below* the mtime of a file
+written microseconds earlier. That file then failed the `st_mtime > cutoff`
+test and was never quarantined. Invisible against the 3600 s default grace, but
+with `incoming_grace_seconds=0` it made the outcome a coin flip — measured at 3
+failures in 6 runs on the desk, reproducing in isolation, which had previously
+been misdiagnosed as load-related flakiness.
+
+**Why a fix rather than a test quarantine.** The behaviour was genuinely wrong,
+not just awkward to test: a file written in the same clock tick as a zero-grace
+check *is* stale and should be quarantined. Quarantining the test would have
+kept the defect and lost the coverage.
+
+**Scope.** Widens the quarantine window by 50 ms. Inconsequential beside any
+real grace period, so production behaviour is unchanged.
+
+**Reopen if.** A platform is added whose filesystem timestamps are coarser than
+its clock, or a caller needs sub-50 ms grace semantics.
