@@ -35,7 +35,7 @@ Each step is its own green commit, pushed. A step is not done until
 | 1 Hygiene (A10, B5, A4) | **DONE** | `tests/test_journal_import_hygiene.py` (34 tests); 2965 passed, exit 0 |
 | 2 v3 migration + uid migration | **DONE** | `scripts/journal_migrate.py` + `tests/test_journal_migration.py` (26 tests); 2991 passed / smoke 7/7, exit 0 |
 | 3 Group-key normalization | **DONE** | `scripts/journal_identity.py` + `tests/test_journal_identity.py` (34 tests); 3025 passed / smoke 7/7, exit 0. Golden regenerated with a note: 10 trades → 9 |
-| 4 Assembly changes | pending | |
+| 4 Assembly changes | **DONE** | `tests/test_journal_assembly.py` (19 tests); 3044 passed, exit 0. Golden regenerated with a note: statuses and trade ids change, no P&L moves |
 | 5–10 Adjustments, coverage, activities, FX, reconcile, nightly slot | pending | |
 | 11–13 Journal UI | pending | |
 | 14 Governance close-out | pending | |
@@ -65,6 +65,18 @@ column by column before regenerating. The note is in the fixture's
 `intentional_difference` field, and the generator now **refuses to write a
 changed golden without one**.
 
+**Step 4 narrowed one spec line, and it matters.** §5 fix 4 says a
+missing-opening-fill produces a `SYNTHETIC_OPEN` leg + `NEEDS_REVIEW`. Built as:
+**only the unambiguous case is flagged** — a fill that closes more than the
+journal knows is open, where the leftover is proof an opening fill is missing.
+A plain sell with no position is *genuinely* ambiguous (a real short entry, or a
+sale of shares bought before the import window), and nothing in the execution
+distinguishes them; flagging every short would make the review queue noise.
+That other half is caught by §9 step 9's reconciliation, where the broker
+reporting flat against a journal that says short is the proof this step cannot
+have. If the trader wants every un-opened short flagged instead, that is a
+one-line change plus a golden update.
+
 **The live journal DB has not been touched.** Everything above ran against
 fixture and temporary databases. `journal_migrate.py` defaults to a dry run
 against a throwaway copy, and a test asserts the live file is byte-identical
@@ -80,12 +92,34 @@ at all yet. The data layer already accepts a real broker/account
 UI and belongs to the Qt Trades tab in **step 11**. Recorded rather than
 silently skipped.
 
-**One suite run exited 3 (a crash, not a failure) during step 3, then passed on
-re-run.** This is the documented Qt/worker-thread hazard in `tests/conftest.py`
-("12/12 is a real improvement over 8/10 but it is not a proof of thread
-safety"); the leaked `run_strategy` worker threads it names are the suspected
-cause. It is **not** attributable to R7 — no R7 file touches Qt — but it is
-recorded here because a crash is not a pass, and P1.1 owns the fix.
+### Suite instability seen during R7 — READ BEFORE MONDAY
+
+Two events, neither in a file R7 touches, both recorded because the merge gate
+has **no rerun-until-green carve-out** and a 6am reader needs to know these
+exist before deciding what a red run means.
+
+| When | What | Reproduced? |
+|---|---|---|
+| During step 3 | One full run exited **3** — a crash, not a test failure | No. Next run green |
+| During step 4 | `tests/test_desk_link_control.py::test_set_auto_mode_intent_round_trip_from_controller` **failed** | No. Green on 2 later full runs and 3/3 in isolation |
+
+What is known: the Desk Link test drives a **real loopback TCP server** and
+polls `_pump_until` against a **20-second wall-clock deadline**. Twenty seconds
+is not an ordinary scheduling miss, which makes "just load" an unsatisfying
+explanation — something stalled. `tests/conftest.py` already names the likely
+family: leaked `bounce_bot_lib.legacy.run_strategy` worker threads that outlive
+their tests, and its own honest verdict that "12/12 is a real improvement over
+8/10 but it is not a proof of thread safety".
+
+What is **not** known: whether R7 makes it more likely. R7 adds 123 tests and
+~17s of runtime, which is more load on a load-sensitive test, so "R7 is
+innocent" is a plausible claim and not a proven one. One full run at the R2 tip
+was green — one run is not evidence of absence. No R7 file touches Qt, sockets,
+or Desk Link.
+
+**Do not treat either as a known-flaky exemption on Monday.** P1.1 owns suite
+hermeticity; if this recurs, it is worth a bounded investigation before the
+merge rather than a re-run.
 
 **Trader-present steps ahead — the build stops and asks at each** (spec §9):
 Flex token setup (§8) before step 7 goes live, account tax-status labeling after

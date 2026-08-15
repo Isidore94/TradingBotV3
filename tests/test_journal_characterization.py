@@ -97,7 +97,10 @@ def test_the_golden_still_contains_the_defects_r7_is_here_to_fix(golden):
     # counted twice, so a 10-share position opens as 20 and never closes.
     nvda = trades[("IBKR", "NVDA", "STK")]
     assert nvda["quantity_opened"] == 20.0, "socket+Flex duplicate no longer doubles"
-    assert nvda["status"] == "OPEN"
+    # CLOSED_PARTIAL since step 4: 10 of the phantom 20 are closed. The frozen
+    # input keeps the v2-style uids on purpose, so the collapse that fixes this
+    # is exercised by the migration tests, not here.
+    assert nvda["status"] == "CLOSED_PARTIAL"
 
     # B2 (§9 step 4) - a closing sell with no opening buy fabricates a short.
     amd = trades[("QUESTRADE", "AMD", "STK")]
@@ -116,11 +119,15 @@ def test_the_golden_still_contains_the_defects_r7_is_here_to_fix(golden):
     # classifier can fix that one; it needs a REASSIGN_GROUP adjustment.
     assert ("MANUAL", "AAPL", "STK") in trades
 
-    # B1 (§9 step 4) - CLOSED_PARTIAL does not exist; a partially exited trade
-    # is indistinguishable from an untouched one.
-    assert {t["status"] for t in golden["trades"]} <= {"OPEN", "CLOSED"}
+    # B1, FIXED in §9 step 4 - a half-exited position now says so. 120 of 150
+    # AAPL are gone; that used to read as an untouched OPEN trade.
     aapl = trades[("QUESTRADE", "AAPL", "STK")]
-    assert aapl["quantity_closed"] == 120.0 and aapl["status"] == "OPEN"
+    assert aapl["quantity_closed"] == 120.0 and aapl["status"] == "CLOSED_PARTIAL"
+    assert golden["summary"]["partial_trades"] == 2
+
+    # §9 step 4 - every trade is anchored to the execution that opened it, which
+    # is what lets a backfill re-key only the trades it really changed.
+    assert all(t["anchor_execution_uid"] for t in golden["trades"])
 
     # B8 (§9 step 8) - a CAD trade still carries no comparable P&L. Since step 2
     # the column exists; nothing books it until the FX step, and a NULL that
@@ -129,17 +136,18 @@ def test_the_golden_still_contains_the_defects_r7_is_here_to_fix(golden):
     assert shop["currency"] == "CAD" and shop["pnl_usd"] is None
     assert shop["net_pnl_cad"] is None and shop["fx_rate"] is None
 
-    # §9 step 4 will fill these; step 2 only created them.
-    assert {t["anchor_execution_uid"] for t in golden["trades"]} == {""}
+    # No case in this frozen corpus oversells, so nothing here is NEEDS_REVIEW.
+    # The synthetic-open path has its own tests in test_journal_assembly.py.
     assert {t["reconcile_status"] for t in golden["trades"]} == {""}
 
 
-def test_annotations_are_orphaned_by_a_rebuild(tmp_path):
-    """B6 (§9 step 4): today a rebuild deletes trades and strands their notes.
+def test_annotations_survive_a_backfill_that_re_keys_their_trade(tmp_path):
+    """B6, FIXED in §9 step 4 - this is invariant I4, and it holds now.
 
-    This is the invariant I4 exists to create. It does not hold yet, and the
-    golden would not show it - annotations are not part of assembly output - so
-    it gets its own test that says plainly what is true today.
+    Written first as ``test_annotations_are_orphaned_by_a_rebuild``, asserting
+    exactly one stranded annotation, because that was the truth. The assertions
+    are inverted rather than the test deleted: the case that used to lose the
+    trader's note is the case worth keeping a permanent guard on.
     """
     db_path = tmp_path / "trade_journal.sqlite3"
     store = build_fixture_store(db_path)
@@ -192,9 +200,19 @@ def test_annotations_are_orphaned_by_a_rebuild(tmp_path):
 
     # The backfilled buy pairs with the sell, so AMD is now one closed long.
     assert [tuple(row) for row in amd_rows] == [("CLOSED", "LONG", 100.0)]
-    # And the annotation is stranded, because nothing re-keys it. I4 will make
-    # this list empty and keep it empty (permanent SQL test, spec §10 gate 4).
-    assert len(orphans) == 1
+    # I4: zero orphans, permanently (spec §10 live gate 4).
+    assert orphans == []
+
+    # The note is on the rebuilt trade, not floating beside it, and the old id
+    # still resolves - `opportunity_events` are immutable and still name it.
+    with store.connection() as conn:
+        moved = conn.execute(
+            "SELECT trade_id, setup_tags FROM trade_annotations"
+        ).fetchone()
+        new_amd = conn.execute("SELECT trade_id FROM trades WHERE symbol = 'AMD'").fetchone()[0]
+    assert moved[0] == new_amd and moved[1] == "avwap-reclaim"
+    assert store.resolve_trade_id(trade_id) == new_amd
+    assert store.last_rekey["ambiguous"] == [] and store.last_rekey["orphaned"] == []
 
 
 def test_a_fresh_store_arrives_at_schema_v3(tmp_path):

@@ -419,6 +419,11 @@ def capture_rebuild_output(store) -> dict[str, Any]:
             "opportunity_event_rows": len(events),
             "open_trades": sum(1 for row in trades if row["status"] == "OPEN"),
             "closed_trades": sum(1 for row in trades if row["status"] == "CLOSED"),
+            # Added with CLOSED_PARTIAL (§9 step 4). Without it the three status
+            # counters would not add up to the row count, and a summary that
+            # silently drops a category is worse than no summary.
+            "partial_trades": sum(1 for row in trades if row["status"] == "CLOSED_PARTIAL"),
+            "needs_review_trades": sum(1 for row in trades if row["reconcile_status"] == "NEEDS_REVIEW"),
         },
     }
 

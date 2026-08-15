@@ -205,6 +205,19 @@ Fixes in dependency order (each a commit; see §9):
 4. Assembly (characterization fixture FIRST — §9 step 0): `CLOSED_PARTIAL`;
    missing-opening-fill produces a `SYNTHETIC_OPEN`-marked leg +
    `reconcile_status='NEEDS_REVIEW'` instead of a phantom inverse trade;
+
+   **Narrowed at build time (§9 step 4, 2026-08-15).** Only the *unambiguous*
+   missing-opening-fill is flagged: a fill that closes more than the journal
+   knows is open, whose leftover is itself the proof that an opening fill is
+   missing. A plain sell with no position open is genuinely ambiguous — a real
+   short entry and a sale of shares bought before the import window are
+   indistinguishable from the execution alone — so it assembles as an ordinary
+   short and is left to fix 9's reconciliation, where the broker reporting flat
+   against a journal that says short is the evidence assembly cannot have.
+   Flagging every short would fill the review queue with correct trades. Reopen
+   this if the trader would rather see false flags than miss one.
+
+
    adjustments applied deterministically (VOID skips, EDIT overlays, ADD injects,
    FORCE_CLOSE injects a synthetic closing fill and stamps `FORCED_CLOSED`);
    anchor-based trade_id + re-key pass.

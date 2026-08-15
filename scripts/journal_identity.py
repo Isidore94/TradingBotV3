@@ -143,6 +143,18 @@ def group_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
     )
 
 
+def group_key_text(key: tuple[str, str, str, str, str]) -> str:
+    """A group key as one string, for adjustments that target a whole position.
+
+    ``trade_adjustments.target_uid`` holds an execution uid for execution-scoped
+    actions and this text for ``TRADE_GROUP`` ones. Pipe-separated because none
+    of the five fields can contain a pipe: broker, account number, symbol and
+    currency are broker identifiers, and the security type is drawn from the
+    canonical vocabulary above.
+    """
+    return "|".join(str(part or "") for part in key)
+
+
 def stable_execution_uid(prefix: str, account_number: str, exec_id: Any, *fallback_parts: Any) -> str:
     """``PREFIX:account:exec_id``, with a deterministic surrogate when there is no exec id.
 

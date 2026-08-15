@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from journal_analytics import AutoTagger
-from journal_identity import contract_multiplier as _contract_multiplier_shared, group_key
+from journal_identity import (
+    contract_multiplier as _contract_multiplier_shared,
+    group_key,
+    group_key_text,
+)
 from journal_migrate import (
     SOURCE_RANK,
     MigrationReport,
@@ -145,6 +149,8 @@ class JournalStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         #: The v2 -> v3 report, when this construction performed the migration.
         self.last_migration: MigrationReport | None = None
+        #: What the last rebuild did to annotated trade ids (I4).
+        self.last_rekey: dict[str, list[Any]] = {"remapped": [], "ambiguous": [], "orphaned": []}
         self.initialize_schema()
 
     def connect(self) -> sqlite3.Connection:
@@ -511,7 +517,29 @@ class JournalStore:
         return [_row_to_dict(row) for row in rows]
 
     def rebuild_trades(self, *, refresh_tags: bool = True) -> int:
-        executions = self._load_raw_executions()
+        """Reassemble every trade from the raw executions and the adjustments.
+
+        Four things changed here in R7 sec 9 step 4, each a defect from the
+        spec's sec 3 register rather than a preference:
+
+        * ``CLOSED_PARTIAL`` exists (B1). A position that has been half exited
+          used to be indistinguishable from one nobody had touched.
+        * A fill that closes more than the journal knows is open no longer
+          fabricates an inverse position out of the leftover (B2). The leftover
+          still opens a trade - the shares were really sold - but its opening leg
+          is marked ``SYNTHETIC_OPEN`` and the trade is stamped ``NEEDS_REVIEW``,
+          because the honest statement is "an opening fill is missing", not
+          "you are short".
+        * Trader corrections in ``trade_adjustments`` are applied here, so a
+          correction survives every future rebuild instead of being a one-time
+          edit the next import undoes (B7, I3).
+        * ``trade_id`` is anchored to the opening execution's uid instead of a
+          per-group sequence number, and annotations are re-keyed onto the
+          rebuilt trades (B6, I4). Inserting an earlier fill used to renumber
+          every trade in the group and strand every tag and note on it.
+        """
+        executions = self._apply_adjustments(self._load_raw_executions())
+        group_actions = self._group_adjustments()
         grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
         for row in executions:
             grouped.setdefault(group_key(row), []).append(row)
@@ -520,7 +548,17 @@ class JournalStore:
         leg_payloads = []
         for key, rows in grouped.items():
             current = None
-            sequence = 0
+            anchor_counts: dict[str, int] = {}
+
+            def _open_trade(row, signed, commission, fees, *, synthetic, _key=key, _counts=anchor_counts):
+                anchor = str(row.get("execution_uid") or "")
+                occurrence = _counts.get(anchor, 0)
+                _counts[anchor] = occurrence + 1
+                state = self._new_trade_state(_key, row, signed, anchor, occurrence)
+                state["synthetic_open"] = bool(synthetic)
+                self._add_open_quantity(state, row, signed, commission, fees, synthetic=synthetic)
+                return state
+
             for row in rows:
                 signed_qty = _signed_quantity(row)
                 if abs(signed_qty) <= EPSILON:
@@ -528,11 +566,19 @@ class JournalStore:
                 remaining_signed = signed_qty
                 remaining_commission = abs(_coerce_float(row.get("commission")))
                 remaining_fees = abs(_coerce_float(row.get("fees")))
+                # Set once this single execution has already closed a position.
+                # Anything left over after that is the B2 case: the journal was
+                # asked to close more than it knows was ever opened.
+                closed_from_this_row = False
                 while abs(remaining_signed) > EPSILON:
                     if current is None:
-                        sequence += 1
-                        current = self._new_trade_state(key, row, remaining_signed, sequence)
-                        self._add_open_quantity(current, row, remaining_signed, remaining_commission, remaining_fees)
+                        current = _open_trade(
+                            row,
+                            remaining_signed,
+                            remaining_commission,
+                            remaining_fees,
+                            synthetic=closed_from_this_row,
+                        )
                         break
 
                     pos = float(current["position_qty"])
@@ -550,6 +596,7 @@ class JournalStore:
                     remaining_signed = math.copysign(remaining_abs, remaining_signed) if remaining_abs > EPSILON else 0.0
                     remaining_commission = max(0.0, remaining_commission - leg_commission)
                     remaining_fees = max(0.0, remaining_fees - leg_fees)
+                    closed_from_this_row = True
 
                     if abs(float(current["position_qty"])) <= EPSILON:
                         trade_payloads.append(self._finalize_trade_state(current))
@@ -557,10 +604,14 @@ class JournalStore:
                         current = None
 
             if current is not None:
+                forced = group_actions.get(group_key_text(key))
+                if forced is not None:
+                    self._force_close_trade_state(current, forced)
                 trade_payloads.append(self._finalize_trade_state(current))
                 leg_payloads.extend(current["legs"])
 
         with self.connection() as conn:
+            carried = self._snapshot_referenced_trades(conn)
             conn.execute("DELETE FROM trade_legs")
             conn.execute("DELETE FROM auto_tag_candidates")
             conn.execute("DELETE FROM trades")
@@ -571,8 +622,9 @@ class JournalStore:
                         trade_id, broker, account_number, account_label, symbol, security_type, currency,
                         direction, status, opened_at, closed_at, trade_date, quantity_opened, quantity_closed,
                         average_entry_price, average_exit_price, gross_pnl, commission, fees, net_pnl,
-                        pnl_usd, auto_tag_summary, tag_confidence, updated_at
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        pnl_usd, auto_tag_summary, tag_confidence, updated_at,
+                        reconcile_status, anchor_execution_uid
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         trade["trade_id"],
@@ -599,6 +651,8 @@ class JournalStore:
                         "",
                         None,
                         _now_iso(),
+                        trade["reconcile_status"],
+                        trade["anchor_execution_uid"],
                     ),
                 )
             for leg in leg_payloads:
@@ -624,6 +678,8 @@ class JournalStore:
             # Rebuilding the trade table cannot duplicate or rewrite them.
             for trade in trade_payloads:
                 self._record_imported_trade_events(conn, trade)
+
+            self.last_rekey = self._rekey_annotations(conn, carried, leg_payloads)
 
         if refresh_tags:
             self.refresh_auto_tags()
@@ -682,17 +738,306 @@ class JournalStore:
                 ),
             )
 
+    # ------------------------------------------------------------------
+    # Adjustments (spec sec 4 `trade_adjustments`). Applied here; the write API
+    # arrives in sec 9 step 5. A correction lives as an append-only record and
+    # is re-applied on every rebuild, so it survives the next import instead of
+    # being a one-off edit that import silently undoes (I3, B7).
+    # ------------------------------------------------------------------
+
+    #: Actions that rewrite the execution list before assembly sees it.
+    EXECUTION_ADJUSTMENT_ACTIONS = frozenset(
+        {"VOID_EXECUTION", "EDIT_EXECUTION", "ADD_EXECUTION", "REASSIGN_GROUP"}
+    )
+
+    #: What an EDIT_EXECUTION or REASSIGN_GROUP may overlay. Deliberately not
+    #: "whatever the payload contains": an adjustment must not rewrite
+    #: ``execution_uid`` (that is identity, not data), and it must not touch a
+    #: trader-owned field, which lives on the annotation and not here (I7).
+    ADJUSTABLE_EXECUTION_FIELDS = frozenset(
+        {
+            "broker", "account_number", "account_label", "account_type", "symbol",
+            "security_type", "currency", "side", "quantity", "price", "timestamp",
+            "trade_date", "commission", "fees", "gross_amount", "net_amount",
+            "order_id", "exchange_exec_id", "multiplier", "raw_json", "source",
+        }
+    )
+
+    def list_active_adjustments(self) -> list[dict[str, Any]]:
+        """Adjustments that still apply, oldest first.
+
+        A superseded record is history, not an instruction. That is how undo
+        works here without deleting anything (I3).
+        """
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM trade_adjustments
+                WHERE COALESCE(superseded_by, '') = ''
+                ORDER BY created_at, adjustment_id
+                """
+            ).fetchall()
+        result = []
+        for raw in rows:
+            row = _row_to_dict(raw)
+            try:
+                payload = json.loads(row.get("payload_json") or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            row["payload"] = payload if isinstance(payload, dict) else {}
+            result.append(row)
+        return result
+
+    def _apply_adjustments(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Rewrite the execution list per the active adjustments, in order."""
+        adjustments = [
+            item
+            for item in self.list_active_adjustments()
+            if str(item.get("target_kind") or "").upper() == "EXECUTION"
+            and str(item.get("action") or "").upper() in self.EXECUTION_ADJUSTMENT_ACTIONS
+        ]
+        if not adjustments:
+            return rows
+
+        by_uid = {str(row.get("execution_uid") or ""): dict(row) for row in rows}
+        for item in adjustments:
+            action = str(item["action"]).upper()
+            target = str(item.get("target_uid") or "")
+            payload = item["payload"]
+            if action == "VOID_EXECUTION":
+                by_uid.pop(target, None)
+                continue
+            if action == "ADD_EXECUTION":
+                injected = {
+                    key: payload[key] for key in payload if key in self.ADJUSTABLE_EXECUTION_FIELDS
+                }
+                injected["execution_uid"] = target or f"ADJ:{item['adjustment_id']}"
+                injected.setdefault("raw_json", _json_dumps({"adjustment_id": item["adjustment_id"]}))
+                injected.setdefault("source", "MANUAL")
+                injected["trade_date"] = _date_text(injected.get("trade_date") or injected.get("timestamp"))
+                by_uid[injected["execution_uid"]] = injected
+                continue
+            existing = by_uid.get(target)
+            if existing is None:
+                continue
+            for field, value in payload.items():
+                if field in self.ADJUSTABLE_EXECUTION_FIELDS:
+                    existing[field] = value
+            if "timestamp" in payload and "trade_date" not in payload:
+                existing["trade_date"] = _date_text(existing.get("timestamp"))
+
+        # Re-sort. An EDIT can move a timestamp and an ADD injects a row, and
+        # assembly nets in the order it is handed - the same ordering as
+        # `_load_raw_executions`, for the same reason.
+        return sorted(
+            by_uid.values(),
+            key=lambda row: (
+                str(row.get("broker") or "").upper(),
+                str(row.get("account_number") or ""),
+                str(row.get("symbol") or "").upper(),
+                str(row.get("currency") or "").upper(),
+                str(row.get("timestamp") or ""),
+                str(row.get("execution_uid") or ""),
+            ),
+        )
+
+    def _group_adjustments(self) -> dict[str, dict[str, Any]]:
+        """Active FORCE_CLOSE records, keyed by their target group text.
+
+        Later records win: the list is oldest-first, so a second FORCE_CLOSE on
+        the same position is the trader changing the price they want it closed
+        at.
+        """
+        actions: dict[str, dict[str, Any]] = {}
+        for item in self.list_active_adjustments():
+            if str(item.get("target_kind") or "").upper() != "TRADE_GROUP":
+                continue
+            if str(item.get("action") or "").upper() != "FORCE_CLOSE":
+                continue
+            actions[str(item.get("target_uid") or "")] = item
+        return actions
+
+    def _force_close_trade_state(self, trade: dict[str, Any], adjustment: dict[str, Any]) -> None:
+        """Close a stuck position with a synthetic fill, because a human said so.
+
+        The price defaults to the average entry, which books **zero** P&L on the
+        forced portion. That is deliberate: the system does not know what the
+        position was really worth, and inventing a number would put a fabricated
+        gain or loss into a tax record. ``FORCED_CLOSED`` records on the trade
+        that a human closed it, not a broker.
+        """
+        payload = adjustment.get("payload") or {}
+        remaining = float(trade["position_qty"])
+        if abs(remaining) <= EPSILON:
+            return
+        price = _coerce_float(payload.get("price"), default=float(trade["average_entry_price"]))
+        row = {
+            "execution_uid": f"ADJ:{adjustment['adjustment_id']}",
+            "price": price,
+            "timestamp": str(payload.get("timestamp") or trade["last_at"] or ""),
+        }
+        self._add_close_quantity(trade, row, -remaining, 0.0, 0.0, role="SYNTHETIC_CLOSE")
+        trade["forced_closed"] = True
+
+    # ------------------------------------------------------------------
+    # Annotation survival across a rebuild (I4, B6)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _snapshot_referenced_trades(conn: sqlite3.Connection) -> dict[str, set[str]]:
+        """Every trade a human or an event refers to, with the executions it held.
+
+        Taken before the DELETE, because afterwards there is nothing left to map
+        from. Only referenced trades are snapshotted: a trade nobody has tagged,
+        noted or recorded an event against loses nothing by being re-keyed.
+        """
+        referenced = {
+            str(row[0])
+            for row in conn.execute(
+                """
+                SELECT trade_id FROM trade_annotations
+                UNION
+                SELECT trade_id FROM opportunity_events WHERE COALESCE(trade_id, '') != ''
+                """
+            )
+        }
+        if not referenced:
+            return {}
+        snapshot: dict[str, set[str]] = {}
+        for trade_id, execution_uid in conn.execute("SELECT trade_id, execution_uid FROM trade_legs"):
+            if str(trade_id) in referenced:
+                snapshot.setdefault(str(trade_id), set()).add(str(execution_uid))
+        return snapshot
+
+    def _rekey_annotations(
+        self,
+        conn: sqlite3.Connection,
+        carried: dict[str, set[str]],
+        leg_payloads: list[dict[str, Any]],
+    ) -> dict[str, list[Any]]:
+        """Move annotations from the old trade ids onto the rebuilt ones.
+
+        The map is by **largest execution-uid overlap**: the rebuilt trade
+        holding the most of the old trade's executions is the same trade. A tie
+        is not resolved - it is reported, because guessing which of two trades a
+        human's note belongs to is exactly the kind of quiet wrong answer this
+        packet exists to remove.
+
+        ``trade_aliases`` records every move, so ``opportunity_events`` - which
+        are immutable and are never rewritten - can still be resolved to the
+        trade they belong to.
+        """
+        summary: dict[str, list[Any]] = {"remapped": [], "ambiguous": [], "orphaned": []}
+        if not carried:
+            return summary
+
+        new_by_trade: dict[str, set[str]] = {}
+        for leg in leg_payloads:
+            new_by_trade.setdefault(str(leg["trade_id"]), set()).add(str(leg["execution_uid"]))
+        surviving = set(new_by_trade)
+        annotated = {str(row[0]) for row in conn.execute("SELECT trade_id FROM trade_annotations")}
+        claimed: set[str] = set()
+
+        for old_id, old_uids in sorted(carried.items()):
+            if old_id in surviving:
+                continue  # the id did not move; there is nothing to carry.
+            scored = sorted(
+                ((len(old_uids & uids), new_id) for new_id, uids in new_by_trade.items() if old_uids & uids),
+                reverse=True,
+            )
+            if not scored:
+                summary["orphaned"].append(
+                    {"old_trade_id": old_id, "reason": "no rebuilt trade shares any of its executions"}
+                )
+                continue
+            best_score, best_id = scored[0]
+            tied = [item[1] for item in scored if item[0] == best_score]
+            if len(tied) > 1:
+                summary["ambiguous"].append(
+                    {
+                        "old_trade_id": old_id,
+                        "candidates": tied,
+                        "reason": f"{len(tied)} rebuilt trades each share {best_score} execution(s)",
+                    }
+                )
+                continue
+            if best_id in claimed or (best_id in annotated and old_id in annotated):
+                summary["ambiguous"].append(
+                    {
+                        "old_trade_id": old_id,
+                        "candidates": [best_id],
+                        "reason": "the rebuilt trade already carries another annotation",
+                    }
+                )
+                continue
+            if old_id in annotated:
+                conn.execute(
+                    "UPDATE trade_annotations SET trade_id = ? WHERE trade_id = ?", (best_id, old_id)
+                )
+                claimed.add(best_id)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO trade_aliases(old_trade_id, new_trade_id, reason, created_at)
+                VALUES(?, ?, ?, ?)
+                """,
+                (old_id, best_id, f"rebuild re-key on {best_score} shared execution(s)", _now_iso()),
+            )
+            summary["remapped"].append({"old_trade_id": old_id, "new_trade_id": best_id, "shared": best_score})
+        return summary
+
+    def resolve_trade_id(self, trade_id: str) -> str:
+        """Follow ``trade_aliases`` to the trade a historical id became.
+
+        ``opportunity_events`` are immutable by design, so an event recorded
+        against a trade that has since been re-keyed still names the old id.
+        This is how a reader gets from that id to the live trade. Transitive,
+        and it refuses to loop.
+        """
+        current = str(trade_id or "")
+        if not current:
+            return ""
+        seen = {current}
+        with self.connection() as conn:
+            while True:
+                row = conn.execute(
+                    "SELECT new_trade_id FROM trade_aliases WHERE old_trade_id = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (current,),
+                ).fetchone()
+                if row is None:
+                    return current
+                nxt = str(row[0])
+                if nxt in seen:
+                    return current
+                seen.add(nxt)
+                current = nxt
+
+    # ------------------------------------------------------------------
+    # Assembly state
+    # ------------------------------------------------------------------
+
     def _new_trade_state(
         self,
         key: tuple[str, str, str, str, str],
         row: dict[str, Any],
         signed_qty: float,
-        sequence: int,
+        anchor_execution_uid: str,
+        occurrence: int,
     ) -> dict[str, Any]:
         direction = "LONG" if signed_qty > 0 else "SHORT"
-        trade_id = _hash_id(*key, row.get("execution_uid"), direction, sequence)
+        # Anchored to the execution that opened the position, not to a counter
+        # within the group (B6). A backfill that inserted an earlier fill used to
+        # renumber every later trade in the group and strand every annotation on
+        # them; now only trades whose opening execution actually changed are
+        # re-keyed, and the re-key pass carries their annotations across.
+        # `occurrence` disambiguates the rare case where one execution opens two
+        # trades - an oversell whose leftover starts a new position.
+        trade_id = _hash_id(*key, anchor_execution_uid, direction, occurrence)
         return {
             "trade_id": trade_id,
+            "anchor_execution_uid": anchor_execution_uid,
+            "synthetic_open": False,
+            "forced_closed": False,
             "broker": key[0],
             "account_number": key[1],
             "symbol": key[2],
@@ -744,7 +1089,16 @@ class JournalStore:
         trade["fees"] = float(trade["fees"]) + abs(float(fees))
         trade["last_at"] = str(row.get("timestamp") or trade["last_at"])
 
-    def _add_open_quantity(self, trade: dict[str, Any], row: dict[str, Any], signed_qty: float, commission: float, fees: float) -> None:
+    def _add_open_quantity(
+        self,
+        trade: dict[str, Any],
+        row: dict[str, Any],
+        signed_qty: float,
+        commission: float,
+        fees: float,
+        *,
+        synthetic: bool = False,
+    ) -> None:
         qty = abs(float(signed_qty))
         old_abs = abs(float(trade["position_qty"]))
         price = _coerce_float(row.get("price"))
@@ -754,9 +1108,26 @@ class JournalStore:
         trade["position_qty"] = float(trade["position_qty"]) + float(signed_qty)
         trade["quantity_opened"] = float(trade["quantity_opened"]) + qty
         trade["entry_notional"] = float(trade["entry_notional"]) + (price * qty)
-        self._add_trade_leg(trade, row, signed_qty, commission, fees, role="OPEN" if old_abs <= EPSILON else "SCALE")
+        if old_abs <= EPSILON:
+            # SYNTHETIC_OPEN says the opening fill was never imported - the leg
+            # below is the closing execution standing in for it, at its own
+            # price, which is why the trade is also stamped NEEDS_REVIEW rather
+            # than presented as a real entry.
+            role = "SYNTHETIC_OPEN" if synthetic else "OPEN"
+        else:
+            role = "SCALE"
+        self._add_trade_leg(trade, row, signed_qty, commission, fees, role=role)
 
-    def _add_close_quantity(self, trade: dict[str, Any], row: dict[str, Any], signed_qty: float, commission: float, fees: float) -> None:
+    def _add_close_quantity(
+        self,
+        trade: dict[str, Any],
+        row: dict[str, Any],
+        signed_qty: float,
+        commission: float,
+        fees: float,
+        *,
+        role: str = "CLOSE",
+    ) -> None:
         qty = abs(float(signed_qty))
         price = _coerce_float(row.get("price"))
         direction = 1.0 if str(trade["direction"]) == "LONG" else -1.0
@@ -766,11 +1137,26 @@ class JournalStore:
         trade["position_qty"] = float(trade["position_qty"]) + float(signed_qty)
         trade["quantity_closed"] = float(trade["quantity_closed"]) + qty
         trade["exit_notional"] = float(trade["exit_notional"]) + (price * qty)
-        self._add_trade_leg(trade, row, signed_qty, commission, fees, role="CLOSE")
+        self._add_trade_leg(trade, row, signed_qty, commission, fees, role=role)
 
     def _finalize_trade_state(self, trade: dict[str, Any]) -> dict[str, Any]:
-        status = "CLOSED" if abs(float(trade["position_qty"])) <= EPSILON else "OPEN"
-        closed_at = str(trade["last_at"] or "") if status == "CLOSED" else ""
+        flat = abs(float(trade["position_qty"])) <= EPSILON
+        if flat:
+            status = "CLOSED"
+        elif float(trade["quantity_closed"]) > EPSILON:
+            # B1. A position that has been half exited is not the same thing as
+            # one nobody has touched, and the trader cannot act on the second
+            # reading of the first.
+            status = "CLOSED_PARTIAL"
+        else:
+            status = "OPEN"
+        closed_at = str(trade["last_at"] or "") if flat else ""
+        if trade.get("forced_closed"):
+            reconcile_status = "FORCED_CLOSED"
+        elif trade.get("synthetic_open"):
+            reconcile_status = "NEEDS_REVIEW"
+        else:
+            reconcile_status = ""
         commission = float(trade["commission"])
         fees = float(trade["fees"])
         net_pnl = float(trade["gross_pnl"]) - commission - fees
@@ -799,6 +1185,8 @@ class JournalStore:
             "fees": fees,
             "net_pnl": net_pnl,
             "pnl_usd": net_pnl if currency == "USD" else None,
+            "reconcile_status": reconcile_status,
+            "anchor_execution_uid": str(trade.get("anchor_execution_uid") or ""),
         }
 
     def list_trades(
