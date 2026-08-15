@@ -3,10 +3,12 @@
 **Status: ACTIVE spec — authorized 2026-08-15, NOT BUILT.**
 Trader-directed packet (2026-08-15 desk request). Builds **after** R7
 (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`) because the walk-away and auto-tag
-review steps read the journal R7 makes trustworthy. Code starts only after the
-P0.7 R2→`main` merge; branch `phase05-r8-weekend-prep` cut from `main` after R7
-merges (overlap with R7's live gates only if no shared file is in flight —
-`ui/services/journal_feed.py` IS shared).
+review steps read the journal R7 makes trustworthy. Per the second 2026-08-15
+trader redirect (recorded in the R7 spec header and `plan.md` Phase 0.5
+preamble), R7 builds now on a branch cut from the R2 tip; R8's branch
+`phase05-r8-weekend-prep` is cut from the R7 tip when R7's build completes —
+or from `main` if the stack has merged by then. Overlap with R7's live gates
+only if no shared file is in flight — `ui/services/journal_feed.py` IS shared.
 
 ## 1. Purpose and locked product decisions (trader, 2026-08-15)
 

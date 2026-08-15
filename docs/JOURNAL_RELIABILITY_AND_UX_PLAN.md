@@ -2,9 +2,15 @@
 
 **Status: ACTIVE spec — authorized 2026-08-15, NOT BUILT.**
 Trader-directed packet (2026-08-15 desk request: "the journal misses trades, has
-trades open — not acceptable; I need this for tax purposes too"). Build starts only
-after the P0.7 R2→`main` merge (planned Monday 2026-08-17), on branch
-`phase05-r7-journal-reliability-ux` cut from `main`. This packet builds **before**
+trades open — not acceptable; I need this for tax purposes too"). **Build
+authorized immediately by a second trader redirect later on 2026-08-15**: branch
+`phase05-r7-journal-reliability-ux` is cut from the tip of
+`phase05-r2-focus-gating-strength-board` (the P0.7 merge has not happened; the
+prior "after the merge" gate is superseded in writing, same pattern as R1/R2).
+The desk keeps running the R2 branch via its scheduled task until Monday's
+validation day passes — never switch the desk branch without disarming that task.
+Merging R7 therefore brings the testing week, R1, R1.1, R2 and R7 together, and
+R1/R2's owed live proofs are inherited unchanged. This packet builds **before**
 R8 (`docs/WEEKEND_PREP_PLAN.md`) because R8's walk-away and tag-review steps read
 the journal. The full planning conversation and diagnosis live in the session plan
 of 2026-08-15; root causes below were verified against code at head of

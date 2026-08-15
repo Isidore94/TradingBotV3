@@ -281,8 +281,13 @@ trader to say so.**
 
 On 2026-08-15 the trader added two new packets with their own explicit redirect:
 **R7 (journal reliability + UX)** and **R8 (Weekend Prep)**, specced the same day.
-Their redirect authorizes spec/documentation work immediately but code only
-**after the P0.7 merge**, R7 before R8. It does not authorize R3–R6.
+Later that day the trader redirected again, in writing: **R7 code starts
+immediately on `phase05-r7-journal-reliability-ux` cut from the R2 tip**, ahead
+of the P0.7 merge — same pattern as the R1/R2 redirects. Rationale recorded:
+R7/R8 touch journal and weekend surfaces, not the scanning/alerting/Focus path
+whose live proofs Monday owes; the desk keeps running the R2 branch until the
+validation day passes. P0's live gates are unchanged and still owed; merging R7
+later brings the whole stack. The redirect does not authorize R3–R6.
 
 R2's branch is cut from R1's and carries the R1.1 repair, so merging R2 brings the
 testing week, R1, R1.1 and R2 together. The R1 and R2 live proofs are both owed and
@@ -374,10 +379,11 @@ are listed in `CURRENT_CHECKPOINT.md`.
    tab (account/tax-status selection that never silently blends, date-range +
    calendar + fees views, R-multiples with alert prefill, pyqtgraph analytics,
    surfaced walk-away). Spec: `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`.
-   Dependencies: builds after the P0.7 merge, branch from `main`. Exit: the
-   spec's deterministic gates plus its live gates (coverage complete since
-   inception, statement reconciliation to the cent, one clean reconciliation
-   week, zero orphaned annotations, five nightly slot runs).
+   Dependencies: authorized to build now on `phase05-r7-journal-reliability-ux`
+   cut from the R2 tip (trader redirect 2026-08-15, second of the day; see the
+   preamble). Exit: the spec's deterministic gates plus its live gates (coverage
+   complete since inception, statement reconciliation to the cent, one clean
+   reconciliation week, zero orphaned annotations, five nightly slot runs).
 8. **R8 Weekend Prep (added 2026-08-15).** A guided five-step weekend routine
    (week in review, focus-pick review, week-windowed walk-away with the auto-tag
    review, H1/D1/Monthly strength discovery on the R2 formula via a new pure
