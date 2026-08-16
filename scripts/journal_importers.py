@@ -16,7 +16,7 @@ import zoneinfo
 
 import requests
 
-from journal_identity import normalize_security_type, stable_execution_uid
+from journal_identity import canonical_option_symbol, normalize_security_type, stable_execution_uid
 from project_paths import get_local_setting, save_local_setting
 
 
@@ -443,14 +443,19 @@ class QuestradeImporter:
         for raw in rows:
             if not isinstance(raw, dict):
                 continue
+            security_type = normalize_security_type(raw.get("securityType") or raw.get("symbolType"))
+            symbol = canonical_option_symbol(
+                raw.get("symbol"), security_type, underlying=raw.get("underlyingSymbol"),
+                expiry=raw.get("expiryDate") or raw.get("expiry"),
+                strike=raw.get("strikePrice") or raw.get("strike"),
+                right=raw.get("optionType") or raw.get("putCall"),
+            )
             result.append(
                 {
                     "broker": "QUESTRADE",
                     "account_number": str(account_number),
-                    "symbol": str(raw.get("symbol") or "").strip().upper(),
-                    "security_type": normalize_security_type(
-                        raw.get("securityType") or raw.get("symbolType")
-                    ),
+                    "symbol": symbol,
+                    "security_type": security_type,
                     "currency": str(raw.get("currency") or "USD").strip().upper(),
                     "quantity": _coerce_float(raw.get("openQuantity")),
                     "raw_json": json.dumps(raw, sort_keys=True, default=str),
@@ -485,6 +490,12 @@ class QuestradeImporter:
         # the instrument trades, never what it is, and using it split one AMZN
         # position into a "STOCK" half and a "NASDAQ" half that could never net.
         security_type = normalize_security_type(raw.get("securityType") or raw.get("symbolType"))
+        symbol = canonical_option_symbol(
+            symbol, security_type, underlying=raw.get("underlyingSymbol"),
+            expiry=raw.get("expiryDate") or raw.get("expiry"),
+            strike=raw.get("strikePrice") or raw.get("strike"),
+            right=raw.get("optionType") or raw.get("putCall"),
+        )
         currency = str(raw.get("currency") or account.get("currency") or "USD").strip().upper()
         side = normalize_side(raw.get("side") or raw.get("action"))
         quantity = abs(_coerce_float(raw.get("quantity") or raw.get("shares")))
@@ -720,6 +731,11 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
             or getattr(execution, "symbol", "")
             or ""
         ).strip().upper()
+        symbol = canonical_option_symbol(
+            symbol, security_type, underlying=getattr(contract, "symbol", ""),
+            expiry=getattr(contract, "lastTradeDateOrContractMonth", ""),
+            strike=getattr(contract, "strike", None), right=getattr(contract, "right", ""),
+        )
         currency = str(getattr(contract, "currency", "") or "").upper()
         commission_report = self.commissions.get(exec_id, {})
         if not currency:
@@ -893,7 +909,12 @@ def parse_ibkr_flex_statement(
     executions: list[NormalizedExecution] = []
     for node in list(root.iter("Trade")) + list(root.iter("TradeConfirm")):
         attrs = dict(node.attrib)
-        symbol = str(attrs.get("symbol") or "").strip().upper()
+        security_type = normalize_security_type(attrs.get("assetCategory") or "STK")
+        symbol = canonical_option_symbol(
+            attrs.get("symbol"), security_type, underlying=attrs.get("underlyingSymbol"),
+            expiry=attrs.get("expiry") or attrs.get("lastTradeDate"),
+            strike=attrs.get("strike"), right=attrs.get("putCall"),
+        )
         if not symbol:
             continue
         raw_datetime = str(attrs.get("dateTime") or attrs.get("tradeDate") or "").replace(";", " ").strip()
@@ -918,7 +939,7 @@ def parse_ibkr_flex_statement(
                 account_label=account_number or "IBKR",
                 account_type="",
                 symbol=symbol,
-                security_type=normalize_security_type(attrs.get("assetCategory") or "STK"),
+                security_type=security_type,
                 currency=str(attrs.get("currency") or "USD").strip().upper(),
                 side=side,
                 quantity=abs(quantity),
@@ -1109,7 +1130,12 @@ def flex_cash_transactions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any
             continue
         amount = _coerce_float(attrs.get("amount"))
         description = str(attrs.get("description") or attrs.get("type") or "").strip()
-        symbol = str(attrs.get("symbol") or "").strip().upper()
+        security_type = normalize_security_type(attrs.get("assetCategory") or "STK")
+        symbol = canonical_option_symbol(
+            attrs.get("symbol"), security_type, underlying=attrs.get("underlyingSymbol"),
+            expiry=attrs.get("expiry") or attrs.get("date"), strike=attrs.get("strike"),
+            right=attrs.get("putCall"),
+        )
         result.append(
             {
                 "txn_uid": _cash_txn_uid(
@@ -1151,7 +1177,12 @@ def flex_option_eae_executions(
     """
     executions: list[NormalizedExecution] = []
     for attrs in rows:
-        symbol = str(attrs.get("symbol") or "").strip().upper()
+        security_type = normalize_security_type(attrs.get("assetCategory") or "OPT")
+        symbol = canonical_option_symbol(
+            attrs.get("symbol"), security_type, underlying=attrs.get("underlyingSymbol"),
+            expiry=attrs.get("expiry") or attrs.get("date"), strike=attrs.get("strike"),
+            right=attrs.get("putCall"),
+        )
         account_number = str(attrs.get("accountId") or "").strip()
         raw_datetime = str(attrs.get("date") or attrs.get("dateTime") or "").replace(";", " ").strip()
         if not symbol:
@@ -1183,7 +1214,7 @@ def flex_option_eae_executions(
                 account_label=account_number or "IBKR",
                 account_type="",
                 symbol=symbol,
-                security_type=normalize_security_type(attrs.get("assetCategory") or "OPT"),
+                security_type=security_type,
                 currency=str(attrs.get("currency") or "USD").strip().upper(),
                 # A negative quantity reduces the position, whichever side it
                 # was held from, so the side follows the sign and assembly nets
@@ -1215,7 +1246,11 @@ def flex_open_positions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     positions: list[dict[str, Any]] = []
     for attrs in rows:
-        symbol = str(attrs.get("symbol") or "").strip().upper()
+        security_type = normalize_security_type(attrs.get("assetCategory") or "STK")
+        symbol = canonical_option_symbol(
+            attrs.get("symbol"), security_type, underlying=attrs.get("underlyingSymbol"),
+            expiry=attrs.get("expiry"), strike=attrs.get("strike"), right=attrs.get("putCall"),
+        )
         quantity = _coerce_float(attrs.get("position"))
         if not symbol:
             continue
@@ -1224,7 +1259,7 @@ def flex_open_positions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "broker": "IBKR",
                 "account_number": str(attrs.get("accountId") or "").strip(),
                 "symbol": symbol,
-                "security_type": normalize_security_type(attrs.get("assetCategory") or "STK"),
+                "security_type": security_type,
                 "currency": str(attrs.get("currency") or "USD").strip().upper(),
                 "quantity": quantity,
                 "raw_json": json.dumps(attrs, sort_keys=True, default=str),

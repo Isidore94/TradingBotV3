@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,7 +26,7 @@ from journal_identity import (  # noqa: E402
     group_key,
     normalize_security_type,
 )
-from journal_importers import QuestradeImporter, parse_ibkr_flex_statement  # noqa: E402
+from journal_importers import IBKRExecutionImporter, QuestradeImporter, parse_ibkr_flex_statement  # noqa: E402
 from journal_store import JournalStore  # noqa: E402
 
 
@@ -139,6 +140,35 @@ def test_flex_and_the_socket_agree_on_one_vocabulary():
     types = {item.security_type for item in parse_ibkr_flex_statement(xml)}
     assert types == {"STK", "OPT"}
     assert types <= CANONICAL_SECURITY_TYPES
+
+
+def test_flex_and_socket_option_spellings_land_on_the_same_group():
+    socket_importer = IBKRExecutionImporter.__new__(IBKRExecutionImporter)
+    socket_importer.commissions = {}
+    socket_row = socket_importer.normalize_execution(
+        SimpleNamespace(
+            localSymbol="SPY   260116C00500000", symbol="SPY", secType="OPT",
+            lastTradeDateOrContractMonth="20260116", strike=500.0, right="CALL",
+            currency="USD", exchange="SMART",
+        ),
+        SimpleNamespace(
+            time="20260804 09:31:00 US/Pacific", execId="socket-1", acctNumber="U1",
+            side="BOT", shares=1, price=5.0, orderId="1", permId="2",
+        ),
+    )
+    flex_row = parse_ibkr_flex_statement(
+        """
+        <FlexQueryResponse><FlexStatements><FlexStatement><Trades>
+          <Trade accountId="U1" symbol="SPY260116C00500000" underlyingSymbol="SPY"
+                 expiry="20260116" strike="500" putCall="Call"
+                 dateTime="20260804;093100" quantity="1" tradePrice="5"
+                 buySell="BUY" ibExecID="flex-1" assetCategory="OPT" currency="USD"/>
+        </Trades></FlexStatement></FlexStatements></FlexQueryResponse>
+        """
+    )[0]
+
+    assert socket_row.symbol == flex_row.symbol == "SPY260116C00500000"
+    assert group_key(socket_row.__dict__) == group_key(flex_row.__dict__)
 
 
 def test_the_split_amzn_position_nets_after_a_rebuild(tmp_path):

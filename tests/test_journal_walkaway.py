@@ -149,5 +149,31 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("no analyzable positions", report)
 
 
+class WindowTests(unittest.TestCase):
+    def test_closed_trades_are_selected_by_exit_date(self):
+        reviewed_week = (pd.Timestamp("2026-08-10").date(), pd.Timestamp("2026-08-14").date())
+        exited_this_week = jw.WalkawayPosition(
+            source="journal", symbol="OLD", side="LONG", entry_date="2026-07-01",
+            exit_date="2026-08-12",
+        )
+        exits_later = jw.WalkawayPosition(
+            source="journal", symbol="NEW", side="LONG", entry_date="2026-08-12",
+            exit_date="2026-08-20",
+        )
+
+        self.assertTrue(jw._within_window(exited_this_week, *reviewed_week))
+        self.assertFalse(jw._within_window(exits_later, *reviewed_week))
+
+    def test_open_focus_picks_fall_back_to_entry_date(self):
+        position = jw.WalkawayPosition(
+            source="focus", symbol="PICK", side="LONG", entry_date="2026-08-12"
+        )
+        self.assertTrue(
+            jw._within_window(
+                position, pd.Timestamp("2026-08-10").date(), pd.Timestamp("2026-08-14").date()
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

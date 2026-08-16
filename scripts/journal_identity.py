@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 #: The canonical vocabulary. Everything a group key sees is one of these.
@@ -126,6 +127,39 @@ def normalize_security_type(value: Any) -> str:
     return text
 
 
+def canonical_option_symbol(
+    symbol: Any,
+    security_type: Any = "",
+    *,
+    underlying: Any = "",
+    expiry: Any = "",
+    strike: Any = None,
+    right: Any = "",
+) -> str:
+    """One compact OCC-style identity for socket, Flex and reconciliation rows."""
+    text = str(symbol or "").strip().upper()
+    compact = re.sub(r"\s+", "", text)
+    match = re.fullmatch(r"([A-Z0-9.]{1,6})(\d{6})([CP])(\d{8})", compact)
+    if match:
+        return "".join(match.groups())
+    if normalize_security_type(security_type) not in {"OPT", "FOP", "WAR"}:
+        return text
+
+    root = re.sub(r"\s+", "", str(underlying or text).strip().upper())
+    expiry_digits = re.sub(r"\D", "", str(expiry or ""))
+    if len(expiry_digits) == 8:
+        expiry_digits = expiry_digits[2:]
+    right_text = str(right or "").strip().upper()
+    option_right = {"CALL": "C", "PUT": "P"}.get(right_text, right_text[:1])
+    try:
+        strike_code = f"{int(round(float(strike) * 1000)):08d}"
+    except (TypeError, ValueError):
+        strike_code = ""
+    if root and len(expiry_digits) == 6 and option_right in {"C", "P"} and strike_code:
+        return f"{root}{expiry_digits}{option_right}{strike_code}"
+    return compact
+
+
 def group_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
     """The identity of the position an execution belongs to.
 
@@ -137,7 +171,7 @@ def group_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
     return (
         str(row.get("broker") or "").strip().upper(),
         str(row.get("account_number") or "").strip(),
-        str(row.get("symbol") or "").strip().upper(),
+        canonical_option_symbol(row.get("symbol"), row.get("security_type")),
         normalize_security_type(row.get("security_type")),
         str(row.get("currency") or "").strip().upper(),
     )

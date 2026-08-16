@@ -408,7 +408,11 @@ def _within_window(position: Any, since: Any = None, until: Any = None) -> bool:
     """
     if since is None and until is None:
         return True
-    raw = getattr(position, "entry_date", None) or getattr(position, "trade_date", None)
+    raw = (
+        getattr(position, "exit_date", None)
+        or getattr(position, "entry_date", None)
+        or getattr(position, "trade_date", None)
+    )
     try:
         when = date.fromisoformat(str(raw)[:10])
     except (TypeError, ValueError):

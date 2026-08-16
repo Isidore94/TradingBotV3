@@ -386,6 +386,10 @@ def build_weekend_board(
             f"every {timeframe.key} chunk failed ({chunks_attempted} of {chunks_attempted}); "
             f"last error: {last_error}"
         )
+    if chunks_attempted and not bars_by_symbol:
+        raise RuntimeError(
+            f"{timeframe.key} provider returned no measurable bars for {len(pool)} symbol(s)"
+        )
 
     board = weekend_strength.build_board(timeframe, bars_by_symbol, side=side, now=moment)
     board.offered = len(pool)
@@ -404,5 +408,5 @@ def _run_weekly_prep() -> str:
     report = MarketPrepOrchestrator().run_weekly_prep()
     markdown = getattr(report, "markdown", None)
     if markdown is None and isinstance(report, dict):
-        markdown = report.get("markdown")
+        markdown = report.get("report") or report.get("markdown")
     return str(markdown or "")

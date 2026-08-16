@@ -279,6 +279,24 @@ def test_a_failed_fetch_keeps_the_last_good_board(service):
     assert any("last good" in m for m in messages)
 
 
+def test_an_all_empty_provider_response_keeps_the_last_good_board(service):
+    import pandas as pd
+
+    service.refresh_board("d1", downloader=_fake_downloader(), symbols=["AAA"],
+                          now=datetime(2026, 4, 1, 12, 0), blocking=True)
+    good = service.board("d1")
+    messages: list[str] = []
+    service.statusChanged.connect(messages.append)
+
+    service.refresh_board(
+        "d1", downloader=lambda *args, **kwargs: pd.DataFrame(), symbols=["AAA"],
+        now=datetime(2026, 4, 1, 12, 0), blocking=True,
+    )
+
+    assert service.board("d1") is good
+    assert any("last good" in message for message in messages)
+
+
 def test_a_bad_chunk_costs_one_chunk_not_the_board(service, monkeypatch):
     import autopilot_core as core
 
@@ -314,6 +332,18 @@ def test_the_week_ahead_runs_only_when_asked_and_keeps_its_last_report(service):
 
     service.refresh_week_ahead(runner=_boom, blocking=True)
     assert "Week ahead" in service.week_ahead_markdown, "the last report survives"
+
+
+def test_week_ahead_accepts_the_orchestrators_real_return_shape(monkeypatch):
+    from market_prep.orchestrator import MarketPrepOrchestrator
+
+    real_shape = {
+        "weekly_report": {"markdown": "# Nested copy"},
+        "report": "# Week ahead\n\nProduction-shaped report",
+    }
+    monkeypatch.setattr(MarketPrepOrchestrator, "run_weekly_prep", lambda self: real_shape)
+
+    assert wps._run_weekly_prep() == real_shape["report"]
 
 
 def test_adoptions_and_tag_reviews_are_recorded_in_state(service):
