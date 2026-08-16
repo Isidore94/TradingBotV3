@@ -959,6 +959,170 @@ def test_visual_remove_suppresses_for_today_and_restore(tmp_path, monkeypatch):
     assert any(alert.symbol == "NVDA" for alert in panel._review_queue)
 
 
+def test_not_today_preserves_and_fires_trader_armed_d1_watches(tmp_path, monkeypatch):
+    """Trader rule: dismissal cannot cancel, defer, mute, or hide an alarm they armed."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from datetime import datetime, timedelta
+        import dataclasses
+
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels import alert_center_panel as panel_mod
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    beeps = []
+    monkeypatch.setattr(panel_mod.QApplication, "beep", lambda: beeps.append("beep"))
+
+    noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+    def m5_bar(minute, high, low, close):
+        return {
+            "dt": noon.replace(hour=11, minute=minute),
+            "open": close,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": 1_000.0,
+        }
+
+    prior_daily = [
+        {
+            "dt": (noon - timedelta(days=offset)).replace(hour=0, minute=0),
+            "open": 100.0,
+            "high": 105.0 + (6 - offset),
+            "low": 95.0,
+            "close": 100.0,
+            "volume": 1_000.0,
+        }
+        for offset in range(6, 0, -1)
+    ]
+    bars = [m5_bar(20, 108.0, 102.0, 106.0)]
+
+    panel = AlertCenterPanel(
+        ignored_symbols_path=tmp_path / "ignored.json",
+        chart_watches_path=tmp_path / "chart_watches.json",
+        d1_level_watches_path=tmp_path / "d1_levels.json",
+        d1_event_watches_path=tmp_path / "d1_events.json",
+    )
+    panel._alerts_may_sound = lambda: True
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda _symbol: list(bars))
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda _symbol: list(prior_daily))
+
+    assert panel.arm_chart_watch_for("NVDA", "LONG", "new_hod")
+    assert panel.arm_d1_level_watch("NVDA", "above", 110.0)
+    assert panel.arm_d1_event_watch("NVDA", "new_5d_high")
+    armed_at = noon.replace(hour=11, minute=40)
+    panel._d1_level_watches[0] = dataclasses.replace(
+        panel._d1_level_watches[0], armed_at=armed_at
+    )
+    panel._d1_event_watches[0] = dataclasses.replace(
+        panel._d1_event_watches[0], armed_at=armed_at
+    )
+
+    panel._ignore_alert_symbol("NVDA")
+    assert [watch.kind for watch in panel._chart_watches] == ["new_hod"]
+    assert len(panel._d1_level_watches) == len(panel._d1_event_watches) == 1
+
+    bars.append(m5_bar(45, 111.0, 106.0, 110.5))
+    panel._poll_d1_level_watches(now=noon)
+    panel._poll_d1_event_watches(now=noon)
+
+    assert panel._d1_level_watches == []
+    assert panel._d1_event_watches == []
+    fired = [alert for alert in panel._alerts if alert.symbol == "NVDA"]
+    assert len(fired) == 2
+    assert all(alert.tag == panel_mod.CHART_WATCH_TAG for alert in fired)
+    assert {alert.payload.get("chart_watch_kind") for alert in fired} == {
+        "d1_level_above",
+        "new_5d_high",
+    }
+    assert panel.feed_layout.count() >= 2
+    assert len(beeps) == 2
+
+
+def test_ignored_focus_derived_d1_interest_still_does_not_fire(tmp_path, monkeypatch):
+    """The automatic Focus carve-out remains ignored; it is not trader-armed."""
+    try:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from datetime import datetime
+
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.models.bounce import BounceAlert, FOCUS_D1_EVENT_TAG
+        from ui.panels import alert_center_panel as panel_mod
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    class _FocusService:
+        def all_focus(self):
+            return {"long": ["NVDA"], "short": []}
+
+        def is_focus(self, symbol, side=None, category=None):
+            return symbol == "NVDA"
+
+        def focus_category(self, symbol):
+            return "swing" if symbol == "NVDA" else None
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
+    beeps = []
+    evaluated = []
+    monkeypatch.setattr(panel_mod.QApplication, "beep", lambda: beeps.append("beep"))
+    monkeypatch.setattr(
+        panel_mod,
+        "evaluate_d1_event_watch",
+        lambda *args, **kwargs: evaluated.append(args[0].kind),
+    )
+
+    panel = AlertCenterPanel(
+        ignored_symbols_path=tmp_path / "ignored.json",
+        focus_d1_flags_path=tmp_path / "focus_flags.json",
+    )
+    panel.focus_service = _FocusService()
+    panel._alerts_may_sound = lambda: True
+    panel._ignored_symbols.add("NVDA")
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda _symbol: [{"dt": datetime.now()}])
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda _symbol: [{"dt": datetime.now()}])
+
+    panel._poll_focus_d1_interest(now=datetime.now())
+    assert evaluated == []
+    assert panel._focus_d1_flags == set()
+    assert panel._alerts == panel._d1_alerts == []
+    assert beeps == []
+
+    # Even a late automatic delivery cannot use the trader-armed tag exemption.
+    panel.add_alert(
+        BounceAlert(
+            time_text="12:00:00",
+            symbol="NVDA",
+            side="LONG",
+            trigger="Focus D1 automatic interest",
+            timeframe="D1",
+            tag=FOCUS_D1_EVENT_TAG,
+            raw_text="FOCUS D1 NVDA automatic interest",
+            is_d1=True,
+        )
+    )
+    assert panel._alerts == panel._d1_alerts == []
+    assert beeps == []
+
+
 def test_chart_watch_hits_bypass_tier_gate_and_sound():
     try:
         from ui.models.bounce import BounceAlert, CHART_WATCH_TAG, is_chart_watch_alert

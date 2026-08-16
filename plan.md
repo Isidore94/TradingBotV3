@@ -384,7 +384,12 @@ are listed in `CURRENT_CHECKPOINT.md`.
    repeated rows without weakening detection, evidence, History, or armed-hit
    delivery. The labeled Y axis already exists — recorded as answered. Spec:
    `docs/DESK_CHART_UNIFICATION_PLAN.md`; historical source:
-   `docs/ALERT_CENTER_QUALITY_PACKET.md`.
+   `docs/ALERT_CENTER_QUALITY_PACKET.md`. **Recovered §6.1 is BUILT 2026-08-16
+   as an authorized quick win:** all trader-armed chart/D1-level/D1-event hits
+   survive "Not today", feed and sound; automatic `FOCUS_D1_EVENT_TAG` interest
+   remains ignored. Deterministic gate: 3377 passed / 19 subtests, focused
+   alert/watch gate 80 passed. The real-session two-direction proof remains owed;
+   the rest of R4 is unbuilt.
 5. **R5 M5 signal engines.** New pure indicator modules (TC2000-parity SMI,
    efficiency-LRSI under a non-colliding name, Heikin-Ashi reversal), the LRSI
    cross alert type, the HA+SMI+LRSI confluence alert (Focus-scoped), the

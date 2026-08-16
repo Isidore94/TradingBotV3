@@ -116,10 +116,25 @@ interest (`FOCUS_D1_EVENT_TAG`) is not trader-armed and correctly continues to
 lapse with Focus membership.
 
 The trader-authorized 2026-08-16 repair scope for the fenced
-`alert_center_panel.py` is exact: `_ignore_alert_symbol` stops deleting
-`_chart_watches`, and `add_alert` exempts `CHART_WATCH_TAG` from the
-ignored-symbol return, with deterministic coverage. Any additional fenced-file
-change requires another ask-first approval.
+`alert_center_panel.py` names all four edits: (1) `_ignore_alert_symbol` stops
+deleting `_chart_watches`; (2) `add_alert` exempts `CHART_WATCH_TAG` from the
+ignored-symbol return; (3) `_poll_d1_level_watches` stops deferring an ignored
+symbol; and (4) `_poll_d1_event_watches` stops deferring an ignored symbol. The
+second pair was explicitly approved after recon found the extra suppressors.
+Producer tracing confirmed both persistent poll stores are trader-armed only:
+their entries come from the UI arm APIs or those APIs' persisted files. Automatic
+Focus interest is separate in `_poll_focus_d1_interest`, creates only transient
+evaluator objects, retains its ignored-symbol guard, and emits
+`FOCUS_D1_EVENT_TAG`; it therefore continues to lapse with Focus membership.
+Deterministic tests must traverse both seams: ignored trader-armed level/event
+hits feed + sound, while ignored automatic Focus D1 interest does neither. Any
+additional fenced-file change requires another ask-first approval.
+
+**Built 2026-08-16 as the authorized R4 quick win.** The two-direction seam is
+pinned in `tests/test_qt_alert_center.py`; 80 focused Alert Center/arm/watch tests
+and the full 3377-test suite plus 19 subtests pass. Live proof still owed: dismiss
+a symbol with a real trader-armed watch, observe its hit in the feed and sound,
+and confirm the same symbol's automatic Focus-derived D1 interest stays absent.
 
 ### 6.2 Make explicit Focus placement readable on the Alert screen
 
@@ -187,4 +202,6 @@ guard that no capture path writes Focus/watchlist membership.
 All entry points open a chart with capture + watch controls + painted armed alerts;
 one desk morning confirms the forming-bar caveat replaces the inflated-gap
 rendering; the trader records a dislike from the RS/RW board and sees the badge
-appear everywhere that symbol renders that day.
+appear everywhere that symbol renders that day. Section 6.1 additionally requires
+one live ignored-symbol armed-watch hit that feeds/sounds while automatic Focus D1
+interest for that ignored symbol remains absent.

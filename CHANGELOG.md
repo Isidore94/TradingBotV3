@@ -22,6 +22,18 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-16 — "Not today" preserves trader-armed alerts
+
+Alert Center dismissal no longer deletes trader-armed chart watches or defers
+trader-armed persistent D1 level/event watches. A fired chart, armed-level, or
+D1-event watch carries `CHART_WATCH_TAG`, bypasses the ignored-symbol feed filter,
+renders in the live feed, and sounds. The automatic Focus-derived D1-interest
+path remains separate: ignored Focus symbols are still skipped and
+`FOCUS_D1_EVENT_TAG` receives no exemption. Producer tracing confirms the two
+persistent watch stores are UI-armed/UI-persisted only. Deterministic evidence:
+80 focused Alert Center/arm/watch tests and the full 3377-test suite plus 19
+subtests pass; live confirmation remains owed.
+
 ### 2026-08-16 — R4 Alert Center contract recovered (documentation)
 
 The historical P1.6 Alert Center quality packet was recovered byte-for-byte from
@@ -31,10 +43,10 @@ scoped removal, and `not_today`-rather-than-dislike outcomes. The active R4 spec
 now retains the unabsorbed trader outcomes: "Not today" never cancels or mutes a
 trader-armed alert; the feed's Focus star becomes a labeled Like-to-Focus action;
 and repeated feed rows/open bursts are controlled on the presentation side only.
-No alert behavior changed in this documentation recovery. Source inspection found
-two additional ignored-symbol deferrals in the D1 level/event watch pollers beyond
-the trader's exact fenced-file approval, so implementation is paused for the
-required ask-first decision rather than silently expanding scope.
+No alert behavior changed in that documentation recovery commit. Source inspection
+found two additional ignored-symbol deferrals in the D1 level/event watch pollers;
+the trader subsequently expanded the exact fenced-file approval to include them,
+with the automatic-Focus carve-out and both-direction seam tests recorded above.
 
 ### 2026-08-16 — R7 journal pre-flight fix pass
 

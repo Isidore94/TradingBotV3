@@ -960,7 +960,11 @@ class AlertCenterPanel(QFrame):
         self._refresh_ignored_market_date()
         if _is_feed_noise_alert(alert):
             return
-        if alert.symbol and alert.symbol in self._ignored_symbols:
+        if (
+            alert.symbol
+            and alert.symbol in self._ignored_symbols
+            and alert.tag != CHART_WATCH_TAG
+        ):
             return
         # Announced before any routing below, so a D1 event reaches the phone
         # whether it lands in the D1 Focus feed or the main feed, and whichever
@@ -2978,10 +2982,6 @@ class AlertCenterPanel(QFrame):
         remaining: list[D1LevelWatch] = []
         triggered = []
         for watch in self._d1_level_watches:
-            if watch.symbol in self._ignored_symbols:
-                # Removed-for-today symbols defer; the watch survives the day.
-                remaining.append(watch)
-                continue
             hit = None
             m5_bars = self._m5_bars_for(watch.symbol)
             d1_bars = self._d1_bars_for(watch.symbol)
@@ -3089,10 +3089,6 @@ class AlertCenterPanel(QFrame):
         remaining: list[D1EventWatch] = []
         triggered = []
         for watch in self._d1_event_watches:
-            if watch.symbol in self._ignored_symbols:
-                # Removed-for-today symbols defer; the watch survives the day.
-                remaining.append(watch)
-                continue
             hit = None
             m5_bars = self._m5_bars_for(watch.symbol)
             d1_bars = self._d1_bars_for(watch.symbol)
@@ -3263,10 +3259,6 @@ class AlertCenterPanel(QFrame):
             alert for alert in self._review_queue if alert.symbol != symbol
         ]
         self._review_guidance.pop(symbol, None)
-        self._chart_watches = [
-            watch for watch in self._chart_watches if watch.symbol != symbol
-        ]
-        self._save_chart_watches()
         if (
             self._current_review_alert is not None
             and self._current_review_alert.symbol == symbol
