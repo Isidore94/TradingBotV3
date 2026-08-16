@@ -250,6 +250,7 @@ def run_journal_backfill(
     messages: list[str] = []
     total_imported = 0
     had_errors = False
+    prefetched_positions: dict[str, list[dict[str, Any]]] = {}
     end_date = date.today()
     start_date = end_date - timedelta(days=max(1, int(days)))
 
@@ -340,6 +341,14 @@ def run_journal_backfill(
             # Only reachable before any chunk exists - account discovery itself
             # failing. No day is marked, because none was attempted.
             had_errors = True
+            run_id = journal_store.start_import_run(
+                "QUESTRADE_BACKFILL", trigger="backfill",
+                coverage_start=start_date, coverage_end=end_date,
+            )
+            journal_store.finish_import_run(
+                run_id, status="FAILED", imported_executions=0,
+                message=f"account discovery failed: {exc}",
+            )
             messages.append(f"Questrade backfill failed: {exc}")
     else:
         messages.append("Questrade backfill skipped (no token).")
@@ -355,6 +364,9 @@ def run_journal_backfill(
         )
         try:
             statement = import_ibkr_flex_executions(with_metadata=True)
+            prefetched_positions["IBKR"] = flex_open_positions(
+                statement.get("open_positions") or []
+            )
             # Option expiries, exercises and assignments are fills too. Without
             # them an option that expired worthless has no closing execution and
             # the position stays open forever (A7).
@@ -442,6 +454,7 @@ def run_journal_backfill(
         "total_imported": total_imported,
         "trade_count": trade_count,
         "messages": messages,
+        "_broker_positions": prefetched_positions,
     }
 
 
@@ -527,7 +540,10 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
         messages.append(f"rebuild failed: {exc}")
 
     try:
-        positions, reachable = _broker_positions(journal_store, messages)
+        positions, reachable = _broker_positions(
+            journal_store, messages,
+            prefetched=backfill.get("_broker_positions") or {},
+        )
         if reachable:
             report = journal_reconcile.reconcile(
                 journal_store, positions, brokers=reachable, trigger=trigger
@@ -587,7 +603,8 @@ def _fetch_one_day(journal_store: JournalStore, broker: str, account_number: str
 
 
 def _broker_positions(
-    journal_store: JournalStore, messages: list[str]
+    journal_store: JournalStore, messages: list[str],
+    *, prefetched: dict[str, list[dict[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Current positions from every configured broker, for reconciliation.
 
@@ -610,9 +627,13 @@ def _broker_positions(
         except Exception as exc:  # noqa: BLE001
             messages.append(f"Questrade positions unavailable: {exc}")
 
+    prefetched = prefetched or {}
     try:
-        statement = import_ibkr_flex_executions(with_metadata=True)
-        positions.extend(flex_open_positions(statement.get("open_positions") or []))
+        if "IBKR" in prefetched:
+            positions.extend(prefetched["IBKR"])
+        else:
+            statement = import_ibkr_flex_executions(with_metadata=True)
+            positions.extend(flex_open_positions(statement.get("open_positions") or []))
         reachable.append("IBKR")
     except Exception as exc:  # noqa: BLE001
         messages.append(f"IBKR positions unavailable: {exc}")

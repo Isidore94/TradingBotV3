@@ -209,6 +209,58 @@ def test_the_night_reports_a_re_key_that_needs_a_human(quiet_night, store, monke
     assert any("re-key needs review" in message for message in result["messages"])
 
 
+def test_account_discovery_failure_records_a_failed_import_run(store, monkeypatch):
+    class _DiscoveryFailure:
+        refresh_token = "token"
+        access_token = ""
+        api_server = ""
+
+        def __init__(self):
+            self.quarantined = []
+
+        def iter_execution_chunks(self, *_args):
+            raise RuntimeError("refresh token expired")
+
+    monkeypatch.setattr(journal_runner, "QuestradeImporter", _DiscoveryFailure)
+
+    result = journal_runner.run_journal_backfill(
+        store=store, include_ibkr_flex=False, rebuild=False
+    )
+
+    runs = store.list_import_runs()
+    assert result["status"] == "FAILED"
+    assert runs[0]["source"] == "QUESTRADE_BACKFILL"
+    assert runs[0]["status"] == "FAILED"
+    assert "refresh token expired" in runs[0]["message"]
+
+
+def test_nightly_reuses_the_flex_statement_for_reconciliation(quiet_night, store, monkeypatch):
+    calls = []
+
+    def flex_statement(**_kwargs):
+        calls.append("flex")
+        return {
+            "executions": [], "option_eae": [], "cash_transactions": [], "quarantined": [],
+            "open_positions": [
+                {"accountId": "U1", "symbol": "AAPL", "assetCategory": "STK",
+                 "currency": "USD", "position": "0"}
+            ],
+            "accounts": ["U1"], "from_date": date.today(), "to_date": date.today(),
+        }
+
+    monkeypatch.setattr(journal_runner, "import_ibkr_flex_executions", flex_statement)
+    monkeypatch.setattr(
+        journal_runner, "get_local_setting",
+        lambda key, default="": "configured" if key in {
+            journal_runner.IBKR_FLEX_TOKEN_SETTING, journal_runner.IBKR_FLEX_QUERY_ID_SETTING
+        } else default,
+    )
+
+    journal_runner.run_nightly_journal_import(store=store)
+
+    assert calls == ["flex"], "the import statement also supplies reconciliation positions"
+
+
 def test_newly_imported_execution_dates_are_booked_in_the_same_nightly_run(
     quiet_night, store, monkeypatch
 ):

@@ -191,12 +191,16 @@ def _completed_intraday(
         if stamp is None:
             continue
         if stamp.tzinfo is not None and now.tzinfo is None:
-            stamp = stamp.replace(tzinfo=None)
+            stamp = stamp.astimezone(_local_timezone()).replace(tzinfo=None)
         elif stamp.tzinfo is None and now.tzinfo is not None:
             stamp = stamp.replace(tzinfo=now.tzinfo)
         if stamp + span <= now:
             kept.append(bar)
     return kept
+
+
+def _local_timezone():
+    return datetime.now().astimezone().tzinfo
 
 
 # ---------------------------------------------------------------------------

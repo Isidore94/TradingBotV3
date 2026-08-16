@@ -123,18 +123,20 @@ class WeekendPrepService(QObject):
         self._workers: dict[str, _Worker] = {}
         self._boards: dict[str, weekend_strength.WeekendBoard] = {}
         self._week_ahead_markdown = ""
-        self._weekend = weekend_id(now)
+        self._now_provider = (lambda: now) if now is not None else datetime.now
+        self._weekend = weekend_id(self._now_provider())
         self._state = self._load()
 
     # -- identity ----------------------------------------------------------
 
     @property
     def weekend(self) -> str:
+        self._weekend = weekend_id(self._now_provider())
         return self._weekend
 
     @property
     def week_bounds(self) -> tuple[date, date]:
-        return week_bounds(self._weekend)
+        return week_bounds(self.weekend)
 
     # -- state -------------------------------------------------------------
 
@@ -165,7 +167,7 @@ class WeekendPrepService(QObject):
             os.replace(tmp, self._path)
 
     def weekend_state(self, weekend: str | None = None) -> dict[str, Any]:
-        key = weekend or self._weekend
+        key = weekend or self.weekend
         weekends = self._state.setdefault("weekends", {})
         if key not in weekends:
             weekends[key] = _empty_weekend()

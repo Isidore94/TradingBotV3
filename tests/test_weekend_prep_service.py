@@ -97,6 +97,17 @@ def test_the_id_is_anchored_to_the_session_calendar_not_the_wall_clock():
     assert wps.weekend_id(datetime(2026, 9, 8, 9, 0)) == "2026-09-04"
 
 
+def test_an_always_on_service_rolls_forward_to_the_new_weekend(service):
+    assert service.weekend == "2026-08-14"
+    service.set_step_status("week_review", "done")
+
+    service._now_provider = lambda: datetime(2026, 8, 22, 10, 0)
+
+    assert service.weekend == "2026-08-21"
+    assert service.week_bounds == (date(2026, 8, 17), date(2026, 8, 21))
+    assert service.step_status("week_review") == "pending"
+
+
 # ---------------------------------------------------------------------------
 # State: atomic, pruned, forgiving
 # ---------------------------------------------------------------------------

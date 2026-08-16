@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -58,6 +59,17 @@ def test_an_hourly_bar_is_complete_sixty_minutes_after_it_opened():
     ]
     kept = ws.completed_bars(ws.H1, bars, now=now)
     assert [b["timestamp"].hour for b in kept] == [10, 11]
+
+
+def test_eastern_hourly_bars_are_converted_to_the_naive_pacific_desk_clock(monkeypatch):
+    monkeypatch.setattr(ws, "_local_timezone", lambda: ZoneInfo("America/Los_Angeles"))
+    bars = [
+        _bar(datetime(2026, 8, 14, 12, 0, tzinfo=ZoneInfo("America/New_York")), 100, 101)
+    ]
+
+    kept = ws.completed_bars(ws.H1, bars, now=datetime(2026, 8, 14, 10, 5))
+
+    assert kept == bars, "12:00 ET opened at 09:00 PT and completed at 10:00 PT"
 
 
 def test_a_daily_bar_follows_the_session_calendar_not_yesterday():
