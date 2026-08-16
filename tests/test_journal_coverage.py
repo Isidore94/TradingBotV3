@@ -139,18 +139,19 @@ class _ChunkedImporter:
         return []
 
     def iter_execution_chunks(self, start_date, end_date):
+        chunk_day = MONDAY
         yield {
             "account": {"number": "51830546", "type": "TFSA"},
             "account_number": "51830546",
-            "start": start_date,
-            "end": start_date,
+            "start": chunk_day,
+            "end": chunk_day,
             "executions": [
                 {
                     "execution_uid": "QT:51830546:e1", "broker": "QUESTRADE",
                     "account_number": "51830546", "account_label": "TFSA", "account_type": "TFSA",
                     "symbol": "AAPL", "security_type": "STK", "currency": "USD", "side": "BUY",
-                    "quantity": 10, "price": 150.0, "timestamp": f"{start_date}T09:31:00-07:00",
-                    "trade_date": str(start_date), "commission": 0.0, "fees": 0.0,
+                    "quantity": 10, "price": 150.0, "timestamp": f"{chunk_day}T09:31:00-07:00",
+                    "trade_date": str(chunk_day), "commission": 0.0, "fees": 0.0,
                     "gross_amount": None, "net_amount": None, "order_id": "",
                     "exchange_exec_id": "", "raw_json": "{}",
                 }
@@ -159,8 +160,8 @@ class _ChunkedImporter:
         yield {
             "account": {"number": "29347316", "type": "Margin"},
             "account_number": "29347316",
-            "start": start_date,
-            "end": start_date,
+            "start": chunk_day,
+            "end": chunk_day,
             "error": "Questrade returned 503",
         }
 
@@ -219,7 +220,7 @@ def test_a_questrade_chunk_with_a_quarantined_row_is_not_covered(store, monkeypa
         def iter_execution_chunks(self, start_date, end_date):
             yield {
                 "account": {"number": "51830546", "type": "TFSA"},
-                "account_number": "51830546", "start": start_date, "end": start_date,
+                "account_number": "51830546", "start": MONDAY, "end": MONDAY,
                 "executions": [], "quarantined": [{"reason": "bad timestamp"}],
             }
 

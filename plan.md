@@ -301,6 +301,17 @@ whose live proofs Monday owes; the desk keeps running the R2 branch until the
 validation day passes. P0's live gates are unchanged and still owed; merging R7
 later brings the whole stack. The redirect does not authorize R3–R6.
 
+**Weekend redirect (2026-08-15).** The trader then explicitly authorized the
+remaining packets on the consolidated release candidate: *"integrate the rest —
+build R3 through R6 on the consolidated branch."* R3, R4, R5 and R6 therefore
+build in that order on `phase05-r8-weekend-prep`, one packet at a time with its
+fixtures, full deterministic gate, governance close-out and push complete before
+the next starts. This redirect does not satisfy any live gate: R3's shadow week,
+R6's watchdog week, R1/R2's eight proofs, R7's migration/backfill/reconciliation
+sequence, and R8's real-weekend run all remain owed. After R6, only the explicitly
+named R7/R8 review-deferral completions are authorized; true USD conversion stays
+deferred pending a trader decision.
+
 R2's branch is cut from R1's and carries the R1.1 repair, so merging R2 brings the
 testing week, R1, R1.1 and R2 together. The R1 and R2 live proofs are both owed and
 are listed in `CURRENT_CHECKPOINT.md`.

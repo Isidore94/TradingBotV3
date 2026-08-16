@@ -13,16 +13,17 @@ elapsed evidence lane that can run in parallel.
 
 | Field | Current value |
 |---|---|
-| Roadmap phase | **Phase 0.5 R1 + R1.1 + R2 + R7 + R8 built; R7/R8 adversarial repair complete** (trader redirects 2026-08-15) — P0's live gates are unchanged and still owed |
-| **Active packet** | **R8 WEEKEND PREP — CODE AND REVIEW REPAIRS COMPLETE** (`docs/WEEKEND_PREP_PLAN.md`). All twelve §9 steps and the verified A/B repair set are built. **One live gate remains: a real weekend run**, which the trader can do as soon as the build lands — read-only against their data, and it does not wait on Monday. Previously: **R7 JOURNAL RELIABILITY AND UX — CODE AND REVIEW REPAIRS COMPLETE** (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`). Its trader-present migration/backfill and six live gates remain owed, and none may start before Monday's validation day. R1/R2's eight live proofs are unchanged and also still owed |
+| Roadmap phase | **Phase 0.5 R3 — fixtures first** (weekend redirect 2026-08-15); R1 + R1.1 + R2 + R7 + R8 are built and their live gates remain owed |
+| **Active packet** | **R3 SWING QUALITY AND FEEDBACK — PRE-FLIGHT COMPLETE, FIXTURES NEXT** (`docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md`). The demotion classifier must ship shadow-only: emit `would_demote` evidence and change no live row membership, ordering, visibility or tier. The full shadow week remains owed. R4–R6 follow only after R3's deterministic build and governance close-out |
 | **Working branch** | **`phase05-r8-weekend-prep`** — since the 2026-08-15 consolidation this is **THE single release candidate**, carrying testing-week + R1 + R1.1 + R2 + R7 + R8 and every review-repair pass. It was cut from the R7 tip `4420bbf`, which was cut from the R2 tip `8d25c92`; the one R2 commit made after that cut (`fc4bcaf`) is now **merged in**, so `phase05-r2-focus-gating-strength-board` is a proven ancestor (`git merge-base --is-ancestor` = 0). Built in a linked worktree at `..\TradingBotV3-r8`. **The main `C:\Users\Aaron\TradingBotV3` checkout stays on the R2 branch, because the desk's scheduled task runs the desk from it.** Run tests with the main repo's venv python and the worktree as cwd |
 | Desk branch | **`phase05-r2-focus-gating-strength-board`** at `fc4bcaf` — what the desk runs and what Monday's live proofs are observed against. It is kept **only until the Monday merge**; do not switch, rename or delete it before the scheduled task is disarmed |
-| Scope | R2 added `scripts/focus_adoption_gate.py`, `scripts/strength_scan.py`, `ui/services/strength_board_service.py`, `ui/panels/strength_board_panel.py`; edited `autopilot_core.py`, `focus_picks.py`, `pick_feedback.py`, `ui/services/focus_service.py`, `ui/panels/alert_center_panel.py`, `ui/widgets/alert_chart_review.py`, `bounce_bot_lib/legacy.py`, `ui/app.py`. Ask-first approval taken before the first edit |
-| State | **Green on the repaired R8 code tip `dd201cd`: 3354 passed / 19 subtests / smoke 7/7 / FROZEN selftest 49/49 `(frozen)`**, all exit 0, checked by their own exit codes. The final governance commit changes documentation only. Nothing observed live yet — every live proof below is **UNKNOWN**, not PASS |
-| Next action | **Monday's sequence below — now ONE merge.** The 2026-08-15 consolidation absorbed the R2 branch into this one, so (a) live-validate on the desk's R2 build, (b) run the sec-6 checklist, then (c) merge `phase05-r8-weekend-prep` into `main`, re-run every gate on `main` including a clean-cache frozen rebuild, and only then disarm the scheduled task, switch the desk to `main`, and re-arm. **R7/R8's own live gates follow after that merge**; R8's real-weekend proof may run independently at any time |
-| Do not start yet | **R3–R6** — their redirects were never given. Also Phase 1 cleanup and any Phase 2+ item. Do not run R7's live migration/backfill before Monday's validation day passes |
+| Scope | Trader quote recorded 2026-08-15: *"integrate the rest — build R3 through R6 on the consolidated branch."* R3 §5 fenced-file approval applies only to the authorized R3 changes and remains fixtures-first; every detector/scoring/alert file outside that list is still ask-first. `scripts/strength_scan.py` remains untouched throughout |
+| State | **Pre-R3 baseline green: 3354 passed / 19 subtests, exit 0.** The first run exposed two Sunday-dependent R7 journal-coverage fixtures (`3352 passed, 2 failed`); their synthetic Questrade chunk now uses the existing fixed Monday date, and the targeted file is 26 passed. Production journal code and live stores were untouched. Prior smoke 7/7 and clean-cache frozen selftest 49/49 `(frozen)` remain the last applicable non-pytest gates |
+| Next action | Land R3's mutation-resistant characterization/golden fixtures before any fenced implementation change, then build the shadow-only classifier, pre-close honesty bundle and dislike-reason loop. Run the full suite and push each commit. Monday's one-merge sequence remains owed and unchanged |
+| Do not start yet | **R4–R6 until R3 closes; Phase 1–7 throughout this session.** Do not run R7's live migration/backfill before Monday's validation day passes; do not claim any live proof from deterministic tests |
 | Doc-only addendum (2026-08-15, late) | Phase 0.5 gained packets **R7 (journal reliability + UX)** and **R8 (Weekend Prep)**: specs written, WISHLIST/plan.md/docs README reconciled (incl. the P3.3 nightly-journal-pull promotion into R7 and the P5.4 narrowing). **Markdown-only — the release candidate, gates, and baseline above are unchanged** |
 | **R7 redirect (2026-08-15, second of the day)** | The trader explicitly authorized **R7 code to start now**, ahead of the P0.7 merge: branch **`phase05-r7-journal-reliability-ux` cut from the R2 tip** — same redirect pattern as R1/R2, recorded in `plan.md` Phase 0.5 preamble and the R7 spec header. Rationale: R7/R8 touch journal/weekend surfaces, not the scanning/alerting/Focus path Monday's proofs cover. **The desk keeps running the R2 branch via the scheduled task until the validation day passes — do not switch the desk branch without disarming that task.** R1/R2's eight live proofs remain owed and are inherited by the eventual stack merge. R7's own trader-present steps (live DB migration, full backfill) must NOT run on the desk before Monday's validation passes |
+| **R3–R6 weekend redirect (2026-08-15)** | The trader explicitly authorized the remaining packets on this consolidated branch: *"integrate the rest — build R3 through R6 on the consolidated branch."* Build order is R3, R4, R5, R6, with per-packet governance and full-suite pushes. The redirect authorizes code; it does not discharge R3's shadow week or R6's watchdog week |
 
 ## R7 build progress — `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md` §9
 
@@ -62,10 +63,11 @@ reviewed week; the week-ahead rendering only on its button press; the app closed
 mid-routine and reopened with progress restored; and the trader confirming board
 character per timeframe — until that, §5's filters are approved but not proven.
 
-**R7 and R8 are built and their adversarial-review repairs are complete.** Do
-not start R3–R6: their redirects were never given. R8's §5 discovery filters are
-trader-approved as proposed; the live weekend run still has to prove their board
-character.
+**R7 and R8 are built and their adversarial-review repairs are complete.** The
+earlier R3–R6 hold is superseded by the trader's 2026-08-15 weekend redirect
+recorded in the active-work table; R3 is now active. R8's §5 discovery filters
+are trader-approved as proposed; the live weekend run still has to prove their
+board character.
 
 **The golden fixture is the packet's spine.** It freezes what `rebuild_trades`
 does today, six known defects included, and it is regenerated only by
@@ -529,8 +531,10 @@ step (a) or (b) exercises them, and none of them is a merge blocker:
   consecutive nightly `journal_import` entries. **None of it may start before
   Monday's validation day passes.**
 
-**Still specced-not-built, and unchanged by any of this: R3, R4, R5 and R6** —
-their redirects were never given. Phases 1–7 remain open.
+**Subsequently authorized by the trader's 2026-08-15 weekend redirect:** R3,
+R4, R5 and R6 now build on this consolidated branch in that order; the
+active-work table owns their current state. Phases 1–7 remain open and are not
+authorized this session.
 
 **Is a packaging trigger pending? No — but rebuild anyway.** Checked all five
 triggers across the whole stack (`e18757e..HEAD`): no new third-party dependency,

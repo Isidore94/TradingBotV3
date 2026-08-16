@@ -1,7 +1,9 @@
 # Swing-quality demotion, pre-close honesty, and the dislike-feedback loop — packet R3
 
-Status: **ACTIVE specification** for `plan.md` Phase 0.5 **R3**. Authorized by the
-trader on 2026-08-15. Builds after R1/R2 (trader's ranked order); the pre-close
+Status: **BUILD AUTHORIZED — IN PROGRESS** for `plan.md` Phase 0.5 **R3**. The
+trader's 2026-08-15 weekend redirect was: *"integrate the rest — build R3 through
+R6 on the consolidated branch."* R3 builds first on
+`phase05-r8-weekend-prep`; the pre-close
 investigation in section 4 is **complete** — its findings are recorded fact, its
 fixes are not yet built.
 

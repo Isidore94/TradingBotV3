@@ -277,6 +277,19 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-16 — Phase 0.5 remaining-packet pre-flight
+
+The trader's 2026-08-15 weekend redirect authorized R3 through R6, in order, on
+the consolidated `phase05-r8-weekend-prep` branch. No live gate was waived: R3's
+shadow week and R6's watchdog week remain owed alongside the existing R1/R2,
+R7 and R8 proofs.
+
+The required pre-R3 suite exposed two journal-coverage tests whose synthetic
+Questrade chunk inherited the wall-clock date and therefore became a weekend
+`NO_SESSION` on Sunday. Their fixture now uses its existing fixed Monday date;
+production journal behavior and live data paths are unchanged. Verification:
+targeted **26 passed**, then full suite **3354 passed / 19 subtests**, both exit 0.
+
 ### 2026-08-15 — packet R8: Weekend Prep
 
 `IMPLEMENTED` + `GREEN`. One live gate owed: a real weekend run. Built on
