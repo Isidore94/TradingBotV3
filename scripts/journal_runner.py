@@ -24,8 +24,8 @@ from journal_importers import (
 import journal_coverage
 import journal_fx
 import journal_reconcile
-from journal_store import JournalStore
-from project_paths import get_local_setting
+from journal_store import JournalStore, existing_journal_requires_migration
+from project_paths import JOURNAL_DB_FILE, get_local_setting
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -332,6 +332,8 @@ def run_journal_backfill(
                         journal_store, qt_importer, chunk, messages_out=messages
                     )
                 except RuntimeError as exc:
+                    chunk_failures += 1
+                    had_errors = True
                     journal_store.finish_import_run(
                         run_id, status="PARTIAL", imported_executions=count, message=str(exc)
                     )
@@ -489,6 +491,20 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
     existing `ai_jobs` runner slot and its only outputs are database rows and
     the ledger entry the runner writes.
     """
+    if store is None and existing_journal_requires_migration(JOURNAL_DB_FILE):
+        message = (
+            "journal database requires trader-present preparation in the GUI; "
+            "nightly import refused without migrating it"
+        )
+        return {
+            "status": "FAILED",
+            "ok": False,
+            "trigger": trigger,
+            "start_date": "",
+            "end_date": "",
+            "trade_count": None,
+            "messages": [message],
+        }
     journal_store = store or JournalStore()
     messages: list[str] = []
     had_errors = False

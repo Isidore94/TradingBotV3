@@ -435,6 +435,16 @@ are listed in `CURRENT_CHECKPOINT.md`.
    built** — and §4's three identity choices (the short `QT`/`IBKR` uid token,
    source precedence enforced at import time as well as in the migration, and a
    deterministic surrogate for a row with no execution id).
+
+   **Release-candidate pre-flight fix pass (2026-08-16):** id-less Questrade
+   identity now hashes only stable fill discriminators; v2 order-id-keyed
+   partials are re-keyed before collapse and counted in the migration report;
+   the GUI preparation gate reads persisted schema v3; the nightly slot refuses
+   an existing pre-v3 database until that trader-present GUI migration; assembly
+   orders fills by normalized instrument identity; and a failed Questrade
+   activities cross-check makes the backfill/night fail. Deterministic regression
+   coverage was added for all five findings; the live migration remains owed and
+   untouched.
 8. **R8 Weekend Prep. — BUILT 2026-08-15, live gate owed.** A guided five-step weekend routine
    (week in review, focus-pick review, week-windowed walk-away with the auto-tag
    review, H1/D1/Monthly strength discovery on the R2 formula via a new pure

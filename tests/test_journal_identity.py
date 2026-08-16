@@ -227,6 +227,37 @@ def test_a_merged_group_receives_its_fills_in_time_order(tmp_path):
     assert row["gross_pnl"] == pytest.approx(100.0)
 
 
+def test_mixed_option_symbol_spellings_receive_fills_in_time_order(tmp_path):
+    """Raw symbol spelling must not sort a normalized option group."""
+    store = JournalStore(tmp_path / "trade_journal.sqlite3")
+    common = dict(
+        broker="IBKR", account_number="U1", account_label="U1", account_type="",
+        security_type="OPT", currency="USD", trade_date="2026-08-05",
+        commission=0.0, fees=0.0, gross_amount=None, net_amount=None,
+        order_id="", exchange_exec_id="", raw_json="{}",
+    )
+    store.upsert_executions(
+        [
+            dict(common, execution_uid="IBKR:U1:o1", symbol="SPY260116C00500000",
+                 side="BUY", quantity=1, price=5.0,
+                 timestamp="2026-08-05T09:00:00-07:00"),
+            # Spaces make this raw spelling sort before the compact spelling,
+            # despite being the later fill. Both normalize to the same symbol.
+            dict(common, execution_uid="IBKR:U1:o2", symbol="SPY   260116C00500000",
+                 side="SELL", quantity=1, price=7.0,
+                 timestamp="2026-08-05T10:00:00-07:00"),
+        ]
+    )
+
+    store.rebuild_trades(refresh_tags=False)
+    with store.connection() as conn:
+        trade = dict(conn.execute("SELECT * FROM trades").fetchone())
+        roles = [row[0] for row in conn.execute("SELECT role FROM trade_legs ORDER BY leg_id")]
+    assert trade["direction"] == "LONG"
+    assert trade["gross_pnl"] == pytest.approx(200.0)
+    assert roles == ["OPEN", "CLOSE"]
+
+
 def test_an_option_multiplier_survives_the_brokers_spelling(tmp_path):
     """The store's multiplier rule read security_type verbatim and missed "Option"."""
     store = JournalStore(tmp_path / "trade_journal.sqlite3")
@@ -269,3 +300,23 @@ def test_questrade_partial_fills_without_execution_ids_do_not_collapse_on_order_
     store.upsert_executions([first, second])
     with store.connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM raw_executions").fetchone()[0] == 2
+
+
+def test_questrade_idless_fill_uid_ignores_payload_and_fee_drift():
+    importer = QuestradeImporter.__new__(QuestradeImporter)
+    account = {"number": "51830546", "type": "TFSA"}
+    stable = {
+        "orderId": 4242, "symbol": "AAPL", "securityType": "Stock", "side": "Buy",
+        "quantity": 5, "price": 150.0, "timestamp": "2026-08-05T09:31:00-07:00",
+        "currency": "USD",
+    }
+    original = importer.normalize_execution(
+        {**stable, "commission": 2.5, "fees": 0.01, "brokerVersion": "old"}, account
+    )
+    amended = importer.normalize_execution(
+        {**stable, "commission": 2.75, "fees": 0.02, "brokerVersion": "new", "newField": True},
+        account,
+    )
+
+    assert original.execution_uid == amended.execution_uid
+    assert original.raw_json != amended.raw_json

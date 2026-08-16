@@ -24,6 +24,14 @@ def store_is_initialized() -> bool:
     return _STORE is not None
 
 
+def store_needs_preparation() -> bool:
+    """Read the persisted schema; process-local store state is not a migration gate."""
+    from journal_store import journal_database_needs_preparation
+
+    path = Path(_STORE.db_path) if _STORE is not None else journal_db_path()
+    return journal_database_needs_preparation(path)
+
+
 def initialize_store() -> dict[str, Any]:
     """Initialize/migrate the shared store; the Journal panel calls this in a worker."""
     store = _store()

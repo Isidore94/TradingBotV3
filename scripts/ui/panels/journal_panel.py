@@ -84,7 +84,7 @@ class JournalPanel(QFrame):
         layout.addWidget(self.header)
         layout.addWidget(self.tabs)
 
-        if journal_feed.store_is_initialized():
+        if not journal_feed.store_needs_preparation():
             self._finish_initialization({"migrated": False, "report": None})
         else:
             self.migration_status.setText(

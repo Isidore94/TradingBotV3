@@ -26,6 +26,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import journal_migrate as jm  # noqa: E402
 from journal_characterization import CHARACTERIZATION_EXECUTIONS  # noqa: E402
+from journal_importers import QuestradeImporter  # noqa: E402
 from journal_store import JOURNAL_SCHEMA_VERSION, JournalStore  # noqa: E402
 
 V2_SCHEMA = """
@@ -312,6 +313,63 @@ def test_questrade_duplicates_keep_the_newer_import(tmp_path):
         row = conn.execute("SELECT execution_uid, price FROM raw_executions").fetchone()
     assert row["execution_uid"] == "QT:51234567:qt-1"
     assert row["price"] == 150.25
+
+
+def test_idless_questrade_partials_are_rekeyed_before_the_v3_collapse(tmp_path):
+    """An order id identifies the order, not each fill within that order."""
+    account = "51234567"
+    order_id = "4242"
+
+    def _partial(timestamp: str, quantity: float, price: float):
+        return {
+            **_socket_row(order_id, timestamp),
+            "execution_uid": f"QT:{account}:{order_id}:AAPL:{timestamp}",
+            "broker": "QUESTRADE",
+            "account_number": account,
+            "symbol": "AAPL",
+            "side": "BUY",
+            "quantity": quantity,
+            "price": price,
+            "order_id": order_id,
+            "exchange_exec_id": "",
+            "raw_json": json.dumps(
+                {
+                    "orderId": int(order_id), "symbol": "AAPL", "side": "Buy",
+                    "quantity": quantity, "price": price, "timestamp": timestamp,
+                }
+            ),
+        }
+
+    rows = [
+        _partial("2026-08-05T09:31:00-07:00", 3.0, 150.0),
+        _partial("2026-08-05T09:31:01-07:00", 2.0, 150.1),
+    ]
+    store = JournalStore(_write_v2(tmp_path / "trade_journal.sqlite3", rows))
+    report = store.last_migration
+    assert report is not None
+    assert report.order_id_uid_groups == 1
+    assert report.order_id_uid_rows == 2
+    assert report.executions_before == report.executions_after == 2
+    assert report.collapsed == []
+    assert "1 legacy group(s)" in report.render()
+
+    expected = {
+        jm.stable_execution_uid(
+            "QT", account, "", order_id, row["symbol"], row["timestamp"],
+            row["side"], row["quantity"], row["price"],
+        )
+        for row in rows
+    }
+    with store.connection() as conn:
+        actual = {row[0] for row in conn.execute("SELECT execution_uid FROM raw_executions")}
+    assert actual == expected
+
+    importer = QuestradeImporter.__new__(QuestradeImporter)
+    account_row = {"number": account, "type": "TFSA"}
+    re_pulled = [importer.normalize_execution(json.loads(row["raw_json"]), account_row) for row in rows]
+    store.upsert_executions(re_pulled)
+    with store.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM raw_executions").fetchone()[0] == 2
 
 
 def test_re_running_the_migration_changes_nothing(tmp_path):

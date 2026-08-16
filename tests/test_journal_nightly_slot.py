@@ -9,6 +9,7 @@ ledger entry the runner already writes.
 from __future__ import annotations
 
 import sys
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -27,6 +28,34 @@ from journal_store import JournalStore  # noqa: E402
 @pytest.fixture
 def store(tmp_path):
     return JournalStore(tmp_path / "trade_journal.sqlite3")
+
+
+def test_nightly_refuses_an_existing_v2_database_until_gui_preparation(tmp_path, monkeypatch):
+    db_path = tmp_path / "trade_journal.sqlite3"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT INTO meta(key, value) VALUES('schema_version', '2')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(journal_runner, "JOURNAL_DB_FILE", db_path)
+    monkeypatch.setattr(
+        journal_runner,
+        "JournalStore",
+        lambda *args, **kwargs: pytest.fail("nightly must not construct and auto-migrate the store"),
+    )
+    result = journal_runner.run_nightly_journal_import()
+
+    assert result["status"] == "FAILED" and result["ok"] is False
+    assert "trader-present preparation" in result["messages"][0]
+    assert not list(tmp_path.glob("*.bak-*"))
+    conn = sqlite3.connect(db_path)
+    try:
+        assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "2"
+    finally:
+        conn.close()
 
 
 class _QuietBroker:

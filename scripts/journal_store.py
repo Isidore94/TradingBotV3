@@ -138,9 +138,45 @@ def _contract_multiplier(row: dict[str, Any]) -> float:
     return _contract_multiplier_shared(row)
 
 
+def _execution_assembly_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Normalized position identity first, then chronological fill order."""
+    return (*group_key(row), str(row.get("timestamp") or ""), str(row.get("execution_uid") or ""))
+
+
 def _hash_id(*parts: Any) -> str:
     blob = "|".join(str(part or "") for part in parts)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24]
+
+
+def persisted_journal_schema_version(db_path: Path = JOURNAL_DB_FILE) -> int | None:
+    """Read the schema marker without creating or migrating the database."""
+    path = Path(db_path)
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        return read_schema_version(conn)
+    finally:
+        conn.close()
+
+
+def journal_database_needs_preparation(db_path: Path = JOURNAL_DB_FILE) -> bool:
+    """Whether opening the Journal would create or migrate its persisted schema."""
+    path = Path(db_path)
+    if not path.is_file() or path.stat().st_size == 0:
+        return True
+    version = persisted_journal_schema_version(path)
+    return version is None or version < JOURNAL_SCHEMA_VERSION
+
+
+def existing_journal_requires_migration(db_path: Path = JOURNAL_DB_FILE) -> bool:
+    """True only for a non-empty existing database below the current schema."""
+    path = Path(db_path)
+    return (
+        path.is_file()
+        and path.stat().st_size > 0
+        and journal_database_needs_preparation(path)
+    )
 
 
 class JournalStore:
@@ -672,22 +708,14 @@ class JournalStore:
     def _load_raw_executions(self) -> list[dict[str, Any]]:
         """Every execution, ordered so each position's fills arrive in time order.
 
-        ``security_type`` is deliberately absent from the ORDER BY since R7 §9
-        step 3. The group key normalizes it, so two rows spelling the same
-        instrument differently ("STOCK" and the "NASDAQ" that Questrade's
-        listingExchange fallback produced) now land in one group - and sorting by
-        the un-normalized spelling would have handed that group its fills in
-        spelling order rather than time order. Assembly nets in the order it is
-        given, so that would have silently changed which fill closed which.
+        SQL cannot express the full normalized identity (especially OCC option
+        spellings), so the rows are sorted with the exact same ``group_key``
+        used by assembly. Within each normalized group, timestamp and uid are
+        the deterministic fill order.
         """
         with self.connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM raw_executions
-                ORDER BY broker, account_number, symbol, currency, timestamp, execution_uid
-                """
-            ).fetchall()
-        return [_row_to_dict(row) for row in rows]
+            rows = conn.execute("SELECT * FROM raw_executions").fetchall()
+        return sorted((_row_to_dict(row) for row in rows), key=_execution_assembly_sort_key)
 
     def rebuild_trades(self, *, refresh_tags: bool = True) -> int:
         """Reassemble every trade from the raw executions and the adjustments.
@@ -712,6 +740,9 @@ class JournalStore:
           every trade in the group and strand every tag and note on it.
         """
         executions = self._apply_adjustments(self._load_raw_executions())
+        # Adjustments may change an identity or timestamp, or inject a fill.
+        # Re-establish the same ordering contract after applying them.
+        executions.sort(key=_execution_assembly_sort_key)
         group_actions = self._group_adjustments()
         grouped: dict[tuple[str, str, str, str, str], list[dict[str, Any]]] = {}
         for row in executions:

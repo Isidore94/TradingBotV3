@@ -22,6 +22,21 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-16 — R7 journal pre-flight fix pass
+
+The release-candidate spot-check closed five journal correctness gaps before any
+further packet work. Id-less Questrade fills now derive identity only from order,
+normalized symbol, timestamp, side, quantity and price, so fee or raw-payload
+drift updates the same row. The v2→v3 migration recognizes Questrade rows whose
+legacy uid used an order id, re-keys each partial fill to that same stable hash
+before collapse, and reports the affected group/row counts. Fresh app launches
+now read the persisted schema version instead of process-local store state; an
+already-v3 journal opens directly, while the nightly slot refuses to migrate an
+existing pre-v3 journal before the trader-present GUI preparation. Rebuild input
+is sorted by normalized position identity and time, including mixed option-symbol
+spellings, and a failed Questrade activities cross-check now propagates FAILED to
+the run. The live journal and brokers were not touched.
+
 ### 2026-08-16 — R3 tracker ownership moves to the close
 
 The swing schedule now adds an explicit close-minus-15-minute preview (12:45 PT

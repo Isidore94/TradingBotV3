@@ -135,6 +135,25 @@ def test_first_open_runs_real_store_initialization_off_the_gui_thread(qapp, tmp_
         widget.deleteLater()
 
 
+def test_fresh_process_opens_an_already_v3_database_without_prepare_gate(qapp, tmp_path, monkeypatch):
+    from ui.panels.journal_panel import JournalPanel
+
+    db_path = tmp_path / "already-v3.sqlite3"
+    JournalStore(db_path)
+    monkeypatch.setattr(journal_feed, "_STORE", None)
+    monkeypatch.setattr(journal_feed, "journal_db_path", lambda: db_path)
+
+    widget = JournalPanel()
+    try:
+        assert widget._migration_worker is None
+        assert widget.tabs.isEnabled()
+        assert not widget.prepare_button.isVisible()
+        assert journal_feed._STORE is not None
+    finally:
+        widget.shutdown()
+        widget.deleteLater()
+
+
 def test_migration_failure_stays_visible_instead_of_claiming_no_accounts(qapp, monkeypatch):
     from ui.panels.journal_panel import JournalPanel
 

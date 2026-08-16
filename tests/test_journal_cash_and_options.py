@@ -322,7 +322,7 @@ def test_a_broken_activities_endpoint_preserves_rows_but_not_green_coverage(stor
 
     monkeypatch.setattr(journal_runner, "QuestradeImporter", _Broken)
     result = journal_runner.run_journal_backfill(days=3, store=store, include_ibkr_flex=False)
-    assert result["status"] == "OK"
+    assert result["status"] == "FAILED"
     assert any("activities" in message and "skipped" in message for message in result["messages"])
     statuses = {row["status"] for row in jc.coverage_rows(store, broker="QUESTRADE")}
     assert jc.FAILED in statuses and jc.COVERED not in statuses, (

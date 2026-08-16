@@ -233,6 +233,8 @@ class MigrationReport:
     executions_before: int = 0
     executions_after: int = 0
     uids_rewritten: int = 0
+    order_id_uid_groups: int = 0
+    order_id_uid_rows: int = 0
     collapsed: list[dict[str, Any]] = field(default_factory=list)
     unmigrated: list[dict[str, Any]] = field(default_factory=list)
     sources_backfilled: dict[str, int] = field(default_factory=dict)
@@ -253,6 +255,8 @@ class MigrationReport:
             "executions_before": self.executions_before,
             "executions_after": self.executions_after,
             "uids_rewritten": self.uids_rewritten,
+            "order_id_uid_groups": self.order_id_uid_groups,
+            "order_id_uid_rows": self.order_id_uid_rows,
             "collapsed": list(self.collapsed),
             "unmigrated": list(self.unmigrated),
             "sources_backfilled": dict(self.sources_backfilled),
@@ -274,6 +278,10 @@ class MigrationReport:
         lines.append(f"  columns added     {len(self.columns_added)}: {', '.join(self.columns_added) or 'none'}")
         lines.append(f"  executions        {self.executions_before} -> {self.executions_after}")
         lines.append(f"  uids rewritten    {self.uids_rewritten}")
+        lines.append(
+            f"  order-id uid rows {self.order_id_uid_rows} row(s) in "
+            f"{self.order_id_uid_groups} legacy group(s), re-keyed before collapse"
+        )
         if self.sources_backfilled:
             detail = ", ".join(f"{key}={value}" for key, value in sorted(self.sources_backfilled.items()))
             lines.append(f"  source backfilled {detail}")
@@ -371,7 +379,49 @@ def canonical_execution_uid(row: dict[str, Any]) -> tuple[str | None, str]:
 
     if not exec_id:
         return None, f"uid has an empty execution id: {uid!r}"
+    order_surrogate = _questrade_order_id_surrogate(row, prefix, account, exec_id)
+    if order_surrogate is not None:
+        return order_surrogate, "questrade order-id uid re-keyed to stable fill discriminators"
     return f"{prefix}:{account}:{exec_id}", ""
+
+
+def _questrade_order_id_surrogate(
+    row: dict[str, Any], prefix: str, account: str, legacy_exec_id: str
+) -> str | None:
+    """Recognize the v2 Questrade fallback that mistook an order id for a fill id.
+
+    One order may have several partial fills.  V2 embedded ``orderId`` in each
+    uid when Questrade omitted the execution id, then the v3 collapse treated
+    those rows as copies of one fill.  Re-key those rows with the same stable
+    discriminators as the current importer so a later pull updates them rather
+    than inserting hashed copies beside a collapsed survivor.
+    """
+    if prefix.upper() != "QT" or str(row.get("broker") or "").upper() != "QUESTRADE":
+        return None
+    try:
+        raw = json.loads(str(row.get("raw_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    if any(str(raw.get(name) or "").strip() for name in ("id", "executionId", "execId")):
+        return None
+    order_id = str(
+        row.get("order_id") or raw.get("orderId") or raw.get("orderID") or ""
+    ).strip()
+    if not order_id or order_id != str(legacy_exec_id).strip():
+        return None
+    return stable_execution_uid(
+        "QT",
+        account,
+        "",
+        order_id,
+        str(row.get("symbol") or "").strip().upper(),
+        str(row.get("timestamp") or "").strip(),
+        str(row.get("side") or "").strip().upper(),
+        float(row.get("quantity") or 0.0),
+        float(row.get("price") or 0.0),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +504,7 @@ def _collapse_execution_uids(conn: sqlite3.Connection, report: MigrationReport) 
         return
 
     keyed: dict[str, list[dict[str, Any]]] = {}
+    order_id_groups: set[str] = set()
     for row in rows:
         new_uid, reason = canonical_execution_uid(row)
         if new_uid is None:
@@ -461,7 +512,14 @@ def _collapse_execution_uids(conn: sqlite3.Connection, report: MigrationReport) 
             continue
         row["_new_uid"] = new_uid
         row["_source"] = classify_execution_source(row)
+        if reason.startswith("questrade order-id uid"):
+            report.order_id_uid_rows += 1
+            order_id_groups.add(
+                f"QT:{str(row.get('account_number') or '')}:{str(row.get('order_id') or '')}"
+            )
+            row["_order_id_uid"] = True
         keyed.setdefault(new_uid, []).append(row)
+    report.order_id_uid_groups = len(order_id_groups)
 
     def _rank(row: dict[str, Any]) -> tuple[int, str, str]:
         return (
@@ -483,7 +541,9 @@ def _collapse_execution_uids(conn: sqlite3.Connection, report: MigrationReport) 
                     "dropped": loser.get("execution_uid"),
                     "dropped_source": loser.get("_source") or "",
                     "reason": (
-                        "same broker execution id; kept the richer source"
+                        "same id-less fill discriminators; kept the newer import"
+                        if winner.get("_order_id_uid") and loser.get("_order_id_uid")
+                        else "same broker execution id; kept the richer source"
                         if _rank(winner)[0] != _rank(loser)[0]
                         else "same broker execution id; kept the newer import"
                     ),

@@ -1,6 +1,6 @@
 # Journal Reliability and UX Plan — Phase 0.5 R7
 
-**Status: ACTIVE spec — authorized 2026-08-15, NOT BUILT.**
+**Status: BUILT 2026-08-15; release-candidate fix pass 2026-08-16; live gates owed.**
 Trader-directed packet (2026-08-15 desk request: "the journal misses trades, has
 trades open — not acceptable; I need this for tax purposes too"). **Build
 authorized immediately by a second trader redirect later on 2026-08-15**: branch
@@ -168,10 +168,19 @@ Identity fixes:
      let a poorer source overwrite a richer one, so a socket import can never
      erase the commissions, fees and netCash a Flex row already carries.
   3. **A broker row with no execution id gets a deterministic surrogate** —
-     `PREFIX:account:auto-<sha256 of symbol|timestamp|qty|price>` — not a random
-     uuid. Dropping symbol+timestamp removed the accidental uniqueness they used
-     to supply; a random uuid would re-import the same fill as a new execution
-     every night and double the position by a second route.
+     `PREFIX:account:auto-<sha256 of order_id|symbol|timestamp|side|qty|price>` —
+     not a random uuid. These are the stable fill discriminators; commission,
+     fees, auxiliary activity ids and the full raw payload are deliberately not
+     identity because a broker correction or payload-schema addition must update
+     the same fill rather than mint a duplicate.
+  4. **Legacy Questrade order-id uids are re-keyed before collapse.** V2 used
+     `orderId` when a Questrade execution had no id, but one order may contain
+     several partial fills. The v2→v3 migration recognizes that provable shape
+     (Questrade row, no execution id in the raw payload, uid id equal to
+     `order_id`) and assigns each row the discriminator hash above before
+     grouping. The report names how many legacy order-id groups and rows it
+     found. Later pulls therefore update those survivors under the same hash;
+     they cannot reinsert beside one order-id-keyed row and double-count it.
 
 - **trade_id anchored to the opening execution uid**, plus a re-key pass inside
   `rebuild_trades`: snapshot annotated trade_ids + their leg uid sets before the
@@ -270,6 +279,15 @@ lives in `journal_runner` so the desk Health tab can also invoke it manually.
 The retired `master_avwap_mini_pc.py` EOD slot is untouched; ownership transfers
 to this slot. Open operational item: audit Task Scheduler for a stale entry that
 could still fire the old EOD import (harmless double-write, but confusing).
+
+**Schema-preparation decision (release-candidate fix pass, 2026-08-16):** the
+Journal GUI gates on the persisted `meta.schema_version`, not whether this Python
+process has already constructed a store. An already-v3 database opens normally
+after every fresh launch. A non-empty pre-v3 database must be prepared by the
+trader in the GUI so the dry-run can be reviewed and the backup/migration remains
+trader-present. The nightly slot refuses that database and records FAILED; it does
+not auto-migrate it. A brand-new absent database may still be initialized by the
+nightly slot because there is no existing data to back up or review.
 
 ## 7. UI (Qt only; the Tk tab stays legacy and untouched)
 
