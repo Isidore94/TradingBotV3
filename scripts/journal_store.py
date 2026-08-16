@@ -1054,6 +1054,24 @@ class JournalStore:
         if row is None:
             raise ValueError(f"unknown adjustment {adjustment_id!r}")
         existing = _row_to_dict(row)
+        if existing["action"] == self.INERT_ADJUSTMENT_ACTION:
+            with self.connection() as conn:
+                predecessor = conn.execute(
+                    "SELECT * FROM trade_adjustments WHERE superseded_by = ?",
+                    (str(adjustment_id),),
+                ).fetchone()
+            if predecessor is None:
+                raise ValueError("cannot re-apply an undo whose original adjustment is missing")
+            original = _row_to_dict(predecessor)
+            try:
+                original_payload = json.loads(original.get("payload_json") or "{}")
+            except json.JSONDecodeError:
+                original_payload = {}
+            return self.record_adjustment(
+                action=original["action"], target_kind=original["target_kind"],
+                target_uid=original["target_uid"], payload=original_payload,
+                reason=reason, source=source, supersedes=str(adjustment_id),
+            )
         return self.record_adjustment(
             action=self.INERT_ADJUSTMENT_ACTION,
             target_kind=existing["target_kind"],
@@ -1583,6 +1601,8 @@ class JournalStore:
         broker: str | None = None,
         account: str | None = None,
         symbol: str | None = None,
+        status: str | None = None,
+        direction: str | None = None,
         date_from: str | date | None = None,
         date_to: str | date | None = None,
     ) -> list[dict[str, Any]]:
@@ -1607,6 +1627,12 @@ class JournalStore:
         if symbol:
             clauses.append("symbol = ?")
             params.append(str(symbol).upper())
+        if status and str(status) != "All":
+            clauses.append("status = ?")
+            params.append(str(status).upper())
+        if direction and str(direction) != "All":
+            clauses.append("direction = ?")
+            params.append(str(direction).upper())
         where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connection() as conn:
             rows = conn.execute(

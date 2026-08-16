@@ -342,17 +342,6 @@ def calendar_pnl_by_day(trades: list[dict[str, Any]], *, pnl_key: str = "net_pnl
     return dict(totals)
 
 
-def _first_setup_tag(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "untagged"
-    for separator in (";", ",", "|"):
-        if separator in text:
-            first = text.split(separator, 1)[0].strip()
-            return first or "untagged"
-    return text
-
-
 def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> dict[str, Any]:
     closed = [row for row in rows if str(row.get("status") or "").upper() == "CLOSED"]
     pnl_values = [_coerce_float(row.get(pnl_key)) or 0.0 for row in closed]
@@ -431,7 +420,7 @@ def resolve_pnl_key(
     return "net_pnl_cad", "converted to CAD at each trade's booked rate"
 
 
-def _tags_for_row(row: dict[str, Any]) -> list[str]:
+def _tags_for_row(row: dict[str, Any], field: str = "setup_tags") -> list[str]:
     """Every setup tag on a trade, not just the first one.
 
     ``_first_setup_tag`` kept only the leading tag, so a trade tagged
@@ -439,10 +428,10 @@ def _tags_for_row(row: dict[str, Any]) -> list[str]:
     all towards the second - which quietly understated every setup that tends to
     be named second.
     """
-    text = str(row.get("setup_tags") or "").strip()
+    text = str(row.get(field) or "").strip()
     if not text:
         return []
-    for separator in (";", ","):
+    for separator in (";", ",", "|"):
         if separator in text:
             return [part.strip() for part in text.split(separator) if part.strip()]
     return [text]
@@ -464,7 +453,8 @@ def build_analytics_summary(
         # as meaningless as the overall one, so say why and stop.
         summary["overall"] = {**summary["overall"], "net_pnl": None, "gross_win": None, "gross_loss": None}
     group_specs = {
-        "setup": lambda row: _first_setup_tag(row.get("setup_tags") or row.get("auto_tag_summary")),
+        "my setups": lambda row: _tags_for_row(row, "setup_tags") or ["untagged"],
+        "auto tags": lambda row: _tags_for_row(row, "auto_tag_summary") or ["untagged"],
         "account": lambda row: str(row.get("account_label") or row.get("account_number") or "unknown"),
         "broker": lambda row: str(row.get("broker") or "unknown"),
         "symbol": lambda row: str(row.get("symbol") or "unknown"),
@@ -476,7 +466,11 @@ def build_analytics_summary(
     for group_name, key_fn in group_specs.items():
         buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in trades:
-            buckets[key_fn(row)].append(row)
+            keys = key_fn(row)
+            if not isinstance(keys, list):
+                keys = [keys]
+            for key in dict.fromkeys(keys):
+                buckets[str(key)].append(row)
         rows = []
         for label, bucket_rows in buckets.items():
             # The same column the overall total used. A per-group breakdown that
@@ -495,6 +489,7 @@ def build_analytics_summary(
             )
         )
         summary["groups"][group_name] = rows
+    summary["nonexclusive_groups"] = ["my setups", "auto tags"]
     return summary
 
 

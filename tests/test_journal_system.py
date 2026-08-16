@@ -200,6 +200,22 @@ class JournalSystemTests(unittest.TestCase):
             self.assertAlmostEqual(summary["overall"]["win_rate"], 0.5)
             self.assertAlmostEqual(summary["overall"]["profit_factor"], 2.0)
 
+    def test_setup_groups_expand_every_tag_and_keep_human_and_auto_tags_separate(self):
+        trade = {
+            "status": "CLOSED", "net_pnl": 100.0, "currency": "USD",
+            "setup_tags": "avwap-reclaim; earnings-gap",
+            "auto_tag_summary": "favorite_setup|high-rvol",
+        }
+
+        summary = build_analytics_summary([trade], "Native")
+
+        mine = {row["label"]: row for row in summary["groups"]["my setups"]}
+        automatic = {row["label"]: row for row in summary["groups"]["auto tags"]}
+        self.assertEqual(set(mine), {"avwap-reclaim", "earnings-gap"})
+        self.assertEqual(set(automatic), {"favorite_setup", "high-rvol"})
+        self.assertTrue(all(row["trades"] == 1 for row in [*mine.values(), *automatic.values()]))
+        self.assertEqual(summary["nonexclusive_groups"], ["my setups", "auto tags"])
+
     def test_regime_mid_and_short_carry_forward(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             store = self._store(temp_dir)

@@ -214,6 +214,19 @@ def test_the_trades_table_renders_what_the_feed_returns(panel):
     assert symbols == {"AAPL", "AMD"}
 
 
+def test_header_symbol_status_and_direction_filters_reach_the_store(panel):
+    panel.header.range_input.setCurrentText("All")
+    panel.header.symbol_input.setText("amd")
+    panel.header.status_input.setCurrentText("OPEN")
+    panel.header.direction_input.setCurrentText("LONG")
+
+    panel.trades_tab.reload()
+
+    assert panel.trades_tab.table.rowCount() == 1
+    assert panel.trades_tab.table.item(0, 1).text() == "AMD"
+    assert panel.trades_tab.table.item(0, 3).text() == "OPEN"
+
+
 def test_an_unconverted_pnl_reads_as_unconverted_and_never_as_a_number(panel):
     """I5 at the render seam. The fixture books no FX rate, so CAD is unavailable."""
     panel.header.range_input.setCurrentText("All")

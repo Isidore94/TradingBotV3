@@ -183,6 +183,8 @@ def load_trades(
     broker: str = "All",
     account: str = "All",
     symbol: str = "",
+    status: str = "All",
+    direction: str = "All",
     date_from: Any = None,
     date_to: Any = None,
     accounts_filter: Iterable[tuple[str, str]] | None = None,
@@ -191,6 +193,8 @@ def load_trades(
         broker=broker or "All",
         account=account or "All",
         symbol=(symbol or "").strip() or None,
+        status=status,
+        direction=direction,
         date_from=date_from,
         date_to=date_to,
     )

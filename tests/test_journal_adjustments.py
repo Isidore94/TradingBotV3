@@ -194,11 +194,18 @@ def test_a_force_close_can_be_undone_and_the_position_reopens(store):
         row = dict(conn.execute("SELECT status, reconcile_status FROM trades").fetchone())
     assert (row["status"], row["reconcile_status"]) == ("CLOSED", "FORCED_CLOSED")
 
-    store.undo_adjustment(forced["adjustment_id"], reason="the shares came back")
+    undone = store.undo_adjustment(forced["adjustment_id"], reason="the shares came back")
     store.rebuild_trades(refresh_tags=False)
     with store.connection() as conn:
         row = dict(conn.execute("SELECT status, reconcile_status FROM trades").fetchone())
     assert (row["status"], row["reconcile_status"]) == ("OPEN", "")
+
+    reapplied = store.undo_adjustment(undone["adjustment_id"], reason="transfer was confirmed")
+    assert reapplied["action"] == "FORCE_CLOSE"
+    store.rebuild_trades(refresh_tags=False)
+    with store.connection() as conn:
+        row = dict(conn.execute("SELECT status, reconcile_status FROM trades").fetchone())
+    assert (row["status"], row["reconcile_status"]) == ("CLOSED", "FORCED_CLOSED")
 
 
 # ---------------------------------------------------------------------------

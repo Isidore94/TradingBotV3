@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QPushButton,
     QVBoxLayout,
@@ -61,6 +62,16 @@ class JournalHeader(QFrame):
         self.range_input.setCurrentText("30d")
         self.range_input.currentTextChanged.connect(self._on_range_changed)
 
+        self.symbol_input = QLineEdit()
+        self.symbol_input.setPlaceholderText("Symbol")
+        self.symbol_input.editingFinished.connect(self._emit_changed)
+        self.status_input = QComboBox()
+        self.status_input.addItems(["All", "OPEN", "CLOSED_PARTIAL", "CLOSED"])
+        self.status_input.currentTextChanged.connect(self._emit_changed)
+        self.direction_input = QComboBox()
+        self.direction_input.addItems(["All", "LONG", "SHORT"])
+        self.direction_input.currentTextChanged.connect(self._emit_changed)
+
         self.date_from = QDateEdit()
         self.date_from.setCalendarPopup(True)
         self.date_to = QDateEdit()
@@ -75,6 +86,12 @@ class JournalHeader(QFrame):
         row.addWidget(QLabel("Accounts"))
         row.addWidget(self.account_button)
         row.addWidget(self.blend_badge)
+        row.addWidget(QLabel("Symbol"))
+        row.addWidget(self.symbol_input)
+        row.addWidget(QLabel("Status"))
+        row.addWidget(self.status_input)
+        row.addWidget(QLabel("Direction"))
+        row.addWidget(self.direction_input)
         row.addStretch(1)
         row.addWidget(QLabel("Currency"))
         row.addWidget(self.currency_input)
@@ -212,4 +229,7 @@ class JournalHeader(QFrame):
             "date_from": date_from,
             "date_to": date_to,
             "accounts_filter": self.selected_accounts,
+            "symbol": self.symbol_input.text().strip(),
+            "status": self.status_input.currentText(),
+            "direction": self.direction_input.currentText(),
         }
