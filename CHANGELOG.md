@@ -46,6 +46,19 @@ ranking change is introduced. The same-slot volume-thrust scoring change remains
 unbuilt because this seam has no intraday slot series. Deterministic gate: 3367
 passed / 19 subtests, exit 0; live churn comparison remains owed.
 
+### 2026-08-16 — R3 setup dislikes become counted evidence
+
+The Setups ✕ dialog now offers the existing versioned veto vocabulary, then an
+optional detail prompt (required for `other`). Review-event rows store the
+permanent code(s) and vocabulary version; the review-learning scoreboard counts a
+new `dislike_reason` dimension. A day/signature-cached union of explicit decisions
+across pick feedback, alert review events, and trader annotations supplies an
+additive "Reviewed today" badge in the Setups table and a matching report group.
+Impressions and hypothetical stops do not count. This is presentation/advisory
+evidence only: no rank, score, filter, alert, or suppression field consumes it.
+Deterministic gate: 3370 passed / 19 subtests, exit 0; first live curation remains
+owed.
+
 ### Application, runtime, and data ownership
 
 - PySide6 Trading Desk launched by `launch_gui.py`, with the legacy Tk UI retained

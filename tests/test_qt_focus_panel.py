@@ -258,6 +258,29 @@ def test_master_panel_report_poll_refreshes_only_when_signature_changes():
     assert calls == [False]
 
 
+def test_reviewed_today_badge_is_additive_and_day_refreshable():
+    from ui.models.setup import SetupRow
+    from ui.panels.master_avwap_panel import _apply_reviewed_today_badges
+
+    reviewed = SetupRow(
+        symbol="NVDA",
+        bucket="favorite_setup",
+        raw={"classification_badges": ["Stretched? (shadow)"]},
+    )
+    untouched = SetupRow(symbol="AMD", bucket="near_favorite_zone", raw={})
+    rows = [reviewed, untouched]
+    _apply_reviewed_today_badges(rows, {"NVDA"})
+    assert reviewed.raw["classification_badges"] == [
+        "Stretched? (shadow)",
+        "Reviewed today",
+    ]
+    assert untouched.raw["classification_badges"] == []
+
+    _apply_reviewed_today_badges(rows, {"AMD"})
+    assert reviewed.raw["classification_badges"] == ["Stretched? (shadow)"]
+    assert untouched.raw["classification_badges"] == ["Reviewed today"]
+
+
 def test_autopilot_ownership_disables_the_setups_page_scheduler():
     from types import SimpleNamespace
 

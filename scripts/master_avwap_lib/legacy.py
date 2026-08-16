@@ -30321,6 +30321,7 @@ def write_priority_setup_report(
     priority_rows: list[dict],
     *,
     stable_rows: list[dict] | None = None,
+    reviewed_symbols: set[str] | None = None,
 ) -> None:
     favorites = sorted(
         [
@@ -30377,6 +30378,12 @@ def write_priority_setup_report(
         ]
     )
     stable_best_swing_rows = _priority_best_swing_trade_rows(stable_actionable_rows)
+    reviewed = {str(symbol).strip().upper() for symbol in (reviewed_symbols or set())}
+    reviewed_rows = [
+        row
+        for row in actionable_priority_rows
+        if str(row.get("symbol") or "").strip().upper() in reviewed
+    ]
 
     buffer = io.StringIO()
     handle = buffer
@@ -30426,6 +30433,7 @@ def write_priority_setup_report(
     _write_priority_detail_rows(handle, "TOP pattern tracking", top_pattern_tracking_rows)
     _write_priority_detail_rows(handle, "SMA breakout retest tracking", sma_breakout_tracking_rows)
     _write_priority_detail_rows(handle, "2nd/3rd stdev retest tracking", stdev_tracking_rows)
+    _write_priority_detail_rows(handle, "Reviewed today", reviewed_rows)
     handle.write("Appendix: setup-type copy lists\n")
     handle.write("===============================\n")
     _write_priority_setup_copy_lists(handle, "By setup type", actionable_priority_rows)

@@ -34,7 +34,9 @@ from project_paths import (
     save_local_setting,
 )
 from review_events import record_review_event, setup_context_fields
+from pick_feedback import reviewed_symbols_today
 from market_session import get_default_hourly_scan_schedule, get_default_stop_time_label, get_market_session_window
+from ui.annotations.vocabulary import VocabularyError, load_veto_vocabulary
 from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
 from ui.services.data_feed import copy_symbols, load_latest_setup_rows_with_meta
@@ -100,6 +102,24 @@ def _apply_swing_quality_shadow_badges(rows: list[SetupRow]) -> None:
         if label not in badges:
             badges.append(label)
 
+
+def _apply_reviewed_today_badges(
+    rows: list[SetupRow],
+    reviewed_symbols: set[str] | None = None,
+) -> None:
+    reviewed = reviewed_symbols if reviewed_symbols is not None else reviewed_symbols_today()
+    for row in rows:
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        badges = raw.get("classification_badges")
+        badges = [
+            str(label)
+            for label in (badges if isinstance(badges, list) else [])
+            if str(label) != "Reviewed today"
+        ]
+        if row.symbol.strip().upper() in reviewed:
+            badges.append("Reviewed today")
+        raw["classification_badges"] = badges
+
 # Columns the compact profile hides. Sector/industry NAMES go, but both RS/RW
 # readings stay: they are the group strength the trader actually reads, and in
 # the old layout they were among the columns pushed off-screen entirely.
@@ -156,6 +176,7 @@ class MasterAvwapPanel(QWidget):
             focus_service is not None
             and getattr(focus_store, "uses_default_paths", lambda: False)()
         )
+        self._uses_default_feedback_paths = default_store
         self._review_events_path = (
             Path(review_events_path)
             if review_events_path is not None
@@ -785,6 +806,8 @@ class MasterAvwapPanel(QWidget):
             style.polish(self.data_as_of_label)
 
     def set_rows(self, rows: list[SetupRow]) -> None:
+        if self._uses_default_feedback_paths:
+            _apply_reviewed_today_badges(rows)
         self.model.set_rows(rows)
         self._refresh_bucket_filter(rows)
         self._apply_filters()
@@ -1061,29 +1084,79 @@ class MasterAvwapPanel(QWidget):
             pass
 
     def _dislike_row(self, row: SetupRow) -> bool:
-        """Prompt for the why and log the dislike. True when not cancelled."""
-        reason, accepted = QInputDialog.getMultiLineText(
+        """Prompt for a versioned reason code plus optional detail."""
+        try:
+            vocabulary = load_veto_vocabulary()
+        except VocabularyError as exc:
+            QMessageBox.warning(self, "Dislike unavailable", str(exc))
+            return False
+        labels = [f"{reason.hotkey}. {reason.label} [{reason.code}]" for reason in vocabulary.reasons]
+        selected, accepted = QInputDialog.getItem(
             self,
             f"Dislike {row.symbol}",
-            "Why is this a bad pick? Saved to pick_feedback.jsonl so an AI can\n"
-            "review your dislikes and suggest scan/scoring changes.",
+            "Choose the primary reason. The permanent code is counted by the review scoreboard.",
+            labels,
+            0,
+            False,
         )
         if not accepted:
             return False
-        self._record_dislike(row, reason)
+        selected_index = labels.index(selected) if selected in labels else -1
+        if selected_index < 0:
+            return False
+        reason_choice = vocabulary.reasons[selected_index]
+        detail, accepted = QInputDialog.getMultiLineText(
+            self,
+            f"Dislike {row.symbol} — optional detail",
+            (
+                f"{reason_choice.label}: add detail for later AI review."
+                if not reason_choice.note_required
+                else f"{reason_choice.label}: detail is required for this reason."
+            ),
+        )
+        if not accepted:
+            return False
+        if not reason_choice.accepts(detail):
+            QMessageBox.warning(self, "Detail required", "The Other reason requires a note.")
+            return False
+        self._record_dislike(
+            row,
+            detail,
+            reason_code=reason_choice.code,
+            vocab_version=vocabulary.vocab_version,
+        )
         return True
 
-    def _record_dislike(self, row: SetupRow, reason: str) -> None:
+    def _record_dislike(
+        self,
+        row: SetupRow,
+        reason: str,
+        *,
+        reason_code: str = "",
+        vocab_version: int | None = None,
+    ) -> None:
+        detail = {
+            "reason": str(reason or "").strip(),
+            "origin": "setups",
+        }
+        if reason_code:
+            detail["reason_code"] = str(reason_code).strip().lower()
+            detail["reason_codes"] = [detail["reason_code"]]
+        if vocab_version is not None:
+            detail["vocab_version"] = int(vocab_version)
         self._record_review_event(
-            "dislike", row, {"reason": str(reason or "").strip(), "origin": "setups"}
+            "dislike", row, detail
         )
+        feedback_reason = str(reason or "").strip()
+        if reason_code:
+            feedback_reason = f"[{str(reason_code).strip().lower()}] {feedback_reason}".strip()
         self.focus_service.record_feedback(
             row.symbol,
             row.side,
             "dislike",
             category=self.focus_service.focus_category(row.symbol) or "swing",
             origin="setups",
-            reason=reason,
+            reason=feedback_reason,
             context=_row_context(row),
         )
         message = f"✕ {row.symbol}: dislike logged for AI review."

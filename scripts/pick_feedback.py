@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from project_paths import PICK_FEEDBACK_FILE
+from project_paths import ALERT_REVIEW_EVENTS_FILE, TRADER_ANNOTATIONS_FILE
 
 
 # "not_today" (packet R2) is narrower than "dislike": the trader is throwing
@@ -41,6 +42,18 @@ PICK_VERDICTS = ("like", "dislike", "unfavorite", "not_today")
 # human-focus snapshot turns them into cohort suffixes such as
 # `focus_swing_chart_review`, so the list documents what those names mean.
 PICK_ORIGINS = ("h1", "d1", "m5", "setups", "manual", "chart_review", "auto_pick")
+
+_REVIEWED_TODAY_CACHE: dict[tuple, frozenset[str]] = {}
+_PICK_DECISIONS = {"like", "dislike", "unfavorite", "not_today"}
+_REVIEW_EVENT_DECISIONS = {
+    "favorite",
+    "dislike",
+    "remove_today",
+    "add_focus",
+    "toggle_d1_focus",
+    "toggle_m5_focus",
+}
+_ANNOTATION_DECISIONS = {"veto", "like_claim", "note"}
 
 
 def _trade_date_text() -> str:
@@ -110,6 +123,107 @@ def load_pick_feedback(path: Path = PICK_FEEDBACK_FILE) -> list[dict[str, Any]]:
     except OSError:
         return []
     return rows
+
+
+def _file_signature(path: Path) -> tuple[int, int]:
+    try:
+        stat = Path(path).stat()
+        return int(stat.st_mtime_ns), int(stat.st_size)
+    except OSError:
+        return 0, 0
+
+
+def clear_reviewed_today_cache() -> None:
+    _REVIEWED_TODAY_CACHE.clear()
+
+
+def reviewed_symbols_today(
+    *,
+    market_date: str | None = None,
+    pick_feedback_path: Path = PICK_FEEDBACK_FILE,
+    review_events_path: Path = ALERT_REVIEW_EVENTS_FILE,
+    annotations_path: Path = TRADER_ANNOTATIONS_FILE,
+) -> set[str]:
+    """Union today's explicit decisions across the three review ledgers.
+
+    Presentation only. ``shown`` impressions and hypothesis stops are excluded:
+    this marker means the trader made a decision (star/x, veto, like, or note),
+    not merely that a row appeared on screen.
+    """
+    target_date = str(market_date or _trade_date_text())
+    pick_path = Path(pick_feedback_path)
+    events_path = Path(review_events_path)
+    annotation_path = Path(annotations_path)
+    if events_path == Path(ALERT_REVIEW_EVENTS_FILE):
+        try:
+            from review_events import review_event_store_mtime
+
+            events_signature = (int((review_event_store_mtime(events_path) or 0) * 1e9), 0)
+        except Exception:
+            events_signature = _file_signature(events_path)
+    else:
+        events_signature = _file_signature(events_path)
+    key = (
+        target_date,
+        str(pick_path),
+        _file_signature(pick_path),
+        str(events_path),
+        events_signature,
+        str(annotation_path),
+        _file_signature(annotation_path),
+    )
+    cached = _REVIEWED_TODAY_CACHE.get(key)
+    if cached is not None:
+        return set(cached)
+
+    symbols: set[str] = set()
+    for row in load_pick_feedback(pick_path):
+        if (
+            str(row.get("trade_date") or "") == target_date
+            and str(row.get("verdict") or "").strip().lower() in _PICK_DECISIONS
+        ):
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol:
+                symbols.add(symbol)
+
+    try:
+        from review_events import load_review_events
+
+        review_rows = load_review_events(
+            events_path,
+            include_shards=events_path == Path(ALERT_REVIEW_EVENTS_FILE),
+        )
+    except Exception:
+        review_rows = []
+    for row in review_rows:
+        if (
+            str(row.get("trade_date") or "") == target_date
+            and str(row.get("action") or "").strip().lower() in _REVIEW_EVENT_DECISIONS
+        ):
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol:
+                symbols.add(symbol)
+
+    try:
+        from ui.annotations.store import load_annotations
+
+        annotation_rows = load_annotations(
+            annotation_path,
+            session_date=target_date,
+            event_types=tuple(sorted(_ANNOTATION_DECISIONS)),
+        )
+    except Exception:
+        annotation_rows = []
+    for row in annotation_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if symbol:
+            symbols.add(symbol)
+
+    # Bound the cache naturally to recent signatures/days.
+    if len(_REVIEWED_TODAY_CACHE) >= 16:
+        _REVIEWED_TODAY_CACHE.clear()
+    _REVIEWED_TODAY_CACHE[key] = frozenset(symbols)
+    return symbols
 
 
 def latest_like_origins(

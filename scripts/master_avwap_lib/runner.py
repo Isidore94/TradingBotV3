@@ -2235,10 +2235,18 @@ def _run_master_impl(
 
     # trim history to last N days
     trim_history(history)
+    try:
+        from pick_feedback import reviewed_symbols_today
+
+        reviewed_symbols = reviewed_symbols_today()
+    except Exception:
+        reviewed_symbols = set()
+    run_result["reviewed_today_symbol_count"] = len(reviewed_symbols)
     write_priority_setup_report(
         PRIORITY_SETUPS_FILE,
         priority_rows,
         stable_rows=stable_priority_rows,
+        reviewed_symbols=reviewed_symbols,
     )
     write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
     favorite_watchlist_reference = datetime.now()

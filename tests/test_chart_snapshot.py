@@ -915,6 +915,10 @@ def test_snapshot_popup_dislike_advances_to_next_chart(monkeypatch, tmp_path):
 
     class _Prompt:
         @staticmethod
+        def getItem(*_args, **_kwargs):
+            return ("5. Too extended from base [too_extended_from_base]", True)
+
+        @staticmethod
         def getMultiLineText(*_args, **_kwargs):
             return ("too extended from the level", True)
 
@@ -926,10 +930,16 @@ def test_snapshot_popup_dislike_advances_to_next_chart(monkeypatch, tmp_path):
     assert rows[0]["symbol"] == "NVDA"
     assert rows[0]["bucket"] == "favorite_setup"
     assert rows[0]["detail"]["reason"] == "too extended from the level"
+    assert rows[0]["detail"]["reason_codes"] == ["too_extended_from_base"]
+    assert rows[0]["detail"]["vocab_version"] == 1
     assert dialog._symbol == "TSLA"
 
     # A cancelled reason prompt = no dislike, no advance.
     class _Cancel:
+        @staticmethod
+        def getItem(*_args, **_kwargs):
+            return ("", False)
+
         @staticmethod
         def getMultiLineText(*_args, **_kwargs):
             return ("", False)

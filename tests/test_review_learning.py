@@ -208,6 +208,50 @@ def test_swing_setups_actions_feed_bucket_family_and_tag_dimensions():
     assert aggregate["dimensions"]["expected_r_band"]["decent(0.5-1)"]["n"] == 2
 
 
+def test_structured_setup_dislikes_are_counted_by_reason_code():
+    swing_extra = {
+        "surface": "setups",
+        "is_d1": True,
+        "timeframe": "D1",
+        "bucket": "favorite_setup",
+        "setup_family": "avwap_breakout",
+        "event_id": "",
+    }
+    rows = [
+        _row(
+            "dislike",
+            symbol="NVDA",
+            detail={
+                "origin": "setups",
+                "reason": "late after a vertical move",
+                "reason_code": "too_extended_from_base",
+                "reason_codes": ["too_extended_from_base"],
+                "vocab_version": 1,
+            },
+            **swing_extra,
+        ),
+        _row(
+            "dislike",
+            symbol="AMD",
+            detail={
+                "origin": "setups",
+                "reason_codes": ["incoming_trendline", "overhead_horizontal"],
+                "vocab_version": 1,
+            },
+            **swing_extra,
+        ),
+    ]
+    episodes = build_episodes(rows)
+    aggregate = aggregate_dimensions(episodes)
+    reasons = aggregate["dimensions"]["dislike_reason"]
+    assert reasons["too_extended_from_base"]["reject"] == 1
+    assert reasons["incoming_trendline"]["n"] == 1
+    assert reasons["overhead_horizontal"]["n"] == 1
+    report = render_report({**aggregate, "generated_at": "now", "window_days": 90})
+    assert "DISLIKE REASON" in report
+    assert "too_extended_from_base" in report
+
+
 def test_find_callouts_flags_blind_spots_and_leaks():
     rows = []
     for index in range(12):

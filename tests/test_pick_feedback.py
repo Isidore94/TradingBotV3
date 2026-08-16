@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -67,3 +68,63 @@ def test_load_pick_feedback_skips_bad_lines_and_missing_file(tmp_path):
     rows = load_pick_feedback(path)
     assert len(rows) == 1
     assert rows[0]["symbol"] == "NVDA"
+
+
+def test_reviewed_today_unions_decisions_from_all_three_ledgers(tmp_path):
+    from pick_feedback import clear_reviewed_today_cache, reviewed_symbols_today
+
+    pick_path = tmp_path / "pick_feedback.jsonl"
+    events_path = tmp_path / "review_events.jsonl"
+    annotations_path = tmp_path / "trader_annotations.jsonl"
+    pick_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {"trade_date": "2026-08-14", "symbol": "NVDA", "verdict": "like"},
+                {"trade_date": "2026-08-13", "symbol": "OLD", "verdict": "dislike"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    events_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {"trade_date": "2026-08-14", "symbol": "AMD", "action": "dislike"},
+                {"trade_date": "2026-08-14", "symbol": "SHOWN", "action": "shown"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    annotations_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {"session_date": "2026-08-14", "symbol": "TSLA", "event_type": "veto"},
+                {"session_date": "2026-08-14", "symbol": "META", "event_type": "note"},
+                {"session_date": "2026-08-14", "symbol": "STOP", "event_type": "hypo_stop"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    clear_reviewed_today_cache()
+    reviewed = reviewed_symbols_today(
+        market_date="2026-08-14",
+        pick_feedback_path=pick_path,
+        review_events_path=events_path,
+        annotations_path=annotations_path,
+    )
+    assert reviewed == {"NVDA", "AMD", "TSLA", "META"}
+
+    # Signature-keyed caching invalidates when a ledger grows.
+    with pick_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"trade_date": "2026-08-14", "symbol": "AAPL", "verdict": "dislike"}) + "\n")
+    assert reviewed_symbols_today(
+        market_date="2026-08-14",
+        pick_feedback_path=pick_path,
+        review_events_path=events_path,
+        annotations_path=annotations_path,
+    ) == {"NVDA", "AMD", "TSLA", "META", "AAPL"}

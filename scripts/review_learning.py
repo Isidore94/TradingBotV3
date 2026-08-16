@@ -116,6 +116,7 @@ class Episode:
     bucket: str = ""
     setup_family: str = ""
     setup_tags: str = ""
+    dislike_reasons: str = ""
     expected_r: float | None = None
     close_r: float | None = None
     forward_pct: dict[int, float] = field(default_factory=dict)
@@ -203,6 +204,20 @@ def build_episodes(rows: Iterable[dict]) -> list[Episode]:
                 value = _as_float(row.get(key))
                 if value is not None and getattr(episode, key) is None:
                     setattr(episode, key, value)
+            if action == "dislike":
+                detail = row.get("detail")
+                detail = detail if isinstance(detail, dict) else {}
+                raw_codes = detail.get("reason_codes")
+                if not isinstance(raw_codes, list):
+                    raw_codes = [detail.get("reason_code")]
+                codes = {
+                    str(code or "").strip().lower()
+                    for code in raw_codes
+                    if str(code or "").strip()
+                }
+                if codes:
+                    existing = set(_split_bounce_types(episode.dislike_reasons))
+                    episode.dislike_reasons = ";".join(sorted(existing | codes))
         episodes.append(episode)
     return episodes
 
@@ -287,6 +302,7 @@ DIMENSIONS: dict[str, Callable[[Episode], list[str]]] = {
     "bucket": lambda e: [e.bucket] if e.bucket else [],
     "setup_family": lambda e: [e.setup_family] if e.setup_family else [],
     "setup_tag": lambda e: _split_bounce_types(e.setup_tags),
+    "dislike_reason": lambda e: _split_bounce_types(e.dislike_reasons),
     "expected_r_band": lambda e: _expected_r_band(e.expected_r),
 }
 

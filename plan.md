@@ -369,7 +369,10 @@ are listed in `CURRENT_CHECKPOINT.md`.
    live PREVIEW, and explicit row stamps. The dislike/reviewed-today loop remains
    deterministic work. Same-slot volume normalization is unresolved because the
    D1 seam has no intraday slot series; no new fetch was invented. Live weeks
-   remain owed.
+   remain owed. **Structured dislike capture/counting and the reviewed-today
+   table/report marker are now built.** R3 remains active only for the trader's
+   §4.3.5 seam/defer decision and its live gates; R4 must not start before that
+   deterministic governance decision is recorded.
 4. **R4 Desk chart unification.** CaptureRail (veto/like/note) on every chart
    surface, review/watch wiring for the RS/RW and Industry panels, Alert Center
    LIKE, armed price alerts and D1 watches painted as a toggleable levels family,

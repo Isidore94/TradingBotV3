@@ -392,13 +392,20 @@ def test_report_presents_completed_stable_beside_forming_preview(tmp_path):
         }
     )
     path = tmp_path / "stable-preview.txt"
-    legacy.write_priority_setup_report(path, [preview], stable_rows=[stable])
+    legacy.write_priority_setup_report(
+        path,
+        [preview],
+        stable_rows=[stable],
+        reviewed_symbols={preview["symbol"]},
+    )
     text = path.read_text(encoding="utf-8")
     stable_start = text.index("STABLE — completed D1 bars only")
     preview_start = text.index("PREVIEW — live D1 scan")
     assert stable_start < preview_start
     assert "bar=COMPLETED" in text[stable_start:preview_start]
     assert "bar=FORMING" in text[preview_start:]
+    reviewed_start = text.index("Reviewed today")
+    assert preview["symbol"] in text[reviewed_start:]
 
 
 def test_new_tracker_record_carries_the_completed_bar_stamp():

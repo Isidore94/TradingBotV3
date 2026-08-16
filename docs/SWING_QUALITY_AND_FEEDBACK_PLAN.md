@@ -248,6 +248,19 @@ the broker/data budget and invent a new contract. The frozen fixture continues t
 characterize the cumulative-D1-volume behavior until the trader chooses a data
 seam or explicitly defers that scoring change.
 
+**Structured feedback milestone (2026-08-16): BUILT, first curation owed.**
+The Setups ✕ flow now loads the append/version-only veto vocabulary, records its
+permanent reason code/version plus optional detail in the review event, and keeps
+the human-readable reason in `pick_feedback.jsonl`. `review_learning.py` folds
+those codes into a mechanical `dislike_reason` dimension, including multi-code
+legacy/future rows, while retaining the annotation-only policy contract and adding
+no suppression field. A signature-cached, day-scoped union of explicit decisions
+from `pick_feedback.jsonl`, alert review shards, and `trader_annotations.jsonl`
+drives an additive "Reviewed today" table badge and report group; `shown` events
+and hypothetical stops do not count as decisions. Chart rendering remains R4.
+Full deterministic gate: 3370 passed / 19 subtests, exit 0. The scoreboard's first
+real-data AI curation/threshold proposal remains UNKNOWN/owed.
+
 ## 6. Exit gates
 
 - Fixtures land before any classification change; full suite green.
