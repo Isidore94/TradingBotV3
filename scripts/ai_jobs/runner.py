@@ -284,7 +284,11 @@ def run_slots(
             # completion and never retried (Sol 5.6 verification review, item
             # 7). "I do not know what happened" is the one thing that must
             # never be filed as success.
-            status = str(outcome.get("status") or ledger.STATUS_OK)
+            # Job implementations historically used display-oriented uppercase
+            # values (``OK``/``FAILED``), while the durable ledger vocabulary is
+            # lowercase.  Normalize at the seam; validation below still fails
+            # closed for genuinely unknown values.
+            status = str(outcome.get("status") or ledger.STATUS_OK).strip().lower()
             if status not in ledger.RECOGNISED_JOB_STATUSES:
                 logging.error(
                     "AI job %s reported an unrecognised status %r; recording it as "

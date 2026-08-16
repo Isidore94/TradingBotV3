@@ -86,6 +86,31 @@ def test_successful_job_writes_an_ok_row_with_its_outputs(tmp_path):
     assert calls == ["2026-08-11"]
 
 
+def test_real_journal_slot_normalizes_its_uppercase_status_into_the_ledger(tmp_path, monkeypatch):
+    """Exercise the production default-slot wrapper, not a lookalike slot.
+
+    The journal runner returns ``OK``/``FAILED`` for its CLI/UI callers.  The
+    overnight ledger speaks lowercase, and retry accounting happens only after
+    that exact return value crosses this seam.
+    """
+    from ai_jobs import runner
+    import journal_runner
+
+    led = tmp_path / "ledger.jsonl"
+    monkeypatch.setattr(
+        journal_runner,
+        "run_nightly_journal_import",
+        lambda *, trigger: {"status": "OK", "messages": ["quiet night"]},
+    )
+    journal_slot = runner.default_slots()[0]
+
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        report = runner.run_slots([journal_slot], now=OVERNIGHT, ledger_path=led)
+
+    assert report.ran == 1 and report.failed == 0
+    assert _rows(led)[0]["status"] == "ok"
+
+
 def test_a_completed_job_is_not_redone_when_the_task_fires_again(tmp_path):
     """Task Scheduler fires every 30 min through the window; that must be safe."""
     from ai_jobs import runner
