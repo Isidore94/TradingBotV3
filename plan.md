@@ -57,7 +57,13 @@ test counts belong in `CURRENT_CHECKPOINT.md`. Only unfinished work belongs here
 
 As of the reconciliation date:
 
-- the active branch is `testing-week-2026-08-10`, not yet merged to `main`;
+- the active branch is `phase05-r8-weekend-prep`, not yet merged to `main` — the
+  single consolidated release candidate since 2026-08-15, carrying testing-week,
+  R1, R1.1, R2, R7 and R8. `testing-week-2026-08-10` and the R1/R7 branch names
+  used below are historical: those branches were deleted once proven contained,
+  and their tips remain reachable by SHA (see `CURRENT_CHECKPOINT.md` rollback
+  points). `phase05-r2-focus-gating-strength-board` survives only as the desk's
+  running branch until the Monday merge;
 - the Windows desk gate is green at 2611 tests plus 7 subtests, smoke 7/7, and
   frozen self-test 29/29;
 - subsequent 2026-08-10 presentation and phone-report fixes have not changed the
@@ -256,7 +262,13 @@ No new feature or threshold work belongs in Phase 0.
    and six Health tiles, answer the pilot-relevant confirmation items (including the
    fixed cohort and favorite-zone definitions), and start the 20-session pilot.
 7. **P0.7 Merge to `main`.** Only after a live-validation day passes, re-run the
-   applicable gates, merge, and update all control documents.
+   applicable gates, merge, and update all control documents. Since the
+   2026-08-15 consolidation this is **one** merge —
+   `phase05-r8-weekend-prep` → `main` — followed by a full gate re-run on `main`
+   including a clean-cache frozen rebuild, and only then the disarm / switch the
+   desk / re-arm sequence. R7's and R8's own live gates follow **after** that
+   merge and are not merge blockers. Exact steps: `CURRENT_CHECKPOINT.md`,
+   "Monday sequence".
 
 Exit gate: the branch is green, one real session is documented, the application is
 operationally safe on the single-main topology, and `main` contains the validated
