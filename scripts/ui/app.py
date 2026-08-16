@@ -115,7 +115,9 @@ class MainWindow(QMainWindow):
             price_alert_read_only=satellite_desk,
         )
         self.journal_panel = JournalPanel()
-        self.weekend_prep_panel = WeekendPrepPanel()
+        self.weekend_prep_panel = WeekendPrepPanel(
+            focus_service=self.trading_panel.focus_service
+        )
         self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel(
             self.trading_panel.price_alert_service,
@@ -733,6 +735,7 @@ class MainWindow(QMainWindow):
         for panel in (
             self.trading_panel,
             self.journal_panel,
+            self.weekend_prep_panel,
             self.universe_panel,
             self.research_panel,
             self.autopilot_panel,

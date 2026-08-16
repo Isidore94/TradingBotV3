@@ -74,6 +74,13 @@ def test_the_strength_board_is_in_the_list_at_all():
     assert "Strength Board" in [spec.title for spec in PAGE_SPECS]
 
 
+def test_weekend_prep_uses_the_desk_shared_focus_service(qt_desk):
+    assert (
+        qt_desk.weekend_prep_panel.discovery._focus_service
+        is qt_desk.trading_panel.focus_service
+    )
+
+
 def test_settings_is_last_and_reachable():
     """The exact failure: `titles[10]` on a ten-entry tuple.
 
@@ -135,3 +142,14 @@ def test_only_the_selected_nav_button_is_checked(qt_desk):
     qt_desk._select_page(len(PAGE_SPECS) - 1)
     checked = [i for i, b in enumerate(qt_desk.nav_buttons) if b.isChecked()]
     assert checked == [len(PAGE_SPECS) - 1]
+
+
+def test_closing_the_real_window_shuts_down_weekend_prep(qt_desk, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        qt_desk.weekend_prep_panel, "shutdown", lambda: calls.append("weekend")
+    )
+
+    qt_desk.close()
+
+    assert calls == ["weekend"]

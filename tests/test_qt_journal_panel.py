@@ -360,6 +360,54 @@ def test_health_lists_a_reconciliation_and_its_suggestions(panel, populated):
     assert panel.health_tab.suggestions_list.count() >= 1
 
 
+def test_health_keeps_force_close_suggestions_aligned_with_their_mismatch_rows(
+    panel, populated, monkeypatch
+):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMessageBox
+    import journal_reconcile
+
+    first_key = "QUESTRADE|51830546|AAPL|STK|USD"
+    second_key = "QUESTRADE|51830546|MSFT|STK|USD"
+    suggestion = {
+        "action": "FORCE_CLOSE",
+        "group_key": second_key,
+        "broker": "QUESTRADE",
+        "symbol": "MSFT",
+        "reason": "broker reports flat",
+    }
+    journal_reconcile.store_report(
+        populated,
+        {
+            "positions_checked": 2,
+            "checked_at": "2026-08-15T12:00:00-07:00",
+            "mismatched": [
+                {"kind": "QUANTITY_MISMATCH", "group_key": first_key, "broker": "QUESTRADE",
+                 "symbol": "AAPL", "journal_quantity": 10, "broker_quantity": 5},
+                {"kind": "JOURNAL_OPEN_BROKER_FLAT", "group_key": second_key,
+                 "broker": "QUESTRADE", "symbol": "MSFT", "journal_quantity": 20,
+                 "broker_quantity": 0},
+            ],
+            "suggestions": [suggestion],
+        },
+    )
+    panel.health_tab.reload()
+
+    assert panel.health_tab.suggestions_list.item(0).data(Qt.UserRole) is None
+    assert panel.health_tab.suggestions_list.item(1).data(Qt.UserRole)["symbol"] == "MSFT"
+    confirmed = []
+    monkeypatch.setattr(
+        "ui.panels.journal.health_tab.QMessageBox.question", lambda *a, **k: QMessageBox.Yes
+    )
+    monkeypatch.setattr(
+        journal_feed, "confirm_reconciliation_suggestion",
+        lambda selected, **kwargs: confirmed.append(selected),
+    )
+    panel.health_tab.suggestions_list.setCurrentRow(1)
+    panel.health_tab._confirm_suggestion()
+    assert confirmed == [suggestion]
+
+
 def test_fees_never_adds_trade_costs_to_cash_fees(panel, populated):
     populated.upsert_cash_transactions(
         [

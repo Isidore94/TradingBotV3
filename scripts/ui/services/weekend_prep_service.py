@@ -269,9 +269,16 @@ class WeekendPrepService(QObject):
         worker = _Worker(action, fn, self)
         worker.done.connect(self._on_done)
         worker.failed.connect(self._on_failed)
+        worker.finished.connect(
+            lambda action=action, worker=worker: self._retire_worker(action, worker)
+        )
         self._workers[action] = worker
         worker.start()
         return True
+
+    def _retire_worker(self, action: str, worker: _Worker) -> None:
+        if self._workers.get(action) is worker:
+            self._workers.pop(action, None)
 
     def _on_done(self, action: str, result: Any) -> None:
         self._inflight.discard(action)
@@ -297,9 +304,15 @@ class WeekendPrepService(QObject):
         self.statusChanged.emit(f"{action} failed: {message} (showing the last good result)")
 
     def shutdown(self) -> None:
-        for worker in list(self._workers.values()):
+        workers = list(self._workers.values())
+        for worker in workers:
+            worker.requestInterruption()
+        for worker in workers:
             if worker.isRunning():
-                worker.wait(3000)
+                # The fetch functions are not safely cancellable mid-request.
+                # Never drop the last reference and let Qt destroy a live
+                # QThread; close waits for the bounded provider call to finish.
+                worker.wait()
         self._workers.clear()
 
 

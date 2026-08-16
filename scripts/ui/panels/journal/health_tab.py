@@ -13,13 +13,14 @@ system was a CLI the trader never ran.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -191,12 +192,18 @@ class HealthTab(QFrame):
             f"Checked {report.get('positions_checked', 0)} position(s) at "
             f"{report.get('checked_at', '')}: {len(mismatched)} mismatch(es)."
         )
-        for item in mismatched:
-            self.suggestions_list.addItem(
-                f"{item.get('kind')} {item.get('broker')} {item.get('symbol')}: "
-                f"journal {item.get('journal_quantity')} vs broker {item.get('broker_quantity')}"
+        suggestions = {
+            str(item.get("group_key") or ""): item
+            for item in report.get("suggestions") or []
+        }
+        for mismatch in mismatched:
+            row = QListWidgetItem(
+                f"{mismatch.get('kind')} {mismatch.get('broker')} {mismatch.get('symbol')}: "
+                f"journal {mismatch.get('journal_quantity')} vs broker {mismatch.get('broker_quantity')}"
             )
-        self._suggestions = list(report.get("suggestions") or [])
+            suggestion = suggestions.get(str(mismatch.get("group_key") or ""))
+            row.setData(Qt.UserRole, suggestion)
+            self.suggestions_list.addItem(row)
 
     def _load_fx(self) -> None:
         coverage = journal_feed.fx_coverage()
@@ -310,11 +317,11 @@ class HealthTab(QFrame):
         self.statusChanged.emit(f"gap repair failed: {message}")
 
     def _confirm_suggestion(self) -> None:
-        row = self.suggestions_list.currentRow()
-        if row < 0 or row >= len(self._suggestions):
+        item = self.suggestions_list.currentItem()
+        suggestion = item.data(Qt.UserRole) if item is not None else None
+        if not isinstance(suggestion, dict):
             self.statusChanged.emit("select a mismatch that offers a force-close")
             return
-        suggestion = self._suggestions[row]
         confirmed = QMessageBox.question(
             self,
             "Force-close this position?",
