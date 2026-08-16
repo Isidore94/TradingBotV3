@@ -294,6 +294,29 @@ def test_newly_imported_execution_dates_are_booked_in_the_same_nightly_run(
     assert trade["net_pnl_cad"] == pytest.approx(140.0)
 
 
+def test_intraday_pull_books_fx_after_its_rebuild(store, monkeypatch):
+    order = []
+    monkeypatch.setattr(
+        journal_runner.journal_fx, "rates_needed_for_trades", lambda *_args: []
+    )
+    monkeypatch.setattr(
+        journal_runner.journal_fx, "rates_needed_for_executions", lambda *_args: []
+    )
+    monkeypatch.setattr(
+        journal_runner.journal_fx, "ensure_rates",
+        lambda *_args: order.append("fx")
+        or {"booked": 0, "carried_back": 0, "unavailable": [], "errors": []},
+    )
+    monkeypatch.setattr(store, "rebuild_trades", lambda **_kwargs: order.append("rebuild") or 0)
+    monkeypatch.setattr(store, "book_cad_values", lambda: order.append("book") or {})
+
+    journal_runner.run_journal_import_for_date(
+        date.today(), store=store, include_questrade=False, include_ibkr=False, trigger="gui"
+    )
+
+    assert order == ["fx", "rebuild", "book"]
+
+
 def test_the_self_heals_per_day_fetch_refuses_ibkr_honestly(store):
     """A gap it cannot fill must say so, not report a repair that did not happen.
 

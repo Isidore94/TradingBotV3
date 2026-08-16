@@ -322,6 +322,7 @@ def self_heal(
     lookback_days: int = 365,
     max_days_per_night: int = DEFAULT_MAX_DAYS_PER_NIGHT,
     max_attempts_per_day: int = DEFAULT_MAX_ATTEMPTS_PER_DAY,
+    failed_only: bool = False,
 ) -> dict[str, Any]:
     """Repair gaps and retry failures, oldest first, within a night's budget.
 
@@ -364,6 +365,12 @@ def self_heal(
         for day in find_gaps(
             store, broker=broker, account_number=account_number, start=start, end=horizon_end
         ):
+            if failed_only:
+                rows = coverage_rows(
+                    store, broker=broker, account_number=account_number, start=day, end=day
+                )
+                if not rows or str(rows[0].get("status") or "") != FAILED:
+                    continue
             work.append((day, str(broker), str(account_number)))
     work.sort()
 

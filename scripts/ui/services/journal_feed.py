@@ -643,16 +643,33 @@ def nightly_slot_status() -> dict[str, Any]:
     return {"rows": rows[-5:], "available": True}
 
 
-def self_heal_gaps(max_days: int = 62) -> dict[str, Any]:
+def self_heal_gaps(max_days: int = 62, *, failed_only: bool = False) -> dict[str, Any]:
     """The Health tab's "Backfill gaps" button. Runs in a worker, never on the GUI thread."""
     import journal_coverage
     from journal_runner import _fetch_one_day
 
-    return journal_coverage.self_heal(
+    all_accounts = journal_coverage.known_accounts(_store())
+    supported = [pair for pair in all_accounts if str(pair[0]).upper() == "QUESTRADE"]
+    summary = journal_coverage.self_heal(
         _store(),
         lambda broker, account, day: _fetch_one_day(_store(), broker, account, day),
+        accounts=supported,
         max_days_per_night=max_days,
+        failed_only=failed_only,
     )
+    summary["unsupported_brokers"] = sorted(
+        {str(broker).upper() for broker, _account in all_accounts if str(broker).upper() != "QUESTRADE"}
+    )
+    return summary
+
+
+def pull_today() -> dict[str, Any]:
+    """Intraday broker pull through the production import/rebuild/FX path."""
+    from datetime import date
+
+    from journal_runner import run_journal_import_for_date
+
+    return run_journal_import_for_date(date.today(), trigger="gui", store=_store())
 
 
 # ---------------------------------------------------------------------------

@@ -156,7 +156,17 @@ def run_journal_import_for_date(
 
     trade_count = None
     try:
+        needed = sorted(
+            set(journal_fx.rates_needed_for_trades(journal_store))
+            | set(journal_fx.rates_needed_for_executions(journal_store))
+        )
+        rates = journal_fx.ensure_rates(journal_store, needed)
+        if rates["errors"] or rates["unavailable"]:
+            messages.append(
+                f"FX: {len(rates['unavailable'])} unavailable, {len(rates['errors'])} error(s)"
+            )
         trade_count = journal_store.rebuild_trades()
+        journal_store.book_cad_values()
         messages.append(f"rebuilt {trade_count} grouped trades")
     except Exception as exc:
         had_errors = True

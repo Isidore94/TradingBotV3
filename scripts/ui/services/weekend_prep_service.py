@@ -122,6 +122,7 @@ class WeekendPrepService(QObject):
         self._inflight: set[str] = set()
         self._workers: dict[str, _Worker] = {}
         self._boards: dict[str, weekend_strength.WeekendBoard] = {}
+        self._board_sides: dict[str, dict[str, weekend_strength.WeekendBoard]] = {}
         self._week_ahead_markdown = ""
         self._now_provider = (lambda: now) if now is not None else datetime.now
         self._weekend = weekend_id(self._now_provider())
@@ -219,7 +220,9 @@ class WeekendPrepService(QObject):
     def is_running(self, action: str) -> bool:
         return action in self._inflight
 
-    def board(self, timeframe: str) -> weekend_strength.WeekendBoard | None:
+    def board(self, timeframe: str, side: str | None = None) -> weekend_strength.WeekendBoard | None:
+        if side is not None:
+            return self._board_sides.get(timeframe, {}).get(side)
         return self._boards.get(timeframe)
 
     @property
@@ -239,15 +242,15 @@ class WeekendPrepService(QObject):
         """Fetch and score one timeframe. Returns False if it was already running."""
         if timeframe not in weekend_strength.TIMEFRAMES_BY_KEY:
             raise ValueError(f"unknown timeframe: {timeframe!r}")
-        action = f"board:{timeframe}:{side}"
+        action = f"board:{timeframe}"
         return self._start(
             action,
-            lambda: build_weekend_board(
-                weekend_strength.TIMEFRAMES_BY_KEY[timeframe],
-                side=side,
-                downloader=downloader,
-                symbols=symbols,
-                now=now,
+            lambda: (
+                side,
+                build_weekend_boards(
+                    weekend_strength.TIMEFRAMES_BY_KEY[timeframe],
+                    downloader=downloader, symbols=symbols, now=now,
+                ),
             ),
             blocking=blocking,
         )
@@ -285,8 +288,11 @@ class WeekendPrepService(QObject):
     def _on_done(self, action: str, result: Any) -> None:
         self._inflight.discard(action)
         if action.startswith("board:"):
-            _, timeframe, _side = action.split(":", 2)
-            self._boards[timeframe] = result
+            _, timeframe = action.split(":", 1)
+            selected_side, boards = result
+            self._board_sides[timeframe] = boards
+            self._boards[timeframe] = boards[selected_side]
+            result = boards[selected_side]
             self.boardChanged.emit(timeframe)
             self.statusChanged.emit(f"{timeframe.upper()} board: {result.accounting}")
         elif action == "week_ahead":
@@ -323,14 +329,13 @@ class WeekendPrepService(QObject):
 # ---------------------------------------------------------------------------
 
 
-def build_weekend_board(
+def build_weekend_boards(
     timeframe: weekend_strength.StrengthTimeframe,
     *,
-    side: str = "long",
     downloader: Callable[..., Any] | None = None,
     symbols: list[str] | None = None,
     now: datetime | None = None,
-) -> weekend_strength.WeekendBoard:
+) -> dict[str, weekend_strength.WeekendBoard]:
     """Batched yfinance over the universe, then the pure board. Zero IB traffic.
 
     Mirrors the R2 strength board's fetch path deliberately, including its chunk
@@ -347,9 +352,12 @@ def build_weekend_board(
     pool = [item for item in pool if item]
     moment = now or datetime.now()
     if not pool:
-        return weekend_strength.WeekendBoard(
-            timeframe=timeframe.key, side=side, as_of=moment.isoformat(timespec="seconds")
-        )
+        return {
+            side: weekend_strength.WeekendBoard(
+                timeframe=timeframe.key, side=side, as_of=moment.isoformat(timespec="seconds")
+            )
+            for side in ("long", "short")
+        }
 
     fetch = downloader or core._default_downloader
     chunk_size = max(1, int(core.AUTOPILOT_OPEN_SCAN_CHUNK_SIZE))
@@ -393,9 +401,27 @@ def build_weekend_board(
             f"{timeframe.key} provider returned no measurable bars for {len(pool)} symbol(s)"
         )
 
-    board = weekend_strength.build_board(timeframe, bars_by_symbol, side=side, now=moment)
-    board.offered = len(pool)
-    return board
+    boards = {
+        side: weekend_strength.build_board(timeframe, bars_by_symbol, side=side, now=moment)
+        for side in ("long", "short")
+    }
+    for board in boards.values():
+        board.offered = len(pool)
+    return boards
+
+
+def build_weekend_board(
+    timeframe: weekend_strength.StrengthTimeframe,
+    *,
+    side: str = "long",
+    downloader: Callable[..., Any] | None = None,
+    symbols: list[str] | None = None,
+    now: datetime | None = None,
+) -> weekend_strength.WeekendBoard:
+    """Compatibility wrapper for callers that need one side."""
+    return build_weekend_boards(
+        timeframe, downloader=downloader, symbols=symbols, now=now
+    )[side]
 
 
 def _run_weekly_prep() -> str:

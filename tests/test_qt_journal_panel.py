@@ -437,7 +437,29 @@ def test_health_offers_the_flex_fields_the_qt_panel_never_had(panel):
     """A1/A9: the only complete import path used to be a CLI the trader never ran."""
     for widget in (panel.health_tab.flex_token_input, panel.health_tab.flex_query_input):
         assert widget is not None
-    assert panel.health_tab.backfill_button.text() == "Backfill gaps"
+    assert panel.health_tab.pull_button.text() == "Pull today now"
+    assert panel.health_tab.backfill_button.text() == "Backfill Questrade gaps"
+    assert panel.health_tab.retry_button.text() == "Retry failed Questrade days"
+
+
+def test_health_routes_the_three_broker_actions_distinctly(panel, monkeypatch, qapp):
+    calls = []
+    monkeypatch.setattr(
+        journal_feed, "pull_today",
+        lambda: calls.append("pull") or {"source_results": [], "messages": ["today done"]},
+    )
+    monkeypatch.setattr(
+        journal_feed, "self_heal_gaps",
+        lambda *, failed_only=False: calls.append("failed" if failed_only else "gaps")
+        or {"repaired": [], "failed": [], "exhausted": [], "unsupported_brokers": ["IBKR"]},
+    )
+
+    for action in ("pull", "gaps", "failed"):
+        panel.health_tab._start_task(action)
+        assert panel.health_tab._task.wait(5000)
+        qapp.processEvents()
+
+    assert calls == ["pull", "gaps", "failed"]
 
 
 def test_health_lists_a_reconciliation_and_its_suggestions(panel, populated):

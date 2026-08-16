@@ -264,14 +264,30 @@ def test_zero_ib_traffic_the_service_only_knows_a_downloader():
 
 
 def test_a_second_refresh_while_one_is_running_is_refused(service, monkeypatch):
-    service._inflight.add("board:d1:long")
+    service._inflight.add("board:d1")
     assert service.refresh_board("d1", symbols=[], blocking=True) is False
 
 
 def test_refreshing_one_timeframe_does_not_block_another(service):
-    service._inflight.add("board:h1:long")
+    service._inflight.add("board:h1")
     assert service.refresh_board("d1", downloader=_fake_downloader(), symbols=["AAA"],
                                  now=datetime(2026, 4, 1, 12, 0), blocking=True) is True
+
+
+def test_one_timeframe_fetch_derives_both_sides_and_has_one_race_slot(service):
+    calls = []
+    service.refresh_board(
+        "d1", side="short", downloader=_fake_downloader(calls), symbols=["AAA", "BBB"],
+        now=datetime(2026, 4, 1, 12, 0), blocking=True,
+    )
+
+    assert len(calls) == 1
+    assert service.board("d1", "long") is not None
+    assert service.board("d1", "short") is not None
+    assert service.board("d1").side == "short"
+
+    service._inflight.add("board:d1")
+    assert service.refresh_board("d1", side="long", blocking=True) is False
 
 
 def test_a_failed_fetch_keeps_the_last_good_board(service):

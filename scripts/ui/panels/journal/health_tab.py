@@ -46,15 +46,23 @@ STATUS_COLOURS = {
 }
 
 
-class _HealTask(QThread):
-    """Gap repair talks to a broker, so it never runs on the GUI thread."""
+class _JournalTask(QThread):
+    """Broker work never runs on the GUI thread."""
 
     finished_with = Signal(dict)
     failed = Signal(str)
 
+    def __init__(self, action: str, parent=None) -> None:
+        super().__init__(parent)
+        self.action = action
+
     def run(self) -> None:  # pragma: no cover - exercised on the desk
         try:
-            self.finished_with.emit(journal_feed.self_heal_gaps())
+            if self.action == "pull":
+                result = journal_feed.pull_today()
+            else:
+                result = journal_feed.self_heal_gaps(failed_only=self.action == "failed")
+            self.finished_with.emit(result)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
 
@@ -65,7 +73,7 @@ class HealthTab(QFrame):
     def __init__(self, header, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._header = header
-        self._task: _HealTask | None = None
+        self._task: _JournalTask | None = None
         self._suggestions: list[dict] = []
 
         self.coverage_table = QTableWidget(0, 0)
@@ -73,10 +81,12 @@ class HealthTab(QFrame):
         self.gaps_label = QLabel("")
         self.gaps_label.setWordWrap(True)
 
-        self.backfill_button = QPushButton("Backfill gaps")
-        self.backfill_button.clicked.connect(self._backfill)
-        self.retry_button = QPushButton("Retry failed days")
-        self.retry_button.clicked.connect(self._backfill)
+        self.pull_button = QPushButton("Pull today now")
+        self.pull_button.clicked.connect(lambda: self._start_task("pull"))
+        self.backfill_button = QPushButton("Backfill Questrade gaps")
+        self.backfill_button.clicked.connect(lambda: self._start_task("gaps"))
+        self.retry_button = QPushButton("Retry failed Questrade days")
+        self.retry_button.clicked.connect(lambda: self._start_task("failed"))
 
         self.reconcile_label = QLabel("No reconciliation has run yet.")
         self.reconcile_label.setWordWrap(True)
@@ -103,6 +113,7 @@ class HealthTab(QFrame):
         self.env_warning.setVisible(False)
 
         heal_row = QHBoxLayout()
+        heal_row.addWidget(self.pull_button)
         heal_row.addWidget(self.backfill_button)
         heal_row.addWidget(self.retry_button)
         heal_row.addStretch(1)
@@ -290,28 +301,39 @@ class HealthTab(QFrame):
         self.statusChanged.emit(f"saved {', '.join(saved)}" if saved else "nothing to save")
         self._load_credentials()
 
-    def _backfill(self) -> None:  # pragma: no cover - worker path
+    def _start_task(self, action: str) -> None:  # pragma: no cover - worker path
         if self._task is not None and self._task.isRunning():
             return
+        self.pull_button.setEnabled(False)
         self.backfill_button.setEnabled(False)
         self.retry_button.setEnabled(False)
-        self.statusChanged.emit("repairing coverage gaps...")
-        self._task = _HealTask(self)
+        labels = {"pull": "pulling today...", "gaps": "backfilling Questrade gaps...",
+                  "failed": "retrying failed Questrade days..."}
+        self.statusChanged.emit(labels[action])
+        self._task = _JournalTask(action, self)
         self._task.finished_with.connect(self._on_heal_done)
         self._task.failed.connect(self._on_heal_failed)
         self._task.start()
 
     def _on_heal_done(self, summary: dict) -> None:  # pragma: no cover
+        self.pull_button.setEnabled(True)
         self.backfill_button.setEnabled(True)
         self.retry_button.setEnabled(True)
-        self.statusChanged.emit(
-            f"repaired {len(summary.get('repaired') or [])}, "
-            f"failed {len(summary.get('failed') or [])}, "
-            f"skipped {len(summary.get('exhausted') or [])}"
-        )
+        if "source_results" in summary:
+            message = "; ".join(summary.get("messages") or []) or summary.get("status", "pull complete")
+        else:
+            message = (
+                f"repaired {len(summary.get('repaired') or [])}, "
+                f"failed {len(summary.get('failed') or [])}, "
+                f"skipped {len(summary.get('exhausted') or [])}"
+            )
+            if "IBKR" in (summary.get("unsupported_brokers") or []):
+                message += "; IBKR historical gaps require a Flex backfill"
+        self.statusChanged.emit(message)
         self.reload()
 
     def _on_heal_failed(self, message: str) -> None:  # pragma: no cover
+        self.pull_button.setEnabled(True)
         self.backfill_button.setEnabled(True)
         self.retry_button.setEnabled(True)
         self.statusChanged.emit(f"gap repair failed: {message}")

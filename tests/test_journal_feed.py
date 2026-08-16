@@ -34,6 +34,19 @@ def test_accounts_does_not_turn_a_store_failure_into_an_empty_journal(monkeypatc
         journal_feed.accounts()
 
 
+def test_pull_today_routes_the_shared_store_through_the_production_runner(feed, monkeypatch):
+    import journal_runner
+
+    calls = []
+    monkeypatch.setattr(
+        journal_runner, "run_journal_import_for_date",
+        lambda day, **kwargs: calls.append((day, kwargs)) or {"status": "OK"},
+    )
+
+    assert journal_feed.pull_today()["status"] == "OK"
+    assert calls[0][1] == {"trigger": "gui", "store": feed}
+
+
 @pytest.fixture
 def feed(tmp_path, monkeypatch):
     """A feed bound to a throwaway store. Never the live journal."""

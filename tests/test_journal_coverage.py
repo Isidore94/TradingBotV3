@@ -358,6 +358,21 @@ def test_self_heal_never_claims_today(store):
     assert date(2026, 8, 6) not in seen
 
 
+def test_retry_failed_only_does_not_consume_unattempted_gaps(store):
+    jc.mark_coverage(
+        store, broker="QUESTRADE", account_number="5", day=date(2026, 8, 6),
+        status=jc.FAILED, message="503",
+    )
+    seen = []
+
+    jc.self_heal(
+        store, lambda b, a, d: seen.append(d) or 0, accounts=[("QUESTRADE", "5")],
+        today=date(2026, 8, 10), lookback_days=7, failed_only=True,
+    )
+
+    assert seen == [date(2026, 8, 6)]
+
+
 def test_a_days_failure_is_recorded_and_does_not_stop_the_rest(store):
     def fetch(broker, account, day):
         if day == date(2026, 8, 5):
