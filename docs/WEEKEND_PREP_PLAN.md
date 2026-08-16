@@ -33,12 +33,11 @@ picks, no weekly journal entry in v1); Adopt routes to swing Focus + watchlist
 injection; universe is `universe_all.txt` (~1,500 symbols; the broader-universe
 WISHLIST candidate stays gated as written); all refreshes are manual.
 
-**Already landed in R7, so R8 does nothing about it:** the four account tax
-statuses (Questrade TFSA 51830546 = TAX_FREE, Questrade margin 29347316 =
-TAXABLE, IBKR U4867396 = TAX_FREE, IBKR U5102524 = TAXABLE) are recorded in
-`journal_migrate.TRADER_CONFIRMED_TAX_STATUS` as `tax_status_source='trader'`
-and are applied by R7's migration. Weekend Prep reads the journal; it does not
-label accounts.
+**Already landed in R7, so R8 does nothing about it:** trader-confirmed account
+tax statuses are machine-local under `journal_trader_tax_statuses`; repository
+source contains no real account identifiers. R7 applies those declarations as
+`tax_status_source='trader'`. Weekend Prep reads the journal; it does not label
+accounts.
 
 ## 2. Invariants (binding restatements)
 
@@ -69,8 +68,9 @@ Step ids: `week_review`, `focus_review`, `walkaway`, `discovery`, `week_ahead`;
 each `pending|done|skipped` with a timestamp. Weekend identity = the Friday date
 of the week containing `market_calendar.last_completed_session(now)`. State file:
 `<shared_home>/data/runtime/weekend_prep_state.json` (new
-`WEEKEND_PREP_STATE_FILE` in `scripts/project_paths.py`), atomic tmp+`os.replace`
-writes, pruned to the most recent 8 weekends. Schema v1:
+`WEEKEND_PREP_STATE_FILE` in `scripts/project_paths.py`), written through the
+shared `diagnostics.artifact_io.atomic_write_json` helper and pruned to the most
+recent 8 weekends. Schema v1:
 
 ```json
 {"version": 1, "weekends": {"<friday-date>": {
@@ -148,6 +148,13 @@ reconstruct it:
 
 ## 6. Step data contracts (inputs → refresh trigger → outputs)
 
+> **DEFERRED — release-candidate reconciliation, 2026-08-15:** Week in Review
+> does not yet join the two `rrs_*strength_extremes.csv` streams. Focus Pick
+> Review currently joins the daily-picks and outcomes CSVs only; the promised
+> `human_focus_performance.csv`, `pick_feedback.jsonl`, and `veto_cohort_*.csv`
+> mirror-cohort views remain future work. The release candidate does not present
+> those absent joins as completed review evidence.
+
 - **Week in review**: `review_learning.build_review_learning_state(window_days=7)`
   (takes/skips/rejects, blind spots, leaks, watch conversion; the
   (trade_date, symbol) episode folding is a recorded, accepted v1 limitation) +
@@ -167,7 +174,7 @@ reconstruct it:
   offered/measured/filtered accounting line, an as-of stamp, and a failure banner
   that keeps the last good board.
 - **Week ahead**: lazy `market_prep.orchestrator.MarketPrepOrchestrator()
-  .run_weekly_prep()` in the worker; render the report's `markdown` in a
+  .run_weekly_prep()` in the worker; render the returned `report` text in a
   QTextBrowser; failure keeps the last rendered report.
   `resolve_weekly_prep_window` maps a weekend reference to the upcoming week —
   confirmed forward-looking, which is what this step wants.

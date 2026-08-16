@@ -284,6 +284,16 @@ warning badge when the selection spans tax groups (I6); **currency toggle**
 CAD/USD/Native; **date-range filter** (7d/30d/QTD/YTD/All + custom;
 `list_trades` gains `date_from`/`date_to`).
 
+> **DEFERRED — release-candidate reconciliation, 2026-08-15:** USD display is
+> currently exact only for USD-native trades. A selection containing CAD or
+> another currency refuses the USD total instead of relabeling native money;
+> true booked USD conversion remains future work. The Calendar ships the month
+> grid but not the promised pyqtgraph year heatmap. Analytics ships its equity
+> curve and non-exclusive grouping table, but the per-setup/account bar charts,
+> day-of-week/time-of-day charts, and R-distribution/expectancy charts (plus
+> chart-specific CSVs) remain deferred. These are visible product gaps, not
+> release-candidate behavior.
+
 - **Trades**: existing table + KPI tiles (computed over the filtered/converted
   selection). Detail pane adds: R-fields group (`planned_entry/stop/risk`
   editable, live R readout = `net_pnl_cad / planned_risk`, "Prefill from alert" —
@@ -294,11 +304,11 @@ CAD/USD/Native; **date-range filter** (7d/30d/QTD/YTD/All + custom;
   + `record_tag_corrections`); corrections launcher (void/edit/add/force-close →
   `trade_adjustments` with mandatory reason → rebuild; per-trade audit list);
   NEEDS_REVIEW banner with the reconciliation delta.
-- **Calendar**: month grid from `calendar_pnl_by_day` (exists, unused by Qt) +
-  pyqtgraph year heatmap; day click filters the Trades tab.
-- **Analytics**: pyqtgraph equity curve (cumulative `net_pnl_cad`), per-setup and
-  per-account bars, day-of-week/time-of-day, R-distribution + expectancy with
-  honest n counts; a table + CSV export under each chart. `journal_analytics`
+- **Calendar**: month grid from `calendar_pnl_by_day`; day click filters the
+  Trades tab. The year heatmap is deferred above.
+- **Analytics**: pyqtgraph equity curve (cumulative `net_pnl_cad`) plus the
+  grouping table described below. The additional charts and their exports are
+  deferred above. `journal_analytics`
   fixes: per-tag expansion (replace `_first_setup_tag`; multi-tag trades count in
   every tag bucket, noted as non-exclusive), and the setup group split into
   **"my setups"** (`setup_tags`) vs **"auto tags"** (`auto_tag_summary`) instead

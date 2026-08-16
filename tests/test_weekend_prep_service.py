@@ -290,6 +290,24 @@ def test_one_timeframe_fetch_derives_both_sides_and_has_one_race_slot(service):
     assert service.refresh_board("d1", side="long", blocking=True) is False
 
 
+def test_last_good_boards_survive_a_service_restart(tmp_path):
+    path = tmp_path / "state.json"
+    first = wps.WeekendPrepService(state_path=path, now=datetime(2026, 8, 15, 10, 0))
+    first.refresh_board(
+        "d1", side="short", downloader=_fake_downloader(), symbols=["AAA", "BBB"],
+        now=datetime(2026, 4, 1, 12, 0), blocking=True,
+    )
+    first.shutdown()
+
+    second = wps.WeekendPrepService(state_path=path, now=datetime(2026, 8, 16, 10, 0))
+    try:
+        assert second.board("d1").side == "short"
+        assert second.board("d1", "long").offered == 2
+        assert second.board("d1", "short").offered == 2
+    finally:
+        second.shutdown()
+
+
 def test_a_failed_fetch_keeps_the_last_good_board(service):
     """An empty board after a blip reads as "nothing is strong this week",
     which is a different and much worse claim than "the fetch failed"."""

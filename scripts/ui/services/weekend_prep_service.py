@@ -23,6 +23,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -128,6 +129,7 @@ class WeekendPrepService(QObject):
         self._now_provider = (lambda: now) if now is not None else datetime.now
         self._weekend = weekend_id(self._now_provider())
         self._state = self._load()
+        self._restore_boards()
 
     # -- identity ----------------------------------------------------------
 
@@ -176,6 +178,25 @@ class WeekendPrepService(QObject):
         for step in STEP_IDS:
             steps.setdefault(step, {"status": "pending", "at": ""})
         return entry
+
+    def _restore_boards(self) -> None:
+        stored = self.weekend_state().get("boards") or {}
+        for timeframe, payload in stored.items():
+            if not isinstance(payload, dict):
+                continue
+            sides: dict[str, weekend_strength.WeekendBoard] = {}
+            for side in ("long", "short"):
+                raw = payload.get(side)
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    sides[side] = weekend_strength.WeekendBoard(**raw)
+                except TypeError:
+                    continue
+            if sides:
+                self._board_sides[str(timeframe)] = sides
+                active = str(payload.get("active_side") or "long")
+                self._boards[str(timeframe)] = sides.get(active) or next(iter(sides.values()))
 
     def step_status(self, step: str) -> str:
         return str(self.weekend_state()["steps"].get(step, {}).get("status") or "pending")
@@ -291,6 +312,10 @@ class WeekendPrepService(QObject):
             self._board_sides[timeframe] = boards
             self._boards[timeframe] = boards[selected_side]
             result = boards[selected_side]
+            stored = {side: asdict(board) for side, board in boards.items()}
+            stored["active_side"] = selected_side
+            self.weekend_state().setdefault("boards", {})[timeframe] = stored
+            self._save()
             self.boardChanged.emit(timeframe)
             self.statusChanged.emit(f"{timeframe.upper()} board: {result.accounting}")
         elif action == "week_ahead":
