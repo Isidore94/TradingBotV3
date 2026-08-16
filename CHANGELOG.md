@@ -1,8 +1,9 @@
 # TradingBotV3 implemented history
 
 Last reconciled: **2026-08-15** from the working copy of
-`phase05-r7-journal-reliability-ux` (cut from `phase05-r2-focus-gating-strength-board`,
-itself cut from `phase05-r1-auto-modes-quiet-hours`, itself branched from
+`phase05-r8-weekend-prep` (cut from `phase05-r7-journal-reliability-ux` (cut from `phase05-r2-focus-gating-strength-board`,
+itself cut from `phase05-r2-focus-gating-strength-board`, itself cut from
+`phase05-r1-auto-modes-quiet-hours`, itself branched from
 `testing-week-2026-08-10`)
 
 Authoritative for: **what exists and the historical sequence of revisions**
@@ -129,6 +130,13 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### Journal, explanations, and learning
 
+- **Weekend Prep (R8, 2026-08-15).** A guided five-step weekend routine with
+  persisted progress: week in review, focus-pick review, week-windowed walk-away
+  with the weekly auto-tag review, strength discovery on H1/D1/Monthly using the
+  M5 formula through the fenced `strength_scan` functions, and the week-ahead
+  prep from the `market_prep` weekly engine. Manual refresh only, zero IB
+  traffic, adds-only adoption into swing Focus.
+
 - **Tax-grade journal (R7, 2026-08-15).** Stable `BROKER:account:exec_id`
   execution identity; one security-type vocabulary across both brokers; anchored
   `trade_id` with an annotation re-key pass and `trade_aliases`;
@@ -244,6 +252,62 @@ and green while its live or promotion gate remains open in `plan.md`.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
+
+### 2026-08-15 — packet R8: Weekend Prep
+
+`IMPLEMENTED` + `GREEN`. One live gate owed: a real weekend run. Built on
+`phase05-r8-weekend-prep`, cut from the R7 tip `4420bbf`, in the spec's §9
+commit order (`docs/WEEKEND_PREP_PLAN.md`).
+
+A new top-level **Weekend Prep** page: a guided five-step routine matching the
+trader's weekend ritual — week in review, focus-pick review, walk-away with the
+weekly auto-tag review, strength discovery on H1/D1/Monthly, and the
+forward-looking week-ahead prep. Progress persists across sittings in
+`weekend_prep_state.json` (atomic write, pruned to eight weekends), keyed by the
+Friday of the week containing the last completed session so Saturday and Sunday
+resume the same routine rather than restarting it.
+
+**The scanner reuses the formula rather than copying it.**
+`scripts/strength_scan.py` is fenced by the spec and is not edited; a new pure
+`weekend_strength` imports its functions and reimplements only the board
+orchestration, which is where the three timeframes genuinely differ. "Completed
+bars only" needs three rules: H1 by clock arithmetic, D1 by
+`last_completed_session` (not "yesterday" — after a Monday holiday that is
+Friday), and monthly by **month identity, never duration**, which is the only
+test that is right on the 1st of a month.
+
+**Filters** are the spec's §5 table, trader-approved as proposed. Session VWAP
+is dropped above M5 rather than imitated: there is no session inside an H1, D1
+or monthly bar for it to anchor to. Each leg is its own named function, and a
+leg that cannot be measured fails with a reason rather than passing by default.
+
+**Nothing starts itself and nothing is removed.** Neither the service nor the
+panel owns a timer, and there is no removal call anywhere in the tab — both
+asserted by parsing the source, not by promise. Adopt routes to swing Focus
+through the existing membership-tracked injection with `origin="weekend_prep"`.
+The R2 M5 adoption gate is deliberately not applied to weekend swing adds (§7);
+a test asserts its absence so it is not later "restored".
+
+#### Defects found while building, each by a test
+
+| # | Defect | Where it would have shown |
+|---|---|---|
+| 1 | `app.py` kept three index-aligned structures; the titles tuple was one short | **Clicking Settings raised IndexError**, and eight titles from index 3 named the wrong page — live on the desk |
+| 2 | `weekend_strength` read a bar's time from `timestamp`/`time`/`date`; `autopilot_core._frame_rows` emits `dt` | **Every board would have measured nothing** on a live desk while every hand-built unit test passed |
+| 3 | A total fetch failure returned an empty board | It overwrote the last good board — "nothing is strong this week" is a claim about the market, not the provider |
+
+Defect 1's two existing guard tests had been passing throughout: they compared
+the positions of two string literals at indices 1 and 2, which were fine.
+Defect 2 was caught only by the one test that went through the downloader
+instead of around it.
+
+#### Frozen packaging
+
+`selftest OK: 49/49 checks passed (frozen)`, exit 0, **first attempt** — from a
+deleted `build/` **and** `dist/`, following the stale-cache rule R7's close-out
+wrote into the checkpoint. Roster additions: `market_prep.orchestrator` (lazily
+imported inside the week-ahead worker, so nothing statically reachable pulls it
+in any more), `weekend_strength`, the service and the panel.
 
 ### 2026-08-15 — packet R7: the tax-grade journal
 

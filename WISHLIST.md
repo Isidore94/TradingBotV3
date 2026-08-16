@@ -51,7 +51,7 @@ requirements live in `plan.md`.
 | Read-only additional broker/data adapters after provider consolidation | `ROADMAP` | P7.3 |
 | Trader refinement packets R1–R6 (the 2026-08-14 desk requests) | `ROADMAP` | Phase 0.5 |
 | Tax-grade journal reliability (both brokers) + TradesViz/TraderSync-style Journal tab | `BUILT` | Phase 0.5 R7 — built 2026-08-15, deterministic gates green; the spec's six live gates are owed and start after Monday's validation day |
-| Weekend Prep guided routine with H1/D1/Monthly strength discovery and weekly auto-tag review | `ROADMAP` | Phase 0.5 R8 |
+| Weekend Prep guided routine with H1/D1/Monthly strength discovery and weekly auto-tag review | `BUILT` | Phase 0.5 R8 — built 2026-08-15, deterministic gates green; the one-real-weekend live proof is owed |
 
 ## Candidate user-experience integrations
 
@@ -152,7 +152,7 @@ Phase 0.5; specs live under `docs/` (see `docs/README.md`).
 | 21 | Journal misses trades / trades stuck open — tax-grade completeness from both brokers | `ROADMAP` | 0.5 R7 — Flex-primary IBKR, Questrade activities, coverage ledger + nightly self-heal, position reconciliation, identity fixes (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`) |
 | 22 | Journal tab like TradesViz/TraderSync: fast edits/notes, tagging, setup performance, walk-away | `ROADMAP` | 0.5 R7 — sub-tabs, corrections with audit trail, R-multiples with alert prefill, pyqtgraph analytics |
 | 23 | Per-account P&L with selectable accounts (tax-free vs taxable) + full commission/fee accounting | `ROADMAP` | 0.5 R7 — account tree grouped by tax status, never silently blended; Fees tab + export; CAD tax totals via booked BoC rates |
-| 24 | Weekend Prep tab: review the week, focus picks, walk-away, find strongest/weakest H1/D1/Monthly, journal tag review | `ROADMAP` | 0.5 R8 — guided 5-step routine, weekend strength boards on the R2 formula, week-ahead prep adoption (`docs/WEEKEND_PREP_PLAN.md`) |
+| 24 | Weekend Prep tab: review the week, focus picks, walk-away, find strongest/weakest H1/D1/Monthly, journal tag review | `BUILT` | 0.5 R8 **built 2026-08-15** — guided 5-step routine, weekend strength boards on the R2 formula, week-ahead prep adoption (`docs/WEEKEND_PREP_PLAN.md`). One-real-weekend live proof owed |
 
 Trader answers that shaped R7/R8 (2026-08-15): journal first, weekend prep second;
 both brokers tax-grade; nightly auto-import + self-heal approved; native currency +

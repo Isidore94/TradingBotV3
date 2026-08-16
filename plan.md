@@ -403,16 +403,33 @@ are listed in `CURRENT_CHECKPOINT.md`.
    built** — and §4's three identity choices (the short `QT`/`IBKR` uid token,
    source precedence enforced at import time as well as in the migration, and a
    deterministic surrogate for a row with no execution id).
-8. **R8 Weekend Prep (added 2026-08-15).** A guided five-step weekend routine
+8. **R8 Weekend Prep. — BUILT 2026-08-15, live gate owed.** A guided five-step weekend routine
    (week in review, focus-pick review, week-windowed walk-away with the auto-tag
    review, H1/D1/Monthly strength discovery on the R2 formula via a new pure
    module — `strength_scan.py` untouched — and week-ahead prep adopting the
    orphaned `market_prep` weekly engine), all manual-refresh with zero IB
    traffic, adopt-to-swing-Focus routing through the existing membership-tracked
    injection. Includes the standalone `app.py` nav-title bugfix as its first
-   commit. Spec: `docs/WEEKEND_PREP_PLAN.md`. Dependencies: after R7 (shares
-   `journal_feed`); discovery step blocked on the spec §5 filter approval.
-   Exit: the spec's deterministic gates plus its one-real-weekend live proof.
+   commit — which turned out to be a **live crash**: the desk's Settings button
+   raised `IndexError`, and eight nav titles from index 3 named the wrong page.
+   Spec: `docs/WEEKEND_PREP_PLAN.md`. Built on `phase05-r8-weekend-prep`, cut
+   from the R7 tip. **§5's filter table is trader-approved as proposed
+   (2026-08-15)**, so the discovery step is no longer blocked.
+
+   **Deterministic gates green: 3308 passed / 19 subtests, smoke 7/7, frozen
+   selftest 49/49 `(frozen)`, all exit 0.**
+
+   **Owed: the one-real-weekend live proof** (spec §10) — the desk booting on a
+   weekend with the tab present and no network activity until a button is
+   pressed, zero IB traffic across the routine, all three boards refreshed with
+   their per-timeframe wall clock recorded, a monthly board spot-checked for the
+   absence of a current-month bar, one real Adopt verified in all four stores
+   with nothing removed anywhere, one auto-tag confirm and one correction, a
+   week-windowed walk-away, the week-ahead rendering only on its button press,
+   progress surviving an app restart mid-routine, and the trader confirming the
+   board character per timeframe before §5's filters count as proven. **The
+   trader can run this as soon as the build lands** — it is read-only against
+   their data and does not wait on Monday.
 
 Exit gate: each packet exits through its own spec; R1 and R2 land first per the
 trader's ranking, then R7 before R8. **R7's code is complete**; what remains for

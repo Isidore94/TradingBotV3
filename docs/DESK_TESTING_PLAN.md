@@ -123,6 +123,48 @@ report to read first; none of that is a reason to run it early.
 
 ---
 
+# 1c. This weekend (optional, and nothing waits on it)
+
+### WHEN
+
+Any weekend. Unlike everything else here, this one does not wait for Monday —
+the tab is read-only against your data and starts nothing until you press
+something.
+
+### DO
+
+Open the desk on a Saturday or Sunday. There is a new **Weekend Prep** page
+between Journal and Universe. Walk the five steps down the left rail.
+
+On **Discovery**, press Refresh on each of Hourly, Daily and Monthly. Note
+roughly how long each takes.
+
+### GOOD
+
+- Nothing fetches until you press a button — no network noise on the desk log
+  between opening the tab and your first press, and **zero IB traffic** all the
+  way through.
+- Each board shows a line like "1506 offered, 1440 measurable, 360 in the top
+  25%, 41 after filters". On Monthly, measurable should be visibly **lower**
+  than offered — recent listings have too little history and are excluded
+  honestly rather than scored.
+- Pick one name on the Monthly board and check it has no bar for the current
+  month.
+- Adopt one name. It should appear in swing Focus, in `swinglongs.txt`, in the
+  membership file and in `pick_feedback.jsonl` with `origin="weekend_prep"` —
+  and **nothing anywhere should have been removed**.
+- Close the app halfway through and reopen it: the rail remembers where you got
+  to.
+
+### BAD
+
+Anything fetching on its own. Any IB connection. Any name disappearing from a
+watchlist. Boards whose character does not match what you would expect from a
+strength scan on that timeframe — that last one is a judgement only you can
+make, and §5's filters are not proven until you have made it.
+
+---
+
 # 2. Monday during the session
 
 These checks need a live market. You do not need to do them all in one day —
