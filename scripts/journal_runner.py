@@ -179,19 +179,21 @@ def _import_questrade_activities(
     chunk: dict[str, Any],
     *,
     messages_out: list[str],
-) -> None:
+) -> set[date]:
     """Pull one chunk's activities alongside its executions (A7).
 
-    Additive and non-fatal: activities are fees, dividends, interest and FX,
-    plus a completeness cross-check. A broker that answers executions but not
-    activities must not turn a good chunk into a failed one, so this records the
-    problem and returns.
+    Activities are fees, dividends, interest and FX, plus the independent
+    completeness cross-check. A broker that answers executions but not
+    activities has not proved the chunk complete, so callers keep its coverage
+    failed while preserving any executions already returned.
     """
     try:
         activities = importer.get_activities(chunk["account_number"], chunk["start"], chunk["end"])
     except Exception as exc:  # noqa: BLE001 - additive; never fails the chunk
         messages_out.append(f"Questrade activities {chunk['account_number']} skipped: {exc}")
-        return
+        raise RuntimeError(
+            f"Questrade activities cross-check unavailable for {chunk['account_number']}: {exc}"
+        ) from exc
     rows = []
     for raw in activities:
         row = normalize_questrade_activity(raw, chunk["account"])
@@ -206,7 +208,12 @@ def _import_questrade_activities(
     # there. Saying so is the point - the executions endpoint stays
     # authoritative and nothing is imported from here.
     traded = questrade_trade_activity_dates(activities)
-    imported = {str(item.get("trade_date") or "")[:10] for item in chunk.get("executions") or []}
+    imported = {
+        str(
+            item.get("trade_date") if isinstance(item, dict) else getattr(item, "trade_date", "")
+        )[:10]
+        for item in chunk.get("executions") or []
+    }
     missing = sorted(day for day in traded if day.isoformat() not in imported)
     if missing:
         messages_out.append(
@@ -223,6 +230,7 @@ def _import_questrade_activities(
                 source="QT_API",
                 message="activities report trades the executions endpoint did not return",
             )
+    return set(missing)
 
 
 def run_journal_backfill(
@@ -287,29 +295,40 @@ def run_journal_backfill(
                     continue
                 journal_store.upsert_accounts("QUESTRADE", [chunk["account"]])
                 count = journal_store.upsert_executions(chunk["executions"])
+                quarantined = list(chunk.get("quarantined") or [])
+                chunk_status = "FAILED" if quarantined else "OK"
+                coverage_status = journal_coverage.FAILED if quarantined else journal_coverage.COVERED
+                detail = (
+                    f"{len(quarantined)} unreadable row(s) quarantined"
+                    if quarantined else f"{count} execution(s)"
+                )
                 journal_store.finish_import_run(
-                    run_id,
-                    status="OK",
-                    imported_executions=count,
-                    message=f"{chunk['start']}..{chunk['end']}",
+                    run_id, status=chunk_status, imported_executions=count, message=detail
                 )
                 journal_coverage.mark_range(
-                    journal_store,
-                    broker="QUESTRADE",
-                    account_number=account_number,
-                    start=chunk["start"],
-                    end=chunk["end"],
-                    status=journal_coverage.COVERED,
-                    source="QT_API",
-                    import_run_id=run_id,
-                    message=f"{count} execution(s)",
+                    journal_store, broker="QUESTRADE", account_number=account_number,
+                    start=chunk["start"], end=chunk["end"], status=coverage_status,
+                    source="QT_API", import_run_id=run_id, message=detail,
                 )
+                if quarantined:
+                    chunk_failures += 1
+                    had_errors = True
                 # After the chunk is marked, never before: the cross-check below
                 # can downgrade a day to FAILED, and marking COVERED afterwards
                 # would paint over exactly the disagreement it just found.
-                _import_questrade_activities(
-                    journal_store, qt_importer, chunk, messages_out=messages
-                )
+                try:
+                    _import_questrade_activities(
+                        journal_store, qt_importer, chunk, messages_out=messages
+                    )
+                except RuntimeError as exc:
+                    journal_store.finish_import_run(
+                        run_id, status="PARTIAL", imported_executions=count, message=str(exc)
+                    )
+                    journal_coverage.mark_range(
+                        journal_store, broker="QUESTRADE", account_number=account_number,
+                        start=chunk["start"], end=chunk["end"], status=journal_coverage.FAILED,
+                        source="QT_API", import_run_id=run_id, message=str(exc),
+                    )
                 total_imported += count
             if qt_importer.quarantined:
                 messages.append(f"Questrade quarantined {len(qt_importer.quarantined)} unreadable row(s)")
@@ -353,7 +372,14 @@ def run_journal_backfill(
             ]
             journal_store.upsert_accounts("IBKR", accounts)
             count = journal_store.upsert_executions(executions)
-            journal_store.finish_import_run(run_id, status="OK", imported_executions=count, message="flex")
+            quarantined = list(statement.get("quarantined") or [])
+            journal_store.finish_import_run(
+                run_id, status=("FAILED" if quarantined else "OK"), imported_executions=count,
+                message=(f"flex; {len(quarantined)} unreadable row(s) quarantined" if quarantined else "flex"),
+            )
+            if quarantined:
+                had_errors = True
+                messages.append(f"IBKR Flex quarantined {len(quarantined)} unreadable row(s)")
             total_imported += count
             messages.append(f"IBKR flex {count}")
 
@@ -361,20 +387,21 @@ def run_journal_backfill(
             # from the range this function was asked for. A Flex query set to
             # "last 365 days" does not prove anything about day 366, and the
             # 365-day service cap means the two often disagree.
-            span_start = statement.get("from_date") or start_date
-            span_end = statement.get("to_date") or end_date
-            for account_number in sorted({item.account_number for item in executions}):
-                journal_coverage.mark_range(
-                    journal_store,
-                    broker="IBKR",
-                    account_number=account_number,
-                    start=span_start,
-                    end=span_end,
-                    status=journal_coverage.COVERED,
-                    source="IBKR_FLEX",
-                    import_run_id=run_id,
-                    message="flex statement span",
-                )
+            span_start = statement.get("from_date")
+            span_end = statement.get("to_date")
+            if span_start and span_end:
+                for account_number in sorted(set(statement.get("accounts") or [])):
+                    journal_coverage.mark_range(
+                        journal_store, broker="IBKR", account_number=account_number,
+                        start=span_start, end=span_end,
+                        status=(journal_coverage.FAILED if quarantined else journal_coverage.COVERED),
+                        source="IBKR_FLEX", import_run_id=run_id,
+                        message=(f"{len(quarantined)} unreadable row(s) quarantined"
+                                 if quarantined else "flex statement span"),
+                    )
+            else:
+                had_errors = True
+                messages.append("IBKR Flex coverage not marked: statement declared no span")
         except Exception as exc:
             had_errors = True
             journal_store.finish_import_run(run_id, status="FAILED", imported_executions=0, message=str(exc))
@@ -523,13 +550,24 @@ def _fetch_one_day(journal_store: JournalStore, broker: str, account_number: str
         raise RuntimeError(f"{broker} has no per-day fetch; its coverage comes from the Flex statement")
     importer = QuestradeImporter()
     total = 0
+    found_account = False
     for chunk in importer.iter_execution_chunks(day, day):
         if chunk["account_number"] != account_number:
             continue
+        found_account = True
         if "error" in chunk:
             raise RuntimeError(chunk["error"])
+        if chunk.get("quarantined"):
+            raise RuntimeError(f"{len(chunk['quarantined'])} unreadable execution row(s) quarantined")
         journal_store.upsert_accounts("QUESTRADE", [chunk["account"]])
         total += journal_store.upsert_executions(chunk["executions"])
+        missing = _import_questrade_activities(
+            journal_store, importer, chunk, messages_out=[]
+        )
+        if day in missing:
+            raise RuntimeError("activities report trades the executions endpoint did not return")
+    if not found_account:
+        raise RuntimeError(f"Questrade did not return account {account_number}")
     return total
 
 

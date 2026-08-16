@@ -218,3 +218,24 @@ def test_an_option_multiplier_survives_the_brokers_spelling(tmp_path):
     with store.connection() as conn:
         gross = conn.execute("SELECT gross_pnl FROM trades").fetchone()[0]
     assert gross == pytest.approx(200.0), "one contract, $2.00 move, x100 - not $2.00"
+
+
+def test_questrade_partial_fills_without_execution_ids_do_not_collapse_on_order_id(tmp_path):
+    importer = QuestradeImporter.__new__(QuestradeImporter)
+    account = {"number": "51830546", "type": "TFSA"}
+    base = {
+        "orderId": 4242, "symbol": "AAPL", "securityType": "Stock", "side": "Buy",
+        "quantity": 5, "price": 150.0, "commission": 2.5, "currency": "USD",
+    }
+    first = importer.normalize_execution(
+        {**base, "timestamp": "2026-08-05T09:31:00-07:00"}, account
+    )
+    second = importer.normalize_execution(
+        {**base, "timestamp": "2026-08-05T09:31:01-07:00"}, account
+    )
+
+    assert first.execution_uid != second.execution_uid
+    store = JournalStore(tmp_path / "trade_journal.sqlite3")
+    store.upsert_executions([first, second])
+    with store.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM raw_executions").fetchone()[0] == 2

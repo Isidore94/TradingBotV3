@@ -315,7 +315,7 @@ def test_a_day_the_activities_endpoint_calls_traded_is_not_left_covered(store, m
     assert len(store.list_cash_transactions()) == 1
 
 
-def test_a_broken_activities_endpoint_does_not_fail_a_good_chunk(store, monkeypatch):
+def test_a_broken_activities_endpoint_preserves_rows_but_not_green_coverage(store, monkeypatch):
     class _Broken(_ActivityImporter):
         def get_activities(self, account_number, start, end):
             raise RuntimeError("activities 500")
@@ -325,4 +325,6 @@ def test_a_broken_activities_endpoint_does_not_fail_a_good_chunk(store, monkeypa
     assert result["status"] == "OK"
     assert any("activities" in message and "skipped" in message for message in result["messages"])
     statuses = {row["status"] for row in jc.coverage_rows(store, broker="QUESTRADE")}
-    assert jc.FAILED not in statuses
+    assert jc.FAILED in statuses and jc.COVERED not in statuses, (
+        "without the independent cross-check completeness is unknown"
+    )

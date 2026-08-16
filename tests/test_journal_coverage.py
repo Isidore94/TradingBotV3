@@ -125,6 +125,9 @@ class _ChunkedImporter:
     def __init__(self):
         self.quarantined = []
 
+    def get_activities(self, account_number, start, end):
+        return []
+
     def iter_execution_chunks(self, start_date, end_date):
         yield {
             "account": {"number": "51830546", "type": "TFSA"},
@@ -182,6 +185,24 @@ def test_each_chunk_records_the_span_it_covered(store, monkeypatch):
     spans = {(row["account_number"], row["coverage_start"], row["coverage_end"]) for row in runs}
     assert all(start and end for _, start, end in spans), "every run names the days it looked at"
     assert {row["trigger"] for row in runs} == {"backfill"}
+
+
+def test_a_questrade_chunk_with_a_quarantined_row_is_not_covered(store, monkeypatch):
+    class _QuarantinedImporter(_ChunkedImporter):
+        def iter_execution_chunks(self, start_date, end_date):
+            yield {
+                "account": {"number": "51830546", "type": "TFSA"},
+                "account_number": "51830546", "start": start_date, "end": start_date,
+                "executions": [], "quarantined": [{"reason": "bad timestamp"}],
+            }
+
+    monkeypatch.setattr(journal_runner, "QuestradeImporter", _QuarantinedImporter)
+    result = journal_runner.run_journal_backfill(
+        days=1, store=store, include_ibkr_flex=False
+    )
+
+    assert result["status"] == "FAILED"
+    assert {row["status"] for row in jc.coverage_rows(store, broker="QUESTRADE")} == {jc.FAILED}
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +263,40 @@ def test_flex_coverage_comes_from_the_statement_not_from_the_range_requested(sto
     assert days[0] == "2026-08-03" and days[-1] == "2026-08-07", (
         "coverage spans the statement, not the decade that was asked for"
     )
+
+
+def test_flex_without_a_declared_statement_span_marks_no_coverage(store, monkeypatch):
+    xml = FLEX_XML.replace(' fromDate="20260803" toDate="20260807"', "")
+    monkeypatch.setattr(
+        journal_runner, "import_ibkr_flex_executions",
+        lambda **kwargs: parse_ibkr_flex_document(xml),
+    )
+
+    result = journal_runner.run_journal_backfill(
+        days=365, store=store, include_questrade=False, include_ibkr_flex=True
+    )
+
+    assert result["status"] == "FAILED"
+    assert jc.coverage_rows(store, broker="IBKR") == []
+
+
+def test_flex_quarantine_marks_its_declared_span_failed_not_covered(store, monkeypatch):
+    xml = FLEX_XML.replace(
+        "</Trades>",
+        '<Trade accountId="U4867396" symbol="MSFT" dateTime="not-a-time" quantity="5" '
+        'tradePrice="300" buySell="BUY" ibExecID="bad"/></Trades>',
+    )
+    monkeypatch.setattr(
+        journal_runner, "import_ibkr_flex_executions",
+        lambda **kwargs: parse_ibkr_flex_document(xml),
+    )
+
+    result = journal_runner.run_journal_backfill(
+        days=365, store=store, include_questrade=False, include_ibkr_flex=True
+    )
+
+    assert result["status"] == "FAILED"
+    assert {row["status"] for row in jc.coverage_rows(store, broker="IBKR")} == {jc.FAILED}
 
 
 # ---------------------------------------------------------------------------

@@ -220,6 +220,31 @@ def test_the_self_heals_per_day_fetch_refuses_ibkr_honestly(store):
         journal_runner._fetch_one_day(store, "IBKR", "U4867396", date(2026, 8, 5))
 
 
+def test_the_self_heal_rechecks_activities_before_calling_a_zero_fill_day_covered(
+    store, monkeypatch
+):
+    class _MissingExecutionBroker:
+        def __init__(self):
+            self.quarantined = []
+
+        def iter_execution_chunks(self, start, end):
+            yield {
+                "account": {"number": "51830546", "type": "TFSA"},
+                "account_number": "51830546", "start": start, "end": end,
+                "executions": [], "quarantined": [],
+            }
+
+        def get_activities(self, account_number, start, end):
+            return [{"type": "Trades", "tradeDate": start.isoformat()}]
+
+    monkeypatch.setattr(journal_runner, "QuestradeImporter", _MissingExecutionBroker)
+
+    with pytest.raises(RuntimeError, match="activities report trades"):
+        journal_runner._fetch_one_day(
+            store, "QUESTRADE", "51830546", date(2026, 8, 5)
+        )
+
+
 # ---------------------------------------------------------------------------
 # I8 - it runs where it was told to run, and nowhere else
 # ---------------------------------------------------------------------------

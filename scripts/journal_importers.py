@@ -493,7 +493,19 @@ class QuestradeImporter:
         net_amount = raw.get("netAmount") if "netAmount" in raw else None
         return NormalizedExecution(
             execution_uid=stable_execution_uid(
-                "QT", account_number, execution_id or order_id, symbol, timestamp.isoformat(), quantity, price
+                "QT",
+                account_number,
+                execution_id,
+                order_id,
+                raw.get("tradeId") or raw.get("transactionId") or raw.get("activityId"),
+                symbol,
+                timestamp.isoformat(),
+                side,
+                quantity,
+                price,
+                commission,
+                fees,
+                json.dumps(raw, sort_keys=True, default=str),
             ),
             source="QT_API",
             broker="QUESTRADE",
@@ -569,9 +581,11 @@ class QuestradeImporter:
                 }
                 try:
                     executions: list[NormalizedExecution] = []
+                    quarantine_start = len(self.quarantined)
                     for raw in self.get_executions(account_number, start, end):
                         self._append_normalized(executions, raw, account)
                     item["executions"] = executions
+                    item["quarantined"] = list(self.quarantined[quarantine_start:])
                 except Exception as exc:  # noqa: BLE001 - the error is the payload
                     item["error"] = str(exc)
                 yield item
@@ -700,9 +714,13 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
         commission_report = self.commissions.get(exec_id, {})
         if not currency:
             currency = str(commission_report.get("currency") or "USD").upper()
+        side = normalize_side(getattr(execution, "side", ""))
+        quantity = abs(_coerce_float(getattr(execution, "shares", 0.0)))
+        price = _coerce_float(getattr(execution, "price", 0.0))
         return NormalizedExecution(
             execution_uid=stable_execution_uid(
-                "IBKR", account_number, exec_id, symbol, timestamp.isoformat()
+                "IBKR", account_number, exec_id, symbol, timestamp.isoformat(), side,
+                quantity, price, getattr(execution, "orderId", ""), getattr(execution, "permId", "")
             ),
             source="IBKR_SOCKET",
             broker="IBKR",
@@ -712,9 +730,9 @@ class IBKRExecutionImporter(EWrapper, EClient):  # type: ignore[misc]
             symbol=symbol,
             security_type=security_type,
             currency=currency or "USD",
-            side=normalize_side(getattr(execution, "side", "")),
-            quantity=abs(_coerce_float(getattr(execution, "shares", 0.0))),
-            price=_coerce_float(getattr(execution, "price", 0.0)),
+            side=side,
+            quantity=quantity,
+            price=price,
             timestamp=timestamp.isoformat(),
             trade_date=timestamp.date().isoformat(),
             commission=abs(_coerce_float(commission_report.get("commission"))),
@@ -829,11 +847,13 @@ def parse_ibkr_flex_document(
         if account_id and account_id not in accounts:
             accounts.append(account_id)
 
+    quarantine_rows = quarantine if quarantine is not None else []
     return {
-        "executions": parse_ibkr_flex_statement(xml_text, quarantine=quarantine),
+        "executions": parse_ibkr_flex_statement(xml_text, quarantine=quarantine_rows),
         "from_date": from_date,
         "to_date": to_date,
         "accounts": accounts,
+        "quarantined": quarantine_rows,
         # `if node.attrib` skips the section container. IBKR nests the OptionEAE
         # rows inside an element of the same name, so an unfiltered iter() picks
         # up the empty wrapper as a phantom row - which would have become a
