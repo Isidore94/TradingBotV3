@@ -200,6 +200,16 @@ Everything here touches scoring/report territory. Ask-first at edit time:
 field. Completed bars only; the STABLE pass is the invariant restored, the PREVIEW
 pass is the labeled exception.
 
+**Fixture milestone (2026-08-16): BUILT before production edits.**
+`tests/fixtures/r3_swing_quality_v1.json` and
+`tests/test_r3_swing_quality_characterization.py` freeze current live Best Swing
+membership, current tracker-slot timing and current full-day volume-thrust behavior.
+They include up/down trends, a session gap, a mid-window missing value, a
+forming/completed pair, exact threshold edges, side mirrors, and explicit mutation
+checks for flipped, inclusive and wrong-field comparisons. Focused baseline:
+63 passed, exit 0. The volume fixture deliberately documents rather than resolves
+the missing intraday-slot data seam described in §4.3.5.
+
 ## 6. Exit gates
 
 - Fixtures land before any classification change; full suite green.

@@ -1,0 +1,241 @@
+{
+  "schema": "r3_swing_quality_v1",
+  "feature_version": "r3_shadow_classifier_v1",
+  "raw_input_keys": [
+    "quality_cases",
+    "series_cases",
+    "legacy_schedule"
+  ],
+  "raw_input_sha256": "92564a07b7e77cf814ef6787eaedef4eb62127b384ef9e352247044624c864c9",
+  "acquired_at": "2026-08-16T00:00:00-07:00",
+  "as_of": "2026-08-16T00:00:00-07:00",
+  "universe_version": "synthetic_r3_threshold_mutations_v1",
+  "provider_assumptions": "Synthetic D1 rows and regular-session schedule inputs only; no broker or network call. Raw series are deliberately trending, contain explicit gaps, and include a mid-window missing value. Forming rows are labeled preview inputs; completed rows are the stable decision inputs.",
+  "expected_keys": [
+    "legacy_live_membership"
+  ],
+  "numeric_tolerance": 1e-09,
+  "intentional_difference": "",
+  "schema_version": 1,
+  "intent": "R3 fixtures land before production changes. They freeze live membership and kill flipped, inclusive, wrong-field, and wrong-side threshold mutations.",
+  "settings": {
+    "ema_atr_max": 2.0,
+    "daytrade_rvol_min": 2.0,
+    "daytrade_score_min": 180.0,
+    "daytrade_expected_r_min": 0.25
+  },
+  "quality_cases": [
+    {
+      "id": "long_inside",
+      "side": "LONG",
+      "last_close": 119.9,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "VWAP to UPPER_1",
+      "relvol": 1.2,
+      "score": 210.0,
+      "expected_r": 0.4,
+      "would_demote": false,
+      "rules": []
+    },
+    {
+      "id": "long_exact_edge",
+      "side": "LONG",
+      "last_close": 120.0,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "VWAP to UPPER_1",
+      "relvol": 1.2,
+      "score": 209.0,
+      "expected_r": 0.4,
+      "would_demote": false,
+      "rules": []
+    },
+    {
+      "id": "long_over_edge",
+      "side": "LONG",
+      "last_close": 120.1,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "VWAP to UPPER_1",
+      "relvol": 2.1,
+      "score": 208.0,
+      "expected_r": 0.4,
+      "would_demote": true,
+      "rules": ["ema_atr_extension"],
+      "daytrade_candidate": true
+    },
+    {
+      "id": "short_over_edge",
+      "side": "SHORT",
+      "last_close": 79.9,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "VWAP to LOWER_1",
+      "relvol": 2.1,
+      "score": 207.0,
+      "expected_r": 0.4,
+      "would_demote": true,
+      "rules": ["ema_atr_extension"],
+      "daytrade_candidate": true
+    },
+    {
+      "id": "wrong_direction_is_not_extension",
+      "side": "LONG",
+      "last_close": 79.0,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "VWAP to UPPER_1",
+      "relvol": 3.0,
+      "score": 206.0,
+      "expected_r": 0.4,
+      "would_demote": false,
+      "rules": []
+    },
+    {
+      "id": "long_beyond_first_band",
+      "side": "LONG",
+      "last_close": 110.0,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "UPPER_1 to UPPER_2",
+      "relvol": 1.5,
+      "score": 205.0,
+      "expected_r": 0.4,
+      "would_demote": true,
+      "rules": ["band_extension"]
+    },
+    {
+      "id": "short_beyond_first_band",
+      "side": "SHORT",
+      "last_close": 90.0,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "LOWER_2 to LOWER_1",
+      "relvol": 1.5,
+      "score": 204.0,
+      "expected_r": 0.4,
+      "would_demote": true,
+      "rules": ["band_extension"]
+    },
+    {
+      "id": "opposite_band_field_must_not_fire",
+      "side": "LONG",
+      "last_close": 110.0,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "LOWER_2 to LOWER_1",
+      "relvol": 1.5,
+      "score": 203.0,
+      "expected_r": 0.4,
+      "would_demote": false,
+      "rules": []
+    },
+    {
+      "id": "missing_atr_is_unknown_not_confirmation",
+      "side": "LONG",
+      "last_close": 140.0,
+      "ema21": 100.0,
+      "atr20": null,
+      "current_band_zone": "VWAP to UPPER_1",
+      "relvol": 3.0,
+      "score": 202.0,
+      "expected_r": 0.4,
+      "would_demote": false,
+      "rules": []
+    },
+    {
+      "id": "missing_middle_bar_propagates_unknown",
+      "side": "SHORT",
+      "last_close": 60.0,
+      "ema21": null,
+      "atr20": 10.0,
+      "current_band_zone": "VWAP to LOWER_1",
+      "relvol": 3.0,
+      "score": 201.0,
+      "expected_r": 0.4,
+      "would_demote": false,
+      "rules": []
+    },
+    {
+      "id": "completed_bar_safe",
+      "pair": "forming_pair",
+      "bar_status": "completed",
+      "side": "LONG",
+      "last_close": 118.0,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "VWAP to UPPER_1",
+      "relvol": 1.3,
+      "score": 200.0,
+      "expected_r": 0.4,
+      "would_demote": false,
+      "rules": []
+    },
+    {
+      "id": "forming_bar_preview_extended",
+      "pair": "forming_pair",
+      "bar_status": "forming",
+      "side": "LONG",
+      "last_close": 121.0,
+      "ema21": 100.0,
+      "atr20": 10.0,
+      "current_band_zone": "UPPER_1 to UPPER_2",
+      "relvol": 2.0,
+      "score": 199.0,
+      "expected_r": 0.25,
+      "would_demote": true,
+      "rules": ["ema_atr_extension", "band_extension"],
+      "daytrade_candidate": true
+    }
+  ],
+  "series_cases": [
+    {
+      "id": "uptrend_with_session_gap",
+      "start": 90.0,
+      "step": 0.45,
+      "bars": 32,
+      "gap_index": 21,
+      "gap_size": 4.0,
+      "missing_index": null,
+      "forming_delta": 5.0
+    },
+    {
+      "id": "downtrend_with_session_gap",
+      "start": 130.0,
+      "step": -0.4,
+      "bars": 32,
+      "gap_index": 21,
+      "gap_size": -4.0,
+      "missing_index": null,
+      "forming_delta": -5.0
+    },
+    {
+      "id": "missing_bar_in_middle",
+      "start": 100.0,
+      "step": 0.3,
+      "bars": 32,
+      "gap_index": 18,
+      "gap_size": 3.0,
+      "missing_index": 12,
+      "forming_delta": 4.0
+    }
+  ],
+  "legacy_live_membership": {
+    "row_ids": [
+      "long_inside",
+      "long_exact_edge",
+      "long_over_edge",
+      "wrong_direction_is_not_extension",
+      "long_beyond_first_band",
+      "missing_atr_is_unknown_not_confirmation",
+      "completed_bar_safe",
+      "forming_bar_preview_extended"
+    ]
+  },
+  "legacy_schedule": {
+    "reference": "2026-07-02T08:00:00",
+    "slots": ["07:30", "09:00", "10:00", "11:00", "12:00", "13:00"],
+    "tracker_write_slots": ["12:00", "13:00"]
+  }
+}
