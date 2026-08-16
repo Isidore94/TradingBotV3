@@ -20,7 +20,7 @@ REF = datetime(2026, 7, 2, 8, 0)
 
 def test_swing_slots_start_open_plus_hour_then_hourly_from_first_full_hour():
     slots = core.get_autopilot_swing_slots(REF, local_timezone_name=PACIFIC)
-    assert slots == ["07:30", "09:00", "10:00", "11:00", "12:00", "13:00"]
+    assert slots == ["07:30", "09:00", "10:00", "11:00", "12:00", "12:45", "13:00"]
 
 
 def test_hourly_away_report_slots_start_at_0700_and_run_once_per_hour():
@@ -37,8 +37,9 @@ def test_hourly_away_report_slots_start_at_0700_and_run_once_per_hour():
     assert core.hourly_away_report_slot_due(datetime(2026, 7, 4, 9, 0)) is None
 
 
-def test_tracker_writes_only_in_the_final_hour_slots():
-    assert core.slot_writes_setup_tracker("12:00", REF, local_timezone_name=PACIFIC)
+def test_tracker_writes_once_at_the_close_slot():
+    assert not core.slot_writes_setup_tracker("12:00", REF, local_timezone_name=PACIFIC)
+    assert not core.slot_writes_setup_tracker("12:45", REF, local_timezone_name=PACIFIC)
     assert core.slot_writes_setup_tracker("13:00", REF, local_timezone_name=PACIFIC)
     assert not core.slot_writes_setup_tracker("07:30", REF, local_timezone_name=PACIFIC)
     assert not core.slot_writes_setup_tracker("11:00", REF, local_timezone_name=PACIFIC)

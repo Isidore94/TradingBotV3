@@ -186,20 +186,22 @@ def test_shadow_packet_starts_with_live_best_swing_membership_unchanged():
     assert all("would_demote" not in row for row in rows)
 
 
-def test_tracker_and_slot_timing_is_characterized_before_the_honesty_fix():
+def test_tracker_and_slot_timing_intentionally_differs_after_the_honesty_fix():
     schedule = FIXTURE["legacy_schedule"]
     reference = datetime.fromisoformat(schedule["reference"])
     slots = autopilot_core.get_autopilot_swing_slots(
         reference, local_timezone_name="America/Los_Angeles"
     )
-    assert slots == schedule["slots"]
+    assert slots != schedule["slots"]
+    assert slots == ["07:30", "09:00", "10:00", "11:00", "12:00", "12:45", "13:00"]
     assert [
         slot
         for slot in slots
         if autopilot_core.slot_writes_setup_tracker(
             slot, reference, local_timezone_name="America/Los_Angeles"
         )
-    ] == schedule["tracker_write_slots"]
+    ] == ["13:00"]
+    assert schedule["tracker_write_slots"] == ["12:00", "13:00"]
 
 
 def test_daily_volume_thrust_characterization_keeps_forming_volume_unscaled():

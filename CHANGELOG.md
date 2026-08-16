@@ -22,6 +22,17 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-16 — R3 tracker ownership moves to the close
+
+The swing schedule now adds an explicit close-minus-15-minute preview (12:45 PT
+on a normal session). That slot never writes the setup tracker. Both scheduling
+and the scanner's wall-clock fallback gate now begin at the actual market close,
+leaving the 13:00 PT close slot as the sole ordinary tracker writer; later manual
+runs and the existing completed-session catch-up remain recovery paths. The R3
+fixture preserves the former 12:00+13:00 behavior and records the intentional
+difference. This milestone does not yet claim the completed-bar STABLE report or
+any live comparison proof.
+
 ### Application, runtime, and data ownership
 
 - PySide6 Trading Desk launched by `launch_gui.py`, with the legacy Tk UI retained

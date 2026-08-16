@@ -15,7 +15,7 @@
     "legacy_live_membership"
   ],
   "numeric_tolerance": 1e-09,
-  "intentional_difference": "",
+  "intentional_difference": "R3 honesty milestone: the legacy schedule remains frozen as evidence, while production adds the 12:45 preview and moves tracker ownership from 12:00+13:00 to the 13:00 close slot only.",
   "schema_version": 1,
   "intent": "R3 fixtures land before production changes. They freeze live membership and kill flipped, inclusive, wrong-field, and wrong-side threshold mutations.",
   "settings": {

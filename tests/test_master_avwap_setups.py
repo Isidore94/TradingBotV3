@@ -7594,7 +7594,7 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertEqual(longs, ["AAPL", "MSFT", "NVDA", "ASML"])
             self.assertEqual(shorts, ["TSLA", "AMD"])
 
-    def test_eod_write_gate_allows_final_hour_and_after_close(self):
+    def test_eod_write_gate_allows_close_and_after_close_only(self):
         self.assertFalse(
             master_avwap.should_update_setup_tracker_now(
                 now=datetime(2026, 5, 5, 11, 30),
@@ -7602,9 +7602,16 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 window_end="13:00",
             )
         )
-        self.assertTrue(
+        self.assertFalse(
             master_avwap.should_update_setup_tracker_now(
                 now=datetime(2026, 5, 5, 12, 30),
+                window_start="12:00",
+                window_end="13:00",
+            )
+        )
+        self.assertTrue(
+            master_avwap.should_update_setup_tracker_now(
+                now=datetime(2026, 5, 5, 13, 0),
                 window_start="12:00",
                 window_end="13:00",
             )

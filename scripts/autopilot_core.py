@@ -124,6 +124,13 @@ def get_autopilot_swing_slots(
     while cursor <= close_naive:
         slots.append(cursor)
         cursor += timedelta(hours=1)
+    # R3 pre-close honesty: keep one explicitly labeled preview close enough to
+    # the bell to be actionable, while retaining the close slot that publishes
+    # completed-bar outputs and owns the single tracker write.
+    near_close = close_naive - timedelta(minutes=15)
+    if first <= near_close <= close_naive and near_close not in slots:
+        slots.append(near_close)
+        slots.sort()
     return [slot.strftime("%H:%M") for slot in slots]
 
 
@@ -152,18 +159,18 @@ def slot_writes_setup_tracker(
     reference: datetime | None = None,
     local_timezone_name: str | None = None,
 ) -> bool:
-    """Tracker-writing slots: anything in the session's final hour or later.
+    """Return whether a scheduled slot is at or after the actual close.
 
-    For a 06:30-13:00 session that is the 12:00 and 13:00 runs - same window
-    the main bot uses for its setup-tracker refresh.
+    A normal 06:30-13:00 Pacific session therefore has one scheduled writer:
+    the 13:00 close run. The 12:45 R3 slot is an explicitly forming-bar preview.
     """
     session = get_market_session_window(reference=reference, local_timezone_name=local_timezone_name)
-    last_hour_label = str(getattr(session, "last_hour_start_label", "") or "")
-    if not last_hour_label:
+    close_label = str(getattr(session, "close_label", "") or "")
+    if not close_label:
         return False
     try:
         slot_minutes = _label_to_minutes(slot)
-        refresh_minutes = _label_to_minutes(last_hour_label)
+        refresh_minutes = _label_to_minutes(close_label)
     except ValueError:
         return False
     return slot_minutes >= refresh_minutes

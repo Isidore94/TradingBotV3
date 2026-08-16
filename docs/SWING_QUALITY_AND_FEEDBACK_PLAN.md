@@ -220,6 +220,16 @@ and S/A/B membership are identical. No watchlist, alert, score, bucket, tier or
 phone membership consumes the stamp. The trader's full shadow week is still
 UNKNOWN and must be accepted before a future demote-and-label presentation change.
 
+**Post-close scheduling milestone (2026-08-16): BUILT, live comparison owed.**
+The regular-session schedule now includes a close-minus-15-minute preview (12:45
+PT on a normal session), while both the scheduler's tracker flag and the scanner's
+wall-clock gate begin at the actual close. Thus the ordinary schedule has exactly
+one tracker writer, the 13:00 PT close slot; a later manual run and the existing
+completed-session catch-up remain recovery paths. The provenance fixture retains
+the old 12:00+13:00 writer set as characterization and names this intentional
+difference. The completed-bar STABLE report and row stamps remain the next part of
+the same honesty bundle.
+
 ## 6. Exit gates
 
 - Fixtures land before any classification change; full suite green.

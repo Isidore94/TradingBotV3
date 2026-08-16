@@ -363,7 +363,10 @@ are listed in `CURRENT_CHECKPOINT.md`.
    forming/completed stamps, STABLE+PREVIEW split, time-normalized volume
    thrust). The after-close investigation is COMPLETE — mechanisms recorded in
    the spec. Spec: `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md`. Exit: fixtures
-   first, then the spec's one-week desk gates.
+   first, then the spec's one-week desk gates. **Built so far (2026-08-16):**
+   shadow-only quality stamps/report badge, the 12:45 preview slot, and actual-close
+   ownership of the single scheduled tracker write. STABLE/PREVIEW output, row
+   stamps, and the dislike loop remain deterministic work; live weeks remain owed.
 4. **R4 Desk chart unification.** CaptureRail (veto/like/note) on every chart
    surface, review/watch wiring for the RS/RW and Industry panels, Alert Center
    LIKE, armed price alerts and D1 watches painted as a toggleable levels family,

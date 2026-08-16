@@ -1758,7 +1758,8 @@ def _parse_clock_time(value: str) -> datetime.time:
 def get_setup_tracker_update_window_labels(
     reference: datetime | date | None = None,
 ) -> tuple[str, str]:
-    return get_last_hour_window_labels(reference=reference)
+    session = get_market_session_window(reference=reference)
+    return session.close_label, session.close_label
 
 
 def should_update_setup_tracker_now(
@@ -1769,11 +1770,10 @@ def should_update_setup_tracker_now(
     reference = now or datetime.now()
     default_start, default_end = get_setup_tracker_update_window_labels(reference=reference)
     current_time = reference.time()
-    start_time = _parse_clock_time(window_start or default_start)
-    # EOD-only outputs are allowed from the final market hour onward. This
-    # keeps intraday scans from rewriting watchlists while still allowing a
-    # manual scan after the close to refresh the stored lists.
-    return current_time >= start_time
+    close_time = _parse_clock_time(window_end or default_end)
+    # EOD-only outputs begin at the actual close. The close slot is the sole
+    # scheduled writer; a later manual scan may still recover a missed write.
+    return current_time >= close_time
 
 
 def get_favorite_zone_watchlist_update_window_labels(
