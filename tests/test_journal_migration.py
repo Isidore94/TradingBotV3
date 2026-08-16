@@ -90,7 +90,9 @@ _EXEC_COLUMNS = (
 ).split()
 
 
-def _write_v2(path: Path, executions, *, accounts=(), annotations=()) -> Path:
+def _write_v2(
+    path: Path, executions, *, accounts=(), annotations=(), trades=(), legs=()
+) -> Path:
     """A real v2 database: v2 DDL, v2 rows, and the v2 version marker."""
     conn = sqlite3.connect(path)
     try:
@@ -110,6 +112,22 @@ def _write_v2(path: Path, executions, *, accounts=(), annotations=()) -> Path:
                 "INSERT INTO accounts(broker, account_number, account_label, account_type, currency, "
                 "raw_json, updated_at) VALUES(?, ?, ?, ?, ?, '{}', '2026-08-05T20:00:00')",
                 account,
+            )
+        for trade in trades:
+            conn.execute(
+                "INSERT INTO trades(trade_id, broker, account_number, account_label, symbol, "
+                "security_type, currency, direction, status, opened_at, closed_at, trade_date, "
+                "quantity_opened, quantity_closed, average_entry_price, average_exit_price, "
+                "gross_pnl, commission, fees, net_pnl, pnl_usd, auto_tag_summary, tag_confidence, "
+                "updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, '', NULL, '2026-08-05T20:00:00')",
+                trade,
+            )
+        for leg in legs:
+            conn.execute(
+                "INSERT INTO trade_legs(trade_id, execution_uid, side, role, quantity, price, "
+                "timestamp, commission, fees) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                leg,
             )
         for trade_id, tags in annotations:
             conn.execute(
@@ -386,6 +404,48 @@ def test_the_annotation_orphan_count_is_recorded_before_step_4_claims_to_fix_it(
     store = JournalStore(db)
     assert store.last_migration.annotations_total == 1
     assert store.last_migration.annotations_orphaned_now == 1
+
+
+def test_v2_trade_legs_bridge_uid_rewrites_so_annotations_rekey_to_the_rebuilt_trade(tmp_path):
+    buy = _socket_row("e1", "2026-08-04T06:31:00-07:00")
+    sell = _socket_row(
+        "e2", "2026-08-04T10:31:00-07:00", side="SELL", quantity=10.0, price=110.0
+    )
+    old_trade_id = "v2-annotated-trade"
+    db = _write_v2(
+        tmp_path / "trade_journal.sqlite3",
+        [buy, sell],
+        trades=[
+            (
+                old_trade_id, "IBKR", "U1234567", "U1234567", "NVDA", "STK", "USD",
+                "LONG", "CLOSED", buy["timestamp"], sell["timestamp"], "2026-08-04",
+                10.0, 10.0, 100.0, 110.0, 100.0, 0.0, 0.0, 100.0, 100.0,
+            )
+        ],
+        legs=[
+            (old_trade_id, buy["execution_uid"], "BUY", "OPEN", 10.0, 100.0,
+             buy["timestamp"], 0.0, 0.0),
+            (old_trade_id, sell["execution_uid"], "SELL", "CLOSE", 10.0, 110.0,
+             sell["timestamp"], 0.0, 0.0),
+        ],
+        annotations=[(old_trade_id, "avwap-reclaim")],
+    )
+
+    store = JournalStore(db)
+
+    trades = store.list_trades()
+    assert len(trades) == 1 and trades[0]["trade_id"] != old_trade_id
+    with store.connection() as conn:
+        annotation = conn.execute(
+            "SELECT trade_id, setup_tags FROM trade_annotations"
+        ).fetchone()
+        orphan_count = conn.execute(
+            "SELECT COUNT(*) FROM trade_annotations a "
+            "LEFT JOIN trades t ON t.trade_id = a.trade_id WHERE t.trade_id IS NULL"
+        ).fetchone()[0]
+    assert tuple(annotation) == (trades[0]["trade_id"], "avwap-reclaim")
+    assert orphan_count == 0
+    assert store.last_rekey["orphaned"] == []
 
 
 # ---------------------------------------------------------------------------

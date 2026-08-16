@@ -505,6 +505,19 @@ def _collapse_execution_uids(conn: sqlite3.Connection, report: MigrationReport) 
                 continue
             report.uids_rewritten += 1
 
+        # Derived v2 legs still refer to the pre-migration identity.  Preserve
+        # that bridge until JournalStore's immediate rebuild snapshots the
+        # annotated trades; otherwise the old and rebuilt trades have zero UID
+        # overlap and every annotation is reported as orphaned.
+        if _table_exists(conn, "trade_legs"):
+            for row in group:
+                old_uid = str(row.get("execution_uid") or "")
+                if old_uid and old_uid != new_uid:
+                    conn.execute(
+                        "UPDATE trade_legs SET execution_uid = ? WHERE execution_uid = ?",
+                        (new_uid, old_uid),
+                    )
+
     report.executions_after = int(
         conn.execute("SELECT COUNT(*) FROM raw_executions").fetchone()[0]
     )
