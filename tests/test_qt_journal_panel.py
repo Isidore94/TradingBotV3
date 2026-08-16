@@ -121,7 +121,9 @@ def test_first_open_runs_real_store_initialization_off_the_gui_thread(qapp, tmp_
 
     widget = JournalPanel()
     try:
-        assert widget._migration_worker is not None
+        assert widget._migration_worker is None
+        assert "dry-run first" in widget.migration_status.text()
+        widget.prepare_button.click()
         assert widget._migration_worker.wait(10000)
         qapp.processEvents()
         assert called_on and called_on[0] is not qapp.thread()
@@ -142,6 +144,7 @@ def test_migration_failure_stays_visible_instead_of_claiming_no_accounts(qapp, m
     )
     widget = JournalPanel()
     try:
+        widget.prepare_button.click()
         assert widget._migration_worker.wait(5000)
         qapp.processEvents()
         assert "migration failed" in widget.migration_status.text().lower()

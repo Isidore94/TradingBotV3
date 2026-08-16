@@ -15,7 +15,7 @@ Everything reads through ``ui.services.journal_feed``. No tab holds a
 from __future__ import annotations
 
 from PySide6.QtCore import QThread, Signal
-from PySide6.QtWidgets import QFrame, QLabel, QTabWidget, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QTabWidget, QVBoxLayout
 
 from ui.panels.journal.analytics_tab import AnalyticsTab
 from ui.panels.journal.calendar_tab import CalendarTab
@@ -49,6 +49,9 @@ class JournalPanel(QFrame):
         self.migration_status.setObjectName("JournalMigrationStatus")
         self.migration_status.setWordWrap(True)
         self.migration_status.setVisible(False)
+        self.prepare_button = QPushButton("Prepare Journal database")
+        self.prepare_button.clicked.connect(self._start_initialization)
+        self.prepare_button.setVisible(False)
 
         self.header = JournalHeader(autoload=False)
         self.header.selectionChanged.connect(self._reload_current)
@@ -77,6 +80,7 @@ class JournalPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.addWidget(self.migration_status)
+        layout.addWidget(self.prepare_button)
         layout.addWidget(self.header)
         layout.addWidget(self.tabs)
 
@@ -84,15 +88,13 @@ class JournalPanel(QFrame):
             self._finish_initialization({"migrated": False, "report": None})
         else:
             self.migration_status.setText(
-                "Preparing Journal database… backup, migration, and rebuild run in the background."
+                "Journal preparation is required. Review the migration dry-run first; then click "
+                "Prepare Journal database to run backup, migration, and rebuild in the background."
             )
             self.migration_status.setVisible(True)
+            self.prepare_button.setVisible(True)
             self.header.setEnabled(False)
             self.tabs.setEnabled(False)
-            self._migration_worker = _JournalInitWorker(self)
-            self._migration_worker.ready.connect(self._finish_initialization)
-            self._migration_worker.failed.connect(self._initialization_failed)
-            self._migration_worker.start()
 
     def _tabs(self):
         return (
@@ -125,9 +127,22 @@ class JournalPanel(QFrame):
     def _set_status(self, message: str) -> None:
         self.statusChanged.emit(f"Journal: {message}")
 
+    def _start_initialization(self) -> None:
+        if self._migration_worker is not None and self._migration_worker.isRunning():
+            return
+        self.prepare_button.setEnabled(False)
+        self.migration_status.setText(
+            "Preparing Journal database… backup, migration, and rebuild are running in the background."
+        )
+        self._migration_worker = _JournalInitWorker(self)
+        self._migration_worker.ready.connect(self._finish_initialization)
+        self._migration_worker.failed.connect(self._initialization_failed)
+        self._migration_worker.start()
+
     def _finish_initialization(self, result: dict) -> None:
         self.header.setEnabled(True)
         self.tabs.setEnabled(True)
+        self.prepare_button.setVisible(False)
         self.header.refresh_accounts()
         self._reload_current()
         if result.get("migrated"):
@@ -139,6 +154,8 @@ class JournalPanel(QFrame):
     def _initialization_failed(self, message: str) -> None:
         self.header.setEnabled(False)
         self.tabs.setEnabled(False)
+        self.prepare_button.setEnabled(True)
+        self.prepare_button.setVisible(True)
         self.migration_status.setText(f"Journal unavailable: migration failed — {message}")
         self.migration_status.setVisible(True)
         self._set_status(f"migration failed: {message}")
