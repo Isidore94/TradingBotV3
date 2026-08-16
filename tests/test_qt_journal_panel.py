@@ -323,7 +323,9 @@ def test_the_equity_curve_reports_what_it_had_to_leave_out(panel, populated):
     panel.header.currency_input.setCurrentText("CAD")
     panel.analytics_tab.reload()
     assert "not in the curve" in panel.analytics_tab.currency_note.text()
-    assert panel.analytics_tab.curve_table.rowCount() == 1, "only the CAD trade converts"
+    assert panel.analytics_tab.curve_table.rowCount() == 0, (
+        "a mixed selection with an unconverted trade refuses the total instead of silently omitting it"
+    )
 
 
 def test_health_shows_the_coverage_grid_and_names_the_gaps(panel, populated):

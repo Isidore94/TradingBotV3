@@ -324,15 +324,15 @@ def test_a_hand_entered_fill_lands_in_a_real_account_not_in_manual(feed):
 # ---------------------------------------------------------------------------
 
 
-def test_the_equity_curve_skips_what_it_cannot_convert_rather_than_zeroing_it(feed):
-    """A flat step for an unconvertible trade is a lie about a real position."""
+def test_the_equity_curve_refuses_a_mixed_selection_it_cannot_fully_convert(feed):
+    """Omitting one trade would make the final curve total look complete."""
     _round_trip(feed, "u", "2026-08-05", 100.0, 110.0)
     _round_trip(feed, "c", "2026-08-06", 80.0, 85.0, currency="CAD", symbol="SHOP.TO")
     feed.rebuild_trades(refresh_tags=False)
     trades = journal_feed.load_trades()
 
     curve = journal_feed.equity_curve(trades, "CAD")
-    assert len(curve) == 1, "only the CAD trade converts"
+    assert curve == []
     assert journal_feed.unconvertible_count(trades, "CAD") == 1
 
 
@@ -341,6 +341,21 @@ def test_the_calendar_returns_pnl_by_day(feed):
     feed.rebuild_trades(refresh_tags=False)
     calendar = journal_feed.calendar_pnl_by_day()
     assert calendar.get("2026-08-05") == pytest.approx(990.0)  # 1000 gross - 9.90 commission - 0.10 fees
+
+
+def test_calendar_and_analytics_use_the_same_selected_currency(feed):
+    _round_trip(feed, "usd", "2026-08-05", 100.0, 110.0, symbol="AAPL")
+    _round_trip(feed, "cad", "2026-08-06", 80.0, 85.0, currency="CAD", symbol="SHOP.TO")
+    feed.rebuild_trades(refresh_tags=False)
+    fx.seed_rate(feed, day="2026-08-05", currency="USD", rate_to_cad=1.4)
+    feed.book_cad_values()
+    trades = journal_feed.load_trades()
+
+    calendar = journal_feed.calendar_pnl_by_day(currency_mode="CAD")
+    summary = journal_feed.analytics_summary(trades, "CAD")
+
+    assert sum(calendar.values()) == pytest.approx(summary["overall"]["net_pnl"])
+    assert journal_feed.equity_curve(trades, "CAD")[-1][1] == pytest.approx(sum(calendar.values()))
 
 
 def test_fee_totals_never_add_trade_costs_to_cash_fees(feed):
@@ -362,6 +377,30 @@ def test_fee_totals_never_add_trade_costs_to_cash_fees(feed):
     cash_row = [row for row in rows if row["cash_fees"] or row["dividends"]][0]
     assert cash_row["cash_fees"] == pytest.approx(-3.0)
     assert cash_row["dividends"] == pytest.approx(12.5)
+    assert len(rows) == 1, "trade costs and cash activity share the broker/account-number key"
+
+
+def test_fee_totals_apply_the_header_date_and_account_filters_to_cash_rows(feed):
+    _round_trip(feed, "f", "2026-08-05", 100.0, 110.0)
+    feed.rebuild_trades(refresh_tags=False)
+    feed.upsert_cash_transactions(
+        [
+            {"txn_uid": "wanted", "broker": "QUESTRADE", "account_number": "51830546",
+             "txn_date": "2026-08-05", "activity_type": "FEE", "amount": -3.0, "currency": "USD"},
+            {"txn_uid": "other-account", "broker": "QUESTRADE", "account_number": "29347316",
+             "txn_date": "2026-08-05", "activity_type": "FEE", "amount": -99.0, "currency": "USD"},
+            {"txn_uid": "old", "broker": "QUESTRADE", "account_number": "51830546",
+             "txn_date": "2025-01-01", "activity_type": "FEE", "amount": -88.0, "currency": "USD"},
+        ]
+    )
+
+    rows = journal_feed.fee_totals(
+        date_from="2026-08-01", date_to="2026-08-31",
+        accounts_filter=[("QUESTRADE", "51830546")],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["account"] == "51830546" and rows[0]["cash_fees"] == pytest.approx(-3.0)
 
 
 def test_the_fee_export_writes_every_column(feed, tmp_path):

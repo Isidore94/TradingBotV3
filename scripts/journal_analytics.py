@@ -377,7 +377,9 @@ def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> d
     }
 
 
-def resolve_pnl_key(trades: list[dict[str, Any]]) -> tuple[str, str]:
+def resolve_pnl_key(
+    trades: list[dict[str, Any]], currency_mode: str | None = None
+) -> tuple[str, str]:
     """Which P&L column may be summed, and what to tell the reader.
 
     Root cause B8. ``_summary_for_rows`` defaulted to ``net_pnl``, which is the
@@ -394,10 +396,32 @@ def resolve_pnl_key(trades: list[dict[str, Any]]) -> tuple[str, str]:
       ``("", reason)`` and shows the reason instead of a number, because a total
       that silently omits the unconverted rows is worse than no total.
     """
-    currencies = {str(row.get("currency") or "").upper() for row in trades if row.get("currency")}
+    closed = [row for row in trades if str(row.get("status") or "").upper() == "CLOSED"]
+    mode = str(currency_mode or "").strip().upper()
+    currencies = {str(row.get("currency") or "").upper() for row in closed if row.get("currency")}
+    if mode == "CAD":
+        unconverted = [row for row in closed if row.get("net_pnl_cad") is None]
+        if unconverted:
+            missing = sorted({str(row.get("currency") or "?").upper() for row in unconverted})
+            return "", (
+                f"{len(unconverted)} of {len(closed)} trades have no booked FX rate "
+                f"({', '.join(missing)}); CAD totals are not shown"
+            )
+        return "net_pnl_cad", "converted to CAD at each trade's booked rate"
+    if mode == "USD":
+        non_usd = [row for row in closed if str(row.get("currency") or "").upper() != "USD"]
+        if non_usd:
+            missing = sorted({str(row.get("currency") or "?").upper() for row in non_usd})
+            return "", f"USD conversion is unavailable for {', '.join(missing)}; USD totals are not shown"
+        return "net_pnl", ""
+    # Native mode (and legacy callers with no explicit mode) can add values only
+    # when the selection has one currency. Legacy mixed selections retain the
+    # tax-grade CAD fallback used by non-UI reports.
+    if mode == "NATIVE" and len(currencies) > 1:
+        return "", "multiple native currencies selected; Native totals are not shown"
     if len(currencies) <= 1:
         return "net_pnl", ""
-    unconverted = [row for row in trades if row.get("net_pnl_cad") is None]
+    unconverted = [row for row in closed if row.get("net_pnl_cad") is None]
     if unconverted:
         missing = sorted({str(row.get("currency") or "?").upper() for row in unconverted})
         return "", (
@@ -424,8 +448,10 @@ def _tags_for_row(row: dict[str, Any]) -> list[str]:
     return [text]
 
 
-def build_analytics_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
-    pnl_key, pnl_note = resolve_pnl_key(trades)
+def build_analytics_summary(
+    trades: list[dict[str, Any]], currency_mode: str | None = None
+) -> dict[str, Any]:
+    pnl_key, pnl_note = resolve_pnl_key(trades, currency_mode)
     summary = {
         "overall": _summary_for_rows(trades, pnl_key or "net_pnl"),
         "groups": {},

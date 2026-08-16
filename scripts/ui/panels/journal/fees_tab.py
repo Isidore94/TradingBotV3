@@ -98,6 +98,7 @@ class FeesTab(QFrame):
         rows = journal_feed.cash_transactions(
             date_from=query.get("date_from"),
             date_to=query.get("date_to"),
+            accounts_filter=query.get("accounts_filter"),
             activity_type="" if activity == "All" else activity,
         )
         self.cash_table.setRowCount(len(rows))
@@ -115,7 +116,7 @@ class FeesTab(QFrame):
 
     def _export(self) -> None:
         try:
-            path = journal_feed.export_fees_csv()
+            path = journal_feed.export_fees_csv(**self._header.query())
         except Exception as exc:  # noqa: BLE001
             self.statusChanged.emit(f"fee export failed: {exc}")
             return

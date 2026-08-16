@@ -112,8 +112,8 @@ class AnalyticsTab(QFrame):
         except Exception as exc:  # noqa: BLE001
             self.statusChanged.emit(f"analytics unavailable: {exc}")
             return
-        summary = journal_feed.analytics_summary(trades)
         mode = self._header.currency_mode
+        summary = journal_feed.analytics_summary(trades, mode)
 
         overall = summary.get("overall") or {}
         net = overall.get("net_pnl")

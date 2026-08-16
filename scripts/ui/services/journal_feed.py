@@ -33,10 +33,12 @@ def distinct_values(column: str) -> list[str]:
         return []
 
 
-def analytics_summary(trades: list[JournalTrade]) -> dict[str, Any]:
+def analytics_summary(
+    trades: list[JournalTrade], currency_mode: str | None = None
+) -> dict[str, Any]:
     from journal_analytics import build_analytics_summary
 
-    return build_analytics_summary([trade.raw for trade in trades])
+    return build_analytics_summary([trade.raw for trade in trades], currency_mode)
 
 
 def analytics_text(trades: list[JournalTrade]) -> str:
@@ -418,11 +420,12 @@ def accept_auto_tags(trade_id: str, tags: Iterable[str]) -> str:
 # -- calendar / analytics ----------------------------------------------------
 
 
-def calendar_pnl_by_day(**kwargs: Any) -> dict[str, float]:
-    from journal_analytics import calendar_pnl_by_day as _calendar
+def calendar_pnl_by_day(*, currency_mode: str = "Native", **kwargs: Any) -> dict[str, float]:
+    from journal_analytics import calendar_pnl_by_day as _calendar, resolve_pnl_key
 
     trades = [trade.raw for trade in load_trades(**kwargs)]
-    return _calendar(trades)
+    pnl_key, _note = resolve_pnl_key(trades, currency_mode)
+    return _calendar(trades, pnl_key=pnl_key) if pnl_key else {}
 
 
 def equity_curve(trades: list[JournalTrade], currency_mode: str = "CAD") -> list[tuple[str, float]]:
@@ -434,10 +437,15 @@ def equity_curve(trades: list[JournalTrade], currency_mode: str = "CAD") -> list
     """
     points: list[tuple[str, float]] = []
     running = 0.0
+    from journal_analytics import resolve_pnl_key
+
+    pnl_key, _note = resolve_pnl_key([trade.raw for trade in trades], currency_mode)
+    if not pnl_key:
+        return []
     for trade in sorted(trades, key=lambda item: (item.trade_date, item.trade_id)):
         if not trade.is_closed:
             continue
-        value, _label = convert_amount(trade, currency_mode)
+        value = trade.raw.get(pnl_key)
         if value is None:
             continue
         running += float(value)
@@ -531,10 +539,18 @@ def fx_coverage() -> dict[str, Any]:
 
 
 def cash_transactions(**kwargs: Any) -> list[dict[str, Any]]:
+    accounts_filter = kwargs.pop("accounts_filter", None)
     try:
-        return _store().list_cash_transactions(**kwargs)
+        rows = _store().list_cash_transactions(**kwargs)
     except Exception:
         return []
+    if accounts_filter is None:
+        return rows
+    wanted = {(str(broker).upper(), str(account)) for broker, account in accounts_filter}
+    return [
+        row for row in rows
+        if (str(row.get("broker") or "").upper(), str(row.get("account_number") or "")) in wanted
+    ]
 
 
 def fee_totals(**kwargs: Any) -> list[dict[str, Any]]:
@@ -549,13 +565,18 @@ def fee_totals(**kwargs: Any) -> list[dict[str, Any]]:
         raw = trade.raw
         key = (
             str(raw.get("broker") or ""),
-            str(raw.get("account_label") or raw.get("account_number") or ""),
+            str(raw.get("account_number") or ""),
             str(raw.get("currency") or ""),
         )
         entry = totals.setdefault(key, {"commission": 0.0, "fees": 0.0, "cash_fees": 0.0, "dividends": 0.0})
         entry["commission"] += float(raw.get("commission") or 0.0)
         entry["fees"] += float(raw.get("fees") or 0.0)
-    for row in cash_transactions():
+    cash_kwargs = {
+        key: kwargs.get(key)
+        for key in ("date_from", "date_to", "accounts_filter")
+        if kwargs.get(key) is not None
+    }
+    for row in cash_transactions(**cash_kwargs):
         key = (str(row.get("broker") or ""), str(row.get("account_number") or ""), str(row.get("currency") or ""))
         entry = totals.setdefault(key, {"commission": 0.0, "fees": 0.0, "cash_fees": 0.0, "dividends": 0.0})
         if str(row.get("activity_type") or "") == "FEE":
@@ -568,12 +589,12 @@ def fee_totals(**kwargs: Any) -> list[dict[str, Any]]:
     ]
 
 
-def export_fees_csv(path: Path | None = None) -> Path:
+def export_fees_csv(path: Path | None = None, **kwargs: Any) -> Path:
     import csv
 
     from project_paths import JOURNAL_EXPORT_DIR
 
-    rows = fee_totals()
+    rows = fee_totals(**kwargs)
     target = Path(path) if path else Path(JOURNAL_EXPORT_DIR) / "journal_fees.csv"
     target.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = ["broker", "account", "currency", "commission", "fees", "cash_fees", "dividends"]

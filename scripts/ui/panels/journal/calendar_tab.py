@@ -77,7 +77,9 @@ class CalendarTab(QFrame):
 
     def reload(self) -> None:
         try:
-            self._by_day = journal_feed.calendar_pnl_by_day(**self._header.query())
+            self._by_day = journal_feed.calendar_pnl_by_day(
+                currency_mode=self._header.currency_mode, **self._header.query()
+            )
         except Exception as exc:  # noqa: BLE001
             self._by_day = {}
             self.statusChanged.emit(f"calendar unavailable: {exc}")
