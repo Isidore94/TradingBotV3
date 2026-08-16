@@ -314,6 +314,22 @@ class TradesTab(QFrame):
         self.save_notes_button = QPushButton("Save tags and notes")
         self.save_notes_button.clicked.connect(self._save_annotation)
 
+        self.review_outcome = QComboBox()
+        self.review_outcome.addItems(
+            [
+                "Followed plan",
+                "Good process, bad outcome",
+                "Poor entry discipline",
+                "Poor exit discipline",
+                "Risk or sizing mistake",
+                "Other",
+            ]
+        )
+        self.decision_reason = QLineEdit()
+        self.decision_reason.setPlaceholderText("Why did you make that decision?")
+        self.save_review_button = QPushButton("Save structured review")
+        self.save_review_button.clicked.connect(self._save_review)
+
         self.correct_button = QPushButton("Correct this trade...")
         self.correct_button.clicked.connect(self._open_corrections)
         self.add_execution_button = QPushButton("Add execution...")
@@ -335,6 +351,11 @@ class TradesTab(QFrame):
         layout.addWidget(self.tags_input)
         layout.addWidget(self.notes_input)
         layout.addWidget(self.save_notes_button)
+        review_form = QFormLayout()
+        review_form.addRow("Review outcome", self.review_outcome)
+        review_form.addRow("Decision reason", self.decision_reason)
+        layout.addLayout(review_form)
+        layout.addWidget(self.save_review_button)
         corrections_row = QHBoxLayout()
         corrections_row.addWidget(self.correct_button)
         corrections_row.addWidget(self.add_execution_button)
@@ -425,6 +446,15 @@ class TradesTab(QFrame):
 
         self.tags_input.setText(str(raw.get("setup_tags") or ""))
         self.notes_input.setPlainText(str(raw.get("notes") or ""))
+        self.review_outcome.setCurrentIndex(0)
+        latest_review = journal_feed.latest_trade_review(trade.trade_id) or {}
+        review_payload = latest_review.get("payload") or {}
+        outcome = str(review_payload.get("review_outcome") or "")
+        if outcome and self.review_outcome.findText(outcome) < 0:
+            self.review_outcome.addItem(outcome)
+        if outcome:
+            self.review_outcome.setCurrentText(outcome)
+        self.decision_reason.setText(str(latest_review.get("reason") or ""))
 
         self.adjustments_list.clear()
         for record in journal_feed.list_adjustments(limit=25):
@@ -477,6 +507,19 @@ class TradesTab(QFrame):
             notes=self.notes_input.toPlainText().strip(),
         )
         self.statusChanged.emit("tags and notes saved")
+        self.reload()
+
+    def _save_review(self) -> None:
+        if self._current is None:
+            return
+        journal_feed.record_trade_review(
+            self._current.trade_id,
+            review_outcome=self.review_outcome.currentText(),
+            decision_reason=self.decision_reason.text().strip(),
+            setup_tags=self.tags_input.text().strip(),
+            notes=self.notes_input.toPlainText().strip(),
+        )
+        self.statusChanged.emit("structured review saved")
         self.reload()
 
     def _accept_tags(self) -> None:

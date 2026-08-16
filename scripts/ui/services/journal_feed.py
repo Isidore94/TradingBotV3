@@ -467,6 +467,15 @@ def walkaway_summary(since: Any = None, until: Any = None) -> dict[str, Any]:
     return run_walkaway_analysis(source="journal", write_outputs=False, since=since, until=until)
 
 
+def render_walkaway_summary(result: dict[str, Any]) -> str:
+    """Render the engine's structured result at every GUI seam."""
+    from journal_walkaway import render_walkaway_report
+
+    return render_walkaway_report(
+        list(result.get("journal_rows") or []), list(result.get("focus_rows") or [])
+    )
+
+
 # -- health / fees -----------------------------------------------------------
 
 

@@ -139,6 +139,60 @@ def test_the_panel_owns_no_timer():
     assert "QTimer" not in names and "singleShot" not in names
 
 
+def test_walkaway_runs_off_the_gui_thread_and_renders_the_structured_result(
+    panel, monkeypatch
+):
+    from PySide6.QtCore import QThread
+
+    called_on = []
+
+    def run_summary(*_args):
+        called_on.append(QThread.currentThread())
+        return {"journal_rows": [], "focus_rows": [], "skipped_non_equity": 0}
+
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.walkaway_summary", run_summary)
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.week_trades",
+                        lambda *_args: {"closed": [], "still_open": []})
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.week_tag_candidates",
+                        lambda *_args: [])
+
+    panel.walkaway.reload()
+    assert panel.walkaway._worker.wait(5000)
+    _app.processEvents()
+
+    assert called_on and called_on[0] is not _app.thread()
+    assert "WALKAWAY ANALYSIS" in panel.walkaway.output.toPlainText()
+    assert "journal_rows" not in panel.walkaway.output.toPlainText()
+
+
+def test_confirming_a_tag_does_not_rerun_walkaway(panel, monkeypatch):
+    row = {
+        "trade_id": "trade-1", "trade_date": "2026-08-12", "symbol": "AAPL",
+        "current_tags": "breakout", "candidates": [{"tag": "avwap-reclaim"}],
+    }
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.accept_auto_tags",
+                        lambda *_args: None)
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.week_trades",
+                        lambda *_args: {"closed": [], "still_open": []})
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.week_tag_candidates",
+                        lambda *_args: [row])
+    monkeypatch.setattr(
+        "ui.panels.weekend_prep_panel.journal_feed.walkaway_summary",
+        lambda *_args: pytest.fail("tag review must not replay market history"),
+    )
+    panel.walkaway._tag_rows = [row]
+    panel.walkaway.tag_table.setRowCount(1)
+    panel.walkaway.tag_table.selectRow(0)
+
+    panel.walkaway._confirm_tag()
+
+    assert service_recorded(panel.service, "trade-1")
+
+
+def service_recorded(service, trade_id):
+    return trade_id in service.weekend_state()["tag_review"]["confirmed"]
+
+
 # ---------------------------------------------------------------------------
 # Discovery and Adopt
 # ---------------------------------------------------------------------------

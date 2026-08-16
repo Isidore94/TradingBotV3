@@ -176,11 +176,7 @@ class AnalyticsTab(QFrame):
 
     def _on_walkaway_done(self, result: dict) -> None:  # pragma: no cover
         self.walkaway_button.setEnabled(True)
-        rows = result.get("journal_rows") or []
-        self.walkaway_output.setText(
-            result.get("report")
-            or f"Walk-away complete: {len(rows)} position(s) replayed for this range."
-        )
+        self.walkaway_output.setText(journal_feed.render_walkaway_summary(result))
 
     def _on_walkaway_failed(self, message: str) -> None:  # pragma: no cover
         self.walkaway_button.setEnabled(True)

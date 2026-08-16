@@ -180,6 +180,21 @@ def test_selecting_a_trade_fills_the_detail_pane_and_its_legs(panel):
     assert panel.trades_tab.legs_table.rowCount() >= 1
 
 
+def test_structured_trade_review_is_captured_through_the_real_store(panel, populated):
+    panel.header.range_input.setCurrentText("All")
+    panel.trades_tab.reload()
+    panel.trades_tab.table.selectRow(0)
+    trade_id = panel.trades_tab._current.trade_id
+    panel.trades_tab.review_outcome.setCurrentText("Poor exit discipline")
+    panel.trades_tab.decision_reason.setText("Moved the stop without a new level")
+
+    panel.trades_tab._save_review()
+
+    stored = populated.latest_trade_review(trade_id)
+    assert stored["payload"]["review_outcome"] == "Poor exit discipline"
+    assert stored["reason"] == "Moved the stop without a new level"
+
+
 def test_the_r_readout_says_what_is_missing_rather_than_showing_a_zero(panel):
     panel.header.range_input.setCurrentText("All")
     panel.trades_tab.reload()
@@ -326,6 +341,14 @@ def test_the_equity_curve_reports_what_it_had_to_leave_out(panel, populated):
     assert panel.analytics_tab.curve_table.rowCount() == 0, (
         "a mixed selection with an unconverted trade refuses the total instead of silently omitting it"
     )
+
+
+def test_analytics_walkaway_renders_structured_engine_output(panel):
+    panel.analytics_tab._on_walkaway_done(
+        {"journal_rows": [], "focus_rows": [], "skipped_non_equity": 0}
+    )
+    assert "WALKAWAY ANALYSIS" in panel.analytics_tab.walkaway_output.text()
+    assert "journal_rows" not in panel.analytics_tab.walkaway_output.text()
 
 
 def test_health_shows_the_coverage_grid_and_names_the_gaps(panel, populated):

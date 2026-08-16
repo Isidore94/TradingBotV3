@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -43,6 +43,22 @@ from ui.services import journal_feed
 from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
 
 STATUS_MARKS = {"pending": "○", "done": "●", "skipped": "–"}
+
+
+class _WalkawayWorker(QThread):
+    finished_with = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, since, until, parent=None) -> None:
+        super().__init__(parent)
+        self._since = since
+        self._until = until
+
+    def run(self) -> None:  # pragma: no cover - exercised through its signal seam
+        try:
+            self.finished_with.emit(journal_feed.walkaway_summary(self._since, self._until))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
 
 
 class _StepPage(QFrame):
@@ -174,6 +190,7 @@ class WalkawayPage(_StepPage):
         self.correct_button = QPushButton("Correct to my tags")
         self.correct_button.clicked.connect(self._correct_tag)
         self._tag_rows: list[dict[str, Any]] = []
+        self._worker: _WalkawayWorker | None = None
 
         tag_buttons = QHBoxLayout()
         tag_buttons.addWidget(self.confirm_button)
@@ -190,11 +207,26 @@ class WalkawayPage(_StepPage):
 
     def reload(self) -> None:
         monday, friday = self.service.week_bounds
-        try:
-            result = journal_feed.walkaway_summary(monday, friday)
-            self.output.setPlainText(str(result.get("report") or result))
-        except Exception as exc:  # noqa: BLE001
-            self.output.setPlainText(f"Walk-away unavailable: {exc}")
+        if self._worker is None or not self._worker.isRunning():
+            self.refresh_button.setEnabled(False)
+            self.output.setPlainText("Running walk-away...")
+            self._worker = _WalkawayWorker(monday, friday, self)
+            self._worker.finished_with.connect(self._on_walkaway_done)
+            self._worker.failed.connect(self._on_walkaway_failed)
+            self._worker.start()
+        self._reload_review_data()
+
+    def _on_walkaway_done(self, result: dict) -> None:  # pragma: no cover - Qt signal seam
+        self.refresh_button.setEnabled(True)
+        self.output.setPlainText(journal_feed.render_walkaway_summary(result))
+
+    def _on_walkaway_failed(self, message: str) -> None:  # pragma: no cover - Qt signal seam
+        self.refresh_button.setEnabled(True)
+        self.output.setPlainText(f"Walk-away unavailable: {message}")
+        self.statusChanged.emit(f"walk-away failed: {message}")
+
+    def _reload_review_data(self) -> None:
+        monday, friday = self.service.week_bounds
 
         try:
             split = journal_feed.week_trades(monday, friday)
@@ -235,7 +267,7 @@ class WalkawayPage(_StepPage):
         journal_feed.accept_auto_tags(row["trade_id"], tags)
         self.service.record_tag_review(row["trade_id"])
         self.statusChanged.emit(f"confirmed {tags[0]} on {row['symbol']}")
-        self.reload()
+        self._reload_review_data()
 
     def _correct_tag(self) -> None:
         row = self._selected_tag_row()
@@ -244,7 +276,12 @@ class WalkawayPage(_StepPage):
         journal_feed.correct_auto_tag(row["trade_id"], row["current_tags"])
         self.service.record_tag_review(row["trade_id"], corrected_to=row["current_tags"])
         self.statusChanged.emit(f"corrected {row['symbol']} to your tags")
-        self.reload()
+        self._reload_review_data()
+
+    def shutdown(self) -> None:
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            worker.wait()
 
 
 class DiscoveryPage(_StepPage):
@@ -466,6 +503,7 @@ class WeekendPrepPanel(QFrame):
             self.pages.setCurrentIndex(row)
 
     def shutdown(self) -> None:
+        self.walkaway.shutdown()
         self.service.shutdown()
 
 
