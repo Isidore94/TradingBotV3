@@ -191,6 +191,23 @@ def test_a_flex_cash_transaction_becomes_a_cash_row(store):
     assert stored[0]["activity_type"] == "DIVIDEND" and stored[0]["amount"] == pytest.approx(12.5)
 
 
+def test_a_flex_cash_transaction_accepts_the_real_compact_timestamp(store):
+    rows = flex_cash_transactions(
+        [
+            {
+                "accountId": "U4867396", "type": "Dividends", "amount": "12.50",
+                "currency": "USD", "dateTime": "20260805;093211", "symbol": "MSFT",
+                "description": "MSFT dividend", "transactionID": "t-compact",
+            }
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["txn_date"] == "2026-08-05"
+    store.upsert_cash_transactions(rows)
+    assert store.list_cash_transactions(broker="IBKR")[0]["txn_uid"] == rows[0]["txn_uid"]
+
+
 def test_cash_rows_never_reach_assembly(store):
     """A dividend moves money and is not a trade. One in raw_executions would
     invent a position out of it."""

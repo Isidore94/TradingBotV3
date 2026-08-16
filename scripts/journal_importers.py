@@ -155,6 +155,15 @@ def _coerce_date(value: Any) -> date | None:
     text = str(value or "").strip()
     if not text:
         return None
+    # Flex dates are either ISO or compact ``yyyyMMdd`` and may carry a
+    # semicolon-delimited time.  Parse the broker's compact form before the ISO
+    # fallback; slicing ``yyyyMMdd HH`` to ten characters is not a date.
+    compact = text.split(";", 1)[0].strip()
+    if len(compact) == 8 and compact.isdigit():
+        try:
+            return datetime.strptime(compact, "%Y%m%d").date()
+        except ValueError:
+            return None
     try:
         return datetime.fromisoformat(text[:10]).date()
     except ValueError:
@@ -1065,7 +1074,7 @@ def flex_cash_transactions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any
     result: list[dict[str, Any]] = []
     for attrs in rows:
         account_number = str(attrs.get("accountId") or "").strip()
-        when = _coerce_date(str(attrs.get("dateTime") or attrs.get("settleDate") or "").replace(";", " ")[:10])
+        when = _coerce_date(attrs.get("dateTime") or attrs.get("settleDate"))
         if when is None:
             continue
         amount = _coerce_float(attrs.get("amount"))
