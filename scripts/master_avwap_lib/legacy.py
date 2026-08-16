@@ -47,6 +47,8 @@ from market_session import (
     get_default_stop_time_label,
     get_last_hour_window_labels,
     get_market_session_window,
+    is_within_regular_market_session,
+    normalize_market_local_datetime,
 )
 from gui_text_highlighter import (
     configure_market_text_tags,
@@ -1794,6 +1796,49 @@ def should_update_favorite_zone_watchlists_now(
         window_start=window_start or default_start,
         window_end=window_end or default_end,
     )
+
+
+def daily_bar_status(
+    last_trade_date: str | date | None,
+    *,
+    reference: datetime | date | None = None,
+) -> str:
+    """Classify a D1 row as the forming preview or a completed decision bar."""
+    try:
+        trade_date = (
+            last_trade_date
+            if isinstance(last_trade_date, date)
+            else date.fromisoformat(str(last_trade_date or "")[:10])
+        )
+    except (TypeError, ValueError):
+        # Missing/invalid dates never receive the stronger completed claim.
+        return "forming"
+
+    session = get_market_session_window(reference=reference)
+    if trade_date < session.market_date:
+        return "completed"
+    if trade_date > session.market_date:
+        return "forming"
+
+    within_session = is_within_regular_market_session(reference=reference)
+    local_reference = normalize_market_local_datetime(reference)
+    if within_session and local_reference < session.close_local:
+        return "forming"
+    return "completed" if local_reference >= session.close_local else "forming"
+
+
+def stamp_daily_bar_status(
+    row: dict | None,
+    *,
+    reference: datetime | date | None = None,
+    view_mode: str = "PREVIEW",
+) -> str:
+    if not isinstance(row, dict):
+        return "forming"
+    status = daily_bar_status(row.get("last_trade_date"), reference=reference)
+    row["bar_status"] = status
+    row["view_mode"] = str(view_mode or "PREVIEW").strip().upper()
+    return status
 
 
 # --- setup-tracker staleness catch-up (durability packet 2.1) --------------
@@ -5087,6 +5132,12 @@ def build_tracker_setup_record(
         "scan_date": scan_date,
         "scan_timestamp": generated_at,
         "entry_trade_date": scan_date,
+        "bar_status": str(
+            row.get("bar_status") or symbol_entry.get("bar_status") or "forming"
+        ).strip().lower(),
+        "view_mode": str(
+            row.get("view_mode") or symbol_entry.get("view_mode") or "PREVIEW"
+        ).strip().upper(),
         "entry_price": float(entry_price),
         "anchor_date": str(current_anchor.get("date") or scan_date),
         "previous_anchor_date": str(previous_anchor.get("date") or ""),
@@ -20165,7 +20216,8 @@ def _write_best_swing_trade_rows(handle, title: str, rows: list[dict]) -> None:
         handle.write(
             f"{rank:>2}. {symbol:<6} {side:<5} score={_priority_score_text(row):<5} "
             f"{_priority_tracker_stats_text(row)} "
-            f"{bucket:<10} {family:<26} zone={zone:<18} trend={trend:<8}\n"
+            f"{bucket:<10} {family:<26} zone={zone:<18} trend={trend:<8} "
+            f"bar={str(row.get('bar_status') or 'forming').upper()}\n"
         )
         handle.write(f"    evidence: {_best_swing_trade_evidence(row)}\n")
         handle.write(f"    risk: {warning_text}\n")
@@ -23123,11 +23175,103 @@ def _evaluate_priority_snapshot_for_date(
     }
     symbol_entry["feature_row"] = feature_row
 
+    # This evaluator is reachable only through an explicit <= evaluation-date
+    # truncation. Its result is therefore the completed-bar/STABLE contract,
+    # including when it is reused by the tracker catch-up path.
+    for snapshot_row in (priority_summary, symbol_entry, feature_row):
+        snapshot_row["bar_status"] = "completed"
+        snapshot_row["view_mode"] = "STABLE"
+
     return {
         "priority_row": priority_summary,
         "symbol_entry": symbol_entry,
         "feature_row": feature_row,
     }
+
+
+def _latest_completed_bar_date(
+    frame: pd.DataFrame | None,
+    *,
+    reference: datetime | date | None = None,
+) -> date | None:
+    if frame is None or frame.empty or "datetime" not in frame.columns:
+        return None
+    values = pd.to_datetime(frame["datetime"], errors="coerce").dropna()
+    for candidate in reversed(sorted(set(values.dt.date))):
+        if daily_bar_status(candidate, reference=reference) == "completed":
+            return candidate
+    return None
+
+
+def build_completed_bar_priority_rows(
+    *,
+    daily_frames_by_symbol: dict[str, pd.DataFrame],
+    sides_by_symbol: dict[str, str],
+    earnings_data: dict[str, list[str]],
+    latest_release_map: dict[str, dict],
+    reference: datetime | date | None = None,
+) -> list[dict]:
+    """Build the R3 STABLE list from each symbol's last completed D1 bar.
+
+    This is a second, presentation-only evaluation. It reuses the tracker replay
+    truncation and its pure daily-bar ranking stages; it never mutates the live
+    PREVIEW rows, tracker, watchlists, alerts, or score configuration.
+    """
+    stable_ai_state = {"symbols": {}}
+    stable_features: dict[str, dict] = {}
+    stable_rows: list[dict] = []
+    history_state: dict[str, list[dict]] = {}
+    evaluated_dates: list[date] = []
+
+    for symbol in sorted(daily_frames_by_symbol):
+        frame = daily_frames_by_symbol.get(symbol)
+        evaluation_date = _latest_completed_bar_date(frame, reference=reference)
+        if evaluation_date is None:
+            continue
+        dates = earnings_data.get(symbol, [])
+        current_anchor = pick_current_earnings_anchor_for_reference_date(dates, evaluation_date)
+        previous_anchor = pick_previous_earnings_anchor_for_reference_date(dates, evaluation_date)
+        snapshot = _evaluate_priority_snapshot_for_date(
+            symbol=symbol,
+            side=normalize_side(sides_by_symbol.get(symbol, "LONG")),
+            df_full=frame,
+            evaluation_date=evaluation_date,
+            current_anchor_iso=current_anchor.isoformat() if current_anchor else None,
+            previous_anchor_iso=previous_anchor.isoformat() if previous_anchor else None,
+            recent_earnings_dates=_earnings_dates_as_of(dates, evaluation_date),
+            latest_release_info=latest_release_map.get(symbol),
+            history_state=history_state,
+        )
+        if not snapshot:
+            continue
+        stable_ai_state["symbols"][symbol] = snapshot["symbol_entry"]
+        stable_features[symbol] = snapshot["feature_row"]
+        stable_rows.append(snapshot["priority_row"])
+        evaluated_dates.append(evaluation_date)
+
+    if not stable_rows:
+        return []
+
+    # These are the established daily-only replay stages. Network/HTF studies
+    # are intentionally absent: STABLE must not spend another broker budget or
+    # pretend an intraday enrichment was completed-bar D1 evidence.
+    apply_pre_earnings_priority_blocks(stable_rows, stable_ai_state, stable_features)
+    apply_post_earnings_hard_rule_blocks(stable_rows, stable_ai_state, stable_features)
+    apply_final_priority_buckets(stable_rows, stable_ai_state, [], stable_features)
+    apply_clean_first_zone_score_bonus(stable_rows, stable_ai_state, stable_features)
+    apply_priority_rejection_score_caps(stable_rows, stable_ai_state, stable_features)
+    apply_final_priority_buckets(stable_rows, stable_ai_state, [], stable_features)
+    attach_setup_candidate_payloads(stable_rows, stable_ai_state, stable_features)
+    apply_expected_r_ranking(
+        stable_rows,
+        stable_ai_state,
+        stable_features,
+        reference_date=max(evaluated_dates),
+    )
+    for row in stable_rows:
+        row["bar_status"] = "completed"
+        row["view_mode"] = "STABLE"
+    return stable_rows
 
 
 def backfill_setup_tracker_from_recent_sessions(
@@ -30172,7 +30316,12 @@ def _priority_best_swing_trade_rows(
     best_rows = _priority_unique_rows_by_symbol(sorted(best_rows, key=_best_swing_trade_sort_key))
     return best_rows[:max(1, int(total_limit))]
 
-def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
+def write_priority_setup_report(
+    path: Path,
+    priority_rows: list[dict],
+    *,
+    stable_rows: list[dict] | None = None,
+) -> None:
     favorites = sorted(
         [
             row for row in priority_rows
@@ -30218,6 +30367,16 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     all_priority_rows = _priority_unique_rows_by_symbol(
         sorted(report_rows, key=_priority_total_score_sort_key)
     )
+    stable_rows = [row for row in (stable_rows or []) if isinstance(row, dict)]
+    stable_actionable_rows = _priority_unique_rows_by_symbol(
+        [
+            row
+            for row in stable_rows
+            if row.get("priority_bucket") in {"favorite_setup", "near_favorite_zone"}
+            or _is_post_earnings_play_ready(row)
+        ]
+    )
+    stable_best_swing_rows = _priority_best_swing_trade_rows(stable_actionable_rows)
 
     buffer = io.StringIO()
     handle = buffer
@@ -30227,6 +30386,18 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
         "Focus: preferred swings across TOP weekly leaders, 2nd-stdev 15EMA/1st-dev retests, AVWAPE pullback bounces, post-earnings 52w breaks, and SMA breakouts after a prior-day high break\n\n"
     )
     _write_priority_data_freshness(handle, report_rows)
+    handle.write("STABLE — completed D1 bars only\n")
+    handle.write("================================\n")
+    handle.write(
+        "Decision list frozen at each symbol's last completed daily bar; no forming bar is consumed.\n\n"
+    )
+    _write_best_swing_trade_rows(handle, "STABLE best swing trades", stable_best_swing_rows)
+    handle.write("PREVIEW — live D1 scan\n")
+    handle.write("======================\n")
+    handle.write(
+        "Live list below may consume today's forming daily bar; every row carries its explicit bar status.\n\n"
+    )
+    _write_best_swing_trade_rows(handle, "PREVIEW best swing trades", best_swing_rows)
     _write_priority_tier_copy_lists(handle, priority_tiers)
     _write_priority_tier_details(handle, priority_tiers)
 
@@ -30526,6 +30697,8 @@ def write_master_avwap_focus_feed(
             "candidate_rejection_reasons": list(row.get("candidate_rejection_reasons") or []),
             "setup_candidate": row.get("setup_candidate") or symbol_state.get("setup_candidate") or {},
             "last_trade_date": symbol_state.get("last_trade_date"),
+            "bar_status": row.get("bar_status") or symbol_state.get("bar_status") or "forming",
+            "view_mode": row.get("view_mode") or symbol_state.get("view_mode") or "PREVIEW",
         }
 
     favorites = [_build_entry(row, "favorite_setup", idx + 1) for idx, row in enumerate(favorite_rows)]

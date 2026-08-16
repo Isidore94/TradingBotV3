@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import math
 import sys
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -298,3 +300,125 @@ def test_report_duplicates_shadow_evidence_but_keeps_live_best_swing(tmp_path):
     finally:
         master_avwap_panel._shadow_would_demote_symbols = original
     assert desk_row.raw["classification_badges"] == ["Stretched? (shadow)"]
+
+
+def test_daily_bar_status_flips_only_at_the_actual_close():
+    preview = datetime(2026, 8, 14, 12, 45, tzinfo=ZoneInfo("America/Los_Angeles"))
+    close = datetime(2026, 8, 14, 13, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    assert legacy.daily_bar_status("2026-08-14", reference=preview) == "forming"
+    assert legacy.daily_bar_status("2026-08-14", reference=close) == "completed"
+    assert legacy.daily_bar_status("2026-08-13", reference=preview) == "completed"
+    assert legacy.daily_bar_status("not-a-date", reference=close) == "forming"
+
+
+def test_stable_builder_truncates_the_forming_bar_without_mutating_preview(
+    monkeypatch,
+):
+    frame = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-08-12", "2026-08-13", "2026-08-14"]),
+            "open": [100.0, 101.0, 250.0],
+            "high": [102.0, 103.0, 300.0],
+            "low": [99.0, 100.0, 50.0],
+            "close": [101.0, 102.0, 275.0],
+            "volume": [1_000.0, 1_100.0, 9_000.0],
+        }
+    )
+    original = frame.copy(deep=True)
+    seen_dates = []
+
+    def fake_snapshot(**kwargs):
+        seen_dates.append(kwargs["evaluation_date"])
+        return {
+            "priority_row": {
+                "symbol": kwargs["symbol"],
+                "side": kwargs["side"],
+                "score": 100.0,
+                "priority_bucket": "favorite_setup",
+                "last_trade_date": kwargs["evaluation_date"].isoformat(),
+            },
+            "symbol_entry": {
+                "last_trade_date": kwargs["evaluation_date"].isoformat(),
+            },
+            "feature_row": {
+                "last_trade_date": kwargs["evaluation_date"].isoformat(),
+            },
+        }
+
+    monkeypatch.setattr(legacy, "_evaluate_priority_snapshot_for_date", fake_snapshot)
+    for name in (
+        "apply_pre_earnings_priority_blocks",
+        "apply_post_earnings_hard_rule_blocks",
+        "apply_final_priority_buckets",
+        "apply_clean_first_zone_score_bonus",
+        "apply_priority_rejection_score_caps",
+        "attach_setup_candidate_payloads",
+        "apply_expected_r_ranking",
+    ):
+        monkeypatch.setattr(legacy, name, lambda *args, **kwargs: None)
+
+    rows = legacy.build_completed_bar_priority_rows(
+        daily_frames_by_symbol={"TEST": frame},
+        sides_by_symbol={"TEST": "LONG"},
+        earnings_data={"TEST": []},
+        latest_release_map={},
+        reference=datetime(
+            2026, 8, 14, 12, 45, tzinfo=ZoneInfo("America/Los_Angeles")
+        ),
+    )
+    assert [value.isoformat() for value in seen_dates] == ["2026-08-13"]
+    assert rows[0]["last_trade_date"] == "2026-08-13"
+    assert rows[0]["bar_status"] == "completed"
+    assert rows[0]["view_mode"] == "STABLE"
+    pd.testing.assert_frame_equal(frame, original)
+
+
+def test_report_presents_completed_stable_beside_forming_preview(tmp_path):
+    case = next(row for row in FIXTURE["quality_cases"] if row["id"] == "long_inside")
+    preview = _live_row(case)
+    preview.update(
+        {
+            "last_trade_date": "2026-08-14",
+            "bar_status": "forming",
+            "view_mode": "PREVIEW",
+        }
+    )
+    stable = deepcopy(preview)
+    stable.update(
+        {
+            "last_trade_date": "2026-08-13",
+            "bar_status": "completed",
+            "view_mode": "STABLE",
+        }
+    )
+    path = tmp_path / "stable-preview.txt"
+    legacy.write_priority_setup_report(path, [preview], stable_rows=[stable])
+    text = path.read_text(encoding="utf-8")
+    stable_start = text.index("STABLE — completed D1 bars only")
+    preview_start = text.index("PREVIEW — live D1 scan")
+    assert stable_start < preview_start
+    assert "bar=COMPLETED" in text[stable_start:preview_start]
+    assert "bar=FORMING" in text[preview_start:]
+
+
+def test_new_tracker_record_carries_the_completed_bar_stamp():
+    row = _live_row(FIXTURE["quality_cases"][0])
+    row.update({"bar_status": "completed", "view_mode": "PREVIEW"})
+    symbol_entry = {
+        "last_close": 100.0,
+        "last_trade_date": "2026-08-14",
+        "current_anchor": {},
+        "previous_anchor": {},
+        "entry_feature_snapshot": {},
+    }
+    setup = legacy.build_tracker_setup_record(
+        row,
+        symbol_entry,
+        {},
+        "2026-08-14T13:20:00-07:00",
+        None,
+        scan_date="2026-08-14",
+    )
+    assert setup is not None
+    assert setup["bar_status"] == "completed"
+    assert setup["view_mode"] == "PREVIEW"

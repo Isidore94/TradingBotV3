@@ -33,6 +33,19 @@ fixture preserves the former 12:00+13:00 behavior and records the intentional
 difference. This milestone does not yet claim the completed-bar STABLE report or
 any live comparison proof.
 
+### 2026-08-16 — R3 exposes completed STABLE beside live PREVIEW
+
+Master AVWAP now performs a presentation-only second pass over each symbol's
+already-fetched D1 frame, truncating it to the latest completed date through the
+existing historical snapshot evaluator and daily-only ranking stages. The report
+puts that STABLE Best Swing list immediately before the independent live PREVIEW
+list. Priority, focus, D1-feature and new tracker records carry explicit
+`bar_status` and presentation-mode fields; report rows print the status. No second
+broker/HTF fetch, tracker mutation, watchlist change, alert change, or live-row
+ranking change is introduced. The same-slot volume-thrust scoring change remains
+unbuilt because this seam has no intraday slot series. Deterministic gate: 3367
+passed / 19 subtests, exit 0; live churn comparison remains owed.
+
 ### Application, runtime, and data ownership
 
 - PySide6 Trading Desk launched by `launch_gui.py`, with the legacy Tk UI retained

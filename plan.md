@@ -365,8 +365,11 @@ are listed in `CURRENT_CHECKPOINT.md`.
    the spec. Spec: `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md`. Exit: fixtures
    first, then the spec's one-week desk gates. **Built so far (2026-08-16):**
    shadow-only quality stamps/report badge, the 12:45 preview slot, and actual-close
-   ownership of the single scheduled tracker write. STABLE/PREVIEW output, row
-   stamps, and the dislike loop remain deterministic work; live weeks remain owed.
+   ownership of the single scheduled tracker write, completed-bar STABLE beside
+   live PREVIEW, and explicit row stamps. The dislike/reviewed-today loop remains
+   deterministic work. Same-slot volume normalization is unresolved because the
+   D1 seam has no intraday slot series; no new fetch was invented. Live weeks
+   remain owed.
 4. **R4 Desk chart unification.** CaptureRail (veto/like/note) on every chart
    surface, review/watch wiring for the RS/RW and Industry panels, Alert Center
    LIKE, armed price alerts and D1 watches painted as a toggleable levels family,

@@ -544,9 +544,10 @@ def _run_master_impl(
 
     ib = connect_daily_data_client(client_id=1003, startup_wait=1.5)
 
-    today_run = datetime.now().date()
-    run_timestamp = datetime.now().isoformat(timespec="seconds")
-    run_id = f"{today_run.isoformat()}-{datetime.now().strftime('%H%M%S')}"
+    scan_reference = datetime.now()
+    today_run = scan_reference.date()
+    run_timestamp = scan_reference.isoformat(timespec="seconds")
+    run_id = f"{today_run.isoformat()}-{scan_reference.strftime('%H%M%S')}"
     _mark_latest_theta_enrichment_run(run_id)
     scoring_config_metadata = get_scoring_config_metadata()
     market_regime_snapshot = build_market_regime_snapshot(ib, today_run)
@@ -1749,6 +1750,12 @@ def _run_master_impl(
             "events_today": ";".join(symbol_events_today),
         }
         symbol_entry["feature_row"] = feature_row
+        for preview_row in (priority_summary, symbol_entry, feature_row):
+            stamp_daily_bar_status(
+                preview_row,
+                reference=scan_reference,
+                view_mode="PREVIEW",
+            )
         feature_rows.append(feature_row)
         feature_rows_by_symbol[sym] = feature_row
 
@@ -1757,10 +1764,21 @@ def _run_master_impl(
             f"multi_day={symbol_multi_day}"
         )
 
-    spy_benchmark = (market_regime_snapshot.get("benchmarks", {}) or {}).get("SPY", {}) or {}
     sides_by_symbol = {
         sym: ("LONG" if sym in longs else "SHORT") for sym in daily_frames_by_symbol
     }
+    stable_priority_rows = build_completed_bar_priority_rows(
+        daily_frames_by_symbol=daily_frames_by_symbol,
+        sides_by_symbol=sides_by_symbol,
+        earnings_data=earnings_data,
+        latest_release_map=latest_release_map,
+        reference=scan_reference,
+    )
+    logging.info(
+        "R3 completed-bar STABLE pass evaluated %d row(s); PREVIEW rows remain live and independent.",
+        len(stable_priority_rows),
+    )
+    spy_benchmark = (market_regime_snapshot.get("benchmarks", {}) or {}).get("SPY", {}) or {}
     industry_context_by_symbol = build_symbol_industry_contexts(daily_frames_by_symbol.keys())
     industry_etfs = sorted(
         {
@@ -2047,6 +2065,8 @@ def _run_master_impl(
         "human_focus_tracking": human_focus_tracking_result,
         "human_focus_marked_setup_count": human_focus_marked_count,
         "swing_quality_shadow_count": swing_quality_shadow_count,
+        "stable_priority_rows": stable_priority_rows,
+        "stable_priority_row_count": len(stable_priority_rows),
         "setup_tracker_updated": False,
         "study_setups_tracked": 0,
         "setup_tracker_allowed": False,
@@ -2110,7 +2130,7 @@ def _run_master_impl(
 
     _phase_t = _log_phase_duration("tracker scoring+ranking", _phase_t)
     if setup_tracker_allowed:
-        # The compact snapshot is sufficient for scoring. Only final-hour runs
+        # The compact snapshot is sufficient for scoring. Only post-close runs
         # that actually passed the source-quality gate pay to load the large
         # authoritative tracker for mutation and publication.
         tracker_payload = load_setup_tracker_payload()
@@ -2163,7 +2183,7 @@ def _run_master_impl(
         elif update_setup_tracker is None:
             window_start, window_end = get_setup_tracker_update_window_labels()
             logging.info(
-                "Setup tracker refresh skipped for this run because local time is before the final-hour/after-close update window (starts %s; close %s).",
+                "Setup tracker refresh skipped for this run because local time is before the post-close update window (starts %s; close %s).",
                 window_start,
                 window_end,
             )
@@ -2215,7 +2235,11 @@ def _run_master_impl(
 
     # trim history to last N days
     trim_history(history)
-    write_priority_setup_report(PRIORITY_SETUPS_FILE, priority_rows)
+    write_priority_setup_report(
+        PRIORITY_SETUPS_FILE,
+        priority_rows,
+        stable_rows=stable_priority_rows,
+    )
     write_theta_put_report(THETA_PUTS_FILE, theta_put_rows, theta_pcs_rows)
     favorite_watchlist_reference = datetime.now()
     favorite_watchlist_result = write_favorite_zone_watchlist_outputs(
@@ -2320,6 +2344,8 @@ def _run_master_impl(
         "symbol",
         "side",
         "last_trade_date",
+        "bar_status",
+        "view_mode",
         "daily_bar_source",
         "market_regime_label",
         "market_regime_score",

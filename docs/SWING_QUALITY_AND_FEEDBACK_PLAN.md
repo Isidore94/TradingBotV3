@@ -230,6 +230,24 @@ the old 12:00+13:00 writer set as characterization and names this intentional
 difference. The completed-bar STABLE report and row stamps remain the next part of
 the same honesty bundle.
 
+**STABLE/PREVIEW milestone (2026-08-16): BUILT, live churn comparison owed.**
+Every already-fetched D1 frame is independently truncated to its latest completed
+date and replayed through `_evaluate_priority_snapshot_for_date` plus the pure
+daily ranking stages. No second broker, HTF, or intraday fetch is introduced.
+The text report puts a completed-bar STABLE Best Swing list immediately before the
+live PREVIEW list, and row/focus/feature/tracker payloads carry
+`bar_status=forming|completed` plus their presentation mode. The PREVIEW objects
+remain independent and retain all live behavior. Mutation-seeded tests prove a
+large forming-bar move cannot enter or mutate the STABLE replay. Full deterministic
+gate: 3367 passed / 19 subtests, exit 0. The one-week 12:45-vs-close and churn
+comparison is still UNKNOWN/owed.
+
+Section 4.3.5 remains deliberately unbuilt: the Master D1 scoring seam has no
+same-slot intraday series for `rvol.same_slot_baseline`. Adding a fetch would alter
+the broker/data budget and invent a new contract. The frozen fixture continues to
+characterize the cumulative-D1-volume behavior until the trader chooses a data
+seam or explicitly defers that scoring change.
+
 ## 6. Exit gates
 
 - Fixtures land before any classification change; full suite green.
