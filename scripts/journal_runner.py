@@ -419,7 +419,17 @@ def run_journal_backfill(
     # to have holes in it.
     if rebuild:
         try:
+            needed = sorted(
+                set(journal_fx.rates_needed_for_trades(journal_store))
+                | set(journal_fx.rates_needed_for_executions(journal_store))
+            )
+            rates = journal_fx.ensure_rates(journal_store, needed)
+            if rates["errors"] or rates["unavailable"]:
+                messages.append(
+                    f"FX: {len(rates['unavailable'])} unavailable, {len(rates['errors'])} error(s)"
+                )
             trade_count = journal_store.rebuild_trades()
+            journal_store.book_cad_values()
             messages.append(f"rebuilt {trade_count} grouped trades")
         except Exception as exc:
             had_errors = True
@@ -485,7 +495,11 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
 
     try:
         rates = journal_fx.ensure_rates(
-            journal_store, journal_fx.rates_needed_for_trades(journal_store)
+            journal_store,
+            sorted(
+                set(journal_fx.rates_needed_for_trades(journal_store))
+                | set(journal_fx.rates_needed_for_executions(journal_store))
+            ),
         )
         if rates["booked"] or rates["errors"] or rates["unavailable"]:
             messages.append(
@@ -500,6 +514,7 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
     trade_count = None
     try:
         trade_count = journal_store.rebuild_trades()
+        journal_store.book_cad_values()
         messages.append(f"rebuilt {trade_count} trades")
         rekey = journal_store.last_rekey
         if rekey.get("ambiguous") or rekey.get("orphaned"):

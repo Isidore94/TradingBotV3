@@ -97,5 +97,55 @@ class QuestradeRangeTests(unittest.TestCase):
         self.assertEqual(accounts[0]["number"], "111")
 
 
+def test_questrade_local_settings_win_over_stale_environment_tokens(monkeypatch):
+    saved = {
+        ji.QUESTRADE_REFRESH_TOKEN_SETTING: "local-refresh",
+        ji.QUESTRADE_ACCESS_TOKEN_SETTING: "local-access",
+        ji.QUESTRADE_API_SERVER_SETTING: "https://local.example/",
+    }
+    monkeypatch.setenv("QUESTRADE_REFRESH_TOKEN", "stale-env-refresh")
+    monkeypatch.setenv("QUESTRADE_ACCESS_TOKEN", "stale-env-access")
+    monkeypatch.setenv("QUESTRADE_API_SERVER", "https://stale.example/")
+    monkeypatch.setattr(ji, "get_local_setting", lambda key, default="": saved.get(key, default))
+    monkeypatch.setattr(ji, "save_local_setting", lambda key, value: saved.__setitem__(key, value))
+
+    importer = ji.QuestradeImporter()
+
+    assert importer.refresh_token == "local-refresh"
+    assert importer.access_token == "local-access"
+    assert importer.api_server == "https://local.example/"
+    assert any("bootstrap seeds" in line for line in importer.status_lines())
+
+
+def test_questrade_rotation_is_saved_even_when_environment_seeds_exist(monkeypatch):
+    saved = {ji.QUESTRADE_REFRESH_TOKEN_SETTING: "current-local"}
+    monkeypatch.setenv("QUESTRADE_REFRESH_TOKEN", "old-env-seed")
+    monkeypatch.setenv("QUESTRADE_ACCESS_TOKEN", "old-env-access")
+    monkeypatch.setattr(ji, "get_local_setting", lambda key, default="": saved.get(key, default))
+    monkeypatch.setattr(ji, "save_local_setting", lambda key, value: saved.__setitem__(key, value))
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "access_token": "rotated-access",
+                "refresh_token": "rotated-refresh",
+                "api_server": "https://api.example/",
+                "expires_in": 1800,
+            }
+
+    class _Session:
+        def get(self, *args, **kwargs):
+            return _Response()
+
+    ji.QuestradeImporter(session=_Session()).refresh_access_token()
+
+    assert saved[ji.QUESTRADE_REFRESH_TOKEN_SETTING] == "rotated-refresh"
+    assert saved[ji.QUESTRADE_ACCESS_TOKEN_SETTING] == "rotated-access"
+    assert saved[ji.QUESTRADE_API_SERVER_SETTING] == "https://api.example/"
+
+
 if __name__ == "__main__":
     unittest.main()

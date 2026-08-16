@@ -232,6 +232,24 @@ def rates_needed_for_trades(store: Any) -> list[tuple[date, str]]:
     return pairs
 
 
+def rates_needed_for_executions(store: Any) -> list[tuple[date, str]]:
+    """Pairs introduced by raw imports before tonight's rebuild creates trades."""
+    with store.connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT trade_date, currency FROM raw_executions
+            WHERE COALESCE(trade_date, '') != '' AND UPPER(COALESCE(currency, '')) != 'CAD'
+            """
+        ).fetchall()
+    pairs: list[tuple[date, str]] = []
+    for row in rows:
+        try:
+            pairs.append((_as_date(row[0]), str(row[1]).upper()))
+        except ValueError:
+            continue
+    return pairs
+
+
 def seed_rate(store: Any, *, day: Any, currency: str, rate_to_cad: float, effective_date: Any = None) -> None:
     """Book a rate directly. For tests and for the one-off manual repair."""
     booked = _as_date(day)

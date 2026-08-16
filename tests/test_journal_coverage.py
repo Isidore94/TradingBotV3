@@ -36,6 +36,16 @@ def store(tmp_path):
     return JournalStore(tmp_path / "trade_journal.sqlite3")
 
 
+@pytest.fixture(autouse=True)
+def no_fx_network(monkeypatch):
+    monkeypatch.setattr(
+        journal_runner.journal_fx, "ensure_rates",
+        lambda *args, **kwargs: {
+            "booked": 0, "carried_back": 0, "unavailable": [], "errors": []
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # I2 - a day is COVERED only when an import actually spanned it
 # ---------------------------------------------------------------------------
@@ -185,6 +195,23 @@ def test_each_chunk_records_the_span_it_covered(store, monkeypatch):
     spans = {(row["account_number"], row["coverage_start"], row["coverage_end"]) for row in runs}
     assert all(start and end for _, start, end in spans), "every run names the days it looked at"
     assert {row["trigger"] for row in runs} == {"backfill"}
+
+
+def test_gui_backfill_requests_fx_for_the_executions_it_just_imported(store, monkeypatch):
+    requested = []
+    monkeypatch.setattr(journal_runner, "QuestradeImporter", _ChunkedImporter)
+    monkeypatch.setattr(
+        journal_runner.journal_fx, "ensure_rates",
+        lambda _store, pairs, **kwargs: requested.extend(pairs) or {
+            "booked": 0, "carried_back": 0, "unavailable": [], "errors": []
+        },
+    )
+
+    journal_runner.run_journal_backfill(
+        days=1, store=store, include_ibkr_flex=False, rebuild=True
+    )
+
+    assert any(currency == "USD" for _day, currency in requested)
 
 
 def test_a_questrade_chunk_with_a_quarantined_row_is_not_covered(store, monkeypatch):

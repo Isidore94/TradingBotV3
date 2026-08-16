@@ -330,27 +330,37 @@ class QuestradeImporter:
 
     @property
     def refresh_token(self) -> str:
-        return (
-            os.environ.get("QUESTRADE_REFRESH_TOKEN")
-            or str(get_local_setting(QUESTRADE_REFRESH_TOKEN_SETTING, "") or "")
-        ).strip()
+        return self._local_setting_or_env(
+            QUESTRADE_REFRESH_TOKEN_SETTING, "QUESTRADE_REFRESH_TOKEN"
+        )
 
     @property
     def access_token(self) -> str:
-        return (
-            os.environ.get("QUESTRADE_ACCESS_TOKEN")
-            or str(get_local_setting(QUESTRADE_ACCESS_TOKEN_SETTING, "") or "")
-        ).strip()
+        return self._local_setting_or_env(
+            QUESTRADE_ACCESS_TOKEN_SETTING, "QUESTRADE_ACCESS_TOKEN"
+        )
 
     @property
     def api_server(self) -> str:
-        value = (
-            os.environ.get("QUESTRADE_API_SERVER")
-            or str(get_local_setting(QUESTRADE_API_SERVER_SETTING, "") or "")
-        ).strip()
+        value = self._local_setting_or_env(
+            QUESTRADE_API_SERVER_SETTING, "QUESTRADE_API_SERVER"
+        )
         if not value:
             return ""
         return value if value.endswith("/") else value + "/"
+
+    @staticmethod
+    def _local_setting_or_env(setting_key: str, env_key: str) -> str:
+        local = str(get_local_setting(setting_key, "") or "").strip()
+        if local:
+            return local
+        seed = str(os.environ.get(env_key) or "").strip()
+        if seed:
+            # Environment variables are a one-time bootstrap only. Questrade
+            # rotates its refresh token, so continuing to prefer the original
+            # environment value would strand every later refresh.
+            save_local_setting(setting_key, seed)
+        return seed
 
     def status_lines(self) -> list[str]:
         lines = []
@@ -361,7 +371,7 @@ class QuestradeImporter:
         lines.append(f"Access token: {mask_secret(access_token) if access_token else 'not set'}")
         lines.append(f"API server: {api_server or 'not set'}")
         if os.environ.get("QUESTRADE_REFRESH_TOKEN") or os.environ.get("QUESTRADE_ACCESS_TOKEN"):
-            lines.append("Environment Questrade token values are taking priority.")
+            lines.append("Environment Questrade values are bootstrap seeds; local settings take priority.")
         expires_at = str(get_local_setting(QUESTRADE_EXPIRES_AT_SETTING, "") or "").strip()
         if expires_at:
             lines.append(f"Saved token expiry: {expires_at}")
@@ -384,11 +394,11 @@ class QuestradeImporter:
         expires_in = int(payload.get("expires_in", 0) or 0)
         expires_at = (datetime.now() + timedelta(seconds=max(0, expires_in))).isoformat(timespec="seconds")
 
-        if access_token and not os.environ.get("QUESTRADE_ACCESS_TOKEN"):
+        if access_token:
             save_local_setting(QUESTRADE_ACCESS_TOKEN_SETTING, access_token)
-        if api_server and not os.environ.get("QUESTRADE_API_SERVER"):
+        if api_server:
             save_local_setting(QUESTRADE_API_SERVER_SETTING, api_server)
-        if next_refresh and not os.environ.get("QUESTRADE_REFRESH_TOKEN"):
+        if next_refresh:
             save_local_setting(QUESTRADE_REFRESH_TOKEN_SETTING, next_refresh)
         save_local_setting(QUESTRADE_EXPIRES_AT_SETTING, expires_at)
         return payload

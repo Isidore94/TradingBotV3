@@ -209,6 +209,39 @@ def test_the_night_reports_a_re_key_that_needs_a_human(quiet_night, store, monke
     assert any("re-key needs review" in message for message in result["messages"])
 
 
+def test_newly_imported_execution_dates_are_booked_in_the_same_nightly_run(
+    quiet_night, store, monkeypatch
+):
+    day = date.today().isoformat()
+    common = {
+        "broker": "QUESTRADE", "account_number": "51830546", "account_label": "TFSA",
+        "account_type": "TFSA", "symbol": "AAPL", "security_type": "STK", "currency": "USD",
+        "trade_date": day, "commission": 0.0, "fees": 0.0, "gross_amount": None,
+        "net_amount": None, "order_id": "", "exchange_exec_id": "", "raw_json": "{}",
+    }
+    store.upsert_executions(
+        [
+            {**common, "execution_uid": "QT:51830546:buy", "side": "BUY", "quantity": 10,
+             "price": 100.0, "timestamp": f"{day}T09:31:00-07:00"},
+            {**common, "execution_uid": "QT:51830546:sell", "side": "SELL", "quantity": 10,
+             "price": 110.0, "timestamp": f"{day}T10:31:00-07:00"},
+        ]
+    )
+
+    def book_rate(target_store, pairs, **kwargs):
+        assert (date.fromisoformat(day), "USD") in pairs
+        journal_runner.journal_fx.seed_rate(
+            target_store, day=day, currency="USD", rate_to_cad=1.4
+        )
+        return {"booked": 1, "carried_back": 0, "unavailable": [], "errors": []}
+
+    monkeypatch.setattr(journal_runner.journal_fx, "ensure_rates", book_rate)
+    journal_runner.run_nightly_journal_import(store=store)
+
+    trade = store.list_trades()[0]
+    assert trade["net_pnl_cad"] == pytest.approx(140.0)
+
+
 def test_the_self_heals_per_day_fetch_refuses_ibkr_honestly(store):
     """A gap it cannot fill must say so, not report a repair that did not happen.
 
