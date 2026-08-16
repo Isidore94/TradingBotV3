@@ -96,8 +96,10 @@ def test_the_journal_is_five_tabs_over_one_header(panel):
 
 
 def test_the_panel_keeps_the_surface_the_app_depends_on(panel):
-    for name in ("statusChanged", "rebuild_trades", "export_csv", "shutdown", "refresh"):
+    for name in ("statusChanged", "shutdown"):
         assert hasattr(panel, name), f"ui/app.py calls {name}"
+    for dead_shell_method in ("rebuild_trades", "export_csv", "refresh"):
+        assert not hasattr(panel, dead_shell_method)
 
 
 def test_first_open_runs_real_store_initialization_off_the_gui_thread(qapp, tmp_path, monkeypatch):
@@ -413,6 +415,7 @@ def test_analytics_walkaway_renders_structured_engine_output(panel):
     )
     assert "WALKAWAY ANALYSIS" in panel.analytics_tab.walkaway_output.text()
     assert "journal_rows" not in panel.analytics_tab.walkaway_output.text()
+    assert panel.analytics_tab.export_button.text() == "Export trades CSV"
 
 
 def test_health_shows_the_coverage_grid_and_names_the_gaps(panel, populated):

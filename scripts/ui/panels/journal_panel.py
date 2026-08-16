@@ -143,29 +143,6 @@ class JournalPanel(QFrame):
         self.migration_status.setVisible(True)
         self._set_status(f"migration failed: {message}")
 
-    # -- the surface ui/app.py depends on ----------------------------------
-
-    def refresh(self) -> None:
-        self.header.refresh_accounts()
-        self._reload_current()
-
-    def rebuild_trades(self) -> None:
-        try:
-            count = journal_feed.rebuild_trades()
-        except Exception as exc:  # noqa: BLE001
-            self._set_status(f"rebuild failed: {exc}")
-            return
-        self._set_status(f"rebuilt {count} trades")
-        self.refresh()
-
-    def export_csv(self) -> None:
-        try:
-            path = journal_feed.export_trades_csv()
-        except Exception as exc:  # noqa: BLE001
-            self._set_status(f"export failed: {exc}")
-            return
-        self._set_status(f"exported {path}")
-
     def shutdown(self) -> None:
         worker = self._migration_worker
         if worker is not None and worker.isRunning():

@@ -83,31 +83,36 @@ def _round_trip(store, uid, day, entry, exit_price, **overrides):
 # ---------------------------------------------------------------------------
 
 
-def test_the_four_confirmed_accounts_are_labeled_by_the_trader(feed):
-    """The trader stated all four on 2026-08-15, so none is a guess."""
-    from journal_migrate import TRADER_CONFIRMED_TAX_STATUS
+def test_confirmed_accounts_are_loaded_from_machine_local_settings(monkeypatch):
+    import journal_migrate as jm
 
-    assert TRADER_CONFIRMED_TAX_STATUS == {
-        ("QUESTRADE", "51830546"): "TAX_FREE",
-        ("QUESTRADE", "29347316"): "TAXABLE",
-        ("IBKR", "U4867396"): "TAX_FREE",
-        ("IBKR", "U5102524"): "TAXABLE",
-    }
+    monkeypatch.setattr(
+        jm, "get_local_setting",
+        lambda key, default=None: {"IBKR:LOCAL-1": "TAX_FREE"}
+        if key == jm.TRADER_TAX_STATUS_SETTING else default,
+    )
+    assert jm._trader_confirmed_tax_status() == {("IBKR", "LOCAL-1"): "TAX_FREE"}
 
 
-def test_a_confirmed_status_beats_the_account_type_guess(tmp_path):
+def test_a_confirmed_status_beats_the_account_type_guess(tmp_path, monkeypatch):
     """A stated fact outranks an inference from an account-type string."""
     store = JournalStore(tmp_path / "j.sqlite3")
-    store.upsert_accounts("IBKR", [{"number": "U4867396", "type": "Margin"}])
+    store.upsert_accounts("IBKR", [{"number": "LOCAL-1", "type": "Margin"}])
     with store.connection() as conn:
         conn.execute("UPDATE accounts SET tax_status = 'TAXABLE', tax_status_source = 'auto'")
-    from journal_migrate import migrate_to_v3
+    import journal_migrate as jm
+
+    monkeypatch.setattr(
+        jm, "get_local_setting",
+        lambda key, default=None: {"IBKR:LOCAL-1": "TAX_FREE"}
+        if key == jm.TRADER_TAX_STATUS_SETTING else default,
+    )
 
     with store.connection() as conn:
-        migrate_to_v3(conn)
+        jm.migrate_to_v3(conn)
     labels = {row["account_number"]: (row["tax_status"], row["tax_status_source"])
               for row in store.list_accounts()}
-    assert labels["U4867396"] == ("TAX_FREE", "trader")
+    assert labels["LOCAL-1"] == ("TAX_FREE", "trader")
 
 
 def test_an_unfunded_account_is_kept_and_labeled(feed):

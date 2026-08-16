@@ -302,6 +302,7 @@ class DiscoveryPage(_StepPage):
         self._finish_layout()
 
         service.boardChanged.connect(self._on_board_changed)
+        service.boardFailed.connect(self.show_failure)
 
     def _build_board_tab(self, timeframe) -> QWidget:
         page = QWidget()

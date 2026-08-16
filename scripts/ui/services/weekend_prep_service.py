@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
@@ -30,6 +29,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from diagnostics.artifact_io import atomic_write_json
 import market_calendar
 import weekend_strength
 from project_paths import WEEKEND_PREP_STATE_FILE
@@ -112,6 +112,7 @@ class WeekendPrepService(QObject):
 
     stateChanged = Signal()
     boardChanged = Signal(str)          # timeframe key
+    boardFailed = Signal(str, str)      # timeframe key, message
     statusChanged = Signal(str)
     weekAheadReady = Signal(str)
 
@@ -162,10 +163,7 @@ class WeekendPrepService(QObject):
             weekends = self._state.setdefault("weekends", {})
             for key in sorted(weekends, reverse=True)[KEEP_WEEKENDS:]:
                 weekends.pop(key, None)
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-            tmp.write_text(json.dumps(self._state, indent=2, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, self._path)
+            atomic_write_json(self._path, self._state, indent=2)
 
     def weekend_state(self, weekend: str | None = None) -> dict[str, Any]:
         key = weekend or self.weekend
@@ -309,6 +307,8 @@ class WeekendPrepService(QObject):
         self._inflight.discard(action)
         # Deliberately does not clear the board or the report. An empty board
         # after a blip reads as "nothing is strong", which is a different claim.
+        if action.startswith("board:"):
+            self.boardFailed.emit(action.split(":", 1)[1], message)
         self.statusChanged.emit(f"{action} failed: {message} (showing the last good result)")
 
     def shutdown(self) -> None:

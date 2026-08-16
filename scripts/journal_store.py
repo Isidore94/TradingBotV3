@@ -577,6 +577,19 @@ class JournalStore:
                     (str(broker or "").upper(), str(account_number or ""), str(account_number or ""),
                      _now_iso(), normalized, str(source or "").lower()),
                 )
+        from project_paths import JOURNAL_DB_FILE
+
+        if (
+            str(source or "trader").lower() == "trader"
+            and self.db_path.resolve() == Path(JOURNAL_DB_FILE).resolve()
+        ):
+            from journal_migrate import TRADER_TAX_STATUS_SETTING
+            from project_paths import get_local_setting, save_local_setting
+
+            saved = get_local_setting(TRADER_TAX_STATUS_SETTING, {})
+            saved = dict(saved) if isinstance(saved, dict) else {}
+            saved[f"{str(broker).upper()}:{str(account_number)}"] = normalized
+            save_local_setting(TRADER_TAX_STATUS_SETTING, saved)
 
     def upsert_cash_transactions(self, rows: Iterable[Mapping[str, Any]]) -> int:
         """Store fees, dividends, interest and FX - the money that is not a trade.

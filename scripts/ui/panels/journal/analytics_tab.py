@@ -87,7 +87,7 @@ class AnalyticsTab(QFrame):
         self.walkaway_output = QLabel("Walk-away has not been run for this range yet.")
         self.walkaway_output.setWordWrap(True)
 
-        self.export_button = QPushButton("Export analytics CSV")
+        self.export_button = QPushButton("Export trades CSV")
         self.export_button.clicked.connect(self._export)
 
         buttons = QHBoxLayout()

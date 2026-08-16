@@ -237,6 +237,17 @@ def test_a_failure_banner_keeps_the_last_good_board(panel, service):
     assert widgets["table"].rowCount() == 1, "the rows are still there"
 
 
+def test_service_failure_signal_wires_the_discovery_banner(panel, service):
+    service._boards["d1"] = _board()
+    service.boardChanged.emit("d1")
+
+    service._on_failed("board:d1", "provider unavailable")
+
+    banner = panel.discovery._boards["d1"]["banner"]
+    assert banner.isVisibleTo(banner.parentWidget())
+    assert "provider unavailable" in banner.text()
+
+
 def test_adopt_calls_focus_with_exactly_the_spec_s_arguments(panel, service, monkeypatch):
     service._boards["d1"] = _board()
     service.boardChanged.emit("d1")

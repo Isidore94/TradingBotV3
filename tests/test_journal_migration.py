@@ -395,6 +395,27 @@ def test_the_tax_status_seed_never_overwrites_the_trader(tmp_path):
     assert rows["53333333"] == ("", "")
 
 
+def test_machine_local_tax_status_seeds_without_account_ids_in_source(tmp_path, monkeypatch):
+    import journal_migrate as jm
+
+    db = _write_v2(
+        tmp_path / "trade_journal.sqlite3", [],
+        accounts=[("IBKR", "LOCAL-ONLY", "Brokerage", "", "USD")],
+    )
+    monkeypatch.setattr(
+        jm, "get_local_setting",
+        lambda key, default=None: {"IBKR:LOCAL-ONLY": "TAX_FREE"}
+        if key == jm.TRADER_TAX_STATUS_SETTING else default,
+    )
+
+    store = JournalStore(db)
+
+    assert store.list_accounts()[0]["tax_status"] == "TAX_FREE"
+    source = (SCRIPTS_DIR / "journal_migrate.py").read_text(encoding="utf-8")
+    for former_literal in ("51830546", "29347316", "U4867396", "U5102524"):
+        assert former_literal not in source
+
+
 def test_the_annotation_orphan_count_is_recorded_before_step_4_claims_to_fix_it(tmp_path):
     db = _write_v2(
         tmp_path / "trade_journal.sqlite3",
