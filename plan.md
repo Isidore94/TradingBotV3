@@ -1,6 +1,6 @@
 # TradingBotV3 remaining roadmap
 
-Last reconciled: **2026-08-15**
+Last reconciled: **2026-08-16**
 
 Authoritative for: **work that is not finished, validation gates, promotion rules,
 and execution order**
@@ -377,8 +377,14 @@ are listed in `CURRENT_CHECKPOINT.md`.
    surface, review/watch wiring for the RS/RW and Industry panels, Alert Center
    LIKE, armed price alerts and D1 watches painted as a toggleable levels family,
    the forming-bar source honesty fix for the early-morning gap distortion, and
-   the reviewed-today badge rendered everywhere. The labeled Y axis already
-   exists — recorded as answered. Spec: `docs/DESK_CHART_UNIFICATION_PLAN.md`.
+   the reviewed-today badge rendered everywhere. The recovered 2026-08-14 Alert
+   Center contract is consolidated here too: "Not today" never cancels or mutes
+   trader-armed alerts; the feed's existing Focus star becomes a labeled
+   Like-to-Focus action; and display-only repetition/open-burst control reduces
+   repeated rows without weakening detection, evidence, History, or armed-hit
+   delivery. The labeled Y axis already exists — recorded as answered. Spec:
+   `docs/DESK_CHART_UNIFICATION_PLAN.md`; historical source:
+   `docs/ALERT_CENTER_QUALITY_PACKET.md`.
 5. **R5 M5 signal engines.** New pure indicator modules (TC2000-parity SMI,
    efficiency-LRSI under a non-colliding name, Heikin-Ashi reversal), the LRSI
    cross alert type, the HA+SMI+LRSI confluence alert (Focus-scoped), the

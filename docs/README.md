@@ -1,6 +1,6 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-08-15**
+Last reconciled: **2026-08-16**
 
 Start here when a supporting detail is not in the four root documents. This index
 classifies every maintained Markdown document so a historical plan cannot be mistaken
@@ -77,6 +77,7 @@ superseded by `plan.md`.
 | [`GUI_PRODUCT_PLAN.md`](../GUI_PRODUCT_PLAN.md) | July 2026 product design; implemented portions are in `CHANGELOG.md` |
 | [`GUI_TRADE_DISCOVERY_LEARNING_PLAN.md`](../GUI_TRADE_DISCOVERY_LEARNING_PLAN.md) | Detailed learning/Command Center design reference; old phase order is superseded |
 | [`GUI_LEARNING_PROGRESS.md`](../GUI_LEARNING_PROGRESS.md) | Superseded July capture-readiness checkpoint |
+| [`ALERT_CENTER_QUALITY_PACKET.md`](ALERT_CENTER_QUALITY_PACKET.md) | Historical P1.6 Alert Center packet recovered from `671ee57`; R2 absorbed its auto-pick provenance/scoped-removal outcome, while its remaining armed-alert, labeled-Focus, and display-only repetition contracts are consolidated into the active R4 spec |
 
 ## Architecture decision records
 

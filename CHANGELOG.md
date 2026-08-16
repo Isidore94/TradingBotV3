@@ -1,6 +1,6 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-15** from the working copy of
+Last reconciled: **2026-08-16** from the working copy of
 `phase05-r8-weekend-prep` (cut from `phase05-r7-journal-reliability-ux` (cut from `phase05-r2-focus-gating-strength-board`,
 itself cut from `phase05-r2-focus-gating-strength-board`, itself cut from
 `phase05-r1-auto-modes-quiet-hours`, itself branched from
@@ -21,6 +21,20 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-16 — R4 Alert Center contract recovered (documentation)
+
+The historical P1.6 Alert Center quality packet was recovered byte-for-byte from
+commit `671ee57`, read against the built R2 contract and active R4 spec, and
+classified as historical evidence. R2 already owns the auto-pick provenance,
+scoped removal, and `not_today`-rather-than-dislike outcomes. The active R4 spec
+now retains the unabsorbed trader outcomes: "Not today" never cancels or mutes a
+trader-armed alert; the feed's Focus star becomes a labeled Like-to-Focus action;
+and repeated feed rows/open bursts are controlled on the presentation side only.
+No alert behavior changed in this documentation recovery. Source inspection found
+two additional ignored-symbol deferrals in the D1 level/event watch pollers beyond
+the trader's exact fenced-file approval, so implementation is paused for the
+required ask-first decision rather than silently expanding scope.
 
 ### 2026-08-16 — R7 journal pre-flight fix pass
 

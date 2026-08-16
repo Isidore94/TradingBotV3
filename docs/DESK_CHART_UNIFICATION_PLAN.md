@@ -91,7 +91,81 @@ set as a prominent badge on the snapshot header and a row marker on every table
 that opens charts (setups, RS/RW, Industry, Focus, Alert Center). Presentation
 only; resets at the market-date boundary.
 
-## 6. Fenced files, invariants, tests
+## 6. Recovered Alert Center quality contract (2026-08-14)
+
+Historical source: `docs/ALERT_CENTER_QUALITY_PACKET.md`, recovered from commit
+`671ee57` on 2026-08-16 and classified as historical evidence. Packet R2 later
+absorbed its auto-pick provenance, scoped M5-side removal, persistent decline,
+and **`not_today`, not trader dislike** outcomes. Do not rebuild those under a
+second design. The following trader outcomes were not otherwise absorbed and
+now belong to R4.
+
+### 6.1 "Not today" never cancels a trader's alarms
+
+Trader wording, 2026-08-14:
+
+> "'Not today' should still trigger on the alerts I set."
+
+This is a general rule for every dismissal path. Dismissing a symbol for the day
+must never disarm or defer a trader-armed chart watch, D1 event watch, armed D1
+level alert, or price alert. Only the explicit disarm toggles may cancel them.
+Their hits still enter the feed and sound. Alerts tagged `CHART_WATCH_TAG` are
+the routing identity for chart-watch, armed-level, and D1-event-watch hits and
+therefore bypass the ignored-symbol feed filter. Focus-derived automatic D1
+interest (`FOCUS_D1_EVENT_TAG`) is not trader-armed and correctly continues to
+lapse with Focus membership.
+
+The trader-authorized 2026-08-16 repair scope for the fenced
+`alert_center_panel.py` is exact: `_ignore_alert_symbol` stops deleting
+`_chart_watches`, and `add_alert` exempts `CHART_WATCH_TAG` from the
+ignored-symbol return, with deterministic coverage. Any additional fenced-file
+change requires another ask-first approval.
+
+### 6.2 Make explicit Focus placement readable on the Alert screen
+
+Trader wording, 2026-08-14:
+
+> "If I like a stock I can add it to m5 focus picks. Then I get flagged on
+> pullbacks."
+
+The existing feed-row favorite action has the intended membership semantics but
+only a star glyph. R4 promotes it to a labeled action such as **Like → M5 Focus**
+or **Like → Swing Focus**, with the lit state retaining the remove-from-Focus
+affordance. The chart pane already has an explicit labeled Add-to-Focus control;
+keep it. This must not blur into R4's separate CaptureRail LIKE: CaptureRail LIKE
+is analysis-only and never writes Focus membership.
+
+### 6.3 Repetition control is presentation, not weaker detection
+
+Trader wording, 2026-08-14:
+
+> "I don't want to be constantly seeing the same stocks over and over ... less
+> spam and more quality ... I basically don't want to see the same ticker over
+> and over again. It def finds bangers though."
+
+The R4 display-only outcome for the main Alerts feed is:
+
+1. One live row per symbol + side + market day. A repeat updates that row in
+   place, retains first-seen time, shows a repeat-count badge, and does not
+   re-sound or re-float unless it escalates.
+2. Escalation means a strictly higher best tier, first BANGER, or first PROVEN.
+   Focus-privileged names and trader-armed hits always surface and sound; they
+   are never silently folded into a stale row.
+3. During the first configurable N minutes after the open (historical proposed
+   default 30; zero disables), ordinary alerts group into one ranked digest row
+   per scan cycle. BANGER, PROVEN, Focus-privileged, trader-armed, entry-assist,
+   and ready-D1 output remain immediate. Digest contents stay reachable rather
+   than being discarded.
+4. This changes no detector, score, evidence stream, History, AWAY push, or
+   `review_policy.json`. It adds no suppression field and is superseded by the
+   future P5.1 typed-delivery challenger once that manifest passes.
+
+Before implementing §6.2/§6.3, retain the historical confirmation gates: digest
+window default, whether Focus likes need an optional Enter-to-skip reason, and
+whether the escalation list is exhaustive. They are not part of the narrow
+2026-08-16 fenced-file approval in §6.1.
+
+## 7. Fenced files, invariants, tests
 
 Ask-first at edit time: `scripts/chart_levels.py` (shares detector-adjacent state),
 `scripts/chart_watch.py`, `scripts/price_alerts.py`,
@@ -108,7 +182,7 @@ forming-bar source selection + suppression window + provenance label, CaptureRai
 context wiring per host (Qt tests), badge derivation from decision stores, and a
 guard that no capture path writes Focus/watchlist membership.
 
-## 7. Exit gate
+## 8. Exit gate
 
 All entry points open a chart with capture + watch controls + painted armed alerts;
 one desk morning confirms the forming-bar caveat replaces the inflated-gap
