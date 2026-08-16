@@ -14,8 +14,8 @@ Everything reads through ``ui.services.journal_feed``. No tab holds a
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QFrame, QTabWidget, QVBoxLayout
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import QFrame, QLabel, QTabWidget, QVBoxLayout
 
 from ui.panels.journal.analytics_tab import AnalyticsTab
 from ui.panels.journal.calendar_tab import CalendarTab
@@ -26,6 +26,17 @@ from ui.panels.journal.trades_tab import TradesTab
 from ui.services import journal_feed
 
 
+class _JournalInitWorker(QThread):
+    ready = Signal(dict)
+    failed = Signal(str)
+
+    def run(self) -> None:  # pragma: no cover - exercised through the real Qt seam
+        try:
+            self.ready.emit(journal_feed.initialize_store())
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
 class JournalPanel(QFrame):
     statusChanged = Signal(str)
 
@@ -33,7 +44,13 @@ class JournalPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
 
-        self.header = JournalHeader()
+        self._migration_worker: _JournalInitWorker | None = None
+        self.migration_status = QLabel("")
+        self.migration_status.setObjectName("JournalMigrationStatus")
+        self.migration_status.setWordWrap(True)
+        self.migration_status.setVisible(False)
+
+        self.header = JournalHeader(autoload=False)
         self.header.selectionChanged.connect(self._reload_current)
 
         self.trades_tab = TradesTab(self.header)
@@ -59,10 +76,23 @@ class JournalPanel(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(self.migration_status)
         layout.addWidget(self.header)
         layout.addWidget(self.tabs)
 
-        self._reload_current()
+        if journal_feed.store_is_initialized():
+            self._finish_initialization({"migrated": False, "report": None})
+        else:
+            self.migration_status.setText(
+                "Preparing Journal database… backup, migration, and rebuild run in the background."
+            )
+            self.migration_status.setVisible(True)
+            self.header.setEnabled(False)
+            self.tabs.setEnabled(False)
+            self._migration_worker = _JournalInitWorker(self)
+            self._migration_worker.ready.connect(self._finish_initialization)
+            self._migration_worker.failed.connect(self._initialization_failed)
+            self._migration_worker.start()
 
     def _tabs(self):
         return (
@@ -95,6 +125,24 @@ class JournalPanel(QFrame):
     def _set_status(self, message: str) -> None:
         self.statusChanged.emit(f"Journal: {message}")
 
+    def _finish_initialization(self, result: dict) -> None:
+        self.header.setEnabled(True)
+        self.tabs.setEnabled(True)
+        self.header.refresh_accounts()
+        self._reload_current()
+        if result.get("migrated"):
+            self.migration_status.setText("Journal migration completed. The audit report is available in Health.")
+            self.migration_status.setVisible(True)
+        else:
+            self.migration_status.setVisible(False)
+
+    def _initialization_failed(self, message: str) -> None:
+        self.header.setEnabled(False)
+        self.tabs.setEnabled(False)
+        self.migration_status.setText(f"Journal unavailable: migration failed — {message}")
+        self.migration_status.setVisible(True)
+        self._set_status(f"migration failed: {message}")
+
     # -- the surface ui/app.py depends on ----------------------------------
 
     def refresh(self) -> None:
@@ -119,6 +167,9 @@ class JournalPanel(QFrame):
         self._set_status(f"exported {path}")
 
     def shutdown(self) -> None:
+        worker = self._migration_worker
+        if worker is not None and worker.isRunning():
+            worker.wait()
         for tab in self._tabs():
             if hasattr(tab, "shutdown"):
                 tab.shutdown()

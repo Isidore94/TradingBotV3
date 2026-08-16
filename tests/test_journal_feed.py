@@ -26,6 +26,14 @@ from ui.models.journal import JournalTrade  # noqa: E402
 from ui.services import journal_feed  # noqa: E402
 
 
+def test_accounts_does_not_turn_a_store_failure_into_an_empty_journal(monkeypatch):
+    monkeypatch.setattr(
+        journal_feed, "_store", lambda: (_ for _ in ()).throw(RuntimeError("migration failed"))
+    )
+    with pytest.raises(RuntimeError, match="migration failed"):
+        journal_feed.accounts()
+
+
 @pytest.fixture
 def feed(tmp_path, monkeypatch):
     """A feed bound to a throwaway store. Never the live journal."""

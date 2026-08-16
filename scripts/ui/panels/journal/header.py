@@ -37,7 +37,7 @@ class JournalHeader(QFrame):
 
     selectionChanged = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, autoload: bool = True) -> None:
         super().__init__(parent)
         self.setObjectName("JournalHeader")
         self._accounts: list[tuple[str, str]] = []
@@ -87,7 +87,8 @@ class JournalHeader(QFrame):
         layout.setContentsMargins(0, 0, 0, 6)
         layout.addLayout(row)
 
-        self.refresh_accounts()
+        if autoload:
+            self.refresh_accounts()
 
     # -- accounts ----------------------------------------------------------
 
@@ -96,8 +97,15 @@ class JournalHeader(QFrame):
         self._loading = True
         try:
             tree = journal_feed.account_tree()
-        except Exception:
-            tree = []
+        except Exception as exc:
+            self.account_menu.clear()
+            failed = self.account_menu.addAction(f"Journal unavailable: {exc}")
+            failed.setEnabled(False)
+            self._accounts = []
+            self._selected = set()
+            self._loading = False
+            self.account_button.setText("Journal unavailable")
+            return
         self.account_menu.clear()
         self._accounts = []
         checkboxes: list[tuple[tuple[str, str], QWidget]] = []

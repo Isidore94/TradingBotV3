@@ -16,8 +16,22 @@ def _store():
     if _STORE is None:
         from journal_store import JournalStore
 
-        _STORE = JournalStore()
+        _STORE = JournalStore(journal_db_path())
     return _STORE
+
+
+def store_is_initialized() -> bool:
+    return _STORE is not None
+
+
+def initialize_store() -> dict[str, Any]:
+    """Initialize/migrate the shared store; the Journal panel calls this in a worker."""
+    store = _store()
+    report = getattr(store, "last_migration", None)
+    return {
+        "migrated": report is not None,
+        "report": report.as_dict() if report is not None else None,
+    }
 
 
 def journal_db_path() -> Path:
@@ -128,10 +142,7 @@ TAX_GROUP_LABELS = {
 
 
 def accounts() -> list[dict[str, Any]]:
-    try:
-        return _store().list_accounts()
-    except Exception:
-        return []
+    return _store().list_accounts()
 
 
 def account_tree() -> list[dict[str, Any]]:

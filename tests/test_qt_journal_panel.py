@@ -100,6 +100,57 @@ def test_the_panel_keeps_the_surface_the_app_depends_on(panel):
         assert hasattr(panel, name), f"ui/app.py calls {name}"
 
 
+def test_first_open_runs_real_store_initialization_off_the_gui_thread(qapp, tmp_path, monkeypatch):
+    import journal_store
+    from PySide6.QtCore import QThread
+    from ui.panels.journal_panel import JournalPanel
+
+    real_store = journal_store.JournalStore
+    called_on = []
+
+    def tracked_store(*args, **kwargs):
+        called_on.append(QThread.currentThread())
+        return real_store(*args, **kwargs)
+
+    monkeypatch.setattr(journal_store, "JournalStore", tracked_store)
+    monkeypatch.setattr(journal_feed, "_STORE", None)
+    db_path = tmp_path / "first-open.sqlite3"
+    monkeypatch.setattr(journal_feed, "journal_db_path", lambda: db_path)
+
+    widget = JournalPanel()
+    try:
+        assert widget._migration_worker is not None
+        assert widget._migration_worker.wait(10000)
+        qapp.processEvents()
+        assert called_on and called_on[0] is not qapp.thread()
+        assert db_path.is_file()
+        assert widget.tabs.isEnabled()
+        assert "migration completed" in widget.migration_status.text().lower()
+    finally:
+        widget.shutdown()
+        widget.deleteLater()
+
+
+def test_migration_failure_stays_visible_instead_of_claiming_no_accounts(qapp, monkeypatch):
+    from ui.panels.journal_panel import JournalPanel
+
+    monkeypatch.setattr(journal_feed, "_STORE", None)
+    monkeypatch.setattr(
+        journal_feed, "initialize_store", lambda: (_ for _ in ()).throw(RuntimeError("backup refused"))
+    )
+    widget = JournalPanel()
+    try:
+        assert widget._migration_worker.wait(5000)
+        qapp.processEvents()
+        assert "migration failed" in widget.migration_status.text().lower()
+        assert "backup refused" in widget.migration_status.text()
+        assert widget.header.account_button.text() != "No accounts"
+        assert not widget.tabs.isEnabled()
+    finally:
+        widget.shutdown()
+        widget.deleteLater()
+
+
 def test_only_the_visible_tab_reloads(panel, monkeypatch):
     """Analytics and Health are the expensive ones; reloading all five on every
     click of the account tree is work nobody is looking at."""
