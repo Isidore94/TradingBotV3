@@ -145,6 +145,9 @@ def test_focus_picks_is_top_level_app_page():
         # its output goes (packet R2 Part B).
         "Strength Board",
         "Journal",
+        # R8 registered Weekend Prep next to Journal: the weekend routine reads
+        # the journal the walk-away and auto-tag steps depend on.
+        "Weekend Prep",
         "Universe",
         "Research",
         "Auto Pilot",

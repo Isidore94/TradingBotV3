@@ -89,6 +89,14 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "ui.panels.journal_panel",
     "ui.panels.journal.trades_tab",
     "ui.panels.journal.health_tab",
+    # Weekend Prep (R8). market_prep.orchestrator is imported lazily inside the
+    # week-ahead worker so a weekday launch does not pay for the whole
+    # pre-session stack; naming it here is what proves the frozen bundle still
+    # contains it, since nothing statically reachable imports it any more.
+    "market_prep.orchestrator",
+    "weekend_strength",
+    "ui.services.weekend_prep_service",
+    "ui.panels.weekend_prep_panel",
     # shadow/evidence engines
     "market_state",
     "greatness_monitor",

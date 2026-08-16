@@ -1,0 +1,525 @@
+"""Weekend Prep: a guided five-step routine (R8 §9 steps 6-9, spec §1/§3/§6/§7).
+
+A stepper rail down the left, one page per step on the right, and progress that
+survives closing the app. The five steps are the trader's actual weekend ritual
+in the order they do it: what happened, how the picks behaved, how the exits
+went, what looks strong now, and what is coming.
+
+Two things this tab deliberately does not do:
+
+* **It never refreshes by itself.** Every fetch is behind a button. The service
+  owns no timer, and the weekend quiet-hours gate is untouched.
+* **It never removes anything.** Adopt adds to swing Focus through the existing
+  membership-tracked injection. There is no remove path in this file at all, and
+  a test asserts that rather than trusting it - the trader's own names stay the
+  trader's.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QStackedWidget,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
+
+import weekend_strength
+from ui.services import journal_feed
+from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
+
+STATUS_MARKS = {"pending": "○", "done": "●", "skipped": "–"}
+
+
+class _StepPage(QFrame):
+    """Shared furniture: a title, a body, and the two buttons every step has."""
+
+    statusChanged = Signal(str)
+
+    def __init__(self, step_id: str, service: WeekendPrepService, parent=None) -> None:
+        super().__init__(parent)
+        self.step_id = step_id
+        self.service = service
+
+        self.heading = QLabel(STEP_LABELS[step_id])
+        self.heading.setObjectName("StepHeading")
+        self.subtitle = QLabel("")
+        self.subtitle.setWordWrap(True)
+
+        self.done_button = QPushButton("Mark done")
+        self.done_button.clicked.connect(lambda: self._set_status("done"))
+        self.skip_button = QPushButton("Skip this week")
+        self.skip_button.clicked.connect(lambda: self._set_status("skipped"))
+
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.addWidget(self.heading)
+        self._layout.addWidget(self.subtitle)
+
+    def _finish_layout(self) -> None:
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        footer.addWidget(self.skip_button)
+        footer.addWidget(self.done_button)
+        self._layout.addLayout(footer)
+
+    def _set_status(self, status: str) -> None:
+        self.service.set_step_status(self.step_id, status)
+        self.statusChanged.emit(f"{STEP_LABELS[self.step_id]} {status}")
+
+    def reload(self) -> None:  # pragma: no cover - overridden
+        pass
+
+
+class WeekReviewPage(_StepPage):
+    """Step 1: what happened, from the review-learning state and the RS extremes."""
+
+    def __init__(self, service, parent=None) -> None:
+        super().__init__("week_review", service, parent)
+        monday, friday = service.week_bounds
+        self.subtitle.setText(f"Week of {monday} to {friday}. Refresh reads the week's decisions.")
+        self.refresh_button = QPushButton("Refresh week")
+        self.refresh_button.clicked.connect(self.reload)
+        self.summary = QTextBrowser()
+        self._layout.addWidget(self.refresh_button)
+        self._layout.addWidget(self.summary, 1)
+        self._finish_layout()
+
+    def reload(self) -> None:
+        try:
+            from review_learning import build_review_learning_state
+
+            state = build_review_learning_state(window_days=7)
+        except Exception as exc:  # noqa: BLE001
+            self.summary.setPlainText(f"Week review unavailable: {exc}")
+            self.statusChanged.emit(f"week review unavailable: {exc}")
+            return
+        lines = [f"Week of {self.service.week_bounds[0]} to {self.service.week_bounds[1]}", ""]
+        for key in ("takes", "skips", "rejects", "blind_spots", "leaks", "watch_conversion"):
+            value = state.get(key) if isinstance(state, dict) else None
+            if value is None:
+                continue
+            lines.append(f"{key.replace('_', ' ').title()}: {value if not isinstance(value, list) else len(value)}")
+        # The recorded, accepted v1 limitation - stated where it is read, not
+        # buried in a spec nobody opens on a Saturday.
+        lines += ["", "Episodes fold on (trade_date, symbol): two setups in one name on one day read as one."]
+        self.summary.setPlainText("\n".join(lines))
+
+
+class FocusReviewPage(_StepPage):
+    """Step 2: how the week's focus picks behaved."""
+
+    def __init__(self, service, parent=None) -> None:
+        super().__init__("focus_review", service, parent)
+        self.subtitle.setText("The week's focus picks, their outcomes, and the veto cohort beside them.")
+        self.refresh_button = QPushButton("Refresh picks")
+        self.refresh_button.clicked.connect(self.reload)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Date", "Symbol", "Side", "Source", "Outcome"])
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.note = QLabel("")
+        self.note.setWordWrap(True)
+        self._layout.addWidget(self.refresh_button)
+        self._layout.addWidget(self.table, 1)
+        self._layout.addWidget(self.note)
+        self._finish_layout()
+
+    def reload(self) -> None:
+        rows = _read_focus_week(self.service.week_bounds)
+        self.table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            for column, key in enumerate(("date", "symbol", "side", "source", "outcome")):
+                self.table.setItem(index, column, QTableWidgetItem(str(row.get(key) or "")))
+        self.note.setText(
+            f"{len(rows)} pick(s) in the reviewed week."
+            if rows
+            else "No focus picks recorded for this week, or the CSVs are not readable."
+        )
+
+
+class WalkawayPage(_StepPage):
+    """Step 3: how the exits went, plus the weekly auto-tag review."""
+
+    def __init__(self, service, parent=None) -> None:
+        super().__init__("walkaway", service, parent)
+        self.subtitle.setText(
+            "Trades CLOSED inside the reviewed week. A position opened this week and still "
+            "open is listed separately - it has no exit to learn from yet."
+        )
+        self.refresh_button = QPushButton("Run walk-away for this week")
+        self.refresh_button.clicked.connect(self.reload)
+        self.output = QTextBrowser()
+        self.open_note = QLabel("")
+        self.open_note.setWordWrap(True)
+
+        self.tag_table = QTableWidget(0, 4)
+        self.tag_table.setHorizontalHeaderLabels(["Date", "Symbol", "My tags", "Suggested"])
+        self.tag_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.confirm_button = QPushButton("Confirm suggested tag")
+        self.confirm_button.clicked.connect(self._confirm_tag)
+        self.correct_button = QPushButton("Correct to my tags")
+        self.correct_button.clicked.connect(self._correct_tag)
+        self._tag_rows: list[dict[str, Any]] = []
+
+        tag_buttons = QHBoxLayout()
+        tag_buttons.addWidget(self.confirm_button)
+        tag_buttons.addWidget(self.correct_button)
+        tag_buttons.addStretch(1)
+
+        self._layout.addWidget(self.refresh_button)
+        self._layout.addWidget(self.output, 2)
+        self._layout.addWidget(self.open_note)
+        self._layout.addWidget(QLabel("Auto-tag review"))
+        self._layout.addWidget(self.tag_table, 2)
+        self._layout.addLayout(tag_buttons)
+        self._finish_layout()
+
+    def reload(self) -> None:
+        monday, friday = self.service.week_bounds
+        try:
+            result = journal_feed.walkaway_summary(monday, friday)
+            self.output.setPlainText(str(result.get("report") or result))
+        except Exception as exc:  # noqa: BLE001
+            self.output.setPlainText(f"Walk-away unavailable: {exc}")
+
+        try:
+            split = journal_feed.week_trades(monday, friday)
+            still_open = split["still_open"]
+            self.open_note.setText(
+                f"{len(split['closed'])} closed this week."
+                + (
+                    f" {len(still_open)} opened this week and still open: "
+                    + ", ".join(t.symbol for t in still_open)
+                    + " - flagged, not counted."
+                    if still_open
+                    else ""
+                )
+            )
+            self._tag_rows = journal_feed.week_tag_candidates(monday, friday)
+        except Exception as exc:  # noqa: BLE001
+            self.open_note.setText(f"Journal unavailable: {exc}")
+            self._tag_rows = []
+
+        self.tag_table.setRowCount(len(self._tag_rows))
+        for index, row in enumerate(self._tag_rows):
+            suggested = "; ".join(str(c.get("tag")) for c in row["candidates"][:3])
+            for column, text in enumerate((row["trade_date"], row["symbol"], row["current_tags"], suggested)):
+                self.tag_table.setItem(index, column, QTableWidgetItem(str(text)))
+
+    def _selected_tag_row(self) -> dict[str, Any] | None:
+        index = self.tag_table.currentRow()
+        if index < 0 or index >= len(self._tag_rows):
+            self.statusChanged.emit("select a trade in the auto-tag list first")
+            return None
+        return self._tag_rows[index]
+
+    def _confirm_tag(self) -> None:
+        row = self._selected_tag_row()
+        if row is None:
+            return
+        tags = [str(c.get("tag")) for c in row["candidates"][:1]]
+        journal_feed.accept_auto_tags(row["trade_id"], tags)
+        self.service.record_tag_review(row["trade_id"])
+        self.statusChanged.emit(f"confirmed {tags[0]} on {row['symbol']}")
+        self.reload()
+
+    def _correct_tag(self) -> None:
+        row = self._selected_tag_row()
+        if row is None:
+            return
+        journal_feed.correct_auto_tag(row["trade_id"], row["current_tags"])
+        self.service.record_tag_review(row["trade_id"], corrected_to=row["current_tags"])
+        self.statusChanged.emit(f"corrected {row['symbol']} to your tags")
+        self.reload()
+
+
+class DiscoveryPage(_StepPage):
+    """Step 4: strongest and weakest on H1, D1 and Monthly, then Adopt."""
+
+    def __init__(self, service, parent=None, *, focus_service=None) -> None:
+        super().__init__("discovery", service, parent)
+        self.subtitle.setText(
+            "Same strength formula as the M5 board, on three timeframes. Every refresh is "
+            "manual and uses batched yfinance - no IB traffic."
+        )
+        self._focus_service = focus_service
+        self.tabs = QTabWidget()
+        self._boards: dict[str, dict[str, Any]] = {}
+        for timeframe in weekend_strength.TIMEFRAMES:
+            self.tabs.addTab(self._build_board_tab(timeframe), timeframe.label)
+        self._layout.addWidget(self.tabs, 1)
+        self._finish_layout()
+
+        service.boardChanged.connect(self._on_board_changed)
+
+    def _build_board_tab(self, timeframe) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        long_button = QPushButton("Refresh strongest")
+        long_button.clicked.connect(lambda: self._refresh(timeframe.key, "long"))
+        short_button = QPushButton("Refresh weakest")
+        short_button.clicked.connect(lambda: self._refresh(timeframe.key, "short"))
+        adopt_button = QPushButton("Adopt selected to swing Focus")
+        adopt_button.clicked.connect(lambda: self._adopt(timeframe.key))
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(long_button)
+        buttons.addWidget(short_button)
+        buttons.addStretch(1)
+        buttons.addWidget(adopt_button)
+
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["Symbol", "Side", "Score", "Last", "Bars"])
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        accounting = QLabel("Not refreshed yet.")
+        accounting.setWordWrap(True)
+        banner = QLabel("")
+        banner.setObjectName("BoardFailureBanner")
+        banner.setWordWrap(True)
+        banner.setVisible(False)
+
+        layout.addLayout(buttons)
+        layout.addWidget(banner)
+        layout.addWidget(table, 1)
+        layout.addWidget(accounting)
+        self._boards[timeframe.key] = {"table": table, "accounting": accounting, "banner": banner}
+        return page
+
+    def _refresh(self, timeframe: str, side: str) -> None:
+        started = self.service.refresh_board(timeframe, side=side)
+        if not started:
+            self.statusChanged.emit(f"{timeframe} {side} board is already refreshing")
+
+    def _on_board_changed(self, timeframe: str) -> None:
+        board = self.service.board(timeframe)
+        widgets = self._boards.get(timeframe)
+        if board is None or widgets is None:
+            return
+        widgets["banner"].setVisible(False)
+        table = widgets["table"]
+        table.setRowCount(len(board.rows))
+        for index, row in enumerate(board.rows):
+            values = (
+                row["symbol"],
+                row["side"],
+                f"{row['score']:.2f}",
+                f"{row['last_close']:.2f}" if row.get("last_close") is not None else "-",
+                row.get("bar_count", ""),
+            )
+            for column, text in enumerate(values):
+                table.setItem(index, column, QTableWidgetItem(str(text)))
+        widgets["accounting"].setText(f"{board.accounting}. As of {board.as_of}.")
+
+    def show_failure(self, timeframe: str, message: str) -> None:
+        """Keep the last good board and say what went wrong above it."""
+        widgets = self._boards.get(timeframe)
+        if widgets is None:
+            return
+        widgets["banner"].setText(f"{message} — showing the last good board.")
+        widgets["banner"].setVisible(True)
+
+    def _adopt(self, timeframe: str) -> None:
+        widgets = self._boards.get(timeframe)
+        board = self.service.board(timeframe)
+        if widgets is None or board is None:
+            return
+        index = widgets["table"].currentRow()
+        if index < 0 or index >= len(board.rows):
+            self.statusChanged.emit("select a row to adopt")
+            return
+        row = board.rows[index]
+        confirmed = QMessageBox.question(
+            self,
+            "Adopt to swing Focus?",
+            f"Add {row['symbol']} ({row['side']}) to swing Focus and the swing watchlist?\n\n"
+            "This adds only. Nothing in Weekend Prep removes an entry.",
+        )
+        if confirmed != QMessageBox.Yes:
+            return
+        service = self._focus_service or _default_focus_service()
+        if service is None:
+            self.statusChanged.emit("Focus service unavailable")
+            return
+        added = service.add(
+            row["symbol"],
+            row["side"],
+            "swing",
+            origin="weekend_prep",
+            context=f"weekend_prep:{timeframe}:{self.service.weekend}",
+        )
+        self.service.record_adopted(row["symbol"], row["side"], timeframe)
+        # A duplicate add is not an error: the trader may already hold the name,
+        # and saying so is more useful than refusing.
+        self.statusChanged.emit(
+            f"adopted {row['symbol']} to swing Focus"
+            if added
+            else f"{row['symbol']} was already on the swing list"
+        )
+
+
+class WeekAheadPage(_StepPage):
+    """Step 5: the forward-looking weekly prep."""
+
+    def __init__(self, service, parent=None) -> None:
+        super().__init__("week_ahead", service, parent)
+        self.subtitle.setText("Earnings, economic calendar and risk windows for the week ahead.")
+        self.refresh_button = QPushButton("Build week-ahead prep")
+        self.refresh_button.clicked.connect(self.reload)
+        self.report = QTextBrowser()
+        self.report.setMarkdown("Not built yet for this weekend.")
+        self._layout.addWidget(self.refresh_button)
+        self._layout.addWidget(self.report, 1)
+        self._finish_layout()
+        service.weekAheadReady.connect(self._render)
+
+    def reload(self) -> None:
+        if not self.service.refresh_week_ahead():
+            self.statusChanged.emit("week ahead is already building")
+
+    def _render(self, markdown: str) -> None:
+        self.report.setMarkdown(markdown or "The weekly prep returned nothing.")
+
+
+class WeekendPrepPanel(QFrame):
+    """The stepper rail and the five pages."""
+
+    statusChanged = Signal(str)
+
+    def __init__(self, parent=None, *, service: WeekendPrepService | None = None, focus_service=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("Panel")
+        self.service = service or WeekendPrepService(self)
+
+        self.rail = QListWidget()
+        self.rail.setObjectName("StepRail")
+        self.rail.setMaximumWidth(240)
+        self.rail.currentRowChanged.connect(self._on_step_selected)
+
+        self.pages = QStackedWidget()
+        self.week_review = WeekReviewPage(self.service)
+        self.focus_review = FocusReviewPage(self.service)
+        self.walkaway = WalkawayPage(self.service)
+        self.discovery = DiscoveryPage(self.service, focus_service=focus_service)
+        self.week_ahead = WeekAheadPage(self.service)
+        self._pages = {
+            "week_review": self.week_review,
+            "focus_review": self.focus_review,
+            "walkaway": self.walkaway,
+            "discovery": self.discovery,
+            "week_ahead": self.week_ahead,
+        }
+        for step in STEP_IDS:
+            page = self._pages[step]
+            page.statusChanged.connect(self.statusChanged)
+            self.pages.addWidget(page)
+
+        self.header = QLabel("")
+        self.header.setObjectName("WeekendHeader")
+
+        body = QHBoxLayout()
+        body.addWidget(self.rail)
+        body.addWidget(self.pages, 1)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(self.header)
+        layout.addLayout(body, 1)
+
+        self.service.stateChanged.connect(self._refresh_rail)
+        self.service.statusChanged.connect(self.statusChanged)
+        self._refresh_rail()
+        self.rail.setCurrentRow(0)
+
+    def _refresh_rail(self) -> None:
+        current = self.rail.currentRow()
+        self.rail.blockSignals(True)
+        self.rail.clear()
+        for step in STEP_IDS:
+            status = self.service.step_status(step)
+            item = QListWidgetItem(f"{STATUS_MARKS.get(status, '○')}  {STEP_LABELS[step]}")
+            item.setData(Qt.UserRole, step)
+            self.rail.addItem(item)
+        self.rail.blockSignals(False)
+        if 0 <= current < self.rail.count():
+            self.rail.setCurrentRow(current)
+        monday, friday = self.service.week_bounds
+        done = "complete" if self.service.routine_complete else "in progress"
+        self.header.setText(f"Weekend of {self.service.weekend} — reviewing {monday} to {friday} — {done}")
+
+    def _on_step_selected(self, row: int) -> None:
+        if 0 <= row < self.pages.count():
+            self.pages.setCurrentIndex(row)
+
+    def shutdown(self) -> None:
+        self.service.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Small readers, kept out of the widgets so the panel stays about layout
+# ---------------------------------------------------------------------------
+
+
+def _default_focus_service():
+    try:
+        from ui.services.focus_service import FocusService
+
+        return FocusService()
+    except Exception:  # pragma: no cover - only on a broken install
+        return None
+
+
+def _read_focus_week(bounds) -> list[dict[str, Any]]:
+    """The week's focus picks from the CSV evidence, or an empty list.
+
+    Read-only and forgiving: this step is a review, and a missing CSV is a
+    quieter week rather than an error worth stopping the routine for.
+    """
+    import csv
+
+    from project_paths import PERSISTENT_DATA_DIR
+
+    monday, friday = bounds
+    rows: list[dict[str, Any]] = []
+    for name, source in (("human_focus_daily_picks.csv", "pick"), ("human_focus_outcomes.csv", "outcome")):
+        path = PERSISTENT_DATA_DIR / name
+        if not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8", newline="") as handle:
+                for raw in csv.DictReader(handle):
+                    stamp = str(raw.get("date") or raw.get("trade_date") or "")[:10]
+                    if not stamp:
+                        continue
+                    try:
+                        when = datetime.fromisoformat(stamp).date()
+                    except ValueError:
+                        continue
+                    if not (monday <= when <= friday):
+                        continue
+                    rows.append(
+                        {
+                            "date": stamp,
+                            "symbol": str(raw.get("symbol") or "").upper(),
+                            "side": str(raw.get("side") or ""),
+                            "source": source,
+                            "outcome": str(raw.get("h5") or raw.get("outcome") or ""),
+                        }
+                    )
+        except OSError:
+            continue
+    return sorted(rows, key=lambda item: (item["date"], item["symbol"]))

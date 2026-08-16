@@ -39,6 +39,7 @@ from ui.panels.autopilot_panel import AutopilotPanel
 from ui.panels.bounce_panel import format_auto_regime_reading
 from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
+from ui.panels.weekend_prep_panel import WeekendPrepPanel
 from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
 from ui.panels.strength_board_panel import StrengthBoardPanel
@@ -80,6 +81,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Focus Picks", "mdi.star-outline", "trading_panel.focus_picks_panel"),
     PageSpec("Strength Board", "mdi.trending-up", "strength_board_panel"),
     PageSpec("Journal", "mdi.notebook-outline", "journal_panel"),
+    PageSpec("Weekend Prep", "mdi.calendar-weekend", "weekend_prep_panel"),
     PageSpec("Universe", "mdi.earth", "universe_panel"),
     PageSpec("Research", "mdi.flask-outline", "research_panel"),
     PageSpec("Auto Pilot", "mdi.robot-outline", "autopilot_panel"),
@@ -113,6 +115,7 @@ class MainWindow(QMainWindow):
             price_alert_read_only=satellite_desk,
         )
         self.journal_panel = JournalPanel()
+        self.weekend_prep_panel = WeekendPrepPanel()
         self.universe_panel = UniversePanel()
         self.research_panel = ResearchPanel(
             self.trading_panel.price_alert_service,
