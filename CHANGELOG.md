@@ -130,6 +130,30 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### Journal, explanations, and learning
 
+- **R7/R8 adversarial release-candidate repair (2026-08-15).** Every verified
+  A1–A19 and B1–B14 finding was closed before handoff. The repair normalizes
+  broker-ledger casing and Flex dates; preserves shared Focus wiring and exact
+  suggestion-row identity; scopes reconciliation clears to reachable brokers;
+  bounds shutdown; migrates every execution leg and gives fills stable
+  identities; makes coverage, quarantine, currency, FX ordering, token
+  precedence, weekly identity, exit-window, empty-last-good, and OCC handling
+  fail honestly; and restores the journal's missing pull/gap/retry controls,
+  grouped tags and filters, reversible undo, atomic exports, and truthful labels.
+  Expensive journal work now runs in a worker and re-renders from captured
+  structured results without re-querying; migration starts only after an
+  explicit **Prepare Journal database** click and remains visibly gated in the
+  background. Weekend rollover, timezone conversion, failed-discovery state,
+  Flex reuse, single-fetch boards, board persistence, and failure signaling are
+  likewise pinned by regression tests. Account tax labels moved out of source
+  into machine-local settings. No live journal database or broker was touched.
+
+  Scope reconciliation is explicit: true non-USD-to-USD conversion, the
+  Calendar year heatmap, additional Analytics charts, Weekend RRS-strength
+  joins, and Weekend Focus performance/pick-feedback/veto joins remain deferred
+  in their governing specs. They are not represented as shipped behavior. The
+  repaired code tip is `dd201cd`; deterministic baseline is 3354 passed / 19
+  subtests, smoke 7/7, frozen selftest 49/49, all exit 0. Live gates remain owed.
+
 - **Weekend Prep (R8, 2026-08-15).** A guided five-step weekend routine with
   persisted progress: week in review, focus-pick review, week-windowed walk-away
   with the weekly auto-tag review, strength discovery on H1/D1/Monthly using the

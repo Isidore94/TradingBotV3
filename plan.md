@@ -416,8 +416,15 @@ are listed in `CURRENT_CHECKPOINT.md`.
    from the R7 tip. **§5's filter table is trader-approved as proposed
    (2026-08-15)**, so the discovery step is no longer blocked.
 
-   **Deterministic gates green: 3308 passed / 19 subtests, smoke 7/7, frozen
+   **Deterministic gates green after the adversarial repair pass: 3354 passed / 19 subtests, smoke 7/7, frozen
    selftest 49/49 `(frozen)`, all exit 0.**
+
+   The release-candidate review closed A1–A19 and B1–B14. Weekend board state
+   now persists across restart. The not-yet-built RRS-strength joins and Focus
+   performance/pick-feedback/veto joins are retained as explicit future scope in
+   the governing spec; they are not claimed by this build. R7 likewise defers
+   true non-USD conversion, the Calendar year heatmap, and additional Analytics
+   charts in its governing spec.
 
    **Owed: the one-real-weekend live proof** (spec §10) — the desk booting on a
    weekend with the tab present and no network activity until a button is
