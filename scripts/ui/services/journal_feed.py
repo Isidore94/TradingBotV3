@@ -608,3 +608,87 @@ def self_heal_gaps(max_days: int = 62) -> dict[str, Any]:
         lambda broker, account, day: _fetch_one_day(_store(), broker, account, day),
         max_days_per_night=max_days,
     )
+
+
+# ---------------------------------------------------------------------------
+# Weekend Prep (R8 §6). The journal side of the weekend routine: which trades
+# belong to the reviewed week, and which of them are still open.
+# ---------------------------------------------------------------------------
+
+
+def week_trades(monday: Any, friday: Any) -> dict[str, list[JournalTrade]]:
+    """The week's trades, split into closed-in-week and still-open.
+
+    "The week's trades" means **closed** within Mon-Fri of the reviewed week.
+    A position opened during the week and still open is not a result yet - it
+    has no realized P&L and no exit to learn from - so it is returned separately
+    and flagged rather than folded into the numbers. Silently including it would
+    put an unfinished trade into a walk-away that is about how exits went.
+    """
+    from datetime import date as _date
+
+    def _as_date(value):
+        if isinstance(value, _date):
+            return value
+        return _date.fromisoformat(str(value)[:10])
+
+    first, last = _as_date(monday), _as_date(friday)
+    closed: list[JournalTrade] = []
+    still_open: list[JournalTrade] = []
+    for trade in load_trades():
+        raw = trade.raw
+        status = str(raw.get("status") or "").upper()
+        closed_at = str(raw.get("closed_at") or "")[:10]
+        opened_at = str(raw.get("opened_at") or "")[:10]
+        if status == "CLOSED" and closed_at:
+            try:
+                when = _as_date(closed_at)
+            except ValueError:
+                continue
+            if first <= when <= last:
+                closed.append(trade)
+            continue
+        if opened_at:
+            try:
+                when = _as_date(opened_at)
+            except ValueError:
+                continue
+            if first <= when <= last:
+                still_open.append(trade)
+    return {"closed": closed, "still_open": still_open}
+
+
+def week_tag_candidates(monday: Any, friday: Any) -> list[dict[str, Any]]:
+    """The week's closed trades with their auto-tag proposals, for the sub-pane.
+
+    Only trades that actually have a proposal are returned - an empty suggestion
+    list is not a review item, and padding the pane with them would make the
+    weekly ritual look like more work than it is.
+    """
+    rows: list[dict[str, Any]] = []
+    for trade in week_trades(monday, friday)["closed"]:
+        candidates = auto_tag_candidates(trade.trade_id)
+        if not candidates:
+            continue
+        rows.append(
+            {
+                "trade_id": trade.trade_id,
+                "symbol": trade.symbol,
+                "trade_date": trade.trade_date,
+                "current_tags": str(trade.raw.get("setup_tags") or ""),
+                "candidates": candidates,
+            }
+        )
+    return rows
+
+
+def correct_auto_tag(trade_id: str, tags: str) -> None:
+    """Record a correction: the trader's wording wins and the tagger learns.
+
+    ``accept_auto_tags`` is the confirm path; this is the other one. Both write
+    through the trader-owned annotation, so neither is reachable by an import.
+    """
+    trade = _store().get_trade(trade_id) or {}
+    save_annotation(trade_id, setup_tags=str(tags or "").strip(), notes=str(trade.get("notes") or ""))
+    if str(tags or "").strip():
+        _store().record_tag_corrections(trade, str(tags))

@@ -97,7 +97,15 @@ def _finite(value: Any) -> float | None:
 
 
 def _bar_time(bar: Mapping[str, Any]) -> datetime | None:
-    value = bar.get("timestamp") or bar.get("time") or bar.get("date")
+    """A bar's start time, whatever the producer called the field.
+
+    ``dt`` is first because it is what ``autopilot_core._frame_rows`` actually
+    emits, and that is the real fetch path. Omitting it meant every bar from a
+    live download had "no readable timestamp" and was silently dropped - a board
+    that would have measured nothing while every hand-built unit test passed.
+    Found by the one test that went through the downloader instead of around it.
+    """
+    value = bar.get("dt") or bar.get("timestamp") or bar.get("time") or bar.get("date")
     if isinstance(value, datetime):
         return value
     if isinstance(value, date):

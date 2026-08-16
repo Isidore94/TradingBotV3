@@ -454,6 +454,11 @@ MASTER_AVWAP_SCORING_RECOMMENDATIONS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "maste
 MASTER_AVWAP_SCORING_TUNER_REPORT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_tuner_report.txt"
 MASTER_AVWAP_USER_FAVORITES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_user_favorites.csv"
 JOURNAL_DB_FILE = PERSISTENT_RUNTIME_DATA_DIR / "trade_journal.sqlite3"
+#: Weekend Prep stepper progress (R8). Compact operational state, so it
+#: belongs in the shared home folder beside the journal rather than in a
+#: per-machine cache - a routine half-finished on Saturday is still
+#: half-finished on Sunday.
+WEEKEND_PREP_STATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "weekend_prep_state.json"
 JOURNAL_FX_CACHE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "trade_journal_fx_rates.json"
 JOURNAL_EXPORT_DIR = OUTPUT_DIR / "journal"
 
