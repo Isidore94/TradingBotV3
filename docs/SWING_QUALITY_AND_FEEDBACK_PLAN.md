@@ -210,6 +210,16 @@ checks for flipped, inclusive and wrong-field comparisons. Focused baseline:
 63 passed, exit 0. The volume fixture deliberately documents rather than resolves
 the missing intraday-slot data seam described in §4.3.5.
 
+**Shadow-classifier milestone (2026-08-16): BUILT, live shadow week owed.**
+`apply_swing_quality_demotion` runs after Expected-R ranking and stamps only
+`would_demote`, named rule/measurement evidence, the D1 `relvol` reading and the
+annotation-only daytrade carve-out. A bottom report section and desk badge expose
+the calls without consuming them as a tier or filter. The focus payload and D1
+feature CSV carry the same evidence. Before/after tests prove Best Swing ordering
+and S/A/B membership are identical. No watchlist, alert, score, bucket, tier or
+phone membership consumes the stamp. The trader's full shadow week is still
+UNKNOWN and must be accepted before a future demote-and-label presentation change.
+
 ## 6. Exit gates
 
 - Fixtures land before any classification change; full suite green.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -59,6 +60,45 @@ BUCKET_SELECTION_KEYS = {
     "all": set(),
 }
 DEFAULT_BUCKET_SELECTION = "fav_hc_near"
+_SHADOW_SECTION_TITLE = "Stretched - shadow would demote (NO LIVE CHANGE)"
+_SHADOW_ROW_RE = re.compile(r"^\s{2}(?P<symbol>[A-Z][A-Z0-9._\-]*)\s+(?:LONG|SHORT)\s+")
+
+
+def _shadow_would_demote_symbols(
+    path: Path = MASTER_AVWAP_PRIORITY_SETUPS_FILE,
+) -> set[str]:
+    """Read the additive R3 shadow section without treating it as a live tier."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return set()
+    active = False
+    symbols: set[str] = set()
+    for line in lines:
+        if line == _SHADOW_SECTION_TITLE:
+            active = True
+            continue
+        if not active:
+            continue
+        match = _SHADOW_ROW_RE.match(line)
+        if match:
+            symbols.add(match.group("symbol").upper())
+    return symbols
+
+
+def _apply_swing_quality_shadow_badges(rows: list[SetupRow]) -> None:
+    report_symbols = _shadow_would_demote_symbols()
+    for row in rows:
+        raw = row.raw if isinstance(row.raw, dict) else {}
+        if not (bool(raw.get("would_demote")) or row.symbol in report_symbols):
+            continue
+        badges = raw.setdefault("classification_badges", [])
+        if not isinstance(badges, list):
+            badges = []
+            raw["classification_badges"] = badges
+        label = "Stretched? (shadow)"
+        if label not in badges:
+            badges.append(label)
 
 # Columns the compact profile hides. Sector/industry NAMES go, but both RS/RW
 # readings stay: they are the group strength the trader actually reads, and in
@@ -714,6 +754,7 @@ class MasterAvwapPanel(QWidget):
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
         meta = load_latest_setup_rows_with_meta()
         rows = meta["rows"]
+        _apply_swing_quality_shadow_badges(rows)
         if rows or emit_empty:
             self.set_rows(rows)
             self.status_label.setText("Loaded latest report rows." if rows else "No report rows found.")

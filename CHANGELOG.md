@@ -277,6 +277,18 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-16 — R3 swing-quality classifier enters shadow
+
+`IMPLEMENTED` as additive shadow evidence only; live gate owed. The classifier
+stamps `would_demote` for directional EMA21 distance over 2 ATR and trade-side
+zones beyond the first AVWAP band. It also carries the already-loaded D1 RVOL
+and an annotation-only daytrade-candidate marker. The priority report duplicates
+the calls in a bottom **NO LIVE CHANGE** section, the focus payload and feature
+CSV retain the measurements, and the desk adds a `Stretched? (shadow)` badge.
+Tests prove live Best Swing rows, ordering and S/A/B membership are identical
+before and after the stamps. Nothing moves, hides, demotes, alerts or writes a
+watchlist until the trader accepts the owed full-session shadow week.
+
 ### 2026-08-16 — Phase 0.5 remaining-packet pre-flight
 
 The trader's 2026-08-15 weekend redirect authorized R3 through R6, in order, on

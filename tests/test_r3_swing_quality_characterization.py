@@ -215,3 +215,84 @@ def test_daily_volume_thrust_characterization_keeps_forming_volume_unscaled():
     ) is None
     note = legacy._playbook_detect_volume_thrust(forming, "LONG", anchor_vwap=1.0)
     assert note is not None and "2.1x avg volume" in note
+
+
+def test_shadow_classifier_matches_the_mutation_seeded_golden():
+    rows = [dict(case) for case in FIXTURE["quality_cases"]]
+    expected = {
+        row["id"]: {
+            "would_demote": row.pop("would_demote"),
+            "rules": row.pop("rules"),
+            "daytrade_candidate": bool(row.pop("daytrade_candidate", False)),
+        }
+        for row in rows
+    }
+    count = legacy.apply_swing_quality_demotion(rows, FIXTURE["settings"])
+    assert count == sum(1 for value in expected.values() if value["would_demote"])
+    for row in rows:
+        frozen = expected[row["id"]]
+        assert row["would_demote"] is frozen["would_demote"], row["id"]
+        assert row["would_demote_rules"] == frozen["rules"], row["id"]
+        assert row["daytrade_candidate"] is frozen["daytrade_candidate"], row["id"]
+
+
+def test_shadow_stamps_never_change_live_selection_or_tier_membership():
+    cases = {case["id"]: case for case in FIXTURE["quality_cases"]}
+    rows = [
+        _live_row(cases[row_id])
+        for row_id in FIXTURE["legacy_live_membership"]["row_ids"]
+    ]
+    before_best = legacy._priority_best_swing_trade_rows(
+        rows, per_side=20, total_limit=40
+    )
+    before_tiers = legacy._priority_partition_tier_rows(
+        actionable_rows=rows,
+        report_rows=rows,
+        high_conviction_rows=rows,
+        best_swing_rows=before_best,
+    )
+    legacy.apply_swing_quality_demotion(rows, FIXTURE["settings"])
+    after_best = legacy._priority_best_swing_trade_rows(
+        rows, per_side=20, total_limit=40
+    )
+    after_tiers = legacy._priority_partition_tier_rows(
+        actionable_rows=rows,
+        report_rows=rows,
+        high_conviction_rows=rows,
+        best_swing_rows=after_best,
+    )
+    assert [row["id"] for row in after_best] == [row["id"] for row in before_best]
+    assert {
+        tier["label"]: [row["id"] for row in tier["rows"]] for tier in after_tiers
+    } == {
+        tier["label"]: [row["id"] for row in tier["rows"]] for tier in before_tiers
+    }
+
+
+def test_report_duplicates_shadow_evidence_but_keeps_live_best_swing(tmp_path):
+    case = next(
+        row for row in FIXTURE["quality_cases"] if row["id"] == "long_over_edge"
+    )
+    row = _live_row(case)
+    legacy.apply_swing_quality_demotion([row], FIXTURE["settings"])
+    path = tmp_path / "priority.txt"
+    legacy.write_priority_setup_report(path, [row])
+    text = path.read_text(encoding="utf-8")
+    assert "Best swing trades today\n" in text
+    assert row["symbol"] in text[text.index("Best swing trades today\n") :]
+    assert "Stretched - shadow would demote (NO LIVE CHANGE)" in text
+    assert "quality shadow: EMA21 distance 2.01 ATR > 2.00" in text
+
+    pytest.importorskip("PySide6")
+    from ui.models.setup import SetupRow
+    from ui.panels import master_avwap_panel
+
+    assert master_avwap_panel._shadow_would_demote_symbols(path) == {row["symbol"]}
+    desk_row = SetupRow(symbol=row["symbol"], raw={})
+    original = master_avwap_panel._shadow_would_demote_symbols
+    try:
+        master_avwap_panel._shadow_would_demote_symbols = lambda: {row["symbol"]}
+        master_avwap_panel._apply_swing_quality_shadow_badges([desk_row])
+    finally:
+        master_avwap_panel._shadow_would_demote_symbols = original
+    assert desk_row.raw["classification_badges"] == ["Stretched? (shadow)"]

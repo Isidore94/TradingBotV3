@@ -853,6 +853,17 @@ def _run_master_impl(
             eligible_indicator_rows = indicator_frame[indicator_frame["trade_date"] <= last_trade_date.isoformat()]
             if not eligible_indicator_rows.empty:
                 indicator_row = eligible_indicator_rows.iloc[-1]
+        ema21 = (
+            _coerce_float(indicator_row.get("ema_21"))
+            if indicator_row is not None
+            else None
+        )
+        relvol_series = compute_relvol(df)
+        relvol = (
+            _coerce_float(relvol_series.iloc[-1])
+            if relvol_series is not None and not relvol_series.empty
+            else None
+        )
 
         latest_release_context = _build_latest_earnings_release_context(
             df,
@@ -1517,6 +1528,10 @@ def _run_master_impl(
         priority_summary["score"] = float(priority_summary["score"] - effective_compression_penalty)
         priority_summary["current_active_level"] = current_band_context["active_level"]
         priority_summary["current_band_zone"] = current_band_context["zone"]
+        priority_summary["last_close"] = last_close
+        priority_summary["ema21"] = ema21
+        priority_summary["atr20"] = atr20
+        priority_summary["relvol"] = relvol
         priority_summary["compression_flag"] = bool(compression_summary.get("is_compressed"))
         priority_summary["compression_penalty"] = int(effective_compression_penalty or 0)
         priority_summary["compression_note"] = effective_compression_note
@@ -1586,6 +1601,8 @@ def _run_master_impl(
             "spy_above_sma50": (market_regime_snapshot.get("benchmarks", {}).get("SPY", {}) or {}).get("above_sma50"),
             "last_close": last_close,
             "last_volume": last_volume,
+            "ema21": ema21,
+            "relvol": relvol,
             "atr20": atr20,
             "current_active_level": current_band_context["active_level"],
             "current_nearby_bands": ";".join(current_band_context["nearby_levels"]),
@@ -1913,6 +1930,30 @@ def _run_master_impl(
         recent_family_rows=recent_family_rows,
         reference_date=today_run,
     )
+    swing_quality_shadow_count = apply_swing_quality_demotion(
+        priority_rows, load_swing_quality_settings()
+    )
+    for row in priority_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if not isinstance(feature_row, dict):
+            continue
+        for key in (
+            "ema21",
+            "atr20",
+            "relvol",
+            "swing_quality_shadow_version",
+            "would_demote",
+            "would_demote_rules",
+            "would_demote_note",
+            "swing_quality_ema_distance_atr",
+            "daytrade_candidate",
+        ):
+            feature_row[key] = row.get(key)
+    logging.info(
+        "R3 swing-quality shadow stamped %d would-demote row(s); live membership unchanged.",
+        swing_quality_shadow_count,
+    )
     # Study rows are pre-ranking shallow copies; refresh their score/ExpR so
     # capped originals don't leave stale stacked scores on the study clones.
     sync_study_row_ranking_fields(study_rows, priority_rows)
@@ -2005,6 +2046,7 @@ def _run_master_impl(
         "d1_watchlist_scan_symbols_added": d1_watchlist_added,
         "human_focus_tracking": human_focus_tracking_result,
         "human_focus_marked_setup_count": human_focus_marked_count,
+        "swing_quality_shadow_count": swing_quality_shadow_count,
         "setup_tracker_updated": False,
         "study_setups_tracked": 0,
         "setup_tracker_allowed": False,
@@ -2303,6 +2345,8 @@ def _run_master_impl(
         "industry_relative_strength_note",
         "last_close",
         "last_volume",
+        "ema21",
+        "relvol",
         "atr20",
         "previous_day_date",
         "previous_day_high",
@@ -2461,6 +2505,12 @@ def _run_master_impl(
         "favorite_context_signals",
         "events_today",
         "candidate_rejection_reasons",
+        "swing_quality_shadow_version",
+        "would_demote",
+        "would_demote_rules",
+        "would_demote_note",
+        "swing_quality_ema_distance_atr",
+        "daytrade_candidate",
         "setup_candidate_json",
     ]
 

@@ -437,6 +437,11 @@ SHORT_FAVORITE_REQUIRE_PRIOR_DAY_LOW_BREAK = True
 # A. (Expected-R is shrunk toward ~0, so this bites harder once regime
 # conditioning de-compresses it for the weak side.)
 TIER_S_DEMOTE_EXPECTED_R_BELOW = -0.05
+SWING_QUALITY_SHADOW_VERSION = "r3_shadow_v1"
+SWING_QUALITY_EMA_ATR_MAX_DEFAULT = 2.0
+SWING_QUALITY_DAYTRADE_RVOL_MIN_DEFAULT = 2.0
+SWING_QUALITY_DAYTRADE_SCORE_MIN_DEFAULT = 180.0
+SWING_QUALITY_DAYTRADE_EXPECTED_R_MIN_DEFAULT = 0.25
 # Condition the tracker's recency-weighted realized R (which feeds Expected-R) on
 # market regime: history from a different coarse regime than the current scan is
 # down-weighted, so e.g. shorts are judged mostly on how shorts did in similar
@@ -19601,6 +19606,126 @@ def _priority_is_extended_stdev_zone(row: dict) -> bool:
     )
 
 
+def load_swing_quality_settings() -> dict[str, float]:
+    """Resolve R3 shadow thresholds outside the pure classifier."""
+
+    def setting(key: str, default: float) -> float:
+        value = _coerce_float(get_local_setting(key, default))
+        return float(default if value is None else value)
+
+    return {
+        "ema_atr_max": setting(
+            "swing_quality_ema_atr_max", SWING_QUALITY_EMA_ATR_MAX_DEFAULT
+        ),
+        "daytrade_rvol_min": setting(
+            "swing_quality_daytrade_rvol_min",
+            SWING_QUALITY_DAYTRADE_RVOL_MIN_DEFAULT,
+        ),
+        "daytrade_score_min": setting(
+            "swing_quality_daytrade_score_min",
+            SWING_QUALITY_DAYTRADE_SCORE_MIN_DEFAULT,
+        ),
+        "daytrade_expected_r_min": setting(
+            "swing_quality_daytrade_expected_r_min",
+            SWING_QUALITY_DAYTRADE_EXPECTED_R_MIN_DEFAULT,
+        ),
+    }
+
+
+def _swing_quality_band_extended(side: str, zone: str) -> bool:
+    normalized_side = normalize_side(side)
+    normalized_zone = str(zone or "").strip()
+    if normalized_side == "LONG":
+        return normalized_zone in {
+            "UPPER_1 to UPPER_2",
+            "UPPER_2 to UPPER_1",
+            "UPPER_2 to UPPER_3",
+            "UPPER_3 to UPPER_2",
+            "UPPER_3",
+        }
+    return normalized_zone in {
+        "LOWER_2 to LOWER_1",
+        "LOWER_1 to LOWER_2",
+        "LOWER_3 to LOWER_2",
+        "LOWER_2 to LOWER_3",
+        "LOWER_3",
+    }
+
+
+def apply_swing_quality_demotion(
+    rows: list[dict], settings: dict | None = None
+) -> int:
+    """Stamp R3 ``would_demote`` evidence without changing live membership.
+
+    The name retains the accepted eventual behavior, but this first release is
+    deliberately shadow-only. It never edits ``score``, ``expected_r``, bucket,
+    tier, ordering, watchlists, or alerts. The desk shadow week must be accepted
+    before a separate change may consume these stamps as a presentation demotion.
+    """
+
+    config = {
+        "ema_atr_max": SWING_QUALITY_EMA_ATR_MAX_DEFAULT,
+        "daytrade_rvol_min": SWING_QUALITY_DAYTRADE_RVOL_MIN_DEFAULT,
+        "daytrade_score_min": SWING_QUALITY_DAYTRADE_SCORE_MIN_DEFAULT,
+        "daytrade_expected_r_min": SWING_QUALITY_DAYTRADE_EXPECTED_R_MIN_DEFAULT,
+        **(settings or {}),
+    }
+    ema_atr_max = max(0.0, float(config["ema_atr_max"]))
+    daytrade_rvol_min = max(0.0, float(config["daytrade_rvol_min"]))
+    daytrade_score_min = float(config["daytrade_score_min"])
+    daytrade_expected_r_min = float(config["daytrade_expected_r_min"])
+    stamped = 0
+
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        side = normalize_side(row.get("side") or "")
+        close = _coerce_float(row.get("last_close"))
+        ema21 = _coerce_float(row.get("ema21"))
+        atr20 = _coerce_float(row.get("atr20"))
+        directional_distance = None
+        rules: list[str] = []
+        notes: list[str] = []
+        if close is not None and ema21 is not None and atr20 is not None and atr20 > 0:
+            directional_distance = (close - ema21) / atr20
+            if side == "SHORT":
+                directional_distance *= -1.0
+            if directional_distance > ema_atr_max:
+                rules.append("ema_atr_extension")
+                notes.append(
+                    f"EMA21 distance {directional_distance:.2f} ATR > {ema_atr_max:.2f}"
+                )
+        zone = str(row.get("current_band_zone") or "").strip()
+        if _swing_quality_band_extended(side, zone):
+            rules.append("band_extension")
+            notes.append(f"outside first AVWAP band ({zone})")
+
+        relvol = _coerce_float(row.get("relvol"))
+        score = _coerce_float(row.get("score"))
+        expected_r = _coerce_float(row.get("expected_r"))
+        daytrade_candidate = bool(
+            rules
+            and relvol is not None
+            and relvol >= daytrade_rvol_min
+            and score is not None
+            and score >= daytrade_score_min
+            and expected_r is not None
+            and expected_r >= daytrade_expected_r_min
+        )
+        if daytrade_candidate:
+            notes.append(f"daytrade candidate (RVOL {relvol:.2f})")
+
+        row["swing_quality_shadow_version"] = SWING_QUALITY_SHADOW_VERSION
+        row["would_demote"] = bool(rules)
+        row["would_demote_rules"] = rules
+        row["would_demote_note"] = "; ".join(notes)
+        row["swing_quality_ema_distance_atr"] = directional_distance
+        row["daytrade_candidate"] = daytrade_candidate
+        if rules:
+            stamped += 1
+    return stamped
+
+
 def _priority_should_track_extended_stdev(row: dict) -> bool:
     if not isinstance(row, dict) or _priority_is_fresh_post_earnings_window(row):
         return False
@@ -19914,6 +20039,7 @@ def _priority_note_parts(row: dict) -> tuple[list[str], list[str]]:
             score_notes.append(f"{label}: {value}")
 
     setup_note_keys = (
+        ("quality shadow", "would_demote_note"),
         ("retest", "retest_note"),
         ("extension", "extension_note"),
         ("prev day", "previous_day_range_note"),
@@ -30080,6 +30206,9 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     )
     high_conviction_rows = _priority_high_conviction_rows(actionable_priority_rows)
     best_swing_rows = _priority_best_swing_trade_rows(actionable_priority_rows)
+    shadow_would_demote_rows = [
+        row for row in actionable_priority_rows if bool(row.get("would_demote"))
+    ]
     priority_tiers = _priority_partition_tier_rows(
         actionable_rows=actionable_priority_rows,
         report_rows=report_rows,
@@ -30129,6 +30258,11 @@ def write_priority_setup_report(path: Path, priority_rows: list[dict]) -> None:
     handle.write("Appendix: setup-type copy lists\n")
     handle.write("===============================\n")
     _write_priority_setup_copy_lists(handle, "By setup type", actionable_priority_rows)
+    _write_priority_detail_rows(
+        handle,
+        "Stretched - shadow would demote (NO LIVE CHANGE)",
+        shadow_would_demote_rows,
+    )
     _write_text_atomic(path, buffer.getvalue().rstrip() + "\n")
 
 def _focus_priority_bucket_sort_value(bucket: str) -> int:
@@ -30367,6 +30501,17 @@ def write_master_avwap_focus_feed(
             "industry_relative_strength_bonus": int(row.get("industry_relative_strength_bonus", 0) or 0),
             "industry_relative_strength_note": row.get("industry_relative_strength_note") or "",
             "extension_note": row.get("extension_note") or "",
+            "ema21": _coerce_float(row.get("ema21")),
+            "atr20": _coerce_float(row.get("atr20")),
+            "relvol": _coerce_float(row.get("relvol")),
+            "swing_quality_shadow_version": row.get("swing_quality_shadow_version") or "",
+            "would_demote": bool(row.get("would_demote")),
+            "would_demote_rules": list(row.get("would_demote_rules") or []),
+            "would_demote_note": row.get("would_demote_note") or "",
+            "swing_quality_ema_distance_atr": _coerce_float(
+                row.get("swing_quality_ema_distance_atr")
+            ),
+            "daytrade_candidate": bool(row.get("daytrade_candidate")),
             "first_dev_note": row.get("first_dev_note") or "",
             "compression_flag": bool(row.get("compression_flag")),
             "compression_penalty": int(row.get("compression_penalty", 0) or 0),
