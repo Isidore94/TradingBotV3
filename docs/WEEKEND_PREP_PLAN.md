@@ -1,6 +1,8 @@
 # Weekend Prep Plan — Phase 0.5 R8
 
-**Status: ACTIVE spec — authorized 2026-08-15, NOT BUILT.**
+**Status: ACTIVE spec — authorized 2026-08-15, BUILDING.**
+Branch `phase05-r8-weekend-prep`, cut from the R7 tip `4420bbf` on 2026-08-15
+after R7's build completed. Baseline at cut: 3203 passed / 19 subtests, exit 0.
 Trader-directed packet (2026-08-15 desk request). Builds **after** R7
 (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`) because the walk-away and auto-tag
 review steps read the journal R7 makes trustworthy. Per the second 2026-08-15
@@ -30,6 +32,13 @@ weekly auto-tag review only (no tag-performance stats, no tagging of weekend
 picks, no weekly journal entry in v1); Adopt routes to swing Focus + watchlist
 injection; universe is `universe_all.txt` (~1,500 symbols; the broader-universe
 WISHLIST candidate stays gated as written); all refreshes are manual.
+
+**Already landed in R7, so R8 does nothing about it:** the four account tax
+statuses (Questrade TFSA 51830546 = TAX_FREE, Questrade margin 29347316 =
+TAXABLE, IBKR U4867396 = TAX_FREE, IBKR U5102524 = TAXABLE) are recorded in
+`journal_migrate.TRADER_CONFIRMED_TAX_STATUS` as `tax_status_source='trader'`
+and are applied by R7's migration. Weekend Prep reads the journal; it does not
+label accounts.
 
 ## 2. Invariants (binding restatements)
 
@@ -119,8 +128,23 @@ the others; a leg that cannot be measured fails with a reason string.
 | D1 | last > EMA15(D1 closes) AND last > prior completed ISO-week's high | below EMA15(D1) and below prior week's low |
 | M1 | last completed month's close > previous month's high | last completed month's close < previous month's low |
 
-Trader decision line: **approved / amended: ________________** (fill before
-building §7 step "discovery").
+Trader decision line: **APPROVED AS PROPOSED — trader, 2026-08-15**
+("let's finish R8"). The table above is the built contract; no leg was amended.
+
+What that approval binds, stated plainly so a later reader does not have to
+reconstruct it:
+
+- **Session VWAP is dropped above M5, not imitated.** It is a session-anchored
+  measure and there is no session inside an H1, D1 or monthly bar. Substituting
+  a look-alike would have produced a number that reads like the M5 gate's and
+  means something else.
+- **Each leg is its own named function**, so one timeframe can be amended later
+  without touching the others.
+- **A leg that cannot be measured fails, with a reason string.** Short history,
+  a missing prior week, a symbol with no completed month - all of them refuse
+  rather than pass by default. Missing data is uncertainty, never confirmation.
+- The **short mirror is a mirror**, not a separate rule: the same legs with the
+  comparison and the extreme inverted.
 
 ## 6. Step data contracts (inputs → refresh trigger → outputs)
 
@@ -225,8 +249,32 @@ Live proof — one real weekend run, observing:
 
 ## 11. Risks and open items
 
-- yfinance `1h` caps at ~730 days (we request 3mo — safe); batch behavior for 1h
-  across ~187-symbol chunks probed once at build start, time recorded.
+- yfinance `1h` caps at ~730 days (we request 3mo — safe). **Probed once at build
+  start, 2026-08-15, read-only, one 187-symbol chunk from `universe_all.txt`
+  (1,506 symbols):**
+
+  | Timeframe | Request | Wall clock | Rows returned | Extrapolated full universe (8 chunks) |
+  |---|---|---|---|---|
+  | H1 | `1h` / `3mo` | **3.1 s** | 441 | ~25 s |
+  | D1 | `1d` / `1y` | **2.0 s** | 251 | ~16 s |
+  | M1 | `1mo` / `6y` | **2.3 s** | 72 | ~18 s |
+
+  Comfortably inside the ≤30–60 s per-timeframe expectation, and well under the
+  M5 board's measured 27.6 s — each symbol returns far fewer rows here than
+  `5m`/`5d` does. Row counts are exactly what the periods imply (3 months of
+  ~7 hourly bars/day; 251 sessions; 72 months), so nothing is being silently
+  truncated.
+
+  Two things the probe settled that the spec had assumed:
+
+  1. **Columns are `(symbol, field)`** — symbol on level 0. A first reading that
+     counted level 1 returned 6 and looked like a truncated batch; it was the
+     field names. Recorded because the same mistake would misread a real
+     shortfall as a healthy fetch.
+  2. **The monthly frame's last row is the current, in-progress month**
+     (`2026-08-01` on a probe run 2026-08-15). This is the exact condition the
+     month-identity drop exists for, confirmed against live data rather than
+     inferred.
 - Monthly bars are stamped on the 1st and the latest row is the in-progress
   month — the month-identity drop handles it; a listing-month first bar is short
   but sits far behind the 51-bar minimum.

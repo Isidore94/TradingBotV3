@@ -576,26 +576,45 @@ class CaptureRailTests(unittest.TestCase):
 
 
 class NavigationRegistrationTests(unittest.TestCase):
-    """Adding a page shifts every later index; these must stay aligned."""
+    """Adding a page shifts every later index; these must stay aligned.
 
-    def test_nav_items_pages_and_titles_agree(self) -> None:
+    Rewritten in R8 §9 step 1 against ``PAGE_SPECS``. The previous versions
+    grepped ``app.py`` for the three parallel structures and compared the
+    *positions of two string literals* - Chart Review before Focus Picks, at
+    indices 1 and 2. Both passed, uninterrupted, while the titles tuple ran a
+    full entry short from index 3 onward and ``Settings`` raised IndexError.
+
+    Checking two adjacent early entries is what gave that false confidence, so
+    these now check the whole list. ``tests/test_qt_page_specs.py`` carries the
+    per-index behavioural half.
+    """
+
+    def _specs(self):
+        from ui.app import PAGE_SPECS
+
+        return PAGE_SPECS
+
+    def test_chart_review_sits_directly_after_the_trading_desk(self) -> None:
+        titles = [spec.title for spec in self._specs()]
+        self.assertEqual(titles[:3], ["Trading Desk", "Chart Review", "Focus Picks"])
+
+    def test_every_page_is_declared_exactly_once(self) -> None:
+        """The alignment these tests were always about, checked end to end."""
+        specs = self._specs()
+        titles = [spec.title for spec in specs]
+        attributes = [spec.attribute for spec in specs]
+        self.assertEqual(len(set(titles)), len(titles))
+        self.assertEqual(len(set(attributes)), len(attributes))
+        # One structure means a page cannot be half-added; the old failure mode
+        # needed three, so guard against a second one reappearing.
         source = (SCRIPTS_DIR / "ui" / "app.py").read_text(encoding="utf-8")
-        self.assertIn('("Chart Review", "mdi.chart-line")', source)
-        self.assertIn("self.pages.addWidget(self.chart_review_panel)", source)
-        # Chart Review sits directly after Trading Desk in both lists.
-        nav_index = source.index('("Chart Review"')
-        focus_nav_index = source.index('("Focus Picks"')
-        self.assertLess(nav_index, focus_nav_index)
-        title_index = source.index('            "Chart Review",')
-        focus_title_index = source.index('            "Focus Picks",')
-        self.assertLess(title_index, focus_title_index)
+        self.assertNotIn("nav_items = (", source)
+        self.assertNotIn("titles = (", source)
 
     def test_trading_desk_is_still_page_zero(self) -> None:
         """F9's setups expand selects page 0 explicitly."""
-        source = (SCRIPTS_DIR / "ui" / "app.py").read_text(encoding="utf-8")
-        desk_add = source.index("self.pages.addWidget(self.trading_panel)")
-        review_add = source.index("self.pages.addWidget(self.chart_review_panel)")
-        self.assertLess(desk_add, review_add)
+        self.assertEqual(self._specs()[0].title, "Trading Desk")
+        self.assertEqual(self._specs()[0].attribute, "trading_panel")
 
 
 if __name__ == "__main__":

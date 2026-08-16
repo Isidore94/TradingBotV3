@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import argparse
 import gc
 import logging
@@ -48,6 +50,43 @@ from ui.state import VALID_UI_SCALES, UiState
 from ui.theme import apply_theme
 from ui.widgets.price_alert_toast import PriceAlertToastManager
 from ui.widgets.technical_integrity_dialog import TechnicalIntegrityDialog
+
+
+@dataclass(frozen=True)
+class PageSpec:
+    """One nav entry: its title, its icon, and the widget it shows.
+
+    The desk used to keep these as three parallel structures - the order pages
+    were added, a ``nav_items`` tuple, and a ``titles`` tuple inside
+    ``_select_page`` - all addressed by the same integer index and none of them
+    aware of the others. Adding the Strength Board updated two of the three, and
+    the third kept ten entries against eleven pages. Every title from index 3
+    onward named the wrong page, and clicking **Settings** - the last one -
+    raised ``IndexError`` on a list that had run out.
+
+    One list now. A page cannot be half-added.
+    """
+
+    title: str
+    icon: str
+    #: Dotted attribute path on the window, so a page owned by another panel
+    #: (Focus Picks lives on the trading panel) needs no special case.
+    attribute: str
+
+
+PAGE_SPECS: tuple[PageSpec, ...] = (
+    PageSpec("Trading Desk", "mdi.chart-timeline-variant", "trading_panel"),
+    PageSpec("Chart Review", "mdi.chart-line", "chart_review_panel"),
+    PageSpec("Focus Picks", "mdi.star-outline", "trading_panel.focus_picks_panel"),
+    PageSpec("Strength Board", "mdi.trending-up", "strength_board_panel"),
+    PageSpec("Journal", "mdi.notebook-outline", "journal_panel"),
+    PageSpec("Universe", "mdi.earth", "universe_panel"),
+    PageSpec("Research", "mdi.flask-outline", "research_panel"),
+    PageSpec("Auto Pilot", "mdi.robot-outline", "autopilot_panel"),
+    PageSpec("A.I. Summary", "mdi.brain", "ai_summary_panel"),
+    PageSpec("System Health", "mdi.heart-pulse", "health_panel"),
+    PageSpec("Settings", "mdi.cog-outline", "settings_panel"),
+)
 
 
 class MainWindow(QMainWindow):
@@ -177,17 +216,8 @@ class MainWindow(QMainWindow):
         )
 
         self.pages = QStackedWidget()
-        self.pages.addWidget(self.trading_panel)
-        self.pages.addWidget(self.chart_review_panel)
-        self.pages.addWidget(self.trading_panel.focus_picks_panel)
-        self.pages.addWidget(self.strength_board_panel)
-        self.pages.addWidget(self.journal_panel)
-        self.pages.addWidget(self.universe_panel)
-        self.pages.addWidget(self.research_panel)
-        self.pages.addWidget(self.autopilot_panel)
-        self.pages.addWidget(self.ai_summary_panel)
-        self.pages.addWidget(self.health_panel)
-        self.pages.addWidget(self.settings_panel)
+        for spec in PAGE_SPECS:
+            self.pages.addWidget(self._page_widget(spec))
 
         self.title_label = QLabel("Trading Desk")
         self.title_label.setObjectName("TitleLabel")
@@ -265,20 +295,8 @@ class MainWindow(QMainWindow):
         nav_layout.addWidget(brand)
         nav_layout.addSpacing(8)
 
-        nav_items = (
-            ("Trading Desk", "mdi.chart-timeline-variant"),
-            ("Chart Review", "mdi.chart-line"),
-            ("Focus Picks", "mdi.star-outline"),
-            ("Strength Board", "mdi.trending-up"),
-            ("Journal", "mdi.notebook-outline"),
-            ("Universe", "mdi.earth"),
-            ("Research", "mdi.flask-outline"),
-            ("Auto Pilot", "mdi.robot-outline"),
-            ("A.I. Summary", "mdi.brain"),
-            ("System Health", "mdi.heart-pulse"),
-            ("Settings", "mdi.cog-outline"),
-        )
-        for index, (label, icon_name) in enumerate(nav_items):
+        for index, spec in enumerate(PAGE_SPECS):
+            label, icon_name = spec.title, spec.icon
             button = QPushButton(label)
             button.setObjectName("NavButton")
             button.setCheckable(True)
@@ -506,21 +524,16 @@ class MainWindow(QMainWindow):
             else "chart column restored"
         )
 
+    def _page_widget(self, spec: "PageSpec"):
+        """Resolve a spec's dotted attribute path to the widget it names."""
+        target = self
+        for part in spec.attribute.split("."):
+            target = getattr(target, part)
+        return target
+
     def _select_page(self, index: int) -> None:
-        titles = (
-            "Trading Desk",
-            "Chart Review",
-            "Focus Picks",
-            "Journal",
-            "Universe",
-            "Research",
-            "Auto Pilot",
-            "A.I. Summary",
-            "System Health",
-            "Settings",
-        )
         self.pages.setCurrentIndex(index)
-        self.title_label.setText(titles[index])
+        self.title_label.setText(PAGE_SPECS[index].title)
         for button_index, button in enumerate(self.nav_buttons):
             button.setChecked(button_index == index)
         mode_visible = index == 0
