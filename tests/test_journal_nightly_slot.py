@@ -135,6 +135,51 @@ def test_an_unreachable_broker_is_reported_and_does_not_fail_the_night(quiet_nig
     assert any("IBKR" in message for message in result["messages"])
 
 
+def test_reconciliation_is_scoped_to_only_the_reachable_brokers(quiet_night, store, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        journal_runner.journal_reconcile,
+        "reconcile",
+        lambda *args, **kwargs: calls.append(kwargs) or {"positions_checked": 0, "mismatched": []},
+    )
+
+    journal_runner.run_nightly_journal_import(store=store)
+
+    assert calls[0]["brokers"] == ["QUESTRADE"]
+
+
+def test_reconciliation_is_skipped_when_no_broker_is_reachable(store, monkeypatch):
+    class _UnconfiguredBroker:
+        refresh_token = ""
+        access_token = ""
+        api_server = ""
+
+        def __init__(self):
+            self.quarantined = []
+
+    monkeypatch.setattr(journal_runner, "QuestradeImporter", _UnconfiguredBroker)
+    monkeypatch.setattr(
+        journal_runner,
+        "import_ibkr_flex_executions",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("Flex unavailable")),
+    )
+    monkeypatch.setattr(
+        journal_runner.journal_reconcile,
+        "reconcile",
+        lambda *args, **kwargs: pytest.fail("unreachable brokers are not evidence of flat positions"),
+    )
+    monkeypatch.setattr(
+        journal_runner.journal_fx,
+        "ensure_rates",
+        lambda *args, **kwargs: {"booked": 0, "carried_back": 0, "unavailable": [], "errors": []},
+    )
+
+    result = journal_runner.run_nightly_journal_import(store=store)
+
+    assert result["ok"] is True
+    assert any("reconcile skipped" in message for message in result["messages"])
+
+
 def test_a_failed_rebuild_fails_the_night(quiet_night, store, monkeypatch):
     monkeypatch.setattr(
         store, "rebuild_trades", lambda **k: (_ for _ in ()).throw(RuntimeError("disk full"))

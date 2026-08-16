@@ -209,6 +209,29 @@ def test_a_position_that_reconciles_today_loses_yesterdays_flag(store):
         assert conn.execute("SELECT reconcile_status FROM trades").fetchone()[0] == ""
 
 
+def test_a_scoped_reconciliation_does_not_clear_another_brokers_review_flag(store):
+    store.upsert_executions([_execution("QT:5:1", "BUY", 100, 150.0, "2026-08-03")])
+    store.upsert_executions(
+        [
+            _execution(
+                "IBKR:U1:1", "BUY", 50, 200.0, "2026-08-03",
+                broker="IBKR", account_number="U1", symbol="MSFT",
+            )
+        ]
+    )
+    store.rebuild_trades(refresh_tags=False)
+    jr.reconcile(store, [], brokers=["QUESTRADE", "IBKR"])
+
+    jr.reconcile(store, [_broker("AAPL", 100)], brokers=["QUESTRADE"])
+
+    with store.connection() as conn:
+        statuses = {
+            row[0]: row[1]
+            for row in conn.execute("SELECT broker, reconcile_status FROM trades")
+        }
+    assert statuses == {"QUESTRADE": "", "IBKR": "NEEDS_REVIEW"}
+
+
 def test_reconciliation_never_overwrites_a_human_decision(store):
     """FORCED_CLOSED records that a human closed it. This module is not a human."""
     store.upsert_executions([_execution("QT:5:1", "BUY", 100, 150.0, "2026-08-03")])

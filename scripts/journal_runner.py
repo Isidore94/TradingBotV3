@@ -485,13 +485,17 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
         messages.append(f"rebuild failed: {exc}")
 
     try:
-        report = journal_reconcile.reconcile(
-            journal_store, _broker_positions(journal_store, messages), trigger=trigger
-        )
-        messages.append(
-            f"reconciled {report['positions_checked']} position(s), "
-            f"{len(report['mismatched'])} mismatch(es)"
-        )
+        positions, reachable = _broker_positions(journal_store, messages)
+        if reachable:
+            report = journal_reconcile.reconcile(
+                journal_store, positions, brokers=reachable, trigger=trigger
+            )
+            messages.append(
+                f"reconciled {report['positions_checked']} position(s), "
+                f"{len(report['mismatched'])} mismatch(es)"
+            )
+        else:
+            messages.append("reconcile skipped: no broker position source was reachable")
     except Exception as exc:  # noqa: BLE001
         had_errors = True
         messages.append(f"reconcile failed: {exc}")
@@ -529,7 +533,9 @@ def _fetch_one_day(journal_store: JournalStore, broker: str, account_number: str
     return total
 
 
-def _broker_positions(journal_store: JournalStore, messages: list[str]) -> list[dict[str, Any]]:
+def _broker_positions(
+    journal_store: JournalStore, messages: list[str]
+) -> tuple[list[dict[str, Any]], list[str]]:
     """Current positions from every configured broker, for reconciliation.
 
     A broker that cannot be reached contributes nothing and says so. It is not
@@ -558,8 +564,7 @@ def _broker_positions(journal_store: JournalStore, messages: list[str]) -> list[
     except Exception as exc:  # noqa: BLE001
         messages.append(f"IBKR positions unavailable: {exc}")
 
-    _broker_positions.reachable = reachable  # type: ignore[attr-defined]
-    return positions
+    return positions, reachable
 
 
 def main() -> int:

@@ -194,10 +194,17 @@ def apply_review_flags(store: Any, report: Mapping) -> int:
     flagged: set[str] = set()
     for item in report.get("mismatched") or []:
         flagged.update(str(trade_id) for trade_id in item.get("trade_ids") or [])
+    brokers = sorted(
+        {str(broker).upper() for broker in report.get("brokers") or [] if str(broker).strip()}
+    )
     with store.connection() as conn:
-        conn.execute(
-            "UPDATE trades SET reconcile_status = '' WHERE reconcile_status = 'NEEDS_REVIEW'"
-        )
+        if brokers:
+            placeholders = ", ".join("?" for _ in brokers)
+            conn.execute(
+                "UPDATE trades SET reconcile_status = '' "
+                f"WHERE reconcile_status = 'NEEDS_REVIEW' AND broker IN ({placeholders})",
+                brokers,
+            )
         for trade_id in sorted(flagged):
             conn.execute(
                 "UPDATE trades SET reconcile_status = 'NEEDS_REVIEW' "
