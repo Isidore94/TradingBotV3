@@ -424,19 +424,27 @@ are listed in `CURRENT_CHECKPOINT.md`.
    from the RS/RW board appearing as a badge everywhere that symbol renders that
    day; and §6.1's ignored-symbol armed-watch hit feeding and sounding while
    automatic Focus D1 interest for that same ignored symbol stays absent.
-5. **R5 M5 signal engines. — §2 BUILT 2026-08-16; wiring BLOCKED on a trader
-   answer.** `scripts/indicators/smi.py`, `efficiency_lrsi.py` and
-   `heikin_ashi.py` are built, pure and green (42 hand-computed tests). Nothing
-   imports them, so **no packaging trigger has fired yet**. Two of the spec's
-   three §8 questions were answered by the trader on 2026-08-16 — the confluence
-   alert stays **M5 Focus only**, and an ORB candidate is an **Alert Center
-   annotation** rather than a strength-board lane. **The third is still open and
-   blocks every §3 alert type: which Alert Center lane/tag the new engines
-   carry.** Ask before wiring. §5's shared completed-bars helper is deliberately
-   unbuilt until it has consumers, and must then be ONE definition reconciled
-   with `weekend_strength.completed_bars` on `astimezone`, never a second copy
-   of BounceBot's `replace(tzinfo=None)` idiom. See the spec's new §9.
-   Original scope follows.
+5. **R5 M5 signal engines. — §2 and §5 BUILT 2026-08-16; §3/§4 wiring is the
+   next build.** `scripts/indicators/smi.py`, `efficiency_lrsi.py` and
+   `heikin_ashi.py` are built, pure and green (42 hand-computed tests), and
+   `scripts/completed_bars.py` is now the one intraday completed-bar rule, with
+   `weekend_strength` delegating to it and a characterization test proving the
+   move changed nothing. Nothing imports `indicators` yet, so **no packaging
+   trigger has fired**.
+
+   All three §8 questions are answered and recorded in that spec: the confluence
+   alert stays **M5 Focus only**; an ORB candidate is an **Alert Center
+   annotation**; and the engines get **a new `M5_SIGNAL_TAG` family** rather
+   than reusing `d1_flag` — main feed, no tier-gate bypass, not loud by default
+   where the spec is silent, and **not privileged** against R4 §6.3, because an
+   unproven engine must be foldable. Per-engine identity rides `bounce_type`.
+
+   **Next:** wire engine by engine, LRSI cross first (§7). The first
+   `scripts/indicators` importer fires the packaging trigger — `collect_submodules`,
+   the spec-drift allowlist, the selftest roster, and a clean-cache frozen
+   rebuild, all in that commit, and there the selftest count must actually move.
+   BounceBot's ad-hoc completed-bars call sites migrate opportunistically, never
+   as a silent change to a shipped detector. Original scope follows.
 
    New pure indicator modules (TC2000-parity SMI,
    efficiency-LRSI under a non-colliding name, Heikin-Ashi reversal), the LRSI

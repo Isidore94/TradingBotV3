@@ -22,6 +22,44 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-16 — One shared completed-bar rule, and R5's lane decision
+
+`plan.md` sec 5 says completed bars only for state transitions and a forming bar
+is preview. That rule had been written once and implemented three times.
+`scripts/completed_bars.py` is now the single definition of the intraday case —
+`bar_start + bar_minutes <= now`, inclusive at the boundary, timezone-converted
+with `astimezone` and never `replace(tzinfo=None)`.
+
+`weekend_strength._completed_intraday` already had it right, so its logic was
+**moved** rather than rewritten and it now delegates. Only the intraday rule is
+shared: the NYSE-last-completed-session and month-identity rules stay where they
+were, because they answer different questions and folding them in would have
+been a behaviour change dressed as a refactor. A characterization test pins the
+weekend board's behaviour with frozen survivor counts and was verified to go red
+against a mutated boundary.
+
+BounceBot's ad-hoc call sites (`bounce_bot_lib/legacy.py:4384-4386, 4533-4535`)
+are deliberately **not** migrated: R5 §5 says they move opportunistically, never
+as a silent behaviour change to a shipped detector. Their `replace(tzinfo=None)`
+spelling is recorded as the defect it is — it discards a stamp's offset instead
+of converting through it, so a zone-carrying bar is judged against a wall-clock
+number that never meant the same instant.
+
+R5's Alert Center lane question was also answered (Fable, trader-delegated;
+trader may override) and recorded in that spec's §8.1 before any wiring: **a new
+`M5_SIGNAL_TAG` family**, not a reuse of `d1_flag`. Main feed, no tier-gate
+bypass, not loud by default where the spec does not say so, and **not privileged**
+against R4 §6.3 — an unproven engine must be foldable. Per-engine identity rides
+`bounce_type` so each engine stays separately countable in the feed and History,
+which is what §7's per-engine desk session needs.
+
+One correction was folded into that record: Focus privilege rides the symbol
+rather than the tag, as the decision assumed, but `_alert_has_focus_privilege`
+is membership **and** an open prev-day break on the alert's own side — stricter
+than membership alone. "Focus member ⇒ never folded" is not what the code does.
+
+Deterministic gate: 3562 passed / 19 subtests, exit 0.
+
 ### 2026-08-16 — R5's pure indicator modules
 
 `scripts/indicators/` gained three pure, offline, completed-bars-only modules:

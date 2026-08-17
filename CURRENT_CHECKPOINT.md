@@ -6,6 +6,85 @@ This file is the frequently refreshed active-work, branch, and verification stam
 - Remaining work and gates: [`plan.md`](plan.md)
 - Supporting-document roles: [`docs/README.md`](docs/README.md)
 
+---
+
+## THE WEEKEND OF 2026-08-15/16 — start here
+
+**One branch now carries everything.** Before this weekend the work lived on
+`testing-week-2026-08-10` plus a ladder of packet branches. It is all collapsed
+into **`phase05-r8-weekend-prep`**, which is **208 commits ahead of `main`** and
+has both `main` and `phase05-r2-focus-gating-strength-board` as proven ancestors
+(`git merge-base --is-ancestor` = 0 for each). Every deleted branch was verified
+fully contained first; every rollback SHA is still reachable. There is exactly
+**one thing to merge**, and it has no known conflict.
+
+```
+main (7d85a27)
+  └─ testing-week → R1 → R1.1 → R2 (8d25c92) → R7 → R8 → [R3, R4, R5 this weekend]
+       = phase05-r8-weekend-prep          ← the single release candidate
+```
+
+**What got built, packet by packet.** 64 commits since the R2 tip; 14 of them in
+the final session.
+
+| Packet | State | One-line summary |
+|---|---|---|
+| **R1 + R1.1** | BUILT, 4 live proofs owed | OFF/DESK/AWAY/EVENING matrix, one fail-open quiet-hours gate over every automatic starter, EVENING SPY wake alarm |
+| **R2** | BUILT, 4 live proofs owed | PDH+VWAP Focus adoption gate at build/refresh/adoption, provenance sidecar, scoped "Not today", M5 strength board |
+| **R3** | **CLOSED 2026-08-16** | Shadow-only `would_demote` classifier, relvol + daytrade annotation, reviewed-today badge, 12:45 preview slot, post-close tracker write, STABLE+PREVIEW, structured dislike codes. **§4.3.5 volume-thrust deferred by trader decision** |
+| **R4** | **BUILT 2026-08-16** | CaptureRail on every chart surface, painted armed alerts, forming-bar honesty fix, reviewed-today markers, labeled Like→Focus, feed repetition + open-burst digest |
+| **R5** | **§2 + §5 built; §3/§4 wiring next** | Three pure indicator modules (SMI / efficiency-LRSI / Heikin-Ashi) and the one shared completed-bars rule. Lane decision answered — see §8.1 of its spec |
+| **R6** | NOT STARTED | Three small operational wins; item (d) already resolved into R7 |
+| **R7** | BUILT, trader-present finale owed | Tax-grade journal from both brokers, rebuilt Journal tab |
+| **R8** | BUILT, one weekend run owed | Guided weekend prep routine, H1/D1/M1 strength boards |
+
+**Gates on the current tip** — all exit 0, all re-run this weekend:
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3562 passed / 19 subtests** |
+| `scripts/smoke_check.py` | **7/7** |
+| clean-cache frozen rebuild + selftest | **`selftest OK: 49/49 checks passed (frozen)`** |
+
+The frozen rebuild deleted `build/` **and** `dist/` first and ran from the
+worktree, so the desk's own `dist/` was never touched. **49 unchanged is the
+correct result**: no packaging trigger fired across R3/R4/R5 and no selftest
+roster changed, so the "a count that does not move after a roster change is a
+stale build" rule does not apply here. R5's wiring **will** change the roster,
+and there the count must move.
+
+**Nothing live was touched all weekend.** No broker call, no journal write, no
+desk-branch switch, no `main` push. The desk kept running
+`phase05-r2-focus-gating-strength-board` from the main checkout throughout.
+
+**Six trader decisions were taken and are recorded, not re-litigable:**
+
+1. R3 §4.3.5 volume-thrust normalization — **deferred** (no intraday seam; a
+   flat-profile proration was offered and rejected).
+2. R4 open-burst digest window — **30 minutes**, zero disables.
+3. R4 like-to-Focus — **one click**, no reason prompt.
+4. R4 escalation list — **exhaustive at three**: higher tier, first BANGER,
+   first PROVEN.
+5. R5 confluence scope — **M5 Focus members only**.
+6. R5 ORB candidate surface — **Alert Center annotation**, not a board lane.
+
+Plus one delegated to Fable and recorded: R5 gets a **new `M5_SIGNAL_TAG`
+family**, no tier bypass, foldable (spec §8.1).
+
+**Three things are held ask-first — recorded, not skipped:**
+
+- the Focus Picks reviewed-today marker (that panel is editable watchlist
+  *text*, so a marker would land in data written back to the watchlists);
+- R4 §2.2's `review_host` for the RS/RW and Industry boards (its remaining half
+  is the setups table's advance-to-next-row flow, meaningless on a ranked board);
+- migrating BounceBot's ad-hoc completed-bars call sites onto the new shared
+  helper (R5 §5 says opportunistically, never as a silent change to a shipped
+  detector).
+
+**→ Next session: see RESUME HERE in the table below.**
+
+---
+
 ## Active work — read this before choosing a task
 
 There may be only one active build item unless `plan.md` explicitly identifies an
@@ -14,16 +93,17 @@ elapsed evidence lane that can run in parallel.
 | Field | Current value |
 |---|---|
 | Roadmap phase | **Phase 0.5 — R5 in progress, R6 and the review-deferral completions still to come.** R3 CLOSED and R4 BUILT 2026-08-16. R1 + R1.1 + R2 + R3 + R4 + R7 + R8 built; every live gate remains owed |
-| **Active packet** | **R5 M5 signal engines** (`docs/M5_SIGNAL_ENGINES_PLAN.md`). **§2's three pure indicator modules are BUILT and green**; all wiring is unbuilt and **BLOCKED**: the spec's §8 Alert Center lane question was asked on 2026-08-16 and came back unanswered, and it decides the tag every §3 alert type carries. **Ask the trader before wiring anything.** §9 of that spec carries the full build state, the two §8 answers that did land, and the packaging + completed-bars rules the wiring commit must honour |
-| **RESUME HERE** | 1. Ask the R5 Alert Center lane question, then build R5 §3/§4/§5 — **`scripts/indicators` gaining its first importer is an explicit packaging trigger**: spec `collect_submodules`, the spec-drift allowlist, `selftest.LAZY_ENGINE_MODULES`, and a frozen rebuild with `build/` **and** `dist/` deleted first, all in that commit. 2. **R6** (`plan.md` Phase 0.5 item 6): the `ai_jobs` boot-line reword + a read-only System Health row over `job_ledger.jsonl`; session-scoped rotation for `technical_integrity_events.jsonl` preserving its replay contract (**`technical_integrity.py` is scoring-adjacent — characterization fixture first**); and the `ui_stall_watchdog` setting/plumbing only, since the diagnostic week is owed not built. Item 6(d) is already resolved into R7 — no work. 3. **The review-deferral completions**: R8 Week-in-Review RRS-extremes join, R8 Focus Review joins (join picks WITH their outcomes, not separate rows), Analytics per-setup/per-account bar charts + day-of-week/time-of-day + R-distribution/expectancy with honest n counts and a CSV under each chart, and the Calendar pyqtgraph year heatmap. **Leave true USD conversion deferred** — the FX table books CAD only, and inventing USD rates is not an option |
+| **Active packet** | **R5 M5 signal engines** (`docs/M5_SIGNAL_ENGINES_PLAN.md`). **§2's three pure indicator modules and §5's shared completed-bars helper are BUILT and green.** The lane question that blocked the wiring is **ANSWERED** — spec §8.1: one new `M5_SIGNAL_TAG` family, main feed, **no tier-gate bypass**, not loud by default where the spec does not say, and **not** privileged against R4 §6.3 (foldable and digest-eligible). Per-engine identity rides `bounce_type`, not the tag. §9 carries build state and the packaging rules |
+| **RESUME HERE** | **1. R5 §3/§4 wiring**, engine by engine, **LRSI cross first** (§7: it is the simplest and the trader wants it standalone). Then the HA+SMI+LRSI confluence (M5 Focus only), then the first-candle ORB flow, then §4's `AnyBounceWatch` + the prior-anchor AVWAP line. **The first `scripts/indicators` importer fires the packaging trigger** — in that same commit: the spec's `collect_submodules`, `tests/test_packaging_spec_drift.py`'s allowlist, `selftest.LAZY_ENGINE_MODULES`, and a frozen rebuild with `build/` **and** `dist/` deleted first. **There the count MUST move; if it does not, it is a stale build, not a pass.** Mind the disjointness rule. **2. R6** (`plan.md` Phase 0.5 item 6): the `ai_jobs` boot-line reword + a read-only System Health row over `job_ledger.jsonl`; session-scoped rotation for `technical_integrity_events.jsonl` preserving its replay contract (**`technical_integrity.py` is scoring-adjacent — characterization fixture FIRST**); and the `ui_stall_watchdog` setting/plumbing only, since the diagnostic week is owed not built. Item 6(d) already resolved into R7 — no work. **3. The review-deferral completions**: R8 Week-in-Review RRS-extremes join (`rrs_strength_extremes.csv` + `rrs_group_strength_extremes.csv` rows inside the reviewed week), R8 Focus Review joins (`human_focus_performance`, `pick_feedback.jsonl`, `veto_cohort_*` as the mirror cohort — **join picks WITH their outcomes, not as separate rows**), Analytics per-setup/per-account bar charts + day-of-week/time-of-day + R-distribution/expectancy with honest n counts and a CSV under each chart, and the Calendar pyqtgraph year heatmap. **Leave true USD conversion deferred** — the FX table books CAD only and inventing USD rates is not an option |
 | **R4 close-out (2026-08-16)** | **BUILT, live proofs owed.** §6.1 armed-alert survival; CaptureRail in the snapshot popup and Alert Center pane (so the RS/RW and Industry boards, which had no capture at all, now inherit it); Alert Center LIKE as capture-not-placement; armed price alerts + D1 level watches painted as a read-only `GROUP_ALERTS` family on the worker; the Yahoo forming-bar early print suppressed 15 min after the open and labeled when drawn; the reviewed-today marker on snapshot/Alert pane/RS-RW/Industry; the labeled `☆ Like → M5 Focus` verb; and one feed row per symbol+side+day with a three-item escalation list and a 30-minute open-burst digest. Three trader confirmations recorded in the spec's §6.4. **Held ask-first:** the Focus Picks marker (editable watchlist *text*, not a table) and §2.2's `review_host` for the boards. **Owed:** the whole §8 exit gate, all live |
 | **R3 close-out (2026-08-16)** | **DETERMINISTIC WORK COMPLETE.** The classifier stays shadow-only — `would_demote` stamps, nothing moves, hides or reorders a live row. Built: relvol + `daytrade_candidate` annotation, reviewed-today badge from recorded decisions only, the 12:45 PT preview slot, actual-close ownership of the single scheduled tracker write, STABLE+PREVIEW with `bar_status` stamps, and structured dislike codes counted as `review_learning`'s `dislike_reason` dimension. **§4.3.5 volume-thrust normalization is DEFERRED by explicit trader decision** — the D1 seam has no intraday slot series, a per-symbol 5-min fetch was refused as a data-budget/contract change, and a session-elapsed proration was offered and rejected because real volume is U-shaped. **Owed, live only:** the `would_demote` shadow week (required before any row moves), the one-week 12:45-vs-close and STABLE-vs-PREVIEW churn comparison, and the first real-data curation cycle |
 | **Working branch** | **`phase05-r8-weekend-prep`** — since the 2026-08-15 consolidation this is **THE single release candidate**, carrying testing-week + R1 + R1.1 + R2 + R7 + R8 and every review-repair pass. It was cut from the R7 tip `4420bbf`, which was cut from the R2 tip `8d25c92`; the one R2 commit made after that cut (`fc4bcaf`) is now **merged in**, so `phase05-r2-focus-gating-strength-board` is a proven ancestor (`git merge-base --is-ancestor` = 0). Built in a linked worktree at `..\TradingBotV3-r8`. **The main `C:\Users\Aaron\TradingBotV3` checkout stays on the R2 branch, because the desk's scheduled task runs the desk from it.** Run tests with the main repo's venv python and the worktree as cwd |
 | Desk branch | **`phase05-r2-focus-gating-strength-board`** at `fc4bcaf` — what the desk runs and what Monday's live proofs are observed against. It is kept **only until the Monday merge**; do not switch, rename or delete it before the scheduled task is disarmed |
-| Scope | R4's own spec fences its files. Edits outside the files the active packet's spec names are **ask-first**, fixtures first on anything detector/scoring/alert adjacent — the recovered-rule detour proved that pattern works |
-| State | **3542 passed / 19 subtests, exit 0; smoke 7/7, exit 0; clean-cache frozen rebuild + `selftest OK: 49/49 checks passed (frozen)`, exit 0.** Main desk checkout and live runtime untouched throughout; no live broker call, no live journal write. The rebuild deleted `build/` **and** `dist/` first and ran from the worktree, so the desk's own `dist/` was never touched. **49 is unchanged from the R7/R8 gate, and that is the correct result here**: no packaging trigger fired across R3/R4/R5 — `alert_repetition.py` is a top-level *module* imported eagerly by `alert_center_panel`, so static analysis reaches it, and the three new `indicators` modules have **no importer at all** yet, exactly like `laguerre_rsi.py`. No new dependency, runtime asset, package or dynamic string import, and **no selftest roster change** — the stale-build rule ("a count that does not move after a roster change is a stale build") does not apply, because no roster changed. R5's wiring WILL change the roster and force a real re-verification |
+| Scope | R5 §6 fences its files: `bounce_bot_lib/legacy.py`, `chart_watch.py`, `master_avwap_lib/d1_zone_arms.py`, `master_avwap_lib/legacy.py` (prior-anchor output), `alert_center_panel.py`, `bounce_service.py`. Edits outside the files the active packet's spec names are **ask-first**, fixtures first on anything detector/scoring/alert adjacent — the recovered-rule detour proved that pattern works. **Never edit `scripts/strength_scan.py`** |
+| State | **3562 passed / 19 subtests, exit 0; smoke 7/7, exit 0; clean-cache frozen rebuild + `selftest OK: 49/49 checks passed (frozen)`, exit 0** (the frozen gate was taken at `6d81492`; the two commits after it add `completed_bars.py` + the lane decision and changed no packaging input). Main desk checkout and live runtime untouched throughout; no live broker call, no live journal write. The rebuild deleted `build/` **and** `dist/` first and ran from the worktree, so the desk's own `dist/` was never touched. **49 is unchanged from the R7/R8 gate, and that is the correct result here**: no packaging trigger fired across R3/R4/R5 — `alert_repetition.py` is a top-level *module* imported eagerly by `alert_center_panel`, so static analysis reaches it, and the three new `indicators` modules have **no importer at all** yet, exactly like `laguerre_rsi.py`. No new dependency, runtime asset, package or dynamic string import, and **no selftest roster change** — the stale-build rule ("a count that does not move after a roster change is a stale build") does not apply, because no roster changed. R5's wiring WILL change the roster and force a real re-verification |
 | Next action | See **RESUME HERE** above. Do not claim any live proof from deterministic tests |
-| Do not start yet | **Phase 1–7 throughout this session.** Do not run R7's live migration/backfill before Monday's validation day passes; do not claim any live proof from deterministic tests |
+| Do not start yet | **Phases 1–7 remain NOT authorized.** Do not run R7's live migration/backfill before Monday's validation day passes; do not claim any live proof from deterministic tests |
+| **Owed live gates — the full ledger** | Nothing below has been observed. UNKNOWN is a result and `plan.md` sec 6 requires recording it as one. **R1 (4):** a ~21:00 boot that starts nothing; an EVENING day that stops after its early block; an AWAY session staging-not-adopting with a clean post-flip drain; one SPY ±1% alarm. **R2 (4):** one staged pick evicted on a VWAP/PDH fallback; one adoption-time refusal; one scoped "Not today" leaving other entries intact; one strength-board session matching the TC2000 scan's character (re-measure the fetch during market hours). **R3 (3):** the `would_demote` shadow week **before any row moves**; the one-week 12:45-vs-close and STABLE-vs-PREVIEW churn comparison; the first real-data curation cycle. **R4:** the whole §8 exit gate, including the two-direction Not-today/armed-watch check. **R6:** the stall-watchdog diagnostic week. **R7:** the trader-present finale — dry-run review, migration, full backfill, ≥10-trade statement spot-audit, one clean reconciliation week, ≥5 consecutive nightly ledger entries. **R8:** one real weekend run (does **not** wait for Monday — read-only, starts nothing until a button is pressed) |
 | Doc-only addendum (2026-08-15, late) | Phase 0.5 gained packets **R7 (journal reliability + UX)** and **R8 (Weekend Prep)**: specs written, WISHLIST/plan.md/docs README reconciled (incl. the P3.3 nightly-journal-pull promotion into R7 and the P5.4 narrowing). **Markdown-only — the release candidate, gates, and baseline above are unchanged** |
 | **R7 redirect (2026-08-15, second of the day)** | The trader explicitly authorized **R7 code to start now**, ahead of the P0.7 merge: branch **`phase05-r7-journal-reliability-ux` cut from the R2 tip** — same redirect pattern as R1/R2, recorded in `plan.md` Phase 0.5 preamble and the R7 spec header. Rationale: R7/R8 touch journal/weekend surfaces, not the scanning/alerting/Focus path Monday's proofs cover. **The desk keeps running the R2 branch via the scheduled task until the validation day passes — do not switch the desk branch without disarming that task.** R1/R2's eight live proofs remain owed and are inherited by the eventual stack merge. R7's own trader-present steps (live DB migration, full backfill) must NOT run on the desk before Monday's validation passes |
 | **R3–R6 weekend redirect (2026-08-15)** | The trader explicitly authorized the remaining packets on this consolidated branch: *"integrate the rest — build R3 through R6 on the consolidated branch."* Build order is R3, R4, R5, R6, with per-packet governance and full-suite pushes. The redirect authorizes code; it does not discharge R3's shadow week or R6's watchdog week |
