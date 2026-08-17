@@ -168,9 +168,53 @@ Put to the trader on 2026-08-16, before any wiring was written.
 
 | Question | Status |
 |---|---|
-| **Alert Center lane** — same `d1_flag` family, or a new tag for LRSI/combo/ORB alerts | **STILL OPEN, and it blocks §3's wiring.** Asked 2026-08-16; no answer came back. Do not settle it by inference. The recommendation put to the trader was a **new tag family**, reasoning that §7 wants each engine's volume judged on its own desk session, and folding brand-new detectors into `d1_flag` makes "is this new engine noisy?" unanswerable. Ask again before wiring any of the three alert types |
+| **Alert Center lane** — same `d1_flag` family, or a new tag for LRSI/combo/ORB alerts | **ANSWERED 2026-08-16 (Fable, trader-delegated; the trader may override): a NEW TAG FAMILY.** Full decision and its consequences in §8.1 below |
 | **Combo signal scope** | **ANSWERED 2026-08-16: M5 Focus members only** — as specced, and as the trader originally framed it. A three-signal confluence run over the full watchlists would fire on names the trader never chose, which is the trash-volume problem R3 exists to reduce. Focus membership is the trader's explicit statement that they care about the name |
 | **ORB candidate tagging surface** | **ANSWERED 2026-08-16: Alert Center annotation**, not a strength-board lane. The candidate is marked where its two follow-up alerts will fire, so the candidate and its follow-ups read as one story in one place, and the mark expires with the day like every other day-scoped annotation |
+
+### 8.1 The lane decision — `M5_SIGNAL_TAG`, 2026-08-16
+
+Decided by Fable under trader delegation; **the trader may override**. Recorded
+here before any wiring, as the decision itself requires.
+
+**One new tag family, `M5_SIGNAL_TAG`, for all three engines. `d1_flag` is not
+reused.** Two structural reasons:
+
+1. **Measurability.** §7's per-engine desk session *is* the promotion gate, and
+   folding three unproven detectors into the champion D1 family makes "is this
+   engine noisy?" unanswerable exactly when it has to be answered. The project
+   rule is adopt-only-what-was-measured; reusing `d1_flag` forfeits the
+   measurement.
+2. **Semantics.** These are M5 intraday signals. `d1_flag` routes toward D1
+   surfaces and carries champion privileges these engines have not earned.
+   "Champions stay untouched" includes not diluting what their tag means.
+
+Per-engine identity rides **`bounce_type`**, not the tag: each engine gets its
+own `BOUNCE_TYPE_DEFAULTS`/`BOUNCE_TYPE_LABELS` entry, so the feed and History
+can count each one separately. That plus the per-engine toggle satisfies §7's
+measurement requirement without three families' worth of plumbing.
+
+| Aspect | Decision |
+|---|---|
+| Feed routing | **Main feed.** The D1 Focus feed stays reserved for favorite/high-conviction D1 transitions |
+| Tier gate | **No bypass.** These pass `alert_passes_min_tier` like ordinary alerts. The existing bypasses (`CHART_WATCH_TAG`, entry-assist, BANGER, PROVEN) are earned or trader-armed; these are neither, yet |
+| Loudness | Follow §3/§4 where they state it. **Where unstated, default NOT loud for each engine's first desk session**, and revisit per engine once its volume is observed. Do not invent loudness the spec does not name |
+| R4 §6.3 fold policy | **Not privileged — foldable and digest-eligible.** An unproven engine must be foldable, or it can spam precisely what the repetition ledger was built to stop |
+
+**One correction to the reasoning, and it matters.** The decision notes that
+confluence alerts, firing only on M5 Focus members, "inherit Focus-privilege
+through membership, not through the tag". The mechanism is right — privilege
+rides the *symbol*, never the tag, so no special-casing is needed. But the gate
+is **stricter than membership**: `_alert_has_focus_privilege` is Focus
+membership **AND** an open prev-day break on the alert's own side
+(`alert_center_panel.py:1286-1300`; "A Focus long still inside yesterday's range
+is ordinary: it competes on tier like any other name").
+
+So a confluence alert on a Focus member that has *not* broken yesterday's
+extreme on its side is **foldable and tier-gated**, exactly like any other
+ordinary alert. That is more conservative than the decision assumed, and it
+points the same way — do not "fix" it, and do not write "Focus member ⇒ never
+folded" anywhere, because that is not what the code does.
 
 ## 9. Build state (2026-08-16)
 
@@ -190,11 +234,11 @@ because both are the failure mode R3's Amendment was written about:
 - the LRSI "already above the level" test asserted a crossing index that cannot
   exist, since a series with no measurable prior bar has no crossing to report.
 
-**Everything else in this packet is unbuilt**, and two things must happen first:
+**Everything else in this packet is unbuilt.** The lane question that blocked it
+is **answered** (§8.1: a new `M5_SIGNAL_TAG` family, no tier bypass, foldable).
+One thing still binds the wiring:
 
-1. **The Alert Center lane question must be answered.** It decides the tag every
-   §3 alert type carries.
-2. **§5's shared completed-bars helper must be reconciled, not re-invented.**
+1. **§5's shared completed-bars helper must be reconciled, not re-invented.**
    `weekend_strength.completed_bars` already holds a correct intraday
    definition — `bar_start + bar_minutes <= now`, normalizing a tz-aware stamp
    with `astimezone(...)`. BounceBot's ad hoc idiom (`legacy.py:4384-4386` and
