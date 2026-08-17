@@ -183,20 +183,23 @@ def _completed_sessions(bars: Sequence[Mapping[str, Any]], *, now: datetime) -> 
 def _completed_intraday(
     timeframe: StrengthTimeframe, bars: Sequence[Mapping[str, Any]], *, now: datetime
 ) -> list[Mapping[str, Any]]:
-    """bar_start + bar_minutes <= now."""
-    span = timedelta(minutes=max(1, int(timeframe.bar_minutes)))
-    kept: list[Mapping[str, Any]] = []
-    for bar in bars:
-        stamp = _bar_time(bar)
-        if stamp is None:
-            continue
-        if stamp.tzinfo is not None and now.tzinfo is None:
-            stamp = stamp.astimezone(_local_timezone()).replace(tzinfo=None)
-        elif stamp.tzinfo is None and now.tzinfo is not None:
-            stamp = stamp.replace(tzinfo=now.tzinfo)
-        if stamp + span <= now:
-            kept.append(bar)
-    return kept
+    """bar_start + bar_minutes <= now.
+
+    Delegates to :mod:`completed_bars`, which is now the ONE definition of this
+    rule (R5 section 5). The logic that used to live here was the correct one -
+    it converts a tz-aware stamp with ``astimezone`` rather than stripping the
+    offset - so it was moved there rather than rewritten, and
+    ``tests/test_completed_bars_helper.py`` characterizes this function's
+    behaviour to prove the move changed nothing.
+
+    Only the INTRADAY rule is shared. ``_completed_sessions`` (NYSE last
+    completed session) and ``_completed_months`` (month identity) stay here:
+    they are different questions, and folding them in would have been a real
+    behaviour change dressed up as a refactor.
+    """
+    from completed_bars import completed_intraday_bars
+
+    return completed_intraday_bars(bars, timeframe.bar_minutes, now=now)
 
 
 def _local_timezone():
