@@ -331,7 +331,15 @@ def test_build_d1_levels_reads_both_stores(tmp_path):
         },
     )
     levels = chart_levels.build_d1_levels(
-        "AAA", bars, levels_dir=levels_dir, ai_state_path=ai_state
+        "AAA",
+        bars,
+        levels_dir=levels_dir,
+        ai_state_path=ai_state,
+        # Explicit empty alert stores: without them this reads the DESK's live
+        # price_alerts.json, and a test whose result depends on what the trader
+        # armed this morning is not a test.
+        price_alerts_path=tmp_path / "no_alerts.json",
+        d1_level_watches_path=tmp_path / "no_watches.json",
     )
     groups = {level["group"] for level in levels}
     assert groups == {
@@ -352,6 +360,8 @@ def test_build_d1_levels_survives_a_missing_store(tmp_path):
         bars,
         levels_dir=tmp_path / "nope",
         ai_state_path=tmp_path / "nothing.json",
+        price_alerts_path=tmp_path / "no_alerts.json",
+        d1_level_watches_path=tmp_path / "no_watches.json",
     )
     assert {level["group"] for level in levels} == {chart_levels.GROUP_PREV_DAY}
 
@@ -363,7 +373,12 @@ def test_build_d1_levels_survives_a_corrupt_store(tmp_path):
     levels_dir.mkdir()
     (levels_dir / "AAA.json").write_text("{not json", encoding="utf-8")
     levels = chart_levels.build_d1_levels(
-        "AAA", bars, levels_dir=levels_dir, ai_state_path=tmp_path / "nothing.json"
+        "AAA",
+        bars,
+        levels_dir=levels_dir,
+        ai_state_path=tmp_path / "nothing.json",
+        price_alerts_path=tmp_path / "no_alerts.json",
+        d1_level_watches_path=tmp_path / "no_watches.json",
     )
     assert {level["group"] for level in levels} == {chart_levels.GROUP_PREV_DAY}
 
@@ -433,3 +448,191 @@ def test_levels_are_built_on_the_worker_never_the_calling_thread():
 
     assert seen, "the level build never ran"
     assert calling_thread not in seen
+
+
+# --------------------------------------------------------------------------
+# R4 section 4: armed alerts painted as a levels family
+#
+# Read-only display. These tests exist to prove three things the spec is
+# explicit about: the lines appear and disappear with the STORES (never with
+# a cached copy), nothing here writes either store, and an event watch with
+# no price contributes no line rather than an invented one.
+# --------------------------------------------------------------------------
+def _write_price_alerts(tmp_path: Path, entries: list[dict]) -> Path:
+    path = tmp_path / "price_alerts.json"
+    path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    return path
+
+
+def _write_level_watches(tmp_path: Path, watches: list[dict]) -> Path:
+    path = tmp_path / "d1_level_watches.json"
+    path.write_text(json.dumps({"watches": watches}), encoding="utf-8")
+    return path
+
+
+def _level_watch(symbol: str, direction: str, level: float, armed: str = "2026-06-10T09:30:00") -> dict:
+    return {
+        "symbol": symbol,
+        "direction": direction,
+        "level": level,
+        "armed_at": armed,
+        "candle_date": "2026-06-10",
+    }
+
+
+def test_armed_price_alerts_paint_both_sides():
+    levels = chart_levels.armed_alert_levels(
+        "AAA",
+        price_alerts=[
+            {"symbol": "AAA", "above": 120.0, "below": 95.0},
+        ],
+        level_watches=[],
+    )
+    by_family = {level["family"]: level for level in levels}
+    assert set(by_family) == {"price_alert_above", "price_alert_below"}
+    assert by_family["price_alert_above"]["price"] == pytest.approx(120.0)
+    assert by_family["price_alert_below"]["price"] == pytest.approx(95.0)
+    assert all(level["group"] == chart_levels.GROUP_ALERTS for level in levels)
+
+
+def test_a_disarmed_side_paints_no_line():
+    """The store keeps the price after a disarm; the chart must not."""
+    levels = chart_levels.armed_alert_levels(
+        "AAA",
+        price_alerts=[
+            {"symbol": "AAA", "above": 120.0, "below": 95.0, "armed_above": False},
+        ],
+        level_watches=[],
+    )
+    assert [level["family"] for level in levels] == ["price_alert_below"]
+
+
+def test_alerts_for_another_symbol_are_not_painted():
+    levels = chart_levels.armed_alert_levels(
+        "AAA",
+        price_alerts=[{"symbol": "BBB", "above": 120.0}],
+        level_watches=[_level_watch("BBB", "above", 130.0)],
+    )
+    assert levels == []
+
+
+def test_armed_d1_level_watches_paint_on_their_side():
+    levels = chart_levels.armed_alert_levels(
+        "AAA",
+        price_alerts=[],
+        level_watches=[
+            _level_watch("AAA", "above", 130.0),
+            _level_watch("AAA", "below", 88.0),
+        ],
+    )
+    families = [level["family"] for level in levels]
+    assert families == ["d1_level_watch_above", "d1_level_watch_below"]
+    assert [level["price"] for level in levels] == [pytest.approx(130.0), pytest.approx(88.0)]
+
+
+def test_an_event_watch_with_no_price_paints_nothing():
+    """A D1 EVENT watch is a condition, not a level. Inventing a price for it
+    would draw a line the trader never armed."""
+    levels = chart_levels.armed_alert_levels(
+        "AAA",
+        price_alerts=[],
+        level_watches=[],
+        event_watches=[{"symbol": "AAA", "kind": "new_high_20", "armed_at": "2026-06-10T09:30:00"}],
+    )
+    assert levels == []
+
+
+def test_armed_alert_ids_are_stable_across_two_builds():
+    store = [{"symbol": "AAA", "above": 120.0}]
+    watches = [_level_watch("AAA", "above", 130.0)]
+    first = chart_levels.armed_alert_levels("AAA", price_alerts=store, level_watches=watches)
+    second = chart_levels.armed_alert_levels("AAA", price_alerts=store, level_watches=watches)
+    assert [level["id"] for level in first] == [level["id"] for level in second]
+    assert len({level["id"] for level in first}) == len(first)
+
+
+def test_moving_an_alert_changes_its_id():
+    """Ids carry the price, so a re-armed alert is a different line - which is
+    what keeps a stale selection from following the trader to a new level."""
+    at_120 = chart_levels.armed_alert_levels(
+        "AAA", price_alerts=[{"symbol": "AAA", "above": 120.0}], level_watches=[]
+    )
+    at_121 = chart_levels.armed_alert_levels(
+        "AAA", price_alerts=[{"symbol": "AAA", "above": 121.0}], level_watches=[]
+    )
+    assert at_120[0]["id"] != at_121[0]["id"]
+
+
+def test_a_duplicate_watch_paints_one_line():
+    watch = _level_watch("AAA", "above", 130.0)
+    levels = chart_levels.armed_alert_levels(
+        "AAA", price_alerts=[], level_watches=[watch, dict(watch)]
+    )
+    assert len(levels) == 1
+
+
+def test_a_price_alert_far_off_the_chart_is_still_painted():
+    """Armed alerts are the trader's own decisions. Painted levels are excluded
+    from autoscale, so an off-range alert costs nothing and dropping it would
+    hide a live alarm."""
+    levels = chart_levels.armed_alert_levels(
+        "AAA", price_alerts=[{"symbol": "AAA", "above": 9_999.0}], level_watches=[]
+    )
+    assert len(levels) == 1
+    assert levels[0]["price"] == pytest.approx(9_999.0)
+
+
+def test_the_armed_alert_group_is_in_the_toggle_order():
+    assert chart_levels.GROUP_ALERTS in dict(chart_levels.LEVEL_GROUPS)
+    assert chart_levels.GROUP_NAMES[chart_levels.GROUP_ALERTS]
+
+
+def test_build_d1_levels_reads_the_alert_stores(tmp_path):
+    chart_levels.reset_caches()
+    bars = _bars(30)
+    alerts = _write_price_alerts(tmp_path, [{"symbol": "AAA", "above": 140.0}])
+    watches = _write_level_watches(tmp_path, [_level_watch("AAA", "below", 90.0)])
+    levels = chart_levels.build_d1_levels(
+        "AAA",
+        bars,
+        levels_dir=tmp_path / "missing",
+        ai_state_path=tmp_path / "missing.json",
+        price_alerts_path=alerts,
+        d1_level_watches_path=watches,
+    )
+    alert_levels = [level for level in levels if level["group"] == chart_levels.GROUP_ALERTS]
+    assert {level["family"] for level in alert_levels} == {
+        "price_alert_above",
+        "d1_level_watch_below",
+    }
+
+
+def test_build_d1_levels_survives_missing_alert_stores(tmp_path):
+    chart_levels.reset_caches()
+    bars = _bars(10)
+    levels = chart_levels.build_d1_levels(
+        "AAA",
+        bars,
+        levels_dir=tmp_path / "missing",
+        ai_state_path=tmp_path / "missing.json",
+        price_alerts_path=tmp_path / "no_alerts.json",
+        d1_level_watches_path=tmp_path / "no_watches.json",
+    )
+    assert not [level for level in levels if level["group"] == chart_levels.GROUP_ALERTS]
+    assert [level for level in levels if level["group"] == chart_levels.GROUP_PREV_DAY]
+
+
+def test_building_alert_levels_never_writes_either_store(tmp_path):
+    chart_levels.reset_caches()
+    alerts = _write_price_alerts(tmp_path, [{"symbol": "AAA", "above": 140.0}])
+    watches = _write_level_watches(tmp_path, [_level_watch("AAA", "below", 90.0)])
+    before = (alerts.read_bytes(), watches.read_bytes())
+    chart_levels.build_d1_levels(
+        "AAA",
+        _bars(30),
+        levels_dir=tmp_path / "missing",
+        ai_state_path=tmp_path / "missing.json",
+        price_alerts_path=alerts,
+        d1_level_watches_path=watches,
+    )
+    assert (alerts.read_bytes(), watches.read_bytes()) == before

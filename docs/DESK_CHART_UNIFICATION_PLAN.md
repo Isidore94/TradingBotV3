@@ -175,10 +175,19 @@ The R4 display-only outcome for the main Alerts feed is:
    `review_policy.json`. It adds no suppression field and is superseded by the
    future P5.1 typed-delivery challenger once that manifest passes.
 
-Before implementing §6.2/§6.3, retain the historical confirmation gates: digest
-window default, whether Focus likes need an optional Enter-to-skip reason, and
-whether the escalation list is exhaustive. They are not part of the narrow
-2026-08-16 fenced-file approval in §6.1.
+### 6.4 The three §6.2/§6.3 confirmation gates — ANSWERED by the trader 2026-08-16
+
+The historical gates were put to the trader before any §6.2/§6.3 code was
+written. All three are now decisions, not open questions:
+
+| Gate | Trader's answer |
+|---|---|
+| Open-burst digest window default | **30 minutes**, the historical proposal unchanged. Settings-tunable via `alert_open_digest_minutes`; **0 disables** the digest entirely |
+| Optional Enter-to-skip reason on a Focus like | **No prompt.** Liking stays one click. The structured vocabulary earns its keep on the dislike side, which R3 just wired; a prompt on every like would tax the cheap action to collect data nothing yet asks a question of |
+| Is the escalation list exhaustive? | **Yes — those three**: a strictly higher best tier, the first BANGER, the first PROVEN. Conservative by design, and safe because Focus-privileged and trader-armed hits bypass folding entirely under §6.3.2, so nothing the trader armed can be quieted by this |
+
+These answers bind the build. Changing any of them later is a fresh trader
+decision, not an implementation detail.
 
 ## 7. Fenced files, invariants, tests
 

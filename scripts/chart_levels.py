@@ -68,6 +68,8 @@ GROUP_AVWAP = "avwap"
 GROUP_HORIZONTAL = "d1_horizontal"
 GROUP_PREV_DAY = "prev_day"
 GROUP_TRENDLINE = "d1_trendline"
+#: R4 section 4: the trader's OWN armed alarms, drawn strictly read-only.
+GROUP_ALERTS = "armed_alerts"
 
 #: Display order, and the order the paint-lines control lists them in.
 LEVEL_GROUPS: tuple[tuple[str, str], ...] = (
@@ -77,6 +79,7 @@ LEVEL_GROUPS: tuple[tuple[str, str], ...] = (
     (GROUP_HORIZONTAL, "D1 S/R"),
     (GROUP_PREV_DAY, "Prev-day H/L"),
     (GROUP_TRENDLINE, "D1 trendline"),
+    (GROUP_ALERTS, "Armed alerts"),
 )
 GROUP_NAMES: dict[str, str] = dict(LEVEL_GROUPS)
 
@@ -105,6 +108,15 @@ _GREEN_COLOR = "chart_green"
 _RED_COLOR = "chart_grey"
 _CLOUD_COLOR = "chart_light_blue"
 _PREV_DAY_COLOR = "chart_white"
+#: Armed alerts deliberately do NOT take a ``chart_*`` role. All eight of those
+#: are fixed overlay assignments the trader reads by colour first (SMA200
+#: purple, EMA21 yellow, AVWAPE white, ...), so reusing one would make the
+#: trader's own alarm look like a moving average. ``caution`` is a semantic
+#: theme role, defined in both themes, and used nowhere else on this chart.
+_ALERT_COLOR = "caution"
+#: A symbol carries at most two price-alert sides; level watches are armed by
+#: hand one at a time. The cap only stops a corrupt store from painting a wall.
+MAX_ARMED_ALERT_LEVELS = 12
 #: Not chart_yellow: "AVWAPE prev" already owns yellow on this chart.
 _TRENDLINE_COLOR = "chart_purple"
 
@@ -376,6 +388,132 @@ def prev_day_levels(bars: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def armed_alert_levels(
+    symbol: str,
+    *,
+    price_alerts: Sequence[Mapping[str, Any]] | None = None,
+    level_watches: Sequence[Any] | None = None,
+    event_watches: Sequence[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """The trader's armed alarms for ``symbol``, as paint-lines (R4 section 4).
+
+    Read-only display, and that is the whole contract. This function opens no
+    file, writes no file, and arms/disarms nothing: it is handed whatever the
+    two single-writer stores already hold and turns the armed ones into lines.
+    Arming still goes through the one existing writer flow, and clicking a
+    painted line only selects it via the ordinary ``levelSelected`` path.
+
+    Three deliberate choices:
+
+    - **A disarmed side paints nothing.** ``price_alerts.json`` keeps the price
+      after a disarm so the trader can re-arm it; a line for a disarmed side
+      would be an alarm that is not going to ring.
+    - **A D1 EVENT watch contributes no line.** ``D1EventWatch`` is a condition
+      (a new N-day extreme, an SMA break, a 15EMA rejection) whose reference
+      level is re-derived on every poll. It has no armed price, and picking one
+      for it would draw a level the trader never chose. Event watches stay
+      visible as ``ArmBar`` chips, which is where a condition belongs.
+    - **Nothing is dropped for being off-chart.** Painted levels are excluded
+      from the y-autoscale, so a far-away alert costs nothing to draw - and
+      hiding a live alarm because today's range does not reach it is exactly
+      the wrong failure.
+
+    Accepts either dataclass instances (``D1LevelWatch``) or their mapping form,
+    so a caller holding one shape never has to convert.
+    """
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return []
+
+    def _field(item: Any, name: str) -> Any:
+        if isinstance(item, Mapping):
+            return item.get(name)
+        return getattr(item, name, None)
+
+    def _price(value: Any) -> float | None:
+        price = _coerce_float(value)
+        return price if price is not None and price > 0 else None
+
+    out: list[dict[str, Any]] = []
+
+    for entry in price_alerts or ():
+        if str(_field(entry, "symbol") or "").strip().upper() != symbol:
+            continue
+        for side, arrow in (("above", "↑"), ("below", "↓")):
+            price = _price(_field(entry, side))
+            if price is None:
+                continue
+            # Absent flag means armed: that is normalize_price_alert's own
+            # default, and a raw store row written before the flags existed
+            # is an armed alert, not a disarmed one.
+            armed = _field(entry, f"armed_{side}")
+            if armed is None:
+                armed = True
+            if not armed:
+                continue
+            family = f"price_alert_{side}"
+            out.append(
+                {
+                    "id": level_id(family, symbol, price),
+                    "family": family,
+                    "group": GROUP_ALERTS,
+                    "price": price,
+                    "values": None,
+                    "label": f"Alert {arrow} {price:.2f}",
+                    "color": _ALERT_COLOR,
+                    "width": 1.4,
+                    "dash": False,
+                    "conviction": None,
+                }
+            )
+
+    for watch in level_watches or ():
+        if str(_field(watch, "symbol") or "").strip().upper() != symbol:
+            continue
+        direction = str(_field(watch, "direction") or "").strip().lower()
+        if direction not in ("above", "below"):
+            continue
+        price = _price(_field(watch, "level"))
+        if price is None:
+            continue
+        armed_at = _field(watch, "armed_at")
+        anchor = ""
+        if isinstance(armed_at, datetime):
+            anchor = armed_at.date().isoformat()
+        elif armed_at:
+            anchor = str(armed_at)[:10]
+        family = f"d1_level_watch_{direction}"
+        arrow = "↑" if direction == "above" else "↓"
+        out.append(
+            {
+                "id": level_id(family, anchor or symbol, price),
+                "family": family,
+                "group": GROUP_ALERTS,
+                "price": price,
+                "values": None,
+                "label": f"Watch {arrow} {price:.2f}",
+                "color": _ALERT_COLOR,
+                "width": 1.4,
+                "dash": True,
+                "conviction": None,
+            }
+        )
+
+    # Event watches are accepted and deliberately ignored - see the docstring.
+    # Taking the argument keeps callers from having to know that, and keeps the
+    # omission a stated decision rather than a forgotten store.
+    del event_watches
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for level in out:
+        if level["id"] in seen:
+            continue
+        seen.add(level["id"])
+        deduped.append(level)
+    return deduped[:MAX_ARMED_ALERT_LEVELS]
+
+
 def trendline_level(
     candidate: Mapping[str, Any],
     bars: Sequence[Mapping[str, Any]],
@@ -573,6 +711,8 @@ def build_d1_levels(
     ai_state_path: Path | None = None,
     store_records: Sequence[Mapping[str, Any]] | None = None,
     trendline_feed: Mapping[str, Mapping[str, Any]] | None = None,
+    price_alerts_path: Path | None = None,
+    d1_level_watches_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Every paint-line for ``symbol``'s D1 chart. Worker threads only.
 
@@ -580,6 +720,10 @@ def build_d1_levels(
     and any caller that already holds the data). A failure in one family never
     costs the others: the chart draws what it could load and stays quiet about
     what it could not, which is the same discipline the overlays use.
+
+    ``price_alerts_path`` / ``d1_level_watches_path`` do the same for R4's
+    armed-alert family. Both reads are strictly read-only; the single-writer
+    rule on each store is untouched.
     """
     symbol = str(symbol or "").strip().upper()
     bars = list(bars or ())
@@ -628,5 +772,24 @@ def build_d1_levels(
                 levels.append(line)
     except Exception:
         _log.debug("D1 trendline unavailable for %s.", symbol, exc_info=True)
+
+    try:
+        from chart_watch import load_d1_level_watches
+        from price_alerts import load_price_alerts
+        from project_paths import D1_LEVEL_WATCHES_FILE, PRICE_ALERTS_FILE
+
+        levels.extend(
+            armed_alert_levels(
+                symbol,
+                price_alerts=load_price_alerts(
+                    Path(price_alerts_path or PRICE_ALERTS_FILE)
+                ),
+                level_watches=load_d1_level_watches(
+                    Path(d1_level_watches_path or D1_LEVEL_WATCHES_FILE)
+                ),
+            )
+        )
+    except Exception:
+        _log.debug("Armed alert levels unavailable for %s.", symbol, exc_info=True)
 
     return levels
