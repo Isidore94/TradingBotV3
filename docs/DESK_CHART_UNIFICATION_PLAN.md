@@ -1,8 +1,22 @@
 # Desk chart unification — packet R4
 
-Status: **ACTIVE specification** for `plan.md` Phase 0.5 **R4**. Authorized by the
-trader on 2026-08-15. Builds after R1–R3 unless a sub-item is pulled forward as a
-quick win (each sub-item is independent).
+Status: **BUILT 2026-08-16 — LIVE PROOFS OWED**, for `plan.md` Phase 0.5 **R4**.
+Authorized by the trader on 2026-08-15; built on `phase05-r8-weekend-prep` under
+the 2026-08-15 weekend redirect, after R3 closed.
+
+Sections 1–5 and 6.1–6.3 are built and green. Two items are **explicitly held
+for a trader decision** rather than silently skipped:
+
+- the **Focus Picks** reviewed-today marker (§5) — that surface is editable
+  watchlist text, not a table; see the §5 note;
+- **§2.2's `review_host`** for the RS/RW and Industry boards — `watch_host` is
+  wired on both, and §2.1's CaptureRail now gives every chart surface
+  veto/like/note/hypothetical-stop, which is what §2 was for. `review_host`
+  additionally carries the setups table's *advance-to-the-next-row* flow, which
+  is table-specific and has no meaning on a ranked board. Recorded as answered
+  by a better mechanism rather than built as written.
+
+The §8 exit gate is unrun: all of it is live observation.
 
 Trader intent (2026-08-14): *"anytime I bring up a chart from master avwap setups
 or the RS/RW board or anywhere it would be nice if it had all the functions of
@@ -90,6 +104,22 @@ note) — no view tracking, zero new capture. Render packet R3 §3.3's decided-t
 set as a prominent badge on the snapshot header and a row marker on every table
 that opens charts (setups, RS/RW, Industry, Focus, Alert Center). Presentation
 only; resets at the market-date boundary.
+
+**BUILT 2026-08-16**, on the setups table (R3), the snapshot popup header, the
+Alert Center review pane, the RS/RW window and the Industry board. The marker
+rides display text only: sort roles and the row payload are untouched, so it can
+never become a ranking and a chart-open handler never receives a `● AAPL`.
+
+**Focus Picks is deliberately NOT marked, and this is an ask-first item, not an
+omission.** The Focus Picks panel is not a table — it is a pair of editable
+plain-text watchlist editors whose *text content is the watchlist itself*.
+Injecting a `● ` prefix into those editors would put the marker inside data that
+gets written back to `swinglongs.txt`/`longs.txt`, which risks the hard
+invariant that user-entered watchlist names are never corrupted or auto-removed.
+Marking that surface needs a design decision this spec does not make — a
+separate non-editable status column, a per-line gutter, or a decision to leave
+it unmarked because the trader already owns every name there. **Ask the trader
+before building it.**
 
 ## 6. Recovered Alert Center quality contract (2026-08-14)
 

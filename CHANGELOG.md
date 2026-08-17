@@ -22,6 +22,72 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-16 — R4 desk chart unification built
+
+Packet R4 is built to its authorized scope. Every chart surface now carries the
+same capture controls, the trader's own armed alarms are drawn on the chart, the
+early-morning gap distortion is fixed at its source, already-checked names are
+marked wherever they render, and the Alert Center's feed stops stacking rows for
+one ticker all day.
+
+`CaptureRail` moved into `SymbolSnapshotDialog` and `AlertChartReview`, so every
+host that opens a chart — the setups table, the RS/RW board, the Industry panel,
+a typed lookup, the Alert Center — inherits veto/like/note/hypothetical-stop
+without knowing anything about it. The RS/RW board and Industry panel previously
+passed no review host at all and had no capture whatsoever. Capture stays
+analysis-only: it writes `trader_annotations.jsonl`, emits no placement signal,
+creates no other file, and does not advance the review queue. The Alert Center's
+"Add to Focus Picks" verb remains the single explicit placement action.
+
+Armed price alerts and armed D1 level watches render as a new `GROUP_ALERTS`
+paint-lines family, built on the `ChartDataService` worker and toggleable
+through the existing paint-lines control. Read-only throughout: the family
+builder opens and writes no file, and the single-writer rule on
+`price_alerts.json` is untouched. A disarmed side paints nothing; a D1 *event*
+watch paints nothing at all, because it is a condition with no armed price and
+inventing one would draw a level the trader never chose.
+
+The forming D1 preview no longer paints a Yahoo daily "today" row as a candle
+during the first 15 minutes after the open (`chart_yahoo_forming_suppress_minutes`,
+zero disables). That row is a thin early print which both mis-stated the gap and
+drove the chart's y-autoscale — the axis the trader suspected was fine, the data
+was not. When a Yahoo-sourced preview *is* drawn it now says so. The IB M5 path
+is unchanged and always preferred.
+
+The reviewed-today marker renders on the snapshot header, the Alert Center pane,
+the RS/RW window and the Industry board, joining the setups table from R3. It
+rides display text only — sort roles and row payloads are untouched, so it
+cannot become a ranking.
+
+The feed's Focus star became a labeled `☆ Like → M5 Focus` / `☆ Like → Swing
+Focus` action with the same semantics and the same signal. New pure module
+`scripts/alert_repetition.py` gives one live feed row per symbol + side + market
+day: a repeat updates that row in place, keeps its first-seen time, gains a
+repeat count, and stays silent unless it escalates on a strictly higher tier,
+the first BANGER, or the first PROVEN. Ordinary alerts in the first 30 minutes
+after the open group into one digest row naming each symbol. Focus-privileged,
+trader-armed, entry-assist and ready-D1 output bypass both the fold and the
+digest entirely.
+
+Nothing in the repetition control withholds anything: the backing alert list is
+written before any repetition decision and never consulted by one, so History,
+the evidence streams and the AWAY push are unaffected, and the chart review
+queue is enqueued independently. No detector, score or threshold changed, and no
+suppression field exists anywhere in this chain. Every failure path falls open
+to a plain new row.
+
+Three trader confirmations were taken before §6.2/§6.3 code was written and are
+now decisions: a 30-minute open digest, no reason prompt on a like, and an
+exhaustive three-item escalation list.
+
+Two items are explicitly held for a trader decision rather than skipped: the
+Focus Picks reviewed-today marker (that surface is editable watchlist text, not
+a table, and a marker injected there would land in data written back to the
+watchlists), and §2.2's `review_host` for the boards (its remaining half is the
+setups table's advance-to-next-row flow, which has no meaning on a ranked
+board). Deterministic gate: 3500 passed / 19 subtests, exit 0. Every §8 live
+proof remains owed.
+
 ### 2026-08-16 — R3 deterministic work closed; §4.3.5 deferred by the trader
 
 Packet R3's build is complete to its authorized scope. The shadow-only

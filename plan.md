@@ -395,12 +395,35 @@ are listed in `CURRENT_CHECKPOINT.md`.
    repeated rows without weakening detection, evidence, History, or armed-hit
    delivery. The labeled Y axis already exists — recorded as answered. Spec:
    `docs/DESK_CHART_UNIFICATION_PLAN.md`; historical source:
-   `docs/ALERT_CENTER_QUALITY_PACKET.md`. **Recovered §6.1 is BUILT 2026-08-16
-   as an authorized quick win:** all trader-armed chart/D1-level/D1-event hits
-   survive "Not today", feed and sound; automatic `FOCUS_D1_EVENT_TAG` interest
-   remains ignored. Deterministic gate: 3377 passed / 19 subtests, focused
-   alert/watch gate 80 passed. The real-session two-direction proof remains owed;
-   the rest of R4 is unbuilt.
+   `docs/ALERT_CENTER_QUALITY_PACKET.md`.
+
+   **BUILT 2026-08-16, live proofs owed.** Sections 1–5 and 6.1–6.3 are green:
+   trader-armed hits survive "Not today" (§6.1); `CaptureRail` lives in the
+   snapshot popup and the Alert Center pane so every chart-opening host inherits
+   capture, including the RS/RW and Industry boards which previously had none;
+   armed price alerts and D1 level watches paint as a read-only `GROUP_ALERTS`
+   levels family on the worker; the Yahoo forming-bar early print is suppressed
+   for 15 minutes after the open and labeled when drawn; the reviewed-today
+   marker renders on the snapshot, the Alert Center pane, RS/RW and Industry;
+   the feed's star became a labeled Like→Focus verb; and one feed row per
+   symbol/side/day folds repeats with a three-item escalation list and a
+   30-minute open-burst digest. Three trader confirmations were taken before any
+   §6.2/§6.3 code and are recorded in the spec's new §6.4.
+   Deterministic gate: **3500 passed / 19 subtests, exit 0.**
+
+   **Held ask-first, recorded not skipped:** the Focus Picks reviewed-today
+   marker (that panel is editable watchlist *text*, so a marker injected there
+   would land in data written back to the watchlists — a design decision the
+   spec does not make), and §2.2's `review_host` for the boards (its remaining
+   half is the setups table's advance-to-next-row flow, meaningless on a ranked
+   board; §2.1's CaptureRail delivered what §2 was actually for).
+
+   **Owed — the §8 exit gate, all live:** every entry point opening a chart with
+   capture, watch controls and painted armed alerts; one desk morning confirming
+   the forming-bar caveat replaced the inflated-gap rendering; a dislike recorded
+   from the RS/RW board appearing as a badge everywhere that symbol renders that
+   day; and §6.1's ignored-symbol armed-watch hit feeding and sounding while
+   automatic Focus D1 interest for that same ignored symbol stays absent.
 5. **R5 M5 signal engines.** New pure indicator modules (TC2000-parity SMI,
    efficiency-LRSI under a non-colliding name, Heikin-Ashi reversal), the LRSI
    cross alert type, the HA+SMI+LRSI confluence alert (Focus-scoped), the
