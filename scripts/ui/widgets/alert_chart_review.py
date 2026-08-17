@@ -14,6 +14,7 @@ from ui.models.bounce import (
     BounceAlert,
     is_auto_pick_alert,
 )
+from ui import theme
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
@@ -63,7 +64,7 @@ class AlertChartReview(QWidget):
     # suppresses, scores, gates or reorders anything - it arms an alert.
     levelAlertRequested = Signal(str, str, float)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, annotations_path=None) -> None:
         super().__init__(parent)
         self.alert: BounceAlert | None = None
         self._cross_labels = ("Add to D1 Focus", "✓ In D1 Focus")
@@ -151,7 +152,29 @@ class AlertChartReview(QWidget):
         # Kept for callers and tests that poke the toggles directly.
         self.watch_buttons = self.arm_bar.watch_buttons
 
+        # R4 section 2.3: "I like the stock" on the Alert screen, as capture.
+        #
+        # The boundary this has to hold: CaptureRail LIKE writes ONE annotation
+        # row and nothing else. It is not a placement verb. "Add to Focus
+        # Picks" above stays the single explicit thing that puts a name on a
+        # list - an earlier draft of the rail routed likes through
+        # FocusService.add, which quietly gave a liked name Focus alert
+        # privileges, and it had to be torn back out. Keep the two apart.
+        from ui.widgets.capture_rail import CaptureRail
+
+        self.capture_rail = CaptureRail(annotations_path=annotations_path)
+        self.capture_rail.captured.connect(self._on_captured)
+        self.snapshot.d1LevelSelected.connect(self._on_capture_level_selected)
+
+        # R4 section 5, on the surface the trader stares at most.
+        self.reviewed_badge = QLabel("")
+        self.reviewed_badge.setObjectName("reviewedTodayBadge")
+        self.reviewed_badge.setStyleSheet(
+            f"color: {theme.color('caution')}; font-weight: 600;"
+        )
+
         buttons = QHBoxLayout()
+        buttons.addWidget(self.reviewed_badge)
         buttons.addWidget(self.focus_button)
         buttons.addWidget(self.skip_button)
         buttons.addWidget(self.remove_today_button)
@@ -167,8 +190,56 @@ class AlertChartReview(QWidget):
         layout.addWidget(self.guidance_label)
         layout.addWidget(self.snapshot, 1)
         layout.addWidget(self.arm_bar)
+        layout.addWidget(self.capture_rail)
         layout.addLayout(buttons)
         self._set_actions_enabled(False)
+
+    # -- R4 sections 2.3 and 5 ------------------------------------------
+    def _on_capture_level_selected(
+        self, symbol: str, level_id: str, family: str, _price: float
+    ) -> None:
+        """A clicked paint-line becomes the capture's reference level."""
+        if self.alert is None or symbol != self.alert.symbol:
+            return
+        self.capture_rail.set_context(
+            symbol=symbol,
+            timeframe="D1",
+            ref_level_id=level_id,
+            ref_level_family=family,
+        )
+
+    def _on_captured(self, _event_type: str, _row: dict) -> None:
+        """Capture is a decision, so the badge updates without a re-chart.
+
+        Deliberately does NOT advance the review queue: only the three queue
+        verbs move it. A rail that skipped to the next chart would make every
+        note cost the trader the chart they were writing it about.
+        """
+        self._refresh_reviewed_badge()
+
+    def _reviewed_symbols(self) -> set:
+        """Today's decided set. Seam so tests read a fixture, not live files."""
+        from pick_feedback import reviewed_symbols_today
+
+        return reviewed_symbols_today()
+
+    def _refresh_reviewed_badge(self) -> None:
+        symbol = self.alert.symbol if self.alert is not None else ""
+        text = ""
+        try:
+            if symbol and symbol in self._reviewed_symbols():
+                text = "● Reviewed today"
+        except Exception:
+            # Presentation only: a locked evidence file costs the badge, and
+            # must never cost the chart the trader is trying to read.
+            text = ""
+        self.reviewed_badge.setText(text)
+        self.reviewed_badge.setToolTip(
+            "You already recorded a decision on this symbol today "
+            "(dislike, favorite, veto, like or note)."
+            if text
+            else ""
+        )
 
     def _emit_level_arm(self, direction: str, level: float) -> None:
         if self.alert is not None and self.alert.symbol:
@@ -237,6 +308,16 @@ class AlertChartReview(QWidget):
         auto_adopted: bool = False,
     ) -> None:
         self.alert = alert
+        # Re-point capture, clearing the previous chart's level reference: a
+        # stale ref_level_id would attribute this alert's veto to a line the
+        # trader clicked on a different symbol.
+        self.capture_rail.set_context(
+            symbol=alert.symbol,
+            side=alert.side if alert.side in ("LONG", "SHORT") else None,
+            ref_level_id="",
+            ref_level_family="",
+        )
+        self._refresh_reviewed_badge()
         guidance_text = str(guidance_text or "").strip()
         self.guidance_label.setText(guidance_text)
         self.guidance_label.setVisible(bool(guidance_text))
