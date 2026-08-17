@@ -761,7 +761,7 @@ class SymbolSnapshotDialog(QDialog):
     host the popup stays a pure quick look.
     """
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, annotations_path=None) -> None:
         super().__init__(parent)
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Tool, True)
@@ -778,6 +778,25 @@ class SymbolSnapshotDialog(QDialog):
 
         self.snapshot = SymbolSnapshotWidget(self)
         self.snapshot.d1LevelAlertRequested.connect(self._on_d1_level_alert)
+
+        # R4 section 2: capture travels with the chart, not with the host.
+        # Every panel that opens this popup - the setups table, the RS/RW
+        # board, the Industry panel, a typed lookup - inherits veto/like/note/
+        # hypothetical-stop from here, which is what "all the functions of
+        # chart review, anywhere" actually means. The rail writes annotations
+        # only; it never touches Focus or a watchlist.
+        from ui.widgets.capture_rail import CaptureRail
+
+        self.capture_rail = CaptureRail(annotations_path=annotations_path)
+        self.capture_rail.captured.connect(self._on_captured)
+        self.snapshot.d1LevelSelected.connect(self._on_d1_level_selected)
+
+        # R4 section 5: "very obvious I have already checked that chart today".
+        self.reviewed_badge = QLabel("")
+        self.reviewed_badge.setObjectName("reviewedTodayBadge")
+        self.reviewed_badge.setStyleSheet(
+            f"color: {theme.color('caution')}; font-weight: 600;"
+        )
         # Compatibility aliases for existing callers and tests.
         for name in (
             "d1_legend",
@@ -862,9 +881,20 @@ class SymbolSnapshotDialog(QDialog):
         action_layout.addStretch(1)
         self.action_row.setVisible(False)
 
+        # The capture row is deliberately OUTSIDE action_row: action_row hides
+        # itself when no watch/review host opened the popup, and capture is
+        # exactly the thing that must not depend on a host being present.
+        self.capture_row = QWidget()
+        capture_layout = QHBoxLayout(self.capture_row)
+        capture_layout.setContentsMargins(10, 0, 10, 4)
+        capture_layout.setSpacing(6)
+        capture_layout.addWidget(self.reviewed_badge)
+        capture_layout.addWidget(self.capture_rail, 1)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.snapshot)
+        layout.addWidget(self.capture_row)
         layout.addWidget(self.action_row)
 
         # The popup is non-modal and stays open while the trader works, so
@@ -942,12 +972,73 @@ class SymbolSnapshotDialog(QDialog):
         self.review_host = review_host
         side_text = f" ({side})" if side in ("LONG", "SHORT") else ""
         self.setWindowTitle(f"{symbol}{side_text} — D1 + M5 snapshot")
+        # Re-point capture at the new symbol, and clear any level reference the
+        # previous chart left behind: a stale ref_level_id would attribute this
+        # symbol's veto to a level the trader clicked on a different name.
+        self.capture_rail.set_context(
+            symbol=symbol,
+            side=self._side or None,
+            ref_level_id="",
+            ref_level_family="",
+        )
         self.snapshot.set_symbol(symbol, bot=bot)
         self._refresh_watch_actions()
+        self._refresh_reviewed_badge()
         # show + raise only (no activateWindow): the popup must never steal
         # typing focus from a watchlist editor or the live feed.
         self.show()
         self.raise_()
+
+    # -- R4 sections 2 and 5 -------------------------------------------
+    def _on_d1_level_selected(
+        self, symbol: str, level_id: str, family: str, _price: float
+    ) -> None:
+        """A clicked paint-line becomes the capture's reference level.
+
+        Same wiring `chart_review_panel` uses, so a veto recorded from the
+        popup joins to the level it was about rather than to the symbol alone.
+        """
+        if symbol != self._symbol:
+            return
+        self.capture_rail.set_context(
+            symbol=symbol,
+            timeframe="D1",
+            ref_level_id=level_id,
+            ref_level_family=family,
+        )
+
+    def _on_captured(self, _event_type: str, _row: dict) -> None:
+        """A capture IS a decision, so the badge must appear immediately.
+
+        The trader asked to see that a chart was already checked today; a badge
+        that only lands on the next open would miss the case that matters most
+        - the same chart resurfacing minutes later in another slot's list.
+        """
+        self._refresh_reviewed_badge()
+
+    def _reviewed_symbols(self) -> set:
+        """Today's decided set. Split out so tests can point it at a fixture
+        rather than the trader's live evidence files."""
+        from pick_feedback import reviewed_symbols_today
+
+        return reviewed_symbols_today()
+
+    def _refresh_reviewed_badge(self) -> None:
+        text = ""
+        try:
+            if self._symbol and self._symbol in self._reviewed_symbols():
+                text = "● Reviewed today"
+        except Exception:
+            # Presentation only. A missing or locked evidence file costs the
+            # badge, never the chart.
+            text = ""
+        self.reviewed_badge.setText(text)
+        self.reviewed_badge.setToolTip(
+            "You already recorded a decision on this symbol today "
+            "(dislike, favorite, veto, like or note)."
+            if text
+            else ""
+        )
 
     def _refresh_watch_actions(self) -> None:
         host = self.watch_host
