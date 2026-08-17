@@ -157,8 +157,13 @@ class IndustryPanel(QFrame):
     def reload_from_disk(self, snapshot: dict | None = None) -> None:
         sector_rows = _read_csv_rows(SECTOR_BOARD_CSV_FILE)
         industry_rows = _read_csv_rows(INDUSTRY_BOARD_CSV_FILE)
-        _fill_table(self.sector_table, SECTOR_COLUMNS, sector_rows)
-        _fill_table(self.industry_table, INDUSTRY_COLUMNS, industry_rows)
+        reviewed = _reviewed_symbols_today()
+        _fill_table(
+            self.sector_table, SECTOR_COLUMNS, sector_rows, reviewed_symbols=reviewed
+        )
+        _fill_table(
+            self.industry_table, INDUSTRY_COLUMNS, industry_rows, reviewed_symbols=reviewed
+        )
         snapshot = snapshot or inspect_industry_snapshot()
         as_of = snapshot.get("as_of")
         if isinstance(as_of, datetime):
@@ -288,7 +293,28 @@ def _format_cell(key: str, value) -> str:
     return text
 
 
-def _fill_table(table: QTableWidget, columns: tuple[tuple[str, str], ...], rows: list[dict]) -> None:
+def _reviewed_symbols_today() -> set[str]:
+    """Today's decided set, or an empty one. Presentation only, so a failure
+    here costs a marker and never the board."""
+    try:
+        from pick_feedback import reviewed_symbols_today
+
+        return set(reviewed_symbols_today())
+    except Exception:
+        return set()
+
+
+def _fill_table(
+    table: QTableWidget,
+    columns: tuple[tuple[str, str], ...],
+    rows: list[dict],
+    *,
+    reviewed_symbols=None,
+) -> None:
+    # R4 section 5: the ETF cell is the one that opens a chart here, so it is
+    # the one that carries the already-checked-today marker. Display only -
+    # sort_value below is untouched, so a marked row keeps its exact place.
+    reviewed = {str(s or "").strip().upper() for s in reviewed_symbols or ()} - {""}
     sorting_enabled = table.isSortingEnabled()
     header = table.horizontalHeader()
     sort_column = header.sortIndicatorSection()
@@ -299,7 +325,17 @@ def _fill_table(table: QTableWidget, columns: tuple[tuple[str, str], ...], rows:
         for col_index, (key, _label) in enumerate(columns):
             text = _format_cell(key, row.get(key))
             sort_value = _numeric_value(row.get(key)) if key in NUMERIC_KEYS else None
-            item = _SortableTableItem(text, sort_value=sort_value)
+            is_reviewed = (
+                key == "etf" and bool(reviewed) and text.strip().upper() in reviewed
+            )
+            item = _SortableTableItem(
+                f"● {text}" if is_reviewed else text, sort_value=sort_value
+            )
+            if is_reviewed:
+                item.setToolTip(
+                    "You already recorded a decision on this symbol today "
+                    "(dislike, favorite, veto, like or note)."
+                )
             if key in SIGNED_KEYS and text.startswith(("+", "-")):
                 item.setForeground(QBrush(POSITIVE_COLOR if text.startswith("+") else NEGATIVE_COLOR))
             if key not in {"sector", "industry", "top_movers"}:

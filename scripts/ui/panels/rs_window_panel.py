@@ -269,6 +269,17 @@ class RsWindowPanel(QFrame):
             return None
         return self.bounce_service.current_bot()
 
+    @staticmethod
+    def _reviewed_symbols_today() -> set:
+        """Today's decided set, or an empty one. A failure here costs the
+        marker and never the board."""
+        try:
+            from pick_feedback import reviewed_symbols_today
+
+            return set(reviewed_symbols_today())
+        except Exception:
+            return set()
+
     def set_chart_watch_host(self, host) -> None:
         """Optional: the Alert Center panel that owns chart watches, so charts
         opened from this panel carry the arming actions instead of being a
@@ -486,6 +497,9 @@ class RsWindowPanel(QFrame):
         )
         rows = rs_window_feed.sort_mover_rows(rows, str(self.sort_input.currentData() or "excess"))
         self.model.set_rows(rows[:300])
+        # R4 section 5: mark names the trader already decided on today.
+        # Presentation only - the sort role is untouched, so nothing moves.
+        self.model.set_reviewed_symbols(self._reviewed_symbols_today())
         self.table.fit_columns()
         if status is not None:
             self._set_status(status)

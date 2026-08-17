@@ -31,6 +31,29 @@ class TrackerTableModel(QAbstractTableModel):
         self.signed_keys = set(signed_keys or set())
         self.numeric_keys = set(numeric_keys or set()) | self.percent_keys | self.signed_keys
         self.tooltip_keys = set(tooltip_keys or set())
+        # R4 section 5: "very obvious I have already checked that chart today".
+        # Presentation only - it never filters, reorders, or feeds scoring, and
+        # it is built from RECORDED DECISIONS only (trader decision 2026-08-15:
+        # no view tracking, zero new capture).
+        self._reviewed_symbols: set[str] = set()
+
+    def set_reviewed_symbols(self, symbols) -> None:
+        """Mark today's already-decided names. Repaints, never re-sorts."""
+        reviewed = {str(symbol or "").strip().upper() for symbol in symbols or ()} - {""}
+        if reviewed == self._reviewed_symbols:
+            return
+        self._reviewed_symbols = reviewed
+        if self._rows:
+            top = self.index(0, 0)
+            bottom = self.index(len(self._rows) - 1, max(0, len(self.columns) - 1))
+            self.dataChanged.emit(top, bottom)
+
+    def _is_reviewed(self, key: str, value) -> bool:
+        return (
+            key == "symbol"
+            and bool(self._reviewed_symbols)
+            and str(value or "").strip().upper() in self._reviewed_symbols
+        )
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -52,7 +75,15 @@ class TrackerTableModel(QAbstractTableModel):
                 return numeric if numeric is not None else -999999999.0
             return str(value or "")
         if role == Qt.ItemDataRole.DisplayRole:
-            return _format_value(value, key, percent_keys=self.percent_keys, signed_keys=self.signed_keys)
+            text = _format_value(
+                value, key, percent_keys=self.percent_keys, signed_keys=self.signed_keys
+            )
+            # The marker rides the DISPLAY text only. SORT_ROLE above is
+            # untouched, so a reviewed name keeps its exact place in the
+            # ordering - the badge must never become a ranking.
+            if self._is_reviewed(key, value):
+                return f"● {text}"
+            return text
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if key in self.numeric_keys:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -72,8 +103,14 @@ class TrackerTableModel(QAbstractTableModel):
                 numeric = _float(value)
                 if numeric is not None:
                     return QColor(theme.color("long" if numeric > 0 else "short" if numeric < 0 else "text_secondary"))
-        if role == Qt.ItemDataRole.ToolTipRole and key in self.tooltip_keys:
-            return str(value or "")
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if self._is_reviewed(key, value):
+                return (
+                    "You already recorded a decision on this symbol today "
+                    "(dislike, favorite, veto, like or note)."
+                )
+            if key in self.tooltip_keys:
+                return str(value or "")
         return None
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
