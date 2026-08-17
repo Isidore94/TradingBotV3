@@ -67,6 +67,7 @@ from project_paths import (
     get_local_setting,
     save_local_setting,
 )
+from alert_repetition import ACTION_DIGEST, ACTION_FOLD
 from review_events import record_review_event
 from review_guidance import ORDERING_ANNOTATION_ONLY, AlertGuidance, ReviewGuide
 from ui import theme
@@ -333,10 +334,25 @@ class _ClickableItem(QFrame):
         feed_item.favoriteToggled.connect(lambda: self.favoriteToggled.emit(self.alert))
         feed_item.dislikeRequested.connect(lambda: self.dislikeRequested.emit(self.alert))
         feed_item.symbolClicked.connect(lambda: self.symbolClicked.emit(self.alert))
+        self.feed_item = feed_item
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(feed_item)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_repeat_count(self, count: int, *, latest_trigger: str = "") -> None:
+        """Forward R4 section 6.3's fold to the row this wrapper contains.
+
+        This class wraps an ``AlertFeedItem`` rather than subclassing it, so
+        the repeat badge has to be forwarded explicitly - the feed only ever
+        holds wrappers, so without this the fold silently fails over to a new
+        row and the whole control does nothing.
+        """
+        self.feed_item.set_repeat_count(count, latest_trigger=latest_trigger)
+
+    @property
+    def repeat_badge(self):
+        return self.feed_item.repeat_badge
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
         self.clicked.emit(self.alert)
@@ -985,16 +1001,155 @@ class AlertCenterPanel(QFrame):
             self._enqueue_review_alert(alert)
             self._add_d1_alert(alert)
             return
+        # The backing list is written BEFORE any repetition decision, and is
+        # never consulted by one. History, the evidence streams and the AWAY
+        # push all read from here, so folding a row can never cost a record.
         self._alerts.insert(0, alert)
         del self._alerts[MAX_FEED_ITEMS * 2 :]
         is_focus = self._alert_has_focus_privilege(alert)
         if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
+            # The chart review queue is likewise decided before, and
+            # independently of, how the row is presented.
             self._enqueue_review_alert(alert)
-            self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
-            if self._alerts_may_sound() and alert_should_sound(alert, is_focus=is_focus):
+            decision = self._repetition_decision(alert, is_focus=is_focus)
+            if decision.action == ACTION_FOLD and self._fold_into_existing_row(alert, decision):
+                pass
+            elif decision.action == ACTION_DIGEST and self._add_to_open_digest(alert):
+                pass
+            else:
+                self._insert_item_into(
+                    self.feed_layout, alert, MAX_FEED_ITEMS, repeat=decision
+                )
+            if (
+                decision.sounds
+                and self._alerts_may_sound()
+                and alert_should_sound(alert, is_focus=is_focus)
+            ):
                 QApplication.beep()
             self._relay_alert_popup(alert, is_focus=is_focus)
         self._emit_feed_status()
+
+    # -- R4 section 6.3: display-only repetition control -----------------
+    def _repetition_decision(self, alert: BounceAlert, *, is_focus: bool):
+        """How this alert should be presented in the feed.
+
+        Fails OPEN on any error: an exception here yields a plain new row,
+        which is exactly today's behaviour. A presentation control must never
+        be able to cost the trader an alert.
+        """
+        from alert_repetition import ACTION_NEW, RepeatDecision
+
+        try:
+            ledger = self._repetition_ledger()
+            privileged = bool(
+                is_focus
+                or is_chart_watch_alert(alert)
+                or is_entry_assist_alert(alert)
+                or is_ready_d1_alert(alert)
+            )
+            return ledger.consider(
+                symbol=alert.symbol,
+                side=alert.side,
+                tier=extract_alert_tier(alert),
+                is_banger=is_banger_alert(alert),
+                is_proven=is_proven_alert(alert),
+                privileged=privileged,
+            )
+        except Exception:
+            logging.debug("Alert repetition decision failed.", exc_info=True)
+            return RepeatDecision(ACTION_NEW, 1)
+
+    def _repetition_ledger(self):
+        from alert_repetition import RepetitionLedger, configured_digest_minutes
+
+        ledger = getattr(self, "_repeat_ledger", None)
+        if ledger is None:
+            ledger = RepetitionLedger(digest_minutes=configured_digest_minutes())
+            self._repeat_ledger = ledger
+        market_date, session_open = self._current_session_bounds()
+        ledger.set_market_date(market_date, session_open=session_open)
+        if ledger.session_open is None and session_open is not None:
+            ledger.session_open = session_open
+        return ledger
+
+    @staticmethod
+    def _current_session_bounds():
+        """(market date, regular open) or (today, None) if unknowable.
+
+        A None open disables the digest rather than digesting all day - the
+        fail-open direction, because this control is presentation and must
+        never become accidental suppression.
+        """
+        try:
+            from market_session import get_market_session_window
+
+            window = get_market_session_window()
+            return (
+                window.market_date.isoformat(),
+                window.open_local.replace(tzinfo=None),
+            )
+        except Exception:
+            from datetime import datetime as _dt
+
+            return _dt.now().date().isoformat(), None
+
+    def _fold_into_existing_row(self, alert: BounceAlert, decision) -> bool:
+        """Update the live row in place. False if there is no row to update.
+
+        A row can legitimately be gone - trimmed off the bottom by
+        MAX_FEED_ITEMS, or destroyed by a feed rebuild - and in that case the
+        honest answer is a fresh row rather than a silently dropped alert.
+        """
+        key = (str(alert.symbol or "").upper(), str(alert.side or "").upper())
+        item = getattr(self, "_feed_rows", {}).get(key)
+        if item is None:
+            return False
+        try:
+            item.set_repeat_count(
+                decision.repeat_count,
+                latest_trigger=alert.trigger or alert.raw_text,
+            )
+        except RuntimeError:
+            # The C++ side was deleted (trimmed or rebuilt).
+            self._feed_rows.pop(key, None)
+            return False
+        return True
+
+    def _add_to_open_digest(self, alert: BounceAlert) -> bool:
+        """Fold an ordinary open-burst alert into one ranked digest row.
+
+        Nothing is discarded: every digested alert is in the backing list, in
+        History, in the chart review queue, and named on the digest row itself.
+        """
+        row = getattr(self, "_digest_row", None)
+        try:
+            if row is None or row.parent() is None:
+                row = QLabel()
+                row.setObjectName("Panel")
+                row.setWordWrap(True)
+                row.setStyleSheet(
+                    f"QLabel#Panel {{ color: {theme.color('text_secondary')}; "
+                    "padding: 8px 10px; }"
+                )
+                self.feed_layout.insertWidget(0, row)
+                self._digest_row = row
+            symbols = self._repetition_ledger().digest_symbols()
+            row.setText(
+                f"Open burst · {len(symbols)} name(s) grouped: "
+                + ", ".join(symbols)
+            )
+            row.setToolTip(
+                "Ordinary alerts in the first minutes after the open are "
+                "grouped here so the burst does not bury the feed. Every one "
+                "of them is still in History, in the chart review queue, and "
+                "in the evidence log - nothing was dropped. Bangers, PROVEN "
+                "configs, Focus names and anything you armed yourself bypass "
+                "this entirely."
+            )
+        except Exception:
+            logging.debug("Open-burst digest row failed.", exc_info=True)
+            return False
+        return True
 
     def _add_d1_alert(self, alert: BounceAlert) -> None:
         self._d1_alerts.insert(0, alert)
@@ -1208,7 +1363,9 @@ class AlertCenterPanel(QFrame):
         self._ignore_alert_symbol(alert.symbol)
         self.statusChanged.emit(message)
 
-    def _insert_item_into(self, layout, alert: BounceAlert, max_items: int) -> None:
+    def _insert_item_into(
+        self, layout, alert: BounceAlert, max_items: int, *, repeat=None
+    ) -> None:
         focus_category = ""
         if self.focus_service and alert.symbol:
             focus_category = self.focus_service.focus_category(alert.symbol) or ""
@@ -1223,12 +1380,41 @@ class AlertCenterPanel(QFrame):
         item.favoriteToggled.connect(self._toggle_favorite)
         item.dislikeRequested.connect(self._dislike_alert)
         item.symbolClicked.connect(self._show_symbol_snapshot)
+        # R4 section 6.3: an escalation re-floats the row and carries the count
+        # with it, so "third time, now S-tier" reads as one story rather than
+        # as an unrelated new alert.
+        if repeat is not None and getattr(repeat, "repeat_count", 1) > 1:
+            try:
+                item.set_repeat_count(repeat.repeat_count)
+            except Exception:
+                logging.debug("Repeat badge failed.", exc_info=True)
         layout.insertWidget(0, item)
+        if layout is self.feed_layout and alert.symbol:
+            rows = getattr(self, "_feed_rows", None)
+            if rows is None:
+                rows = {}
+                self._feed_rows = rows
+            rows[(str(alert.symbol).upper(), str(alert.side or "").upper())] = item
         while layout.count() > max_items + 1:
             taken = layout.takeAt(layout.count() - 2)
             widget = taken.widget()
             if widget is not None:
+                self._forget_feed_row(widget)
                 widget.deleteLater()
+
+    def _forget_feed_row(self, widget) -> None:
+        """Drop a trimmed row from the fold registry.
+
+        Without this the registry would hold a deleted C++ object and every
+        later repeat of that name would try to update a row that is no longer
+        on screen - which fails safe (a fresh row) but only by accident.
+        """
+        rows = getattr(self, "_feed_rows", None)
+        if not rows:
+            return
+        for key, item in list(rows.items()):
+            if item is widget:
+                rows.pop(key, None)
 
     @staticmethod
     def _clear_feed_layout(layout) -> None:
@@ -1239,6 +1425,12 @@ class AlertCenterPanel(QFrame):
                 widget.deleteLater()
 
     def _rebuild_feed(self) -> None:
+        # Every row widget is about to be destroyed, so the fold registry and
+        # the digest row must go with them - a registry pointing at deleted
+        # widgets would make the next repeat of each name silently fail over
+        # to a new row instead of folding.
+        self._feed_rows = {}
+        self._digest_row = None
         self._clear_feed_layout(self.feed_layout)
         mode = self._min_tier_mode()
         for alert in reversed(

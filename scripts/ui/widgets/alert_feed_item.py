@@ -99,6 +99,14 @@ class AlertFeedItem(QWidget):
             symbol_label.setStyleSheet("font-weight: 700;")
         top.addWidget(time_label)
         top.addWidget(symbol_label)
+        # R4 section 6.3: a repeat updates this row in place and shows how many
+        # times the name has come back, instead of stacking another row. The
+        # time_label above deliberately keeps FIRST-seen time - "when did this
+        # start" is the question a repeat count makes worth asking.
+        self.repeat_badge = QLabel("")
+        self.repeat_badge.setObjectName("MutedLabel")
+        self.repeat_badge.setVisible(False)
+        top.addWidget(self.repeat_badge)
         if is_watch_hit:
             kind = str((alert.payload or {}).get("chart_watch_kind") or "")
             label = (
@@ -178,3 +186,32 @@ class AlertFeedItem(QWidget):
             context.setObjectName("MutedLabel")
             context.setWordWrap(True)
             layout.addWidget(context)
+
+    def set_repeat_count(self, count: int, *, latest_trigger: str = "") -> None:
+        """Fold a repeat into this row (R4 section 6.3).
+
+        Display only: the alert itself is already in the feed's backing list,
+        in History, and in whatever the AWAY push reads. This just stops a
+        second row from appearing for a name the trader is already looking at.
+
+        The first-seen time in the row header is deliberately left alone -
+        "since when has this name been coming back" is the question a repeat
+        count exists to answer.
+        """
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            return
+        if count <= 1:
+            self.repeat_badge.setVisible(False)
+            return
+        self.repeat_badge.setText(f"×{count}")
+        self.repeat_badge.setToolTip(
+            f"This name has alerted {count} times today. The row keeps its "
+            "first-seen time; nothing was dropped - every hit is still in "
+            "History and the evidence log."
+        )
+        self.repeat_badge.setVisible(True)
+        latest_trigger = str(latest_trigger or "").strip()
+        if latest_trigger:
+            self.trigger_label.setText(latest_trigger)
