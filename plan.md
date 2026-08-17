@@ -367,12 +367,23 @@ are listed in `CURRENT_CHECKPOINT.md`.
    shadow-only quality stamps/report badge, the 12:45 preview slot, and actual-close
    ownership of the single scheduled tracker write, completed-bar STABLE beside
    live PREVIEW, and explicit row stamps. The dislike/reviewed-today loop remains
-   deterministic work. Same-slot volume normalization is unresolved because the
-   D1 seam has no intraday slot series; no new fetch was invented. Live weeks
-   remain owed. **Structured dislike capture/counting and the reviewed-today
-   table/report marker are now built.** R3 remains active only for the trader's
-   §4.3.5 seam/defer decision and its live gates; R4 must not start before that
-   deterministic governance decision is recorded.
+   deterministic work. **Structured dislike capture/counting and the
+   reviewed-today table/report marker are now built.**
+
+   **DETERMINISTIC WORK COMPLETE 2026-08-16.** The one remaining item, §4.3.5
+   same-slot volume normalization, was **explicitly deferred by the trader on
+   2026-08-16**: the D1 scoring seam has no intraday slot series, the faithful
+   TC2000 baseline would need a 5-minute fetch across ~1,100 symbols, and the
+   zero-fetch session-elapsed proration was offered and rejected as trading one
+   dishonest reading for another. The 18-pt thrust bonus therefore keeps its
+   full-day baseline as a **known, accepted** pre-close gap, characterized by
+   `tests/fixtures/r3_swing_quality_v1.json`. Reopening it needs a fresh trader
+   decision on the data seam. That decision is now recorded, so R4 is unblocked.
+
+   **Owed — live gates only, none claimable from tests:** the §6 `would_demote`
+   shadow week the Amendment requires before any row moves, the one-week
+   12:45-vs-close list and STABLE-vs-PREVIEW churn comparison, and the
+   scoreboard's first real-data curation cycle producing a threshold proposal.
 4. **R4 Desk chart unification.** CaptureRail (veto/like/note) on every chart
    surface, review/watch wiring for the RS/RW and Industry panels, Alert Center
    LIKE, armed price alerts and D1 watches painted as a toggleable levels family,

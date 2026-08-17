@@ -22,6 +22,35 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-16 — R3 deterministic work closed; §4.3.5 deferred by the trader
+
+Packet R3's build is complete to its authorized scope. The shadow-only
+`would_demote` classifier, the D1 `relvol` field with its annotation-only
+`daytrade_candidate` carve-out, the reviewed-today badge built from recorded
+decisions, the 12:45 PT preview slot with actual-close ownership of the single
+scheduled tracker write, the completed-bar STABLE list beside the live PREVIEW
+list with `bar_status` stamps, and structured dislike reason codes counted by
+`review_learning.py` as a `dislike_reason` dimension are all in place. Nothing
+demotes, hides, reorders or suppresses a live row: the classifier stamps
+evidence only, and `review_policy.json` still has no suppression field.
+
+The one unbuilt item, §4.3.5 time-normalized volume thrust, is now a recorded
+trader decision rather than an open question. The Master D1 scan fetches daily
+bars only, so `rvol.same_slot_baseline` has no same-slot intraday series to read;
+supplying one would mean a 5-minute fetch across ~1,100 symbols and a new data
+contract inside the scanner. A zero-fetch alternative — prorating the 20-session
+full-day average by session-elapsed fraction — was offered and rejected, because
+real intraday volume is U-shaped and a flat-profile proration would over-fire
+mid-day and under-fire at the open and close. The trader deferred the change on
+2026-08-16 pending a week of stamped evidence. The 18-pt thrust bonus therefore
+keeps its full-day baseline as a known, accepted pre-close honesty gap, frozen in
+`tests/fixtures/r3_swing_quality_v1.json`. Documentation only; no code changed in
+this reconciliation.
+
+R3's live gates remain owed and UNKNOWN: the `would_demote` shadow week required
+before any row moves, the one-week 12:45-vs-close and STABLE-vs-PREVIEW churn
+comparison, and the scoreboard's first real-data curation cycle.
+
 ### 2026-08-16 — "Not today" preserves trader-armed alerts
 
 Alert Center dismissal no longer deletes trader-armed chart watches or defers

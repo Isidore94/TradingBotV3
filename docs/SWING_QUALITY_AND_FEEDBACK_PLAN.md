@@ -1,11 +1,15 @@
 # Swing-quality demotion, pre-close honesty, and the dislike-feedback loop — packet R3
 
-Status: **BUILD AUTHORIZED — IN PROGRESS** for `plan.md` Phase 0.5 **R3**. The
-trader's 2026-08-15 weekend redirect was: *"integrate the rest — build R3 through
-R6 on the consolidated branch."* R3 builds first on
-`phase05-r8-weekend-prep`; the pre-close
-investigation in section 4 is **complete** — its findings are recorded fact, its
-fixes are not yet built.
+Status: **DETERMINISTIC WORK COMPLETE 2026-08-16 — LIVE GATES OWED** for `plan.md`
+Phase 0.5 **R3**. The trader's 2026-08-15 weekend redirect was: *"integrate the
+rest — build R3 through R6 on the consolidated branch."* R3 built first on
+`phase05-r8-weekend-prep`; the pre-close investigation in section 4 is
+**complete** and its authorized fixes are built, **except §4.3.5, which the
+trader explicitly deferred on 2026-08-16** — see the §4.3.5 note below.
+
+Everything still open in this packet is a live gate, not code: the §6 shadow
+week, the one-week 12:45-vs-close churn comparison, and the first real-data
+curation cycle. None may be claimed from deterministic tests.
 
 This packet is the trader's stated core theme for the week: *"we were spammed with
 a lot of trades/tickers we had already checked… there are a lot of OBVIOUSLY
@@ -242,11 +246,32 @@ large forming-bar move cannot enter or mutate the STABLE replay. Full determinis
 gate: 3367 passed / 19 subtests, exit 0. The one-week 12:45-vs-close and churn
 comparison is still UNKNOWN/owed.
 
-Section 4.3.5 remains deliberately unbuilt: the Master D1 scoring seam has no
-same-slot intraday series for `rvol.same_slot_baseline`. Adding a fetch would alter
-the broker/data budget and invent a new contract. The frozen fixture continues to
-characterize the cumulative-D1-volume behavior until the trader chooses a data
-seam or explicitly defers that scoring change.
+**§4.3.5 — DEFERRED BY THE TRADER, 2026-08-16. This is a decision, not an open
+item.** The Master D1 scoring seam has no same-slot intraday series for
+`rvol.same_slot_baseline`: the scan fetches daily bars only, so the faithful
+TC2000 baseline would need a 5-minute fetch per scanned symbol — a material
+change to the broker/data budget across ~1,100 symbols and a new data contract
+inside the D1 scanner. A zero-fetch proration of the 20-day full-day average by
+session-elapsed fraction was offered and **not** selected: real intraday volume
+is U-shaped, so a flat-profile proration would over-fire mid-day and under-fire
+near the open and close, trading one dishonest reading for another.
+
+The trader chose to defer rather than pick a seam, on the §7 reasoning already
+recorded here — this changes which names carry an 18-pt bonus, and they want a
+week of stamped evidence before judging it. Consequences, stated plainly:
+
+- `_playbook_detect_volume_thrust` keeps comparing today's D1 volume against a
+  20-session **full-day** average, so the bonus stays structurally
+  near-unfireable before the close and systematically over-represented in the
+  after-close list. That is a **known, accepted** pre-close honesty gap.
+- `tests/fixtures/r3_swing_quality_v1.json` continues to characterize that
+  cumulative-D1-volume behavior. It is the frozen record of the deferral, not a
+  placeholder for a fix.
+- Reopening this needs a trader decision on the data seam first. Do not build it
+  from either option above without one, and do not treat the proration as a
+  fallback the spec blessed.
+
+The rest of the §4.3 bundle — items 1 through 4 — is built and described above.
 
 **Structured feedback milestone (2026-08-16): BUILT, first curation owed.**
 The Setups ✕ flow now loads the append/version-only veto vocabulary, records its
@@ -279,8 +304,10 @@ real-data AI curation/threshold proposal remains UNKNOWN/owed.
 - Whether the demoted section should also appear in the phone digest or stay
   desk-only at first (default: include, clearly labeled, since the digest inherits
   membership anyway).
-- Sequencing of 4.3.5 (volume-thrust) — it changes which names carry an 18-pt
-  bonus; the trader may want to see a week of stamped evidence first.
+- ~~Sequencing of 4.3.5 (volume-thrust)~~ — **ANSWERED 2026-08-16: deferred by
+  the trader.** It changes which names carry an 18-pt bonus, and the trader wants
+  a week of stamped evidence before choosing a data seam. See the §4.3.5 note in
+  section 5.
 
 
 ## Amendment — 2026-08-15 (R2.1 item 7, external review)
