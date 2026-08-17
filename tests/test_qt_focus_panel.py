@@ -328,13 +328,18 @@ def test_alert_feed_item_star_reflects_favorite_state():
 
     hollow_item = AlertFeedItem(alert, show_favorite_button=True, favorite_hint="Swing Focus")
     hollow = buttons_by_text(hollow_item)
-    assert set(hollow) == {"☆", "✕"}  # star to favorite, ✕ to dislike-with-reason
-    assert "Swing Focus" in hollow["☆"].toolTip()
+    # R4 section 6.2 relabelled these: the one verb on this row that places
+    # membership now names the list it places into instead of wearing a bare
+    # glyph. Same semantics, same signal - only the words changed.
+    assert set(hollow) == {"☆ Like → Swing Focus", "✕"}  # like to place, ✕ to dislike-with-reason
+    assert "Swing Focus" in hollow["☆ Like → Swing Focus"].toolTip()
     assert "pick_feedback" in hollow["✕"].toolTip()
-    lit_item = AlertFeedItem(alert, focus_category="swing", show_favorite_button=True)
+    lit_item = AlertFeedItem(
+        alert, focus_category="swing", show_favorite_button=True, favorite_hint="Swing Focus"
+    )
     lit = buttons_by_text(lit_item)
-    assert set(lit) == {"★", "✕"}
-    assert "Unfavorite" in lit["★"].toolTip()
+    assert set(lit) == {"★ In Swing Focus", "✕"}
+    assert "remove" in lit["★ In Swing Focus"].toolTip().lower()
     # No symbol -> nothing to click.
     no_symbol = AlertFeedItem(
         BounceAlert(time_text="09:30:00", symbol="", side="WATCH", trigger="regime note"),

@@ -114,22 +114,35 @@ class AlertFeedItem(QWidget):
         if alert.timeframe:
             top.addWidget(Badge(alert.timeframe, "info"))
         top.addStretch(1)
+        # R4 section 6.2: the one verb on this row that places membership used
+        # to be a bare glyph. It keeps the same semantics and the same signal -
+        # only the words change, so it reads as the action it always was.
+        #
+        # This is NOT the CaptureRail LIKE on the chart pane. That one is
+        # analysis-only and never writes Focus; this one is placement.
+        self.favorite_button = None
         if show_favorite_button and alert.symbol:
+            bucket = favorite_hint or "Focus"
             star = QToolButton()
-            star.setText("★" if is_focus else "☆")
             if is_focus:
-                star.setToolTip(f"Unfavorite {alert.symbol}: remove it from Focus Picks.")
-            else:
+                star.setText(f"★ In {bucket}")
                 star.setToolTip(
-                    f"Favorite {alert.symbol}{f' into {favorite_hint}' if favorite_hint else ''}: "
-                    "its alerts flag gold, skip the tier filter, and sound."
+                    f"{alert.symbol} is in {bucket}. Click to remove it from "
+                    "Focus Picks."
+                )
+            else:
+                star.setText(f"☆ Like → {bucket}")
+                star.setToolTip(
+                    f"Like {alert.symbol} into {bucket}: its alerts flag gold, "
+                    "skip the tier filter, and sound."
                 )
             star.setCursor(Qt.CursorShape.PointingHandCursor)
-            color = theme.color("favorite") if is_focus else theme.with_alpha(theme.color("favorite"), 0.55)
+            color = theme.color("favorite") if is_focus else theme.with_alpha(theme.color("favorite"), 0.75)
             star.setStyleSheet(
-                f"QToolButton {{ color: {color}; font-weight: 700; font-size: 14pt; padding: 0 4px; }}"
+                f"QToolButton {{ color: {color}; font-weight: 700; padding: 0 6px; }}"
             )
             star.clicked.connect(self.favoriteToggled.emit)
+            self.favorite_button = star
             top.addWidget(star)
 
             dislike = QToolButton()
