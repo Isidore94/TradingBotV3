@@ -44,14 +44,29 @@ the final session.
 |---|---|
 | `pytest tests/ -q` | **3562 passed / 19 subtests** |
 | `scripts/smoke_check.py` | **7/7** |
-| clean-cache frozen rebuild + selftest | **`selftest OK: 49/49 checks passed (frozen)`** |
+| clean-cache frozen rebuild + selftest | **`selftest OK: 51/51 checks passed (frozen)`** |
 
 The frozen rebuild deleted `build/` **and** `dist/` first and ran from the
-worktree, so the desk's own `dist/` was never touched. **49 unchanged is the
-correct result**: no packaging trigger fired across R3/R4/R5 and no selftest
-roster changed, so the "a count that does not move after a roster change is a
-stale build" rule does not apply here. R5's wiring **will** change the roster,
-and there the count must move.
+worktree, so the desk's own `dist/` was never touched. Exe mtime **22:08:48**
+postdates the last code commit — provenance stated on its face, because a past
+round shipped an exe built 21 seconds *before* its tip and an external review
+correctly refused it.
+
+**The count moved 49 → 51, and that movement is the point.** The first rebuild
+of the evening was taken at `6d81492`, then `7d97904` added `completed_bars.py`
+and made `weekend_strength` reach it through a **function-level import** — the
+exact shape PyInstaller can follow today and a refactor can quietly break, whose
+failure mode is a bundle that starts fine and dies the first time a weekend
+board filters a forming bar. `completed_bars` and `alert_repetition` were added
+to `selftest.LAZY_ENGINE_MODULES` so the frozen run *proves* they import instead
+of inferring it, and the count moving from 49 to 51 is what shows the rebuild
+was real rather than a cached reuse.
+
+`indicators.*` is deliberately **not** in the roster: it has no importer
+anywhere and is listed in `PACKAGES_NOT_IN_THE_BUNDLE`, so the frozen exe
+genuinely does not contain it. When R5's wiring gives it a real importer, that
+entry is removed and its modules are added to the roster **in the same commit** —
+the two lists must never contradict each other.
 
 **Nothing live was touched all weekend.** No broker call, no journal write, no
 desk-branch switch, no `main` push. The desk kept running
@@ -100,7 +115,7 @@ elapsed evidence lane that can run in parallel.
 | **Working branch** | **`phase05-r8-weekend-prep`** — since the 2026-08-15 consolidation this is **THE single release candidate**, carrying testing-week + R1 + R1.1 + R2 + R7 + R8 and every review-repair pass. It was cut from the R7 tip `4420bbf`, which was cut from the R2 tip `8d25c92`; the one R2 commit made after that cut (`fc4bcaf`) is now **merged in**, so `phase05-r2-focus-gating-strength-board` is a proven ancestor (`git merge-base --is-ancestor` = 0). Built in a linked worktree at `..\TradingBotV3-r8`. **The main `C:\Users\Aaron\TradingBotV3` checkout stays on the R2 branch, because the desk's scheduled task runs the desk from it.** Run tests with the main repo's venv python and the worktree as cwd |
 | Desk branch | **`phase05-r2-focus-gating-strength-board`** at `fc4bcaf` — what the desk runs and what Monday's live proofs are observed against. It is kept **only until the Monday merge**; do not switch, rename or delete it before the scheduled task is disarmed |
 | Scope | R5 §6 fences its files: `bounce_bot_lib/legacy.py`, `chart_watch.py`, `master_avwap_lib/d1_zone_arms.py`, `master_avwap_lib/legacy.py` (prior-anchor output), `alert_center_panel.py`, `bounce_service.py`. Edits outside the files the active packet's spec names are **ask-first**, fixtures first on anything detector/scoring/alert adjacent — the recovered-rule detour proved that pattern works. **Never edit `scripts/strength_scan.py`** |
-| State | **3562 passed / 19 subtests, exit 0; smoke 7/7, exit 0; clean-cache frozen rebuild + `selftest OK: 49/49 checks passed (frozen)`, exit 0** (the frozen gate was taken at `6d81492`; the two commits after it add `completed_bars.py` + the lane decision and changed no packaging input). Main desk checkout and live runtime untouched throughout; no live broker call, no live journal write. The rebuild deleted `build/` **and** `dist/` first and ran from the worktree, so the desk's own `dist/` was never touched. **49 is unchanged from the R7/R8 gate, and that is the correct result here**: no packaging trigger fired across R3/R4/R5 — `alert_repetition.py` is a top-level *module* imported eagerly by `alert_center_panel`, so static analysis reaches it, and the three new `indicators` modules have **no importer at all** yet, exactly like `laguerre_rsi.py`. No new dependency, runtime asset, package or dynamic string import, and **no selftest roster change** — the stale-build rule ("a count that does not move after a roster change is a stale build") does not apply, because no roster changed. R5's wiring WILL change the roster and force a real re-verification |
+| State | **3562 passed / 19 subtests, exit 0; smoke 7/7, exit 0; clean-cache frozen rebuild + `selftest OK: 51/51 checks passed (frozen)`, exit 0**, taken on the current tip with the exe postdating the last code commit. Main desk checkout and live runtime untouched throughout; no live broker call, no live journal write. The rebuild deleted `build/` **and** `dist/` first and ran from the worktree, so the desk's own `dist/` was never touched. **49 is unchanged from the R7/R8 gate, and that is the correct result here**: no packaging trigger fired across R3/R4/R5 — `alert_repetition.py` is a top-level *module* imported eagerly by `alert_center_panel`, so static analysis reaches it, and the three new `indicators` modules have **no importer at all** yet, exactly like `laguerre_rsi.py`. No new dependency, runtime asset, package or dynamic string import, and **no selftest roster change** — the stale-build rule ("a count that does not move after a roster change is a stale build") does not apply, because no roster changed. R5's wiring WILL change the roster and force a real re-verification |
 | Next action | See **RESUME HERE** above. Do not claim any live proof from deterministic tests |
 | Do not start yet | **Phases 1–7 remain NOT authorized.** Do not run R7's live migration/backfill before Monday's validation day passes; do not claim any live proof from deterministic tests |
 | **Owed live gates — the full ledger** | Nothing below has been observed. UNKNOWN is a result and `plan.md` sec 6 requires recording it as one. **R1 (4):** a ~21:00 boot that starts nothing; an EVENING day that stops after its early block; an AWAY session staging-not-adopting with a clean post-flip drain; one SPY ±1% alarm. **R2 (4):** one staged pick evicted on a VWAP/PDH fallback; one adoption-time refusal; one scoped "Not today" leaving other entries intact; one strength-board session matching the TC2000 scan's character (re-measure the fetch during market hours). **R3 (3):** the `would_demote` shadow week **before any row moves**; the one-week 12:45-vs-close and STABLE-vs-PREVIEW churn comparison; the first real-data curation cycle. **R4:** the whole §8 exit gate, including the two-direction Not-today/armed-watch check. **R6:** the stall-watchdog diagnostic week. **R7:** the trader-present finale — dry-run review, migration, full backfill, ≥10-trade statement spot-audit, one clean reconciliation week, ≥5 consecutive nightly ledger entries. **R8:** one real weekend run (does **not** wait for Monday — read-only, starts nothing until a button is pressed) |

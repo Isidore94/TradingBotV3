@@ -75,6 +75,22 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # journal_import_service directly and the rebuilt one does not, so the only
     # thing keeping journal_runner in the bundle now is a function-level import.
     # Naming them here makes the frozen run prove it instead of inferring it.
+    #
+    # R4/R5 top-level modules, for exactly that reason. `completed_bars` is the
+    # one that needs it: weekend_strength reaches it through a FUNCTION-LEVEL
+    # import, the same shape as journal_runner above - the kind PyInstaller can
+    # follow today and a refactor can quietly break, where the failure is a
+    # bundle that starts fine and dies the first time a weekend board filters a
+    # forming bar. `alert_repetition` is imported eagerly by alert_center_panel,
+    # so it is lower risk, but it costs one line to prove rather than infer.
+    #
+    # NOT `indicators.*`: that package has no importer anywhere in the tree and
+    # is listed in PACKAGES_NOT_IN_THE_BUNDLE, so the frozen exe genuinely does
+    # not contain it. When R5's wiring gives it a real importer, that entry is
+    # REMOVED and its modules are added here IN THE SAME COMMIT - the two lists
+    # must never contradict each other.
+    "completed_bars",
+    "alert_repetition",
     "journal_store",
     "journal_identity",
     "journal_migrate",
