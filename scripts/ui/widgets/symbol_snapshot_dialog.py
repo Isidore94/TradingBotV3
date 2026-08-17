@@ -52,6 +52,87 @@ _FORMING_BARS: dict[str, tuple[datetime, dict]] = {}
 _FORMING_ATTEMPTS: dict[str, datetime] = {}
 _FORMING_REFRESH = timedelta(minutes=2)
 
+#: R4 section 3: how long after the open a Yahoo daily "today" row is refused.
+#:
+#: The row is taken verbatim as OHLC, and in the first minutes of a session it
+#: is a thin pre-market/early print. Drawn as a candle it mis-states the gap AND
+#: drives the chart's y-autoscale, which is what the trader read as a broken
+#: axis. The IB M5 path is unaffected: when an M5 cache exists the preview is
+#: built from real RTH bars and none of this applies.
+#:
+#: Zero disables the suppression. Settings key below; the default is the spec's.
+YAHOO_FORMING_SUPPRESS_MINUTES = 15
+YAHOO_FORMING_SUPPRESS_SETTING = "chart_yahoo_forming_suppress_minutes"
+
+
+def _suppress_minutes() -> int:
+    """The configured suppression window, clamped. Unreadable falls back.
+
+    A corrupt or missing settings file must not silently disable the guard,
+    which is why every failure path returns the default rather than 0.
+    """
+    try:
+        from project_paths import get_local_setting
+
+        raw = get_local_setting(
+            YAHOO_FORMING_SUPPRESS_SETTING, YAHOO_FORMING_SUPPRESS_MINUTES
+        )
+    except Exception:
+        return YAHOO_FORMING_SUPPRESS_MINUTES
+    try:
+        minutes = int(float(raw))
+    except (TypeError, ValueError):
+        return YAHOO_FORMING_SUPPRESS_MINUTES
+    return max(0, min(minutes, 6 * 60))
+
+
+def yahoo_forming_bar_is_trustworthy(now: datetime | None = None) -> bool:
+    """False while a Yahoo daily "today" row is still an early print.
+
+    Two deliberate fail-open cases:
+
+    - **Before the open** (and on a weekend) there is no session for the row to
+      be an early print OF, so nothing is suppressed. The caller simply finds
+      no today-dated bar.
+    - **A session lookup that raises** answers True. If we cannot tell whether
+      we are inside the early window, suppressing every preview all day would
+      be a worse failure than the distortion it prevents - so the caveat label
+      carries the uncertainty instead of the chart going blank.
+    """
+    minutes = _suppress_minutes()
+    if minutes <= 0:
+        return True
+    now = now or datetime.now()
+    try:
+        import chart_snapshot
+        from market_session import get_market_session_window
+
+        if not chart_snapshot.session_has_opened(now):
+            return True
+        opened = get_market_session_window(now.date()).open_local.replace(tzinfo=None)
+    except Exception:
+        return True
+    return now >= opened + timedelta(minutes=minutes)
+
+
+def forming_preview_caveat(source: str, *, suppressed: bool = False) -> str:
+    """What the D1 note says about where the forming candle came from.
+
+    The provenance plumbing already existed in ``chart_review_panel``; the
+    popup just never surfaced it. Missing data renders as absence with a
+    reason, never as a confident candle.
+    """
+    source = str(source or "").strip().lower()
+    if suppressed:
+        return (
+            "Today's forming candle is not shown yet — the only source "
+            "available before the open settles is a Yahoo daily row, which "
+            "is a thin early print that would mis-state the gap."
+        )
+    if source in ("yfinance-fallback", "yfinance", "yahoo"):
+        return "Forming candle: Yahoo daily row (preview, not IB bars)."
+    return ""
+
 
 def _last_row_as_bar(frame) -> dict | None:
     """Newest row of a daily-bar frame as a chart bar dict, or None.
@@ -340,13 +421,24 @@ class SymbolSnapshotWidget(QWidget):
         # daily candle from; a separately fetched today-bar stands in. It is a
         # daily bar, so it feeds ONLY the D1 build, never the M5 pane.
         forming = self._forming_bar(self._symbol)
+        # R4 section 3. A Yahoo daily "today" row is only reached when there is
+        # no M5 cache, and in the first minutes after the open it is a thin
+        # early print that mis-states the gap and drags the y-autoscale with
+        # it. Refuse to draw it during that window and say so, rather than
+        # painting a confident candle over an uncertain one. The IB M5 path is
+        # untouched: real RTH bars are always preferred when they exist.
+        self._forming_suppressed = False
+        if forming is not None and not m5_bars and not yahoo_forming_bar_is_trustworthy():
+            forming = None
+            self._forming_suppressed = True
         source = (
             "ibkr-cache"
             if m5_bars
             else "yfinance-fallback"
-            if forming
+            if forming or self._forming_suppressed
             else "durable-store"
         )
+        self._forming_source = source
         self._data.request(
             self._symbol,
             m5_bars,
@@ -595,6 +687,20 @@ class SymbolSnapshotWidget(QWidget):
             + f" &nbsp; <span style='color:{theme.color('text_muted')};'>"
             + f"{reach}</span>"
         )
+        # R4 section 3: say where the forming candle came from - or why there
+        # is not one. The provenance was already assembled on the worker; the
+        # popup simply never surfaced it, so a Yahoo early print looked exactly
+        # like an IB-built preview.
+        caveat = forming_preview_caveat(
+            getattr(self, "_forming_source", ""),
+            suppressed=bool(getattr(self, "_forming_suppressed", False)),
+        )
+        if caveat:
+            self.d1_legend.setText(
+                self.d1_legend.text()
+                + f" &nbsp; <span style='color:{theme.color('caution')};'>"
+                + f"● {caveat}</span>"
+            )
 
     @staticmethod
     def _staleness_badge(bars) -> str:
