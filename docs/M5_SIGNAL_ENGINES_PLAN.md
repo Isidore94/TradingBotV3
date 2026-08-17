@@ -1,8 +1,9 @@
 # M5 signal engines — packet R5
 
-Status: **ACTIVE specification** for `plan.md` Phase 0.5 **R5**. Authorized by the
-trader on 2026-08-15; ranked **last** among the feature packets (trader's ordering),
-so R1–R4 land first. Every engine here is new detector work: pure builders may land
+Status: **IN PROGRESS** for `plan.md` Phase 0.5 **R5**. Authorized by the trader on
+2026-08-15; ranked **last** among the feature packets (trader's ordering), and
+R1–R4 have now landed. **§2's pure indicator modules are BUILT (2026-08-16); all
+wiring is unbuilt and BLOCKED on the §8 Alert Center lane question — see §9.** Every engine here is new detector work: pure builders may land
 with hand-written unit tests, but **wiring any of them into the live M5 alert path
 requires a golden characterization fixture first** (decision 0009; the
 `tests/test_d1_zone_arms.py` precedent states this split explicitly), and every
@@ -163,9 +164,52 @@ next engine wires in. The frozen exe rebuild + 30-check selftest runs when the
 
 ## 8. Open questions
 
-- Alert Center lane: same `d1_flag` family or a new tag for LRSI/combo/ORB alerts
-  (trader preference at build time).
-- Combo signal scope: literally only current M5 Focus members, or Focus + the
-  day's watchlists? (Default specced: Focus only.)
-- ORB candidate tagging surface: Alert Center annotation vs a small ORB lane on
-  the strength board (packet R2's board is a natural home).
+Put to the trader on 2026-08-16, before any wiring was written.
+
+| Question | Status |
+|---|---|
+| **Alert Center lane** — same `d1_flag` family, or a new tag for LRSI/combo/ORB alerts | **STILL OPEN, and it blocks §3's wiring.** Asked 2026-08-16; no answer came back. Do not settle it by inference. The recommendation put to the trader was a **new tag family**, reasoning that §7 wants each engine's volume judged on its own desk session, and folding brand-new detectors into `d1_flag` makes "is this new engine noisy?" unanswerable. Ask again before wiring any of the three alert types |
+| **Combo signal scope** | **ANSWERED 2026-08-16: M5 Focus members only** — as specced, and as the trader originally framed it. A three-signal confluence run over the full watchlists would fire on names the trader never chose, which is the trash-volume problem R3 exists to reduce. Focus membership is the trader's explicit statement that they care about the name |
+| **ORB candidate tagging surface** | **ANSWERED 2026-08-16: Alert Center annotation**, not a strength-board lane. The candidate is marked where its two follow-up alerts will fire, so the candidate and its follow-ups read as one story in one place, and the mark expires with the day like every other day-scoped annotation |
+
+## 9. Build state (2026-08-16)
+
+**§2 pure indicator modules: BUILT.** `scripts/indicators/smi.py`,
+`efficiency_lrsi.py` and `heikin_ashi.py`, with 42 hand-computed tests in
+`tests/test_indicators_r5.py`. Nothing imports them, so **no packaging trigger
+has fired** — they stand exactly where `laguerre_rsi.py` does, which the
+spec-drift allowlist already covers.
+
+Two fixture defects were caught on the first run and are worth remembering,
+because both are the failure mode R3's Amendment was written about:
+
+- the SMI separate-smoothing test — the parity detail the formula most invites
+  getting wrong — **passed vacuously on a clean linear ramp**, because a linear
+  ramp has a constant 5-bar range, so the denominator is constant and dividing
+  early or late agree exactly. Rebuilt on an expanding-and-contracting swing;
+- the LRSI "already above the level" test asserted a crossing index that cannot
+  exist, since a series with no measurable prior bar has no crossing to report.
+
+**Everything else in this packet is unbuilt**, and two things must happen first:
+
+1. **The Alert Center lane question must be answered.** It decides the tag every
+   §3 alert type carries.
+2. **§5's shared completed-bars helper must be reconciled, not re-invented.**
+   `weekend_strength.completed_bars` already holds a correct intraday
+   definition — `bar_start + bar_minutes <= now`, normalizing a tz-aware stamp
+   with `astimezone(...)`. BounceBot's ad hoc idiom (`legacy.py:4384-4386` and
+   `4533-4535`) uses `replace(tzinfo=None)`, which is the wrong spelling for a
+   tz-aware stamp. The R5 helper must be **one** definition shared with
+   `weekend_strength` and the strength board, on `astimezone`. It was
+   deliberately **not** built ahead of its consumers: an unused abstraction
+   would have been reconciled by guesswork, and §5 itself says existing call
+   sites migrate opportunistically, never as a silent behavior change to a
+   shipped detector.
+
+**The packaging trigger fires the moment `scripts/indicators` gains its first
+real importer**, which is §3's wiring. In that same change: the spec's
+`collect_submodules` list, `tests/test_packaging_spec_drift.py`'s allowlist, the
+`selftest.LAZY_ENGINE_MODULES` roster, and a frozen rebuild with **`build/` AND
+`dist/` deleted first** — a count that does not move after a roster change is a
+stale build, not a pass. Mind the disjointness rule: a package listed in
+`PACKAGES_NOT_IN_THE_BUNDLE` may not also appear in the selftest roster.

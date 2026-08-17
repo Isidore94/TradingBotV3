@@ -22,6 +22,32 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-16 — R5's pure indicator modules
+
+`scripts/indicators/` gained three pure, offline, completed-bars-only modules:
+TC2000-parity `smi.py`, the TC2000 "LRSI" efficiency oscillator as
+`efficiency_lrsi.py`, and `heikin_ashi.py` with a reversal classifier. Immutable
+tuples out, no provider call, no clock, no ledger, each with its own
+`FEATURE_VERSION`.
+
+`efficiency_lrsi.py` is named apart from the pre-existing `laguerre_rsi.py`
+deliberately: that module is Ehlers' Laguerre RSI with fractal-energy
+modulation, an unrelated algorithm, and the trader calls this one "LRSI" only
+because TC2000 does. A test asserts the two cannot be confused. Of the two
+possible readings of the trader's LRSI source, the 0–100 scale is used, because
+the spec pins that range and its crossing levels (up through 20, up through 50)
+only make sense there.
+
+An unmeasurable bar is `None` throughout, never a fabricated zero — a warm-up
+window, a mid-window gap, an SMI range of zero, an EMA that did not move.
+
+**Nothing imports these yet, so no packaging trigger has fired**; they stand
+where `laguerre_rsi.py` does. All R5 wiring is unbuilt and blocked on the spec's
+§8 Alert Center lane question. Two other §8 questions were answered by the
+trader the same day: the confluence alert stays M5-Focus-only, and an ORB
+candidate is an Alert Center annotation rather than a strength-board lane.
+Deterministic gate: 3542 passed / 19 subtests, exit 0.
+
 ### 2026-08-16 — R4 desk chart unification built
 
 Packet R4 is built to its authorized scope. Every chart surface now carries the

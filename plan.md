@@ -424,7 +424,21 @@ are listed in `CURRENT_CHECKPOINT.md`.
    from the RS/RW board appearing as a badge everywhere that symbol renders that
    day; and §6.1's ignored-symbol armed-watch hit feeding and sounding while
    automatic Focus D1 interest for that same ignored symbol stays absent.
-5. **R5 M5 signal engines.** New pure indicator modules (TC2000-parity SMI,
+5. **R5 M5 signal engines. — §2 BUILT 2026-08-16; wiring BLOCKED on a trader
+   answer.** `scripts/indicators/smi.py`, `efficiency_lrsi.py` and
+   `heikin_ashi.py` are built, pure and green (42 hand-computed tests). Nothing
+   imports them, so **no packaging trigger has fired yet**. Two of the spec's
+   three §8 questions were answered by the trader on 2026-08-16 — the confluence
+   alert stays **M5 Focus only**, and an ORB candidate is an **Alert Center
+   annotation** rather than a strength-board lane. **The third is still open and
+   blocks every §3 alert type: which Alert Center lane/tag the new engines
+   carry.** Ask before wiring. §5's shared completed-bars helper is deliberately
+   unbuilt until it has consumers, and must then be ONE definition reconciled
+   with `weekend_strength.completed_bars` on `astimezone`, never a second copy
+   of BounceBot's `replace(tzinfo=None)` idiom. See the spec's new §9.
+   Original scope follows.
+
+   New pure indicator modules (TC2000-parity SMI,
    efficiency-LRSI under a non-colliding name, Heikin-Ashi reversal), the LRSI
    cross alert type, the HA+SMI+LRSI confluence alert (Focus-scoped), the
    first-candle ORB candidate flow, the AnyBounceWatch multi-level armed watch
