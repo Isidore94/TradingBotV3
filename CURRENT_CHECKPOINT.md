@@ -30,6 +30,25 @@ carrying commits absent from the release candidate, and both were ruled out:
 Do not re-raise either as an open merge question. If a future audit wants to
 revisit the scoring branch, that is a fresh trader decision, not a cleanup task.
 
+**FOUND 2026-08-18, NOT FIXED, and bigger than the test it surfaced through:
+the deterministic suite does live work during market hours.** Chasing the
+stall-watchdog failure, a full run inside the 06:00-14:00 window showed the
+suite connecting to IB (`Connected to IB API`, `Reconnected with
+clientId=1278001`), rebuilding the universe through
+`autopilot_core.rebuild_universe_if_stale` -> `universe_builder.build_universe`
+-> `fetch_market_caps` over **1,536 symbols**, and fetching real SPY quotes
+(`Auto market regime: SPY -0.53% on the day`). Runtime went ~152 s (evening,
+window closed) -> ~217 s (market hours) and one run exceeded 10 minutes.
+
+Consequences, none of them small: the suite is not deterministic, it is not
+offline, it consumes live broker/provider budget on every run, and its timing
+depends on the clock. The stall watchdog was only the canary - it is the one
+test that measures the main thread, so it noticed first.
+
+**This is a trader decision, not a cleanup task**, because the fix touches what
+autopilot/universe code does under test. Do NOT fold it into another packet
+silently. Do NOT run the full suite during market hours until it is resolved.
+
 **Branch renamed 2026-08-17: `phase05-r8-weekend-prep` → `testing-week-2026-08-17`.**
 Same commits, same SHAs, nothing merged or rebased — only the name moved, and the
 old remote ref is deleted so there is exactly one name for one lineage. The old
@@ -69,7 +88,7 @@ the final session.
 
 | Check | Result |
 |---|---|
-| `pytest tests/ -q` | **3637 passed / 19 subtests, 1 FAILED** (2026-08-17). The failure is `test_ui_stall_watchdog.py::test_watchdog_records_a_blocking_call_with_its_stack`: it passes alone in 1.4 s and fails under full-suite load, where the suite now takes ~180 s against ~152 s earlier in the day. **Not introduced by the day's work** — verified by stashing every uncommitted change and re-running at `514c1fb`, which reproduced it identically. It is a genuinely timing-sensitive test (a 250 ms deliberate block, a 30 ms threshold, a 5 ms sampler) and the load moved past its margin. Treat the baseline as **green minus this one known, reproducing timing failure** — do not claim a clean exit 0 until it is fixed or quarantined |
+| `pytest tests/ -q` | **3638 passed / 19 subtests, exit 0** (2026-08-18). The stall-watchdog failure is FIXED, test-side only: `tests/test_ui_stall_watchdog.py` now runs its two event-loop scenarios in a private interpreter, because earlier Qt tests leave live QTimers on the shared `QApplication` and their work was being recorded as this file's stalls. No assertion was weakened and `scripts/ui/stall_watchdog.py` was not touched |
 | `scripts/smoke_check.py` | **7/7** |
 | clean-cache frozen rebuild + selftest | **`selftest OK: 55/55 checks passed (frozen)`** (2026-08-17; 51 → 55 on the R5 roster growth) |
 

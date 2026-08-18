@@ -7,7 +7,9 @@ unoptimized chart path look clean.
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -44,13 +46,15 @@ def _block_the_gui_thread(seconds: float) -> None:
         pass
 
 
-def test_watchdog_records_a_blocking_call_with_its_stack(tmp_path):
-    app = _qt_app()
-    if app is None:
-        pytest.skip("PySide6 unavailable")
+def _scenario(log: Path) -> list[dict]:
+    """Start the watchdog, block the GUI thread, return what it recorded.
+
+    Kept importable AND runnable as ``__main__`` so the test can execute it in
+    a clean interpreter - see :func:`_run_scenario` for why that matters.
+    """
     from ui.stall_watchdog import StallWatchdog, load_stalls
 
-    log = tmp_path / "ui_stalls.jsonl"
+    app = _qt_app()
     watchdog = StallWatchdog(threshold_ms=30, log_path=log, heartbeat_ms=5)
     watchdog.start()
     try:
@@ -58,16 +62,60 @@ def test_watchdog_records_a_blocking_call_with_its_stack(tmp_path):
         # the record under test is the block and not the startup gap.
         _pump(app, 0.3)
         _block_the_gui_thread(0.25)
-        found = _pump(app, 3.0, until=lambda: bool(load_stalls(log)))
+        _pump(app, 3.0, until=lambda: bool(load_stalls(log)))
     finally:
         watchdog.stop()
+    return load_stalls(log)
 
-    assert found, "a 250ms main-thread block produced no stall record"
-    records = load_stalls(log)
+
+def _run_scenario(tmp_path: Path, mode: str = "--scenario") -> list[dict]:
+    """Run the scenario in its OWN interpreter, and say why that is necessary.
+
+    This test measures the main thread by watching what runs on it, so it is
+    uniquely sensitive to what else is on that thread. Inside the full suite it
+    is not alone: earlier Qt tests leave live QTimers on the shared
+    QApplication, and every ``processEvents()`` here runs THEIR work. On
+    2026-08-18 the recorded culprits were::
+
+        ['scripts/ui/panels/industry_panel.py:277',
+         'scripts/autopilot_core.py:2417',
+         'tests/test_ui_stall_watchdog.py:33',   # the pump's own sleep
+         'tests/test_ui_stall_watchdog.py:33']
+
+    - four stalls, none of them the deliberate block. Foreign timer work
+    stalled the loop around the block, so the gap the sampler measured was
+    never sampled inside ``_block_the_gui_thread`` at all.
+
+    That is contamination, not a margin that needs widening, and it does not
+    reproduce under CPU load alone (verified: 16 busy workers, the scenario
+    passes every time). Widening the bounds or relaxing the attribution filter
+    would therefore have hidden a real cross-test coupling while making the
+    test weaker. A private interpreter removes the coupling instead, and every
+    assertion below stays exactly as strict as it was.
+    """
+    if _qt_app() is None:
+        pytest.skip("PySide6 unavailable")
+    log = tmp_path / f"ui_stalls{mode.replace('--', '_')}.jsonl"
+    proc = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), mode, str(log)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=str(Path(__file__).resolve().parents[1]),
+    )
+    assert proc.returncode == 0, (
+        f"scenario subprocess failed: stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_watchdog_records_a_blocking_call_with_its_stack(tmp_path):
+    records = _run_scenario(tmp_path)
+
+    assert records, "a 250ms main-thread block produced no stall record"
     # Pick the record for OUR deliberate block rather than whichever stall
-    # happens to be longest. Run inside the full suite the machine is busy
-    # enough to produce other stalls (a GC pause, a loaded scheduler), and
-    # keying on the maximum makes this flaky instead of meaningful.
+    # happens to be longest: even in a private interpreter, keying on the
+    # maximum would make an unrelated pause the subject of the test.
     blocks = [
         record
         for record in records
@@ -93,21 +141,32 @@ def test_watchdog_records_a_blocking_call_with_its_stack(tmp_path):
     assert any("_block_the_gui_thread" in frame for frame in worst["stack"])
 
 
-def test_idle_loop_records_nothing(tmp_path):
-    app = _qt_app()
-    if app is None:
-        pytest.skip("PySide6 unavailable")
+def _idle_scenario(log: Path) -> list[dict]:
+    """Watch a loop that does nothing. Nothing should be recorded."""
     from ui.stall_watchdog import StallWatchdog, load_stalls
 
-    log = tmp_path / "ui_stalls.jsonl"
+    app = _qt_app()
     watchdog = StallWatchdog(threshold_ms=50, log_path=log, heartbeat_ms=5)
     watchdog.start()
     try:
         _pump(app, 0.6)
     finally:
         watchdog.stop()
+    return load_stalls(log)
+
+
+def test_idle_loop_records_nothing(tmp_path):
+    # Isolated for the same reason as the block test, and by the same
+    # mechanism - see _run_scenario. This assertion is the more fragile of the
+    # two under contamination, because it asserts SILENCE: one foreign QTimer
+    # firing on the shared loop is enough to break it, and it does not even
+    # need to be slow enough to matter. It went red the moment the block test
+    # stopped absorbing the noise, which is the clearest evidence available
+    # that the noise was never this file's doing.
+    records = _run_scenario(tmp_path, "--idle-scenario")
+
     # A responsive loop must stay silent, or every real stall drowns in noise.
-    assert load_stalls(log) == []
+    assert records == []
 
 
 def test_summary_ranks_offenders_by_total_blocked_time(tmp_path):
@@ -158,3 +217,16 @@ def test_threshold_defaults_and_overrides(monkeypatch):
     assert stall_watchdog.threshold_ms() == 120.0
     monkeypatch.setenv(stall_watchdog.ENV_THRESHOLD_MS, "not-a-number")
     assert stall_watchdog.threshold_ms() == stall_watchdog.DEFAULT_THRESHOLD_MS
+
+
+if __name__ == "__main__":
+    # `--scenario <log>`: run the block-and-measure scenario in this pristine
+    # interpreter and print the records as JSON on the last stdout line.
+    _MODES = {"--scenario": _scenario, "--idle-scenario": _idle_scenario}
+    if len(sys.argv) == 3 and sys.argv[1] in _MODES:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        print(json.dumps(_MODES[sys.argv[1]](Path(sys.argv[2]))))
+    else:  # pragma: no cover - developer convenience only
+        raise SystemExit(
+            "usage: test_ui_stall_watchdog.py [--scenario|--idle-scenario] <log path>"
+        )
