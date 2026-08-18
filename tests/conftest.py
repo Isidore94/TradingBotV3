@@ -576,3 +576,98 @@ def _drain_chart_workers():
             "chart workers queued by this test were still running at teardown: "
             + ", ".join(stalled)
         )
+
+
+# ---------------------------------------------------------------------------
+# The offline tripwire (hermetic-suite packet, 2026-08-18).
+#
+# The deterministic suite was only ever ACCIDENTALLY offline. Evening runs
+# looked clean because R1's quiet-hours gate (`auto_scanning_due`, weekdays
+# 06:00-14:00 PT) was closed; a market-hours run on 2026-08-18 showed the same
+# suite connecting to IB, rebuilding a 1,536-symbol universe through
+# `fetch_market_caps`, and pulling real SPY quotes. Wall time moved ~152 s ->
+# ~217 s and one run passed ten minutes.
+#
+# So: no unmarked test may open a socket. `network` and `broker` are the
+# opt-outs that already existed for the handful of tests whose point IS the
+# wire.
+#
+# LOOPBACK IS NOT EXEMPT, deliberately. TWS listens on 127.0.0.1:7496, so an
+# exemption for "local" traffic would wave through the single worst leak this
+# guard exists to catch.
+#
+# Attempts are RECORDED as well as refused, and recorded attempts fail the test
+# at teardown. A raise alone is not enough: the universe rebuild runs on a
+# background thread, where the exception is logged and swallowed, and the test
+# would pass while still having tried to reach the wire.
+# ---------------------------------------------------------------------------
+
+_SOCKET_OPT_OUT_MARKERS = ("network", "broker")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Remember whether the test body already failed.
+
+    Without this the teardown check reports a SECOND failure for the same
+    violation - one FAILED and one ERROR per leak - which turns the inventory
+    this guard exists to produce into twice the noise.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if report.when == "call" and report.failed:
+        item._offline_tripwire_already_failed = True
+
+
+class OfflineSuiteViolation(AssertionError):
+    """A test that never declared it needs the wire tried to use it."""
+
+
+@pytest.fixture(autouse=True)
+def _offline_tripwire(request, monkeypatch):
+    if any(request.node.get_closest_marker(name) for name in _SOCKET_OPT_OUT_MARKERS):
+        yield
+        return
+
+    import socket as _socket
+
+    test_id = request.node.nodeid
+    attempts: list[str] = []
+
+    def _refuse(where: str, address: object):
+        target = repr(address)
+        attempts.append(f"{where} -> {target}")
+        raise OfflineSuiteViolation(
+            f"{test_id} tried to open a socket ({where} -> {target}). "
+            "The suite is hermetic: stub the seam, or mark the test "
+            "@pytest.mark.network / @pytest.mark.broker if live I/O is its point."
+        )
+
+    real_connect = _socket.socket.connect
+    real_connect_ex = _socket.socket.connect_ex
+    real_create_connection = _socket.create_connection
+
+    def guarded_connect(self, address, *args, **kwargs):
+        _refuse("socket.connect", address)
+
+    def guarded_connect_ex(self, address, *args, **kwargs):
+        _refuse("socket.connect_ex", address)
+
+    def guarded_create_connection(address, *args, **kwargs):
+        _refuse("socket.create_connection", address)
+
+    monkeypatch.setattr(_socket.socket, "connect", guarded_connect, raising=True)
+    monkeypatch.setattr(_socket.socket, "connect_ex", guarded_connect_ex, raising=True)
+    monkeypatch.setattr(_socket, "create_connection", guarded_create_connection, raising=True)
+    try:
+        yield
+    finally:
+        monkeypatch.setattr(_socket.socket, "connect", real_connect, raising=True)
+        monkeypatch.setattr(_socket.socket, "connect_ex", real_connect_ex, raising=True)
+        monkeypatch.setattr(_socket, "create_connection", real_create_connection, raising=True)
+    if attempts and not getattr(request.node, "_offline_tripwire_already_failed", False):
+        # Reached when a background thread swallowed the raise. The test looked
+        # green; it was not.
+        raise OfflineSuiteViolation(
+            f"{test_id} attempted live I/O on a background thread: " + "; ".join(sorted(set(attempts)))
+        )
