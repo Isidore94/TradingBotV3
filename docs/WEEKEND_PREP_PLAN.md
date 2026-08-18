@@ -1,14 +1,14 @@
 # Weekend Prep Plan — Phase 0.5 R8
 
 **Status: ACTIVE spec — authorized 2026-08-15, BUILDING.**
-Branch `phase05-r8-weekend-prep`, cut from the R7 tip `4420bbf` on 2026-08-15
+Branch `testing-week-2026-08-17`, cut from the R7 tip `4420bbf` on 2026-08-15
 after R7's build completed. Baseline at cut: 3203 passed / 19 subtests, exit 0.
 Trader-directed packet (2026-08-15 desk request). Builds **after** R7
 (`docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`) because the walk-away and auto-tag
 review steps read the journal R7 makes trustworthy. Per the second 2026-08-15
 trader redirect (recorded in the R7 spec header and `plan.md` Phase 0.5
 preamble), R7 builds now on a branch cut from the R2 tip; R8's branch
-`phase05-r8-weekend-prep` is cut from the R7 tip when R7's build completes —
+`testing-week-2026-08-17` is cut from the R7 tip when R7's build completes —
 or from `main` if the stack has merged by then. Overlap with R7's live gates
 only if no shared file is in flight — `ui/services/journal_feed.py` IS shared.
 

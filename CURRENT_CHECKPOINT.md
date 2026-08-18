@@ -10,9 +10,16 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ## THE WEEKEND OF 2026-08-15/16 — start here
 
+**Branch renamed 2026-08-17: `phase05-r8-weekend-prep` → `testing-week-2026-08-17`.**
+Same commits, same SHAs, nothing merged or rebased — only the name moved, and the
+old remote ref is deleted so there is exactly one name for one lineage. The old
+name had stopped being true: it carried R1, R1.1, R2, R3, R4, R5, R7 and R8, not
+a weekend-prep packet. Older documents and commit messages still say
+`phase05-r8-weekend-prep`; those are accurate history, not stale pointers.
+
 **One branch now carries everything.** Before this weekend the work lived on
 `testing-week-2026-08-10` plus a ladder of packet branches. It is all collapsed
-into **`phase05-r8-weekend-prep`**, which is **208 commits ahead of `main`** and
+into **`testing-week-2026-08-17`**, which is **208 commits ahead of `main`** and
 has both `main` and `phase05-r2-focus-gating-strength-board` as proven ancestors
 (`git merge-base --is-ancestor` = 0 for each). Every deleted branch was verified
 fully contained first; every rollback SHA is still reachable. There is exactly
@@ -21,7 +28,7 @@ fully contained first; every rollback SHA is still reachable. There is exactly
 ```
 main (7d85a27)
   └─ testing-week → R1 → R1.1 → R2 (8d25c92) → R7 → R8 → [R3, R4, R5 this weekend]
-       = phase05-r8-weekend-prep          ← the single release candidate
+       = testing-week-2026-08-17          ← the single release candidate
 ```
 
 **What got built, packet by packet.** 64 commits since the R2 tip; 14 of them in
@@ -112,7 +119,7 @@ elapsed evidence lane that can run in parallel.
 | **RESUME HERE** | **R5 §3.1 (LRSI cross) is WIRED, green and frozen-verified as of 2026-08-17 — see below. The next two engines are blocked on a LIVE gate, not on build effort.** **1. §7's per-engine desk session**: the confluence (§3.2) and first-candle ORB (§3.3) engines wire ONLY after one desk session confirms the LRSI cross's alert volume is sane. Do not wire them from deterministic tests. **2. R5 §4's any-bounce watch** is not behind that gate and can build next, but its prior-anchor AVWAP line is an **ask-first** edit to `master_avwap_lib/legacy.py` (D1 scan output) — ask before touching it. **3. R6** (`plan.md` Phase 0.5 item 6): the `ai_jobs` boot-line reword + a read-only System Health row over `job_ledger.jsonl`; session-scoped rotation for `technical_integrity_events.jsonl` preserving its replay contract (**`technical_integrity.py` is scoring-adjacent — characterization fixture FIRST**); and the `ui_stall_watchdog` setting/plumbing only. **4. The review-deferral completions**: R8 Week-in-Review RRS-extremes join, R8 Focus Review joins (**join picks WITH their outcomes, not as separate rows**), Analytics per-setup/per-account charts with honest n counts and a CSV under each, and the Calendar pyqtgraph year heatmap. **Leave true USD conversion deferred** — the FX table books CAD only |
 | **R4 close-out (2026-08-16)** | **BUILT, live proofs owed.** §6.1 armed-alert survival; CaptureRail in the snapshot popup and Alert Center pane (so the RS/RW and Industry boards, which had no capture at all, now inherit it); Alert Center LIKE as capture-not-placement; armed price alerts + D1 level watches painted as a read-only `GROUP_ALERTS` family on the worker; the Yahoo forming-bar early print suppressed 15 min after the open and labeled when drawn; the reviewed-today marker on snapshot/Alert pane/RS-RW/Industry; the labeled `☆ Like → M5 Focus` verb; and one feed row per symbol+side+day with a three-item escalation list and a 30-minute open-burst digest. Three trader confirmations recorded in the spec's §6.4. **Held ask-first:** the Focus Picks marker (editable watchlist *text*, not a table) and §2.2's `review_host` for the boards. **Owed:** the whole §8 exit gate, all live |
 | **R3 close-out (2026-08-16)** | **DETERMINISTIC WORK COMPLETE.** The classifier stays shadow-only — `would_demote` stamps, nothing moves, hides or reorders a live row. Built: relvol + `daytrade_candidate` annotation, reviewed-today badge from recorded decisions only, the 12:45 PT preview slot, actual-close ownership of the single scheduled tracker write, STABLE+PREVIEW with `bar_status` stamps, and structured dislike codes counted as `review_learning`'s `dislike_reason` dimension. **§4.3.5 volume-thrust normalization is DEFERRED by explicit trader decision** — the D1 seam has no intraday slot series, a per-symbol 5-min fetch was refused as a data-budget/contract change, and a session-elapsed proration was offered and rejected because real volume is U-shaped. **Owed, live only:** the `would_demote` shadow week (required before any row moves), the one-week 12:45-vs-close and STABLE-vs-PREVIEW churn comparison, and the first real-data curation cycle |
-| **Working branch** | **`phase05-r8-weekend-prep`** — since the 2026-08-15 consolidation this is **THE single release candidate**, carrying testing-week + R1 + R1.1 + R2 + R7 + R8 and every review-repair pass. It was cut from the R7 tip `4420bbf`, which was cut from the R2 tip `8d25c92`; the one R2 commit made after that cut (`fc4bcaf`) is now **merged in**, so `phase05-r2-focus-gating-strength-board` is a proven ancestor (`git merge-base --is-ancestor` = 0). Built in a linked worktree at `..\TradingBotV3-r8`. **The main `C:\Users\Aaron\TradingBotV3` checkout stays on the R2 branch, because the desk's scheduled task runs the desk from it.** Run tests with the main repo's venv python and the worktree as cwd |
+| **Working branch** | **`testing-week-2026-08-17`** — since the 2026-08-15 consolidation this is **THE single release candidate**, carrying testing-week + R1 + R1.1 + R2 + R7 + R8 and every review-repair pass. It was cut from the R7 tip `4420bbf`, which was cut from the R2 tip `8d25c92`; the one R2 commit made after that cut (`fc4bcaf`) is now **merged in**, so `phase05-r2-focus-gating-strength-board` is a proven ancestor (`git merge-base --is-ancestor` = 0). Built in a linked worktree at `..\TradingBotV3-r8`. **The main `C:\Users\Aaron\TradingBotV3` checkout stays on the R2 branch, because the desk's scheduled task runs the desk from it.** Run tests with the main repo's venv python and the worktree as cwd |
 | Desk branch | **`phase05-r2-focus-gating-strength-board`** at `fc4bcaf` — what the desk runs and what Monday's live proofs are observed against. It is kept **only until the Monday merge**; do not switch, rename or delete it before the scheduled task is disarmed |
 | Scope | R5 §6 fences its files: `bounce_bot_lib/legacy.py`, `chart_watch.py`, `master_avwap_lib/d1_zone_arms.py`, `master_avwap_lib/legacy.py` (prior-anchor output), `alert_center_panel.py`, `bounce_service.py`. Edits outside the files the active packet's spec names are **ask-first**, fixtures first on anything detector/scoring/alert adjacent — the recovered-rule detour proved that pattern works. **Never edit `scripts/strength_scan.py`** |
 | State | **3590 passed / 19 subtests, exit 0; smoke 7/7, exit 0; clean-cache frozen rebuild + `selftest OK: 55/55 checks passed (frozen)`, exit 0** (2026-08-17). **The packaging trigger finally fired and moved the count 51 → 55**, which is the outcome the stale-build rule demands: R5 §3.1 gave `indicators` its first real importer, so it left `PACKAGES_NOT_IN_THE_BUNDLE`, entered the spec's `FIRST_PARTY_PACKAGES`, and four modules joined the selftest roster — all in one commit, the two lists still disjoint. `build/` **and** `dist/` were deleted first and the build ran from the worktree, so the desk's own `dist/` was never touched; exe mtime 18:59:35 postdates the commit at 18:57:23. Main desk checkout and live runtime untouched; no live broker call, no live journal write |
@@ -346,7 +353,7 @@ afterwards.
 
 ### Repaired R7/R8 release candidate — code tip `dd201cd`
 
-**`phase05-r8-weekend-prep` at code tip `dd201cd` is the repaired release
+**`testing-week-2026-08-17` at code tip `dd201cd` is the repaired release
 candidate.** The subsequent governance commit changes documentation only. All
 three gates are green on the repaired tree:
 
@@ -398,14 +405,14 @@ is **7 inserted Markdown lines in this file** — verified with
 
 The repository was reduced to **three** branches so Monday has one thing to
 merge. Everything deleted was proven fully contained first
-(`git merge-base --is-ancestor <branch> phase05-r8-weekend-prep`); no commit was
+(`git merge-base --is-ancestor <branch> testing-week-2026-08-17`); no commit was
 lost, and every named rollback SHA is still reachable from this branch.
 
 | Branch | Fate |
 |---|---|
 | `main` | kept — trunk, tip untouched at `7d85a27` |
 | `phase05-r2-focus-gating-strength-board` | kept — the desk branch, until Monday |
-| `phase05-r8-weekend-prep` | kept — **the** consolidated release candidate |
+| `testing-week-2026-08-17` | kept — **the** consolidated release candidate |
 | `testing-week-2026-08-10`, `phase05-r1-auto-modes-quiet-hours`, `phase05-r7-journal-reliability-ux`, `testing`, `chart-review-workspace`, `chart-perf-c`, `integration-test`, `durability-catchup`, `local-ai-phase-0`, `local-ai-phase-1`, `repair-packet-2` | deleted, local and (where it still existed) on `origin` — all contained |
 
 Worktrees `..\TradingBotV3-r7`, `..\TBV3-testing` and `..\TBV3-chart-review`
@@ -501,7 +508,7 @@ could not.
 
 **Read this first: the branch names below no longer exist.** The 2026-08-15
 consolidation deleted them, but every SHA is still reachable from
-`phase05-r8-weekend-prep`, so each remains a plain `git checkout <sha>` — a
+`testing-week-2026-08-17`, so each remains a plain `git checkout <sha>` — a
 detached checkout, not a revert. Nothing here got harder to roll back; the names
 just stopped being branch heads.
 
@@ -591,7 +598,7 @@ The 2026-08-15 consolidation replaced the three-branch ladder with a single
 merge. There is no order to get wrong and no known conflict:
 
 ```
-phase05-r8-weekend-prep  ->  main
+testing-week-2026-08-17  ->  main
 ```
 
 That one branch carries testing-week + R1 + R1.1 + R2 + R7 + R8 and every
@@ -603,7 +610,7 @@ preserved by SHA in the rollback-points table instead.
 
 | # | Step | Note |
 |---|---|---|
-| 1 | Merge `phase05-r8-weekend-prep` into `main` | one merge, no expected conflict |
+| 1 | Merge `testing-week-2026-08-17` into `main` | one merge, no expected conflict |
 | 2 | Re-run **all** gates on `main`, including a **clean-cache** frozen rebuild | delete `build/` **and** `dist/` first — R7's close-out proved a rebuild silently reuses cached modules, and a frozen count that does not move after a roster change is a stale build, not a pass |
 | 3 | Disarm `TradingBotV3 0700 Launch` | **before** touching the checkout — the task starts the desk from source and can launch a half-swapped tree |
 | 4 | Switch the desk checkout to `main` | this is when `phase05-r2-focus-gating-strength-board` stops being needed |
@@ -926,7 +933,7 @@ Three branches exist, and that is the whole list (2026-08-15 consolidation):
 |---|---|---|
 | `main` | `7d85a27` | trunk. Tip untouched; nothing is merged into it until Monday |
 | `phase05-r2-focus-gating-strength-board` | `fc4bcaf` | **the desk branch** — what the scheduled task runs and what Monday's live proofs are observed against. Retired at merge step 4 |
-| `phase05-r8-weekend-prep` | consolidated tip | **the release candidate** — testing-week + R1 + R1.1 + R2 + R7 + R8 + all review repairs. Worked in `..\TradingBotV3-r8` |
+| `testing-week-2026-08-17` | consolidated tip | **the release candidate** — testing-week + R1 + R1.1 + R2 + R7 + R8 + all review repairs. Worked in `..\TradingBotV3-r8` |
 
 - State: **nothing merged to `main`; no PR recorded.**
 - The consolidated branch is a strict superset of the desk branch (proven with
@@ -1375,7 +1382,7 @@ JSON line, so line-based projection is still all-or-nothing for it.
 - **P0.6:** start Local-AI's five-session clock and the warehouse broker/live/pilot
   sequence.
 - **P0.7:** merge only after the live-validation day and applicable rechecks pass.
-  **One** branch now queues for `main` — `phase05-r8-weekend-prep`, which carries
+  **One** branch now queues for `main` — `testing-week-2026-08-17`, which carries
   testing-week, R1, R1.1, R2, R7 and R8 together after the 2026-08-15
   consolidation. The gates to re-run, the clean-cache rebuild rule, and the
   desk-switch order are in the Monday sequence at the top of this file.

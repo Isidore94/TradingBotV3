@@ -57,7 +57,7 @@ test counts belong in `CURRENT_CHECKPOINT.md`. Only unfinished work belongs here
 
 As of the reconciliation date:
 
-- the active branch is `phase05-r8-weekend-prep`, not yet merged to `main` — the
+- the active branch is `testing-week-2026-08-17`, not yet merged to `main` — the
   single consolidated release candidate since 2026-08-15, carrying testing-week,
   R1, R1.1, R2, R7 and R8. `testing-week-2026-08-10` and the R1/R7 branch names
   used below are historical: those branches were deleted once proven contained,
@@ -264,7 +264,7 @@ No new feature or threshold work belongs in Phase 0.
 7. **P0.7 Merge to `main`.** Only after a live-validation day passes, re-run the
    applicable gates, merge, and update all control documents. Since the
    2026-08-15 consolidation this is **one** merge —
-   `phase05-r8-weekend-prep` → `main` — followed by a full gate re-run on `main`
+   `testing-week-2026-08-17` → `main` — followed by a full gate re-run on `main`
    including a clean-cache frozen rebuild, and only then the disarm / switch the
    desk / re-arm sequence. R7's and R8's own live gates follow **after** that
    merge and are not merge blockers. Exact steps: `CURRENT_CHECKPOINT.md`,
@@ -304,7 +304,7 @@ later brings the whole stack. The redirect does not authorize R3–R6.
 **Weekend redirect (2026-08-15).** The trader then explicitly authorized the
 remaining packets on the consolidated release candidate: *"integrate the rest —
 build R3 through R6 on the consolidated branch."* R3, R4, R5 and R6 therefore
-build in that order on `phase05-r8-weekend-prep`, one packet at a time with its
+build in that order on `testing-week-2026-08-17`, one packet at a time with its
 fixtures, full deterministic gate, governance close-out and push complete before
 the next starts. This redirect does not satisfy any live gate: R3's shadow week,
 R6's watchdog week, R1/R2's eight proofs, R7's migration/backfill/reconciliation
@@ -532,7 +532,7 @@ are listed in `CURRENT_CHECKPOINT.md`.
    injection. Includes the standalone `app.py` nav-title bugfix as its first
    commit — which turned out to be a **live crash**: the desk's Settings button
    raised `IndexError`, and eight nav titles from index 3 named the wrong page.
-   Spec: `docs/WEEKEND_PREP_PLAN.md`. Built on `phase05-r8-weekend-prep`, cut
+   Spec: `docs/WEEKEND_PREP_PLAN.md`. Built on `testing-week-2026-08-17`, cut
    from the R7 tip. **§5's filter table is trader-approved as proposed
    (2026-08-15)**, so the discovery step is no longer blocked.
 

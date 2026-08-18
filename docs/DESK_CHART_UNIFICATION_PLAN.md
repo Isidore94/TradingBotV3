@@ -1,7 +1,7 @@
 # Desk chart unification — packet R4
 
 Status: **BUILT 2026-08-16 — LIVE PROOFS OWED**, for `plan.md` Phase 0.5 **R4**.
-Authorized by the trader on 2026-08-15; built on `phase05-r8-weekend-prep` under
+Authorized by the trader on 2026-08-15; built on `testing-week-2026-08-17` under
 the 2026-08-15 weekend redirect, after R3 closed.
 
 Sections 1–5 and 6.1–6.3 are built and green. Two items are **explicitly held

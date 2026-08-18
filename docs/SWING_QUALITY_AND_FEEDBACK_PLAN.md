@@ -3,7 +3,7 @@
 Status: **DETERMINISTIC WORK COMPLETE 2026-08-16 — LIVE GATES OWED** for `plan.md`
 Phase 0.5 **R3**. The trader's 2026-08-15 weekend redirect was: *"integrate the
 rest — build R3 through R6 on the consolidated branch."* R3 built first on
-`phase05-r8-weekend-prep`; the pre-close investigation in section 4 is
+`testing-week-2026-08-17`; the pre-close investigation in section 4 is
 **complete** and its authorized fixes are built, **except §4.3.5, which the
 trader explicitly deferred on 2026-08-16** — see the §4.3.5 note below.
 
