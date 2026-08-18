@@ -30,24 +30,34 @@ carrying commits absent from the release candidate, and both were ruled out:
 Do not re-raise either as an open merge question. If a future audit wants to
 revisit the scoring branch, that is a fresh trader decision, not a cleanup task.
 
-**FOUND 2026-08-18, NOT FIXED, and bigger than the test it surfaced through:
-the deterministic suite does live work during market hours.** Chasing the
-stall-watchdog failure, a full run inside the 06:00-14:00 window showed the
-suite connecting to IB (`Connected to IB API`, `Reconnected with
-clientId=1278001`), rebuilding the universe through
-`autopilot_core.rebuild_universe_if_stale` -> `universe_builder.build_universe`
--> `fetch_market_caps` over **1,536 symbols**, and fetching real SPY quotes
-(`Auto market regime: SPY -0.53% on the day`). Runtime went ~152 s (evening,
-window closed) -> ~217 s (market hours) and one run exceeded 10 minutes.
+**FIXED 2026-08-18 - the suite is hermetic.** The deterministic suite was only
+ever ACCIDENTALLY offline: evening runs looked clean because R1's quiet-hours
+gate was closed, and a market-hours run connected to IB, rebuilt a
+1,536-symbol universe and pulled live SPY quotes. Mechanism of the fix: a
+conftest tripwire refuses `socket.connect`/`connect_ex`/`create_connection` for
+any test not marked `network`/`broker` (loopback included, because TWS is on
+127.0.0.1:7496), records attempts so background-thread reaches fail at teardown
+too, and names the calling frame; then eight external adapters are stubbed at
+their boundaries - `ibapi EClient.connect`, ForexFactory, Treasury, yfinance,
+the NASDAQ earnings fetch, and all five `universe_builder.fetch_*` entry
+points. No product file was edited. The four Desk Link files are marked
+`network` (a wire protocol whose transport IS the subject). Full suite in the
+OPEN window, 11:19 PT: **3638 passed / 19 subtests, 0 failed, 0 errors**, and
+no socket left the process.
 
-Consequences, none of them small: the suite is not deterministic, it is not
-offline, it consumes live broker/provider budget on every run, and its timing
-depends on the clock. The stall watchdog was only the canary - it is the one
-test that measures the main thread, so it noticed first.
-
-**This is a trader decision, not a cleanup task**, because the fix touches what
-autopilot/universe code does under test. Do NOT fold it into another packet
-silently. Do NOT run the full suite during market hours until it is resolved.
+**STILL OPEN, newly attributed, and it blocks a clean gate:** the pytest
+PROCESS exits `0xC0000409` (STATUS_STACK_BUFFER_OVERRUN) - a native crash at
+interpreter shutdown, AFTER every test has passed and the summary has printed.
+It is not a test failure and it is not the hermetic work: `--ignore
+tests/test_ui_stall_watchdog.py` returns **0** with 3633 passed, while ignoring
+other Qt-heavy files (`test_qt_desk_layout`, `test_qt_journal_panel`) still
+crashes. Deselecting only that file's two subprocess tests still crashes, so
+the trigger is **importing `ui.stall_watchdog` into the shared process**, not
+yesterday's subprocess isolation. `scripts/ui/stall_watchdog.py` imports
+`PySide6.QtCore` at module scope and is product code owed R6(c)'s diagnostic
+week - so this is NOT to be "fixed" by editing it to make a suite exit cleanly.
+Until it is resolved, quote the summary line AND this exit code together;
+neither alone is the truth.
 
 **Branch renamed 2026-08-17: `phase05-r8-weekend-prep` → `testing-week-2026-08-17`.**
 Same commits, same SHAs, nothing merged or rebased — only the name moved, and the
@@ -88,7 +98,7 @@ the final session.
 
 | Check | Result |
 |---|---|
-| `pytest tests/ -q` | **3638 passed / 19 subtests, exit 0** (2026-08-18). The stall-watchdog failure is FIXED, test-side only: `tests/test_ui_stall_watchdog.py` now runs its two event-loop scenarios in a private interpreter, because earlier Qt tests leave live QTimers on the shared `QApplication` and their work was being recorded as this file's stalls. No assertion was weakened and `scripts/ui/stall_watchdog.py` was not touched |
+| `pytest tests/ -q` | **3638 passed / 19 subtests, 0 failed, 0 errors** (2026-08-18 11:19 PT, quiet-hours window OPEN, hermetic). **Process exit code is `0xC0000409`, not 0** - a native Qt-teardown crash after the summary prints, attributed to importing `ui.stall_watchdog`; see the entry above. The 3638/exit-0 row previously dated 2026-08-18 was written while its confirmation run was in flight: that run did land with 3638 passed, but its exit-code line never wrote, and the code was almost certainly already this crash. **Do not quote exit 0 for this suite until the teardown crash is resolved.** |
 | `scripts/smoke_check.py` | **7/7** |
 | clean-cache frozen rebuild + selftest | **`selftest OK: 55/55 checks passed (frozen)`** (2026-08-17; 51 → 55 on the R5 roster growth) |
 

@@ -618,7 +618,13 @@ def _no_ib_session(request, monkeypatch):
     This stubs the ADAPTER BOUNDARY, not behaviour - the client simply never
     dials, which is the same state as a desk with TWS closed.
     """
-    if any(request.node.get_closest_marker(name) for name in _SOCKET_OPT_OUT_MARKERS):
+    # Opt-out is `broker` ONLY, not `network`. The two markers mean different
+    # things: `network` is "this test uses the internet" (the Desk Link wire
+    # protocol tests), `broker` is "this test needs a live IBKR session".
+    # Letting `network` disable the IB stub is how the Desk Link files quietly
+    # reconnected to TWS after they were marked - a real connection, logged as
+    # "Sec-def data farm connection is OK", inside a suite meant to be offline.
+    if request.node.get_closest_marker("broker"):
         yield
         return
     try:
@@ -661,12 +667,36 @@ def _no_market_prep_feeds(request, monkeypatch):
         # so nothing downstream sees a state it has not handled before. The
         # file is ask-first and is NOT edited: this is a test-side stub.
         ("master_avwap_lib.legacy", "_fetch_nasdaq_earnings_rows_with_retries", ([], None)),
+        # The universe rebuild - the leak that started this packet. It runs on
+        # a background thread from autopilot_core.rebuild_universe_if_stale,
+        # and on 2026-08-18 it walked 1,536 symbols against the live wire in
+        # the middle of a deterministic suite. Empty list / empty dict are the
+        # shapes both already return when their caches are cold and the fetch
+        # yields nothing.
+        # ALL five of universe_builder's fetch entry points, not the two that
+        # happened to fire first. Chasing them one full-suite run at a time is
+        # how a guard like this gets declared done while a fourth path is still
+        # dialling out on a code path no test exercised that day.
+        ("universe_builder", "fetch_all_listed_symbols", []),
+        ("universe_builder", "fetch_weekly_option_symbols", []),
+        ("universe_builder", "fetch_optionable_symbols", []),
+        ("universe_builder", "fetch_market_caps", {}),
+        ("universe_builder", "fetch_price_history", None),
     ):
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError:  # pragma: no cover - optional tree
             continue
         if hasattr(module, attribute):
+            # Stash the original so a test that stubs the layer BELOW this one
+            # (test_earnings_collect_speed fakes requests.get to exercise the
+            # real retry/batching logic) can put it back in one line and stay
+            # hermetic while doing it.
+            setattr(module, f"_offline_original_{attribute}", getattr(module, attribute))
+            if empty is None and attribute == "fetch_price_history":
+                import pandas as _pd
+
+                empty = _pd.DataFrame()
             monkeypatch.setattr(module, attribute, lambda *a, _e=empty, **k: _e, raising=True)
     yield
 

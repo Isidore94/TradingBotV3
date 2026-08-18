@@ -93,8 +93,13 @@ def _run_scenario(tmp_path: Path, mode: str = "--scenario") -> list[dict]:
     test weaker. A private interpreter removes the coupling instead, and every
     assertion below stays exactly as strict as it was.
     """
-    if _qt_app() is None:
-        pytest.skip("PySide6 unavailable")
+    # Availability is decided by IMPORT, never by constructing a QApplication.
+    # The scenario now runs in a child interpreter, so the parent has no reason
+    # to own a Qt app - and creating one here late in the session left it
+    # dangling at interpreter exit, which is a native crash
+    # (STATUS_STACK_BUFFER_OVERRUN, 0xC0000409) after every test had already
+    # passed. The suite reported "3638 passed" and still exited non-zero.
+    pytest.importorskip("PySide6.QtWidgets")
     log = tmp_path / f"ui_stalls{mode.replace('--', '_')}.jsonl"
     proc = subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), mode, str(log)],

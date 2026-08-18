@@ -80,6 +80,15 @@ def test_collect_earnings_dates_batches_cache_writes_on_cold_walk(monkeypatch):
     monkeypatch.setattr(legacy.time, "sleep", lambda *_: None)
     monkeypatch.setattr(legacy, "_record_shared_nasdaq_rows_safely", lambda *a, **k: None)
     monkeypatch.setattr(legacy.requests, "get", lambda *a, **k: _FakeResponse())
+    # This test's subject IS the retry/batching loop inside the fetch, and it
+    # already stubs the wire one layer down (requests.get above). Put the real
+    # fetch back over the conftest offline stub - still hermetic, because
+    # nothing below it can reach a socket.
+    monkeypatch.setattr(
+        legacy,
+        "_fetch_nasdaq_earnings_rows_with_retries",
+        legacy._offline_original__fetch_nasdaq_earnings_rows_with_retries,
+    )
 
     writes = {"count": 0}
     monkeypatch.setattr(legacy, "save_json", lambda *a, **k: writes.__setitem__("count", writes["count"] + 1))
