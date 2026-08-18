@@ -216,7 +216,58 @@ ordinary alert. That is more conservative than the decision assumed, and it
 points the same way — do not "fix" it, and do not write "Focus member ⇒ never
 folded" anywhere, because that is not what the code does.
 
-## 9. Build state (2026-08-16)
+## 9. Build state (2026-08-17)
+
+**§3.1, the LRSI cross engine, is WIRED and green.** Built in this order:
+
+1. `scripts/m5_signal_engines.py` — the pure seam between the indicator maths
+   and the 11k-line detector. Bars in, events out; no clock, no I/O, no
+   BounceBot import. It owns the three rules the call site has historically got
+   wrong: completed bars only; the indicator warms **across** sessions while the
+   event belongs to **one** (the `_evaluate_ema8_grind` precedent); and shorts
+   mirror by negating price rather than inverting the test — the oscillator
+   clamps at zero, so a falling name reads LOW, never negative, and there is no
+   downward crossing that means the same thing. `latest_lrsi_cross` fires only
+   on the most recently completed bar, so one crossing is one alert instead of
+   one per scan cycle.
+2. The detector wiring: `check_lrsi_cross_setups` beside the ORB and 8-EMA
+   grind sweeps, on both the fast-lane and full-cycle hooks.
+
+**The lane is built as §8.1 decided**: `M5_SIGNAL_TAG = "m5_signal"`, defined
+once in `m5_signal_engines` because the detector cannot import from the UI and
+both sides must agree. It replaces the `"green"`/`"red"` colour BounceBot passes
+as the callback's second argument — safe because direction has always come from
+the feedback block, and that is now asserted rather than assumed. The alert is
+not D1, holds no chart-watch or entry-assist bypass, and passes the tier gate
+like any other.
+
+**The toggle map is separate on purpose.** `BOUNCE_LEARNING_TYPE_KEYS` is
+derived from `BOUNCE_TYPE_DEFAULTS`, so adding engines on probation to that dict
+would widen what the learning path treats as an established bounce type — a
+scoring change smuggled in as a feature. `M5_SIGNAL_TYPE_DEFAULTS` is its own
+map, and a taxonomy pin in `tests/test_r5_lrsi_cross_wiring.py` fails if anyone
+ever tidies the two together.
+
+**The packaging trigger fired and was discharged in the same commit**, exactly
+as the allowlist entry promised: `indicators` left `PACKAGES_NOT_IN_THE_BUNDLE`,
+joined the spec's `FIRST_PARTY_PACKAGES`, and `m5_signal_engines` plus the three
+indicator modules joined `selftest.LAZY_ENGINE_MODULES`. The clean-cache rebuild
+(`build/` **and** `dist/` deleted, run from the worktree) moved the frozen count
+**51 → 55** — the movement is the proof it was not a cached reuse. Exe mtime
+18:59:35 postdates the commit at 18:57:23. `laguerre_rsi` is deliberately absent
+from the roster: collecting the package sweeps it in, but the selftest asserts
+what is *reachable*, and it still has no importer.
+
+Gate: **3590 passed / 19 subtests, exit 0; smoke 7/7, exit 0;
+`selftest OK: 55/55 checks passed (frozen)`, exit 0.**
+
+**What §3.1 has NOT earned.** §7's gate is per engine and it is live: the
+confluence (§3.2) and first-candle ORB (§3.3) engines wire only after a desk
+session confirms this engine's alert volume is sane. No such session has run.
+§4's any-bounce watch is not behind that gate, but its prior-anchor AVWAP line
+is an ask-first edit to the D1 scan output.
+
+## 9.1 Prior build state (2026-08-16)
 
 **§2 pure indicator modules: BUILT.** `scripts/indicators/smi.py`,
 `efficiency_lrsi.py` and `heikin_ashi.py`, with 42 hand-computed tests in

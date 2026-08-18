@@ -22,6 +22,44 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-17 — R5's first live engine: the LRSI efficiency crossing
+
+`IMPLEMENTED` + `GREEN`; **live gate open.**
+
+- **`scripts/m5_signal_engines.py`** — the pure seam between the R5 indicator
+  modules and the live detector. Bars in, events out, no clock and no I/O, so
+  the three rules the call site historically got wrong are testable without
+  standing up a scanner: completed bars only through the one shared helper; the
+  indicator warms across sessions while the *event* belongs to one; and shorts
+  mirror by negating price rather than inverting the test, because the
+  efficiency oscillator clamps at zero and a falling name reads LOW, never
+  negative. `latest_lrsi_cross` fires only on the most recently completed bar,
+  so one crossing is one alert rather than one per scan cycle.
+- **`check_lrsi_cross_setups`** in `bounce_bot_lib/legacy.py`, on both the
+  human-focus fast lane and the full cycle, beside the ORB and 8-EMA grind
+  sweeps. It passes an aware market-local clock straight through to
+  `completed_bars` instead of stripping the offset with `replace(tzinfo=None)`,
+  which is the defect that helper was extracted to end.
+- **`M5_SIGNAL_TAG` family** (R5 §8.1), defined once in `m5_signal_engines`
+  because the detector cannot import from the UI and both sides must agree. It
+  replaces the `"green"`/`"red"` colour previously passed as the callback tag;
+  direction has always come from the feedback block, which is now asserted. No
+  D1 routing, no chart-watch or entry-assist bypass, ordinary tier gate.
+- **`M5_SIGNAL_TYPE_DEFAULTS`**, a toggle map kept deliberately out of
+  `BOUNCE_TYPE_DEFAULTS`. `BOUNCE_LEARNING_TYPE_KEYS` derives from that dict, so
+  adding engines on probation would have widened what the learning path treats
+  as an established bounce type — a scoring change smuggled in as a feature. A
+  taxonomy pin now fails if the two are ever tidied together.
+- **Packaging trigger fired and discharged in the same commit**: `indicators`
+  moved out of `PACKAGES_NOT_IN_THE_BUNDLE` into the spec's
+  `FIRST_PARTY_PACKAGES`, and four modules joined the selftest roster. The
+  clean-cache frozen rebuild moved the count **51 → 55**; the movement is what
+  proves the build was real.
+- Gate: 3590 passed / 19 subtests, smoke 7/7, `selftest OK: 55/55 (frozen)`,
+  all exit 0.
+- **Owed:** R5 §7's per-engine desk session. The confluence and first-candle ORB
+  engines are deliberately NOT wired until one runs.
+
 ### 2026-08-16 — One shared completed-bar rule, and R5's lane decision
 
 `plan.md` sec 5 says completed bars only for state transitions and a forming bar
