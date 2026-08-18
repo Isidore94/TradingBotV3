@@ -24,6 +24,7 @@ import tkinter.font as tkFont
 
 import pandas as pd
 import yfinance as yf
+from m5_signal_engines import M5_SIGNAL_TAG, latest_lrsi_cross
 from market_session import (
     get_market_local_now,
     get_market_session_close_naive,
@@ -289,6 +290,8 @@ BOUNCE_TYPE_LABELS = {
     "h1_ema10_bounce": "H1 10-EMA Bounce",
     "h1_blue_after_red": "H1 Blue After Red",
     "h1_green_to_yellow": "H1 Green->Yellow Fade",
+    "lrsi_cross_20": "LRSI Cross 20",
+    "lrsi_cross_50": "LRSI Cross 50",
 }
 BOUNCE_LEARNING_TYPE_KEYS = set(BOUNCE_TYPE_DEFAULTS)
 
@@ -524,6 +527,27 @@ EMA8_GRIND_SQUEEZE_BARS = 4  # bars right before the push that must hug the EMA
 EMA8_GRIND_SQUEEZE_MAX_ATR = 0.35  # max |close - ema8| in intraday ATRs
 EMA8_GRIND_HOD_TYPE = "ema8_grind_hod"
 EMA8_GRIND_LOD_TYPE = "ema8_grind_lod"
+
+# LRSI efficiency crossings (R5 section 3.1, 2026-08-17). The trader's TC2000
+# "LRSI" is an efficiency ratio over EMA9 changes, and the readable event is a
+# completed M5 bar crossing UP through 20 (a name leaving pure churn - the
+# strongest tell) or through 50 (the ordinary one). Shorts are the mirror,
+# taken by negating price in m5_signal_engines: the oscillator clamps at zero,
+# so a falling name reads LOW rather than negative and there is no downward
+# crossing that means the same thing.
+LRSI_CROSS_20_TYPE = "lrsi_cross_20"
+LRSI_CROSS_50_TYPE = "lrsi_cross_50"
+
+# R5 section 8.1: the M5 signal engines get their OWN toggle map, deliberately
+# NOT BOUNCE_TYPE_DEFAULTS. BOUNCE_LEARNING_TYPE_KEYS is derived from that dict
+# (see below), so adding unproven engines to it would silently widen the
+# learning set - a scoring change smuggled in as a feature. These are new
+# detectors on probation; they must be measurable and switchable without
+# touching what the champions learn from.
+M5_SIGNAL_TYPE_DEFAULTS = {
+    LRSI_CROSS_20_TYPE: True,
+    LRSI_CROSS_50_TYPE: True,
+}
 
 # H1 candle-color sweeps (2026-07-06): the trader's hourly regime colors.
 # EMA15 vs SMA20 defines the hourly trend; the close's position classifies
@@ -2641,10 +2665,12 @@ class BounceBot(EWrapper, EClient):
         self._orb_break_state = None
         self._ema8_grind_state = None
         self._h1_color_state = None
+        self._lrsi_cross_state = None
         self.latest_rrs_payload = None
         self.earnings_reaction_filter_cache = {}
 
         self.bounce_type_toggles = dict(BOUNCE_TYPE_DEFAULTS)
+        self.m5_signal_toggles = dict(M5_SIGNAL_TYPE_DEFAULTS)
         self.scanning_enabled = bool(start_scanning_enabled)
         self.scanning_lock = threading.Lock()
         self._scan_cycle_index = 0
@@ -6469,6 +6495,129 @@ class BounceBot(EWrapper, EClient):
         payload = self._build_bounce_feedback_alert_payload(message, event_row)
         if self.gui_callback:
             self.gui_callback(payload, "red" if side == "short" else "green")
+        self.log_symbol(symbol, f"ALERT: {message}")
+        self.log_bounce_to_file(
+            symbol=symbol,
+            direction=side,
+            levels=levels,
+            bounce_candle=bar_dict,
+            current_candle=bar_dict,
+            threshold=0.0,
+            quality=quality,
+        )
+
+    # ------------------------------------------------------------------
+    # LRSI efficiency crossings (R5 section 3.1, 2026-08-17). The first of the
+    # three M5 signal engines, wired standalone because the spec section 7
+    # gate is per engine: each one earns its next sibling by proving its alert
+    # volume is sane on a desk session. All maths lives in m5_signal_engines /
+    # indicators.efficiency_lrsi, which are pure; this method is only the
+    # sweep, the once-per-crossing bookkeeping and the emit.
+    # ------------------------------------------------------------------
+    def check_lrsi_cross_setups(self, symbols=None):
+        """Fire on a completed M5 bar crossing up through an LRSI level."""
+        spy_today, _prev_close = self._spy_session_bars()
+        if not spy_today:
+            return []
+        today = spy_today[-1].dt.date()
+        state = self._lrsi_cross_state
+        if not state or state.get("date") != today:
+            state = {"date": today, "alerted": set()}
+            self._lrsi_cross_state = state
+        # An aware market-local clock, passed straight through. The old ad hoc
+        # idiom stripped the offset with replace(tzinfo=None); completed_bars
+        # converts instead, which is the whole reason it exists.
+        now = get_market_local_now()
+        hits = []
+        for side in ("long", "short"):
+            for symbol in self._watchlist_day_sweep_symbols(side, symbols):
+                event = self._evaluate_lrsi_cross(symbol, side, today, now)
+                if not event:
+                    continue
+                bounce_type = (
+                    LRSI_CROSS_20_TYPE if event.is_strongest else LRSI_CROSS_50_TYPE
+                )
+                if not self.is_m5_signal_enabled(bounce_type):
+                    continue
+                stamp = event.bar_time.strftime("%H:%M") if event.bar_time else "?"
+                key = f"{symbol}|{side}|{bounce_type}|{stamp}"
+                if key in state["alerted"]:
+                    continue
+                state["alerted"].add(key)
+                hits.append((event, bounce_type))
+        for event, bounce_type in hits:
+            self._emit_lrsi_cross_alert(event, bounce_type)
+        return [event for event, _bounce_type in hits]
+
+    def _evaluate_lrsi_cross(self, symbol, side, today, now):
+        bars = self.get_cached_5m_bars(symbol)
+        if not bars:
+            return None
+        rows = [
+            {
+                "dt": bar.dt,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+            }
+            for bar in bars
+        ]
+        return latest_lrsi_cross(
+            rows, symbol=symbol, side=side, now=now, session=today
+        )
+
+    def is_m5_signal_enabled(self, signal_type):
+        """R5 engines are on probation and each one is switchable alone."""
+        return bool(self.m5_signal_toggles.get(signal_type, False))
+
+    def set_m5_signal_enabled(self, signal_type, enabled):
+        if signal_type in self.m5_signal_toggles:
+            self.m5_signal_toggles[signal_type] = bool(enabled)
+
+    def _emit_lrsi_cross_alert(self, event, bounce_type):
+        symbol = event.symbol
+        side = event.side
+        bar_dict = {
+            "time": event.bar_time.strftime("%Y%m%d  %H:%M:%S") if event.bar_time else "",
+            "open": event.close,
+            "high": event.close,
+            "low": event.close,
+            "close": event.close,
+        }
+        levels = {bounce_type: event.close}
+        strength = "strongest" if event.is_strongest else "ordinary"
+        event_row = self._log_bounce_candidate_event(
+            "confirmed",
+            symbol,
+            side,
+            levels,
+            bar_dict,
+            bar_dict,
+            reason=(
+                f"LRSI efficiency crossed up through {event.level:.0f} "
+                f"({event.previous:.1f} -> {event.value:.1f}) on the completed "
+                f"5m bar - the {strength} crossing"
+            ),
+        )
+        self._register_bounce_outcome(
+            symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
+        )
+        quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        message = (
+            f"[{quality.get('tier', 'B')}-TIER] LRSI CROSS {event.level:.0f} {symbol} "
+            f"({side}): efficiency {event.previous:.1f} -> {event.value:.1f} on the "
+            f"completed 5m bar at {event.close:.2f}."
+        )
+        exit_note = self._measured_exit_suffix(side, levels)
+        if exit_note:
+            message += f" | {exit_note}"
+        payload = self._build_bounce_feedback_alert_payload(message, event_row)
+        if self.gui_callback:
+            # R5 section 8.1: its own tag family, never d1_flag. Per-engine
+            # identity rides bounce_type, so the feed can count each engine
+            # separately; the tag only says "M5 signal engine, on probation".
+            self.gui_callback(payload, M5_SIGNAL_TAG)
         self.log_symbol(symbol, f"ALERT: {message}")
         self.log_bounce_to_file(
             symbol=symbol,
@@ -11156,6 +11305,7 @@ class BounceBot(EWrapper, EClient):
         # These two M5 pattern families consume the bars just fetched above.
         self.check_orb_break_setups(symbols=processed)
         self.check_ema8_grind_setups(symbols=processed)
+        self.check_lrsi_cross_setups(symbols=processed)
         return processed
 
     def run_strategy(self):
@@ -11280,6 +11430,10 @@ class BounceBot(EWrapper, EClient):
                     self.check_ema8_grind_setups()
                 except Exception:
                     logging.exception("8-EMA grind sweep failed.")
+                try:
+                    self.check_lrsi_cross_setups()
+                except Exception:
+                    logging.exception("LRSI cross sweep failed.")
 
                 # H1 candle-color signals under test: green-regime 10-EMA
                 # bounces + blue-after-red reclaims (longs), green->yellow

@@ -70,7 +70,6 @@ PACKAGES_NOT_IN_THE_BUNDLE = {
         "which in turn is imported only by gui_app - so it is reachable from the "
         "Tk entry point alone, not the frozen Qt desk."
     ),
-    "indicators": "no importer anywhere in the tree; nothing can reach it, frozen or not.",
 }
 #: The A4 suite's name for the same allowlist.
 UNCOLLECTED_PACKAGES = PACKAGES_NOT_IN_THE_BUNDLE

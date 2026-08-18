@@ -53,6 +53,10 @@ FIRST_PARTY_PACKAGES = (
     "diagnostics",
     "research_warehouse",
     "desk_link",
+    # R5 (2026-08-17): `indicators` gained its first real importer when the LRSI
+    # cross engine wired in - bounce_bot_lib.legacy -> m5_signal_engines ->
+    # indicators.efficiency_lrsi. It was allowlisted as unreachable until then.
+    "indicators",
 )
 
 

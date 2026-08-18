@@ -84,13 +84,24 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # forming bar. `alert_repetition` is imported eagerly by alert_center_panel,
     # so it is lower risk, but it costs one line to prove rather than infer.
     #
-    # NOT `indicators.*`: that package has no importer anywhere in the tree and
-    # is listed in PACKAGES_NOT_IN_THE_BUNDLE, so the frozen exe genuinely does
-    # not contain it. When R5's wiring gives it a real importer, that entry is
-    # REMOVED and its modules are added here IN THE SAME COMMIT - the two lists
-    # must never contradict each other.
+    # `indicators.*` and `m5_signal_engines` (R5 wiring, 2026-08-17). The
+    # allowlist entry promised this: the moment `indicators` gained a real
+    # importer its PACKAGES_NOT_IN_THE_BUNDLE entry was REMOVED and its modules
+    # were added here IN THE SAME COMMIT, because the two lists must never
+    # contradict each other. The chain is
+    # bounce_bot_lib.legacy -> m5_signal_engines -> indicators.efficiency_lrsi,
+    # all module-level, which is the shape static analysis reaches; naming them
+    # makes the frozen run prove it rather than infer it.
+    #
+    # `laguerre_rsi` is deliberately absent: it is a different Ehlers algorithm
+    # with still no importer, kept only as the style precedent. Collecting the
+    # package sweeps it in, but the selftest asserts what is REACHABLE.
     "completed_bars",
     "alert_repetition",
+    "m5_signal_engines",
+    "indicators.efficiency_lrsi",
+    "indicators.smi",
+    "indicators.heikin_ashi",
     "journal_store",
     "journal_identity",
     "journal_migrate",

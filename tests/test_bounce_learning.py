@@ -492,6 +492,7 @@ def test_human_focus_fast_lane_runs_before_broad_scan_and_reuses_bars():
         ),
         check_orb_break_setups=lambda symbols=None: calls.append(("orb", frozenset(symbols or ()))),
         check_ema8_grind_setups=lambda symbols=None: calls.append(("ema8", frozenset(symbols or ()))),
+        check_lrsi_cross_setups=lambda symbols=None: calls.append(("lrsi", frozenset(symbols or ()))),
     )
 
     processed = BounceBot._scan_human_focus_fast_lane(stub, {"vwap", "ema_8"})
@@ -504,6 +505,7 @@ def test_human_focus_fast_lane_runs_before_broad_scan_and_reuses_bars():
     assert calls[2:] == [
         ("orb", frozenset({"AAPL", "TSLA"})),
         ("ema8", frozenset({"AAPL", "TSLA"})),
+        ("lrsi", frozenset({"AAPL", "TSLA"})),
     ]
 
 

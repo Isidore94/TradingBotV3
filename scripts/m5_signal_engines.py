@@ -47,6 +47,17 @@ from indicators.efficiency_lrsi import (
     compute_efficiency_lrsi,
 )
 
+#: R5 section 8.1: one new tag family for every M5 signal engine. `d1_flag` is
+#: deliberately NOT reused - folding three unproven detectors into the champion
+#: D1 family makes "is this engine noisy?" unanswerable exactly when section 7
+#: requires it answered, and it would lend them champion privileges they have
+#: not earned. Per-engine identity rides `bounce_type`, not this tag.
+#:
+#: It lives here rather than in `ui/models/bounce.py` because both the detector
+#: (`bounce_bot_lib.legacy`) and the UI must agree on it, and the detector
+#: cannot import from the UI. One definition, imported twice.
+M5_SIGNAL_TAG = "m5_signal"
+
 LONG = "long"
 SHORT = "short"
 
