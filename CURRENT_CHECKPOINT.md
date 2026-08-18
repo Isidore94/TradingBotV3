@@ -10,6 +10,26 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ## THE WEEKEND OF 2026-08-15/16 — start here
 
+**The two stray remote branches are known and deliberately NOT merged
+(trader decision, 2026-08-17).** A branch audit that day found exactly two refs
+carrying commits absent from the release candidate, and both were ruled out:
+
+- `scoring-flagging-evidence-guardrails` — one commit from 2026-08-03,
+  "Tighten setup flags and add evidence boosts" (13 files, 704 insertions,
+  `master_avwap` setup scoring/flagging plus a golden fixture). **Ignored by
+  explicit trader decision.** It predates the consolidation, has never run
+  alongside any of R1-R8, and merging a scoring change into a release candidate
+  awaiting live validation would make the validation unreadable - a behaviour
+  change could no longer be attributed. The branch is left in place, not
+  deleted: ignoring is not discarding, and the work is still reachable if it is
+  ever wanted.
+- `claude/trading-system-review-e0p8ll` — one doc commit from 2026-08-09,
+  `CONSOLIDATION_PLAN_2026-08-09.md`, describing a consolidation that has since
+  actually happened. Superseded; no action.
+
+Do not re-raise either as an open merge question. If a future audit wants to
+revisit the scoring branch, that is a fresh trader decision, not a cleanup task.
+
 **Branch renamed 2026-08-17: `phase05-r8-weekend-prep` → `testing-week-2026-08-17`.**
 Same commits, same SHAs, nothing merged or rebased — only the name moved, and the
 old remote ref is deleted so there is exactly one name for one lineage. The old
