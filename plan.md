@@ -358,11 +358,48 @@ are listed in `CURRENT_CHECKPOINT.md`.
 6. **R6 Small operational wins.** (a) AI-jobs visibility: reword the routine
    "(no arguments)" line in `scripts/run_ai_jobs.ps1` and add a read-only System
    Health row over `job_ledger.jsonl`/the dated log — the batch layer is never
-   hosted in the GUI. (b) Evidence-ledger rotation: session-scoped rotation for
-   `technical_integrity_events.jsonl` (~247 MB, fully re-parsed each boot)
-   preserving its replay contract, then audit the other JSONL ledgers via the
-   existing footprint check; `technical_integrity.py` is scoring-adjacent —
-   ask first. (c) A bounded stall-watchdog diagnostic week (`ui_stall_watchdog`
+   hosted in the GUI. (b) Evidence-ledger rotation — **DECIDED 2026-08-17
+   (delegated, R5 §8.1 pattern): do NOT rotate the live file now.** Measured
+   that day: 370 MB / 318,040 rows / 25 sessions (~15 MB/session; the ~247 MB
+   here and ~106 MB in `operations_audit.py` were both true when written and
+   are stale by growth), and the full boot re-parse costs **2.2 s** —
+   `_load_resolved_events` is strictly session-filtered, so every field it
+   reconstructs (dedupe set, resolved ordering, followup horizons, snapshot
+   markers, and the `latest_completed_bar_end` watermark, whose max only ever
+   sees current-session rows) is untouched by the presence or absence of
+   closed sessions. Rotation therefore buys ~2 s of boot time while risking
+   the two readers that DO span sessions: the daily calibration replay wants
+   full history deliberately, and `research_warehouse/ingest_existing.py`
+   resumes each source from a (file SHA, max line-offset) watermark that
+   in-place truncation or compaction silently breaks — rows below the old
+   watermark would never reach bronze. The size fix is already owned
+   elsewhere: the locked warehouse plan (§19) declares this ledger a bronze
+   source whose "retention cleanup unlocks after verified ingestion" (Phase 3
+   live evidence, not yet run). When that unlocks, implement it as
+   **forward-only per-session segment files plus the monolith frozen in
+   place** (each closed segment immutable = a clean ingest source; the frozen
+   file's watermark stays valid forever) — never in-place truncation. What
+   R6(b) still owes NOW, in order: (1) a replay characterization fixture over
+   `_load_resolved_events` (tests only; contents specified in the decision
+   record below), which sec 5 requires before ANY future change here; (2) the
+   read-only JSONL-ledger audit via the existing footprint check; (3) the
+   stale-size comment fix in `operations_audit.py` (ask-first applies to any
+   `technical_integrity.py` edit; the fixture and audit touch tests/docs
+   only). Fixture must pin: a started/resolved pair; an unresolved started
+   recovering into pending with append-time provenance stripped; a resolved
+   row with no started row suppressing stale state-seed pending; a followup
+   chain with partial horizons (stays pending) and one fully complete
+   (drops); all four snapshot-marker event types; a cross-session row of each
+   type proven fully inert including its `as_of`; a truncated mid-flush line;
+   the `(resolved_at, event_id)` sort tiebreak; and monolith-vs-segmented
+   equivalence so the eventual segmentation is checkable rather than
+   aspirational. Reopen triggers: warehouse Phase-3 verified ingest of this
+   artifact passes (retention unlocks — implement the segment scheme then);
+   boot replay measured >15 s or a session-rollover UI stall; diagnostics
+   free space approaching the 5 GB floor with this file the driver; the
+   calibration replay overrunning its overnight window (that is a separate
+   windowing decision, not rotation).
+   (c) A bounded stall-watchdog diagnostic week (`ui_stall_watchdog`
    setting only) before prioritizing any worker-offload work. (d) **Auto journal
    is a mapping, not new work**: the trader's ask resolves to the QUEUED nightly
    `journal_import` slot (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c — build
