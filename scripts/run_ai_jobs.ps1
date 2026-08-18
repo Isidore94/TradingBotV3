@@ -56,7 +56,11 @@ function Write-Log {
 if (-not (Test-Path $python))  { Write-Log "REFUSED: venv Python not found at $python"; exit 3 }
 if (-not (Test-Path $script))  { Write-Log "REFUSED: entry point not found at $script"; exit 3 }
 
-$argLine = if ($Passthrough) { $Passthrough -join ' ' } else { '(no arguments)' }
+# The scheduled task passes nothing, so the no-argument case IS the routine
+# nightly run - not a caller that forgot something. "(no arguments)" read like a
+# defect in the one log line an operator sees most often, which is the opposite
+# of what this wrapper exists to do.
+$argLine = if ($Passthrough) { $Passthrough -join ' ' } else { 'scheduled run: every due slot' }
 Write-Log "=== AI jobs starting === $argLine"
 
 # Redirect both streams into the log. `2>&1` on a native exe is avoided inside

@@ -76,6 +76,7 @@ from project_paths import (
     UNIVERSE_LONGS_FILE,
     UNIVERSE_SHORTS_FILE,
     get_diagnostics_dir,
+    get_local_setting,
 )
 
 
@@ -370,6 +371,129 @@ def _heartbeat_check(path: Path, now: datetime, local_tz) -> dict[str, Any]:
             "next_job": payload.get("next_job") or "",
             "last_success": payload.get("last_success") or "",
             "age_minutes": round(age, 2) if age is not None else None,
+        },
+    )
+
+
+#: The AI batch layer's store root, resolved WITHOUT importing `ai_jobs`.
+#:
+#: `ai_jobs` is in PACKAGES_NOT_IN_THE_BUNDLE: the frozen desk genuinely does
+#: not contain it, because its only entry point is a scheduled CLI run from the
+#: repo checkout. Importing it here would give a row that works in the checkout
+#: and dies in the exe - and this audit renders inside System Health, which is
+#: frozen. So the two-source rule (env override, then the local setting) is
+#: mirrored here by path alone, and
+#: test_ai_jobs_store_resolution_matches_the_batch_layer keeps the two in step.
+AI_STORE_DIR_ENV = "TRADINGBOTV3_AI_STORE_DIR"
+AI_STORE_DIR_SETTING = "ai_store_dir"
+AI_JOB_LEDGER_NAME = "ai_job_ledger.jsonl"
+
+
+def _ai_store_dir() -> Path | None:
+    """The configured AI store root, or None when the batch layer is off."""
+    raw = str(os.environ.get(AI_STORE_DIR_ENV) or "").strip()
+    if not raw:
+        value = get_local_setting(AI_STORE_DIR_SETTING)
+        raw = value.strip() if isinstance(value, str) else ""
+    if not raw:
+        return None
+    try:
+        return Path(raw).expanduser()
+    except (OSError, ValueError):
+        return None
+
+
+def _ai_jobs_check(now: datetime, local_tz) -> dict[str, Any]:
+    """Read-only visibility for the overnight AI batch layer.
+
+    The layer runs entirely outside the GUI (a scheduled task against the repo
+    checkout), which is exactly why it needed a row: until now a night where it
+    never ran and a night where it had nothing to do looked identical from the
+    desk - the failure mode `run_ai_jobs.ps1` was written to end, reproduced one
+    level up.
+
+    An UNSET store is reported HEALTHY, not UNKNOWN, and the distinction is the
+    point: UNKNOWN means "could not measure". A machine with no `ai_store_dir`
+    has been measured, and the answer is that the layer is deliberately off.
+    """
+    store = _ai_store_dir()
+    if store is None:
+        return _check(
+            "ai_jobs",
+            "AI batch layer",
+            STATUS_HEALTHY,
+            "Not configured on this machine (no ai_store_dir) - the batch layer is off by choice.",
+            # There is no artifact to point at, and an empty path would claim
+            # there was. The source of this answer is the configuration lookup
+            # in this module, so that is what it names.
+            source=Path(__file__),
+            details={"configured": False},
+        )
+
+    path = store / "logs" / AI_JOB_LEDGER_NAME
+    if not path.exists():
+        return _check(
+            "ai_jobs",
+            "AI batch layer",
+            STATUS_UNKNOWN,
+            "AI store is configured but no job ledger has been written yet.",
+            source=path,
+            details={"configured": True},
+        )
+
+    from diagnostics.artifact_io import read_jsonl
+
+    # skip_bad is the default and is wanted here: a partially flushed tail line
+    # written while the scheduled task was mid-run must not make the whole
+    # ledger unreadable to a read-only viewer.
+    rows = read_jsonl(path)
+    if not rows:
+        return _check(
+            "ai_jobs",
+            "AI batch layer",
+            STATUS_UNKNOWN,
+            "The AI job ledger exists but holds no readable rows.",
+            source=path,
+            details={"configured": True, "row_count": 0},
+        )
+
+    last = rows[-1]
+    updated_at = str(last.get("ts") or last.get("timestamp") or "")
+    age = _age_minutes(updated_at, now, local_tz)
+    statuses = Counter(str(row.get("status") or "") for row in rows)
+    failed = statuses.get("failed", 0)
+    degraded = statuses.get("degraded", 0)
+
+    # Freshness is deliberately generous: the layer is nightly, so a run that
+    # is hours old is normal and only a run that is more than a day-and-a-half
+    # old suggests the schedule itself stopped firing.
+    if failed:
+        status = STATUS_UNHEALTHY
+        summary = f"{failed} AI job(s) failed in the ledger; last row {updated_at or 'undated'}."
+    elif degraded:
+        status = STATUS_DEGRADED
+        summary = f"{degraded} AI job(s) degraded in the ledger; last row {updated_at or 'undated'}."
+    else:
+        status = _freshness_status(age, healthy_minutes=36 * 60, unhealthy_minutes=72 * 60)
+        summary = (
+            f"Last AI job row {updated_at or 'undated'}"
+            + (f" ({age / 60:.1f}h ago)." if age is not None else " (age unknown).")
+        )
+
+    return _check(
+        "ai_jobs",
+        "AI batch layer",
+        status,
+        summary,
+        source=path,
+        updated_at=updated_at,
+        details={
+            "configured": True,
+            "row_count": len(rows),
+            "status_counts": dict(statuses),
+            "last_job": str(last.get("job") or ""),
+            "last_status": str(last.get("status") or ""),
+            "age_hours": round(age / 60, 2) if age is not None else None,
         },
     )
 
@@ -2026,6 +2150,7 @@ def build_operations_audit(
         *_writer_health_checks(health_path, moment, local_tz),
         heartbeat,
         ledger,
+        _ai_jobs_check(moment, local_tz),
         manifest,
         _away_report_check(report_path, auto_state_path, moment, local_tz, market_phase),
         _industry_board_check(industry_path, moment, local_tz, market_phase),

@@ -340,6 +340,11 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         "away_report", "industry_board", "spy_shadow", "greatness_shadow",
         "candidate_registry", "owned_process_counts", "provider_counters",
         "universe_and_market_data_freshness", "disk_storage_warnings",
+        # R6(a): the overnight AI batch layer. It reports HEALTHY here because
+        # no ai_store_dir is configured in the test environment - a measured
+        # "deliberately off", not an unmeasured unknown, which is why the
+        # unknown_operational assertion below still holds at exactly one entry.
+        "ai_jobs",
     }
     # Every dimension H2 implemented reports a measured status, and the ONLY
     # remaining UNKNOWN is the one nothing captures.
