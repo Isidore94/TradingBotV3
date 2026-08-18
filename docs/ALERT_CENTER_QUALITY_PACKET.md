@@ -1,7 +1,7 @@
 # Alert Center quality packet
 
-Status: **DRAFT — scope proposed, no code written.** Phase 1 onward is blocked on
-the trader's answer to the ask-first gate in Section 9.
+Status: **Phase 0 landed and green.** Phases 1-4 are blocked on the trader's
+answer to the ask-first gate in Section 9.
 
 Branch: `claude/alert-center-quality-packet-5btu3w`.
 
@@ -107,7 +107,14 @@ metric registry — one `outcome_definition_id`, horizon, and cohort rule per
 metric, per the sec 17 preamble — so later numbers are comparable.
 
 Touches no alert file. Safe to build before the Section 9 answer, and is the
-only phase I would start unprompted.
+only phase to start unprompted.
+
+**Landed** (`scripts/alert_quality.py`, `tests/test_alert_quality.py`, 25
+tests): the metric registry with a frozen `outcome_definition_id` per metric,
+the capture-coverage audit (rows, sessions, span, writers, schemas, and a
+multi-installation warning), the delivery-gap finding, and the two metrics that
+are computable today. An empty store renders as an empty store, explicitly not
+as a quiet desk.
 
 ### Phase 1 — delivery capture (**gated, touches alert files**)
 
@@ -217,5 +224,21 @@ capture-only changes.
 
 ## 10. Status
 
-- Phase 0: not started.
-- Phases 1-4: blocked on Section 9.
+- **Phase 0: landed.** Suite green (2077 passed, 5 skipped, 7 subtests; 25
+  new), smoke 7/7. Run it with
+  `.venv\Scripts\python.exe scripts/alert_quality.py [--days N]`.
+  Against a real store it will currently report `Unknown` for four of the
+  seven sec 17 metrics — that output *is* the Phase 0 finding, not a defect.
+- **Phases 1-4: blocked** on the Section 9 answers. Phase 1 edits
+  `alert_center_panel.py`, so it does not start without them.
+
+### Note on the test baseline
+
+The suite is fully green only under a Pacific timezone
+(`TZ=America/Vancouver`). Several existing tests — `test_vold_recorder.py`,
+`test_breadth_backfill.py`, `test_autopilot_core.py` and others — build
+`America/Vancouver` timestamps and parse IB time strings in local time, so a
+UTC machine fails 16 of them for reasons that have nothing to do with the code
+under test. This is a pre-existing property of the suite, not something this
+packet introduced or fixed; it is recorded here so the next agent on a
+non-Pacific box does not mistake it for a regression.
