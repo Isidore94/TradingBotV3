@@ -1,7 +1,8 @@
 # Alert Center quality packet
 
-Status: **Phase 0 landed and green.** Phases 1-4 are blocked on the trader's
-answer to the ask-first gate in Section 9.
+Status: **Phases 0–2 landed and green, Phase 3 partly.** The Section 9
+ask-first gate is answered. Phase 4 is the live exit gate and needs real
+sessions on the desk — the code is GREEN, not `LIVE_VALIDATED`.
 
 Branch: `claude/alert-center-quality-packet-5btu3w`.
 
@@ -51,16 +52,16 @@ still applies, because the capture site lives inside an alert file.
 `GUI_TRADE_DISCOVERY_LEARNING_PLAN.md` sec 17 defines seven alert-quality
 metrics. Audited against current capture:
 
-| Metric (sec 17 / sec 10.3) | Computable today? | Blocker |
-|---|---|---|
-| Alert-to-action conversion by action type | **Partly** | `shown` + action rows exist; folds episodes by `(trade_date, symbol)`, so a long and a short collapse |
-| Watch conversion | **Yes** | already in `review_learning.py` |
-| Loud alerts per session | **No** | no delivery row is ever written |
-| Duplicate loud rate | **No** | needs a typed `alert_event_id`; the identifier does not exist in the repo |
-| User-armed hit delivery rate + latency | **No** | `watch_fired` records the fire, not the visible delivery or its timestamp |
-| Missed-winner rate among quiet/queued items | **No** | requires the quiet cohort, which is never logged |
-| Ready precision / precision@K | **No** | gated on canonical Ready, which is Phase 3+ of the GUI learning plan — **not this packet** |
-| Remaining Expected R at alert | **No** | needs versioned target/stop at alert time; gated with Ready above |
+| Metric (sec 17 / sec 10.3) | Before this packet | After | Note |
+|---|---|---|---|
+| Alert-to-action conversion by action type | Partly | Partly | Covers reviewed alerts only; an alert that never reached the review queue leaves no impression to divide by |
+| Watch conversion | Yes | Yes | Already in `review_learning.py` |
+| Loud alerts per session | No | **Yes** | Unblocked by Phase 1 delivery capture |
+| Duplicate loud rate | No | **Yes** | Needed a typed `alert_event_id`, which did not exist in the repo; Phase 1 adds it |
+| User-armed hit delivery rate + latency | No | **Yes** | `watch_fired` records the fire; `watch_delivered` adds the visible delivery and its latency |
+| Missed-winner rate among quiet/queued items | No | No | The quiet cohort is still not logged — delivery capture records what WAS shown, not what was withheld |
+| Ready precision / precision@K | No | No | Gated on canonical Ready — **deferred, not in this packet** |
+| Remaining Expected R at alert | No | No | Needs versioned target/stop at alert time; deferred with Ready above |
 
 Two conclusions drive the phase order. First, four of the unbuilt metrics share
 exactly one blocker — there is no delivery record — so one capture change
@@ -116,45 +117,78 @@ multi-installation warning), the delivery-gap finding, and the two metrics that
 are computable today. An empty store renders as an empty store, explicitly not
 as a quiet desk.
 
-### Phase 1 — delivery capture (**gated, touches alert files**)
+### Phase 1 — delivery capture (touches alert files) — **LANDED**
 
-Two new review-event actions written at the existing `add_alert` site:
+Two actions, written at the existing `add_alert` and watch-poll sites:
 
 - `delivered` — one row per alert reaching the feed, carrying
-  `alert_event_id`, `alert_type`, `loud` (the recorded result of
-  `alert_should_sound`, never a re-derivation), `sounded` (whether the sound
-  checkbox was actually on), and the existing structured context.
-- `watch_delivered` — the visible delivery of a fired watch, carrying
-  `watch_id` and `fired_to_delivered_ms`, which is what makes the sec 17
-  latency bound measurable.
+  `alert_event_id`, `alert_type`, `loud`, `sounded` (whether a beep actually
+  happened), `is_focus`, `tier`, and the existing structured context.
+- `watch_delivered` — the visible delivery of a fired armed condition,
+  carrying `watch_id` and `fired_to_delivered_ms`, which is what makes the
+  sec 17 latency bound measurable.
 
-Capture-side only: `add_alert` gains a `record_review_event(...)` call and
-nothing else. The beep, the gates, and the queue are untouched. Best-effort and
-exception-swallowing like every other emit site — a cloud-synced folder locking
-the log must never surface as a GUI error, and must never drop an alert.
+Capture-side only. The beep, the gates, and the queue are untouched; the panel
+diff is +87/−3 and contains no gate or threshold. `alert_is_loud` is read
+rather than re-implemented, so the recorded judgement cannot drift from the one
+driving the beep. Best-effort and exception-swallowing like every other emit
+site, and tests assert that a raising recorder still leaves the alert in the
+feed and does not stop the next one.
 
-Schema goes to `review_events_v3`, additive. Readers already merge legacy
-shards; `SUPPORTED_REVIEW_EVENTS_SCHEMAS` grows, and no reader may require the
-new fields, so old shards stay readable and the desk can roll back to a v2
-build without losing the log.
+**Design changed during implementation** (from `review_events_v3` to a separate
+store), because the trader's storage decision made it the right shape:
 
-### Phase 2 — the scoreboard
+- Delivery rows go to a new machine-local store
+  (`scripts/alert_delivery_events.py`, schema `alert_delivery_events_v1`) under
+  the diagnostics root, partitioned by month — **not** the Drive-synced review
+  store. Keeping them out of `review_events` means the synced schema never
+  moves, so there is no reader/writer skew risk on the cloud-synced file at all,
+  which the v3 bump would have introduced for no benefit.
+- Escalation is **not** decided at write time. Rows carry the inputs (`tier`,
+  `loud`, `is_armed_fire`) and the reader applies the rule, so revising the
+  definition costs a re-read rather than re-instrumenting and waiting another
+  month for data.
+- There are **three** armed-condition types, not one — chart watches, D1 price
+  levels, and D1 event watches. All three record deliveries and all three count
+  in the armed-hit denominator; wiring only the first would have silently
+  excluded every level and D1 event the trader armed. A price level is
+  identified by direction and price rather than a `kind`, and both stores build
+  that identity component identically or the join yields an empty intersection
+  that looks like a delivery failure.
+- `watch_id` is **derived** from `(trade_date, symbol, side, kind)` on both
+  sides rather than added to the existing `watch_fired` payload — the smallest
+  change that makes the join possible without editing another emit site inside
+  the alert panel.
+- The measured latency is **detection → on screen**. Detection lag relative to
+  the bar close is a separate quantity this does not measure, and the metric
+  must not be read as covering it.
 
-`alert_quality.py` grows the real computations over Phase 1 data: loud per
-session, duplicate loud rate with the escalation carve-out, armed-hit delivery
-rate and latency distribution, and alert-to-action conversion split by
-`alert_type` so a long and a short no longer collapse. Every output carries
-independent sample count, session count, date range, and dispersion, per the
-sec 10.4 evidence display rules. Below the sample floor it prints the floor and
+### Phase 2 — the scoreboard — **LANDED**
+
+`alert_quality.py` computes loud per session, duplicate loud rate with the
+escalation carve-out, and armed-hit delivery rate with latency. Every output
+carries independent sample count, session count, and date range per the
+sec 10.4 evidence display rules; below the sample floor it prints the floor and
 `Unknown`.
 
-### Phase 3 — surface
+Three places the easy implementation would have flattered the desk, and does
+not: a fired watch never delivered stays in the denominator instead of
+vanishing from both sides; a delivery with no recorded latency cannot prove it
+met the bound, so it is not a hit; and the per-session floor counts sessions
+rather than alerts, so one very loud day is not evidence about normal volume.
 
-An Alert Quality section in System Health, rendered from Phase 2 like the
-existing audits (`operations_audit.py`, `review_capture_audit.py`). Read-only.
-Plus a `review_capture_audit.py` line stating whether delivery capture is
-actually running, so a silently-dead emit site is visible rather than being
-mistaken for a quiet session.
+### Phase 3 — surface — **partly landed**
+
+Landed: the `review_delivery_capture` check in `review_capture_audit.py`, which
+states whether delivery capture is actually running, so a silently-dead emit
+site is visible rather than mistaken for a quiet session. It renders in System
+Health through the existing audit plumbing with no new panel code, and is
+capped at `degraded` — advisory evidence with no path to a detector cannot take
+the desk red.
+
+Remaining: a dedicated Alert Quality panel section rendering the Phase 2
+numbers. The CLI (`scripts/alert_quality.py`) is the interim surface, and is
+the right one until the exit gate proves the numbers are worth a panel.
 
 ### Phase 4 — exit gate
 
@@ -183,54 +217,75 @@ trustworthy:
   owns nothing.
 - A failed publish never destroys the last verified report.
 
-## 7. Test plan
+## 7. Test plan — landed
 
-- `tests/test_alert_quality.py` — metric maths on synthetic event logs,
-  including the empty log, the below-floor log, and the escalation carve-out.
-- Schema round-trip: a v2 shard and a v3 shard merged by one reader.
-- Offscreen Qt test asserting `add_alert` emits exactly one `delivered` row per
-  alert, and that a raising `record_review_event` cannot lose an alert or
-  surface an error.
-- A characterization test pinning `alert_is_loud` / `alert_should_sound` before
-  Phase 1, so the packet can prove it changed no gate.
+- `tests/test_alert_quality.py` (45) — metric maths on synthetic logs: the
+  empty log, the below-floor log, each arm of the escalation rule, and the
+  cases where the easy implementation would flatter the desk.
+- `tests/test_alert_delivery_events.py` (23) — storage class, typed identity,
+  and that a malformed alert cannot break a write. The isolation fixture is
+  `autouse`: an opt-in one let an early version append synthetic rows to the
+  real diagnostics directory, which conftest.py exists to forbid.
+- `tests/test_qt_alert_delivery_capture.py` (7) — offscreen Qt: one row per
+  delivered alert, nothing for a suppressed one, recorded loudness matching the
+  panel's own verdict, and a raising recorder neither losing an alert nor
+  stopping the next.
+- `tests/test_review_capture_audit.py` (+4) — the health check tells a stopped
+  emit site apart from a quiet desk, and never goes past `degraded`.
 
 ## 8. Risks
 
 - **Log volume.** A delivery row per alert is far higher-volume than a decision
-  row. Needs a measured estimate against a real session before Phase 1 merges;
-  the shard directory is on the cloud-synced home folder.
+  row. Mitigated by the machine-local, month-partitioned store — retention is
+  deleting old files, and nothing syncs — but the real per-session row count is
+  still unmeasured and is an exit-gate item.
 - **Escalation definition is a judgement call.** Get it wrong and the duplicate
-  rate is either ~0 or ~1 and useless either way.
+  rate is either ~0 or ~1 and useless either way. Mitigated by applying the
+  rule at read time: revising it costs a re-read, not another month of capture.
 - **Measurement inviting action.** The first instinct on seeing a duplicate
   rate will be to suppress duplicates. That is a separate decision through the
-  Section 7 ladder, not a follow-on commit.
+  plan's Section 7 ladder, not a follow-on commit.
+- **Latency semantics.** `fired_to_delivered_ms` covers detection → on screen.
+  If it is ever read as fire → on screen it will understate the trader's real
+  wait, because detection lag is not in it.
 
-## 9. Ask-first gate — open questions
+## 9. Ask-first gate — answered 2026-08-18
 
-The file-scoped rule (CLAUDE.md, checkpoint review 2026-08-08) requires the
-trader's answer before Phase 1 touches `alert_center_panel.py`, even for
-capture-only changes.
+The file-scoped rule (CLAUDE.md, checkpoint review 2026-08-08) required the
+trader's answer before Phase 1 touched `alert_center_panel.py`. Answers:
 
-1. **Is this the right reading of "quality"?** This packet reads it as *alert
-   quality* — measuring what the desk delivers. It could instead have meant
-   code quality of a 2,776-line panel, or review-capture completeness. The
-   answer changes the whole packet.
-2. **Escalation:** is the Section 4 definition right?
-3. **Identity:** is the Section 4 `alert_event_id` tuple the right grain?
-4. **Volume:** is a delivery row per alert acceptable in the Drive-synced log,
-   or should delivery capture shard machine-locally only?
-5. **Ready metrics:** confirm Ready precision / Remaining Expected R stay
-   deferred to the canonical-Ready work rather than being approximated here.
+1. **Reading of "quality":** *alert quality* — measuring what the desk
+   delivers. Confirmed.
+2. **Escalation:** tier rises, quiet becomes loud, or an armed condition fires.
+   Confirmed as written in Section 4.
+3. **Volume:** machine-local shards only, never the Drive-synced store.
+   Confirmed, and it is what changed Phase 1's design.
+4. **Identity / Ready metrics:** unchanged from Section 4 and Section 3 — the
+   typed tuple stands, and Ready precision / Remaining Expected R stay deferred
+   to the canonical-Ready work rather than being approximated here.
 
 ## 10. Status
 
-- **Phase 0: landed.** Suite green (2077 passed, 5 skipped, 7 subtests; 25
-  new), smoke 7/7. Run it with
-  `.venv\Scripts\python.exe scripts/alert_quality.py [--days N]`.
-  Against a real store it will currently report `Unknown` for four of the
-  seven sec 17 metrics — that output *is* the Phase 0 finding, not a defect.
-- **Phases 1-4: blocked** on the Section 9 answers. Phase 1 edits
-  `alert_center_panel.py`, so it does not start without them.
+- **Phases 0–2: landed.** Capture-gap audit, machine-local delivery store, and
+  the scoreboard.
+- **Phase 3: partly landed.** The health check is in; the dedicated panel
+  section is not. `.venv\Scripts\python.exe scripts/alert_quality.py [--days N]`
+  is the interim surface.
+- **Phase 4 (exit gate): not started, and cannot be from here.** It needs ≥10
+  real sessions of capture on the desk, a delivered-row/feed-item
+  reconciliation, and the duplicate rate hand-checked against a session the
+  trader remembers. Until then the code is **GREEN**, not `LIVE_VALIDATED`.
+
+Suite green: **2131 passed, 5 skipped, 7 subtests** (79 new), smoke **7/7**,
+ruff clean on every touched file.
+
+### First run on the desk
+
+The first `scripts/alert_quality.py` run after this lands will report `Unknown`
+for the delivery-backed metrics and `degraded` for `review_delivery_capture`.
+That is correct: capture starts writing only once the GUI restarts onto a build
+containing it. Numbers appear from the first session onward, and the sec 17
+rates hold at `Unknown` until they clear the sample floor.
 
 ### Note on the test baseline
 

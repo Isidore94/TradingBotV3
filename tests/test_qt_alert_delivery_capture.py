@@ -34,9 +34,10 @@ def panel(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "alert_delivery_events.get_diagnostics_dir", lambda: tmp_path
     )
-    widget = module.AlertCenterPanel(parked_symbols_path=tmp_path / "parked.json")
-    yield widget
-    widget.deleteLater()
+    # No deleteLater(): these tests run without an event loop, so a deferred
+    # delete would land at interpreter shutdown instead. The suite's other
+    # panel tests keep the widget alive for the same reason.
+    return module.AlertCenterPanel(parked_symbols_path=tmp_path / "parked.json")
 
 
 def _rows(tmp_path):

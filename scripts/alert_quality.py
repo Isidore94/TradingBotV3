@@ -204,8 +204,9 @@ METRIC_REGISTRY: tuple[MetricSpec, ...] = (
         outcome_definition_id="missed_winner_rate_v1",
         status=STATUS_BLOCKED,
         blocker=(
-            "the quiet cohort is never logged, so the denominator does not "
-            "exist; needs packet Phase 1"
+            "still blocked after Phase 1: delivery capture records what WAS "
+            "shown, not what was withheld, so the quiet cohort - the "
+            "denominator - remains unlogged"
         ),
     ),
     MetricSpec(
