@@ -68,9 +68,16 @@ class FakeAlert:
         self.timeframe = timeframe
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def store(tmp_path, monkeypatch):
-    """Redirect the machine-local store into a temp dir for the whole module."""
+    """Redirect the machine-local store into a temp dir for every test here.
+
+    ``autouse`` on purpose. conftest.py's rule is that tests must never append
+    synthetic events to the running application's evidence, and an opt-in
+    fixture makes that a thing each new test has to remember - one that forgot
+    is exactly how this module first leaked rows into the real diagnostics
+    directory. Making isolation the default removes the chance to forget.
+    """
 
     monkeypatch.setattr(ade, "get_diagnostics_dir", lambda: tmp_path)
     return tmp_path / "alert_delivery_events"

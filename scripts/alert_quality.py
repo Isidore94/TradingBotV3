@@ -44,6 +44,11 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from alert_delivery_events import (
+    DELIVERED,
+    WATCH_DELIVERED,
+    load_delivery_events,
+)
 from review_events import load_review_events
 
 #: Below this many independent samples a rate is reported as its floor, not as
@@ -57,10 +62,23 @@ MIN_SAMPLES = 8
 #: leaves no row at all, which is precisely the blind spot Phase 1 closes.
 IMPRESSION_ACTION = "shown"
 
-#: Written only once packet Phase 1 lands. Their absence is the finding.
-DELIVERY_ACTION = "delivered"
-WATCH_DELIVERY_ACTION = "watch_delivered"
+#: Written by packet Phase 1 into the machine-local delivery store. Their
+#: absence in a real store means capture is not running - which is a finding,
+#: not a quiet desk, and the report says so in those words.
+DELIVERY_ACTION = DELIVERED
+WATCH_DELIVERY_ACTION = WATCH_DELIVERED
 DELIVERY_ACTIONS = frozenset({DELIVERY_ACTION, WATCH_DELIVERY_ACTION})
+
+#: Tier ordering for the escalation rule. Higher wins; an unrecognised or
+#: absent tier ranks below every real one so a missing tier can never be read
+#: as a promotion.
+TIER_RANK = {"D": 1, "C": 2, "B": 3, "A": 4, "S": 5}
+
+#: Declared latency bound for "visibly delivered" (sec 17 user-armed hit
+#: delivery). The trader armed this exact condition and is waiting on it, so
+#: the bar is tight. Stated as a constant rather than buried in a comparison
+#: because the metric is meaningless without the bound quoted beside it.
+LATENCY_BOUND_MS = 2000
 
 #: Acting on an alert. "Take" deliberately includes arming a watch: committing
 #: to wait for a condition is a decision about the alert, not a pass.
@@ -89,6 +107,10 @@ BLOCKER_NO_DELIVERY = (
     "no delivery row is ever written; needs packet Phase 1 (delivered / "
     "watch_delivered) plus a typed alert_event_id"
 )
+BLOCKER_NEEDS_CAPTURE = (
+    "requires delivery capture (packet Phase 1) to be running; reports Unknown "
+    "rather than zero when the delivery store is empty"
+)
 BLOCKER_NO_READY = (
     "depends on the canonical Ready lifecycle and versioned target/stop, which "
     "this packet does not build (GUI learning plan Phase 3+)"
@@ -111,6 +133,10 @@ class MetricSpec:
     outcome_definition_id: str
     status: str
     blocker: str = ""
+    #: "rate" renders as a percentage; "per_session" and "ms" are absolute
+    #: numbers. A per-session count rendered as a percentage would be nonsense,
+    #: and silently wrong rather than obviously wrong.
+    unit: str = "rate"
 
 
 #: The sec 17 "Alert quality" list, audited against what the store holds.
@@ -141,8 +167,9 @@ METRIC_REGISTRY: tuple[MetricSpec, ...] = (
         title="Loud alerts per session",
         definition="Loud deliveries divided by sessions",
         outcome_definition_id="loud_per_session_v1",
-        status=STATUS_BLOCKED,
-        blocker=BLOCKER_NO_DELIVERY,
+        status=STATUS_COMPUTABLE,
+        blocker=BLOCKER_NEEDS_CAPTURE,
+        unit="per_session",
     ),
     MetricSpec(
         key="duplicate_loud_rate",
@@ -152,8 +179,8 @@ METRIC_REGISTRY: tuple[MetricSpec, ...] = (
             "without a genuine escalation, divided by all loud deliveries"
         ),
         outcome_definition_id="duplicate_loud_rate_v1",
-        status=STATUS_BLOCKED,
-        blocker=BLOCKER_NO_DELIVERY,
+        status=STATUS_COMPUTABLE,
+        blocker=BLOCKER_NEEDS_CAPTURE,
     ),
     MetricSpec(
         key="armed_hit_delivery",
@@ -163,11 +190,8 @@ METRIC_REGISTRY: tuple[MetricSpec, ...] = (
             "declared latency bound divided by all distinct fired watches"
         ),
         outcome_definition_id="armed_hit_delivery_v1",
-        status=STATUS_BLOCKED,
-        blocker=(
-            "watch_fired records the fire, not the visible delivery or its "
-            "timestamp; needs packet Phase 1 (watch_delivered)"
-        ),
+        status=STATUS_COMPUTABLE,
+        blocker=BLOCKER_NEEDS_CAPTURE,
     ),
     MetricSpec(
         key="missed_winner_rate",
@@ -220,6 +244,10 @@ class CaptureCoverage:
     installations: int = 0
     machines: tuple[str, ...] = ()
     schemas: tuple[str, ...] = ()
+    #: Counts from the SEPARATE machine-local delivery store, not from the
+    #: review rows above - the two live in different storage classes.
+    delivery_rows: int = 0
+    delivery_sessions: int = 0
     has_delivery_capture: bool = False
 
     @property
@@ -287,11 +315,18 @@ def filter_recent(
     return [row for row in rows if isinstance(row, dict) and _within_days(row, cutoff)]
 
 
-def audit_capture(rows: Sequence[dict[str, Any]]) -> CaptureCoverage:
-    """Describe the store itself: volume, span, writers, and what is missing."""
+def audit_capture(
+    rows: Sequence[dict[str, Any]],
+    delivery_rows: Sequence[dict[str, Any]] = (),
+) -> CaptureCoverage:
+    """Describe both stores: volume, span, writers, and what is missing."""
 
     coverage = CaptureCoverage()
     coverage.rows = len(rows)
+    coverage.delivery_rows = len(delivery_rows)
+    delivery_sessions, _, _ = _span(list(delivery_rows))
+    coverage.delivery_sessions = delivery_sessions
+    coverage.has_delivery_capture = bool(delivery_rows)
     if not rows:
         return coverage
 
@@ -326,9 +361,6 @@ def audit_capture(rows: Sequence[dict[str, Any]]) -> CaptureCoverage:
         ordered = sorted(trade_dates)
         coverage.first_trade_date = ordered[0]
         coverage.last_trade_date = ordered[-1]
-    coverage.has_delivery_capture = any(
-        actions.get(action, 0) > 0 for action in DELIVERY_ACTIONS
-    )
     return coverage
 
 
@@ -358,6 +390,10 @@ class MetricResult:
     def display_value(self) -> str:
         if self.value is None:
             return "Unknown"
+        if self.spec.unit == "per_session":
+            return f"{self.value:.1f} per session"
+        if self.spec.unit == "ms":
+            return f"{self.value:.0f} ms"
         return f"{self.value * 100:.1f}%"
 
 
@@ -485,12 +521,219 @@ def compute_watch_conversion(rows: Sequence[dict[str, Any]]) -> MetricResult:
     return result
 
 
-def compute_metrics(rows: Sequence[dict[str, Any]]) -> list[MetricResult]:
-    """Every registry metric: computed where possible, blocked where honest."""
+# --- delivery-backed metrics (packet Phase 1 data) --------------------------
+
+
+def _spec(key: str) -> MetricSpec:
+    return next(spec for spec in METRIC_REGISTRY if spec.key == key)
+
+
+def _is_loud(row: dict[str, Any]) -> bool:
+    return bool(row.get("loud"))
+
+
+def _tier_rank(row: dict[str, Any]) -> int:
+    return TIER_RANK.get(str(row.get("tier") or "").strip().upper(), 0)
+
+
+def _delivery_rows(rows: Sequence[dict[str, Any]], action: str) -> list[dict[str, Any]]:
+    picked = [row for row in rows if _action_of(row) == action]
+    picked.sort(key=lambda item: str(item.get("ts") or ""))
+    return picked
+
+
+def is_escalation(row: dict[str, Any], state: dict[str, Any]) -> bool:
+    """Did this repeat delivery earn its noise? (trader-confirmed rule)
+
+    A repeat is an escalation, not a duplicate, when any of three things is
+    true: the tier rose, a previously quiet alert became loud, or an armed
+    condition fired on a name that was only queued before. The rule lives here
+    rather than at the write site precisely so it can be revised against
+    already-captured data.
+    """
+
+    if row.get("is_armed_fire"):
+        return True
+    if _tier_rank(row) > int(state.get("max_tier", 0)):
+        return True
+    if _is_loud(row) and not state.get("was_loud", False):
+        return True
+    return False
+
+
+def compute_duplicate_loud_rate(delivery_rows: Sequence[dict[str, Any]]) -> MetricResult:
+    """Loud repeats of one typed alert that did not escalate.
+
+    Every delivery is walked, not only the loud ones: the quiet-to-loud arm of
+    the escalation rule needs to know that a quiet delivery came first, and a
+    loud-only pass would be blind to it and would misreport those as duplicates.
+    """
+
+    result = MetricResult(spec=_spec("duplicate_loud_rate"))
+    rows = _delivery_rows(delivery_rows, DELIVERY_ACTION)
+    result.sessions, result.first_trade_date, result.last_trade_date = _span(rows)
+
+    state_by_id: dict[str, dict[str, Any]] = {}
+    loud_total = 0
+    duplicates = 0
+    escalations = 0
+    for row in rows:
+        event_id = str(row.get("alert_event_id") or "").strip()
+        if not event_id:
+            continue
+        state = state_by_id.get(event_id)
+        loud = _is_loud(row)
+        if loud:
+            loud_total += 1
+        if state is None:
+            # First delivery of this thesis is never a duplicate.
+            state_by_id[event_id] = {
+                "max_tier": _tier_rank(row),
+                "was_loud": loud,
+            }
+            continue
+        if loud:
+            if is_escalation(row, state):
+                escalations += 1
+            else:
+                duplicates += 1
+        state["max_tier"] = max(int(state["max_tier"]), _tier_rank(row))
+        state["was_loud"] = state["was_loud"] or loud
+
+    result.denominator = loud_total
+    result.numerator = duplicates
+    result.breakdown = {
+        "loud_deliveries": loud_total,
+        "duplicates": duplicates,
+        "escalations": escalations,
+        "distinct_alerts": len(state_by_id),
+    }
+    if loud_total < MIN_SAMPLES:
+        result.note = (
+            f"{loud_total} loud deliveries; needs {MIN_SAMPLES} before a rate "
+            "is reported"
+        )
+        return result
+    result.value = duplicates / loud_total
+    result.note = f"{escalations} repeats counted as escalation, not duplicate"
+    return result
+
+
+def compute_loud_per_session(delivery_rows: Sequence[dict[str, Any]]) -> MetricResult:
+    """How much noise a session actually makes.
+
+    The floor is on sessions, not on alerts: one very loud day is not evidence
+    about the desk's normal volume, however many rows it contributes.
+    """
+
+    result = MetricResult(spec=_spec("loud_per_session"))
+    rows = _delivery_rows(delivery_rows, DELIVERY_ACTION)
+    result.sessions, result.first_trade_date, result.last_trade_date = _span(rows)
+
+    loud = [row for row in rows if _is_loud(row)]
+    result.numerator = len(loud)
+    result.denominator = result.sessions
+    result.breakdown = {
+        "loud": len(loud),
+        "quiet": len(rows) - len(loud),
+        "sounded": sum(1 for row in loud if row.get("sounded")),
+    }
+    if result.sessions < MIN_SAMPLES:
+        result.note = (
+            f"{result.sessions} sessions; needs {MIN_SAMPLES} before a "
+            "per-session number is reported"
+        )
+        return result
+    result.value = len(loud) / result.sessions
+    muted = len(loud) - result.breakdown["sounded"]
+    result.note = f"{muted} loud alerts made no sound (feed muted)"
+    return result
+
+
+def compute_armed_hit_delivery(
+    delivery_rows: Sequence[dict[str, Any]],
+    review_rows: Sequence[dict[str, Any]] = (),
+) -> MetricResult:
+    """Fired watches the trader could actually see, within the declared bound.
+
+    The denominator comes from the review store's ``watch_fired`` rows and the
+    numerator from the delivery store, so a watch that fired and was never
+    delivered counts against the rate instead of vanishing from both sides. A
+    delivery with no recorded latency is not assumed to be fast: it cannot
+    prove it met the bound, so it does not count as a hit.
+    """
+
+    result = MetricResult(spec=_spec("armed_hit_delivery"))
+    delivered = _delivery_rows(delivery_rows, WATCH_DELIVERY_ACTION)
+    fired_ids = {
+        str((row.get("detail") or {}).get("watch_id") or "").strip()
+        for row in review_rows
+        if _action_of(row) == "watch_fired"
+        and isinstance(row.get("detail"), dict)
+    }
+    fired_ids.discard("")
+
+    delivered_by_id: dict[str, int | None] = {}
+    for row in delivered:
+        watch_id = str(row.get("watch_id") or "").strip()
+        if not watch_id:
+            continue
+        latency = row.get("fired_to_delivered_ms")
+        latency = int(latency) if isinstance(latency, (int, float)) else None
+        previous = delivered_by_id.get(watch_id, "missing")
+        if previous == "missing" or (
+            latency is not None and (previous is None or latency < previous)
+        ):
+            delivered_by_id[watch_id] = latency
+
+    # A watch delivered but never seen firing in the review store still counts:
+    # the delivery is proof it fired, and dropping it would flatter the rate.
+    universe = fired_ids | set(delivered_by_id)
+    within = [
+        watch_id
+        for watch_id in universe
+        if delivered_by_id.get(watch_id) is not None
+        and delivered_by_id[watch_id] <= LATENCY_BOUND_MS
+    ]
+    latencies = [
+        value for value in delivered_by_id.values() if isinstance(value, int)
+    ]
+
+    result.sessions, result.first_trade_date, result.last_trade_date = _span(delivered)
+    result.denominator = len(universe)
+    result.numerator = len(within)
+    result.breakdown = {
+        "fired": len(universe),
+        "delivered": len(delivered_by_id),
+        "within_bound": len(within),
+        "no_latency_recorded": sum(
+            1 for value in delivered_by_id.values() if value is None
+        ),
+        "median_ms": int(sorted(latencies)[len(latencies) // 2]) if latencies else 0,
+    }
+    if result.denominator < MIN_SAMPLES:
+        result.note = (
+            f"{result.denominator} fired watches; needs {MIN_SAMPLES} before a "
+            "rate is reported"
+        )
+        return result
+    result.value = len(within) / result.denominator
+    result.note = f"bound {LATENCY_BOUND_MS} ms; {len(universe) - len(delivered_by_id)} never delivered"
+    return result
+
+
+def compute_metrics(
+    rows: Sequence[dict[str, Any]],
+    delivery_rows: Sequence[dict[str, Any]] = (),
+) -> list[MetricResult]:
+    """Every registry metric: computed where possible, Unknown where honest."""
 
     computed = {
         "alert_to_action": compute_alert_to_action(rows),
         "watch_conversion": compute_watch_conversion(rows),
+        "loud_per_session": compute_loud_per_session(delivery_rows),
+        "duplicate_loud_rate": compute_duplicate_loud_rate(delivery_rows),
+        "armed_hit_delivery": compute_armed_hit_delivery(delivery_rows, rows),
     }
     results: list[MetricResult] = []
     for spec in METRIC_REGISTRY:
@@ -513,7 +756,7 @@ def build_report(
     stamp = (now or datetime.now()).isoformat(timespec="seconds")
     window = f"last {days} days" if days else "all recorded sessions"
     lines: list[str] = [
-        "ALERT QUALITY - CAPTURE AUDIT (packet Phase 0)",
+        "ALERT QUALITY - CAPTURE AUDIT AND SCOREBOARD",
         f"generated {stamp}  |  window: {window}",
         "",
         "CAPTURE COVERAGE",
@@ -549,9 +792,13 @@ def build_report(
         for action, count in coverage.action_counts.items():
             lines.append(f"    {action:<18} {count}")
 
-    lines += ["", "DELIVERY CAPTURE"]
+    lines += ["", "DELIVERY CAPTURE (machine-local store)"]
     if coverage.has_delivery_capture:
-        lines.append("  present - Phase 1 capture is running.")
+        lines += [
+            "  present - Phase 1 capture is running.",
+            f"  delivery rows   : {coverage.delivery_rows}",
+            f"  sessions        : {coverage.delivery_sessions}",
+        ]
     else:
         lines += [
             "  ABSENT. No 'delivered' or 'watch_delivered' row exists.",
@@ -609,11 +856,19 @@ def run_audit(
     days: int | None = None,
     path: Path | None = None,
     shards_dir: Path | None = None,
+    delivery_dir: Path | None = None,
     rows: Sequence[dict[str, Any]] | None = None,
+    delivery_rows: Sequence[dict[str, Any]] | None = None,
     today: date | None = None,
     now: datetime | None = None,
 ) -> tuple[CaptureCoverage, list[MetricResult], str]:
-    """Load, window, audit, compute, render. ``rows`` bypasses the store."""
+    """Load both stores, window, audit, compute, render.
+
+    ``rows`` / ``delivery_rows`` bypass their stores for tests and for the
+    offline job. The two are loaded independently because they are different
+    storage classes: review decisions are Drive-synced, deliveries are
+    machine-local.
+    """
 
     if rows is None:
         kwargs: dict[str, Any] = {}
@@ -625,9 +880,15 @@ def run_audit(
     else:
         loaded = list(rows)
 
+    if delivery_rows is None:
+        loaded_deliveries = load_delivery_events(delivery_dir)
+    else:
+        loaded_deliveries = list(delivery_rows)
+
     windowed = filter_recent(loaded, days, today=today)
-    coverage = audit_capture(windowed)
-    results = compute_metrics(windowed)
+    windowed_deliveries = filter_recent(loaded_deliveries, days, today=today)
+    coverage = audit_capture(windowed, windowed_deliveries)
+    results = compute_metrics(windowed, windowed_deliveries)
     report = build_report(coverage, results, days=days, now=now)
     return coverage, results, report
 

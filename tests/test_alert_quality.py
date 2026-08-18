@@ -25,7 +25,11 @@ from alert_quality import (
     STATUS_DEFERRED,
     audit_capture,
     build_report,
+    LATENCY_BOUND_MS,
     compute_alert_to_action,
+    compute_armed_hit_delivery,
+    compute_duplicate_loud_rate,
+    compute_loud_per_session,
     compute_metrics,
     compute_watch_conversion,
     filter_recent,
@@ -42,6 +46,37 @@ def _row(action, symbol="AAPL", *, side="LONG", trade_date="2026-08-10", **extra
         "trade_date": trade_date,
         "installation_id": "a" * 32,
         "machine": "DESK",
+    }
+    row.update(extra)
+    return row
+
+
+def _delivery(
+    symbol="AAPL",
+    *,
+    side="LONG",
+    trade_date="2026-08-10",
+    loud=True,
+    sounded=True,
+    tier="",
+    is_armed_fire=False,
+    event_id=None,
+    ts="2026-08-10T09:30:00",
+    action="delivered",
+    **extra,
+):
+    row = {
+        "schema": "alert_delivery_events_v1",
+        "action": action,
+        "symbol": symbol,
+        "side": side,
+        "trade_date": trade_date,
+        "ts": ts,
+        "loud": loud,
+        "sounded": sounded,
+        "tier": tier,
+        "is_armed_fire": is_armed_fire,
+        "alert_event_id": event_id or f"{trade_date}|{symbol}|{side}|m5_bounce|reclaim",
     }
     row.update(extra)
     return row
@@ -116,12 +151,22 @@ def test_delivery_capture_absent_is_detected_and_named():
 
 
 def test_delivery_capture_present_once_phase_1_rows_exist():
-    rows = [_row("shown"), _row("delivered"), _row("watch_delivered")]
-    coverage = audit_capture(rows)
-    assert coverage.has_delivery_capture is True
+    """Deliveries live in their own machine-local store, not the review log."""
 
-    _, _, report = run_audit(rows=rows)
+    deliveries = [_delivery(), _delivery()]
+    coverage = audit_capture([_row("shown")], deliveries)
+    assert coverage.has_delivery_capture is True
+    assert coverage.delivery_rows == 2
+
+    _, _, report = run_audit(rows=[_row("shown")], delivery_rows=deliveries)
     assert "Phase 1 capture is running" in report
+
+
+def test_delivery_rows_in_the_review_log_do_not_count_as_capture():
+    """Guards the storage-class split: the review store is the wrong place."""
+
+    coverage = audit_capture([_row("delivered"), _row("watch_delivered")], [])
+    assert coverage.has_delivery_capture is False
 
 
 def test_delivery_actions_are_not_confused_with_take_or_pass():
@@ -130,6 +175,16 @@ def test_delivery_actions_are_not_confused_with_take_or_pass():
 
 
 # --- blocked and deferred metrics never invent a number ---------------------
+
+
+def test_delivery_metrics_are_unknown_when_the_delivery_store_is_empty():
+    """The four that Phase 1 unblocks must not read zero without capture."""
+
+    rows = _impressions(50) + [_row("add_focus", symbol=f"SYM{i}") for i in range(50)]
+    results = {result.spec.key: result for result in compute_metrics(rows, [])}
+    for key in ("loud_per_session", "duplicate_loud_rate", "armed_hit_delivery"):
+        assert results[key].value is None, key
+        assert results[key].display_value() == "Unknown", key
 
 
 def test_blocked_and_deferred_metrics_stay_unknown_even_with_rich_data():
@@ -309,3 +364,182 @@ def test_run_audit_reads_the_store_when_no_rows_are_supplied(tmp_path):
     coverage, results, report = run_audit(path=store, shards_dir=tmp_path / "shards")
     assert coverage.rows == 0
     assert "CAPTURE AUDIT" in report
+
+
+# --- duplicate loud rate ----------------------------------------------------
+
+
+def test_first_loud_delivery_of_a_thesis_is_never_a_duplicate():
+    result = compute_duplicate_loud_rate([_delivery()])
+    assert result.breakdown["duplicates"] == 0
+    assert result.breakdown["loud_deliveries"] == 1
+
+
+def test_repeat_loud_delivery_without_escalation_is_a_duplicate():
+    rows = [_delivery(ts=f"2026-08-10T09:3{i}:00") for i in range(MIN_SAMPLES)]
+    result = compute_duplicate_loud_rate(rows)
+    assert result.breakdown["duplicates"] == MIN_SAMPLES - 1
+    assert result.value == (MIN_SAMPLES - 1) / MIN_SAMPLES
+
+
+def test_a_rising_tier_is_an_escalation_not_a_duplicate():
+    rows = [
+        _delivery(tier="C", ts="2026-08-10T09:30:00"),
+        _delivery(tier="A", ts="2026-08-10T09:31:00"),
+    ]
+    result = compute_duplicate_loud_rate(rows)
+    assert result.breakdown["escalations"] == 1
+    assert result.breakdown["duplicates"] == 0
+
+
+def test_a_falling_tier_is_still_a_duplicate():
+    rows = [
+        _delivery(tier="A", ts="2026-08-10T09:30:00"),
+        _delivery(tier="C", ts="2026-08-10T09:31:00"),
+    ]
+    result = compute_duplicate_loud_rate(rows)
+    assert result.breakdown["duplicates"] == 1
+
+
+def test_quiet_alert_becoming_loud_is_an_escalation():
+    rows = [
+        _delivery(loud=False, ts="2026-08-10T09:30:00"),
+        _delivery(loud=True, ts="2026-08-10T09:31:00"),
+    ]
+    result = compute_duplicate_loud_rate(rows)
+    assert result.breakdown["escalations"] == 1
+    assert result.breakdown["duplicates"] == 0
+    assert result.breakdown["loud_deliveries"] == 1
+
+
+def test_an_armed_condition_firing_is_always_an_escalation():
+    rows = [
+        _delivery(ts="2026-08-10T09:30:00"),
+        _delivery(is_armed_fire=True, ts="2026-08-10T09:31:00"),
+    ]
+    result = compute_duplicate_loud_rate(rows)
+    assert result.breakdown["escalations"] == 1
+
+
+def test_different_theses_never_duplicate_each_other():
+    rows = [
+        _delivery(symbol="AAA", ts="2026-08-10T09:30:00"),
+        _delivery(symbol="BBB", ts="2026-08-10T09:31:00"),
+    ]
+    result = compute_duplicate_loud_rate(rows)
+    assert result.breakdown["duplicates"] == 0
+    assert result.breakdown["distinct_alerts"] == 2
+
+
+def test_quiet_repeats_are_not_counted_in_the_loud_denominator():
+    rows = [
+        _delivery(loud=True, ts="2026-08-10T09:30:00"),
+        _delivery(loud=False, ts="2026-08-10T09:31:00"),
+    ]
+    result = compute_duplicate_loud_rate(rows)
+    assert result.breakdown["loud_deliveries"] == 1
+    assert result.breakdown["duplicates"] == 0
+
+
+def test_duplicate_rate_withheld_below_the_floor():
+    result = compute_duplicate_loud_rate([_delivery(), _delivery()])
+    assert result.value is None
+
+
+# --- loud per session -------------------------------------------------------
+
+
+def test_loud_per_session_counts_sessions_not_alerts():
+    rows = []
+    for day in range(MIN_SAMPLES):
+        trade_date = f"2026-08-{10 + day:02d}"
+        for index in range(3):
+            rows.append(
+                _delivery(trade_date=trade_date, ts=f"{trade_date}T09:3{index}:00")
+            )
+    result = compute_loud_per_session(rows)
+    assert result.sessions == MIN_SAMPLES
+    assert result.value == 3.0
+    assert result.display_value() == "3.0 per session"
+
+
+def test_loud_per_session_withheld_until_enough_sessions():
+    rows = [_delivery(ts=f"2026-08-10T09:3{i}:00") for i in range(100)]
+    result = compute_loud_per_session(rows)
+    assert result.value is None
+    assert "sessions" in result.note
+
+
+def test_muted_loud_alerts_are_counted_and_named():
+    rows = []
+    for day in range(MIN_SAMPLES):
+        trade_date = f"2026-08-{10 + day:02d}"
+        rows.append(_delivery(trade_date=trade_date, sounded=False, ts=f"{trade_date}T09:30:00"))
+    result = compute_loud_per_session(rows)
+    assert result.breakdown["sounded"] == 0
+    assert "made no sound" in result.note
+
+
+# --- armed hit delivery -----------------------------------------------------
+
+
+def _fired(watch_id, trade_date="2026-08-10"):
+    return _row("watch_fired", trade_date=trade_date, detail={"watch_id": watch_id})
+
+
+def _watch_delivery(watch_id, latency, trade_date="2026-08-10"):
+    return _delivery(
+        action="watch_delivered",
+        trade_date=trade_date,
+        ts=f"{trade_date}T09:30:00",
+        watch_id=watch_id,
+        fired_to_delivered_ms=latency,
+    )
+
+
+def test_armed_hits_delivered_within_the_bound_count():
+    fired = [_fired(f"w{i}") for i in range(MIN_SAMPLES)]
+    delivered = [_watch_delivery(f"w{i}", 100) for i in range(MIN_SAMPLES)]
+    result = compute_armed_hit_delivery(delivered, fired)
+    assert result.denominator == MIN_SAMPLES
+    assert result.value == 1.0
+
+
+def test_a_fired_watch_never_delivered_counts_against_the_rate():
+    fired = [_fired(f"w{i}") for i in range(MIN_SAMPLES)]
+    delivered = [_watch_delivery(f"w{i}", 100) for i in range(MIN_SAMPLES - 2)]
+    result = compute_armed_hit_delivery(delivered, fired)
+    assert result.denominator == MIN_SAMPLES
+    assert result.numerator == MIN_SAMPLES - 2
+    assert result.breakdown["fired"] - result.breakdown["delivered"] == 2
+
+
+def test_a_slow_delivery_is_not_a_hit():
+    fired = [_fired(f"w{i}") for i in range(MIN_SAMPLES)]
+    delivered = [
+        _watch_delivery(f"w{i}", LATENCY_BOUND_MS + 1) for i in range(MIN_SAMPLES)
+    ]
+    result = compute_armed_hit_delivery(delivered, fired)
+    assert result.value == 0.0
+
+
+def test_a_delivery_without_a_latency_cannot_prove_it_met_the_bound():
+    fired = [_fired(f"w{i}") for i in range(MIN_SAMPLES)]
+    delivered = [_watch_delivery(f"w{i}", None) for i in range(MIN_SAMPLES)]
+    result = compute_armed_hit_delivery(delivered, fired)
+    assert result.value == 0.0
+    assert result.breakdown["no_latency_recorded"] == MIN_SAMPLES
+
+
+def test_a_delivered_watch_missing_from_the_review_log_still_counts():
+    delivered = [_watch_delivery(f"w{i}", 100) for i in range(MIN_SAMPLES)]
+    result = compute_armed_hit_delivery(delivered, [])
+    assert result.denominator == MIN_SAMPLES
+    assert result.value == 1.0
+
+
+def test_armed_hit_rate_quotes_the_bound_it_was_measured_against():
+    fired = [_fired(f"w{i}") for i in range(MIN_SAMPLES)]
+    delivered = [_watch_delivery(f"w{i}", 100) for i in range(MIN_SAMPLES)]
+    result = compute_armed_hit_delivery(delivered, fired)
+    assert str(LATENCY_BOUND_MS) in result.note
