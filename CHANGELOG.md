@@ -22,6 +22,29 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-17 — The overnight AI layer becomes visible (R6a)
+
+`IMPLEMENTED` + `GREEN`.
+
+- **`ai_jobs` row in `operations_audit`** — read-only visibility for the batch
+  layer, which runs as a scheduled task against the repo checkout and had no
+  System Health row at all. It resolves the AI store by path (env override,
+  then the local setting) and **never imports `ai_jobs`**: that package is in
+  `PACKAGES_NOT_IN_THE_BUNDLE`, so an import would work in a checkout and die
+  in the frozen exe that actually renders System Health. Four pins keep the
+  duplicated rule honest — the env key, the setting key and the ledger filename
+  are each asserted equal to the batch layer's own, and a source-level test
+  forbids the import.
+- An **unset store reports HEALTHY**, not UNKNOWN: UNKNOWN means "could not
+  measure", and a machine with no `ai_store_dir` has been measured — the layer
+  is off by choice. Failure outranks degradation; freshness is graded in days
+  because the layer is nightly; a tail line killed mid-flush costs that line
+  rather than the whole ledger.
+- **`run_ai_jobs.ps1`** routine log line reworded: the scheduled task passes no
+  arguments, so `(no arguments)` labelled the normal nightly run as though a
+  caller had forgotten something.
+- Gate: 3604 passed / 19 subtests, smoke 7/7, both exit 0.
+
 ### 2026-08-17 — R5's first live engine: the LRSI efficiency crossing
 
 `IMPLEMENTED` + `GREEN`; **live gate open.**

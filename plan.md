@@ -465,10 +465,18 @@ are listed in `CURRENT_CHECKPOINT.md`.
    shared completed-bars helper. Golden fixtures gate live wiring; packaging and
    frozen selftest update when `scripts/indicators` gains its first importer.
    Spec: `docs/M5_SIGNAL_ENGINES_PLAN.md`.
-6. **R6 Small operational wins.** (a) AI-jobs visibility: reword the routine
-   "(no arguments)" line in `scripts/run_ai_jobs.ps1` and add a read-only System
-   Health row over `job_ledger.jsonl`/the dated log — the batch layer is never
-   hosted in the GUI. (b) Evidence-ledger rotation: session-scoped rotation for
+6. **R6 Small operational wins. — (a) BUILT 2026-08-17; (c) was ALREADY BUILT;
+   (b) remains, and is ask-first.** (a) AI-jobs visibility: the routine log line
+   in `scripts/run_ai_jobs.ps1` no longer reads as a caller error, and
+   `operations_audit` gained an **`ai_jobs` row** over the AI job ledger. It
+   resolves the store by path and never imports `ai_jobs`, because that package
+   is in `PACKAGES_NOT_IN_THE_BUNDLE` and System Health is frozen; four pins
+   keep the duplicated rule honest. An unset store reads HEALTHY ("off by
+   choice"), never UNKNOWN. (c) The `ui_stall_watchdog` **already exists** —
+   `scripts/ui/stall_watchdog.py`, off by default, installed from `ui/app.py`,
+   with setting + env overrides, a reader CLI and its own tests. **No code is
+   owed; only the bounded diagnostic week, which is a live gate.** (b) is the
+   only build work left in R6. (b) Evidence-ledger rotation: session-scoped rotation for
    `technical_integrity_events.jsonl` (~247 MB, fully re-parsed each boot)
    preserving its replay contract, then audit the other JSONL ledgers via the
    existing footprint check; `technical_integrity.py` is scoring-adjacent —
