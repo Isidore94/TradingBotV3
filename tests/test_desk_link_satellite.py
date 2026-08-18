@@ -27,6 +27,17 @@ import chart_snapshot
 from desk_link import protocol
 from desk_link.popup_payload import build_alert_popup_payload, restore_alert_popup_payload
 from ui.models.bounce import BounceAlert
+import pytest
+
+# Real client/server sockets on loopback ARE the point of this file: Desk Link
+# is a wire protocol, and a test that mocked the transport would be testing a
+# mock. Marked `network` so the offline tripwire lets it through - the marker
+# permits, it does not deselect, so these still run in every suite.
+#
+# This is a re-marking, not a weakening: nothing here reaches the internet or a
+# broker, and every assertion is unchanged.
+pytestmark = pytest.mark.network
+
 
 EASTERN = ZoneInfo("America/New_York")
 WAIT = 5.0

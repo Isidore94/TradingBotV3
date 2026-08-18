@@ -23,6 +23,16 @@ from desk_link import protocol
 from desk_link.client import DeskLinkClient
 from desk_link.outbox import IntentOutbox
 
+# Real client/server sockets on loopback ARE the point of this file: Desk Link
+# is a wire protocol, and a test that mocked the transport would be testing a
+# mock. Marked `network` so the offline tripwire lets it through - the marker
+# permits, it does not deselect, so these still run in every suite.
+#
+# This is a re-marking, not a weakening: nothing here reaches the internet or a
+# broker, and every assertion is unchanged.
+pytestmark = pytest.mark.network
+
+
 #: Ceiling on how long a pump waits for a Qt/socket round trip.
 #:
 #: 5.0 s was enough in isolation and occasionally not enough under full-suite

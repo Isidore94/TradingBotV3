@@ -25,6 +25,16 @@ from desk_link.client import DeskLinkClient
 from desk_link.framing import LineReader
 from desk_link.server import DeskLinkServer
 
+# Real client/server sockets on loopback ARE the point of this file: Desk Link
+# is a wire protocol, and a test that mocked the transport would be testing a
+# mock. Marked `network` so the offline tripwire lets it through - the marker
+# permits, it does not deselect, so these still run in every suite.
+#
+# This is a re-marking, not a weakening: nothing here reaches the internet or a
+# broker, and every assertion is unchanged.
+pytestmark = pytest.mark.network
+
+
 WAIT = 5.0
 
 

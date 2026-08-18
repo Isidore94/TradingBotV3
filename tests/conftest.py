@@ -33,6 +33,7 @@ from __future__ import annotations
 import atexit
 import gc
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -605,6 +606,103 @@ def _drain_chart_workers():
 _SOCKET_OPT_OUT_MARKERS = ("network", "broker")
 
 
+@pytest.fixture(autouse=True)
+def _no_ib_session(request, monkeypatch):
+    """Stop the IB client dialling TWS from an unmarked test.
+
+    The tripwire refuses the socket, but refusing is not the same as not
+    trying: `EClient.connect` spins its reader thread and retries around the
+    failure, which is live-broker machinery running inside a deterministic
+    suite. 132 of the 2026-08-18 inventory's attempts were this one seam.
+
+    This stubs the ADAPTER BOUNDARY, not behaviour - the client simply never
+    dials, which is the same state as a desk with TWS closed.
+    """
+    if any(request.node.get_closest_marker(name) for name in _SOCKET_OPT_OUT_MARKERS):
+        yield
+        return
+    try:
+        from ibapi.client import EClient
+    except ModuleNotFoundError:
+        yield
+        return
+
+    def refuse(self, host, port, clientId):  # noqa: N803 - ibapi's own spelling
+        raise ConnectionRefusedError(
+            f"offline suite: {request.node.nodeid} tried to reach TWS at {host}:{port}"
+        )
+
+    monkeypatch.setattr(EClient, "connect", refuse, raising=True)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_market_prep_feeds(request, monkeypatch):
+    """Stop the two market-prep calendar adapters dialling out.
+
+    Both already handle a failed fetch gracefully - the orchestrator logs
+    "ForexFactory scrape failed" and carries on - which is exactly why they
+    were invisible until the tripwire recorded the attempt. Graceful is not
+    hermetic.
+
+    Stubbed at the fetch boundary, so every parse, merge and date-window rule
+    above it still runs against the same shapes it always did.
+    """
+    if any(request.node.get_closest_marker(name) for name in _SOCKET_OPT_OUT_MARKERS):
+        yield
+        return
+    for module_name, attribute, empty in (
+        ("market_prep.services.forexfactory_calendar_service", "_refresh_events", ([], [])),
+        ("market_prep.services.treasury_calendar_service", "_fetch_upcoming_auctions", []),
+        # The NASDAQ earnings calendar, reached from a BACKGROUND thread inside
+        # master_avwap_lib.legacy - which is why its violation kept landing on
+        # innocent tests. Its contract is (rows, error), and "no rows, no
+        # error" is the shape it already returns for a day with no earnings,
+        # so nothing downstream sees a state it has not handled before. The
+        # file is ask-first and is NOT edited: this is a test-side stub.
+        ("master_avwap_lib.legacy", "_fetch_nasdaq_earnings_rows_with_retries", ([], None)),
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except ModuleNotFoundError:  # pragma: no cover - optional tree
+            continue
+        if hasattr(module, attribute):
+            monkeypatch.setattr(module, attribute, lambda *a, _e=empty, **k: _e, raising=True)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_yfinance_fetch(request, monkeypatch):
+    """The third adapter boundary: the fallback bar provider.
+
+    `yfinance` is the fallback quote/bar source, and the inventory caught it
+    being dialled from a BACKGROUND thread - which is why the failure landed on
+    whichever test happened to be running rather than the one that started the
+    work. Refusing at the boundary makes the reach-out impossible instead of
+    merely unlucky.
+
+    Tests that stub yfinance themselves override this, as they already did.
+    """
+    if any(request.node.get_closest_marker(name) for name in _SOCKET_OPT_OUT_MARKERS):
+        yield
+        return
+    try:
+        import yfinance
+    except ModuleNotFoundError:  # pragma: no cover - optional dependency
+        yield
+        return
+
+    def refuse(*args, **kwargs):
+        raise ConnectionRefusedError(
+            f"offline suite: {request.node.nodeid} tried to fetch bars from yfinance"
+        )
+
+    for attribute in ("download", "Ticker", "Tickers"):
+        if hasattr(yfinance, attribute):
+            monkeypatch.setattr(yfinance, attribute, refuse, raising=True)
+    yield
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     """Remember whether the test body already failed.
@@ -619,8 +717,16 @@ def pytest_runtest_makereport(item, call):
         item._offline_tripwire_already_failed = True
 
 
-class OfflineSuiteViolation(AssertionError):
-    """A test that never declared it needs the wire tried to use it."""
+class OfflineSuiteViolation(AssertionError, OSError):
+    """A test that never declared it needs the wire tried to use it.
+
+    Deliberately an OSError as well as an AssertionError. Product code that
+    already handles "TWS is not running" catches OSError, so inheriting from it
+    makes a refused connection behave exactly as it does on a machine with no
+    broker - graceful, not a novel crash path. The attempt is still recorded,
+    so the teardown check fails the test anyway: the goal is that no test
+    REACHES for the wire, not that it survives being denied.
+    """
 
 
 @pytest.fixture(autouse=True)
@@ -635,8 +741,20 @@ def _offline_tripwire(request, monkeypatch):
     attempts: list[str] = []
 
     def _refuse(where: str, address: object):
+        import traceback as _traceback
+
         target = repr(address)
-        attempts.append(f"{where} -> {target}")
+        # Name the CALLER, not just the address. A background-thread attempt is
+        # reported against whichever test happens to be running, so "something
+        # dialled 23.6.255.188" without a stack sends the reader hunting
+        # through an innocent file. The two frames below the guard are the ones
+        # that identify the real seam.
+        origin = " <- ".join(
+            f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
+            for frame in reversed(_traceback.extract_stack()[-14:-1])
+            if "site-packages" not in frame.filename
+        )
+        attempts.append(f"{where} -> {target} from {origin}")
         raise OfflineSuiteViolation(
             f"{test_id} tried to open a socket ({where} -> {target}). "
             "The suite is hermetic: stub the seam, or mark the test "
