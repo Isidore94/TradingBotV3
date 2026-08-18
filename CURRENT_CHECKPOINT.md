@@ -69,7 +69,7 @@ the final session.
 
 | Check | Result |
 |---|---|
-| `pytest tests/ -q` | **3623 passed / 19 subtests** (2026-08-17, after R5 §3.1 + R6a + R6b's fixture) |
+| `pytest tests/ -q` | **3637 passed / 19 subtests, 1 FAILED** (2026-08-17). The failure is `test_ui_stall_watchdog.py::test_watchdog_records_a_blocking_call_with_its_stack`: it passes alone in 1.4 s and fails under full-suite load, where the suite now takes ~180 s against ~152 s earlier in the day. **Not introduced by the day's work** — verified by stashing every uncommitted change and re-running at `514c1fb`, which reproduced it identically. It is a genuinely timing-sensitive test (a 250 ms deliberate block, a 30 ms threshold, a 5 ms sampler) and the load moved past its margin. Treat the baseline as **green minus this one known, reproducing timing failure** — do not claim a clean exit 0 until it is fixed or quarantined |
 | `scripts/smoke_check.py` | **7/7** |
 | clean-cache frozen rebuild + selftest | **`selftest OK: 55/55 checks passed (frozen)`** (2026-08-17; 51 → 55 on the R5 roster growth) |
 
