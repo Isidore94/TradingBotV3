@@ -110,18 +110,35 @@ desk-branch switch, no `main` push. The desk kept running
 5. R5 confluence scope — **M5 Focus members only**.
 6. R5 ORB candidate surface — **Alert Center annotation**, not a board lane.
 
-Plus one delegated to Fable and recorded: R5 gets a **new `M5_SIGNAL_TAG`
-family**, no tier bypass, foldable (spec §8.1).
+Plus delegated to Fable and recorded (the trader may override any of them):
+R5 gets a **new `M5_SIGNAL_TAG` family**, no tier bypass, foldable (spec §8.1);
+**R5 §7 holds the WIRING of §3.2/§3.3, not their pure logic** — no wiring into
+the live M5 loop even default-OFF until §3.1's desk session, pure
+correlator/ORB-classifier code with fixtures may land now, and note nothing in
+the UI can flip `m5_signal_toggles` anyway (spec §8.2, 2026-08-17); the
+**prior-anchor AVWAP line is carried as an optional top-level `prev_avwape`
+key** on the existing zone-arms entry — never a `trigger_levels` arm, absent
+when no prior anchor, golden fixture over `build_d1_zone_arms` first, and the
+value already exists at `runner.py:747` so no new band computation and no
+`master_avwap_lib/legacy.py` edit at all (spec §8.3, 2026-08-17).
 
-**Three things are held ask-first — recorded, not skipped:**
+**The three held-ask-first items are TRIAGED 2026-08-17 (Fable, delegated) —
+none needs a trader question:**
 
-- the Focus Picks reviewed-today marker (that panel is editable watchlist
-  *text*, so a marker would land in data written back to the watchlists);
-- R4 §2.2's `review_host` for the RS/RW and Industry boards (its remaining half
-  is the setups table's advance-to-next-row flow, meaningless on a ranked board);
-- migrating BounceBot's ad-hoc completed-bars call sites onto the new shared
-  helper (R5 §5 says opportunistically, never as a silent change to a shipped
-  detector).
+- the Focus Picks reviewed-today marker — **technical, decided: decoration
+  only**, never in the document text, save-path byte-identity pinned by test;
+  the only path back to the trader is if decoration proves impossible (R4 spec
+  header note);
+- R4 §2.2's `review_host` for the boards — **CLOSED, no build**: auto-advance
+  on a re-ranking board advances to the wrong symbol; reopen only on a trader
+  ask for a frozen review-queue mode (R4 spec header note);
+- the completed-bars migration — **verified NOT a live bug**: every checked
+  site strips the offset only *after* `get_market_local_now()` has converted
+  to market time, so naive market-local compares against naive market-local
+  and the answers are correct today. Migration stays opportunistic hygiene —
+  it rides along with the next authorized `legacy.py` wiring edit behind an
+  old-vs-new equivalence pin, and never opens that ask-first file on its own
+  (R5 spec §5 note).
 
 **→ Next session: see RESUME HERE in the table below.**
 

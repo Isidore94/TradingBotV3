@@ -137,6 +137,19 @@ Before adding four new detectors that would each re-implement the ad hoc
 use it in the new engines (existing call sites migrate opportunistically, not in
 this packet — no behavior change to shipped detectors without fixtures).
 
+**Triage finding, 2026-08-17 (Fable, trader-delegated):** the ad hoc BounceBot
+sites were checked and are **producing correct answers today** — not a live
+bug. `get_market_local_now()` converts to the market timezone *before* the
+`replace(tzinfo=None)` strip, so the cutoff is naive market-local wall time
+compared against IB's naive market-local bar starts; the same holds at the
+technical-integrity observer and the `cached_m5_window_bars` alignment. The
+idiom is fragile (a copy-paste with a UTC-aware stamp would be silently wrong
+by hours), which is what the shared helper prevents in new code — but
+migration of the existing sites is hygiene with zero expected behavior change,
+so it stays opportunistic: it rides along with the next authorized wiring edit
+to `legacy.py`, behind an old-vs-new equivalence pin, and is never a reason to
+open that ask-first file on its own.
+
 ## 6. Fenced files, invariants, tests
 
 Ask-first at edit time: `scripts/bounce_bot_lib/legacy.py`,
@@ -215,6 +228,125 @@ extreme on its side is **foldable and tier-gated**, exactly like any other
 ordinary alert. That is more conservative than the decision assumed, and it
 points the same way — do not "fix" it, and do not write "Focus member ⇒ never
 folded" anywhere, because that is not what the code does.
+
+### 8.2 What the §7 per-engine gate holds back — 2026-08-17
+
+Decided by Fable under trader delegation (§8.1 pattern; **the trader may
+override**). Question: with §3.1 wired and green but no desk session run, may
+§3.2 and §3.3 be built now behind default-OFF toggles, with only enablement
+waiting on the desk session?
+
+**DECISION: No — §3.2 and §3.3 do not wire into the live M5 loop, even behind
+default-OFF toggles, until a desk session confirms §3.1's alert volume; their
+pure event logic (the confluence correlator, the first-candle ORB classifier
+and its follow-up arming rules) MAY land now in `m5_signal_engines.py` with
+hand-computed fixtures. The answer is the same for both engines.**
+
+Three structural reasons:
+
+1. **"Wires in" means enters the live loop, not "can fire."** The loop is where
+   the risk lives — per-symbol correlator state, emit ordering, callback
+   contracts — and §3.2's correlator holds state across bars whether or not its
+   alert is audible. A dormant state machine that springs alive on a toggle
+   flip mid-session, carrying contents no session ever exercised, is a
+   different defect class from a dead function. The desk session §7 demands is
+   also *design* review: §8.1 explicitly defers loudness and window tuning
+   until each engine's volume is observed, so wiring built before that
+   observation is built against unreviewed assumptions inside an ask-first
+   detector file — rework, not progress.
+2. **The cheap-enablement premise is false today.** Nothing flips
+   `m5_signal_toggles` at runtime: the setter exists
+   (`bounce_bot_lib/legacy.py:6575`) but has zero callers anywhere in
+   `scripts/ui`. "Only enablement waits" would in practice mean a
+   default-flip code change plus a frozen rebuild — exactly the cost of wiring
+   it later, minus nothing.
+3. **Three unmeasured detectors landing together is the batch §7 was written to
+   prevent**, and the trader cannot review the second and third designs before
+   they exist. The pure-vs-wiring split is already this packet's law (§1
+   preamble, the `test_d1_zone_arms.py` precedent), so the pure layer is the
+   permitted head start.
+
+Consequences: the packet stretches — §3.2 wires only after §3.1's desk
+session, §3.3 after §3.2's. The wiring commits stay small because the pure
+logic and its fixtures will already exist. Whether the toggles deserve a
+settings surface is decided at wiring time, not built speculatively.
+
+Reopen triggers: the trader overrides (batching engines is their call to
+make); §3.1's desk session runs with sane volume (§3.2's wiring may then start
+under its own ask-first request); a finding that the correlator cannot be
+expressed purely (none is expected — `m5_signal_engines.py` was built as
+exactly this seam).
+
+Correction to the framing: `M5_SIGNAL_TYPE_DEFAULTS` currently defaults both
+LRSI types **True**, so "each behind its toggle defaulting OFF" describes a
+proposed posture for §3.2/§3.3, not the map §3.1 actually shipped with.
+
+### 8.3 The prior-anchor AVWAP line — carried, not computed — 2026-08-17
+
+Decided by Fable under trader delegation (§8.1 pattern; **the trader may
+override**). Recorded before code, as required.
+
+**DECISION: the prior-anchor AVWAP value is carried as a new OPTIONAL
+top-level key `prev_avwape` on the existing per-symbol zone-arms entry —
+never as a new arm in `trigger_levels` — plumbed from the already-computed
+`prev_anchor_meta["vwap"]` at the zone-arms call site, absent (not null) when
+there is no prior anchor; a golden characterization fixture over
+`build_d1_zone_arms` lands before the edit; and §4 is not held by §8.2's
+engine gate.**
+
+Point by point:
+
+1. **Where.** The existing zone-arms file, as a top-level entry key
+   `prev_avwape` (rounded like every other level), named to match the
+   established `PREV_AVWAPE` label vocabulary the theta-support entries
+   already use. It must NOT be appended to `trigger_levels`:
+   `detect_zone_arm_triggers` walks that list blindly
+   (`d1_zone_arms.py:351-411`), so a new arm there would become a live
+   trigger of the shipped zone-arm alert rubric — a detector behavior change
+   smuggled in as plumbing. A top-level key is invisible to the trigger
+   walker and readable by §4's AnyBounceWatch evaluation.
+2. **Missing prior anchor.** §6's rule is confirmed and sharpened: no prior
+   anchor, or too little history for the prior series, means the key is
+   **absent from the entry** — never `null`, never `0`, never a fabricated
+   level — so a no-prior symbol is indistinguishable from a file written
+   before this change, which is exactly the tolerant-reader posture. The
+   AnyBounceWatch silently evaluates one fewer level.
+3. **Additive-only.** Yes. `schema_version` stays 1 — nothing existing
+   changes meaning, and a bump could trip any reader that gates on it.
+   Readers today: BounceBot's `load_master_avwap_d1_zone_arms`
+   (`bounce_bot_lib/legacy.py:4099`, dict passthrough, unknown keys inert)
+   and `detect_zone_arm_triggers` (reads only `trigger_levels`). Both are
+   proven untouched by the fixture below.
+4. **Fixture first.** `tests/test_d1_zone_arms.py` says of itself it is NOT
+   golden-fixture — so before the edit, a golden characterization fixture
+   pins `build_d1_zone_arms` output across the side/zone matrix (long/short,
+   zones 1–3, with/without prior bands and EMAs, the still-armed gating
+   edges). After the edit the same fixture must show every existing key
+   byte-identical and `trigger_levels` unchanged, with only `prev_avwape`
+   added where a prior anchor exists.
+5. **Ordering.** §4 is not one of §3's engines and §9 already states it is
+   not behind the per-engine gate; it may proceed independently of §8.2. Its
+   own gates: the fixture (test-only, may land immediately), then the
+   additive edit under the ask-first rule for `d1_zone_arms.py` and the
+   runner call site.
+
+Consequences: no second `calc_anchored_vwap_bands` call is added anywhere —
+the σ-formula invariant is not merely respected but never approached, because
+the value already exists. The zone-arm alert rubric provably cannot gain or
+lose a trigger from this change.
+
+Reopen triggers: a reader found gating on exact key sets (none known); the
+trader wanting the prior AVWAP armed as a *zone-arm trigger* too — that is a
+detector change with its own fixture-first path, not this plumbing.
+
+**Corrections to the spec (§1, §4):** "tracked nowhere today" is imprecise —
+the prior anchor's AVWAP line is already computed every scan and used for the
+theta-support entries (`master_avwap_lib/legacy.py:29866`,
+`runner.py:745-747`); it is computed-but-not-exported to the intraday side.
+And "the one D1-side change… lands in `scripts/master_avwap_lib/legacy.py`"
+names the wrong file: the zone-arms write site is `runner.py:1111` and the
+builder is `d1_zone_arms.py` — **no `master_avwap_lib/legacy.py` edit is
+needed at all.**
 
 ## 9. Build state (2026-08-17)
 

@@ -8,13 +8,27 @@ Sections 1–5 and 6.1–6.3 are built and green. Two items are **explicitly hel
 for a trader decision** rather than silently skipped:
 
 - the **Focus Picks** reviewed-today marker (§5) — that surface is editable
-  watchlist text, not a table; see the §5 note;
+  watchlist text, not a table; see the §5 note. **Triaged 2026-08-17 (Fable,
+  trader-delegated; the trader may override): a technical decision, taken —
+  build it as decoration only.** The marker renders as a per-line editor
+  decoration (extra-selection highlight or gutter mark with a tooltip),
+  derived from the same recorded-decision streams as every other marked
+  surface, and **never enters the document text** — nothing new is ever
+  serialized to the watchlist files, making the never-corrupt-user-names
+  invariant structural rather than careful. A test must pin save-path
+  byte-identity with markers active. If the editors cannot be decorated
+  without touching the text path, the fallback is NOT a `● ` prefix — it is
+  returning to the trader with that one question;
 - **§2.2's `review_host`** for the RS/RW and Industry boards — `watch_host` is
   wired on both, and §2.1's CaptureRail now gives every chart surface
   veto/like/note/hypothetical-stop, which is what §2 was for. `review_host`
   additionally carries the setups table's *advance-to-the-next-row* flow, which
   is table-specific and has no meaning on a ranked board. Recorded as answered
-  by a better mechanism rather than built as written.
+  by a better mechanism rather than built as written. **Triaged 2026-08-17
+  (Fable, trader-delegated): CLOSED, no build.** Auto-advance on a board that
+  re-ranks under the reviewer would advance to the wrong symbol — the flow is
+  affirmatively not wanted there, not merely unbuilt. Reopen only if the
+  trader asks for a review-queue mode (ordering frozen at review start).
 
 The §8 exit gate is unrun: all of it is live observation.
 
