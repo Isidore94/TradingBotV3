@@ -104,7 +104,7 @@ def test_empty_store_reports_nothing_rather_than_zero():
 
 
 def test_empty_report_distinguishes_empty_store_from_quiet_desk():
-    _, _, report = run_audit(rows=[])
+    _, _, report = run_audit(rows=[], delivery_rows=[])
     assert "empty store" in report
     assert "NOT a quiet desk" in report
 
@@ -132,7 +132,7 @@ def test_multiple_installations_raise_a_visible_warning():
         _row("shown", symbol="MSFT", installation_id="b" * 32, machine="MINI"),
     ]
     coverage = audit_capture(rows)
-    _, _, report = run_audit(rows=rows)
+    _, _, report = run_audit(rows=rows, delivery_rows=[])
     assert coverage.installations == 2
     assert "more than one installation" in report
 
@@ -145,7 +145,7 @@ def test_delivery_capture_absent_is_detected_and_named():
     coverage = audit_capture(rows)
     assert coverage.has_delivery_capture is False
 
-    _, _, report = run_audit(rows=rows)
+    _, _, report = run_audit(rows=rows, delivery_rows=[])
     assert "ABSENT" in report
     assert "unmeasured" in report
 
@@ -197,7 +197,7 @@ def test_blocked_and_deferred_metrics_stay_unknown_even_with_rich_data():
 
 
 def test_report_prints_unknown_and_a_reason_for_every_blocked_metric():
-    _, _, report = run_audit(rows=_impressions(20))
+    _, _, report = run_audit(rows=_impressions(20), delivery_rows=[])
     for spec in METRIC_REGISTRY:
         if spec.status in {STATUS_BLOCKED, STATUS_DEFERRED}:
             assert spec.title in report
@@ -344,7 +344,7 @@ def test_no_window_keeps_undated_rows():
 
 
 def test_report_states_the_episode_identity_divergence():
-    _, _, report = run_audit(rows=_impressions(10))
+    _, _, report = run_audit(rows=_impressions(10), delivery_rows=[])
     assert "EPISODE IDENTITY" in report
     assert "review_learning.py folds" in report
     assert "FIFO" in report
@@ -361,7 +361,7 @@ def test_report_is_deterministic_for_a_fixed_clock():
 def test_run_audit_reads_the_store_when_no_rows_are_supplied(tmp_path):
     store = tmp_path / "alert_review_events.jsonl"
     store.write_text("", encoding="utf-8")
-    coverage, results, report = run_audit(path=store, shards_dir=tmp_path / "shards")
+    coverage, results, report = run_audit(path=store, shards_dir=tmp_path / "shards", delivery_dir=tmp_path / "deliveries")
     assert coverage.rows == 0
     assert "CAPTURE AUDIT" in report
 

@@ -23,6 +23,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from alert_delivery_events import (
+    record_delivery,
+    record_watch_delivery,
+    watch_identity,
+)
 from alert_review_state import (
     load_day_scoped_flags,
     load_ignored_alert_symbols,
@@ -804,6 +809,39 @@ class AlertCenterPanel(QFrame):
         except Exception:
             logging.exception("Desk Link alert relay failed; the desk itself is unaffected.")
 
+    def _record_delivery(
+        self,
+        alert: BounceAlert,
+        *,
+        sounded: bool,
+        is_focus: bool = False,
+    ) -> None:
+        """Log that this alert reached the trader (packet Phase 1).
+
+        Capture only. Nothing here decides what is loud, what sounds, or what
+        is queued: ``alert_is_loud`` is READ, never re-implemented, so the
+        recorded judgement cannot drift from the one driving the beep.
+        ``sounded`` is separate because a loud alert with the feed muted made
+        no noise, and that is a real and different event.
+
+        Recording is strictly subordinate to delivering - the alert is already
+        on screen by the time this runs, and no failure here may undo that.
+        """
+
+        try:
+            record_delivery(
+                alert,
+                loud=alert_is_loud(alert),
+                sounded=bool(sounded),
+                is_focus=bool(is_focus),
+                queue_len=len(self._review_queue),
+            )
+        except Exception:
+            logging.debug(
+                "Delivery capture failed; the alert itself is unaffected.",
+                exc_info=True,
+            )
+
     def add_alert(self, alert: BounceAlert) -> None:
         self._refresh_ignored_market_date()
         if _is_feed_noise_alert(alert):
@@ -815,6 +853,7 @@ class AlertCenterPanel(QFrame):
         if alert.tag == FOCUS_D1_EVENT_TAG:
             self._enqueue_review_alert(alert)
             self._add_d1_alert(alert)
+            self._record_delivery(alert, sounded=False)
             return
         # D1 Focus is reserved for favorite/high-conviction transitions
         # (final bucket upgrades only). Developing trigger/watch observations
@@ -822,6 +861,7 @@ class AlertCenterPanel(QFrame):
         if alert.is_d1 and is_ready_d1_alert(alert):
             self._enqueue_review_alert(alert)
             self._add_d1_alert(alert)
+            self._record_delivery(alert, sounded=False)
             return
         self._alerts.insert(0, alert)
         del self._alerts[MAX_FEED_ITEMS * 2 :]
@@ -829,8 +869,13 @@ class AlertCenterPanel(QFrame):
         if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
             self._enqueue_review_alert(alert)
             self._insert_item_into(self.feed_layout, alert, MAX_FEED_ITEMS)
-            if self.sound_input.isChecked() and alert_should_sound(alert, is_focus=is_focus):
+            sounded = bool(
+                self.sound_input.isChecked()
+                and alert_should_sound(alert, is_focus=is_focus)
+            )
+            if sounded:
                 QApplication.beep()
+            self._record_delivery(alert, sounded=sounded, is_focus=is_focus)
             self._relay_alert_popup(alert, is_focus=is_focus)
         self._emit_feed_status()
 
@@ -2076,6 +2121,41 @@ class AlertCenterPanel(QFrame):
             self._save_chart_watches()
             self._refresh_review_armed_kinds()
 
+    def _record_watch_delivery(self, hit, alert: BounceAlert, moment: datetime) -> None:
+        """Log that a condition the trader armed became visible (Phase 1).
+
+        ``watch_fired`` already records that a watch fired; nothing recorded
+        when the trader could actually SEE it, so the sec 17 latency bound has
+        never been checkable. The span measured here is detection -> on screen.
+        Detection lag relative to the bar close is a separate quantity this
+        does not measure, and the metric must not be read as covering it.
+        """
+
+        try:
+            watch = hit.watch
+            side = getattr(hit, "resolved_side", "") or getattr(watch, "side", "")
+            # Three kinds of armed condition reach here. Chart and D1-event
+            # watches carry a `kind`; a price level is identified by its
+            # direction and price instead. The component built here must match
+            # the one alert_quality derives from the matching *_fired review
+            # row, or the two stores cannot be joined.
+            kind = getattr(watch, "kind", "") or ""
+            if not kind:
+                kind = f"{getattr(watch, 'direction', '')}@{getattr(watch, 'level', '')}"
+            elapsed_ms = int((datetime.now() - moment).total_seconds() * 1000)
+            record_watch_delivery(
+                alert,
+                watch_id=watch_identity("", watch.symbol, side, kind),
+                fired_to_delivered_ms=elapsed_ms,
+                loud=alert_is_loud(alert),
+                sounded=bool(self.sound_input.isChecked()),
+            )
+        except Exception:
+            logging.debug(
+                "Watch delivery capture failed; the alert itself is unaffected.",
+                exc_info=True,
+            )
+
     def _chart_watch_alert(self, hit, moment: datetime) -> BounceAlert:
         watch = hit.watch
         resolved = str(getattr(hit, "resolved_side", "") or "").upper()
@@ -2374,7 +2454,9 @@ class AlertCenterPanel(QFrame):
                     "message": str(hit.message or ""),
                 },
             )
-            self.add_alert(self._chart_watch_alert(hit, moment))
+            level_alert = self._chart_watch_alert(hit, moment)
+            self.add_alert(level_alert)
+            self._record_watch_delivery(hit, level_alert, moment)
 
     # ------------------------------------------------------------------
     # Persistent D1 event watches: derived-level alerts (15EMA reject, new
@@ -2499,7 +2581,9 @@ class AlertCenterPanel(QFrame):
                     "message": str(hit.message or ""),
                 },
             )
-            self.add_alert(self._chart_watch_alert(hit, moment))
+            event_alert = self._chart_watch_alert(hit, moment)
+            self.add_alert(event_alert)
+            self._record_watch_delivery(hit, event_alert, moment)
 
     def _refresh_review_armed_kinds(self) -> None:
         current = self._current_review_alert

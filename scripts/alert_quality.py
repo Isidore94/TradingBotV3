@@ -48,6 +48,7 @@ from alert_delivery_events import (
     DELIVERED,
     WATCH_DELIVERED,
     load_delivery_events,
+    watch_identity,
 )
 from review_events import load_review_events
 
@@ -536,6 +537,31 @@ def _tier_rank(row: dict[str, Any]) -> int:
     return TIER_RANK.get(str(row.get("tier") or "").strip().upper(), 0)
 
 
+#: The three ways an armed condition fires. All are conditions the trader set
+#: by hand and is waiting on, so all three belong in the armed-hit denominator;
+#: counting only ``watch_fired`` would silently exclude every price level and
+#: D1 event the trader armed.
+FIRED_ACTIONS = frozenset({"watch_fired", "level_fired", "d1_event_fired"})
+
+
+def _fired_kind(detail: dict[str, Any]) -> str:
+    """The identity component for a fired armed condition.
+
+    Chart and D1-event watches carry a ``kind``; a price level is identified by
+    its direction and price instead. Must mirror what the panel builds when it
+    records the delivery, or the two stores cannot be joined.
+    """
+
+    kind = str(detail.get("kind") or "").strip()
+    if kind:
+        return kind
+    direction = str(detail.get("direction") or "").strip()
+    level = detail.get("level")
+    if direction or level is not None:
+        return f"{direction}@{level}"
+    return ""
+
+
 def _delivery_rows(rows: Sequence[dict[str, Any]], action: str) -> list[dict[str, Any]]:
     picked = [row for row in rows if _action_of(row) == action]
     picked.sort(key=lambda item: str(item.get("ts") or ""))
@@ -665,12 +691,22 @@ def compute_armed_hit_delivery(
 
     result = MetricResult(spec=_spec("armed_hit_delivery"))
     delivered = _delivery_rows(delivery_rows, WATCH_DELIVERY_ACTION)
-    fired_ids = {
-        str((row.get("detail") or {}).get("watch_id") or "").strip()
-        for row in review_rows
-        if _action_of(row) == "watch_fired"
-        and isinstance(row.get("detail"), dict)
-    }
+    fired_ids: set[str] = set()
+    for row in review_rows:
+        if _action_of(row) not in FIRED_ACTIONS:
+            continue
+        detail = row.get("detail")
+        detail = detail if isinstance(detail, dict) else {}
+        explicit = str(detail.get("watch_id") or "").strip()
+        fired_ids.add(
+            explicit
+            or watch_identity(
+                _trade_date_of(row),
+                str(row.get("symbol") or ""),
+                str(row.get("side") or ""),
+                _fired_kind(detail),
+            )
+        )
     fired_ids.discard("")
 
     delivered_by_id: dict[str, int | None] = {}

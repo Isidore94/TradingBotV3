@@ -201,6 +201,26 @@ def alert_event_id(
     return "|".join([day, symbol, side, resolved_type, resolved_anchor])
 
 
+def watch_identity(trade_date: str, symbol: str, side: str, kind: str) -> str:
+    """Shared identity for one armed watch, derivable from either store.
+
+    The review log's ``watch_fired`` row carries no explicit watch id, but it
+    does carry every part of this tuple. Deriving the identity instead of
+    adding a field means the armed-hit metric can join the two stores without
+    editing an existing emit site inside the alert panel - the smallest change
+    that makes the join possible.
+    """
+
+    return "|".join(
+        [
+            _text(trade_date),
+            _text(symbol).upper(),
+            _text(side).upper(),
+            _text(kind).lower(),
+        ]
+    )
+
+
 def _trade_date_text() -> str:
     try:
         from market_session import get_market_session_window
