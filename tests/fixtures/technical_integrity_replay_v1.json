@@ -1,0 +1,275 @@
+{
+  "schema": "technical_integrity_replay_fixture_v1",
+  "feature_version": "technical_integrity_monitor_state_v1",
+  "raw_input_keys": [
+    "ledger_lines",
+    "state_seed"
+  ],
+  "raw_input_sha256": "145f5b71eed294d630fc1252b5326bb972a70d619e85597353a1e75be68c8750",
+  "acquired_at": "2026-08-17T20:30:00-07:00",
+  "as_of": "2026-08-17T20:30:00-07:00",
+  "universe_version": "synthetic_technical_integrity_replay_v1",
+  "provider_assumptions": "Hand-built ledger rows. No provider, no calendar, no clock: the replay is a pure function of the ledger bytes and the state seed.",
+  "expected_keys": [
+    "expected",
+    "expected_segmented",
+    "expected_next_session"
+  ],
+  "numeric_tolerance": 0.0,
+  "intentional_difference": "",
+  "configuration": {
+    "followup_horizons_minutes": [
+      30,
+      60,
+      90
+    ],
+    "append_time_provenance_fields": [
+      "as_of",
+      "written_at"
+    ],
+    "session_date": "2026-08-17",
+    "prior_session_date": "2026-08-14",
+    "next_session_date": "2026-08-18"
+  },
+  "ledger_lines": [
+    "{\"as_of\": \"2026-08-17T10:00:00-07:00\", \"event_id\": \"t-A\", \"event_type\": \"level_test_started\", \"family\": \"avwap\", \"level_value\": 101.5, \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\", \"written_at\": \"2026-08-17T10:00:05-07:00\"}",
+    "{\"as_of\": \"2026-08-17T10:05:00-07:00\", \"event_id\": \"t-A\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-17T10:05:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-17T10:10:00-07:00\", \"event_id\": \"t-B\", \"event_type\": \"level_test_started\", \"family\": \"avwap\", \"level_value\": 101.5, \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"BBB\", \"written_at\": \"2026-08-17T10:00:05-07:00\"}",
+    "{\"as_of\": \"2026-08-17T10:15:00-07:00\", \"event_id\": \"t-C\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-17T10:15:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-17T10:18:00-07:00\", \"event_id\": \"t-E\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-17T10:18:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-17T10:18:00-07:00\", \"event_id\": \"t-D\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-17T10:18:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-17T10:19:00-07:00\", \"event_type\": \"post_resolution_tracking_started\", \"followup_id\": \"f-1\", \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-17T10:19:00-07:00\", \"event_id\": \"fu-1\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-1\", \"horizon_minutes\": 30, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+    "{\"as_of\": \"2026-08-17T10:19:00-07:00\", \"event_id\": \"fu-2\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-1\", \"horizon_minutes\": 60, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+    "{\"as_of\": \"2026-08-17T10:20:00-07:00\", \"event_type\": \"post_resolution_tracking_started\", \"followup_id\": \"f-2\", \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-17T10:20:00-07:00\", \"event_id\": \"fu-3\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-2\", \"horizon_minutes\": 30, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+    "{\"as_of\": \"2026-08-17T10:20:00-07:00\", \"event_id\": \"fu-4\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-2\", \"horizon_minutes\": 60, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+    "{\"as_of\": \"2026-08-17T10:20:00-07:00\", \"event_id\": \"fu-5\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-2\", \"horizon_minutes\": 90, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+    "{\"as_of\": \"2026-08-17T10:01:00-07:00\", \"event_type\": \"frozen_intraday_snapshot\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-17\", \"snapshot_key\": \"sk-frozen\"}",
+    "{\"as_of\": \"2026-08-17T10:02:00-07:00\", \"event_type\": \"missed_snapshot\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-17\", \"snapshot_key\": \"sk-missed\"}",
+    "{\"as_of\": \"2026-08-17T10:03:00-07:00\", \"event_type\": \"opening_range_baseline\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-17\", \"snapshot_key\": \"sk-orb\"}",
+    "{\"as_of\": \"2026-08-17T10:04:00-07:00\", \"event_type\": \"missed_opening_range_baseline\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-17\", \"snapshot_key\": \"sk-missed-orb\"}",
+    "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_id\": \"x-started\", \"event_type\": \"level_test_started\", \"family\": \"avwap\", \"level_value\": 101.5, \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-14\", \"symbol\": \"AAA\", \"written_at\": \"2026-08-14T10:00:05-07:00\"}",
+    "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_id\": \"x-resolved\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-14T23:00:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-14\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_type\": \"post_resolution_tracking_started\", \"followup_id\": \"x-f\", \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-14\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_id\": \"x-fu\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"x-f\", \"horizon_minutes\": 30, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-14\"}",
+    "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_type\": \"frozen_intraday_snapshot\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-14\", \"snapshot_key\": \"x-sk\"}",
+    "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_id\": \"n-started\", \"event_type\": \"level_test_started\", \"family\": \"avwap\", \"level_value\": 101.5, \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-18\", \"symbol\": \"AAA\", \"written_at\": \"2026-08-18T10:00:05-07:00\"}",
+    "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_id\": \"n-resolved\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-18T06:36:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-18\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_type\": \"post_resolution_tracking_started\", \"followup_id\": \"n-f\", \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-18\", \"symbol\": \"AAA\"}",
+    "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_id\": \"n-fu\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"n-f\", \"horizon_minutes\": 30, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-18\"}",
+    "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_type\": \"missed_snapshot\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-18\", \"snapshot_key\": \"n-sk\"}",
+    "{\"session_date\": \"2026-08-17\", \"event_type\": \"level_test_st"
+  ],
+  "state_seed": {
+    "schema": "technical_integrity_monitor_state_v1",
+    "session_date": "2026-08-17",
+    "pending": {
+      "t-C": {
+        "event_id": "t-C",
+        "symbol": "AAA",
+        "stale": true
+      },
+      "t-Z": {
+        "event_id": "t-Z",
+        "symbol": "ZZZ"
+      }
+    },
+    "seen_test_ids": [
+      "t-seed"
+    ],
+    "pending_followups": {
+      "f-3": {
+        "followup_id": "f-3",
+        "symbol": "CCC",
+        "completed_horizons": [
+          30
+        ]
+      }
+    },
+    "followup_event_ids": [],
+    "frozen_snapshot_markers": [],
+    "followup_sweep_markers": [],
+    "followup_symbol_attempts": {},
+    "latest_completed_bar_end": ""
+  },
+  "segment_lines": {
+    "2026-08-17": [
+      "{\"as_of\": \"2026-08-17T10:00:00-07:00\", \"event_id\": \"t-A\", \"event_type\": \"level_test_started\", \"family\": \"avwap\", \"level_value\": 101.5, \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\", \"written_at\": \"2026-08-17T10:00:05-07:00\"}",
+      "{\"as_of\": \"2026-08-17T10:05:00-07:00\", \"event_id\": \"t-A\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-17T10:05:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-17T10:10:00-07:00\", \"event_id\": \"t-B\", \"event_type\": \"level_test_started\", \"family\": \"avwap\", \"level_value\": 101.5, \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"BBB\", \"written_at\": \"2026-08-17T10:00:05-07:00\"}",
+      "{\"as_of\": \"2026-08-17T10:15:00-07:00\", \"event_id\": \"t-C\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-17T10:15:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-17T10:18:00-07:00\", \"event_id\": \"t-E\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-17T10:18:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-17T10:18:00-07:00\", \"event_id\": \"t-D\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-17T10:18:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-17T10:19:00-07:00\", \"event_type\": \"post_resolution_tracking_started\", \"followup_id\": \"f-1\", \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-17T10:19:00-07:00\", \"event_id\": \"fu-1\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-1\", \"horizon_minutes\": 30, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+      "{\"as_of\": \"2026-08-17T10:19:00-07:00\", \"event_id\": \"fu-2\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-1\", \"horizon_minutes\": 60, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+      "{\"as_of\": \"2026-08-17T10:20:00-07:00\", \"event_type\": \"post_resolution_tracking_started\", \"followup_id\": \"f-2\", \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-17T10:20:00-07:00\", \"event_id\": \"fu-3\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-2\", \"horizon_minutes\": 30, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+      "{\"as_of\": \"2026-08-17T10:20:00-07:00\", \"event_id\": \"fu-4\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-2\", \"horizon_minutes\": 60, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+      "{\"as_of\": \"2026-08-17T10:20:00-07:00\", \"event_id\": \"fu-5\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"f-2\", \"horizon_minutes\": 90, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-17\"}",
+      "{\"as_of\": \"2026-08-17T10:01:00-07:00\", \"event_type\": \"frozen_intraday_snapshot\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-17\", \"snapshot_key\": \"sk-frozen\"}",
+      "{\"as_of\": \"2026-08-17T10:02:00-07:00\", \"event_type\": \"missed_snapshot\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-17\", \"snapshot_key\": \"sk-missed\"}",
+      "{\"as_of\": \"2026-08-17T10:03:00-07:00\", \"event_type\": \"opening_range_baseline\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-17\", \"snapshot_key\": \"sk-orb\"}",
+      "{\"as_of\": \"2026-08-17T10:04:00-07:00\", \"event_type\": \"missed_opening_range_baseline\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-17\", \"snapshot_key\": \"sk-missed-orb\"}",
+      "{\"session_date\": \"2026-08-17\", \"event_type\": \"level_test_st"
+    ],
+    "2026-08-14": [
+      "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_id\": \"x-started\", \"event_type\": \"level_test_started\", \"family\": \"avwap\", \"level_value\": 101.5, \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-14\", \"symbol\": \"AAA\", \"written_at\": \"2026-08-14T10:00:05-07:00\"}",
+      "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_id\": \"x-resolved\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-14T23:00:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-14\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_type\": \"post_resolution_tracking_started\", \"followup_id\": \"x-f\", \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-14\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_id\": \"x-fu\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"x-f\", \"horizon_minutes\": 30, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-14\"}",
+      "{\"as_of\": \"2026-08-14T23:59:00-07:00\", \"event_type\": \"frozen_intraday_snapshot\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-14\", \"snapshot_key\": \"x-sk\"}"
+    ],
+    "2026-08-18": [
+      "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_id\": \"n-started\", \"event_type\": \"level_test_started\", \"family\": \"avwap\", \"level_value\": 101.5, \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-18\", \"symbol\": \"AAA\", \"written_at\": \"2026-08-18T10:00:05-07:00\"}",
+      "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_id\": \"n-resolved\", \"event_type\": \"level_resolved\", \"outcome\": \"held\", \"resolved_at\": \"2026-08-18T06:36:00-07:00\", \"schema\": \"technical_integrity_event_v1\", \"session_date\": \"2026-08-18\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_type\": \"post_resolution_tracking_started\", \"followup_id\": \"n-f\", \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-18\", \"symbol\": \"AAA\"}",
+      "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_id\": \"n-fu\", \"event_type\": \"post_resolution_followup\", \"followup_id\": \"n-f\", \"horizon_minutes\": 30, \"schema\": \"technical_integrity_followup_v1\", \"session_date\": \"2026-08-18\"}",
+      "{\"as_of\": \"2026-08-18T06:35:00-07:00\", \"event_type\": \"missed_snapshot\", \"schema\": \"technical_integrity_frozen_snapshot_v1\", \"session_date\": \"2026-08-18\", \"snapshot_key\": \"n-sk\"}"
+    ]
+  },
+  "expected": {
+    "session_date": "2026-08-17",
+    "seen_test_ids": [
+      "t-A",
+      "t-B",
+      "t-C",
+      "t-D",
+      "t-E",
+      "t-seed"
+    ],
+    "resolved_event_ids": [
+      "t-A",
+      "t-C",
+      "t-D",
+      "t-E"
+    ],
+    "pending_ids": [
+      "t-B",
+      "t-Z"
+    ],
+    "pending_t_B_keys": [
+      "event_id",
+      "event_type",
+      "family",
+      "level_value",
+      "schema",
+      "session_date",
+      "symbol"
+    ],
+    "pending_followup_ids": [
+      "f-1",
+      "f-3"
+    ],
+    "pending_followup_horizons": {
+      "f-1": [
+        30,
+        60
+      ],
+      "f-3": [
+        30
+      ]
+    },
+    "followup_event_ids": [
+      "fu-1",
+      "fu-2",
+      "fu-3",
+      "fu-4",
+      "fu-5"
+    ],
+    "frozen_snapshot_markers": [
+      "sk-frozen",
+      "sk-missed",
+      "sk-missed-orb",
+      "sk-orb"
+    ],
+    "latest_completed_bar_end": "2026-08-17T10:20:00-07:00"
+  },
+  "expected_segmented": {
+    "session_date": "2026-08-17",
+    "seen_test_ids": [
+      "t-A",
+      "t-B",
+      "t-C",
+      "t-D",
+      "t-E",
+      "t-seed"
+    ],
+    "resolved_event_ids": [
+      "t-A",
+      "t-C",
+      "t-D",
+      "t-E"
+    ],
+    "pending_ids": [
+      "t-B",
+      "t-Z"
+    ],
+    "pending_t_B_keys": [
+      "event_id",
+      "event_type",
+      "family",
+      "level_value",
+      "schema",
+      "session_date",
+      "symbol"
+    ],
+    "pending_followup_ids": [
+      "f-1",
+      "f-3"
+    ],
+    "pending_followup_horizons": {
+      "f-1": [
+        30,
+        60
+      ],
+      "f-3": [
+        30
+      ]
+    },
+    "followup_event_ids": [
+      "fu-1",
+      "fu-2",
+      "fu-3",
+      "fu-4",
+      "fu-5"
+    ],
+    "frozen_snapshot_markers": [
+      "sk-frozen",
+      "sk-missed",
+      "sk-missed-orb",
+      "sk-orb"
+    ],
+    "latest_completed_bar_end": "2026-08-17T10:20:00-07:00"
+  },
+  "expected_next_session": {
+    "session_date": "2026-08-18",
+    "seen_test_ids": [
+      "n-resolved",
+      "n-started"
+    ],
+    "resolved_event_ids": [
+      "n-resolved"
+    ],
+    "pending_ids": [
+      "n-started"
+    ],
+    "pending_t_B_keys": [],
+    "pending_followup_ids": [
+      "n-f"
+    ],
+    "pending_followup_horizons": {
+      "n-f": [
+        30
+      ]
+    },
+    "followup_event_ids": [
+      "n-fu"
+    ],
+    "frozen_snapshot_markers": [
+      "n-sk"
+    ],
+    "latest_completed_bar_end": "2026-08-18T06:35:00-07:00"
+  }
+}

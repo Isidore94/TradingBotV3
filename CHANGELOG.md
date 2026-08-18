@@ -22,6 +22,37 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-17 — The technical-integrity replay contract is pinned (R6b)
+
+`IMPLEMENTED` + `GREEN`. Tests and fixtures only — no source file was edited.
+
+- **`tests/fixtures/technical_integrity_replay_v1.json`** +
+  **`tests/test_technical_integrity_replay.py`** (18 tests) characterize
+  `_load_resolved_events`: the boot-time reconstruction of in-memory state from
+  the append-only ledger. The pre-existing `technical_integrity_scoring_v1`
+  fixture covers the scoring math and would have stayed green through a change
+  that corrupted every field here.
+- Pinned: started/resolved pairing; unresolved starts recovering into pending
+  with append-time provenance (`as_of`, `written_at`) **stripped**; a resolved
+  row suppressing a stale state-seeded pending entry; partial vs complete
+  follow-up horizon chains; all four snapshot-marker types; the
+  `(resolved_at, event_id)` sort tiebreak, written in reverse order so an
+  unsorted read fails; a truncated mid-flush final line costing that line only;
+  and **monolith-vs-segmented equivalence**.
+- **Cross-session inertness is proven both ways.** Rows from a LATER session
+  are included, because a prior session sorts below every current row and
+  deleting the filter would leave the watermark unchanged — the assertion would
+  have passed while measuring nothing. A positive control replays the identical
+  bytes against the next session and gets the later watermark, so "the filter
+  excludes those rows" and "that field is never reachable" cannot be confused.
+- **Mutation-proven**: removing the session filter fails 7 tests; removing the
+  provenance strip fails 3. `scripts/technical_integrity.py` was restored
+  byte-identical after each check.
+- This is what makes the per-session segmentation committed by the R6(b)
+  decision checkable rather than aspirational when warehouse Phase-3 retention
+  unlocks.
+- Gate: 3623 passed / 19 subtests, exit 0.
+
 ### 2026-08-17 — The overnight AI layer becomes visible (R6a)
 
 `IMPLEMENTED` + `GREEN`.

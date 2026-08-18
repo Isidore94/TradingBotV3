@@ -497,9 +497,16 @@ are listed in `CURRENT_CHECKPOINT.md`.
    **forward-only per-session segment files plus the monolith frozen in
    place** (each closed segment immutable = a clean ingest source; the frozen
    file's watermark stays valid forever) — never in-place truncation. What
-   R6(b) still owes NOW, in order: (1) a replay characterization fixture over
-   `_load_resolved_events` (tests only; contents specified in the decision
-   record below), which sec 5 requires before ANY future change here; (2) the
+   R6(b) still owes NOW: **(1) the replay characterization fixture over
+   `_load_resolved_events` is BUILT 2026-08-17** —
+   `tests/fixtures/technical_integrity_replay_v1.json` +
+   `tests/test_technical_integrity_replay.py`, 18 tests, every case in the
+   specification below pinned, and **mutation-proven**: deleting the session
+   filter fails 7 of them (including the watermark and the segmentation
+   equivalence) and deleting the provenance strip fails 3. A **positive
+   control** replays the same bytes against the next session, so "the filter
+   excludes those rows" and "that field is unreachable" cannot be confused.
+   `scripts/technical_integrity.py` was NOT edited. (2) the
    read-only JSONL-ledger audit via the existing footprint check; (3) the
    stale-size comment fix in `operations_audit.py` (ask-first applies to any
    `technical_integrity.py` edit; the fixture and audit touch tests/docs
