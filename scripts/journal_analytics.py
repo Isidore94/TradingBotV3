@@ -366,6 +366,45 @@ def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> d
     }
 
 
+#: Column written by :func:`apply_manual_usd_estimate`. Named "estimated" on
+#: purpose: it must never be mistaken for a booked value in a log or a CSV.
+USD_ESTIMATE_KEY = "net_pnl_usd_estimated"
+
+
+def apply_manual_usd_estimate(
+    trades: list[dict[str, Any]], rate: float | None = None
+) -> tuple[float, list[dict[str, Any]]] | None:
+    """Annotate rows with an estimated USD P&L. Returns (rate, unconverted).
+
+    ``None`` when no manual rate is set, which leaves every existing refusal
+    exactly as it was. A USD-native row passes its own value through untouched;
+    anything else divides the BOOKED CAD value by the entered rate, so the
+    estimate inherits the booked path's honesty about what it could not convert.
+    """
+    if rate is None:
+        from journal_fx import manual_usd_rate
+
+        stored = manual_usd_rate()
+        if not stored:
+            return None
+        rate = float(stored["rate_cad_per_usd"])
+    if not rate:
+        return None
+
+    unconverted: list[dict[str, Any]] = []
+    for row in trades:
+        if str(row.get("currency") or "").upper() == "USD":
+            row[USD_ESTIMATE_KEY] = row.get("net_pnl")
+            continue
+        cad = row.get("net_pnl_cad")
+        if cad is None:
+            row[USD_ESTIMATE_KEY] = None
+            unconverted.append(row)
+            continue
+        row[USD_ESTIMATE_KEY] = float(cad) / rate
+    return float(rate), unconverted
+
+
 def resolve_pnl_key(
     trades: list[dict[str, Any]], currency_mode: str | None = None
 ) -> tuple[str, str]:
@@ -399,10 +438,31 @@ def resolve_pnl_key(
         return "net_pnl_cad", "converted to CAD at each trade's booked rate"
     if mode == "USD":
         non_usd = [row for row in closed if str(row.get("currency") or "").upper() != "USD"]
-        if non_usd:
-            missing = sorted({str(row.get("currency") or "?").upper() for row in non_usd})
-            return "", f"USD conversion is unavailable for {', '.join(missing)}; USD totals are not shown"
-        return "net_pnl", ""
+        if not non_usd:
+            return "net_pnl", ""
+        # A manually entered display rate is the ONLY way a mixed selection
+        # gets a USD total, and it is an estimate, not a booked figure. It
+        # converts from the booked CAD value, so a row the booked path could
+        # not convert stays unconvertible here too - a manual rate buys an
+        # approximation, never a missing observation.
+        estimate = apply_manual_usd_estimate(closed)
+        if estimate is not None:
+            rate, unconverted = estimate
+            if unconverted:
+                missing = sorted({str(row.get("currency") or "?").upper() for row in unconverted})
+                return "", (
+                    f"{len(unconverted)} of {len(closed)} trades have no booked FX rate "
+                    f"({', '.join(missing)}); USD totals are not shown"
+                )
+            return USD_ESTIMATE_KEY, (
+                f"ESTIMATE - non-USD trades converted at a manually entered "
+                f"{rate:.4f} CAD/USD, not each trade's booked rate. Not a tax figure."
+            )
+        missing = sorted({str(row.get("currency") or "?").upper() for row in non_usd})
+        return "", (
+            f"USD conversion is unavailable for {', '.join(missing)}; USD totals are not "
+            f"shown. Enter a USD/CAD rate in the Journal header for an estimate."
+        )
     # Native mode (and legacy callers with no explicit mode) can add values only
     # when the selection has one currency. Legacy mixed selections retain the
     # tax-grade CAD fallback used by non-UI reports.

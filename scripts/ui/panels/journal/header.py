@@ -55,7 +55,25 @@ class JournalHeader(QFrame):
 
         self.currency_input = QComboBox()
         self.currency_input.addItems(CURRENCY_MODES)
-        self.currency_input.currentTextChanged.connect(self._emit_changed)
+        self.currency_input.currentTextChanged.connect(self._on_currency_changed)
+
+        # Manual USD display rate. Booked CAD conversion is point-in-time and
+        # automatic (journal_fx); this is the separate, deliberately manual
+        # knob that lets a MIXED selection show a USD total at all. It is an
+        # estimate - it never touches fx_rates or net_pnl_cad - so it only
+        # appears in USD mode and says so in its own tooltip.
+        self.usd_rate_input = QLineEdit()
+        self.usd_rate_input.setPlaceholderText("USD/CAD")
+        self.usd_rate_input.setMaximumWidth(90)
+        self.usd_rate_input.setToolTip(
+            "Estimate only. Non-USD trades are converted from their booked CAD "
+            "value at this one rate, not at each trade's own booked rate. "
+            "Never a tax figure; leave blank to refuse mixed USD totals."
+        )
+        self.usd_rate_input.editingFinished.connect(self._on_usd_rate_entered)
+        self.usd_rate_status = QLabel("")
+        self.usd_rate_status.setObjectName("UsdRateStatus")
+        self._load_usd_rate()
 
         self.range_input = QComboBox()
         self.range_input.addItems(DATE_PRESETS)
@@ -95,6 +113,8 @@ class JournalHeader(QFrame):
         row.addStretch(1)
         row.addWidget(QLabel("Currency"))
         row.addWidget(self.currency_input)
+        row.addWidget(self.usd_rate_input)
+        row.addWidget(self.usd_rate_status)
         row.addWidget(QLabel("Range"))
         row.addWidget(self.range_input)
         row.addWidget(self.date_from)
@@ -106,6 +126,47 @@ class JournalHeader(QFrame):
 
         if autoload:
             self.refresh_accounts()
+
+    # -- manual USD display rate -------------------------------------------
+    def _load_usd_rate(self) -> None:
+        from journal_fx import manual_usd_rate
+
+        stored = manual_usd_rate()
+        if stored:
+            self.usd_rate_input.setText(f"{stored['rate_cad_per_usd']:.4f}")
+            stamp = str(stored.get("entered_at") or "")[:10]
+            self.usd_rate_status.setText(f"est. rate set {stamp}" if stamp else "est. rate set")
+        else:
+            self.usd_rate_status.setText("")
+        self._sync_usd_rate_visibility()
+
+    def _sync_usd_rate_visibility(self) -> None:
+        showing = self.currency_mode.upper() == "USD"
+        self.usd_rate_input.setVisible(showing)
+        self.usd_rate_status.setVisible(showing and bool(self.usd_rate_status.text()))
+
+    def _on_currency_changed(self, _text: str = "") -> None:
+        self._sync_usd_rate_visibility()
+        self._emit_changed()
+
+    def _on_usd_rate_entered(self) -> None:
+        from journal_fx import set_manual_usd_rate
+
+        try:
+            stored = set_manual_usd_rate(self.usd_rate_input.text().strip())
+        except ValueError as exc:
+            # Refused, not stored. A silently accepted 13.5 would rescale every
+            # USD total by an order of magnitude and look like a real number.
+            self.usd_rate_status.setText(str(exc))
+            self.usd_rate_status.setVisible(True)
+            return
+        if stored is None:
+            self.usd_rate_input.setText("")
+            self.usd_rate_status.setText("")
+        else:
+            self.usd_rate_status.setText(f"est. rate set {str(stored['entered_at'])[:10]}")
+        self._sync_usd_rate_visibility()
+        self._emit_changed()
 
     # -- accounts ----------------------------------------------------------
 

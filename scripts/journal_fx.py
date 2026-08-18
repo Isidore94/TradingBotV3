@@ -46,6 +46,71 @@ MAX_CARRY_BACK_DAYS = 10
 BASE_CURRENCY = "CAD"
 
 
+#: Machine-local setting holding the trader's manually entered USD display rate
+#: and when it was entered.
+MANUAL_USD_RATE_SETTING = "journal_manual_usd_cad_rate"
+MANUAL_USD_RATE_STAMP_SETTING = "journal_manual_usd_cad_rate_entered_at"
+
+#: Sanity bounds. USD/CAD has not left this range in living memory, and a
+#: fat-fingered 13 or 0.13 silently rescaling every total is exactly the class
+#: of error a manual field invites.
+MANUAL_USD_RATE_MIN = 0.5
+MANUAL_USD_RATE_MAX = 3.0
+
+
+def manual_usd_rate() -> dict[str, Any] | None:
+    """The trader's manually entered USD/CAD rate, or None.
+
+    **This is a DISPLAY convenience and never a booked figure.** Everything
+    above this line is point-in-time: a rate is fetched once, at import, for the
+    day the trade happened, and stored, because a tax number that moves when you
+    look at it is not a tax number. One current rate applied to a year of trades
+    is an estimate and nothing more.
+
+    So it is kept deliberately far away from the booked path: it lives in a
+    machine-local setting rather than the ``fx_rates`` table, it never touches
+    ``net_pnl_cad``, and every total computed from it is labelled as an estimate
+    at the entered rate. Nothing here is CRA-facing.
+    """
+    from project_paths import get_local_setting
+
+    raw = get_local_setting(MANUAL_USD_RATE_SETTING)
+    try:
+        rate = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not MANUAL_USD_RATE_MIN <= rate <= MANUAL_USD_RATE_MAX:
+        return None
+    return {
+        "rate_cad_per_usd": rate,
+        "entered_at": str(get_local_setting(MANUAL_USD_RATE_STAMP_SETTING) or ""),
+        "source": "MANUAL_DISPLAY",
+    }
+
+
+def set_manual_usd_rate(rate: Any) -> dict[str, Any] | None:
+    """Store (or clear, on a blank/None) the manual USD display rate.
+
+    Refuses anything outside the sanity bounds rather than storing it: a
+    rejected entry is visible immediately, while a stored 13.5 quietly makes
+    every USD total wrong by an order of magnitude.
+    """
+    from project_paths import save_local_setting
+
+    if rate is None or str(rate).strip() == "":
+        save_local_setting(MANUAL_USD_RATE_SETTING, "")
+        save_local_setting(MANUAL_USD_RATE_STAMP_SETTING, "")
+        return None
+    value = float(rate)
+    if not MANUAL_USD_RATE_MIN <= value <= MANUAL_USD_RATE_MAX:
+        raise ValueError(
+            f"USD/CAD rate {value} is outside {MANUAL_USD_RATE_MIN}-{MANUAL_USD_RATE_MAX}"
+        )
+    save_local_setting(MANUAL_USD_RATE_SETTING, value)
+    save_local_setting(MANUAL_USD_RATE_STAMP_SETTING, _now_iso())
+    return manual_usd_rate()
+
+
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
