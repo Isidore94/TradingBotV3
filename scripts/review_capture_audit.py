@@ -41,6 +41,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from alert_delivery_events import (  # noqa: E402
+    DELIVERED,
+    WATCH_DELIVERED,
+    delivery_store_dir,
+    load_delivery_events,
+)
 from project_paths import (  # noqa: E402
     ALERT_REVIEW_EVENTS_FILE,
     MASTER_AVWAP_SCORING_CONFIG_FILE,
@@ -754,6 +760,82 @@ def evidence_label_check(
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
+#: A delivery store with no new rows for this many trade dates is treated as a
+#: stopped emit site rather than a quiet stretch. Generous on purpose: the desk
+#: has quiet weeks, and a false alarm here trains the trader to ignore the
+#: health page.
+DELIVERY_STALE_DAYS = 5
+
+
+def delivery_capture_check(
+    store_dir: Path | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Is packet Phase 1 delivery capture actually writing?
+
+    Exists because of a specific failure mode: if the emit site dies, every
+    alert-quality metric reads Unknown or zero, and an empty scoreboard looks
+    identical to a calm trading week. This is the check that tells those apart,
+    so a dead capture surfaces as a health problem rather than as good news.
+
+    Never worse than ``degraded``. The delivery store is advisory evidence with
+    no path to a detector, a score, or an alert, so it cannot justify taking the
+    desk's health to unhealthy.
+    """
+
+    moment = now or datetime.now()
+    directory = Path(store_dir) if store_dir is not None else delivery_store_dir()
+    rows = load_delivery_events(directory)
+    delivered = sum(1 for row in rows if row.get("action") == DELIVERED)
+    watch_delivered = sum(1 for row in rows if row.get("action") == WATCH_DELIVERED)
+    trade_dates = sorted({str(row.get("trade_date") or "") for row in rows} - {""})
+    latest = trade_dates[-1] if trade_dates else ""
+    details = {
+        "rows": len(rows),
+        "delivered": delivered,
+        "watch_delivered": watch_delivered,
+        "sessions": len(trade_dates),
+        "latest_trade_date": latest,
+        "store_dir": str(directory),
+    }
+
+    if not rows:
+        return _check(
+            "review_delivery_capture",
+            "Alert delivery capture",
+            "degraded",
+            "No delivery rows yet - alert quality is unmeasurable until the "
+            "desk runs a session on a build with Phase 1 capture.",
+            source=directory,
+            details=details,
+        )
+
+    age = _age_days(latest, moment) if latest else None
+    if age is not None and age > DELIVERY_STALE_DAYS:
+        return _check(
+            "review_delivery_capture",
+            "Alert delivery capture",
+            "degraded",
+            f"Newest delivery row is {age:.0f} days old ({latest}); capture "
+            "looks stopped, so an empty scoreboard would be misread as a quiet desk.",
+            source=directory,
+            updated_at=latest,
+            details=details,
+        )
+
+    return _check(
+        "review_delivery_capture",
+        "Alert delivery capture",
+        "healthy",
+        f"{delivered} delivered + {watch_delivered} armed-hit rows over "
+        f"{len(trade_dates)} sessions (latest {latest}).",
+        source=directory,
+        updated_at=latest,
+        details=details,
+    )
+
+
 def build_review_capture_checks(
     *,
     now: datetime | None = None,
@@ -763,6 +845,7 @@ def build_review_capture_checks(
     policy_draft_path: Path | str | None = None,
     scoring_config_path: Path | str | None = None,
     ordering_mode: str | None = None,
+    delivery_store_path: Path | str | None = None,
 ) -> list[dict[str, Any]]:
     """The Phase 0 checks, in the shape ``operations_audit`` publishes."""
     moment = now or datetime.now()
@@ -786,6 +869,10 @@ def build_review_capture_checks(
         policy_gate_check(policy, draft, ordering_mode=ordering_mode, now=moment),
         scoring_config_check(scoring, now=moment),
         evidence_label_check(ordering_mode=ordering_mode),
+        delivery_capture_check(
+            Path(delivery_store_path) if delivery_store_path is not None else None,
+            now=moment,
+        ),
     ]
 
 

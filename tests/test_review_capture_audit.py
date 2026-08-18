@@ -368,6 +368,7 @@ def test_full_audit_composes_every_phase0_check(tmp_path, monkeypatch):
         policy_path=tmp_path / "policy.json",
         policy_draft_path=tmp_path / "draft.json",
         scoring_config_path=tmp_path / "scoring.json",
+        delivery_store_path=tmp_path / "deliveries",
     )
     assert payload["schema"] == "review_capture_audit_v1"
     assert payload["evidence_label"] == EVIDENCE_LABEL
@@ -378,6 +379,7 @@ def test_full_audit_composes_every_phase0_check(tmp_path, monkeypatch):
         "review_policy_gate",
         "setup_scoring_config",
         "review_evidence_label",
+        "review_delivery_capture",
     }
     # Nothing on disk: everything unbuilt reads degraded, nothing reads broken.
     assert payload["status"] == "degraded"
@@ -398,3 +400,78 @@ def test_audit_never_writes_to_the_artifacts_it_reads(tmp_path):
     )
     after = {item.name: item.read_bytes() for item in tmp_path.iterdir()}
     assert after == before
+
+
+# ---------------------------------------------------------------------------
+# Delivery capture - telling a dead emit site apart from a quiet desk
+# ---------------------------------------------------------------------------
+def _delivery_row(trade_date="2026-07-28", action="delivered", **overrides):
+    row = {
+        "schema": "alert_delivery_events_v1",
+        "action": action,
+        "symbol": "NVDA",
+        "side": "LONG",
+        "trade_date": trade_date,
+        "ts": f"{trade_date}T10:15:00",
+        "loud": True,
+        "sounded": True,
+        "alert_event_id": f"{trade_date}|NVDA|LONG|m5_bounce|reclaim",
+    }
+    row.update(overrides)
+    return row
+
+
+def _write_deliveries(directory: Path, rows: list) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / "alert-deliveries-2026-07.jsonl"
+    target.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+    return directory
+
+
+def test_no_delivery_rows_is_degraded_and_says_why(tmp_path):
+    from review_capture_audit import delivery_capture_check
+
+    check = delivery_capture_check(tmp_path / "deliveries", now=NOW)
+    assert check["status"] == "degraded"
+    assert check["details"]["rows"] == 0
+    assert "unmeasurable" in check["summary"]
+
+
+def test_recent_delivery_rows_are_healthy(tmp_path):
+    from review_capture_audit import delivery_capture_check
+
+    directory = _write_deliveries(
+        tmp_path / "deliveries",
+        [_delivery_row(), _delivery_row(action="watch_delivered", watch_id="w-1")],
+    )
+    check = delivery_capture_check(directory, now=NOW)
+    assert check["status"] == "healthy"
+    assert check["details"]["delivered"] == 1
+    assert check["details"]["watch_delivered"] == 1
+    assert check["details"]["sessions"] == 1
+
+
+def test_a_stopped_emit_site_is_not_reported_as_a_quiet_desk(tmp_path):
+    """The specific failure this check exists for."""
+
+    from review_capture_audit import DELIVERY_STALE_DAYS, delivery_capture_check
+
+    directory = _write_deliveries(tmp_path / "deliveries", [_delivery_row("2026-07-01")])
+    check = delivery_capture_check(directory, now=NOW)
+    assert check["status"] == "degraded"
+    assert "looks stopped" in check["summary"]
+    assert DELIVERY_STALE_DAYS > 0
+
+
+def test_delivery_capture_never_takes_the_desk_unhealthy(tmp_path):
+    """Advisory evidence with no path to a detector cannot justify red."""
+
+    from review_capture_audit import delivery_capture_check
+
+    empty = delivery_capture_check(tmp_path / "absent", now=NOW)
+    stale = delivery_capture_check(
+        _write_deliveries(tmp_path / "old", [_delivery_row("2026-07-01")]), now=NOW
+    )
+    assert {empty["status"], stale["status"]} == {"degraded"}

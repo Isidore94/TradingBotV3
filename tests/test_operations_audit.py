@@ -468,10 +468,16 @@ def test_capture_readiness_checks_reach_the_audit_and_never_read_the_shared_home
     assert checks["review_evidence_label"]["details"]["promotion_clock_started"] is False
     # The sandbox is self-contained: no check resolved back to the shared home.
     # Inventory-gap rows cite the plan bullet they came from, not a file.
+    # The machine-local diagnostics root is allowed for the same reason the
+    # shared home is not: delivery capture is deliberately stored per-machine,
+    # outside the cloud-synced folder, so citing it cannot leak the home path.
+    from project_paths import get_diagnostics_dir
+
+    machine_local = str(get_diagnostics_dir())
     for check in payload["checks"]:
         assert (
             str(tmp_path) in check["source"]
-            or check["source"].startswith("plan.md")
+            or check["source"].startswith(("plan.md", machine_local))
             or check["source"].endswith(
                 ("review_capture_audit.py", "operations_audit.py", "scan_service.py")
             )
