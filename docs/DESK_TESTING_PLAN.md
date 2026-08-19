@@ -1,6 +1,6 @@
 # Desk testing plan — what to check, and when
 
-Document role: **active operator runbook.** Last reconciled: **2026-08-15**.
+Document role: **active operator runbook.** Last reconciled: **2026-08-18**.
 
 > **This file restates the owed live proofs from `CURRENT_CHECKPOINT.md` for a
 > human reader.** It is not a second source of truth. Whenever those proofs
@@ -36,6 +36,60 @@ lines at the bottom. That is where today's activity is.
 
 ---
 
+# 0. Where things stand — read this first
+
+**Last updated: 2026-08-18**, after two live sessions.
+
+You ran **2026-08-17 and 2026-08-18, both in AWAY the whole time**. That matters
+more than it sounds: AWAY exercises the machine *staging* picks and reporting to
+your phone, and it exercises none of the things that need you at the desk. So
+some checks below are done, and the rest are simply still waiting for the right
+kind of day.
+
+## What is finished
+
+| Check | Result | What proved it |
+|---|---|---|
+| §2.5 pick eviction | **PASSED** | `trading_bot.log` on 08-18 at 10:31, 11:40, 12:11 and 12:48 shows `Focus gate evicted N staged pick(s)` with a reason beside every symbol |
+| §1 quiet boot | **PASSED** | The 08-16 22:06 launch logged `nothing starts yet - weekend - quiet hours` and nothing automatic ran until 06:00 the next morning |
+| §2.3 AWAY day | **HALF done** | Two full days of picks staying staged, and every hourly phone report present. The other half — flipping back to DESK and watching what adopts — never happened, because you never flipped |
+
+**One thing changed in this document because of what you saw.** The 08-16 boot
+also logged `IB: connected`. That is **expected and fine**: the BounceBot panel
+connects to IB every time the desk opens, at any hour, and always has. It is not
+Auto Pilot waking up. The line that would mean Auto Pilot woke up is
+`Starting BounceBot` — and that one was correctly absent. §1's GOOD list below
+now says so.
+
+## What is still waiting
+
+| Check | Needs |
+|---|---|
+| §2.6 adoption refusal, §2.7 "Not today", §2.8 strength board | **one DESK day** |
+| §2.2 EVENING stop, §2.4 SPY wake alarm | **one EVENING night** |
+
+That is the whole remaining list: **one DESK day and one EVENING night.**
+
+## Two things were broken, and both are fixed
+
+You would not have seen either one on screen.
+
+1. **Three swing scans died mid-run** — 08-17 at 07:30 and 10:00, 08-18 at 12:00.
+   Each had already done 8 to 30 minutes of real work and then hit a locked file
+   at the moment it wrote its market-prep report, and threw the whole scan away.
+   The lock was the desk's own Market Prep page reading that file. The writer now
+   waits a moment and tries again instead of giving up, and if it ever fails
+   again `autopilot.log` will **name the reason on the same line** instead of
+   just saying "exited with code 1".
+2. **The Monday 06:00 universe rebuild failed** with a message about `datetime`.
+   One odd row of data from Yahoo aborted the whole rebuild. It now skips the bad
+   row and carries on — and, separately, a rebuild that finds *nothing* now
+   refuses to overwrite your good universe files rather than blanking them.
+
+**The desk was rebuilt and re-tested after both fixes** (all tests green, smoke
+7/7, packaged self-test `31/31 (frozen)`). The build you will run for the DESK
+day and the EVENING night is that one.
+
 # 1. Tonight (optional) — the quiet-boot check
 
 **The question this answers:** if you open the desk late at night, does it
@@ -44,6 +98,9 @@ correctly do *nothing* until the morning?
 Before this was fixed, launching at 9pm woke the whole machine up — it swept
 every ticker through Yahoo, connected to IB, and switched Auto Pilot on against
 a market that had been closed for hours.
+
+> **Already PASSED on 2026-08-16 22:06.** Keep this step for future builds; you
+> do not need to repeat it before the DESK day or the EVENING night.
 
 ### WHEN
 Any weekday evening after about 3pm. Around 9pm is ideal. **Skip it on a
@@ -74,6 +131,12 @@ And you should **NOT** see any of these:
 - `07:00 auto-arm: Auto Pilot ON for the day`
 - any `Swing scan started for slot ...`
 
+**`IB: retrying` and `IB: connected` are fine and expected.** The BounceBot panel
+connects to IB every time the desk opens, whatever the hour, and always has —
+that is not Auto Pilot starting up. The line that *would* mean Auto Pilot started
+the bot is `Starting BounceBot`, and that is the one that must be absent. This
+tripped up the 2026-08-16 reading, so it is spelled out here.
+
 **Then check the manual path still works:** click **Run Scan** (Master AVWAP
 page, or Ctrl+R). It should start normally. Quiet hours are only meant to stop
 things the machine starts by itself — anything *you* click must still work at
@@ -88,7 +151,7 @@ manual scan ran.
 
 ---
 
-# 2. Monday during the session
+# 2. During a live session
 
 These checks need a live market. You do not need to do them all in one day —
 but each one needs the market open, so they cannot be done over the weekend.
@@ -178,6 +241,11 @@ set EVENING.
 
 ## 2.3 An AWAY day — do picks wait for you?
 
+> **Half done (2026-08-17 and 08-18).** Two full AWAY days proved picks
+> stay staged and the hourly phone reports arrive. What is left is the
+> second half: **flip back to DESK during a session and watch what
+> adopts.** Do that on the DESK day.
+
 **The question:** while you are away, does the machine hold its picks instead of
 dumping them into your watchlists, and does it stay silent?
 
@@ -259,6 +327,11 @@ times the pushes arrived on your phone, and the threshold you set.
 ---
 
 ## 2.5 Pick eviction and the adoption re-check
+
+> **Eviction PASSED on 2026-08-18** — `trading_bot.log` shows
+> `Focus gate evicted N staged pick(s)` at 10:31, 11:40, 12:11 and 12:48
+> with a reason beside every symbol. The **adoption re-check** half is
+> still owed: it needs a DESK day, because AWAY never adopts.
 
 **The question:** when a pick the machine staged goes bad before you accept it,
 does the machine drop it?
@@ -569,7 +642,7 @@ specific filter; "the character looked off" points at nothing.
 
 **Copy to the AI:** both lists as text, the time, and the side.
 
-# 3. Monday after the close
+# 3. After the close
 
 ## 3.1 The first-session checklist
 
@@ -590,8 +663,10 @@ look better — a wrong "pass" costs more than a recorded failure.
 
 ## 3.2 The frozen rebuild and its self-test
 
-**Already done and green on 2026-08-15** —
-`selftest OK: 31/31 checks passed (frozen)`, exit 0, on the current build.
+**Already done and green on 2026-08-18** —
+`selftest OK: 31/31 checks passed (frozen)`, exit 0, on the current build (the
+one carrying the two 2026-08-18 defect fixes). The full test run was **2935
+passed**, exit 0, and the smoke check 7/7.
 
 Three rebuilds happened that day and **the count changed between them, which is
 correct**: the 09:58 build reported **30/30**, and the 10:27 and later builds
@@ -612,7 +687,8 @@ self-test is what catches it.
 
 ## 3.3 The merge
 
-**WHEN:** only after §3.1 passes and the live checks above came out good.
+**WHEN:** only after §3.1 passes and the live checks above came out good —
+which now means **after the DESK day and the EVENING night**, not before.
 
 **DO:** **tell the AI: "Monday's session passed — do the P0.7 merge."** Do not
 run git commands yourself. There are three branches that have to go into `main`

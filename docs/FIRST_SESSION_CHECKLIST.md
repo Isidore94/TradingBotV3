@@ -6,7 +6,7 @@ Applies to: `plan.md` Section 6 and P0.2–P0.5
 
 Topology: **single main desk**
 
-Last reconciled: **2026-08-15** (packet R1 and R2 rows added)
+Last reconciled: **2026-08-18** (2026-08-17/18 AWAY-session results filled in)
 
 This checklist turns an implemented/green build into real operational evidence. A
 deterministic test cannot satisfy a live row. Record failures and UNKNOWN states
@@ -53,7 +53,7 @@ Then:
    dist\TradingBotV3\TradingBotV3.exe --selftest
    ```
 
-   Current expected result: `selftest OK: 31/31 checks passed (frozen)`. The count grows whenever a check is added, so treat the number as a floor to re-read here rather than a constant: it was 29 before `scan_worker` (2026-08-13) and 30 before the testing-plan asset (2026-08-15). What matters is the **`(frozen)` suffix** and exit 0 - the source selftest prints the same count without it, which is how three packets of notes once recorded a frozen run that never happened.
+   Current expected result: `selftest OK: 31/31 checks passed (frozen)` (last verified 2026-08-18 on `c69b69c`, with `build/` and `dist/` deleted first). The count grows whenever a check is added, so treat the number as a floor to re-read here rather than a constant: it was 29 before `scan_worker` (2026-08-13) and 30 before the testing-plan asset (2026-08-15). What matters is the **`(frozen)` suffix** and exit 0 - the source selftest prints the same count without it, which is how three packets of notes once recorded a frozen run that never happened.
 7. Launch with `launch_gui.py`; verify one process only.
 8. Capture the initial System Health page. UNKNOWN is acceptable before the first
    instrumented event but must not be silently rolled up as HEALTHY.
@@ -65,7 +65,7 @@ Check each row from real behavior:
 | Area | Required observation | Result/evidence |
 |---|---|---|
 | Runtime | heartbeat advances; one generation owns timers/threads | |
-| Master scan | one run ID/PID; phases and provider counters recorded | |
+| Master scan | one run ID/PID; phases and provider counters recorded | **PASS with a defect since fixed** — manifests complete on both days, but three slots (08-17 07:30 and 10:00, 08-18 12:00) died at `output/reports` with `PermissionError(13, 'Access is denied')`. Root cause and repair: `CURRENT_CHECKPOINT.md` 2026-08-18 |
 | BounceBot | completed M5 bars drive transitions; forming data is preview | |
 | SPY shadow | rows/coverage advance without changing champion pause state | |
 | Greatness shadow | transition evidence advances without changing D1 alerts | |
@@ -77,14 +77,14 @@ Check each row from real behavior:
 | Price alert | actual/test push reaches ntfy; fire disarms only that side | |
 | Auto/Away | current verified digest publishes with correct section order | |
 | Phone pushes | AWAY only: swing push carries a roster matching the tracker's Favorite + High Conviction rows; D1 push names only that hour's events; DESK/EVENING/OFF push nothing while a price alert still fires | |
-| Quiet hours | a launch outside 06:00–14:00 on a weekday starts nothing — Auto Pilot logs `nothing starts yet`, no universe rebuild, no IB connect from saved state, no self-arm — and a manual scan still runs from the same desk | |
-| AWAY discipline | picks stage rather than reaching `longs.txt`/`shorts.txt`, alerts arrive with no sound but keep filling the feed and D1 badge, and the flip back to DESK adopts the day's picks | |
-| EVENING stop | the early open+30 slot and the 07:00/07:15/07:30 checks run, then the log names each refused hourly slot once and no further scan starts | |
-| EVENING SPY alarm | a real (or forced-threshold) ±1% move sends one urgent push, repeats at 5-minute spacing, and stops on the flip out of EVENING | |
-| Focus gate | at least one staged pick evicted for a VWAP/PDH fallback, and one refused at adoption; both name a reason in the log | |
-| Pick ownership | a name YOU added by hand that the machine also staged stays yours: no auto marker, and "Not today" refuses to remove it | |
-| Stale drain | a flip back to DESK after a long AWAY stretch re-measures before adopting; picks measured more than 2 M5 bars ago are refused, not adopted | |
-| Strength board | ~20-40 names a side; refresh completes; a row that has fallen back is refused at click time with its reason | |
+| Quiet hours | a launch outside 06:00–14:00 on a weekday starts nothing — Auto Pilot logs `nothing starts yet`, **no `Starting BounceBot` line**, no universe rebuild, no self-arm — and a manual scan still runs from the same desk. A bare `IB: connected` is expected: `BouncePanel` connects on every launch at any hour (`bounce_panel.py:280`), outside Auto Pilot | **PASS 2026-08-16 22:06** — `autopilot.log` 22:06:38 `Auto Pilot is ON from saved state, but nothing starts yet - weekend - quiet hours until the next session`; nothing automatic until `Automatic work resumed` at 2026-08-17 06:00:11 |
+| AWAY discipline | picks stage rather than reaching `longs.txt`/`shorts.txt`, alerts arrive with no sound but keep filling the feed and D1 badge, and the flip back to DESK adopts the day's picks | **HALF-PROVEN 2026-08-17/18** — two full AWAY sessions staged without adopting, every hourly `Hourly Away swing report verified for HH:00` present. The flip back to DESK never happened, so that half is UNKNOWN |
+| EVENING stop | the early open+30 slot and the 07:00/07:15/07:30 checks run, then the log names each refused hourly slot once and no further scan starts | **UNKNOWN** — no EVENING day has run |
+| EVENING SPY alarm | a real (or forced-threshold) ±1% move sends one urgent push, repeats at 5-minute spacing, and stops on the flip out of EVENING | **UNKNOWN** — no EVENING day has run. Force it with a low `push_evening_spy_alarm_pct` for one night, then restore it |
+| Focus gate | at least one staged pick evicted for a VWAP/PDH fallback, and one refused at adoption; both name a reason in the log | **Eviction PASS 2026-08-18** — `trading_bot.log` 10:31, 11:40, 12:11, 12:48, `Focus gate evicted N staged pick(s)` with per-symbol reasons. **Adoption refusal UNKNOWN** — AWAY never adopts |
+| Pick ownership | a name YOU added by hand that the machine also staged stays yours: no auto marker, and "Not today" refuses to remove it | **UNKNOWN** — needs an auto-adopted M5 entry, which AWAY never produces |
+| Stale drain | a flip back to DESK after a long AWAY stretch re-measures before adopting; picks measured more than 2 M5 bars ago are refused, not adopted | **UNKNOWN** — the trader never flipped back on 08-17 or 08-18 |
+| Strength board | ~20-40 names a side; refresh completes; a row that has fallen back is refused at click time with its reason | **UNKNOWN** — never opened during a session |
 | Warehouse | live tee/Health tiles advance if enabled; disabled path is a no-op | |
 | GUI | no sustained event-loop stall or main-thread I/O regression | |
 

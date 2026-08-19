@@ -1,6 +1,6 @@
 # TradingBotV3 remaining roadmap
 
-Last reconciled: **2026-08-15**
+Last reconciled: **2026-08-18**
 
 Authoritative for: **work that is not finished, validation gates, promotion rules,
 and execution order**
@@ -304,10 +304,16 @@ are listed in `CURRENT_CHECKPOINT.md`.
    (2773 passed / 19 subtests, smoke 7/7, source selftest 30/30 at the time, all exit 0);
    CLAUDE.md/AGENTS.md push policy, both runbooks, the first-session checklist
    and decision 0015 reconciled.
-   **Remaining — the spec §6 live proofs, none yet run:** a ~21:00 boot that
-   provably starts nothing; an EVENING day whose log shows the early block and
-   then zero further slots; an AWAY session with picks staged-not-adopted and a
-   clean drain on return; and one SPY-alarm firing (real or forced threshold).
+   **Remaining — the spec §6 live proofs, narrowed 2026-08-18.** The quiet boot
+   **PASSED** on 2026-08-16 22:06, and AWAY staging-without-adoption **PASSED**
+   across the 08-17 and 08-18 sessions. Still owed: the **drain on return** (the
+   trader never flipped back to DESK, so that half of the AWAY proof is
+   untested); an **EVENING day** whose log shows the early block and then zero
+   further slots; and one **SPY-alarm firing** (real or forced threshold).
+   Evidence and the exact log lines are in `CURRENT_CHECKPOINT.md`. Note
+   recorded there and not fixed: `BouncePanel` connects to IB on every launch at
+   any hour (`bounce_panel.py:280`), outside Auto Pilot and outside quiet hours —
+   a behaviour decision left to the trader, not a gate.
 2. **R2 M5 Focus adoption discipline and the M5 strength board. — BUILT
    2026-08-15, live proof owed.** The combined prev-day-extreme + session-VWAP
    gate applied at candidate build, staging refresh (queue eviction), and
@@ -323,11 +329,13 @@ are listed in `CURRENT_CHECKPOINT.md`.
    recorded stale-drain gap**: the AWAY/EVENING→DESK drain now adopts only
    verdicts stamped after the flip itself, re-measured on the flip, with a
    failed re-measurement retrying rather than falling through (R2.2).
-   **Remaining — the spec §8 live proofs, none yet run:** one session showing a
-   staged pick evicted for a VWAP/PDH fallback, one adoption-time refusal, one
-   clean "Not today" scoped removal that leaves the trader's other entries
-   intact, and a board session the trader confirms matches the TC2000 scan's
-   character (~20–40/side). Re-measure the board fetch during market hours on
+   **Remaining — the spec §8 live proofs, narrowed 2026-08-18.** The **eviction
+   proof PASSED** on 2026-08-18 (four logged evictions with per-symbol reasons;
+   lines quoted in `CURRENT_CHECKPOINT.md`). Still owed, all three needing a DESK
+   day because AWAY never adopts: one adoption-time refusal, one clean "Not
+   today" scoped removal that leaves the trader's other entries intact, and a
+   board session the trader confirms matches the TC2000 scan's character
+   (~20–40/side). Re-measure the board fetch during market hours on
    that session (spec §10 recorded 27.6 s on a Saturday — a floor, not a worst
    case). RVOL-for-survivors is specified but deliberately not built; decide it
    on that session.
