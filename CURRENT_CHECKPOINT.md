@@ -208,10 +208,19 @@ re-run against it.
 frozen count stays 31: neither fix added a dependency, asset, package or dynamic
 import, and the spec-drift test passes.
 
-**Provenance, on its face:** last code commit `c69b69c` at **19:36:04**;
-`dist\TradingBotV3\TradingBotV3.exe` mtime **19:48:58** — the executable
-postdates the last code commit. `build/` and `dist/` were **deleted before the
-build**, so no cached module could have been reused.
+**Provenance, on its face:** last code commit `c69b69c` at **19:36:04**; last
+commit of any kind `f2141c5` (Markdown only) at **20:00:01**;
+`dist\TradingBotV3\TradingBotV3.exe` mtime **20:02:47** — the executable
+postdates both. `build/` and `dist/` were **deleted before each of the two
+builds**, so no cached module could have been reused.
+
+The second build was not ceremony: `docs/DESK_TESTING_PLAN.md` is a **bundled
+runtime asset** (the 31st selftest check exists because of it), and the doc pass
+changed it after the first build. Rebuilding keeps the packaged Settings ▸
+Testing Plan page from rendering a superseded runbook. Both builds returned
+`selftest OK: 31/31 checks passed (frozen)`, exit 0; the bundled copy at
+`dist/TradingBotV3/_internal/docs/DESK_TESTING_PLAN.md` was confirmed to carry
+the 2026-08-18 text.
 
 ### Next action — one DESK day and one EVENING night
 
