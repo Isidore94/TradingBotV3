@@ -50,15 +50,24 @@ requirements live in `plan.md`.
 | Clean-machine recovery, installer, icon, and release polish | `ROADMAP` | P7.1–P7.2 |
 | Read-only additional broker/data adapters after provider consolidation | `ROADMAP` | P7.3 |
 | Trader refinement packets R1–R6 (the 2026-08-14 desk requests) | `ROADMAP` | Phase 0.5 |
+| Deep-link a symbol into an external charting tool | `BUILT` | Promoted trader-directed 2026-08-18; built the same day |
 | Tax-grade journal reliability (both brokers) + TradesViz/TraderSync-style Journal tab | `BUILT` | Phase 0.5 R7 — built 2026-08-15, deterministic gates green; the spec's six live gates are owed and start after Monday's validation day |
 | Weekend Prep guided routine with H1/D1/Monthly strength discovery and weekly auto-tag review | `BUILT` | Phase 0.5 R8 — built 2026-08-15, deterministic gates green; the one-real-weekend live proof is owed |
 
 ## Candidate user-experience integrations
 
+**Triage of 2026-08-18 (trader integration redirect).** Every item in this and
+the next section was assessed for whether it is buildable from its description
+plus the codebase. One was — the TradingView deep link, now `BUILT`. Each of the
+rest turned out to need exactly one trader judgment whose plausible answers lead
+to *different code*; those questions are written down, one per item, in
+`docs/WISHLIST_OPEN_QUESTIONS.md` rather than guessed at. Nothing else here was
+implemented, and nothing here was promoted into `plan.md`.
+
 | Idea | Status | Value | Prerequisite or decision needed |
 |---|---|---|---|
 | Voice dictation for the live commentary journal | `CANDIDATE` | Faster capture while watching charts | Choose local vs cloud speech, privacy, correction workflow, and storage format after P3.5 |
-| Deep-link a symbol/timeframe into TradingView or TC2000 | `CANDIDATE` | Faster transition to external deep TA | Confirm supported URL/application schemes and failure behavior; no scraping or browser automation dependency |
+| Deep-link a symbol/timeframe into TradingView or TC2000 | `BUILT` | Faster transition to external deep TA | **Promoted and built trader-directed 2026-08-18.** TradingView link built (`scripts/external_chart_links.py`, "Open in TradingView" on the arm bar, URL template is a machine-local setting); TC2000 deliberately not wired because it answers no documented URL scheme - see `docs/WISHLIST_OPEN_QUESTIONS.md` |
 | User-selectable chart line-density presets | `CANDIDATE` | Adapt the chart to symbol volatility and screen size | First resolve P1.2's red-level threshold and clutter budget; preferences stay display-only |
 | Read-only mobile/web dashboard beyond the text digest | `CANDIDATE` | Richer Away review | Define authentication, hosting, freshness, and zero-write boundary after P5.3 |
 | Self-hosted ntfy deployment | `CANDIDATE` | More control over notification privacy/availability | Decide operational burden, TLS, backups, and phone reachability; hosted ntfy already works |

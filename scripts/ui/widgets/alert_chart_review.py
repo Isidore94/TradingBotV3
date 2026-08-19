@@ -54,6 +54,7 @@ class AlertChartReview(QWidget):
     watchToggled = Signal(object, str)  # (alert, chart-watch kind)
     d1EventToggled = Signal(object, str)  # (alert, D1 event watch kind)
     anyBounceToggled = Signal(object)  # (alert) - R5 section 4, whole level set
+    externalChartRequested = Signal(str)  # symbol - deep-link out for external TA
     d1LevelAlertRequested = Signal(str, str, float, str)  # symbol, direction, level, candle date
     symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
     levelArmRequested = Signal(str, str, float)  # symbol, direction, level
@@ -145,6 +146,7 @@ class AlertChartReview(QWidget):
         self.arm_bar.d1EventToggled.connect(
             lambda kind: self.alert is not None and self.d1EventToggled.emit(self.alert, kind)
         )
+        self.arm_bar.externalChartRequested.connect(self.externalChartRequested)
         self.arm_bar.anyBounceToggled.connect(
             lambda: self.alert is not None and self.anyBounceToggled.emit(self.alert)
         )

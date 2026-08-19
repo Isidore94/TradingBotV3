@@ -439,3 +439,39 @@ Live:
 - Desk Modern Standby can shorten the nightly window; self-heal on the next
   firing is the mitigation. GUI-vs-nightly SQLite write collision: accepted per
   §6.4c decision 4 — surfaces as a FAILED run and self-heals; no new locking.
+
+## Deferred visuals — BUILT 2026-08-18
+
+R7 deferred three things at build time: true non-USD conversion, the Calendar
+year heatmap, and additional Analytics charts. The last two landed under the
+trader's 2026-08-18 integration redirect. **True USD conversion stays deferred**
+— the FX table books CAD only, and inventing a rate is exactly the dishonesty
+the currency refusal was built to prevent.
+
+**Analytics per-group charts, with honest n and a CSV underneath.** A group
+picker over the breakdowns the tab already computed (my setups, auto tags,
+account, broker, symbol, direction, the three regimes), a bar chart of net by
+bucket, and an export of exactly what is charted. Three rules make it safe to
+read:
+
+1. every bar carries **n as closed trades**, and a bucket under the thin-sample
+   line says "thin" on its own label — a two-trade setup must not look like a
+   finding;
+2. a bucket whose total is `None` is **excluded, not zeroed** — `None` means
+   "mixed currencies with unconverted rows", and a zero bar would claim the
+   setup broke even;
+3. what the bar cap and the exclusions dropped is **counted and printed**, and
+   the overlapping groups (my setups, auto tags) say that they overlap and do
+   not sum to the headline.
+
+**The Calendar year heatmap.** A pyqtgraph image of the year, diverging
+red→white→green, **centred on zero and scaled to the largest absolute day**.
+Scaling to the raw min/max would make a good year look mediocre purely from
+where the extremes fall. A day with no trading is **blank, not a break-even
+colour** — the matrix carries `None` for it and the image carries NaN — because
+a flat day and a day the trader did not trade are different facts, and a heatmap
+that paints them alike invents a hundred break-even sessions a year. The numeric
+grid stays underneath, and both surfaces still filter the Trades tab on a click.
+
+The six live gates in this spec are unchanged and still owed; none of the above
+touches the store, the migration or the reconciliation path.

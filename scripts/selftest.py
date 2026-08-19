@@ -98,6 +98,11 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # package sweeps it in, but the selftest asserts what is REACHABLE.
     "completed_bars",
     "alert_repetition",
+    # `external_chart_links` (wishlist deep link, 2026-08-18): the Alert
+    # Center imports it inside the click handler, so nothing proves it is
+    # bundled until a trader presses the button on a frozen desk. One line
+    # here moves that discovery from a live session to the build gate.
+    "external_chart_links",
     "m5_signal_engines",
     "indicators.efficiency_lrsi",
     "indicators.smi",

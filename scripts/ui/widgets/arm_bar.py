@@ -89,6 +89,9 @@ class ArmBar(QFrame):
     # carries no kind - "tell me when this name bounces off any of my
     # levels". The host owns the side (it knows the charted alert).
     anyBounceToggled = Signal()
+    # WISHLIST 2026-08-18: hand the charted symbol to an external charting tool
+    # for deep TA. The host owns the timeframe; this bar only says "that name".
+    externalChartRequested = Signal(str)
     levelArmRequested = Signal(str, float)  # direction, level
     levelDisarmRequested = Signal(str, float)  # direction, level
     # direction - a PHONE price alert off the painted D1 level the trader
@@ -176,6 +179,17 @@ class ArmBar(QFrame):
             )
             self.d1_event_buttons[kind] = button
 
+        self.external_chart_button = QPushButton("Open in TradingView")
+        self.external_chart_button.setToolTip(
+            "Open this symbol in your external charting tool for deep TA. The "
+            "link is a setting (external_chart_url_template), so it can point at "
+            "any tool that answers a URL. Nothing is read back - the desk never "
+            "learns anything from the other window."
+        )
+        self.external_chart_button.clicked.connect(
+            lambda: self.externalChartRequested.emit(self.symbol_input.text().strip().upper())
+        )
+
         self.any_bounce_button = QPushButton("Any bounce")
         self.any_bounce_button.setCheckable(True)
         self.any_bounce_button.setToolTip(self._any_bounce_tooltip())
@@ -224,6 +238,7 @@ class ArmBar(QFrame):
         for button in self.d1_event_buttons.values():
             d1_row.addWidget(button)
         d1_row.addWidget(self.any_bounce_button)
+        d1_row.addWidget(self.external_chart_button)
         d1_row.addWidget(self.armed_row)
 
         layout = QVBoxLayout(self)
@@ -280,6 +295,7 @@ class ArmBar(QFrame):
             *self.watch_buttons.values(),
             *self.d1_event_buttons.values(),
             self.any_bounce_button,
+            self.external_chart_button,
             self.level_input,
             self.direction_input,
             self.arm_level_button,

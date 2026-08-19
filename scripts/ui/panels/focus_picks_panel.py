@@ -72,6 +72,19 @@ class FocusPicksPanel(QFrame):
         self.snapshot_status_label = QLabel("")
         self.snapshot_status_label.setObjectName("MutedLabel")
 
+        # R4's held-back reviewed-today marker for Focus Picks, built 2026-08-18
+        # as a LINE BESIDE the editors rather than a glyph inside them.
+        #
+        # The hold was right and the reason still stands: these editors hold
+        # editable watchlist TEXT that is written back to the shared
+        # watchlists, so a marker injected into a row is one careless save away
+        # from becoming a symbol name. A separate read-only line answers the
+        # same question - "which of these did I already look at today" -
+        # without ever touching a byte the sync writes.
+        self.reviewed_today_label = QLabel("")
+        self.reviewed_today_label.setObjectName("MutedLabel")
+        self.reviewed_today_label.setWordWrap(True)
+
         category_splitter = QSplitter(Qt.Orientation.Vertical)
         category_splitter.addWidget(swing_section)
         category_splitter.addWidget(m5_section)
@@ -102,6 +115,7 @@ class FocusPicksPanel(QFrame):
         layout.setSpacing(10)
         layout.addWidget(header)
         layout.addWidget(self.snapshot_status_label)
+        layout.addWidget(self.reviewed_today_label)
         layout.addWidget(content_splitter, 1)
 
         # One signal rebuilds all editors (covers edits from anywhere, incl. the
@@ -109,6 +123,45 @@ class FocusPicksPanel(QFrame):
         # day's snapshot so a mid-day like still lands in today's cohort.
         self.service.focusChanged.connect(self._on_focus_changed)
         self.snapshot_today(force=False, emit_status=False)
+
+    def refresh_reviewed_today(self) -> None:
+        """Name the focus symbols the trader has already reviewed today.
+
+        Read-only in the strongest sense: it reads recorded decisions and
+        writes nothing, and it renders OUTSIDE the editors so no marker can
+        ever reach the watchlist text. A symbol with no recorded decision is
+        simply absent - absence here means "not reviewed yet", never "rejected".
+        """
+        try:
+            from pick_feedback import reviewed_symbols_today
+
+            reviewed = {str(symbol or "").strip().upper() for symbol in reviewed_symbols_today()}
+        except Exception:
+            # The badge is decoration over evidence. If the evidence cannot be
+            # read, say nothing rather than claim nothing was reviewed.
+            self.reviewed_today_label.setText("")
+            return
+        if not reviewed:
+            self.reviewed_today_label.setText("Reviewed today: none yet.")
+            return
+        focus_symbols = set()
+        for editor in self.editors:
+            try:
+                focus_symbols.update(
+                    str(symbol or "").strip().upper()
+                    for symbol in self.service.focus_symbols(editor.side, editor.category)
+                )
+            except Exception:
+                continue
+        in_focus = sorted(focus_symbols & reviewed)
+        if not in_focus:
+            self.reviewed_today_label.setText(
+                f"Reviewed today: {len(reviewed)} name(s), none of them in Focus."
+            )
+            return
+        self.reviewed_today_label.setText(
+            "Reviewed today, in Focus: " + ", ".join(in_focus)
+        )
 
     def _build_category_section(self, title: str, category: str, hint: str, accent: str | None = None) -> QWidget:
         long_editor = FocusSideEditor(
@@ -155,6 +208,7 @@ class FocusPicksPanel(QFrame):
     def _refresh_all(self) -> None:
         for editor in self.editors:
             editor.refresh()
+        self.refresh_reviewed_today()
 
     def record_bounce_alert(self, alert: BounceAlert) -> None:
         """Surface BounceBot alerts directly on matching Focus Picks chips."""

@@ -14,8 +14,13 @@ a lie in the shape a chart makes easy to believe.
 
 from __future__ import annotations
 
+import csv
+from datetime import datetime
+from pathlib import Path
+
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -35,6 +40,46 @@ try:  # pragma: no cover - the desk has pyqtgraph; a headless box may not.
 except Exception:  # pragma: no cover
     pg = None
     PYQTGRAPH_AVAILABLE = False
+
+
+#: Buckets with fewer closed trades than this are drawn, but labeled thin. The
+#: number is not a threshold anything is decided on - it is the point at which
+#: a bar chart starts to look like evidence when it is not.
+THIN_SAMPLE_TRADES = 5
+
+#: How many buckets one chart shows. Beyond this the axis is unreadable, and
+#: what is dropped is SAID rather than silently trimmed.
+GROUP_CHART_MAX_BARS = 12
+
+
+def group_breakdown_rows(summary: dict, group_name: str) -> list[dict]:
+    """The chosen group's buckets, sorted the way the table already sorts."""
+    groups = summary.get("groups") or {}
+    return list(groups.get(group_name) or [])
+
+
+def group_chart_series(rows: list[dict]) -> tuple[list[str], list[float], int]:
+    """(labels with honest n, net values, dropped count) for one breakdown.
+
+    A bucket whose net is ``None`` is EXCLUDED, never plotted as zero: None
+    here means "mixed currencies with unconverted rows", and a zero bar would
+    read as "this setup broke even" - a claim the data refuses to make. The
+    count of what was excluded is returned so the caller can say it.
+    """
+    plottable = [row for row in rows if row.get("net_pnl") is not None]
+    dropped = len(rows) - len(plottable)
+    shown = plottable[:GROUP_CHART_MAX_BARS]
+    dropped += max(0, len(plottable) - len(shown))
+    labels = []
+    values = []
+    for row in shown:
+        closed = int(row.get("closed", 0) or 0)
+        label = f"{row.get('label', '')} (n={closed})"
+        if closed < THIN_SAMPLE_TRADES:
+            label += " thin"
+        labels.append(label)
+        values.append(float(row.get("net_pnl") or 0.0))
+    return labels, values, dropped
 
 
 class _WalkawayWorker(QThread):
@@ -82,6 +127,23 @@ class AnalyticsTab(QFrame):
         )
         self.groups_table.setEditTriggers(QTableWidget.NoEditTriggers)
 
+        # R7's deferred per-group charts, built 2026-08-18. The table below
+        # already carries every number; what was missing is the SHAPE, and the
+        # n count beside each bar is what stops a two-trade setup from looking
+        # like a finding.
+        self.group_picker = QComboBox()
+        self.group_chart = (
+            pg.PlotWidget(title="Net by group")
+            if PYQTGRAPH_AVAILABLE
+            else QLabel("pyqtgraph is not installed; the table below carries the same numbers.")
+        )
+        self.group_note = QLabel("")
+        self.group_note.setWordWrap(True)
+        self.group_picker.currentTextChanged.connect(lambda _text: self._draw_group_chart())
+        self.group_csv_button = QPushButton("Export this breakdown CSV")
+        self.group_csv_button.clicked.connect(self._export_group_csv)
+        self._summary: dict = {}
+
         self.walkaway_button = QPushButton("Run walk-away for this range")
         self.walkaway_button.clicked.connect(self._run_walkaway)
         self.walkaway_output = QLabel("Walk-away has not been run for this range yet.")
@@ -93,7 +155,13 @@ class AnalyticsTab(QFrame):
         buttons = QHBoxLayout()
         buttons.addWidget(self.walkaway_button)
         buttons.addWidget(self.export_button)
+        buttons.addWidget(self.group_csv_button)
         buttons.addStretch(1)
+
+        picker_row = QHBoxLayout()
+        picker_row.addWidget(QLabel("Chart group"))
+        picker_row.addWidget(self.group_picker)
+        picker_row.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -102,6 +170,9 @@ class AnalyticsTab(QFrame):
         layout.addWidget(self.curve, 3)
         layout.addWidget(self.curve_table, 1)
         layout.addWidget(QLabel("By group"))
+        layout.addLayout(picker_row)
+        layout.addWidget(self.group_chart, 2)
+        layout.addWidget(self.group_note)
         layout.addWidget(self.groups_table, 2)
         layout.addLayout(buttons)
         layout.addWidget(self.walkaway_output)
@@ -144,7 +215,10 @@ class AnalyticsTab(QFrame):
             self.curve_table.setItem(row, 0, QTableWidgetItem(day))
             self.curve_table.setItem(row, 1, QTableWidgetItem(f"{value:,.2f}"))
 
+        self._summary = summary
         groups = summary.get("groups") or {}
+        self._sync_group_picker(groups)
+        self._draw_group_chart()
         rows = [
             (group_name, stats)
             for group_name, buckets in groups.items()
@@ -162,6 +236,79 @@ class AnalyticsTab(QFrame):
             ]
             for column, text in enumerate(values):
                 self.groups_table.setItem(row, column, QTableWidgetItem(str(text)))
+
+    def _sync_group_picker(self, groups: dict) -> None:
+        names = list(groups.keys())
+        existing = [self.group_picker.itemText(i) for i in range(self.group_picker.count())]
+        if names == existing:
+            return
+        current = self.group_picker.currentText()
+        self.group_picker.blockSignals(True)
+        self.group_picker.clear()
+        self.group_picker.addItems(names)
+        if current in names:
+            self.group_picker.setCurrentText(current)
+        self.group_picker.blockSignals(False)
+
+    def _draw_group_chart(self) -> None:
+        group_name = self.group_picker.currentText()
+        rows = group_breakdown_rows(self._summary, group_name)
+        labels, values, dropped = group_chart_series(rows)
+        if PYQTGRAPH_AVAILABLE:
+            self.group_chart.clear()
+            if values:
+                bars = pg.BarGraphItem(x=list(range(len(values))), height=values, width=0.6)
+                self.group_chart.addItem(bars)
+                self.group_chart.getAxis("bottom").setTicks([list(enumerate(labels))])
+            self.group_chart.setTitle(f"Net by {group_name}" if group_name else "Net by group")
+        parts = []
+        if not rows:
+            parts.append("No trades in this range for that grouping.")
+        else:
+            thin = sum(1 for row in rows if int(row.get("closed", 0) or 0) < THIN_SAMPLE_TRADES)
+            parts.append(
+                f"{len(labels)} bucket(s) charted; n is closed trades. "
+                f"{thin} bucket(s) have fewer than {THIN_SAMPLE_TRADES} closed trades "
+                "and are labeled thin."
+            )
+        if dropped:
+            # Said out loud: a chart that silently drops buckets reads as
+            # "that was all of them".
+            parts.append(
+                f"{dropped} bucket(s) not charted (no convertible total, or beyond the "
+                f"{GROUP_CHART_MAX_BARS}-bar cap). They are still in the table below."
+            )
+        if group_name in (self._summary.get("nonexclusive_groups") or []):
+            parts.append(
+                "One trade can carry several tags here, so these buckets overlap and "
+                "do not sum to the headline."
+            )
+        self.group_note.setText(" ".join(parts))
+
+    def _export_group_csv(self) -> None:
+        """The charted breakdown, exactly as shown, as a CSV beside it."""
+        group_name = self.group_picker.currentText()
+        rows = group_breakdown_rows(self._summary, group_name)
+        if not rows:
+            self.statusChanged.emit("nothing to export for that grouping")
+            return
+        try:
+            from project_paths import JOURNAL_EXPORT_DIR
+
+            slug = "".join(ch if ch.isalnum() else "_" for ch in group_name) or "group"
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            target = Path(JOURNAL_EXPORT_DIR) / f"journal_by_{slug}_{stamp}.csv"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            columns = ["label", "trades", "closed", "win_rate", "profit_factor", "net_pnl"]
+            with target.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow({column: row.get(column, "") for column in columns})
+        except Exception as exc:  # noqa: BLE001
+            self.statusChanged.emit(f"breakdown export failed: {exc}")
+            return
+        self.statusChanged.emit(f"exported {target}")
 
     def _run_walkaway(self) -> None:  # pragma: no cover - worker path
         if self._worker is not None and self._worker.isRunning():

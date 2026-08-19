@@ -258,3 +258,29 @@ rendering; the trader records a dislike from the RS/RW board and sees the badge
 appear everywhere that symbol renders that day. Section 6.1 additionally requires
 one live ignored-symbol armed-watch hit that feeds/sounds while automatic Focus D1
 interest for that ignored symbol remains absent.
+
+## The two held-back items — resolved 2026-08-18
+
+R4 recorded two items as held under the ask-first rule rather than skipped. The
+2026-08-18 integration redirect pre-satisfies that rule, so both were revisited.
+
+**The Focus Picks reviewed-today marker — BUILT, but not where R4 proposed it.**
+The hold was correct and its reason still stands: those editors hold editable
+watchlist *text* that is synced back to the shared watchlists, so a marker
+injected into a row is one careless save away from becoming a symbol name — and
+"user-entered watchlist names are never auto-removed" would be one bad round-trip
+from being violated in the other direction. The marker is therefore a read-only
+LINE beside the editors ("Reviewed today, in Focus: …"), which answers the same
+question and cannot reach a byte the sync writes. Unreadable evidence renders
+nothing rather than claiming nothing was reviewed, and a reviewed name that is
+not in Focus is counted rather than listed. `tests/test_qt_focus_reviewed_today.py`
+pins all of it, including that the editors' own text is untouched.
+
+**§2.2's `review_host` for the boards — still declined, and now on the record as
+a decision rather than a hold.** Its remaining half is the setups table's
+advance-to-next-row flow. A ranked board has no "next row" in that sense: the
+order is a score, not a queue, and advancing through it would either fight the
+ranking or invent a queue the trader never asked for. §2.1's CaptureRail already
+delivered what §2 was for — capture on every chart-opening surface. Reopening
+this needs a trader statement that they want a queue over the boards, which is a
+workflow decision, not a wiring one.

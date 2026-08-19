@@ -290,3 +290,37 @@ Live proof — one real weekend run, observing:
 - Swing-grade adoption gate question recorded in §7.
 - Away-report archive depth (~3 trading days at `archive_keep=30`) limits any
   future narrative week-in-review; out of scope for v1, noted for WISHLIST.
+
+## Retained joins — BUILT 2026-08-18
+
+The R8 release-candidate review kept two joins as explicit future scope and did
+not claim them. Both landed under the trader's 2026-08-18 integration redirect.
+
+**Week in review — the RS/RW extremes join.** `_read_rrs_week` reads
+`rrs_strength_extremes.csv` for the reviewed week and folds it to one row per
+(bucket, symbol) carrying days seen, sightings and the best reading. Folding is
+the point: the log is one row per sighting, so a name that led the tape all week
+would otherwise bury every other name in the step. "Best" is direction-aware —
+the weak bucket's best reading is its most *negative* one. The step shows a
+capped number of rows per bucket and **prints what the cap dropped**, because a
+silent top-N reads as "that was all of it".
+
+**Focus review — picks joined to their outcomes.** `_join_focus_week` joins
+`human_focus_daily_picks.csv` to `human_focus_outcomes.csv` on
+(trade_date, symbol, side) and renders **one row per pick** carrying H1/H3/H5/H10
+returns and the matured-horizon count. The v1 step listed picks and outcomes as
+separate rows, so a name appeared twice and the table could not answer "how did
+this pick do".
+
+Two honesty rules are load-bearing and are tested as such:
+
+- **A horizon that has not matured is BLANK, never 0.00%.** The review is read on
+  a Saturday; a fabricated zero is a false lesson about a trade that is still
+  running.
+- **An outcome with no matching pick snapshot is still shown, and marked.** It is
+  evidence that a pick existed on a day whose snapshot did not persist; dropping
+  it would quietly narrow the week.
+
+Both readers stay read-only and forgiving, like every other weekend-prep reader:
+a missing or unreadable CSV is a quieter week, not an error worth stopping the
+routine for. The one-real-weekend live gate in §10 is unchanged and still owed.

@@ -605,6 +605,50 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-18 — R7/R8's deferred visuals, and the one buildable wishlist item
+
+`IMPLEMENTED`, live proof owed. Same branch and same redirect as the entry
+below.
+
+**The journal's per-group charts (R7 deferred scope).** The Analytics tab gains
+a group picker, a bar chart of net by bucket, and a CSV of exactly what is
+charted. Every bar carries its n as closed trades and a thin sample says so on
+its own label. A bucket whose total cannot be converted is **excluded, never
+drawn as zero** — None there means "mixed currencies, unconverted", and a zero
+bar would claim the setup broke even. What the 12-bar cap drops is printed,
+because a silent top-N reads as "that was all of them".
+
+**The Calendar year heatmap (R7 deferred scope).** A pyqtgraph image of the
+year, diverging red→white→green, **centred on zero and scaled to the largest
+single day** so a good year and a bad one are drawn on the same footing. A day
+with no trading stays blank rather than taking a break-even colour — a flat day
+and a day the trader did not trade are different facts. The numeric grid stays
+underneath and still filters the Trades tab on a click.
+
+**The wishlist triage (trader-directed).** Every `WISHLIST.md` candidate was
+assessed against the codebase. One was buildable: the external chart deep link,
+now `scripts/external_chart_links.py` plus an **Open in TradingView** button on
+the arm bar, with the URL template as a machine-local setting, symbol validation
+before any URL is built, and a refused open reported rather than swallowed.
+TC2000 is deliberately not wired — it answers no documented URL scheme, and a
+dead `tc2000://` link would be worse than the honest gap. Every other item
+needed exactly one trader judgment whose plausible answers lead to different
+code; those are written down one per item in `docs/WISHLIST_OPEN_QUESTIONS.md`
+instead of being guessed at. Nothing else was promoted into `plan.md`.
+
+**R4's two held items resolved.** The Focus Picks reviewed-today marker is
+built as a read-only line BESIDE the editors rather than a glyph inside them -
+those editors hold watchlist text that is synced back, so a marker in a row is
+one careless save from becoming a symbol name. §2.2's `review_host` for the
+boards is now a recorded decision rather than a hold: a ranked board has no
+"next row", and advancing through one would invent a queue the trader never
+asked for.
+
+**Packaging.** `external_chart_links` joins the selftest roster because the
+Alert Center imports it inside the click handler — the failure mode is a bundle
+that starts fine and dies the first time the trader presses the button. Source
+selftest 56/56.
+
 ### 2026-08-18 — R5 completed: confluence, first-candle ORB, any-bounce watch
 
 `IMPLEMENTED`, live proof owed. Built on `phase05-integration-blitz` under the

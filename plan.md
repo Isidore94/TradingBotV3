@@ -633,6 +633,20 @@ are listed in `CURRENT_CHECKPOINT.md`.
    trader can run this as soon as the build lands** — it is read-only against
    their data and does not wait on Monday.
 
+9. **Wishlist deep link into an external charting tool. — BUILT 2026-08-18
+   (trader-directed).** Promoted from `WISHLIST.md` under the 2026-08-18
+   integration redirect and built the same day: `scripts/external_chart_links.py`
+   plus an "Open in TradingView" button on the arm bar, so every chart surface
+   carrying that bar inherits it. The URL template is a machine-local setting,
+   the symbol is validated before a URL exists, and a refused open is reported.
+   Read-only in both directions — it opens a URL and reads nothing back, so no
+   second source of truth about a symbol enters the system. TC2000 stays
+   unwired by decision, not oversight (it answers no documented URL scheme).
+   **No live gate**: the trader pressing the button once on the frozen desk is
+   the whole proof, and the frozen selftest already covers the import.
+   The rest of the wishlist triage produced no code: each remaining item needs
+   one trader judgment, recorded in `docs/WISHLIST_OPEN_QUESTIONS.md`.
+
 Exit gate: each packet exits through its own spec; R1 and R2 land first per the
 trader's ranking, then R7 before R8. **R7's code is complete**; what remains for
 it is live evidence, which is why it does not close the phase on its own. A packet's live gates may overlap the next

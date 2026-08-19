@@ -746,6 +746,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.watchToggled.connect(self._toggle_chart_watch)
         self.chart_review.d1EventToggled.connect(self._toggle_d1_event_watch)
         self.chart_review.anyBounceToggled.connect(self._toggle_any_bounce_watch)
+        self.chart_review.externalChartRequested.connect(self._open_external_chart)
         self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
@@ -3486,6 +3487,18 @@ class AlertCenterPanel(QFrame):
                 detail={"kind": hit.kind, "level": hit.level, "message": hit.message},
             )
             self.add_alert(self._chart_watch_alert(hit, moment))
+
+    def _open_external_chart(self, symbol: str) -> None:
+        """Deep-link the charted name into the trader's external tool.
+
+        Read-only in both directions: it opens a URL and reads nothing back, so
+        no second source of truth about a symbol enters the system. A refused
+        open is REPORTED - silence would read as "it worked, look elsewhere".
+        """
+        from external_chart_links import open_chart
+
+        _opened, message = open_chart(symbol, "D1")
+        self.statusChanged.emit(message)
 
     def _refresh_review_armed_kinds(self) -> None:
         current = self._current_review_alert
