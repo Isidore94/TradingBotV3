@@ -644,6 +644,14 @@ boards is now a recorded decision rather than a hold: a ranked board has no
 "next row", and advancing through one would invent a queue the trader never
 asked for.
 
+**Gate for the whole blitz branch.** 3760 passed / 19 subtests, exit 0; smoke
+7/7, exit 0; clean-cache frozen rebuild + `selftest OK: 56/56 checks passed
+(frozen)`, exit 0, with `build/` and `dist/` deleted first and the build run
+from the worktree so the desk's own `dist/` was never touched (exe mtime
+22:02 postdates the commit at 22:00). The `0xC0000409` teardown crash the
+testing-week entry warned about did **not** reproduce in any run on this
+branch; that is reported, not claimed as fixed.
+
 **Packaging.** `external_chart_links` joins the selftest roster because the
 Alert Center imports it inside the click handler — the failure mode is a bundle
 that starts fine and dies the first time the trader presses the button. Source

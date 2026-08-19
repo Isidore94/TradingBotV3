@@ -8,7 +8,222 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## THE WEEKEND OF 2026-08-15/16 — start here
+## THE MORNING REPORT — 2026-08-18 integration blitz. READ THIS FIRST.
+
+**Branch: `phase05-integration-blitz`, pushed. The desk is untouched.** The main
+checkout at `C:\Users\Aaron\TradingBotV3` is still on
+`phase05-r2-focus-gating-strength-board`, its `dist/` was never rebuilt from
+this work, and the 07:00 scheduled task will run exactly what it ran yesterday.
+Everything below happened in a linked worktree at `..\TradingBotV3-blitz`.
+
+### The first thing to know: most of the redirect was already built
+
+The redirect asked for R3, R4, R5, R6, R7 and R8. When the branch audit ran, R3
+through R8 were **already built** on `testing-week-2026-08-17` — 30-plus commits
+from 2026-08-16/17 that the desk branch's own checkpoint had not caught up with.
+So the blitz branch was cut from that lineage and the four newer R2 commits were
+merged into it, rather than rebuilding landed work (which `CLAUDE.md` forbids).
+
+That merge is itself a deliverable: **one branch now carries testing-week, R1,
+R1.1, R2 (including the 08-18 defect fixes), R3, R4, R5, R6, R7 and R8.** Before
+today, the desk branch and the release candidate had diverged.
+
+### What was actually built today
+
+| Packet | State before today | What landed |
+|---|---|---|
+| **R5 §3.2** | pure logic not written | Confluence engine (HA reversal + SMI turn + LRSI cross within 4 completed bars), **M5 Focus symbols only**, wired, **default OFF** |
+| **R5 §3.3** | pure logic not written | First-candle ORB flow: candidate mark, post-pullback new-extreme break, informational LRSI recross — three separately toggleable types, all **default OFF** |
+| **R5 §4** | not started | `AnyBounceWatch`: one armed request per symbol/side over nine levels, own store, Alert Center owns it, fires once naming the level that held then disarms; **Any bounce** button on the arm bar |
+| **R5 §8.3** | decided, not built | `prev_avwape` carried onto the zone-arms entry as a top-level key, golden fixture first, fixture passes unchanged after the edit |
+| **R6(b)** | decided + narrowed | Read-only JSONL-ledger audit inside the existing footprint check; the stale `~106 MB` comment removed. R6 is now fully closed |
+| **R7 visuals** | deferred | Analytics per-group bar charts with honest n counts + a CSV of exactly what is charted; Calendar pyqtgraph year heatmap centred on zero |
+| **R8 joins** | retained future scope | Week review folds the week's RS/RW extremes per symbol; Focus review joins picks WITH their outcomes, one row per pick |
+| **R4 held items** | held ask-first | Focus Picks reviewed-today marker built as a line BESIDE the editors; `review_host` for the boards declined on the record |
+| **WISHLIST** | 20+ candidates | One was buildable and is built (external chart deep link). Every other item has one blocking trader question, written down in `docs/WISHLIST_OPEN_QUESTIONS.md` |
+
+### Every autonomous decision I made where a spec was ambiguous
+
+1. **R5 §8.2 said do not wire §3.2/§3.3 until a desk session measures §3.1.** The
+   redirect is that decision's own first reopen trigger ("the trader
+   overrides"), so I wired them — and kept the substance by shipping **all four
+   new alert types OFF** and writing both engines as **stateless** functions
+   over the session's completed bars. §8.2's objection was a dormant state
+   machine waking mid-session with contents nobody exercised; a function that
+   recomputes from bars has nothing to carry. **What the desk session now
+   decides is which toggles earn a default-on, not whether the code exists.**
+2. **The ORB candidate mark does not seed the bounce outcome tracker.** Only the
+   re-break does. Measuring an engine against events it never claimed were
+   entries would corrupt the evidence the promotion ladder reads.
+3. **The confluence is Focus-scoped at the sweep**, intersecting the watchlist
+   with the human focus sets — the trader's framing was "on names I'm watching",
+   and a perfect chart on a non-Focus name is silence.
+4. **The any-bounce watch reuses `detect_zone_arm_triggers`' two-bar idiom**
+   rather than inventing a bounce rule, so "bounce" means one thing system-wide.
+   Its tolerance for a chart-armed watch (no scan measurement available) is
+   0.15% of the level — deliberately small, and a named constant.
+5. **R4's Focus Picks marker renders beside the editors, not inside them.** Those
+   editors hold watchlist text that is synced back; a marker in a row is one
+   careless save from becoming a symbol name. Same answer, no path to the data.
+6. **`review_host` for the ranked boards is declined**, not deferred: a ranked
+   board has no "next row", so advancing through it would invent a queue.
+7. **TC2000 deep-linking is not wired.** It answers no documented URL scheme; the
+   URL template is a setting, so it is one line of config away the day you tell
+   me what your install answers to.
+8. **The ledger audit estimates rows from a 256 KB sample** rather than counting
+   370 MB of newlines on every System Health render. The field is called
+   `estimated_rows` because that is what it is.
+9. **Two hermeticity gaps were fixed test-side, not in product code**: the Fed
+   calendar adapter (it reached the wire in a full-suite run and passed in
+   isolation only because a cache answered first) and the new universe-shape
+   tests (they were measuring conftest's own offline stub instead of the
+   function under test).
+
+### What the redirect asked for that I deliberately did NOT reopen
+
+**R3 §4.3.5, the same-slot volume-thrust normalization.** The trader deferred it
+explicitly on 2026-08-16 with a reason that today's redirect does not touch: the
+D1 scoring seam has no intraday slot series, the faithful TC2000 baseline would
+need a 5-minute fetch across ~1,100 symbols (a data-budget and contract change),
+and the zero-fetch session-elapsed proration was offered and REJECTED because
+real volume is U-shaped. Reopening it needs a fresh decision about the data
+seam, not a permission — the blanket ask-first approval removes the asking, not
+the missing judgment. The 18-point thrust bonus therefore keeps its full-day
+baseline as a known, accepted pre-close gap, characterized by
+`tests/fixtures/r3_swing_quality_v1.json`.
+
+### Wishlist: built vs stubbed-with-a-question
+
+**Built (1):** deep-link a symbol into an external charting tool.
+
+**Stubbed with the blocking question stated (12), in
+`docs/WISHLIST_OPEN_QUESTIONS.md`:** voice dictation (local vs cloud speech, and
+what happens to a bad transcription); chart line-density presets (blocked on
+P1.2's clutter budget — a desk-evidence decision, not a preference); read-only
+mobile/web dashboard (who may read it, from where); self-hosted ntfy (is the
+operational burden worth it); macOS scheduled jobs (will a Mac ever be the
+unattended host); broader strength-board universe (explicitly gated on the R2
+board proving itself); and the six research/data captures, which share one rule —
+each needs a **registered consumer** before capture is justified.
+
+Nothing on that list was implemented, and nothing was promoted into `plan.md`
+except the one item that was built.
+
+### The gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3760 passed / 19 subtests, 0 failed, 0 errors, exit 0 (2026-08-18 21:56 PT)** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| Source selftest | **56/56** (55 → 56: `external_chart_links` joined the roster) |
+| Clean-cache frozen rebuild + frozen selftest | **`selftest OK: 56/56 checks passed (frozen)`, exit 0. `build/` AND `dist/` deleted first and built from the worktree, so the desk's own `dist/` was never touched; exe mtime 22:02 postdates the commit at 22:00** |
+
+**The teardown crash is gone.** The `0xC0000409` native crash at interpreter
+shutdown that the testing-week checkpoint says must be quoted alongside the
+summary line **did not occur in any run today** — every full-suite run on this
+branch exited 0. I did not fix it and cannot claim it is fixed; I can only
+report that it stopped reproducing on this tree. If it returns, quote the
+summary line and the exit code together, as that entry says.
+
+### Live proofs now owed — the full ledger
+
+**Nothing below has been observed.** UNKNOWN is a result and `plan.md` sec 6
+requires recording it as one.
+
+Inherited (8, unchanged except where the 08-17/08-18 AWAY sessions closed one):
+
+- **R1 (3 open):** an EVENING day that stops after its early block; one SPY ±1%
+  alarm; the AWAY→DESK **drain on return** (the trader never flipped back). The
+  quiet boot PASSED 2026-08-16; AWAY staging-without-adoption PASSED both days.
+- **R2 (3 open):** one adoption-time refusal; one scoped "Not today" that leaves
+  other entries intact; one strength-board session matching the TC2000 scan's
+  character. The eviction proof PASSED 2026-08-18.
+- **R3 (3):** the `would_demote` shadow week **before any row moves**; the
+  one-week 12:45-vs-close and STABLE-vs-PREVIEW churn comparison; the first
+  real-data curation cycle.
+- **R4:** the whole §8 exit gate.
+- **R6:** the stall-watchdog diagnostic week.
+- **R7:** the trader-present finale — dry-run migration report, live migration,
+  full backfill, ≥10-trade statement audit, one clean reconciliation week, ≥5
+  consecutive nightly ledger entries.
+- **R8:** one real weekend run (does not wait for Monday).
+
+Added by today's work:
+
+- **R5, per engine:** one desk session confirming the **LRSI cross** volume is
+  sane; then the same for the **confluence**; then for the **first-candle ORB**.
+  Each session also decides whether that engine's toggle should default on.
+- **R5 §4:** one observed any-bounce firing that names the level that held, and
+  one re-arm after it.
+- **R5 §8.3:** one scan whose zone-arms file actually carries `prev_avwape` for a
+  symbol with a prior anchor (deterministic tests prove the shape, not the feed).
+- **R7 visuals:** one look at the Analytics group chart and the year heatmap on
+  real data, to confirm the thin-sample labels and the blank (untraded) days read
+  the way you expect.
+- **R8 joins:** one weekend where the focus-review table shows a pick whose
+  horizons are still maturing, so the blank-not-zero rule is seen rather than
+  trusted.
+
+### Known weak spots — where I would look first if something misbehaves
+
+1. **The four new alert types are OFF.** If you turn one on and the feed floods,
+   that is the volume question §7 was written to ask — turn it back off and tell
+   me the count; do not tune thresholds from one session.
+2. **`_any_bounce_levels_for` reads `bot.d1_zone_arms`.** If the any-bounce watch
+   never fires on D1 levels, check that the running BounceBot actually has that
+   dict loaded; the session/H1 EMAs will still work without it, which is the
+   design (a missing level is absent, never fabricated), but it looks like
+   silence.
+3. **The H1 15EMA needs 15 completed hours.** Early in a session it is legitimately
+   absent, so an any-bounce watch armed at the open watches fewer levels than one
+   armed in the afternoon.
+4. **The confluence needs all three legs inside 4 bars.** If it never fires, that
+   is far more likely to be the window than a bug; it is a parameter
+   (`CONFLUENCE_WINDOW_BARS`) and the desk session is where it gets tuned.
+5. **The Analytics group chart excludes buckets with no convertible total.** If
+   the chart looks emptier than the table, read the note under it — it says how
+   many were excluded and why.
+6. **The Fed-calendar and universe stubs are conftest-side.** If a future test
+   genuinely needs the real fetch, take back the stashed original the way
+   `tests/test_universe_builder.py` now does, rather than removing the guard.
+
+### Putting this build on the desk, when you choose to
+
+Do these in order, on the main checkout, with the market closed:
+
+1. **Disarm the scheduled task first.** Nothing else in this list is safe while
+   it can fire: `Get-ScheduledTask -TaskName '<the launch task>' | Disable-ScheduledTask`.
+2. Confirm the desk app is closed, then in `C:\Users\Aaron\TradingBotV3`:
+   `git fetch origin` then `git checkout phase05-integration-blitz`.
+3. Re-run the gate on the checkout you will actually run:
+   `.venv\Scripts\python.exe -m pytest tests/ -q` (expect the figure above,
+   exit 0) and `.venv\Scripts\python.exe scripts/smoke_check.py` (7/7).
+4. Rebuild the exe if you run the frozen desk:
+   `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm`,
+   then `dist\TradingBotV3\TradingBotV3.exe --selftest` — expect
+   `selftest OK: 56/56 checks passed (frozen)`, exit 0.
+5. Launch once by hand and confirm the desk opens on Main, Auto mode reads what
+   you left it at, and the Focus tab looks normal.
+6. **Re-arm the scheduled task**: `Enable-ScheduledTask`.
+
+To back out at any point: `git checkout phase05-r2-focus-gating-strength-board`,
+rebuild, re-arm. Nothing in this branch writes to `C:\TradingBotData` differently
+from the branch you are on now, and no store schema changed — the new
+`any_bounce_watches.json` is created on first use and its absence is normal.
+
+### What I did NOT do
+
+- **No merge to `main`.** As instructed.
+- **No live migration or backfill** (R7's trader-present finale) — built and
+  tested against fixtures only, still behind their manual actions.
+- **No threshold tuning** from any single session, and no live proof claimed
+  from a deterministic test.
+- **No changes to the desk's scheduled tasks, settings, or `C:\TradingBotData`.**
+
+
+---
+
+## THE WEEKEND OF 2026-08-15/16 — history, superseded by the report above
 
 **The two stray remote branches are known and deliberately NOT merged
 (trader decision, 2026-08-17).** A branch audit that day found exactly two refs
