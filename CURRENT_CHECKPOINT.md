@@ -8,7 +8,192 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## THE MORNING REPORT — 2026-08-18 integration blitz. READ THIS FIRST.
+## 2026-08-19 — the gate that could not tell the time. READ THIS FIRST.
+
+**Branch: `phase05-integration-blitz`, pushed. The desk's main checkout is
+untouched** and still on `phase05-r2-focus-gating-strength-board`. Everything
+below happened in `..\TradingBotV3-blitz`.
+
+### What the first DESK morning actually did
+
+**Zero adoptions. 121 picks refused every 30 seconds from 08:07 onward.**
+`focus_auto_picks.json` finished the day with an empty `picks` map, and the
+failure logging rotated `trading_bot.log`.
+
+**Root cause — one subtraction, two clocks.** A stored verdict carries two
+stamps written by different paths:
+
+| Field | Writer | Awareness |
+|---|---|---|
+| `gate_bar_end` | the intraday profile's `as_of` (`_intraday_extreme_metrics`) | **always aware** — the provider's own offset when it has one, market-local otherwise |
+| `gate_checked_at` | the staging refresh's `datetime.now()` | **naive** |
+| the caller's `now` | `AlertCenterPanel` → `datetime.now()` | **naive** |
+
+So `pending_pick_gate_ok`'s wall-clock age check (naive − naive) passed, and its
+bar-lag check (naive − aware) raised
+`TypeError: can't subtract offset-naive and offset-aware datetimes` — exactly the
+line the traceback named. The Alert Center caught it and refused fail-closed,
+which is correct behaviour for an unverifiable pick.
+
+**The gate did not judge the picks wrongly. It never ran.** Nothing about the
+PDH/VWAP rule was exercised on 2026-08-19, which is why §2.5 and §2.6 of the
+testing plan are re-owed **in full** rather than being partly done.
+
+**The fix.** Every datetime the gate compares — the caller's clock, both stored
+stamps and the `not_before` flip barrier — is normalized at one seam
+(`_gate_moment` → `market_session.normalize_market_local_datetime`), which
+ATTACHES market-local to a naive stamp and converts an aware one. Stripping the
+offset instead would have ended the crash and kept the outage: an aware 11:05 ET
+bar read as naive against an 08:07 PT clock is three hours "ahead of the tape",
+so every pick would still have been refused — silently. A test pins that
+direction, and every refusal path (stale clock, stale bar, future bar, pre-flip
+verdict) is re-asserted unchanged.
+
+`minutes_since_open` carried the identical subtraction one function away and is
+hardened the same way. Every caller passes a naive clock today, so its answers
+are unchanged; the scheduler is simply no longer where this class of bug gets
+discovered live.
+
+**The log flood is bounded.** The refusal wrapper logged a full traceback per
+pick, so one systematic fault wrote 121 tracebacks every 30 seconds and rotated
+the log holding the evidence. Now the first failure of each poll cycle carries
+the traceback and the cycle ends with one WARNING naming the count and the
+exception. The refusal is as loud as it was; fail-closed semantics are untouched.
+
+### The retry investigation: design and code agree, no change made
+
+R2.2's budget (`FLIP_REVERIFY_RETRY_SECONDS` = 60, `FLIP_REVERIFY_MAX_ATTEMPTS`
+= 5) governs **only** a failed flip re-measurement — the `reverify_pending_picks`
+fetch on an AWAY/EVENING → DESK return. The desk was in DESK mode from the start
+on 08-19, so no flip happened, no re-verification was owed, and that budget was
+never engaged. Correctly.
+
+The 30-second cadence in the log is the **ordinary poll**:
+`_poll_auto_pick_pending` rides the Alert Center's 30s `_watch_timer`, and a
+refused pick is deliberately not marked seen, so every cycle re-attempts the
+whole queue. That is designed — "a stale verdict costs one cycle rather than the
+pick" — and it is what makes recovery automatic once the code is fixed rather
+than requiring a restart. Two mechanisms were being read as one; nothing
+disagreed, so nothing was changed. Recorded in the R2 spec so it is not
+re-litigated.
+
+### The strength board, on the trader's two requests
+
+**Sortable columns.** Every heading sorts, with a visible indicator, and clicking
+the same heading flips it. Sorting is presentation: it re-orders rows already in
+hand and never calls the service, so a header click cannot cost a refetch — the
+board's budget stays one batched yfinance pull per 15 minutes and **zero IB
+traffic**. Qt's own `setSortingEnabled` is deliberately not used: the last column
+holds a per-row cell *widget*, and `QTableWidget` leaves cell widgets behind when
+it sorts, so the Add button would end up on its neighbour's row. Owning the order
+also puts blank cells last in **both** directions — an unmeasured field is an
+absence, not a small number. The default order is unchanged and now stated by the
+indicator (longs strength-descending, shorts ascending — strongest for that side
+first). Every add still re-runs the adoption gate at click time.
+
+**Charts on selection.** Selecting a row opens that symbol in the desk's existing
+snapshot popup — the same one the RS/RW, entry and Industry boards use, owned by
+the Alert Center — so it carries the same bot-backed series, painted levels and
+CaptureRail. No new chart widget exists anywhere (R4's unification pattern), and
+`show_symbol_snapshot` already reuses one dialog per owner, so re-selecting
+re-points that window instead of stacking dialogs. Selecting on one side clears
+the other; a refresh that keeps the same row selected is not a new chart request;
+double-click still works.
+
+**The docked chart is the follow-up option, not this build.** An always-visible
+chart inside the board needs a desk-layout decision about what happens to the two
+tables' width on that page — a judgement about the trader's screen, not a wiring
+problem. The popup reuses a surface the trader already knows.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3794 passed / 19 subtests, 0 failed, 0 errors**. **The PROCESS exit code is `0xC0000409`, not 0** — see the finding below |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| Source selftest | **56/56**, exit 0 (roster unchanged — no new module is lazily imported) |
+| Clean-cache frozen rebuild + frozen selftest | **`selftest OK: 56/56 checks passed (frozen)`**, exit 0. `build/` AND `dist/` deleted first, built from the worktree, so the desk's own `dist/` was never touched; exe mtime 09:20 postdates the commit at 09:15 |
+
+
+### A correction about the teardown crash, with new evidence
+
+Yesterday's report said the `0xC0000409` native crash "did not occur in any run
+today". That observation was true and it was also **misleading**, because the
+tool reporting it truncates the code: bash shows `127` for `0xC0000409`, and I
+read a genuine `0` yesterday against truncated readings elsewhere. Measured
+properly today, through Python's own `returncode`:
+
+| Run | Summary line | Process exit |
+|---|---|---|
+| today's tip (`80279c3`) | 3794 passed, 0 failed | `0xC0000409` |
+| **yesterday's tip (`e266f5f`), re-run today, unchanged code** | 3760 passed, 0 failed | `0xC0000409` |
+| today's tip minus `tests/test_ui_stall_watchdog.py` | 3789 passed | `0xC0000409` |
+| today's tip minus either new test file | 3776 / 3778 passed | `0xC0000409` |
+
+Three things follow, and none of them is "my changes broke it":
+
+1. **The same commit that read clean yesterday crashes today.** The crash is
+   **intermittent**, not resolved and not introduced by this work.
+2. **The recorded attribution is stale.** The testing-week note says ignoring
+   `tests/test_ui_stall_watchdog.py` returns exit 0; on this tree it does not.
+   Whatever the trigger is now, that single file is no longer a discriminator.
+3. **Neither of today's new test files causes it** — removing either one leaves
+   the crash exactly where it was.
+
+**Not "fixed" by editing product code.** `scripts/ui/stall_watchdog.py` is
+product code owed R6(c)'s diagnostic week, and making a suite exit cleanly is not
+a reason to touch it. The standing rule holds: **quote the summary line AND the
+exit code together; neither alone is the truth.** What is new is that the
+summary line is now the one that has stayed stable across every run, and the exit
+code is the one that moves.
+
+### Live proofs — what today changed
+
+**Re-owed in full** (the 08-19 session proved nothing about them, because the
+gate crashed before it could judge anything):
+
+- one adoption actually happening on a DESK day (new §2.5 check: names landing in
+  M5 Focus, `focus_auto_picks.json` non-empty);
+- one adoption-time refusal with its reason;
+- one scoped "Not today" leaving the trader's other entries intact.
+
+**Newly owed:**
+
+- §2.7a — the board's sorting and chart-on-selection, on real rows.
+
+**Unchanged and still owed:** the strength board's TC2000-character check, the
+EVENING stop, the SPY wake alarm, and everything in R3–R8's ledger from the
+08-18 report below.
+
+### Putting this build on the desk
+
+Same sequence as the 08-18 report below, with one number changed — the frozen
+selftest count is **56/56**, unchanged from yesterday, because nothing added a
+lazily-imported module today:
+
+1. **Disarm the scheduled task first.**
+2. Close the desk app, then in `C:\Users\Aaron\TradingBotV3`:
+   `git fetch origin` → `git checkout phase05-integration-blitz`.
+3. `.venv\Scripts\python.exe -m pytest tests/ -q` (expect the figure above, exit
+   0) and `.venv\Scripts\python.exe scripts/smoke_check.py` (7/7).
+4. `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm`,
+   then `dist\TradingBotV3\TradingBotV3.exe --selftest` — expect
+   `selftest OK: 56/56 checks passed (frozen)`, exit 0.
+5. Launch once by hand; confirm the desk opens on Main and the Focus tab looks
+   normal.
+6. **Re-arm the scheduled task.**
+
+**On the next DESK morning, check the thing that failed:** within a poll cycle or
+two of the first staged picks, names should appear in M5 Focus and the status
+line should say `N auto pick(s) added to M5 Focus for today`. If the gate ever
+fails again you should see **one** traceback and **one**
+`Focus gate check unavailable for N staged pick(s) this cycle` line per 30
+seconds — not a flood. A flood is a regression worth reporting on its own.
+
+
+---
+
+## The 2026-08-18 integration blitz report (still current for everything below)
 
 **Branch: `phase05-integration-blitz`, pushed. The desk is untouched.** The main
 checkout at `C:\Users\Aaron\TradingBotV3` is still on

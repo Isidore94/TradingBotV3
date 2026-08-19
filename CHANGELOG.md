@@ -643,6 +643,20 @@ the ordinary poll, and a refused pick is deliberately not marked seen so every
 cycle re-attempts the queue — which is what made recovery automatic once the code
 was fixed. Recorded in the R2 spec so it is not re-litigated.
 
+### 2026-08-19 — the teardown crash is intermittent, and its attribution was stale
+
+`RECORDED`, not fixed. Measured through Python's own `returncode` rather than a
+shell that truncates `0xC0000409` to `127`: today's tip, **yesterday's unchanged
+tip re-run today**, the suite minus `tests/test_ui_stall_watchdog.py`, and the
+suite minus either of today's new test files all report every test passing and
+all exit `0xC0000409`. So the crash is **intermittent** — the same commit read
+clean yesterday — and the recorded discriminator (ignore the stall-watchdog tests
+→ exit 0) no longer holds on this tree. The 2026-08-18 entry's "did not occur in
+any run today" was a true observation read through a truncating shell; it is
+corrected here rather than left to be mistaken for a fix. `ui/stall_watchdog.py`
+is product code owed R6(c)'s diagnostic week and is NOT to be edited to make a
+suite exit cleanly. Quote the summary line and the exit code together.
+
 ### 2026-08-19 — the strength board becomes readable
 
 `IMPLEMENTED`, live proof owed (`docs/DESK_TESTING_PLAN.md` §2.7a). Two trader
