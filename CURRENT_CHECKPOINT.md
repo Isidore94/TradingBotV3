@@ -8,11 +8,48 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## 2026-08-19 — the gate that could not tell the time. READ THIS FIRST.
+## 2026-08-19, midday — THE DESK NOW RUNS THIS BRANCH
 
-**Branch: `phase05-integration-blitz`, pushed. The desk's main checkout is
-untouched** and still on `phase05-r2-focus-gating-strength-board`. Everything
-below happened in `..\TradingBotV3-blitz`.
+The trader flipped the desk to `phase05-integration-blitz` at 11:08 PT
+(mid-session, deliberately — trader's call on a slow tape). The worktree
+`..\TradingBotV3-blitz` is removed (it was clean and fully pushed); this main
+checkout at `C:\Users\Aaron\TradingBotV3` now holds the branch. Sequence
+executed: task disarmed → desk closed by the trader → checkout `198a2bd` →
+gates → manual launch via `scripts/launch_gui_auto.ps1` (the task's own path)
+→ task re-armed (all three tasks `Ready`). New desk pid 13364, heartbeat
+fresh, Auto Pilot resumed ON, slot 11:00 picked up at 11:09:30.
+
+Gates on this checkout, 2026-08-19 ~11:00 PT:
+
+| Check | Result |
+|---|---|
+| pytest | **3794 passed / 19 subtests, 0 failed**, process exit **0** (the intermittent `0xC0000409` did not occur this run) |
+| smoke | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen rebuild | clean-cache rebuild exit 0 — **but the exe could not be executed; see below** |
+
+**NEW OPEN ITEM — Smart App Control blocks the freshly built exe.** Windows 11
+Smart App Control (enforcing, `VerifiedAndReputablePolicyState=1`) refused to
+run `dist\TradingBotV3\TradingBotV3.exe` built at ~11:05 ("An Application
+Control policy has blocked this file"; CodeIntegrity events 3077/3118 at
+11:07). The worktree's byte-different build had run fine at 09:20 the same
+morning — SAC verdicts are per-hash cloud reputation, so they can differ
+between rebuilds. **The desk is unaffected** (the 07:00 task launches from
+source, and this flip was verified with the source selftest), but the frozen
+gate cannot be relied on to *execute* on this machine until this is resolved.
+Options are a trader decision: code-sign the exe (SAC needs a real signature
+with reputation), stop using SAC (WARNING: once turned off it cannot be
+re-enabled without reinstalling Windows), or accept that the frozen selftest
+may intermittently be blocked and re-run it when the verdict clears. Recorded
+here; not resolved.
+
+---
+
+## 2026-08-19 — the gate that could not tell the time.
+
+**Branch: `phase05-integration-blitz`, pushed.** Everything
+below happened in `..\TradingBotV3-blitz` (worktree since removed; see the
+flip entry above).
 
 ### What the first DESK morning actually did
 
