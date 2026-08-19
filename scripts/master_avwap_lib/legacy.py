@@ -2155,6 +2155,54 @@ def _json_default(value):
     return str(value)
 
 
+#: Bounded tolerance for a reader holding an output file open at replace time.
+#: Ten tries a tenth of a second apart: long enough to outlast a panel refresh
+#: or an antivirus peek, short enough that a genuinely stuck file still fails
+#: inside the scan's own output phase rather than hanging it.
+_REPLACE_RETRY_ATTEMPTS = 10
+_REPLACE_RETRY_DELAY_SECONDS = 0.1
+
+
+def _replace_with_retry(temp_path: Path, path: Path) -> None:
+    """``os.replace``, tolerant of a reader holding the destination open.
+
+    Windows' ``open()`` does not grant FILE_SHARE_DELETE, so *any* process
+    reading ``path`` - the desk's own Market Prep panel refreshing off its
+    QFileSystemWatcher, an antivirus scanner, an editor - makes MoveFileEx
+    fail with ``PermissionError [WinError 5] Access is denied``. That killed
+    three scheduled swing scans on the desk (2026-08-17 07:30 and 10:00,
+    2026-08-18 12:00), each dying after ``output/signals`` and taking the
+    tracker, reports, feature history and scan factors down with it, while
+    Auto Pilot could only report "exited with code 1".
+
+    Same doctrine as ``project_paths.SafeRotatingFileHandler``: a locked
+    destination is a transient condition to wait out, not a reason to lose
+    the write. A lock that outlives the budget still raises - a report that
+    genuinely cannot be published must not be reported as published.
+    """
+    for attempt in range(_REPLACE_RETRY_ATTEMPTS):
+        try:
+            os.replace(temp_path, path)
+            if attempt:
+                logging.info(
+                    "Atomic replace of %s succeeded on attempt %s (destination was locked).",
+                    path.name,
+                    attempt + 1,
+                )
+            return
+        except PermissionError:
+            if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
+                logging.warning(
+                    "Atomic replace of %s still denied after %s attempt(s) over %.1fs; "
+                    "something is holding it open.",
+                    path.name,
+                    _REPLACE_RETRY_ATTEMPTS,
+                    _REPLACE_RETRY_ATTEMPTS * _REPLACE_RETRY_DELAY_SECONDS,
+                )
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+
+
 def _write_text_atomic(path: Path, text: str, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = None
@@ -2169,7 +2217,7 @@ def _write_text_atomic(path: Path, text: str, encoding: str = "utf-8") -> None:
         ) as handle:
             handle.write(text)
             temp_path = Path(handle.name)
-        os.replace(temp_path, path)
+        _replace_with_retry(temp_path, path)
     finally:
         if temp_path is not None and temp_path.exists():
             temp_path.unlink(missing_ok=True)
@@ -2192,7 +2240,7 @@ def _write_dataframe_csv_atomic(frame: pd.DataFrame, path: Path, **to_csv_kwargs
         ) as handle:
             temp_path = Path(handle.name)
         frame.to_csv(temp_path, **to_csv_kwargs)
-        os.replace(temp_path, path)
+        _replace_with_retry(temp_path, path)
     finally:
         if temp_path is not None and temp_path.exists():
             temp_path.unlink(missing_ok=True)

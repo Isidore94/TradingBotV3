@@ -553,6 +553,38 @@ def _run_master_scan_subprocess(
     }
 
 
+#: Cap on the cause appended to the failure's first line. Auto Pilot's activity
+#: feed and the phone report both render that line; a 5,000-character exception
+#: would swamp both.
+_FAILURE_SUMMARY_MAX_CHARS = 240
+
+
+def child_failure_summary(stderr_text: str) -> str:
+    """The child's own final exception line, for the first line of the error.
+
+    ``AutopilotService._on_scan_failed`` writes ``detail.splitlines()[0]`` to
+    ``autopilot.log``. With the cause only in the *later* lines, three real desk
+    failures (2026-08-17 07:30 and 10:00, 2026-08-18 12:00) each read
+
+        Swing scan for slot 12:00 FAILED: Master AVWAP scan process exited with
+        code 1.
+
+    and named nothing; identifying them needed the run manifest and a log that
+    had since rotated. A Python traceback ends with an *unindented* exception
+    line, so that is what is lifted. A child that dies without one (a native
+    fault, a kill) leaves this empty and the message keeps its old shape rather
+    than quoting a random stack frame.
+    """
+    for line in reversed(str(stderr_text or "").splitlines()):
+        if not line.strip() or line[:1].isspace():
+            continue
+        summary = line.strip()
+        if len(summary) > _FAILURE_SUMMARY_MAX_CHARS:
+            summary = summary[: _FAILURE_SUMMARY_MAX_CHARS - 3] + "..."
+        return summary
+    return ""
+
+
 def _wait_for_scan_marker(
     command: list[str],
     *,
@@ -623,7 +655,13 @@ def _wait_for_scan_marker(
     stderr_text = "".join(stderr_tail).strip()
     stdout_text = "".join(stdout_tail).strip()
     details = "\n\n".join(part for part in (stderr_text, stdout_text) if part)
+    # The cause goes on the FIRST line: that is the only line Auto Pilot's
+    # activity feed keeps, and a bare "exited with code 1" sent the last
+    # three desk failures to the run manifests to be identified at all.
+    summary = child_failure_summary(stderr_text)
     raise RuntimeError(
         f"Master AVWAP scan process exited with code {returncode}."
+        + (f" {summary}" if summary else "")
         + (f"\n\n{details}" if details else "")
     )
+

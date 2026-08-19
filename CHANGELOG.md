@@ -1,10 +1,9 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-16** from the working copy of
-`phase05-r8-weekend-prep` (cut from `phase05-r7-journal-reliability-ux` (cut from `phase05-r2-focus-gating-strength-board`,
-itself cut from `phase05-r2-focus-gating-strength-board`, itself cut from
-`phase05-r1-auto-modes-quiet-hours`, itself branched from
-`testing-week-2026-08-10`)
+Last reconciled: **2026-08-18** from the working copy of
+`phase05-integration-blitz` (cut from `testing-week-2026-08-17`, which carries
+testing-week + R1 + R1.1 + R2 + R3 + R4 + R5 + R6 + R7 + R8, with the four later
+`phase05-r2-focus-gating-strength-board` commits merged in on 2026-08-18)
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -605,6 +604,77 @@ owed.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
+
+### 2026-08-18 — two live sessions, and the two defects they exposed
+
+`IMPLEMENTED` + `GREEN`. Repair pass on `phase05-r2-focus-gating-strength-board`,
+after AWAY sessions on 2026-08-17 and 2026-08-18. Live-proof results — one R2
+PASS, one R1 PASS, one HALF-PROVEN, five UNKNOWN — are recorded in
+`CURRENT_CHECKPOINT.md` with their log evidence and are **not** promoted here:
+nothing became `LIVE_VALIDATED`.
+
+**A reader holding a report open cost the desk three whole swing scans.**
+2026-08-17 07:30 and 10:00, and 2026-08-18 12:00, each after 8 to 30 minutes of
+real work. All three run manifests carry `"error": "PermissionError(13, 'Access
+is denied')"` and a phase list ending at `output/signals`; the surviving
+traceback names `legacy.py:2122`, the `os.replace` inside `_write_text_atomic`,
+replacing `master_avwap_market_prep.txt`. It is a self-inflicted race:
+`write_market_prep_files` writes the JSON first, the desk's own Market Prep
+panel watches that JSON with a `QFileSystemWatcher` and re-reads the *report
+text* on the change, and Windows' `open()` does not grant FILE_SHARE_DELETE — so
+the replace landing milliseconds later is denied. Not the frozen `-c` spawn
+class of 2026-08-13 (that failed one second in with exit code 2) and not a data
+fault (the provider counters on the failed run match the successful one).
+
+`_write_text_atomic` and `_write_dataframe_csv_atomic` now replace through a
+bounded retry — ten attempts a tenth of a second apart — the same doctrine
+`project_paths.SafeRotatingFileHandler` already applies to a locked log file at
+rollover. A lock outliving the budget still raises: a report that cannot be
+published must never be reported as published. `save_json` inherits it, since it
+writes through `_write_text_atomic`. The file-scoped ask-first rule was applied;
+the trader approved the `legacy.py` edit before it was made. No detector, score,
+ranking or alert behaviour changed — only the publish step became lock-tolerant.
+
+**The failure path now names its own cause.** `AutopilotService._on_scan_failed`
+writes only `detail.splitlines()[0]` to `autopilot.log`, so "exited with code 1"
+was the entire public record and identifying these three took the run manifests
+plus a log that had since rotated. `scan_service` now lifts the child's final
+unindented exception line onto that first line, bounded to 240 characters, and
+leaves the message unchanged when the child dies without one (a native fault, a
+kill) rather than quoting a random stack frame.
+
+**One odd yfinance frame aborted the universe rebuild.** `Universe rebuild
+failed: "['datetime'] not in index"` (2026-08-17 06:00:16), raised by the column
+selection ending `fetch_price_history`'s per-symbol loop: yfinance normally
+names the daily index `Date`, that chunk arrived with an unnamed index,
+`reset_index()` produced `index`, and one malformed sub-frame killed the whole
+rebuild while every other per-symbol fault there is skipped. It self-healed on
+the ~60-minute retry, which is why it needed a test rather than a watch. The
+date axis is now resolved by name (`Date`/`Datetime`/`index`/`level_0`) and then
+by dtype, and an unusable frame is skipped and counted — five warnings plus one
+total, so a systematic oddity reads as one line rather than 1,500.
+
+**And a floor under that fail-soft.** `build_universe` wrote
+`universe_all/longs/shorts` unconditionally, so a fetch outage that priced
+nothing would have overwritten a good universe with an empty file — against the
+sec 5 invariant that a failed publish never destroys the last verified report.
+An empty screen now raises; the caller already logs and retries in ~60 minutes,
+and the previous universe stays authoritative until a rebuild succeeds.
+
+Fourteen new tests, every one verified to fail against the unfixed code,
+including a Windows-only reproduction that holds a real read handle on the
+destination while the write runs. Gates on the new candidate: **2935 passed / 19
+subtests, smoke 7/7, `selftest OK: 31/31 checks passed (frozen)`**, all exit 0,
+with `build/` and `dist/` deleted before the rebuild.
+
+**Recorded, not fixed.** `BouncePanel.__init__` runs
+`QTimer.singleShot(0, self.start)` (`bounce_panel.py:280`), so the desk connects
+to IB on every launch at any hour, outside Auto Pilot and outside quiet hours.
+That is what produced `IB: connected` at 22:06:41 on the quiet-boot night — not
+an Auto Pilot BounceBot start, which is unconditionally announced by
+`Starting BounceBot` and was absent. It contradicts the *wording* of the R1
+quiet-hours proof (which said "no IB connect"), so that wording is corrected;
+changing the behaviour is an R1 decision left to the trader.
 
 ### 2026-08-16 — R3 swing-quality classifier enters shadow
 

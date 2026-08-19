@@ -192,6 +192,7 @@ elapsed evidence lane that can run in parallel.
 | Next action | See **RESUME HERE** above. Do not claim any live proof from deterministic tests |
 | Do not start yet | **Phases 1–7 remain NOT authorized.** Do not run R7's live migration/backfill before Monday's validation day passes; do not claim any live proof from deterministic tests |
 | **Owed live gates — the full ledger** | Nothing below has been observed. UNKNOWN is a result and `plan.md` sec 6 requires recording it as one. **R1 (4):** a ~21:00 boot that starts nothing; an EVENING day that stops after its early block; an AWAY session staging-not-adopting with a clean post-flip drain; one SPY ±1% alarm. **R2 (4):** one staged pick evicted on a VWAP/PDH fallback; one adoption-time refusal; one scoped "Not today" leaving other entries intact; one strength-board session matching the TC2000 scan's character (re-measure the fetch during market hours). **R3 (3):** the `would_demote` shadow week **before any row moves**; the one-week 12:45-vs-close and STABLE-vs-PREVIEW churn comparison; the first real-data curation cycle. **R5 (1, and it blocks build work):** one desk session confirming the LRSI cross engine's alert volume is sane — §7's gate is per engine, so §3.2's confluence and §3.3's first-candle ORB stay unwired until it runs. **R4:** the whole §8 exit gate, including the two-direction Not-today/armed-watch check. **R6:** the stall-watchdog diagnostic week (the code was already built; only the week is owed). **R7:** the trader-present finale — dry-run review, migration, full backfill, ≥10-trade statement spot-audit, one clean reconciliation week, ≥5 consecutive nightly ledger entries. **R8:** one real weekend run (does **not** wait for Monday — read-only, starts nothing until a button is pressed) |
+| **Live sessions 2026-08-17 + 2026-08-18 (merged in from the desk branch)** | Both days ran AWAY open-to-close on `c69b69c`. **R2 eviction PASSED** (four timestamped `Focus gate evicted N staged pick(s)` lines with per-symbol reasons), **R1 quiet boot PASSED with a note** (the `IB: connected` at 22:06:41 is `BouncePanel`'s launch auto-connect, not an Auto Pilot start), **R1 AWAY discipline HALF-PROVEN** (no DESK flip ever happened), and the other five proofs stay **UNKNOWN**. Two defects found and fixed on the desk branch and now merged here: an open report file aborting a whole swing scan (`_write_text_atomic` PermissionError), and one odd yfinance frame blanking the universe rebuild |
 | Doc-only addendum (2026-08-15, late) | Phase 0.5 gained packets **R7 (journal reliability + UX)** and **R8 (Weekend Prep)**: specs written, WISHLIST/plan.md/docs README reconciled (incl. the P3.3 nightly-journal-pull promotion into R7 and the P5.4 narrowing). **Markdown-only — the release candidate, gates, and baseline above are unchanged** |
 | **R6(b) decision (2026-08-17, delegated)** | Rotation of `technical_integrity_events.jsonl` is **declined for now** — measured 370 MB / 2.2 s boot re-parse, session-filtered replay makes closed sessions inert, and in-place rotation would break the warehouse ingest (SHA + line-offset) watermark; retention stays owned by the locked warehouse plan's after-verified-ingest cleanup, to be built as forward-only per-session segments with the monolith frozen. R6(b) narrows to the replay characterization fixture + read-only ledger audit. Recorded in `plan.md` item 6(b). **Markdown-only — the release candidate, gates, and baseline above are unchanged** |
 | **R7 redirect (2026-08-15, second of the day)** | The trader explicitly authorized **R7 code to start now**, ahead of the P0.7 merge: branch **`phase05-r7-journal-reliability-ux` cut from the R2 tip** — same redirect pattern as R1/R2, recorded in `plan.md` Phase 0.5 preamble and the R7 spec header. Rationale: R7/R8 touch journal/weekend surfaces, not the scanning/alerting/Focus path Monday's proofs cover. **The desk keeps running the R2 branch via the scheduled task until the validation day passes — do not switch the desk branch without disarming that task.** R1/R2's eight live proofs remain owed and are inherited by the eventual stack merge. R7's own trader-present steps (live DB migration, full backfill) must NOT run on the desk before Monday's validation passes |
@@ -416,6 +417,219 @@ against fixture and temporary stores; `journal_migrate.py` defaults to a dry run
 against a throwaway copy, and a test asserts the live file is byte-identical
 afterwards.
 
+## Live sessions 2026-08-17 and 2026-08-18 — what they proved, and two defects
+
+Both days ran **AWAY from open to close**. That is the single fact that shapes
+everything below: AWAY exercises staging, eviction, silent alert queueing and the
+hourly phone reports, and it exercises **none** of adoption, "Not today", the
+strength board, EVENING or the SPY alarm. Those did not fail — their triggering
+conditions never occurred, so they stay **UNKNOWN**, which `plan.md` sec 6 counts
+as a result.
+
+### Proof results
+
+| Proof | Result | Evidence |
+|---|---|---|
+| R2 eviction | **PASS** | `Focus gate evicted N staged pick(s)` in `trading_bot.log` / `trading_bot.log.1` on **2026-08-18 at 10:31, 11:40, 12:11 and 12:48**, each with per-symbol reasons — e.g. `Focus gate evicted 6 staged long pick(s): BMRN (not above yesterday's high and not above session VWAP), COO (not above session VWAP), DLTR (not above session VWAP), HLT (not above session VWAP), PAYC (not above session VWAP), SBH (not above session VWAP)`. Refusals at candidate build (`Focus gate refused N long candidate(s)`) appear in the same file and hour |
+| R1 quiet boot | **PASS, with a note** (see below) | The 2026-08-16 22:06 launch logged `Auto Pilot is ON from saved state, but nothing starts yet - weekend - quiet hours until the next session` (autopilot.log 22:06:38) and nothing automatic ran until `Automatic work resumed - inside the 06:00-14:00 automatic-work window` at 2026-08-17 06:00:11 |
+| R1 AWAY discipline | **HALF-PROVEN** | Two full sessions staged without adopting, and every hourly `Hourly Away swing report verified for HH:00` line is present on both days. **The flip-back-to-DESK half never ran** — the trader never flipped, so the R2.2 post-flip re-measurement is untested |
+| R2 adoption refusal | **UNKNOWN** | AWAY never adopts, so `Focus gate refused N staged pick(s) at adoption` cannot appear |
+| R2 scoped "Not today" | **UNKNOWN** | Needs an auto-adopted M5 entry; AWAY produced none |
+| R2 strength board | **UNKNOWN** | Never opened during a session |
+| R1 EVENING stop | **UNKNOWN** | No EVENING day ran |
+| R1 SPY wake alarm | **UNKNOWN** | No EVENING day ran |
+
+**No UNKNOWN above was upgraded.** A green suite does not move any of them, and
+none may be written as `LIVE_VALIDATED` in `CHANGELOG.md` without its own
+preserved evidence.
+
+### The quiet-boot note: `IB: connected` at 22:06:41 — what it actually was
+
+autopilot.log shows `IB: retrying` and then `IB: connected` at 2026-08-16
+22:06:41, three seconds after the quiet-hours refusal. Answered from the code:
+
+**It is neither of the two candidates.** It is not an Auto Pilot BounceBot start
+— finding #1 of the R1 review has **not** regressed — and it is not a standalone
+market-internals recorder, because none exists: the internals recorder lives
+*inside* a running BounceBot (`bounce_bot_lib/legacy.py:8602-8625`), and the only
+IB connect sites in the tree are `bounce_bot_lib/legacy.py:11535` and `:11637`
+(inside `run_bot_with_gui`), `master_avwap_lib/legacy.py:1936` (the scan child)
+and `journal_importers.py:412` (broker import).
+
+It is a **third path**: `scripts/ui/panels/bounce_panel.py:280` runs
+`QTimer.singleShot(0, self.start)` in `BouncePanel.__init__`, so the BounceBot
+panel connects to IB on every launch at any hour, entirely outside Auto Pilot.
+Its own tooltip says so (`bounce_panel.py:285`, "Auto-connects on launch").
+
+Why that proves the R1 gate held rather than failed:
+
+- An automatic start is **unconditionally announced**: `autopilot_service.py:576`
+  logs `Starting BounceBot (IB connect + intraday scanning).` on every successful
+  `service.start()`, and `_ensure_bot_running` (`autopilot_service.py:547-577`,
+  the call at `:568`) is the only automated caller. That line is **absent** on
+  08-16. The two previous real starts (08-14 12:48:31 and 08-14 23:32:15) both
+  show it immediately *before* the same IB status pair — the contrast is the
+  proof.
+- The R1.1 fix is where it should be: the gate sits inside `_ensure_bot_running`
+  (`autopilot_service.py:556-561`), not only at the boot resume
+  (`autopilot_service.py:204-217`), so the 30-second tick cannot undo it.
+- `IB: retrying` / `IB: connected` are emitted only by `bounce_service.py:865`
+  and `:920`, both of which require an installed bot. `IB: connecting`
+  (`bounce_service.py:403`) never reached the log because `_on_connection_changed`
+  suppresses the first status when the previous one is `None`
+  (`autopilot_service.py:2106-2117`).
+- Nothing swept: a freshly started BounceBot begins with scanning disabled, and
+  the window gate never enabled it — the same behaviour recorded for the
+  2026-08-10 21:19 restart further down this file.
+
+**Recorded, not fixed — the trader decides.** The desk connects to IB on every
+launch regardless of hour. That is arguably right (a connection is cheap, and the
+trader may want live charts at 22:00) but it contradicts the *wording* of the R1
+quiet-hours proof row, which said "no IB connect". That row is now written
+against what the build does. Making the panel's launch connect obey quiet hours
+is a one-line change at `bounce_panel.py:280` plus a test; it is an R1 behaviour
+change, so it waits for direction rather than riding along with a defect repair.
+
+### Defect 1 — a reader holding a report open killed three whole swing scans
+
+**Symptom.** `Swing scan for slot HH:MM FAILED: Master AVWAP scan process exited
+with code 1.` on 2026-08-17 at 07:30 and 10:00, and 2026-08-18 at 12:00 (a
+tracker-write slot), while neighbouring slots the same days succeeded.
+
+**Root cause, with evidence.** All three run manifests record `"status":
+"failed"`, `"error": "PermissionError(13, 'Access is denied')"`, and a phase list
+ending at `output/signals` — the next phase, `output/reports`, never completed.
+The surviving traceback (`trading_bot.log`, 2026-08-18 12:29:50) names the line:
+
+```
+File "scripts\master_avwap_lib\runner.py", line 2265, in _run_master_impl
+    write_market_prep_files(market_prep_payload)
+File "scripts\master_avwap_lib\legacy.py", line 21984, in write_market_prep_files
+    _write_text_atomic(report_path, ...)
+File "scripts\master_avwap_lib\legacy.py", line 2122, in _write_text_atomic
+    os.replace(temp_path, path)
+PermissionError: [WinError 5] Access is denied:
+  'C:\TradingBotData\output\reports\.master_avwap_market_prep.txt.ifkokr1w.tmp'
+  -> 'C:\TradingBotData\output\reports\master_avwap_market_prep.txt'
+```
+
+It is a **self-inflicted race**. Not a data or network fault: the failed 08-18
+run's provider counters are normal (1,295 IBKR daily-bar successes against 1,293
+on the successful 13:00 run). Not the frozen `-c` spawn class of 2026-08-13:
+that failed one second in with exit code **2**, while these failed 8 to 30
+minutes in with exit code 1, from a source-launched desk.
+`write_market_prep_files` (`legacy.py:21978-21985`) writes the JSON first; the
+desk's Market Prep panel watches that JSON with a `QFileSystemWatcher`
+(`ui/panels/master_market_prep_panel.py:141-146`) and re-reads the **report
+text** on the change (`:163` → `ui/services/market_prep_feed.py:90-96`); and
+Windows' `open()` does not grant FILE_SHARE_DELETE, so the `os.replace` landing
+milliseconds later is denied. Reproduced directly on this desk: a plain read
+handle on a destination file makes `os.replace` raise the identical
+`[WinError 5] Access is denied`.
+
+**Cost.** The whole scan died — tracker, reports, feature history, scan factors
+and state — because one 60 KB report file was being read for a millisecond.
+
+**Fix** (`c69b69c`; the trader approved the `legacy.py` edit before it was made):
+
+1. `_write_text_atomic` and `_write_dataframe_csv_atomic` now replace through
+   `_replace_with_retry` — ten attempts a tenth of a second apart. Same doctrine
+   as `project_paths.SafeRotatingFileHandler`, which already tolerates a locked
+   log file on rollover. A lock that outlives the budget still raises: a report
+   that cannot be published must never be reported as published.
+2. `ui/services/scan_service.py` lifts the child's own final exception line onto
+   the **first** line of the `RuntimeError`, bounded to 240 characters, because
+   `_on_scan_failed` writes only `detail.splitlines()[0]` to `autopilot.log`
+   (`autopilot_service.py:1144`). The next occurrence reads `... exited with code
+   1. PermissionError: [WinError 5] Access is denied: ...` instead of sending the
+   reader to the run manifests and a log that may have rotated. No change to
+   `autopilot_service.py` was needed — putting the cause on the first line was
+   enough.
+
+**Tests** (`tests/test_atomic_publish_under_reader_lock.py`,
+`tests/test_scan_service_marker.py`): nine new, every one verified to fail
+against the unfixed code, including a Windows-only reproduction that holds a real
+read handle on the destination while the write runs.
+
+**Not fixed, deliberately:** the panel still re-reads the report on every JSON
+change, so the race can still *start*; the writer now survives it. Removing the
+trigger as well is a UI change outside this pass.
+
+### Defect 2 — one odd yfinance frame aborted the universe rebuild
+
+**Symptom.** `Universe rebuild failed: "['datetime'] not in index"` (autopilot.log
+2026-08-17 06:00:16). It self-healed on the ~60-minute retry — the universe was
+rebuilt at 13:00 the same day — so the visible cost was a stale universe for one
+session, which is exactly why it needed a test rather than a watch.
+
+**Root cause.** `scripts/universe_builder.py:329` (pre-fix), the column selection
+that ends `fetch_price_history`'s per-symbol loop. yfinance normally names the
+daily index `Date`, so `reset_index()` yields a `Date` column the rename turns
+into `datetime`; that chunk arrived with an **unnamed** index instead,
+`reset_index()` produced `index`, and the selection raised pandas'
+`KeyError: "['datetime'] not in index"` — the exact message the log carries. One
+malformed sub-frame aborted the entire rebuild, while every other per-symbol
+fault in that loop is skipped. The upstream response itself is not recoverable:
+`trading_bot.log` has since rotated past 08-17.
+
+**Fix** (`0d355b1`): the date axis is resolved by name (`Date` / `Datetime` /
+`index` / `level_0`) and then by dtype; a frame with no usable date column is
+skipped and counted rather than fatal, bounded to five warnings plus one total.
+
+**And a floor under that fail-soft.** `build_universe` wrote
+`universe_all/longs/shorts` unconditionally, so a fetch outage that priced
+nothing would have overwritten a good universe with an empty file. `plan.md`
+sec 5 — *a failed publish never destroys the last verified report* — so an empty
+screen now raises; the caller already logs and retries in ~60 minutes, and the
+previous universe stays authoritative until a rebuild succeeds. Trader approved.
+
+**Tests** (`tests/test_universe_builder.py`): five new. The offending frame shape
+was verified to fail against the unfixed code with the identical `KeyError`.
+
+### Release candidate — 2026-08-18
+
+Code changed, so this is a **new** release candidate and all three gates were
+re-run against it.
+
+| Check | Result | When |
+|---|---|---|
+| pytest | **2935 passed / 19 subtests**, exit 0 | 2026-08-18, on `c69b69c` |
+| smoke | **7/7**, exit 0 | 2026-08-18, on `c69b69c` |
+| frozen rebuild + selftest | **`selftest OK: 31/31 checks passed (frozen)`**, exit 0 | 2026-08-18, on `c69b69c` |
+
+2921 → 2935 is the fourteen new tests; no test was weakened or removed. The
+frozen count stays 31: neither fix added a dependency, asset, package or dynamic
+import, and the spec-drift test passes.
+
+**Provenance, on its face:** last code commit `c69b69c` at **19:36:04**; last
+commit of any kind `f2141c5` (Markdown only) at **20:00:01**;
+`dist\TradingBotV3\TradingBotV3.exe` mtime **20:02:47** — the executable
+postdates both. `build/` and `dist/` were **deleted before each of the two
+builds**, so no cached module could have been reused.
+
+The second build was not ceremony: `docs/DESK_TESTING_PLAN.md` is a **bundled
+runtime asset** (the 31st selftest check exists because of it), and the doc pass
+changed it after the first build. Rebuilding keeps the packaged Settings ▸
+Testing Plan page from rendering a superseded runbook. Both builds returned
+`selftest OK: 31/31 checks passed (frozen)`, exit 0; the bundled copy at
+`dist/TradingBotV3/_internal/docs/DESK_TESTING_PLAN.md` was confirmed to carry
+the 2026-08-18 text.
+
+### Next action — one DESK day and one EVENING night
+
+Neither needs code. Both are written up for a human reader in
+`docs/DESK_TESTING_PLAN.md`.
+
+| Day | What it closes |
+|---|---|
+| One **DESK** session | R2 adoption refusal, scoped "Not today", the strength board's first real look — and the second half of AWAY discipline if the trader spends part of the day in AWAY and flips back |
+| One **EVENING** night | EVENING stop (the early block runs, then each refused hourly slot is named once) and the SPY wake alarm |
+
+The SPY alarm does not need a real ±1% day: set `push_evening_spy_alarm_pct` low
+for one night to force it, confirm one urgent push with repeats no sooner than
+five minutes and silence after flipping out of EVENING, then **restore the
+setting** — a forgotten low threshold wakes the trader on an ordinary move.
+
 ## Merge safeguards — read before Monday
 
 ### Repaired R7/R8 release candidate — code tip `dd201cd`
@@ -532,12 +746,18 @@ package.
 
 ### Previous release candidate (R1/R2)
 
-Monday tests **the tip of `phase05-r2-focus-gating-strength-board`**. The last
-commit that changed code or tests is the R2.3 fix **"Give each return to the
+> **Superseded 2026-08-18.** The current release candidate is `c69b69c` - see
+> the 2026-08-18 section above for its gate figures and provenance. The table
+> below is the 2026-08-15 R2.3 candidate, kept because the 08-17 and 08-18
+> sessions' evidence belongs to *that* tree.
+
+The 08-17 and 08-18 sessions ran **the tip of
+`phase05-r2-focus-gating-strength-board` as of 2026-08-15**. The last
+commit that changed code or tests before them is the R2.3 fix **"Give each return to the
 desk an identity its timestamp cannot collide"** (`90ba0d4`, committed
-2026-08-15 13:11:19 PT); anything after it on this branch is documentation, so
-the running behaviour Monday exercises is exactly the tree the three gates
-below were run against.
+2026-08-15 13:11:19 PT); everything after it until the 2026-08-18 defect repair
+is documentation, so the running behaviour those two days exercised is exactly
+the tree the three gates below were run against.
 
 Stated that way on purpose: the SHA above is re-stated **only** because the
 external provenance check needs commit time and executable mtime side by side.
@@ -825,13 +1045,15 @@ alternative. The trader's note left that as their call, so the accepted-exposure
 documentation was built as written and the constant is unchanged. Switching it
 later is a one-line change plus the golden-fixture update.
 
-### R2 live proofs owed
+### R2 live proofs — one PASSED 2026-08-18, three still owed
 
-None has run. From `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` §8:
+From `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` §8. **Eviction PASSED on
+2026-08-18** with the log lines quoted in the 2026-08-18 section above; the other
+three need a DESK day, which AWAY could not provide:
 
 | Proof | What to look for |
 |---|---|
-| Eviction | One staged pick evicted for falling back through VWAP or the previous-day extreme: `Focus gate evicted N staged long pick(s): SYM (not above session VWAP)` in the Auto Pilot log. Silent on the desk by design — the log is the record |
+| Eviction — **PASSED 2026-08-18** | One staged pick evicted for falling back through VWAP or the previous-day extreme: `Focus gate evicted N staged long pick(s): SYM (not above session VWAP)` in the Auto Pilot log. Silent on the desk by design — the log is the record |
 | Adoption refusal | One pick refused at adoption, in `trading_bot.log`: `Focus gate refused N staged pick(s) at adoption`. A verdict older than 45 min reads `gate check is NN min old` |
 | Scoped "Not today" | On an auto-adopted M5 entry the button reads `✕ Not today - drop pick` and removes only that entry; the trader's own picks, the swing list and the other side are all still there afterwards. On a name the trader typed the button keeps its old feed-only wording and Focus is untouched |
 | Strength board | A board session the trader confirms matches the TC2000 scan's character (~20–40/side). **Re-measure the fetch during market hours** — §10's 27.6 s was taken on a Saturday and is a floor, not a worst case. Decide the RVOL column then; it is specified but deliberately not built |
@@ -840,15 +1062,19 @@ None has run. From `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` §8:
 in §9, not built — the trader decides on the first live board session whether
 they miss it, and the fetch is cheap only at survivor scale.
 
-### R1 live proofs owed
+### R1 live proofs — one PASSED, one HALF-PROVEN, two owed
 
-None of these has run. Each is one observation on the desk:
+**Quiet hours PASSED** on the 2026-08-16 22:06 boot (with the `IB: connected`
+note resolved in the 2026-08-18 section above). **AWAY discipline is
+HALF-PROVEN**: staging without adoption held for two full sessions, but the
+flip back to DESK never happened. EVENING stop and the SPY alarm need an
+EVENING night. Each is one observation on the desk:
 
 | Proof | What to look for |
 |---|---|
-| Quiet hours | Launch at ~21:00 on a weekday with Auto left ON. `autopilot.log` says `Auto Pilot is ON from saved state, but nothing starts yet`; no IB connect, no universe rebuild, no self-arm. A manual scan from the same desk still runs |
+| Quiet hours — **PASSED 2026-08-16** | Launch at ~21:00 on a weekday with Auto left ON. `autopilot.log` says `Auto Pilot is ON from saved state, but nothing starts yet`; **no `Starting BounceBot` line**, no universe rebuild, no self-arm. A manual scan from the same desk still runs. **`IB: connected` on its own is expected and is not a failure** — `BouncePanel` connects on every launch at any hour (`bounce_panel.py:280`), outside Auto Pilot; the Auto Pilot start is the announced one |
 | EVENING stop | An EVENING day: the open+30 slot and the 07:00/07:15/07:30 checks run, then one `Evening mode: swing slot(s) … not run` line per refused hourly slot and no further scan. The after-close wrap-up still fires |
-| AWAY discipline | An AWAY session: picks do not reach `longs.txt`/`shorts.txt`, alerts arrive silently while the feed and D1 badge fill, and the flip back to DESK adopts **only picks re-measured since the flip** — R2 changed this proof and R2.2 tightened it, so anything staged hours ago and no longer qualifying is refused rather than adopted. If the re-check itself fails, the status line says `Retrying in 60s` and **nothing adopts** — that is also a pass |
+| AWAY discipline — **HALF-PROVEN 2026-08-17/18** | An AWAY session: picks do not reach `longs.txt`/`shorts.txt`, alerts arrive silently while the feed and D1 badge fill, and the flip back to DESK adopts **only picks re-measured since the flip** — R2 changed this proof and R2.2 tightened it, so anything staged hours ago and no longer qualifying is refused rather than adopted. If the re-check itself fails, the status line says `Retrying in 60s` and **nothing adopts** — that is also a pass |
 | SPY wake alarm | One real ±1% EVENING day, or force it by setting `push_evening_spy_alarm_pct` low: an urgent push, a repeat no sooner than 5 minutes, and silence after flipping out of EVENING |
 
 **~~Known limitation, deliberate~~ — CLOSED by R2 (2026-08-15).** The

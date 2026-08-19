@@ -263,6 +263,54 @@ def fetch_optionable_symbols(*, refresh: bool = False) -> list[str]:
 # ---------------------------------------------------------------------------
 # Price history + metrics (yfinance, chunked + cached)
 # ---------------------------------------------------------------------------
+#: Column names ``reset_index()`` can produce for a yfinance daily date axis.
+#: "Date" is the documented one; "Datetime" is what yfinance uses for intraday
+#: responses; "index"/"level_0" are what an *unnamed* index degrades into.
+_DATETIME_COLUMN_CANDIDATES = ("Date", "Datetime", "date", "datetime", "index", "level_0")
+
+#: Cap on per-symbol shape warnings so a systematically odd response logs a
+#: readable handful of lines and one total, not 1,500 identical ones.
+_MAX_SHAPE_WARNINGS = 5
+
+
+def _normalise_history_frame(sub: pd.DataFrame, symbol: str) -> pd.DataFrame | None:
+    """One symbol's yfinance daily frame as ``[symbol, datetime, close, volume]``.
+
+    Returns ``None`` when the frame carries no usable date axis, so the caller
+    can skip that symbol the way it already skips an empty one.
+
+    The date axis is resolved by name **and** by dtype rather than assumed to be
+    ``Date``. On 2026-08-17 06:00 the desk's Monday rebuild died with
+    ``KeyError: "['datetime'] not in index"`` because a chunk arrived with an
+    unnamed index: ``reset_index()`` produced an ``index`` column, the rename
+    below found no ``Date`` to rename, and the final column selection raised -
+    aborting the whole universe rebuild over one malformed sub-frame.
+    """
+    frame = sub.reset_index().rename(columns={"Close": "close", "Volume": "volume"})
+    if "datetime" not in frame.columns:
+        source = ""
+        for candidate in _DATETIME_COLUMN_CANDIDATES:
+            if candidate in frame.columns:
+                source = candidate
+                break
+        if not source:
+            # Last resort: the first datetime-typed column, whatever it is named.
+            for column in frame.columns:
+                if pd.api.types.is_datetime64_any_dtype(frame[column]):
+                    source = str(column)
+                    break
+        if not source:
+            return None
+        frame = frame.rename(columns={source: "datetime"})
+    if "close" not in frame.columns or "volume" not in frame.columns:
+        return None
+    frame = frame.dropna(subset=["close"])
+    if frame.empty:
+        return None
+    frame["symbol"] = symbol
+    return frame[["symbol", "datetime", "close", "volume"]]
+
+
 def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.DataFrame:
     """Long-form frame [symbol, datetime, close, volume] for every fetchable symbol."""
     tickers = sorted({str(s or "").strip().upper() for s in symbols if str(s or "").strip()})
@@ -293,6 +341,7 @@ def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.Data
         )
 
     parts: list[pd.DataFrame] = []
+    skipped_shapes = 0
     for start in range(0, len(tickers), YF_CHUNK_SIZE):
         chunk = tickers[start : start + YF_CHUNK_SIZE]
         logging.info("Universe price fetch %s-%s of %s...", start + 1, start + len(chunk), len(tickers))
@@ -321,12 +370,30 @@ def fetch_price_history(symbols: list[str], *, refresh: bool = False) -> pd.Data
                 continue
             if sub is None or sub.empty:
                 continue
-            frame = sub.reset_index().rename(columns={"Date": "datetime", "Close": "close", "Volume": "volume"})
-            frame = frame.dropna(subset=["close"])
-            if frame.empty:
+            try:
+                frame = _normalise_history_frame(sub, symbol)
+            except Exception as exc:  # a shape nothing here anticipated
+                frame = None
+                shape_failure = str(exc)
+            else:
+                shape_failure = "no usable date column" if frame is None else ""
+            if frame is None:
+                skipped_shapes += 1
+                if skipped_shapes <= _MAX_SHAPE_WARNINGS:
+                    logging.warning(
+                        "Universe price fetch skipped %s (%s); columns seen: %s.",
+                        symbol,
+                        shape_failure,
+                        list(sub.reset_index().columns),
+                    )
                 continue
-            frame["symbol"] = symbol
-            parts.append(frame[["symbol", "datetime", "close", "volume"]])
+            parts.append(frame)
+    if skipped_shapes:
+        logging.warning(
+            "Universe price fetch skipped %s of %s symbol frame(s) with no usable date column.",
+            skipped_shapes,
+            len(tickers),
+        )
     history = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["symbol", "datetime", "close", "volume"])
     if not history.empty:
         try:
@@ -574,6 +641,15 @@ def build_universe(
     )
 
     if write_outputs:
+        if screened.empty:
+            # plan.md sec 5: a failed publish never destroys the last verified
+            # report. An outage that prices nothing used to overwrite a good
+            # universe with an empty file; the caller retries in ~60m and the
+            # previous lists stay authoritative until one succeeds.
+            raise RuntimeError(
+                f"Universe screen produced 0 symbols (priced {len(metrics)}); "
+                "refusing to overwrite the existing universe files."
+            )
         _write_watchlist(UNIVERSE_ALL_FILE, all_symbols)
         _write_watchlist(UNIVERSE_LONGS_FILE, longs)
         _write_watchlist(UNIVERSE_SHORTS_FILE, shorts)
