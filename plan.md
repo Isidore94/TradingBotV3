@@ -456,8 +456,17 @@ are listed in `CURRENT_CHECKPOINT.md`.
    `collect_submodules`, four modules joined the selftest roster, and a
    clean-cache rebuild moved the frozen count **51 → 55**.
 
-   **Next, and it is a LIVE gate, not a build one:** §7 orders the remaining
-   engines behind a desk session per engine — the confluence (§3.2) and
+   **BUILT OUT 2026-08-18 (trader integration redirect).** §3.2's confluence,
+   §3.3's first-candle ORB flow and §4's any-bounce watch are all built, wired
+   and green, with the prior-anchor AVWAP line carried onto the zone-arms entry
+   behind a golden fixture that passes unchanged (spec §9.2). The redirect is
+   §8.2's own first reopen trigger. **All four new alert types default OFF**, so
+   what §7's per-engine desk session now decides is which of them earns a
+   default-on — audibility, not existence. **Owed, live only:** that session,
+   for each engine, plus one observed any-bounce firing naming its level.
+
+   **Superseded — the original ordering, kept because it explains the shape:**
+   §7 ordered the remaining engines behind a desk session per engine — the confluence (§3.2) and
    first-candle ORB (§3.3) engines wire only after a session confirms the LRSI
    cross's alert volume is sane. §4's any-bounce watch is not behind that gate
    but needs the prior-anchor AVWAP line added to the D1 scan output, which is
@@ -505,7 +514,13 @@ are listed in `CURRENT_CHECKPOINT.md`.
    **forward-only per-session segment files plus the monolith frozen in
    place** (each closed segment immutable = a clean ingest source; the frozen
    file's watermark stays valid forever) — never in-place truncation. What
-   R6(b) still owes NOW: **(1) the replay characterization fixture over
+   R6(b) is **CLOSED 2026-08-18**: item (2)'s read-only ledger audit and item
+   (3)'s stale-comment fix both landed (`operations_audit._jsonl_ledger_rows`
+   reports measured size, estimated rows and last write per ledger from the
+   existing footprint walk, reading a 256 KB sample and writing nothing; no
+   current size is hard-coded in code any more). Rotation stays declined; the
+   reopen triggers below are unchanged. What it owed, for the record: **(1) the
+   replay characterization fixture over
    `_load_resolved_events` is BUILT 2026-08-17** —
    `tests/fixtures/technical_integrity_replay_v1.json` +
    `tests/test_technical_integrity_replay.py`, 18 tests, every case in the

@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
+from chart_watch import ANY_BOUNCE_KINDS, D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
 from ui.widgets.flow_layout import FlowLayout
 
@@ -85,6 +85,10 @@ class ArmBar(QFrame):
     symbolRequested = Signal(str)
     watchToggled = Signal(str)  # chart-watch kind
     d1EventToggled = Signal(str)  # D1 event watch kind
+    # R5 section 4: one armed request covering the WHOLE level set, so it
+    # carries no kind - "tell me when this name bounces off any of my
+    # levels". The host owns the side (it knows the charted alert).
+    anyBounceToggled = Signal()
     levelArmRequested = Signal(str, float)  # direction, level
     levelDisarmRequested = Signal(str, float)  # direction, level
     # direction - a PHONE price alert off the painted D1 level the trader
@@ -172,6 +176,13 @@ class ArmBar(QFrame):
             )
             self.d1_event_buttons[kind] = button
 
+        self.any_bounce_button = QPushButton("Any bounce")
+        self.any_bounce_button.setCheckable(True)
+        self.any_bounce_button.setToolTip(self._any_bounce_tooltip())
+        self.any_bounce_button.clicked.connect(
+            lambda _checked=False: self.anyBounceToggled.emit()
+        )
+
         self.armed_row = QWidget()
         self.armed_layout = QHBoxLayout(self.armed_row)
         self.armed_layout.setContentsMargins(0, 0, 0, 0)
@@ -212,6 +223,7 @@ class ArmBar(QFrame):
         d1_row.addWidget(d1_label)
         for button in self.d1_event_buttons.values():
             d1_row.addWidget(button)
+        d1_row.addWidget(self.any_bounce_button)
         d1_row.addWidget(self.armed_row)
 
         layout = QVBoxLayout(self)
@@ -267,6 +279,7 @@ class ArmBar(QFrame):
         for widget in (
             *self.watch_buttons.values(),
             *self.d1_event_buttons.values(),
+            self.any_bounce_button,
             self.level_input,
             self.direction_input,
             self.arm_level_button,
@@ -344,6 +357,22 @@ class ArmBar(QFrame):
             label = D1_EVENT_KINDS[kind]
             button.setText(f"{label} ✓" if kind in armed else label)
             button.setChecked(kind in armed)
+
+    def set_any_bounce_armed(self, armed: bool) -> None:
+        """Reflect this symbol's any-bounce watch; a second click disarms."""
+        self.any_bounce_button.setText("Any bounce ✓" if armed else "Any bounce")
+        self.any_bounce_button.setChecked(bool(armed))
+
+    @staticmethod
+    def _any_bounce_tooltip() -> str:
+        levels = ", ".join(ANY_BOUNCE_KINDS.values())
+        return (
+            "Tell me when this name bounces off ANY of my levels: "
+            f"{levels}. Two completed 5m bars confirm it, exactly as the "
+            "D1 zone arms do. It fires once, names the level that held, "
+            "and disarms - click again to re-arm. A level the data cannot "
+            "supply is simply not watched."
+        )
 
     @staticmethod
     def _d1_event_tooltip(kind: str) -> str:

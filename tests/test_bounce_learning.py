@@ -493,6 +493,12 @@ def test_human_focus_fast_lane_runs_before_broad_scan_and_reuses_bars():
         check_orb_break_setups=lambda symbols=None: calls.append(("orb", frozenset(symbols or ()))),
         check_ema8_grind_setups=lambda symbols=None: calls.append(("ema8", frozenset(symbols or ()))),
         check_lrsi_cross_setups=lambda symbols=None: calls.append(("lrsi", frozenset(symbols or ()))),
+        check_confluence_setups=lambda symbols=None: calls.append(
+            ("confluence", frozenset(symbols or ()))
+        ),
+        check_orb_first_candle_setups=lambda symbols=None: calls.append(
+            ("orb_first_candle", frozenset(symbols or ()))
+        ),
     )
 
     processed = BounceBot._scan_human_focus_fast_lane(stub, {"vwap", "ema_8"})
@@ -502,10 +508,14 @@ def test_human_focus_fast_lane_runs_before_broad_scan_and_reuses_bars():
         ("bounce", "AAPL", frozenset({"vwap", "ema_8"})),
         ("bounce", "TSLA", frozenset({"vwap", "ema_8"})),
     ]
+    # Every M5 pattern family in the fast lane consumes the bars just
+    # fetched above, in a fixed order, and none of them refetches.
     assert calls[2:] == [
         ("orb", frozenset({"AAPL", "TSLA"})),
         ("ema8", frozenset({"AAPL", "TSLA"})),
         ("lrsi", frozenset({"AAPL", "TSLA"})),
+        ("confluence", frozenset({"AAPL", "TSLA"})),
+        ("orb_first_candle", frozenset({"AAPL", "TSLA"})),
     ]
 
 

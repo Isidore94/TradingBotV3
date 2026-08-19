@@ -53,6 +53,7 @@ class AlertChartReview(QWidget):
     crossFocusToggled = Signal(object)
     watchToggled = Signal(object, str)  # (alert, chart-watch kind)
     d1EventToggled = Signal(object, str)  # (alert, D1 event watch kind)
+    anyBounceToggled = Signal(object)  # (alert) - R5 section 4, whole level set
     d1LevelAlertRequested = Signal(str, str, float, str)  # symbol, direction, level, candle date
     symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
     levelArmRequested = Signal(str, str, float)  # symbol, direction, level
@@ -143,6 +144,9 @@ class AlertChartReview(QWidget):
         )
         self.arm_bar.d1EventToggled.connect(
             lambda kind: self.alert is not None and self.d1EventToggled.emit(self.alert, kind)
+        )
+        self.arm_bar.anyBounceToggled.connect(
+            lambda: self.alert is not None and self.anyBounceToggled.emit(self.alert)
         )
         self.arm_bar.symbolRequested.connect(self.symbolRequested)
         self.arm_bar.levelArmRequested.connect(self._emit_level_arm)
@@ -303,6 +307,7 @@ class AlertChartReview(QWidget):
         cross_active: bool = False,
         armed_levels: Iterable = (),
         armed_d1_events: Iterable[str] = (),
+        any_bounce_armed: bool = False,
         guidance_text: str = "",
         in_focus: bool = False,
         auto_adopted: bool = False,
@@ -430,6 +435,7 @@ class AlertChartReview(QWidget):
         self.set_armed_kinds(armed_kinds)
         self.set_armed_levels(armed_levels)
         self.set_armed_d1_events(armed_d1_events)
+        self.set_any_bounce_armed(any_bounce_armed)
         self.set_cross_active(cross_active)
         # The price box seed and the watch-button availability both read the
         # drawn M5 series, which does not exist yet - _on_snapshot_rendered
@@ -489,6 +495,7 @@ class AlertChartReview(QWidget):
         self._set_actions_enabled(False)
         self.set_armed_kinds(())
         self.set_armed_d1_events(())
+        self.set_any_bounce_armed(False)
         self.set_cross_active(False)
 
     def set_queued_count(self, count: int) -> None:
@@ -506,6 +513,10 @@ class AlertChartReview(QWidget):
     def set_armed_d1_events(self, kinds: Iterable[str] = ()) -> None:
         """Reflect this symbol's armed D1 event watches on the dock's D1 row."""
         self.arm_bar.set_armed_d1_events(kinds)
+
+    def set_any_bounce_armed(self, armed: bool = False) -> None:
+        """Reflect this symbol's any-bounce watch on the dock's D1 row."""
+        self.arm_bar.set_any_bounce_armed(armed)
 
     def set_cross_active(self, active: bool) -> None:
         self.cross_focus_button.setText(self._cross_labels[1 if active else 0])

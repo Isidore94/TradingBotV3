@@ -93,8 +93,15 @@ AWAY_REPORT_RETAINED_DEGRADED_AFTER_MINUTES = 24 * 60.0
 DISK_FREE_DEGRADED_GB = 5.0
 DISK_FREE_UNHEALTHY_GB = 1.0
 #: Nothing prunes the shadow logs yet, so the footprint is reported and bounded
-#: rather than silently growing: ``technical_integrity_events.jsonl`` alone is
-#: already ~106 MB on the desk machine.
+#: rather than silently growing. The audit MEASURES the live files every run;
+#: no current size is written down here, because the two that used to be - one
+#: in this comment, one in the R6 packet - were both true when written and
+#: stale by growth within weeks. Dated, for scale only:
+#: ``technical_integrity_events.jsonl`` measured
+#: 370 MB / 318,040 rows / 25 sessions on 2026-08-17, and rotation was DECLINED
+#: that day (plan.md item 6(b)) - the ledger is a warehouse bronze source whose
+#: retention unlocks only after verified ingest. What this module owes is a
+#: read-only measurement, which is what `jsonl_ledgers` below reports.
 DIAGNOSTICS_FOOTPRINT_DEGRADED_MB = 1024.0
 SINGLE_ARTIFACT_DEGRADED_MB = 100.0
 
@@ -1548,6 +1555,72 @@ def _writability_probe(directory: Path) -> tuple[bool, str, str]:
     return True, "", str(name)
 
 
+#: Ledgers below this size are not worth estimating rows for; the estimate
+#: costs a small read and the answer would be noise.
+JSONL_LEDGER_MIN_MB = 1.0
+#: How much of a ledger is sampled to estimate its row count. Reading 370 MB
+#: to count newlines on every audit would make System Health the thing that
+#: stalls the desk; a sampled mean line length answers "how many rows, give
+#: or take" for a fraction of the cost, and the field says `estimated`.
+JSONL_LEDGER_SAMPLE_BYTES = 256 * 1024
+
+
+def _jsonl_ledger_rows(diagnostics: Path, largest: list[tuple[int, str]]) -> list[dict]:
+    """Read-only measurement of the append-only JSONL evidence ledgers.
+
+    R6(b), 2026-08-17: rotation of these files is DECLINED for now, so what
+    the desk needs is not a pruner but an honest number - size, estimated
+    rows and last write, per ledger, measured rather than remembered. It
+    reuses the footprint walk's own results: no second traversal, no writes,
+    and nothing here can delete, truncate or compact anything.
+    """
+    rows: list[dict] = []
+    for size, name in largest:
+        if not name.lower().endswith(".jsonl"):
+            continue
+        megabytes = _bytes_mb(size)
+        if megabytes < JSONL_LEDGER_MIN_MB:
+            continue
+        path = diagnostics / name
+        estimated_rows = None
+        sampled_lines = 0
+        try:
+            with path.open("rb") as handle:
+                chunk = handle.read(JSONL_LEDGER_SAMPLE_BYTES)
+            sampled_lines = chunk.count(b"\n")
+            if sampled_lines:
+                # Measure COMPLETE lines only. The read almost always ends
+                # mid-row, and counting that fragment's bytes against the
+                # rows that did finish biases every estimate the same way.
+                complete = chunk.rfind(b"\n") + 1
+                mean_line = complete / float(sampled_lines)
+                estimated_rows = int(round(size / mean_line))
+            elif chunk:
+                # One enormous line, or a file still on its first row.
+                estimated_rows = 1
+        except OSError:
+            # Unreadable is UNKNOWN, never zero: a ledger the audit cannot
+            # open has not been shown to be empty.
+            estimated_rows = None
+        modified_at = ""
+        try:
+            modified_at = datetime.fromtimestamp(path.stat().st_mtime).isoformat(
+                timespec="seconds"
+            )
+        except OSError:
+            modified_at = ""
+        rows.append(
+            {
+                "artifact": name,
+                "megabytes": megabytes,
+                "estimated_rows": estimated_rows,
+                "sampled_lines": sampled_lines,
+                "modified_at": modified_at,
+                "retention": "declined 2026-08-17 (plan.md item 6(b)); warehouse-owned",
+            }
+        )
+    return rows
+
 def _disk_check(diagnostics: Path, now: datetime) -> dict[str, Any]:
     """Free space, writability and artifact footprint (sec 6.3 bullet 13).
 
@@ -1599,6 +1672,7 @@ def _disk_check(diagnostics: Path, now: datetime) -> dict[str, Any]:
         walk_error = f"{type(exc).__name__}: {exc}"
     largest.sort(reverse=True)
     largest_rows = [{"artifact": name, "megabytes": _bytes_mb(size)} for size, name in largest[:5]]
+    ledger_rows = _jsonl_ledger_rows(diagnostics, largest)
 
     free_gb = _bytes_gb(usage.free)
     footprint_mb = _bytes_mb(total_bytes)
@@ -1650,6 +1724,7 @@ def _disk_check(diagnostics: Path, now: datetime) -> dict[str, Any]:
             "diagnostics_footprint_mb": footprint_mb,
             "diagnostics_file_count": file_count,
             "largest_artifacts": largest_rows,
+            "jsonl_ledgers": ledger_rows,
             "diagnostics_writable": writable,
             "write_probe_error": write_error,
             "write_probe_path": probe_path,

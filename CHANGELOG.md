@@ -605,6 +605,55 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-18 — R5 completed: confluence, first-candle ORB, any-bounce watch
+
+`IMPLEMENTED`, live proof owed. Built on `phase05-integration-blitz` under the
+trader's integration redirect of 2026-08-18, which is the override R5 §8.2
+named as its own first reopen trigger.
+
+**Two new M5 engines, wired and silent.** `m5_signal_engines` gained
+`confluence_events`/`latest_confluence` (Heikin-Ashi reversal + SMI turn +
+LRSI cross within a tunable 4-bar window, **M5 Focus symbols only**) and
+`orb_events`/`latest_orb_events` (gap-up first candle sets the session extreme;
+after an LRSI pullback below 50 it arms a new-extreme alert and an
+informational recross). Both are **pure and stateless** — they recompute from
+the session's completed bars, so a toggle flipped mid-session cannot wake a
+state machine holding contents no session exercised, which was §8.2's actual
+objection. All four new alert types default **OFF**, so the desk session §7
+demands now gates audibility rather than existence.
+
+**The any-bounce watch (R5 §4).** One armed request per symbol and side over
+the whole level set — D1 1st-dev band, current and prior AVWAP, prior 1st-dev
+band, D1 15/21 EMA, session M5 15/21 EMA, H1 15 EMA — evaluated with the two-bar
+bounce idiom the D1 zone arms already use, firing once on the level that held
+and then disarming. New `any_bounce_watches.json` store, owned by the Alert
+Center panel like every other watch store; new **Any bounce** button on the arm
+bar. A level the data cannot supply is absent, never fabricated.
+
+**The prior-anchor AVWAP line (R5 §8.3), proven additive.** `prev_avwape` is
+carried — not recomputed — from `prev_anchor_meta["vwap"]` onto the zone-arms
+entry as an optional TOP-LEVEL key, never a `trigger_levels` arm, so the
+shipped zone-arm alert rubric cannot gain a trigger. The golden characterization
+fixture landed first and passes **unchanged** after the edit; a companion test
+shows the trigger walker cannot see the key. No second
+`calc_anchored_vwap_bands` call exists anywhere — the σ-formula invariant is not
+approached.
+
+**R6(b) closed out.** The read-only JSONL-ledger audit now reports each
+diagnostics ledger's measured size, estimated rows and last write inside the
+existing footprint check — reusing that walk, reading a 256 KB sample rather
+than 370 MB, and writing nothing. The stale `~106 MB` comment is gone: no
+current size is recorded in code any more, because the two that were had both
+gone stale by growth within weeks. Rotation stays **declined** (plan.md 6(b)).
+
+**Two hermeticity gaps found by the merge and fixed test-side.** The Fed
+calendar adapter reached `federalreserve.gov` from the daily-prep orchestrator
+in a full-suite run (it passed in isolation because the on-disk cache answered
+first) — stubbed at `_fetch_text`, the one boundary both callers share. And the
+new `PriceHistoryShapeTests` were measuring conftest's own offline stub rather
+than `fetch_price_history`; they now take back the stashed original, which the
+guard provides for exactly this case.
+
 ### 2026-08-18 — two live sessions, and the two defects they exposed
 
 `IMPLEMENTED` + `GREEN`. Repair pass on `phase05-r2-focus-gating-strength-board`,

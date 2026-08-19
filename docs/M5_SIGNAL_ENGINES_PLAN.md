@@ -440,3 +440,86 @@ real importer**, which is §3's wiring. In that same change: the spec's
 `dist/` deleted first** — a count that does not move after a roster change is a
 stale build, not a pass. Mind the disjointness rule: a package listed in
 `PACKAGES_NOT_IN_THE_BUNDLE` may not also appear in the selftest roster.
+
+## 9.2 Build state (2026-08-18) — the packet is code-complete
+
+The trader's integration redirect of 2026-08-18 authorized building R3–R8 and
+every implementable wishlist item in one pass, with **all live proofs deferred
+and recorded as owed**. For this packet that redirect is precisely §8.2's first
+reopen trigger — *"the trader overrides (batching engines is their call to
+make)"* — so §3.2, §3.3 and §4 were built and wired here.
+
+**What §8.2's substance bought anyway.** Its objection was never "these engines
+are wrong"; it was that an unmeasured detector should not enter the live loop
+carrying state no session has exercised, and that loudness cannot be reviewed
+before the volume is seen. Both are still honored:
+
+- **Every new type ships OFF.** `M5_SIGNAL_TYPE_DEFAULTS` gains
+  `m5_confluence`, `orb_first_candle`, `orb_first_candle_break` and
+  `orb_first_candle_recross`, all `False`. The desk session §7 asked for now
+  gates *audibility* instead of existence, and turning one on is a toggle, not
+  a rebuild.
+- **The engines are stateless.** `confluence_events` and `orb_events` recompute
+  from the session's completed bars, so a scan that starts at 11:00 sees what a
+  scan running since the open would have seen, and a toggle flipped mid-session
+  cannot wake a state machine holding contents nobody exercised. The correlator
+  the spec sketched as "tracking each signal's most recent firing bar per
+  symbol" is that walk, expressed as a function — the two are equivalent, and
+  the function has nothing to carry.
+
+### §3.2 — the confluence
+
+Fires on the bar carrying the **last** of the three legs (HA reversal, SMI turn
+out of a washed-out state, LRSI cross), with the other two no more than
+`CONFLUENCE_WINDOW_BARS` = 4 completed bars earlier — the outside edge of the
+trader's "within 3–4 candles". **M5 Focus symbols only**, as §3.2 says: the
+sweep intersects the watchlist with `_human_focus_sets()`, and a perfect chart
+on a non-Focus name is silence. Each distinct leg-triple reports once.
+
+### §3.3 — the first-candle ORB
+
+Three separately toggleable types, because they are three different claims: the
+**candidate** mark (a gap whose first completed candle sets the session
+extreme) is an annotation and deliberately does **not** seed the bounce outcome
+tracker; the **new session extreme** after an LRSI pullback below 50 is the
+re-break the trader armed for, and it does; the **LRSI recross** back above 50
+is information. `deep` records that the pullback went under 20 first. No prior
+close means no gap to measure and therefore no events — missing data is
+uncertainty, not a gap of zero.
+
+### §4 — the any-bounce watch
+
+`AnyBounceWatch` (symbol, side, kind set, armed_at) lives in `chart_watch.py`
+with its own store, `ANY_BOUNCE_WATCHES_FILE`, owned by the Alert Center panel
+exactly as the D1 event watches are — one writer, `PriceAlertService`
+untouched. It is armed from the arm bar's new **Any bounce** button (which the
+R4 CaptureRail work put on every chart surface), evaluated on the same 60-second
+poll with the **two-bar bounce idiom taken from `detect_zone_arm_triggers`**, and
+it fires once naming the level that held, then disarms — one click re-arms, which
+is the trader's stated workflow.
+
+Levels come from what the desk already has: the scan's zone-arms entry (D1
+1st-dev band, current AVWAP, **prior AVWAP**, prior 1st-dev band, D1 15/21 EMA),
+the cached M5 bars (session 15/21 EMA, and the H1 15 EMA aggregated from
+completed hours only), with the daily store filling an EMA the scan did not
+carry. A level the data cannot supply is **absent**, never fabricated.
+
+### §8.3 — the prior-anchor AVWAP, built as decided
+
+`prev_avwape` is now an optional top-level key on the zone-arms entry, plumbed
+from the already-computed `prev_anchor_meta["vwap"]` at `runner.py`'s call
+site. No second `calc_anchored_vwap_bands` call exists anywhere. The golden
+characterization fixture landed **first**
+(`tests/test_d1_zone_arms_golden.py` + `tests/fixtures/d1_zone_arms_golden_v1.json`,
+contract-bearing, 13 cases across both sides, all three zones, the tolerance
+fallbacks and the still-armed gating edges) and it passes **unchanged** after
+the edit — which is the proof the plumbing was additive. A companion test shows
+the trigger walker cannot see the new key, so the zone-arm alert rubric provably
+cannot gain or lose a trigger.
+
+### Gate
+
+Engine tests 31, wiring tests 19, any-bounce 20 + 5 Qt, zone-arms golden 6.
+Full-suite figures are in `CURRENT_CHECKPOINT.md`. **No live proof is claimed**:
+§7's per-engine desk session is still owed, and now it also decides which of the
+four new toggles should default on.

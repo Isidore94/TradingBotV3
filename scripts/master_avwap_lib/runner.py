@@ -1122,6 +1122,10 @@ def _run_master_impl(
                 ema21=_coerce_float(indicator_row.get("ema_21")) if indicator_row is not None else None,
                 prev_upper_1=prev_bands.get("UPPER_1"),
                 prev_lower_1=prev_bands.get("LOWER_1"),
+                # Already computed for the theta-support entries; carried
+                # here rather than recomputed, so no second
+                # calc_anchored_vwap_bands call is added anywhere.
+                prev_avwape=(prev_anchor_meta or {}).get("vwap"),
                 stdev=current_anchor_meta.get("stdev") if current_anchor_meta else None,
                 atr=atr20,
                 sustained_2nd_3rd=zone3_sustained,

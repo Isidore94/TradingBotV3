@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -31,6 +32,8 @@ from alert_review_state import (
     save_ignored_alert_symbols,
 )
 from chart_watch import (
+    ANY_BOUNCE_KINDS,
+    AnyBounceWatch,
     BAND_BOUNCE_PRIME_BUCKETS,
     BAND_BOUNCE_TRACKER_TYPES,
     ChartWatch,
@@ -41,14 +44,19 @@ from chart_watch import (
     D1_LEVEL_KINDS,
     D1_PULLBACK_KINDS,
     WATCH_KINDS,
+    any_bounce_levels,
     arm_chart_watch,
+    d1_event_levels,
+    evaluate_any_bounce_watch,
     evaluate_chart_watch,
     evaluate_d1_event_watch,
     evaluate_d1_level_watch,
     completed_session_bars,
+    load_any_bounce_watches,
     load_chart_watches,
     load_d1_event_watches,
     load_d1_level_watches,
+    save_any_bounce_watches,
     save_chart_watches,
     save_d1_event_watches,
     save_d1_level_watches,
@@ -62,6 +70,7 @@ from project_paths import (
     ALERT_REVIEW_PARKED_SYMBOLS_FILE,
     AUTO_POPULATE_PENDING_FILE,
     FOCUS_D1_FLAGS_FILE,
+    ANY_BOUNCE_WATCHES_FILE,
     D1_EVENT_WATCHES_FILE,
     D1_LEVEL_WATCHES_FILE,
     get_local_setting,
@@ -489,6 +498,16 @@ class AlertCenterPanel(QFrame):
             if self._d1_event_watches_path is not None
             else []
         )
+        # R5 section 4: the any-bounce watch rides the same persistence
+        # gate, so a bare test panel never writes it either.
+        self._any_bounce_watches_path = (
+            ANY_BOUNCE_WATCHES_FILE if persist_ignored else None
+        )
+        self._any_bounce_watches: list[AnyBounceWatch] = (
+            load_any_bounce_watches(self._any_bounce_watches_path)
+            if self._any_bounce_watches_path is not None
+            else []
+        )
         # Append-only decision log (review_events.py): every shown/skip/focus/
         # arm decision with its structured alert context. Gated exactly like
         # the other persistence paths so bare test panels never write it.
@@ -726,6 +745,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
         self.chart_review.watchToggled.connect(self._toggle_chart_watch)
         self.chart_review.d1EventToggled.connect(self._toggle_d1_event_watch)
+        self.chart_review.anyBounceToggled.connect(self._toggle_any_bounce_watch)
         self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
@@ -772,6 +792,7 @@ class AlertCenterPanel(QFrame):
         self._d1_watch_timer.setInterval(60_000)
         self._d1_watch_timer.timeout.connect(self._poll_d1_level_watches)
         self._d1_watch_timer.timeout.connect(self._poll_d1_event_watches)
+        self._d1_watch_timer.timeout.connect(self._poll_any_bounce_watches)
         # Focus picks are auto-watched for every D1 event kind - no arming
         # needed. Rides the same 60s cadence as the armed D1 watches.
         self._d1_watch_timer.timeout.connect(self._poll_focus_d1_interest)
@@ -1712,6 +1733,7 @@ class AlertCenterPanel(QFrame):
             cross_active=self._review_cross_active(alert),
             armed_levels=self.armed_levels_for(alert.symbol),
             armed_d1_events=self.armed_d1_event_kinds(alert.symbol),
+            any_bounce_armed=self.any_bounce_armed_for(alert.symbol),
             guidance_text=guidance.summary_text(),
             in_focus=self._alert_is_focus(alert),
             auto_adopted=self._alert_is_auto_adopted(alert),
@@ -2847,7 +2869,9 @@ class AlertCenterPanel(QFrame):
         side = str(getattr(watch, "side", "") or "")
         if side not in ("LONG", "SHORT"):
             side = resolved if resolved in ("LONG", "SHORT") else "WATCH"
-        kind = watch.kind
+        # An any-bounce hit names the level that actually held; every other
+        # watch carries exactly one kind of its own.
+        kind = str(getattr(hit, "kind", "") or "") or watch.kind
         trigger = hit.message
         note = self._tracker_note_for(watch, hit, moment)
         if note:
@@ -3323,12 +3347,155 @@ class AlertCenterPanel(QFrame):
             )
             self.add_alert(self._chart_watch_alert(hit, moment))
 
+    # ------------------------------------------------------------------
+    # Persistent any-bounce watches (R5 section 4): one armed request per
+    # symbol+side covering the whole level set. Same rails as the D1 event
+    # watches - same 60s poll, same red chart-watch alert, same one-shot
+    # retire - and the same single owner, because a second writer to a watch
+    # store is how two components start disagreeing about what is armed.
+    def any_bounce_armed_for(self, symbol: str) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        return any(watch.symbol == symbol for watch in self._any_bounce_watches)
+
+    def _save_any_bounce_watches(self) -> None:
+        if self._any_bounce_watches_path is not None:
+            try:
+                save_any_bounce_watches(
+                    self._any_bounce_watches, self._any_bounce_watches_path
+                )
+            except Exception:
+                pass
+
+    def _toggle_any_bounce_watch(self, alert: BounceAlert) -> None:
+        if alert is None or not alert.symbol:
+            return
+        if self.any_bounce_armed_for(alert.symbol):
+            self.disarm_any_bounce_watch(alert.symbol)
+        else:
+            self.arm_any_bounce_watch(alert.symbol, alert.side or "long")
+
+    def arm_any_bounce_watch(self, symbol: str, side: str = "long") -> bool:
+        symbol = str(symbol or "").strip().upper()
+        side = "short" if str(side or "").strip().lower().startswith("short") else "long"
+        if not symbol:
+            return False
+        if self.any_bounce_armed_for(symbol):
+            self.statusChanged.emit(f"{symbol}: any-bounce alert already armed.")
+            return False
+        self._any_bounce_watches.append(
+            AnyBounceWatch(
+                symbol=symbol,
+                side=side,
+                kinds=tuple(ANY_BOUNCE_KINDS),
+                armed_at=datetime.now(),
+            )
+        )
+        self._save_any_bounce_watches()
+        self._refresh_review_armed_kinds()
+        self.armedWatchesChanged.emit()
+        current = self._current_review_alert
+        self._record_review_event(
+            "arm_any_bounce",
+            alert=current if current is not None and current.symbol == symbol else None,
+            symbol=symbol,
+            side=side,
+            dwell_ms=self._review_dwell_ms(symbol),
+            detail={"kinds": list(ANY_BOUNCE_KINDS)},
+        )
+        self.statusChanged.emit(
+            f"{symbol}: any-bounce alert armed - it fires once, on whichever "
+            "of your levels holds, and then disarms."
+        )
+        return True
+
+    def disarm_any_bounce_watch(self, symbol: str) -> bool:
+        symbol = str(symbol or "").strip().upper()
+        remaining = [
+            watch for watch in self._any_bounce_watches if watch.symbol != symbol
+        ]
+        if len(remaining) == len(self._any_bounce_watches):
+            return False
+        self._any_bounce_watches = remaining
+        self._save_any_bounce_watches()
+        self._refresh_review_armed_kinds()
+        self.armedWatchesChanged.emit()
+        self._record_review_event("disarm_any_bounce", symbol=symbol)
+        self.statusChanged.emit(f"{symbol}: any-bounce alert disarmed.")
+        return True
+
+    def _any_bounce_levels_for(self, symbol: str, moment: datetime) -> dict:
+        """The armed level set from whatever the desk already has cached.
+
+        The D1 side comes from the scan's zone-arms file (which is where the
+        prior-anchor AVWAP now rides, R5 section 8.3); the session and hourly
+        EMAs are aggregated from the cached M5 bars. Nothing here fetches.
+        """
+        entry = None
+        try:
+            bot = self._current_bot()
+            arms = getattr(bot, "d1_zone_arms", None) or {}
+            candidate = arms.get(symbol)
+            if isinstance(candidate, Mapping):
+                entry = candidate
+        except Exception:
+            entry = None
+        d1_levels = None
+        try:
+            d1_bars = self._d1_bars_for(symbol)
+            if d1_bars:
+                d1_levels = d1_event_levels(d1_bars, session=moment.date())
+        except Exception:
+            d1_levels = None
+        return any_bounce_levels(
+            zone_arm_entry=entry,
+            m5_bars=self._m5_bars_for(symbol),
+            d1_levels=d1_levels,
+            now=moment,
+        )
+
+    def _poll_any_bounce_watches(self, now: datetime | None = None) -> None:
+        if not self._any_bounce_watches:
+            return
+        moment = now or datetime.now()
+        remaining: list[AnyBounceWatch] = []
+        triggered = []
+        for watch in self._any_bounce_watches:
+            hit = None
+            try:
+                levels = self._any_bounce_levels_for(watch.symbol, moment)
+                if levels:
+                    hit = evaluate_any_bounce_watch(
+                        watch, self._m5_bars_for(watch.symbol), levels, now=moment
+                    )
+            except Exception:
+                hit = None
+            if hit is None:
+                remaining.append(watch)
+            else:
+                triggered.append(hit)
+        self._any_bounce_watches = remaining
+        if triggered:
+            self._save_any_bounce_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+        for hit in triggered:
+            self._record_review_event(
+                "any_bounce_fired",
+                symbol=hit.watch.symbol,
+                side=hit.resolved_side,
+                detail={"kind": hit.kind, "level": hit.level, "message": hit.message},
+            )
+            self.add_alert(self._chart_watch_alert(hit, moment))
+
     def _refresh_review_armed_kinds(self) -> None:
         current = self._current_review_alert
         if current is not None:
             self.chart_review.set_armed_kinds(self.armed_watch_kinds(current.symbol))
             self.chart_review.set_armed_d1_events(
                 self.armed_d1_event_kinds(current.symbol)
+            )
+            self.chart_review.set_any_bounce_armed(
+                self.any_bounce_armed_for(current.symbol)
             )
 
     def _remove_review_alert_for_today(self, alert: BounceAlert) -> None:

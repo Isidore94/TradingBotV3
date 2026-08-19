@@ -18,6 +18,7 @@ Two things this tab deliberately does not do:
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QThread, Qt, Signal
@@ -41,6 +42,11 @@ from PySide6.QtWidgets import (
 import weekend_strength
 from ui.services import journal_feed
 from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
+
+#: How many folded RS/RW rows one bucket may show in the week review. A cap
+#: keeps the step readable; what it drops is printed, because a silent
+#: top-N reads as "that was all of it".
+RRS_ROWS_PER_BUCKET = 8
 
 STATUS_MARKS = {"pending": "○", "done": "●", "skipped": "–"}
 
@@ -133,7 +139,39 @@ class WeekReviewPage(_StepPage):
         # The recorded, accepted v1 limitation - stated where it is read, not
         # buried in a spec nobody opens on a Saturday.
         lines += ["", "Episodes fold on (trade_date, symbol): two setups in one name on one day read as one."]
+        lines += self._rrs_lines()
         self.summary.setPlainText("\n".join(lines))
+
+
+    def _rrs_lines(self) -> list[str]:
+        """The week's RS/RW extremes beside the decisions (R8 retained scope).
+
+        Folded per symbol, and capped, because the step is a review rather than
+        a log dump - and what the cap drops is SAID, since a silent top-N reads
+        as "that was all of it".
+        """
+        rows = _read_rrs_week(self.service.week_bounds)
+        if not rows:
+            return ["", "RS/RW extremes: nothing recorded this week (or the log is unreadable)."]
+        lines = ["", "RS/RW extremes this week (folded per symbol):"]
+        shown = 0
+        for bucket in sorted({row["bucket"] for row in rows}):
+            in_bucket = [row for row in rows if row["bucket"] == bucket]
+            lines.append(f"  {bucket}: {len(in_bucket)} name(s)")
+            for row in in_bucket[:RRS_ROWS_PER_BUCKET]:
+                lines.append(
+                    f"    {row['symbol']}: {row['days']} day(s), "
+                    f"{row['sightings']} sighting(s), best RRS {row['best_rrs']:+.2f}, "
+                    f"last {row['last_seen']}"
+                )
+                shown += 1
+            if len(in_bucket) > RRS_ROWS_PER_BUCKET:
+                lines.append(
+                    f"    ... {len(in_bucket) - RRS_ROWS_PER_BUCKET} more in this bucket "
+                    "not shown"
+                )
+        lines.append(f"  ({shown} of {len(rows)} folded rows shown.)")
+        return lines
 
 
 class FocusReviewPage(_StepPage):
@@ -144,8 +182,13 @@ class FocusReviewPage(_StepPage):
         self.subtitle.setText("The week's focus picks, their outcomes, and the veto cohort beside them.")
         self.refresh_button = QPushButton("Refresh picks")
         self.refresh_button.clicked.connect(self.reload)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Date", "Symbol", "Side", "Source", "Outcome"])
+        # One row per PICK, carrying its outcome - not picks and outcomes as
+        # separate rows, which listed the same name twice and could not answer
+        # "how did this pick do" (R8 retained scope, built 2026-08-18).
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels(
+            ["Date", "Symbol", "Side", "Source", "H1", "H3", "H5", "H10", "Matured"]
+        )
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.note = QLabel("")
         self.note.setWordWrap(True)
@@ -155,16 +198,26 @@ class FocusReviewPage(_StepPage):
         self._finish_layout()
 
     def reload(self) -> None:
-        rows = _read_focus_week(self.service.week_bounds)
+        rows = _join_focus_week(self.service.week_bounds)
         self.table.setRowCount(len(rows))
+        columns = ("date", "symbol", "side", "source", "h1", "h3", "h5", "h10", "matured")
         for index, row in enumerate(rows):
-            for column, key in enumerate(("date", "symbol", "side", "source", "outcome")):
+            for column, key in enumerate(columns):
                 self.table.setItem(index, column, QTableWidgetItem(str(row.get(key) or "")))
-        self.note.setText(
-            f"{len(rows)} pick(s) in the reviewed week."
-            if rows
-            else "No focus picks recorded for this week, or the CSVs are not readable."
+        if not rows:
+            self.note.setText(
+                "No focus picks recorded for this week, or the CSVs are not readable."
+            )
+            return
+        matured = sum(1 for row in rows if str(row.get("matured") or "").strip() not in ("", "0"))
+        orphans = sum(1 for row in rows if "no pick snapshot" in str(row.get("source") or ""))
+        note = (
+            f"{len(rows)} pick(s) in the reviewed week; {matured} have at least one "
+            "matured horizon. A blank horizon has not matured yet - it is not a zero."
         )
+        if orphans:
+            note += f" {orphans} row(s) have an outcome but no pick snapshot."
+        self.note.setText(note)
 
 
 class WalkawayPage(_StepPage):
@@ -520,6 +573,181 @@ def _default_focus_service():
         return FocusService()
     except Exception:  # pragma: no cover - only on a broken install
         return None
+
+
+def _read_rrs_week(bounds) -> list[dict[str, Any]]:
+    """The week's RS/RW extremes, folded to one row per symbol and bucket.
+
+    R8's retained future scope, built 2026-08-18. The extremes log is one row
+    per sighting, so a name that led the tape all week would otherwise bury
+    every other name in the review. Folding to (bucket, symbol) with a count
+    and the best reading answers the question the step actually asks - "who
+    was strong this week, and how consistently" - instead of reprinting the
+    log.
+
+    Read-only and forgiving, like every other weekend-prep reader: a missing
+    or unreadable CSV is a quieter week, not an error worth stopping on.
+    """
+    import csv
+
+    from project_paths import RRS_STRENGTH_LOG_FILE
+
+    monday, friday = bounds
+    folded: dict[tuple[str, str], dict[str, Any]] = {}
+    path = Path(RRS_STRENGTH_LOG_FILE)
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            for raw in csv.DictReader(handle):
+                stamp = str(raw.get("timestamp_local") or "")[:10]
+                symbol = str(raw.get("symbol") or "").strip().upper()
+                if not stamp or not symbol:
+                    continue
+                try:
+                    when = datetime.fromisoformat(stamp).date()
+                except ValueError:
+                    continue
+                if not (monday <= when <= friday):
+                    continue
+                bucket = str(raw.get("bucket") or "").strip() or "unknown"
+                try:
+                    rrs = float(raw.get("rrs") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                key = (bucket, symbol)
+                entry = folded.get(key)
+                if entry is None:
+                    folded[key] = {
+                        "bucket": bucket,
+                        "symbol": symbol,
+                        "sightings": 1,
+                        "days": {stamp},
+                        "best_rrs": rrs,
+                        "last_seen": stamp,
+                    }
+                    continue
+                entry["sightings"] += 1
+                entry["days"].add(stamp)
+                # "Best" means most extreme in the bucket's own direction: a
+                # weak-side reading is most notable when it is most negative.
+                if bucket.startswith("weak"):
+                    entry["best_rrs"] = min(entry["best_rrs"], rrs)
+                else:
+                    entry["best_rrs"] = max(entry["best_rrs"], rrs)
+                entry["last_seen"] = max(entry["last_seen"], stamp)
+    except OSError:
+        return []
+    rows = []
+    for entry in folded.values():
+        rows.append(
+            {
+                "bucket": entry["bucket"],
+                "symbol": entry["symbol"],
+                "days": len(entry["days"]),
+                "sightings": entry["sightings"],
+                "best_rrs": round(float(entry["best_rrs"]), 4),
+                "last_seen": entry["last_seen"],
+            }
+        )
+    rows.sort(key=lambda row: (row["bucket"], -row["days"], -abs(row["best_rrs"])))
+    return rows
+
+
+def _join_focus_week(bounds) -> list[dict[str, Any]]:
+    """The week's focus picks JOINED to their outcomes - one row per pick.
+
+    R8's retained future scope, built 2026-08-18. The v1 step listed picks and
+    outcomes as separate rows, so the same name appeared twice and the table
+    could not answer "how did this pick do". The join is on
+    (trade_date, symbol, side), which is the identity both CSVs are written
+    with.
+
+    An outcome with no matching pick is still shown - it is evidence that a
+    pick existed on a day whose snapshot did not persist, and dropping it
+    would quietly narrow the week. It is marked so the reader can tell.
+    """
+    import csv
+
+    from project_paths import PERSISTENT_DATA_DIR
+
+    monday, friday = bounds
+
+    def _rows(name: str) -> list[dict[str, str]]:
+        path = PERSISTENT_DATA_DIR / name
+        if not path.is_file():
+            return []
+        try:
+            with path.open("r", encoding="utf-8", newline="") as handle:
+                return list(csv.DictReader(handle))
+        except OSError:
+            return []
+
+    def _key(raw) -> tuple[str, str, str] | None:
+        stamp = str(raw.get("trade_date") or raw.get("date") or "")[:10]
+        symbol = str(raw.get("symbol") or "").strip().upper()
+        if not stamp or not symbol:
+            return None
+        try:
+            when = datetime.fromisoformat(stamp).date()
+        except ValueError:
+            return None
+        if not (monday <= when <= friday):
+            return None
+        return (stamp, symbol, str(raw.get("side") or "").strip().lower())
+
+    outcomes: dict[tuple[str, str, str], dict[str, str]] = {}
+    for raw in _rows("human_focus_outcomes.csv"):
+        key = _key(raw)
+        if key is not None:
+            outcomes[key] = raw
+
+    joined: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in _rows("human_focus_daily_picks.csv"):
+        key = _key(raw)
+        if key is None:
+            continue
+        seen.add(key)
+        joined.append(_focus_row(key, raw, outcomes.get(key), orphan=False))
+    for key, raw in outcomes.items():
+        if key not in seen:
+            joined.append(_focus_row(key, None, raw, orphan=True))
+    joined.sort(key=lambda row: (row["date"], row["symbol"]))
+    return joined
+
+
+def _focus_row(key, pick, outcome, *, orphan: bool) -> dict[str, Any]:
+    stamp, symbol, side = key
+
+    def _return(name: str) -> str:
+        if not outcome:
+            return ""
+        value = str(outcome.get(name) or "").strip()
+        if not value:
+            return ""
+        try:
+            return f"{float(value) * 100:+.2f}%"
+        except (TypeError, ValueError):
+            return value
+
+    source = str((pick or outcome or {}).get("source") or "")
+    if orphan:
+        # Said plainly in the row rather than dropped: an outcome whose pick
+        # snapshot is missing is a real pick with a gap in its evidence.
+        source = f"{source} (no pick snapshot)".strip()
+    matured = str((outcome or {}).get("matured_horizons") or "")
+    return {
+        "date": stamp,
+        "symbol": symbol,
+        "side": side,
+        "source": source,
+        "h1": _return("h1_return"),
+        "h3": _return("h3_return"),
+        "h5": _return("h5_return"),
+        "h10": _return("h10_return"),
+        "matured": matured,
+    }
 
 
 def _read_focus_week(bounds) -> list[dict[str, Any]]:

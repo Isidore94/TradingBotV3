@@ -364,6 +364,12 @@ D1_LEVEL_WATCHES_FILE = PERSISTENT_DATA_DIR / "d1_level_watches.json"
 # armed from the dock's D1 row, kept across sessions until they fire. Their
 # reference levels are re-derived from the daily store on every poll.
 D1_EVENT_WATCHES_FILE = PERSISTENT_DATA_DIR / "d1_event_watches.json"
+# Persistent ANY-BOUNCE watches (R5 section 4): one armed request per
+# symbol and side covering a SET of levels - D1 bands, current and prior
+# AVWAP, daily and session EMAs, the H1 15 EMA. Its own store beside the
+# others because it carries a set rather than one kind, and because one
+# component must own one file.
+ANY_BOUNCE_WATCHES_FILE = PERSISTENT_DATA_DIR / "any_bounce_watches.json"
 # Append-only trader annotations for the BounceBot market-environment control.
 # The bot's automatic SPY read remains separate; each manual selection records
 # that contemporaneous read so later research can learn where/why the trader

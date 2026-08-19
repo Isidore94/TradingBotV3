@@ -216,9 +216,17 @@ class PriceHistoryShapeTests(unittest.TestCase):
         module.download = self._download_stub(index_name)
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp) / "price_history.parquet"
+            # conftest's offline guard replaces fetch_price_history with a
+            # stub returning an empty frame - which is the point of the guard,
+            # and exactly wrong here, because this fetch IS the subject. The
+            # guard stashes the original for precisely this case; taking it
+            # back is still hermetic, because yfinance itself is faked above.
+            original = getattr(
+                ub, "_offline_original_fetch_price_history", ub.fetch_price_history
+            )
             with patch.dict(sys.modules, {"yfinance": module}), \
                     patch.object(ub, "PRICE_HISTORY_CACHE", cache):
-                return ub.fetch_price_history(["AAPL"], refresh=True)
+                return original(["AAPL"], refresh=True)
 
     def test_named_date_index_still_works(self):
         history = self._fetch("Date")

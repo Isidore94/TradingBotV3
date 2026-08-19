@@ -660,6 +660,20 @@ def _no_market_prep_feeds(request, monkeypatch):
     for module_name, attribute, empty in (
         ("market_prep.services.forexfactory_calendar_service", "_refresh_events", ([], [])),
         ("market_prep.services.treasury_calendar_service", "_fetch_upcoming_auctions", []),
+        # The Fed calendar/RSS adapter, found 2026-08-18 during the R1-R8
+        # integration merge: it reaches www.federalreserve.gov from the daily
+        # prep orchestrator, and it only showed up in a FULL-suite run because
+        # in isolation the on-disk cache answered first. One boundary covers
+        # both callers (the monthly HTML calendar and the three RSS feeds).
+        # An empty RSS document is the "no events, no error" shape: the HTML
+        # section walk finds no sections in it and the XML parse finds no
+        # items, so every parse and date-window rule above still runs and
+        # nothing logs a spurious failure.
+        (
+            "market_prep.services.fed_calendar_service",
+            "_fetch_text",
+            '<rss version="2.0"><channel></channel></rss>',
+        ),
         # The NASDAQ earnings calendar, reached from a BACKGROUND thread inside
         # master_avwap_lib.legacy - which is why its violation kept landing on
         # innocent tests. Its contract is (rows, error), and "no rows, no

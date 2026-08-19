@@ -1053,3 +1053,298 @@ def evaluate_d1_level_watch(
                 resolved_side="long" if is_above else "short",
             )
     return None
+
+
+# ---------------------------------------------------------------------------
+# The any-bounce watch (R5 section 4).
+#
+# One armed request per symbol and side: "tell me when this name bounces off
+# ANY of my levels." It is deliberately not a second price-alert system - it
+# reuses the two-bar bounce idiom the D1 zone arms already use
+# (``master_avwap_lib.d1_zone_arms.detect_zone_arm_triggers``), so a bounce
+# means here exactly what it means there.
+#
+# It fires ONCE, naming the level that held, and disarms. The trader's own
+# words for why that is right: "if I still dislike it when that alert fires
+# then I can set it again."
+#
+# A level the data cannot supply is silently absent - never fabricated, never
+# zero. A symbol with no zone-arms entry simply watches its session EMAs.
+# ---------------------------------------------------------------------------
+
+#: kind -> label. The trader's level set, 2026-08-14 and 2026-08-15.
+ANY_BOUNCE_KINDS = {
+    "d1_band_1": "D1 1st-dev band",
+    "avwape": "current AVWAP",
+    "prev_avwape": "previous AVWAP",
+    "prev_band_1": "previous 1st-dev band",
+    "d1_ema15": "D1 15 EMA",
+    "d1_ema21": "D1 21 EMA",
+    "m5_ema15": "session 5m 15 EMA",
+    "m5_ema21": "session 5m 21 EMA",
+    "h1_ema15": "H1 15 EMA",
+}
+
+#: The tolerance band for "dipped to it and held", as a fraction of the level.
+#: The D1 zone arms carry a per-entry tolerance measured from the scan; a
+#: watch armed from a chart has no such measurement, so this is the fallback
+#: and it is deliberately small.
+ANY_BOUNCE_TOLERANCE_FRACTION = 0.0015
+
+
+@dataclass(frozen=True)
+class AnyBounceWatch:
+    """One armed 'bounce off any of these levels' request."""
+
+    symbol: str
+    side: str
+    kinds: tuple[str, ...]
+    armed_at: datetime
+
+    @property
+    def direction(self) -> str:
+        """For chip/badge coloring: a long watches for a bounce UP."""
+        return "below" if self.side == "short" else "above"
+
+
+@dataclass(frozen=True)
+class AnyBounceTrigger:
+    watch: AnyBounceWatch
+    kind: str
+    level: float
+    price: float
+    triggered_at: datetime
+    message: str
+
+    @property
+    def resolved_side(self) -> str:
+        return self.watch.side
+
+
+def any_bounce_watch_to_dict(watch: AnyBounceWatch) -> dict:
+    return {
+        "symbol": watch.symbol,
+        "side": watch.side,
+        "kinds": list(watch.kinds),
+        "armed_at": _naive(watch.armed_at).isoformat(),
+    }
+
+
+def any_bounce_watch_from_dict(payload: Mapping[str, Any]) -> AnyBounceWatch | None:
+    try:
+        symbol = str(payload["symbol"] or "").strip().upper()
+        side = str(payload["side"] or "").strip().lower()
+        armed_at = datetime.fromisoformat(str(payload["armed_at"]))
+        raw_kinds = payload["kinds"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not symbol or side not in ("long", "short"):
+        return None
+    kinds = tuple(
+        kind for kind in (str(item) for item in raw_kinds or ()) if kind in ANY_BOUNCE_KINDS
+    )
+    if not kinds:
+        # A watch with no recognised level watches nothing. Dropping it is
+        # honest; keeping it would show an armed chip that can never fire.
+        return None
+    return AnyBounceWatch(symbol=symbol, side=side, kinds=kinds, armed_at=armed_at)
+
+
+def save_any_bounce_watches(watches: Iterable[AnyBounceWatch], path: Path) -> None:
+    _atomic_write_json(
+        {"watches": [any_bounce_watch_to_dict(watch) for watch in watches]},
+        path,
+    )
+
+
+def load_any_bounce_watches(path: Path) -> list[AnyBounceWatch]:
+    target = Path(path)
+    try:
+        text = target.read_text(encoding="utf-8") if target.exists() else ""
+    except OSError:
+        return []
+    if not text.strip():
+        return []
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    watches = []
+    for item in payload.get("watches") or []:
+        if isinstance(item, Mapping):
+            watch = any_bounce_watch_from_dict(item)
+            if watch is not None:
+                watches.append(watch)
+    return watches
+
+
+def _ema_last(values: list[float], length: int) -> float | None:
+    if len(values) < length:
+        return None
+    alpha = 2.0 / (float(length) + 1.0)
+    ema = values[0]
+    for value in values[1:]:
+        ema = alpha * value + (1.0 - alpha) * ema
+    return ema
+
+
+def _hourly_closes(bars: Iterable[Mapping[str, Any]] | None, moment: datetime) -> list[float]:
+    """Completed hourly closes aggregated from M5 bars.
+
+    A forming hour is preview, so the bucket containing ``moment`` is dropped
+    (plan.md sec 5). Aggregation is by clock hour, which is what the desk's
+    hourly chart draws.
+    """
+    buckets: dict[datetime, float] = {}
+    for bar in bars or []:
+        stamp = bar.get("dt")
+        if not isinstance(stamp, datetime):
+            continue
+        close = _finite_value(bar.get("close"))
+        if close is None:
+            continue
+        hour = _naive(stamp).replace(minute=0, second=0, microsecond=0)
+        buckets[hour] = close
+    if not buckets:
+        return []
+    forming = _naive(moment).replace(minute=0, second=0, microsecond=0)
+    return [close for hour, close in sorted(buckets.items()) if hour < forming]
+
+
+def _finite_value(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def any_bounce_levels(
+    *,
+    zone_arm_entry: Mapping[str, Any] | None = None,
+    m5_bars: Iterable[Mapping[str, Any]] | None = None,
+    d1_levels: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, float]:
+    """The armed level set for one symbol, from whatever data exists.
+
+    D1 levels (the 1st-dev bands, the current and previous AVWAP, the daily
+    15/21 EMAs) come from the scan's zone-arms entry and the daily store; the
+    session 15/21 EMAs and the H1 15 EMA are aggregated from the cached M5
+    bars. Anything missing is simply absent from the result - R5 section 6:
+    "missing zone-arm data for a symbol means that level silently absent from
+    the watch, never a fabricated level."
+    """
+    moment = _naive(now or datetime.now())
+    levels: dict[str, float] = {}
+
+    entry = zone_arm_entry if isinstance(zone_arm_entry, Mapping) else {}
+    for source_key, kind in (
+        ("avwape", "avwape"),
+        ("prev_avwape", "prev_avwape"),
+    ):
+        value = _finite_value(entry.get(source_key))
+        if value is not None:
+            levels[kind] = value
+    # The 1st-dev bands ride on the zone-arm trigger levels, whose names are
+    # the established label vocabulary (UPPER_1/LOWER_1, PREV_UPPER_1/...).
+    for arm in entry.get("trigger_levels") or []:
+        if not isinstance(arm, Mapping):
+            continue
+        name = str(arm.get("name") or arm.get("label") or "").strip().upper()
+        value = _finite_value(arm.get("level"))
+        if value is None:
+            continue
+        if name in ("UPPER_1", "LOWER_1") and "d1_band_1" not in levels:
+            levels["d1_band_1"] = value
+        elif name in ("PREV_UPPER_1", "PREV_LOWER_1") and "prev_band_1" not in levels:
+            levels["prev_band_1"] = value
+        elif name in ("EMA_15", "D1_EMA_15") and "d1_ema15" not in levels:
+            levels["d1_ema15"] = value
+        elif name in ("EMA_21", "D1_EMA_21") and "d1_ema21" not in levels:
+            levels["d1_ema21"] = value
+
+    for source_key, kind in (("ema15", "d1_ema15"), ("ema21", "d1_ema21")):
+        if kind in levels:
+            continue
+        value = _finite_value((d1_levels or {}).get(source_key))
+        if value is not None:
+            levels[kind] = value
+
+    session = completed_session_bars(m5_bars, now=moment)
+    closes = [
+        value
+        for value in (_finite_value(bar.get("close")) for bar in session)
+        if value is not None
+    ]
+    for length, kind in ((15, "m5_ema15"), (21, "m5_ema21")):
+        value = _ema_last(closes, length)
+        if value is not None:
+            levels[kind] = value
+
+    hourly = _hourly_closes(m5_bars, moment)
+    h1_ema15 = _ema_last(hourly, 15)
+    if h1_ema15 is not None:
+        levels["h1_ema15"] = h1_ema15
+
+    return levels
+
+
+def evaluate_any_bounce_watch(
+    watch: AnyBounceWatch,
+    m5_bars: Iterable[Mapping[str, Any]] | None,
+    levels: Mapping[str, float],
+    *,
+    now: datetime | None = None,
+    tolerance_fraction: float = ANY_BOUNCE_TOLERANCE_FRACTION,
+) -> AnyBounceTrigger | None:
+    """The first armed level that produced a two-bar bounce, or ``None``.
+
+    The idiom is ``detect_zone_arm_triggers``' own: bar A dips to within the
+    tolerance of the level and closes on the right side of it, then bar B
+    closes better than bar A and clear of the level. Both bars must be
+    COMPLETED - a forming bar is preview and can un-happen.
+    """
+    moment = _naive(now or datetime.now())
+    bars = completed_session_bars(m5_bars, now=moment)
+    if len(bars) < 2:
+        return None
+    previous, latest = bars[-2], bars[-1]
+    a_high = _finite_value(previous.get("high"))
+    a_low = _finite_value(previous.get("low"))
+    a_close = _finite_value(previous.get("close"))
+    b_close = _finite_value(latest.get("close"))
+    if None in (a_high, a_low, a_close, b_close):
+        return None
+
+    for kind in watch.kinds:
+        level = _finite_value(levels.get(kind))
+        if level is None:
+            continue
+        tolerance = abs(level) * float(tolerance_fraction)
+        if watch.side == "short":
+            tagged = a_high >= level - tolerance and a_close <= level + tolerance
+            hit = tagged and b_close < a_close and b_close < level
+        else:
+            tagged = a_low <= level + tolerance and a_close >= level - tolerance
+            hit = tagged and b_close > a_close and b_close > level
+        if not hit:
+            continue
+        label = ANY_BOUNCE_KINDS.get(kind, kind)
+        verb = "rejected from" if watch.side == "short" else "bounced off"
+        return AnyBounceTrigger(
+            watch=watch,
+            kind=kind,
+            level=level,
+            price=b_close,
+            triggered_at=_bar_end(latest),
+            message=(
+                f"{watch.symbol} {verb} the {label} at {level:.2f} "
+                f"(completed 5m close {b_close:.2f})"
+            ),
+        )
+    return None

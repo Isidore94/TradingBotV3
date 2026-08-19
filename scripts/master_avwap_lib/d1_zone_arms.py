@@ -119,6 +119,7 @@ def build_d1_zone_arms(
     ema21: Any = None,
     prev_upper_1: Any = None,
     prev_lower_1: Any = None,
+    prev_avwape: Any = None,
     stdev: Any = None,
     atr: Any = None,
     sustained_2nd_3rd: bool = False,
@@ -333,7 +334,7 @@ def build_d1_zone_arms(
     if not arms:
         return None
 
-    return {
+    entry = {
         "schema_version": ZONE_ARM_SCHEMA_VERSION,
         "symbol": sym,
         "side": side,
@@ -346,6 +347,18 @@ def build_d1_zone_arms(
         "active_current_scan": True,
         "trigger_levels": arms,
     }
+    # R5 section 8.3: the PRIOR anchor's AVWAP line, carried for the
+    # intraday any-bounce watch. It is a top-level key and deliberately
+    # NOT an entry in `trigger_levels`: detect_zone_arm_triggers walks
+    # that list blindly, so a new arm there would silently become a live
+    # trigger of the shipped zone-arm alert rubric - a detector change
+    # smuggled in as plumbing. No prior anchor means the key is ABSENT,
+    # never null and never zero, so a no-prior symbol reads exactly like a
+    # file written before this change.
+    prev_avwape_value = _finite(prev_avwape)
+    if prev_avwape_value is not None and prev_avwape_value > 0:
+        entry["prev_avwape"] = round(prev_avwape_value, 4)
+    return entry
 
 
 def detect_zone_arm_triggers(entry: Any, bars: Any) -> list[dict]:

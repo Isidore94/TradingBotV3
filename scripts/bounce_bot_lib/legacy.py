@@ -24,7 +24,15 @@ import tkinter.font as tkFont
 
 import pandas as pd
 import yfinance as yf
-from m5_signal_engines import M5_SIGNAL_TAG, latest_lrsi_cross
+from m5_signal_engines import (
+    M5_SIGNAL_TAG,
+    ORB_CANDIDATE,
+    ORB_LRSI_RECROSS,
+    ORB_NEW_EXTREME,
+    latest_confluence,
+    latest_lrsi_cross,
+    latest_orb_events,
+)
 from market_session import (
     get_market_local_now,
     get_market_session_close_naive,
@@ -292,6 +300,10 @@ BOUNCE_TYPE_LABELS = {
     "h1_green_to_yellow": "H1 Green->Yellow Fade",
     "lrsi_cross_20": "LRSI Cross 20",
     "lrsi_cross_50": "LRSI Cross 50",
+    "m5_confluence": "HA+SMI+LRSI Confluence",
+    "orb_first_candle": "First-Candle ORB Candidate",
+    "orb_first_candle_break": "First-Candle ORB New Extreme",
+    "orb_first_candle_recross": "First-Candle ORB LRSI Recross",
 }
 BOUNCE_LEARNING_TYPE_KEYS = set(BOUNCE_TYPE_DEFAULTS)
 
@@ -544,9 +556,31 @@ LRSI_CROSS_50_TYPE = "lrsi_cross_50"
 # learning set - a scoring change smuggled in as a feature. These are new
 # detectors on probation; they must be measurable and switchable without
 # touching what the champions learn from.
+# R5 sections 3.2 and 3.3, wired 2026-08-18. Each is a separate claim, so
+# each gets its own type and its own switch.
+M5_CONFLUENCE_TYPE = "m5_confluence"
+ORB_CANDIDATE_TYPE = "orb_first_candle"
+ORB_NEW_EXTREME_TYPE = "orb_first_candle_break"
+ORB_LRSI_RECROSS_TYPE = "orb_first_candle_recross"
+
+#: Pure-engine event kind -> the alert type it emits under.
+ORB_EVENT_TYPES = {
+    ORB_CANDIDATE: ORB_CANDIDATE_TYPE,
+    ORB_NEW_EXTREME: ORB_NEW_EXTREME_TYPE,
+    ORB_LRSI_RECROSS: ORB_LRSI_RECROSS_TYPE,
+}
+
 M5_SIGNAL_TYPE_DEFAULTS = {
     LRSI_CROSS_20_TYPE: True,
     LRSI_CROSS_50_TYPE: True,
+    # OFF until a desk session says otherwise. R5 section 8.2 wanted the
+    # WIRING held back; the trader overrode that ordering on 2026-08-18,
+    # so what is held back instead is every one of these firing at all -
+    # which is the part that reaches the trader's ears.
+    M5_CONFLUENCE_TYPE: False,
+    ORB_CANDIDATE_TYPE: False,
+    ORB_NEW_EXTREME_TYPE: False,
+    ORB_LRSI_RECROSS_TYPE: False,
 }
 
 # H1 candle-color sweeps (2026-07-06): the trader's hourly regime colors.
@@ -2666,6 +2700,8 @@ class BounceBot(EWrapper, EClient):
         self._ema8_grind_state = None
         self._h1_color_state = None
         self._lrsi_cross_state = None
+        self._confluence_state = None
+        self._orb_first_candle_state = None
         self.latest_rrs_payload = None
         self.earnings_reaction_filter_cache = {}
 
@@ -6617,6 +6653,241 @@ class BounceBot(EWrapper, EClient):
             # R5 section 8.1: its own tag family, never d1_flag. Per-engine
             # identity rides bounce_type, so the feed can count each engine
             # separately; the tag only says "M5 signal engine, on probation".
+            self.gui_callback(payload, M5_SIGNAL_TAG)
+        self.log_symbol(symbol, f"ALERT: {message}")
+        self.log_bounce_to_file(
+            symbol=symbol,
+            direction=side,
+            levels=levels,
+            bounce_candle=bar_dict,
+            current_candle=bar_dict,
+            threshold=0.0,
+            quality=quality,
+        )
+
+    # ------------------------------------------------------------------
+    # HA + SMI + LRSI confluence (R5 section 3.2) and the first-candle ORB
+    # flow (R5 section 3.3), wired 2026-08-18 under the trader's integration
+    # redirect - which is the override the spec section 8.2 named as its first
+    # reopen trigger ("the trader overrides; batching engines is their call").
+    #
+    # Section 8.2's substance is kept even though its ordering was overridden:
+    # both engines default OFF in M5_SIGNAL_TYPE_DEFAULTS, so the desk session
+    # that was supposed to gate their wiring now gates their AUDIBILITY, and
+    # neither can add a row to a feed until the trader turns it on. The pure
+    # logic holds no cross-bar state (m5_signal_engines recomputes from the
+    # session's bars), so flipping a toggle mid-session cannot wake a state
+    # machine carrying contents no session exercised - which was 8.2's actual
+    # objection, and the reason these engines were written stateless.
+    # ------------------------------------------------------------------
+    def check_confluence_setups(self, symbols=None):
+        """Fire when the HA reversal, SMI turn and LRSI cross cluster.
+
+        M5 Focus symbols only, per the trader's framing recorded in R5
+        section 3.2: this is the "strongest" tell and it is asked for on names
+        the trader is already watching, not across the whole watchlist.
+        """
+        if not self.is_m5_signal_enabled(M5_CONFLUENCE_TYPE):
+            return []
+        spy_today, _prev_close = self._spy_session_bars()
+        if not spy_today:
+            return []
+        today = spy_today[-1].dt.date()
+        state = self._confluence_state
+        if not state or state.get("date") != today:
+            state = {"date": today, "alerted": set()}
+            self._confluence_state = state
+        now = get_market_local_now()
+        focus = self._human_focus_sets()
+        requested = None
+        if symbols is not None:
+            requested = {
+                str(item or "").strip().upper() for item in symbols if str(item or "").strip()
+            }
+        hits = []
+        for side in ("long", "short"):
+            scoped = sorted(focus.get(side) or set())
+            for symbol in scoped:
+                if requested is not None and symbol not in requested:
+                    continue
+                event = self._evaluate_confluence(symbol, side, today, now)
+                if not event:
+                    continue
+                stamp = event.bar_time.strftime("%H:%M") if event.bar_time else "?"
+                key = f"{symbol}|{side}|{stamp}|{event.parts}"
+                if key in state["alerted"]:
+                    continue
+                state["alerted"].add(key)
+                hits.append(event)
+        for event in hits:
+            self._emit_confluence_alert(event)
+        return hits
+
+    def _evaluate_confluence(self, symbol, side, today, now):
+        rows = self._m5_engine_rows(symbol)
+        if not rows:
+            return None
+        return latest_confluence(rows, symbol=symbol, side=side, now=now, session=today)
+
+    def _m5_engine_rows(self, symbol):
+        """Cached M5 bars as the plain dict rows the pure engines take."""
+        bars = self.get_cached_5m_bars(symbol)
+        if not bars:
+            return []
+        return [
+            {
+                "dt": bar.dt,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+            }
+            for bar in bars
+        ]
+
+    def _emit_confluence_alert(self, event):
+        symbol = event.symbol
+        side = event.side
+        bar_dict = {
+            "time": event.bar_time.strftime("%Y%m%d  %H:%M:%S") if event.bar_time else "",
+            "open": event.close,
+            "high": event.close,
+            "low": event.close,
+            "close": event.close,
+        }
+        levels = {M5_CONFLUENCE_TYPE: event.close}
+        event_row = self._log_bounce_candidate_event(
+            "confirmed",
+            symbol,
+            side,
+            levels,
+            bar_dict,
+            bar_dict,
+            reason=(
+                "Heikin-Ashi reversal, SMI turn and LRSI cross "
+                f"{event.lrsi_level:.0f} landed within {event.span_bars} completed "
+                "5m bars of each other"
+            ),
+        )
+        self._register_bounce_outcome(
+            symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
+        )
+        quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        message = (
+            f"[{quality.get('tier', 'B')}-TIER] M5 CONFLUENCE {symbol} ({side}): "
+            f"HA reversal + SMI turn + LRSI {event.lrsi_level:.0f} within "
+            f"{event.span_bars} bars, at {event.close:.2f}."
+        )
+        exit_note = self._measured_exit_suffix(side, levels)
+        if exit_note:
+            message += f" | {exit_note}"
+        payload = self._build_bounce_feedback_alert_payload(message, event_row)
+        if self.gui_callback:
+            self.gui_callback(payload, M5_SIGNAL_TAG)
+        self.log_symbol(symbol, f"ALERT: {message}")
+        self.log_bounce_to_file(
+            symbol=symbol,
+            direction=side,
+            levels=levels,
+            bounce_candle=bar_dict,
+            current_candle=bar_dict,
+            threshold=0.0,
+            quality=quality,
+        )
+
+    def check_orb_first_candle_setups(self, symbols=None):
+        """The first-candle ORB flow: candidate, then re-break and recross.
+
+        Three separately toggleable types, because they are three different
+        claims: the candidate is an annotation ("this name opened the way the
+        setup wants"), the new session extreme is the break the trader armed
+        for, and the LRSI recross is information about the pullback ending.
+        """
+        enabled = {
+            ORB_CANDIDATE_TYPE: self.is_m5_signal_enabled(ORB_CANDIDATE_TYPE),
+            ORB_NEW_EXTREME_TYPE: self.is_m5_signal_enabled(ORB_NEW_EXTREME_TYPE),
+            ORB_LRSI_RECROSS_TYPE: self.is_m5_signal_enabled(ORB_LRSI_RECROSS_TYPE),
+        }
+        if not any(enabled.values()):
+            return []
+        spy_today, _prev_close = self._spy_session_bars()
+        if not spy_today:
+            return []
+        today = spy_today[-1].dt.date()
+        state = self._orb_first_candle_state
+        if not state or state.get("date") != today:
+            state = {"date": today, "alerted": set()}
+            self._orb_first_candle_state = state
+        now = get_market_local_now()
+        hits = []
+        for side in ("long", "short"):
+            for symbol in self._watchlist_day_sweep_symbols(side, symbols):
+                rows = self._m5_engine_rows(symbol)
+                if not rows:
+                    continue
+                for event in latest_orb_events(
+                    rows, symbol=symbol, side=side, now=now, session=today
+                ):
+                    bounce_type = ORB_EVENT_TYPES.get(event.kind)
+                    if not bounce_type or not enabled.get(bounce_type):
+                        continue
+                    stamp = event.bar_time.strftime("%H:%M") if event.bar_time else "?"
+                    key = f"{symbol}|{side}|{bounce_type}|{stamp}"
+                    if key in state["alerted"]:
+                        continue
+                    state["alerted"].add(key)
+                    hits.append((event, bounce_type))
+        for event, bounce_type in hits:
+            self._emit_orb_first_candle_alert(event, bounce_type)
+        return [event for event, _bounce_type in hits]
+
+    def _emit_orb_first_candle_alert(self, event, bounce_type):
+        symbol = event.symbol
+        side = event.side
+        bar_dict = {
+            "time": event.bar_time.strftime("%Y%m%d  %H:%M:%S") if event.bar_time else "",
+            "open": event.close,
+            "high": event.close,
+            "low": event.close,
+            "close": event.close,
+        }
+        levels = {bounce_type: event.close}
+        extreme_word = "high" if side == "long" else "low"
+        if event.kind == ORB_CANDIDATE:
+            reason = (
+                f"Gap {'up' if side == 'long' else 'down'} from "
+                f"{event.gap_from:.2f}; the first completed 5m candle set the "
+                f"session {extreme_word} at {event.first_extreme:.2f}"
+            )
+            headline = f"ORB CANDIDATE {symbol}"
+        elif event.kind == ORB_NEW_EXTREME:
+            reason = (
+                f"New session {extreme_word} at {event.level:.2f} after the LRSI "
+                f"pullback, taking out the first candle's {event.first_extreme:.2f}"
+            )
+            headline = f"ORB NEW {extreme_word.upper()} {symbol}"
+        else:
+            reason = "LRSI crossed back up through 50 after the ORB pullback"
+            headline = f"ORB LRSI RECROSS {symbol}"
+        if event.deep:
+            reason += " (the pullback went below 20 first)"
+        event_row = self._log_bounce_candidate_event(
+            "confirmed", symbol, side, levels, bar_dict, bar_dict, reason=reason
+        )
+        # Only the break asserts a move. The candidate mark and the recross are
+        # annotations, and seeding the outcome tracker with them would measure
+        # this engine against events it never claimed were entries.
+        if event.kind == ORB_NEW_EXTREME:
+            self._register_bounce_outcome(
+                symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
+            )
+        quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        message = (
+            f"[{quality.get('tier', 'B')}-TIER] {headline} ({side}): {reason}, "
+            f"at {event.close:.2f}."
+        )
+        payload = self._build_bounce_feedback_alert_payload(message, event_row)
+        if self.gui_callback:
             self.gui_callback(payload, M5_SIGNAL_TAG)
         self.log_symbol(symbol, f"ALERT: {message}")
         self.log_bounce_to_file(
@@ -11306,6 +11577,8 @@ class BounceBot(EWrapper, EClient):
         self.check_orb_break_setups(symbols=processed)
         self.check_ema8_grind_setups(symbols=processed)
         self.check_lrsi_cross_setups(symbols=processed)
+        self.check_confluence_setups(symbols=processed)
+        self.check_orb_first_candle_setups(symbols=processed)
         return processed
 
     def run_strategy(self):
@@ -11432,6 +11705,8 @@ class BounceBot(EWrapper, EClient):
                     logging.exception("8-EMA grind sweep failed.")
                 try:
                     self.check_lrsi_cross_setups()
+                    self.check_confluence_setups()
+                    self.check_orb_first_candle_setups()
                 except Exception:
                     logging.exception("LRSI cross sweep failed.")
 
