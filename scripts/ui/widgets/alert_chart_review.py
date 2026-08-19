@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from chart_watch import WATCH_KINDS
@@ -55,6 +55,10 @@ class AlertChartReview(QWidget):
     d1EventToggled = Signal(object, str)  # (alert, D1 event watch kind)
     anyBounceToggled = Signal(object)  # (alert) - R5 section 4, whole level set
     externalChartRequested = Signal(str)  # symbol - deep-link out for external TA
+    # The trader clicking "N hidden (inside yesterday's range) - show". A
+    # request to REVEAL, never to change what was recorded: the host still owns
+    # every store, and nothing was removed to begin with.
+    revealHiddenRequested = Signal()
     d1LevelAlertRequested = Signal(str, str, float, str)  # symbol, direction, level, candle date
     symbolRequested = Signal(str)  # type-a-ticker: chart it on demand
     levelArmRequested = Signal(str, str, float)  # symbol, direction, level
@@ -178,14 +182,39 @@ class AlertChartReview(QWidget):
         self.reviewed_badge.setStyleSheet(
             f"color: {theme.color('caution')}; font-weight: 600;"
         )
+        # Trader rule 2026-08-19: the names actually moving are the ones beyond
+        # yesterday's extreme. Same badge idiom as the Focus chips' BOUNCE/RRS
+        # flag - a short uppercase word in the accent colour - rather than a new
+        # visual language for one more piece of state.
+        self.mover_badge = QLabel("")
+        self.mover_badge.setObjectName("moverBadge")
+        self.mover_badge.setVisible(False)
+        # The withheld count. It is a BUTTON because it is an action: one click
+        # shows the inside-range names for the rest of the session. It states a
+        # number so "nothing is queued" can never be confused with "everything
+        # was filtered away".
+        self.hidden_button = QPushButton("")
+        self.hidden_button.setObjectName("HiddenReviewsButton")
+        self.hidden_button.setFlat(True)
+        self.hidden_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.hidden_button.setVisible(False)
+        self.hidden_button.setToolTip(
+            "These names are inside yesterday's range, so the review queue is "
+            "holding them back. Nothing was deleted - they are still in the "
+            "feed, the history and every store. One click shows them for the "
+            "rest of today."
+        )
+        self.hidden_button.clicked.connect(self.revealHiddenRequested)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.reviewed_badge)
+        buttons.addWidget(self.mover_badge)
         buttons.addWidget(self.focus_button)
         buttons.addWidget(self.skip_button)
         buttons.addWidget(self.remove_today_button)
         buttons.addWidget(self.cross_focus_button)
         buttons.addStretch(1)
+        buttons.addWidget(self.hidden_button)
         buttons.addWidget(self.queue_label)
 
         layout = QVBoxLayout(self)
@@ -310,6 +339,7 @@ class AlertChartReview(QWidget):
         armed_levels: Iterable = (),
         armed_d1_events: Iterable[str] = (),
         any_bounce_armed: bool = False,
+        mover_state: str = "",
         guidance_text: str = "",
         in_focus: bool = False,
         auto_adopted: bool = False,
@@ -438,6 +468,7 @@ class AlertChartReview(QWidget):
         self.set_armed_levels(armed_levels)
         self.set_armed_d1_events(armed_d1_events)
         self.set_any_bounce_armed(any_bounce_armed)
+        self.set_mover_state(mover_state)
         self.set_cross_active(cross_active)
         # The price box seed and the watch-button availability both read the
         # drawn M5 series, which does not exist yet - _on_snapshot_rendered
@@ -498,6 +529,7 @@ class AlertChartReview(QWidget):
         self.set_armed_kinds(())
         self.set_armed_d1_events(())
         self.set_any_bounce_armed(False)
+        self.set_mover_state("")
         self.set_cross_active(False)
 
     def set_queued_count(self, count: int) -> None:
@@ -515,6 +547,36 @@ class AlertChartReview(QWidget):
     def set_armed_d1_events(self, kinds: Iterable[str] = ()) -> None:
         """Reflect this symbol's armed D1 event watches on the dock's D1 row."""
         self.arm_bar.set_armed_d1_events(kinds)
+
+    def set_mover_state(self, state: str = "") -> None:
+        """Say which of the three answers this chart is showing.
+
+        A verified break is the flag the trader asked for. An UNMEASURED name
+        is labelled rather than dressed up either way: it is on the chart
+        BECAUSE it could not be measured (missing data is uncertainty, never
+        confirmation), and the tag is what stops that from reading as a
+        breakout. A name verified inside the range only appears once the
+        trader has revealed the hidden ones, and it says so.
+        """
+        text, color = {
+            "open": ("MOVING", theme.color("favorite")),
+            "unknown": ("unmeasured", theme.color("text_muted")),
+            "closed": ("inside range", theme.color("text_muted")),
+        }.get(str(state or "").strip().lower(), ("", ""))
+        self.mover_badge.setText(text)
+        self.mover_badge.setVisible(bool(text))
+        if text:
+            weight = 700 if text == "MOVING" else 500
+            self.mover_badge.setStyleSheet(f"color: {color}; font-weight: {weight};")
+
+    def set_hidden_count(self, count: int = 0) -> None:
+        """The honest line about what the movers-only filter is holding back."""
+        count = max(0, int(count or 0))
+        self.hidden_button.setVisible(count > 0)
+        if count:
+            self.hidden_button.setText(
+                f"{count} hidden (inside yesterday's range) - show"
+            )
 
     def set_any_bounce_armed(self, armed: bool = False) -> None:
         """Reflect this symbol's any-bounce watch on the dock's D1 row."""

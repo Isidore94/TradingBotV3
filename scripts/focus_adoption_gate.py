@@ -53,6 +53,8 @@ __all__ = [
     "OPEN",
     "UNKNOWN",
     "focus_adoption_gate_state",
+    "is_focus_mover",
+    "mover_state",
     "passes_focus_adoption_gate",
     "session_vwap_state",
 ]
@@ -71,6 +73,45 @@ def session_vwap_state(side: Any, price: Any, vwap: Any) -> str:
     return OPEN if last > level else CLOSED
 
 
+def mover_state(side: Any, price: Any, prev_high: Any, prev_low: Any) -> tuple[str, str]:
+    """(state, reason) for the EXTREME LEG ALONE - no session-VWAP leg.
+
+    Trader rule 2026-08-19 (evening): "a long inside yesterday's range is
+    probably chop", so chart review shows only longs above the previous day's
+    high and shorts below the previous day's low, and Focus picks beyond their
+    previous-day extreme are flagged as the ones actually moving.
+
+    This is deliberately a THIN NAME over `prev_day_break_state`, the same
+    call `focus_adoption_gate_state` makes for its own extreme leg, rather
+    than a second implementation of "beyond yesterday's extreme". A display
+    filter that drifted from the gate would hide names the machine had just
+    adopted - the trader would be looking at a queue that disagreed with their
+    own Focus list, and neither number would be wrong on its own.
+
+    The caller supplies the price; every caller here passes the close of the
+    last COMPLETED M5 bar, because a forming bar is a preview (plan.md sec 5)
+    and a break it closes back inside is exactly the chop this rule removes.
+
+    UNKNOWN is returned, never folded into CLOSED. The display layer SHOWS an
+    unmeasured name with a tag: missing data is uncertainty, and a data outage
+    must not silently blank a review queue.
+    """
+    state = prev_day_break_state(side, price, prev_high, prev_low)
+    short = is_short_side(side)
+    extreme_label = "yesterday's low" if short else "yesterday's high"
+    side_label = "below" if short else "above"
+    if state == UNKNOWN:
+        return UNKNOWN, f"cannot verify the break of {extreme_label}"
+    if state == CLOSED:
+        return CLOSED, f"inside yesterday's range (not {side_label} {extreme_label})"
+    return OPEN, f"{side_label} {extreme_label}"
+
+
+def is_focus_mover(side: Any, price: Any, prev_high: Any, prev_low: Any) -> bool:
+    """True only for a VERIFIED break. UNKNOWN is not a mover - it is unknown."""
+    return mover_state(side, price, prev_high, prev_low)[0] == OPEN
+
+
 def focus_adoption_gate_state(
     side: Any,
     price: Any,
@@ -85,7 +126,9 @@ def focus_adoption_gate_state(
     reported before CLOSED when both apply: "could not measure" and "measured,
     failed" are different operational problems.
     """
-    extreme = prev_day_break_state(side, price, prev_high, prev_low)
+    # The same call the display filter makes, through the same name: one
+    # definition of "beyond yesterday's extreme" for the gate and the review.
+    extreme, _extreme_reason = mover_state(side, price, prev_high, prev_low)
     vwap_state = session_vwap_state(side, price, vwap)
     short = is_short_side(side)
     extreme_label = "yesterday's low" if short else "yesterday's high"

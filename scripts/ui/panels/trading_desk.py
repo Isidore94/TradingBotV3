@@ -100,6 +100,14 @@ class TradingDeskPanel(QWidget):
         self.industry_panel.statusChanged.connect(self.statusChanged)
         self.rs_window_panel.statusChanged.connect(self.statusChanged)
         self.focus_picks_panel.statusChanged.connect(self.statusChanged)
+        # Trader rule 2026-08-19: flag the Focus picks that are beyond their
+        # previous-day extreme. The Alert Center's 60-second D1 poll already
+        # measures exactly that for every Focus name, so the board asks it
+        # rather than measuring again - no new timer, no new market data.
+        self.focus_picks_panel.set_mover_source(self.alert_center.mover_state)
+        self.alert_center.focusBreakStatesChanged.connect(
+            self.focus_picks_panel.refresh_mover_flags
+        )
         self.bounce_panel.statusChanged.connect(self.statusChanged)
         self.alert_center.statusChanged.connect(self.statusChanged)
         self.bounce_panel.service.connectionChanged.connect(self.connectionChanged)

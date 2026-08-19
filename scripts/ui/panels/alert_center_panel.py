@@ -62,7 +62,14 @@ from chart_watch import (
     save_d1_level_watches,
     watch_is_stale,
 )
-from prev_day_gate import OPEN as PREV_DAY_BREAK_OPEN, prev_day_break_state, prev_session_extremes
+import focus_adoption_gate
+from prev_day_gate import (
+    CLOSED as PREV_DAY_CLOSED,
+    OPEN as PREV_DAY_BREAK_OPEN,
+    UNKNOWN as PREV_DAY_UNKNOWN,
+    prev_day_break_state,
+    prev_session_extremes,
+)
 from project_paths import (
     ALERT_CENTER_IGNORED_SYMBOLS_FILE,
     ALERT_CHART_WATCHES_FILE,
@@ -389,6 +396,11 @@ class AlertCenterPanel(QFrame):
     statusChanged = Signal(str)
     setupRequested = Signal(dict)  # show_setup kwargs, when the embedded pane is off
     armedWatchesChanged = Signal()  # any arm/disarm, so the inventory can redraw
+    #: Emitted after the 60-second D1 poll re-measures every Focus name
+    #: against yesterday's range, so surfaces showing the "moving" flag
+    #: repaint on the cadence that already exists rather than polling
+    #: themselves (trader rule 2026-08-19).
+    focusBreakStatesChanged = Signal()
     # One D1 level/event alert worth the hourly Away phone push, as the
     # {symbol, label, time_text} dict d1_push_event builds. Emitted for every
     # qualifying alert in every mode; Auto Pilot owns the AWAY-only gate.
@@ -416,6 +428,15 @@ class AlertCenterPanel(QFrame):
         self._alerts: list[BounceAlert] = []
         self._d1_alerts: list[BounceAlert] = []
         self._review_queue: list[BounceAlert] = []
+        #: Trader rule 2026-08-19 (evening): "a long inside yesterday's range is
+        #: probably chop. Chart review should only show me longs above the
+        #: previous day's high and shorts below the previous day's low."
+        #: DEFAULT-ON, and it HIDES - nothing is removed from any store, feed or
+        #: history, no alert is muted, and no watchlist entry is touched.
+        self._review_movers_only = True
+        #: What the filter withheld, newest per symbol, so the count is honest
+        #: and one click can show exactly those names.
+        self._hidden_inside_range: dict[str, BounceAlert] = {}
         self._current_review_alert: BounceAlert | None = None
         self._embedded_detail_enabled = True
         # Decision-log dwell tracking: which symbol the review pane is showing
@@ -754,6 +775,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.d1EventToggled.connect(self._toggle_d1_event_watch)
         self.chart_review.anyBounceToggled.connect(self._toggle_any_bounce_watch)
         self.chart_review.externalChartRequested.connect(self._open_external_chart)
+        self.chart_review.revealHiddenRequested.connect(self.reveal_hidden_reviews)
         self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
         self.chart_review.symbolRequested.connect(self.chart_symbol)
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
@@ -1312,6 +1334,100 @@ class AlertCenterPanel(QFrame):
             self._focus_break_open_at[key] = stamped
         return stamped
 
+    def mover_state(self, symbol: str, side: str) -> str:
+        """OPEN / CLOSED / UNKNOWN for "beyond yesterday's extreme".
+
+        ONE definition, shared with the adoption gate: this reads
+        `focus_adoption_gate.mover_state`, which is the same
+        `prev_day_break_state` call the gate makes for its extreme leg. A
+        display filter with its own copy of the rule would eventually hide a
+        name the machine had just adopted.
+
+        The 60-second D1 poll already measures every Focus name and caches the
+        answer, so those cost nothing here. Anything else is measured on
+        demand from bars the desk already holds - `_m5_bars_for` and
+        `_d1_bars_for` read the running bot's in-memory series and the local
+        daily store, so this adds no fetch and no IB traffic.
+        """
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return PREV_DAY_UNKNOWN
+        side_key = str(side or "").strip().lower()
+        sides = (side_key,) if side_key in ("long", "short") else ("long", "short")
+        for item in sides:
+            cached = self._focus_break_state.get(self._focus_gate_key(symbol, item))
+            if cached == PREV_DAY_BREAK_OPEN:
+                return PREV_DAY_BREAK_OPEN
+        measured = [self._measure_mover_state(symbol, item) for item in sides]
+        if PREV_DAY_BREAK_OPEN in measured:
+            return PREV_DAY_BREAK_OPEN
+        # A name whose sides disagree between "measured, inside" and "could not
+        # measure" is not verified inside anything: uncertainty wins, and the
+        # display shows it rather than hiding it.
+        if PREV_DAY_UNKNOWN in measured:
+            return PREV_DAY_UNKNOWN
+        return PREV_DAY_CLOSED
+
+    def _measure_mover_state(self, symbol: str, side: str) -> str:
+        """One side, measured now from cached bars. Never raises."""
+        try:
+            moment = datetime.now()
+            prev_high, prev_low = prev_session_extremes(
+                self._d1_bars_for(symbol), session=moment.date()
+            )
+            completed = completed_session_bars(self._m5_bars_for(symbol), now=moment)
+            price = _bar_close(completed[-1]) if completed else None
+            state, _reason = focus_adoption_gate.mover_state(
+                side, price, prev_high, prev_low
+            )
+            return state
+        except Exception:
+            # An unreadable measurement is UNKNOWN, which SHOWS. A filter that
+            # failed closed would blank the review the moment a data source
+            # hiccuped - the opposite of what a trader needs mid-session.
+            logging.debug("Mover state unavailable for %s.", symbol, exc_info=True)
+            return PREV_DAY_UNKNOWN
+
+    def _review_shows_regardless(self, alert: BounceAlert) -> bool:
+        """Entry points the movers-only filter must never touch.
+
+        - A deliberate Focus review shows EVERYTHING: the trader asked for
+          their own list, and answering with a filtered subset of names they
+          chose themselves is the surface lying about what it holds.
+        - An armed chart-watch hit is the exact condition the trader armed and
+          is waiting on.
+        """
+        return (
+            str(alert.tag or "") == FOCUS_REVIEW_TAG
+            or is_chart_watch_alert(alert)
+        )
+
+    def hidden_inside_range_count(self) -> int:
+        return len(self._hidden_inside_range)
+
+    def reveal_hidden_reviews(self) -> int:
+        """Show the withheld names, and stop filtering for this session.
+
+        "For that session" is literal: the flag resets with the market date,
+        beside the other day-scoped state, so tomorrow opens filtered again.
+        """
+        withheld = list(self._hidden_inside_range.values())
+        self._hidden_inside_range.clear()
+        self._review_movers_only = False
+        self.chart_review.set_hidden_count(0)
+        for alert in withheld:
+            self._enqueue_review_alert(alert)
+        if withheld:
+            self.statusChanged.emit(
+                f"Showing {len(withheld)} name(s) inside yesterday's range - "
+                "the movers-only review filter is off for the rest of today."
+            )
+        else:
+            self.statusChanged.emit(
+                "Movers-only review filter is off for the rest of today."
+            )
+        return len(withheld)
+
     def _alert_has_focus_privilege(self, alert: BounceAlert) -> bool:
         """Focus membership AND the prev-day break on the alert's own side.
 
@@ -1507,6 +1623,16 @@ class AlertCenterPanel(QFrame):
             self._current_review_alert = alert
             self._render_current_review()
             return
+        # Movers only (trader rule 2026-08-19). Applied HERE because this is
+        # the single door into the review queue - every caller, including the
+        # auto-pick drain and the D1 feed, arrives through it. It hides and
+        # counts; it deletes nothing, mutes nothing and records nothing to the
+        # review-learning stream.
+        if self._review_movers_only and not self._review_shows_regardless(alert):
+            if self.mover_state(alert.symbol, alert.side) == PREV_DAY_CLOSED:
+                self._hidden_inside_range[alert.symbol] = alert
+                self.chart_review.set_hidden_count(len(self._hidden_inside_range))
+                return
         self._review_queue = [
             queued for queued in self._review_queue if queued.symbol != alert.symbol
         ]
@@ -1742,6 +1868,7 @@ class AlertCenterPanel(QFrame):
             armed_levels=self.armed_levels_for(alert.symbol),
             armed_d1_events=self.armed_d1_event_kinds(alert.symbol),
             any_bounce_armed=self.any_bounce_armed_for(alert.symbol),
+            mover_state=self.mover_state(alert.symbol, alert.side),
             guidance_text=guidance.summary_text(),
             in_focus=self._alert_is_focus(alert),
             auto_adopted=self._alert_is_auto_adopted(alert),
@@ -2557,6 +2684,10 @@ class AlertCenterPanel(QFrame):
                     hits.append((symbol, side_label, kind, hit))
                     extension_spent = extension_spent or kind in D1_EXTENSION_KINDS
         self._focus_gate_held = held
+        # Every Focus name has just been re-measured against yesterday's range.
+        # Surfaces that show the "moving" flag repaint from here rather than
+        # owning a timer of their own (trader rule 2026-08-19).
+        self.focusBreakStatesChanged.emit()
         if not hits:
             self._emit_feed_status()
             return
@@ -3753,6 +3884,11 @@ class AlertCenterPanel(QFrame):
         self._focus_break_state.clear()
         self._focus_break_open_at.clear()
         self._focus_gate_held = 0
+        # The movers-only filter is day-scoped for the same reason: a reveal is
+        # "show me the chop for the rest of today", not a preference change.
+        self._review_movers_only = True
+        self._hidden_inside_range.clear()
+        self.chart_review.set_hidden_count(0)
         self._refresh_ignored_button()
 
     def _park_review_symbol(self, symbol: str) -> None:

@@ -1566,6 +1566,11 @@ def test_dock_d1_event_buttons_arm_poll_and_fire_red(monkeypatch):
     bot = _Bot()
     panel = AlertCenterPanel()
     panel._bounce_service = _Service(bot)
+    # This test is about the D1 event buttons, not about the movers-only review
+    # filter (trader rule 2026-08-19), and NVDA here sits inside yesterday's
+    # range by construction. Turning the filter off keeps the test measuring
+    # what it was written to measure; the filter has its own tests.
+    panel._review_movers_only = False
     panel.add_alert(
         BounceAlert(
             time_text="11:30:00",

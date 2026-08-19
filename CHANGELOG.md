@@ -605,6 +605,52 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-19 (evening) — chart review shows movers only
+
+`IMPLEMENTED`, live proof owed (`docs/DESK_TESTING_PLAN.md` §2.10). Trader rule,
+recorded verbatim as a dated addendum in the R2 spec: "a long inside yesterday's
+range is probably chop", so chart review shows only longs above the previous
+day's high and shorts below the previous day's low, Focus picks beyond their
+previous-day extreme are flagged, and inside-range picks appear only on a
+deliberate Focus review.
+
+**One predicate.** `focus_adoption_gate.mover_state` is the adoption gate's own
+extreme leg — a thin name over the same `prev_day_break_state` call — and
+`focus_adoption_gate_state` now routes its extreme leg through it, so there is
+exactly one implementation of "beyond yesterday's extreme" in the tree. A test
+walks the whole input matrix and asserts the two entry points cannot disagree; a
+filter with a private copy of the rule would eventually hide a name the machine
+had just adopted. No session-VWAP leg: this asks the weaker question on purpose.
+
+**The filter is presentation, and stays that way.** It lives in
+`AlertCenterPanel._enqueue_review_alert`, the single door into the review queue.
+It hides and counts — `N hidden (inside yesterday's range) - show`, one click
+reveals exactly those names and turns the filter off for that session (day-scoped,
+resets with the market date). It removes nothing from any feed, history or store,
+mutes no alert or push, auto-removes no watchlist or Focus entry, writes nothing
+to `review_policy.json`, and records nothing to the review-learning stream. Each
+of those is a test.
+
+**UNKNOWN shows, tagged `unmeasured`.** Missing data is uncertainty, never
+confirmation, and a filter that failed closed would blank the review the moment
+the daily store hiccuped — indistinguishable from "nothing qualifies".
+
+**Two entry points bypass it entirely:** the deliberate Focus review
+(`review_focus_picks`), because answering a request for the trader's own list
+with a subset of it is the surface lying, and armed chart-watch hits, because
+that is the exact condition the trader armed.
+
+**The flag.** A Focus chip beyond its previous-day extreme on its own side
+carries `MOVING`, in the same badge idiom as the existing `BOUNCE`/`RRS` flags;
+the charted alert shows `MOVING` / `unmeasured` / `inside range` beside the
+reviewed-today badge. It repaints off the Alert Center's existing 60-second D1
+poll via a new `focusBreakStatesChanged` signal — no new timer, no new market
+data, no IB traffic.
+
+**Docs.** `CLAUDE.md`/`AGENTS.md` also correct a line that contradicted the R1
+spec: OFF does nothing automatic at all, including no auto-pick adoption. The
+old wording claimed OFF was the one mode where auto picks self-apply.
+
 ### 2026-08-19 — the adoption gate could not compare two clocks
 
 `FIXED`, live proof re-owed. The first DESK morning adopted nothing: every

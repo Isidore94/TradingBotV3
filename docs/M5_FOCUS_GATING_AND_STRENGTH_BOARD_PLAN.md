@@ -442,3 +442,85 @@ is not a new chart request. Double-click still works.
 this build: it needs its own layout budget on a two-table page and a decision
 about what happens to the tables' width, which is a desk-layout judgement rather
 than a wiring one. The popup reuses a surface the trader already knows.
+
+## Addendum — 2026-08-19 (evening): movers only in chart review
+
+**The trader's rule, verbatim:**
+
+> "A long inside yesterday's range is probably chop. Chart review should only
+> show me longs above the previous day's high and shorts below the previous
+> day's low. Focus picks that ARE beyond their previous-day extreme should be
+> flagged - those are the ones actually moving. Inside-range picks appear only
+> when I deliberately review focus picks."
+
+This is a **presentation** rule. No detector, score, alert or watchlist changed;
+nothing in this addendum touches what fires, what is recorded, or what is kept.
+
+### The predicate is the gate's own
+
+`focus_adoption_gate.mover_state(side, price, prev_high, prev_low)` is the
+**extreme leg alone** of the Part A adoption gate — a thin name over the same
+`prev_day_break_state` call the gate makes, and `focus_adoption_gate_state` now
+routes its own extreme leg through it. There is exactly one implementation of
+"beyond yesterday's extreme" in the tree.
+
+That matters more than it looks. A display filter with a private copy of the
+rule would eventually hide a name the machine had just adopted, and the trader
+would be reading a review queue that disagreed with their own Focus list, with
+neither number wrong on its own. A test walks the whole input matrix and asserts
+the two entry points can never disagree.
+
+There is **no session-VWAP leg** here: this filter answers "is it beyond
+yesterday's extreme", which is a weaker question than adoption asks, and
+deliberately so — the trader wants to *see* movers, not only the ones the
+machine would take.
+
+### What the filter does, and what it refuses to do
+
+Applied in `AlertCenterPanel._enqueue_review_alert`, the single door into the
+review queue, so every caller — the D1 Focus feed, the auto-pick drain, the
+scanner alerts — passes through it.
+
+| | |
+|---|---|
+| Default | **ON** |
+| Longs inside yesterday's range | not queued |
+| Shorts inside yesterday's range | not queued |
+| UNKNOWN (no prior session, no bars, measurement failed) | **SHOWN**, tagged `unmeasured` |
+| The withheld | counted on a clickable line: `N hidden (inside yesterday's range) - show` |
+| One click | shows exactly those names and turns the filter off **for that session** (day-scoped, resets with the market date) |
+| Deliberate Focus review (`review_focus_picks`) | **bypasses the filter entirely** |
+| Armed chart-watch hits | bypass it — the trader armed that exact condition |
+
+**Hard lines, all tested:**
+
+- it **hides**; nothing is removed from the feed, history, or any store;
+- **no** `review_policy.json` involvement — that file ranks and annotates and has
+  no suppression field, ever;
+- **nothing** is written to the review-learning stream (`_record_review_event` is
+  not called on a hide);
+- **no** alert sound, toast or phone push is muted;
+- **no** watchlist or Focus entry is auto-removed.
+
+UNKNOWN showing is the load-bearing choice: missing data is uncertainty, never
+confirmation (`plan.md` sec 5). A filter that failed closed would blank the
+review queue the moment the daily store or the bot's bars hiccuped — the worst
+possible behaviour mid-session, and indistinguishable from "nothing qualifies".
+
+### The flag on Focus surfaces
+
+A Focus chip whose name is beyond its previous-day extreme **on its own side**
+carries a `MOVING` flag, in the existing badge idiom (the same short uppercase
+word the `BOUNCE`/`RRS` flags use). The charted alert carries the same state as
+`MOVING` / `unmeasured` / `inside range` beside the reviewed-today badge.
+
+Cadence: the Alert Center's existing 60-second D1 poll already re-measures every
+Focus name against yesterday's range (`_update_focus_break_state`); it now emits
+`focusBreakStatesChanged` and the Focus board repaints from that. **No new timer,
+no new market data, no IB traffic** — the flag asks a question the desk had
+already answered.
+
+### Owed, live
+
+One review session where the trader confirms the queue shows only movers and the
+hidden-count line is honest — recorded as `DESK_TESTING_PLAN.md` §2.10.

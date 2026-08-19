@@ -54,6 +54,10 @@ class FocusPicksPanel(QFrame):
         self.service = focus_service
         self.price_alert_service = price_alert_service or PriceAlertService(self)
         self._bounce_state: dict[str, dict[str, str]] = {}
+        #: Answers "is this pick beyond its previous-day extreme?". Installed by
+        #: the desk (`set_mover_source`); absent on a bare panel, which simply
+        #: shows no flag rather than guessing.
+        self._mover_source = None
         self._rrs_state: dict[str, dict[str, str]] = {}
 
         self.editors: list[FocusSideEditor] = []
@@ -256,11 +260,43 @@ class FocusPicksPanel(QFrame):
         if emit_status:
             self.statusChanged.emit(message)
 
-    def _live_state_for(self, symbol: str) -> dict[str, dict[str, str]]:
+    def refresh_mover_flags(self) -> None:
+        """Repaint the chips because the desk re-measured the break states.
+
+        Rides the Alert Center's existing 60-second D1 poll - the cadence this
+        board already depends on for its BOUNCE/RRS chips - so no timer is
+        added and nothing is fetched.
+        """
+        self._refresh_all()
+
+    def set_mover_source(self, resolver) -> None:
+        """Install the callable that answers "is this pick moving?".
+
+        The desk wires this to the Alert Center's `mover_state`, which is fed
+        by the 60-second D1 poll that already measures every Focus name. No
+        timer and no fetch is added here: this panel asks a question the desk
+        has already answered.
+        """
+        self._mover_source = resolver
+        self._refresh_all()
+
+    def _mover_state_for(self, symbol: str, side: str) -> str:
+        resolver = getattr(self, "_mover_source", None)
+        if resolver is None:
+            return ""
+        try:
+            return str(resolver(symbol, side) or "")
+        except Exception:
+            # A flag is decoration over a measurement. If the measurement is
+            # unavailable, show no flag rather than a wrong one.
+            return ""
+
+    def _live_state_for(self, symbol: str, side: str = "") -> dict[str, dict[str, str]]:
         symbol = str(symbol or "").upper()
         return {
             "bounce": self._bounce_state.get(symbol, {}),
             "rrs": self._rrs_state.get(symbol, {}),
+            "mover": self._mover_state_for(symbol, side),
         }
 
 
@@ -353,7 +389,9 @@ class FocusSideEditor(QFrame):
                 widget.deleteLater()
         symbols = self.service.focus_symbols(self.side, self.category)
         for symbol in symbols:
-            chip = FocusStatusChip(symbol, tone=self.tone, state=self.live_state_for(symbol))
+            chip = FocusStatusChip(
+                symbol, tone=self.tone, state=self.live_state_for(symbol, self.side)
+            )
             chip.removed.connect(self._remove)
             self.chip_flow.addWidget(chip)
         self.count_label.setText(str(len(symbols)))
@@ -434,6 +472,20 @@ class FocusStatusChip(QFrame):
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(4)
         top.addWidget(title)
+        # Trader rule 2026-08-19: the picks beyond their previous-day extreme
+        # are "the ones actually moving". Same idiom as BOUNCE/RRS - one short
+        # uppercase word in the accent colour - and it sits FIRST because it is
+        # the question the trader is scanning the board for.
+        if str(state.get("mover") or "") == "open":
+            moving = QLabel("MOVING")
+            moving.setObjectName("FocusMovingFlag")
+            moving.setToolTip(
+                "Beyond yesterday's extreme on the last completed 5m bar - "
+                "above yesterday's high for a long, below yesterday's low for "
+                "a short. Same measurement the adoption gate uses."
+            )
+            moving.setStyleSheet(f"color: {theme.color('favorite')}; font-weight: 700;")
+            top.addWidget(moving)
         if has_bounce:
             flag = QLabel("BOUNCE")
             flag.setStyleSheet(f"color: {theme.color('favorite')}; font-weight: 700;")

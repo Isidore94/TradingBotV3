@@ -96,6 +96,7 @@ adopted nothing.
 |---|---|
 | §2.5 adoption happens, §2.6 adoption refusal, §2.7 "Not today", §2.8 strength board | **one DESK day** (re-owed in full: 2026-08-19 crashed before the gate ran) |
 | §2.7a strength-board sorting and charts (new, 2026-08-19) | the same DESK day |
+| §2.10 movers-only chart review (new, 2026-08-19 evening) | the same DESK day |
 | §2.2 EVENING stop, §2.4 SPY wake alarm | **one EVENING night** |
 
 That is the whole remaining list: **one DESK day and one EVENING night.**
@@ -615,6 +616,48 @@ Any time the board has rows — same session as §2.7 is ideal.
 - The Add button adds the wrong symbol after a sort.
 - A second, third, fourth chart window stacking up as you click through rows.
 - The board refetching (status line time changing) when you only sorted.
+
+
+## 2.10 Movers only in chart review (new, 2026-08-19 evening)
+
+**The question:** does the review queue now show you only the names that are
+actually moving — and does it tell you the truth about what it held back?
+
+### WHEN
+Any session, once alerts are flowing. Mid-morning is ideal.
+
+### DO
+1. Watch the review chart for a while without touching anything.
+2. Look at the right-hand end of the button row under the chart.
+3. Click the `N hidden (inside yesterday's range) - show` line once.
+4. Now press **Review ▶** on the Focus board (the deliberate focus-picks review).
+
+### GOOD
+- Every chart that comes up on its own is a long **above** yesterday's high or a
+  short **below** yesterday's low. Names inside yesterday's range do not appear.
+- A `MOVING` tag sits beside the reviewed-today badge on those charts.
+- A name the desk could not measure (no prior session, no bars yet) **still
+  appears**, tagged `unmeasured`. That is deliberate: a data gap must never
+  blank your review.
+- The hidden line states a real count, and it grows as the session goes on.
+- One click shows exactly those names — and the filter stays off for the rest of
+  the day, so you are not fighting it.
+- **Review ▶ shows everything**, filtered or not. Your own list is your own list.
+- Nothing disappeared anywhere else: the Alert Center feed, the history and the
+  D1 badge still carry every name, and no watchlist changed.
+
+### BAD, and worth reporting
+- An empty review queue with **no** hidden line — that would mean the filter
+  swallowed everything silently.
+- A hidden count that does not match what appears when you click it.
+- Any name vanishing from the FEED (not the chart queue) — the filter must only
+  affect what is charted.
+- Review ▶ showing a filtered subset of your Focus picks.
+
+### WHY THIS IS SAFE TO TRY MID-SESSION
+It hides charts; it changes nothing else. No alert is muted, no push is
+suppressed, nothing is removed from any store, and the file that ranks your
+alerts is untouched. If you dislike it, one click reveals everything for the day.
 
 ## 2.8a Can the machine steal one of your picks?
 

@@ -8,7 +8,99 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## 2026-08-19, midday — THE DESK NOW RUNS THIS BRANCH
+## 2026-08-19, evening — MOVERS ONLY IN CHART REVIEW. READ THIS FIRST.
+
+Built on the desk's live checkout (`C:\Users\Aaron\TradingBotV3`, branch
+`phase05-integration-blitz`) while the desk was running. **Nothing was restarted
+and no scheduled task was touched** — see "restart" below.
+
+### The trader's rule, as recorded
+
+> "A long inside yesterday's range is probably chop. Chart review should only
+> show me longs above the previous day's high and shorts below the previous
+> day's low. Focus picks that ARE beyond their previous-day extreme should be
+> flagged - those are the ones actually moving. Inside-range picks appear only
+> when I deliberately review focus picks."
+
+Verbatim as a dated addendum in `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`.
+
+### One predicate, not two
+
+`focus_adoption_gate.mover_state(side, price, prev_high, prev_low)` is the
+adoption gate's **extreme leg alone** — a thin name over the same
+`prev_day_break_state` call — and `focus_adoption_gate_state` now routes its own
+extreme leg through it. There is exactly one implementation of "beyond
+yesterday's extreme" in the tree, and a test walks the whole input matrix
+asserting the two entry points cannot disagree. That is the point: a display
+filter with a private copy of the rule would eventually hide a name the machine
+had just adopted, and the trader would be reading a queue that disagreed with
+their own Focus list.
+
+No session-VWAP leg. The filter asks the weaker question deliberately — the
+trader wants to *see* movers, not only the ones the machine would take.
+
+### Where the filter lives, and what it will not do
+
+`AlertCenterPanel._enqueue_review_alert` — the single door into the review
+queue, so the D1 Focus feed, the auto-pick drain and the scanner alerts all pass
+through it. Default ON.
+
+- Longs and shorts inside yesterday's range: **not queued**.
+- **UNKNOWN shows**, tagged `unmeasured`. Missing data is uncertainty; a filter
+  that failed closed would blank the review the moment the daily store hiccuped.
+- The withheld are counted on a clickable line, `N hidden (inside yesterday's
+  range) - show`. One click shows exactly those names and turns the filter off
+  **for that session** (day-scoped — tomorrow opens filtered again).
+- **Bypassed entirely** by the deliberate Focus review (`review_focus_picks`)
+  and by armed chart-watch hits.
+- It **hides**: nothing leaves the feed, the history or any store; no alert,
+  sound or push is muted; no watchlist or Focus entry is auto-removed;
+  `review_policy.json` is untouched; nothing is written to the review-learning
+  stream. Each of those is a test.
+
+### The flag
+
+A Focus chip beyond its previous-day extreme on its own side carries `MOVING`,
+in the existing badge idiom (the same short uppercase word as `BOUNCE`/`RRS`).
+The charted alert shows `MOVING` / `unmeasured` / `inside range` beside the
+reviewed-today badge. It repaints from the Alert Center's existing 60-second D1
+poll through a new `focusBreakStatesChanged` signal — **no new timer, no new
+market data, no IB traffic**.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3822 passed / 19 subtests, 0 failed, 0 errors**; process exit **`0xC0000409`** (the intermittent Qt-teardown crash, measured through Python's `returncode` — bash shows it as `127`) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | **not executed** — Smart App Control still blocks the built exe on this machine (see the midday entry). Unchanged and unresolved; no new module was added to the selftest roster, so the expected count stays 56 |
+
+Fail-before-feature: all 28 new tests were run against `e207851` in a throwaway
+worktree first and **all 28 failed**; all 28 pass here.
+
+### A desk restart IS needed
+
+The running desk is executing the Python it imported at launch. Everything here
+is source-level, so **the trader sees none of it until the desk is restarted.**
+Nothing is urgent: the filter changes what is charted, not what is detected,
+recorded or alerted, so the running session keeps working exactly as it did.
+
+Cleanest moment: **after tomorrow's close, or before the 07:00 task on
+2026-08-20** — the scheduled task launches from source, so letting the desk be
+restarted the usual way picks it up with no extra step. To take it now: close the
+desk and relaunch via `scripts/launch_gui_auto.ps1` (the task's own path). No task
+disarm is needed, because the branch is not changing.
+
+### Owed, live
+
+`docs/DESK_TESTING_PLAN.md` §2.10 — one review session where the trader
+confirms the queue shows only movers and the hidden-count line is honest.
+
+
+---
+
+## 2026-08-19, midday — the desk flipped to this branch
 
 The trader flipped the desk to `phase05-integration-blitz` at 11:08 PT
 (mid-session, deliberately — trader's call on a slow tape). The worktree
