@@ -326,3 +326,119 @@ adoption, with no action from the trader.
 **Reopen trigger.** If a live session shows an adoption that survived the feed
 stall and cost a trade, the change is `FOCUS_GATE_MAX_BAR_LAG = 1` plus the
 golden-fixture update that records what it newly refuses — not a new mechanism.
+
+## 2026-08-19 — the first DESK morning, and what it cost
+
+### The defect: a naive clock against an aware measured bar
+
+**Every adoption failed all session. Zero picks adopted; 121 refused every 30
+seconds from at least 08:07.** `focus_auto_picks.json` ended the day with an
+empty `picks` map, and the failure logging rotated `trading_bot.log`.
+
+Root cause, one line deep:
+
+```
+autopilot_core.pending_pick_gate_ok
+    lag_bars = (latest - bar_end).total_seconds() / (M5_BAR_MINUTES * 60.0)
+TypeError: can't subtract offset-naive and offset-aware datetimes
+```
+
+The two stamps in a stored verdict come from different writers and had drifted
+apart:
+
+| Field | Writer | Awareness |
+|---|---|---|
+| `gate_bar_end` | the intraday profile's `as_of` (`_intraday_extreme_metrics`) | **always aware** — the provider's own offset when it has one, market-local otherwise |
+| `gate_checked_at` | the staging refresh's `moment` (`datetime.now()`) | **naive** |
+| the caller's `now` | `AlertCenterPanel` → `datetime.now()` | **naive** |
+
+So the wall-clock age check (naive − naive) passed, and the bar-lag check
+(naive − aware) raised — which is exactly the line the traceback named. The
+Alert Center's wrapper caught it, correctly refused (fail-closed: an
+unverifiable pick is not an approved pick), and the desk adopted nothing.
+
+**This was not a gate that judged the picks wrongly. It was a gate that never
+ran.** The distinction matters for the owed proofs: nothing about the PDH/VWAP
+rule was exercised on 2026-08-19.
+
+### The fix: normalize at the seam, attaching offsets rather than stripping them
+
+`pending_pick_gate_ok` now runs every datetime it compares — the caller's clock,
+`gate_checked_at`, `gate_bar_end` and the `not_before` flip barrier — through
+`_gate_moment`, which delegates to `market_session.normalize_market_local_datetime`
+(attach market-local to a naive stamp, convert an aware one).
+
+Stripping offsets instead would have ended the crash and kept the outage: an
+aware 11:05 ET bar read as naive 11:05 against an 08:07 PT clock is three hours
+"ahead of the tape", so every pick would still have been refused — silently.
+`tests/test_focus_gate_timezone_seam.py` pins that direction explicitly, and
+every refusal path (stale clock, stale bar, future bar, pre-flip verdict) is
+re-asserted unchanged. `plan.md` sec 5's "timestamps carry explicit timezones"
+is now enforced at the comparison, not only at the writers.
+
+The same subtraction one function away (`minutes_since_open`) is hardened the
+same way. Every caller passes a naive clock today, so its answers are unchanged;
+the scheduler is simply no longer a place to discover this class of bug live.
+
+### The logging: one traceback per cycle, not one per pick
+
+The wrapper logged a full traceback for every pick it refused, so one systematic
+fault wrote **121 tracebacks every 30 seconds**, rotated the log, and nearly
+destroyed the evidence needed to diagnose it. Now the first failure of each poll
+cycle carries the traceback and the cycle ends with one WARNING naming the count
+and the exception. The refusal itself is as loud as it was and fail-closed
+semantics are untouched.
+
+### The retry investigation: design and code agree
+
+The R2.2 budget (`FLIP_REVERIFY_RETRY_SECONDS` = 60, `FLIP_REVERIFY_MAX_ATTEMPTS`
+= 5) governs **only** a failed flip re-measurement — the `reverify_pending_picks`
+fetch on an AWAY/EVENING → DESK return. On 2026-08-19 the desk was in DESK mode
+from the start, so no flip occurred, no re-verification was owed, and that budget
+was never engaged. Correctly.
+
+The 30-second cadence in the log is the **ordinary poll**: `_poll_auto_pick_pending`
+rides the Alert Center's 30s `_watch_timer`, and a refused pick is deliberately
+not marked seen, so every cycle re-attempts the whole queue. That is the designed
+behaviour — "a stale verdict costs one cycle rather than the pick" — and it is
+what made recovery automatic once the code was fixed rather than requiring a
+restart. **No code change was needed here; the spec's two mechanisms were being
+read as one.** Recorded so the next reader does not re-litigate it.
+
+## Strength board — sortable columns and charts (trader requests, 2026-08-19)
+
+"I need to see my charts in there to make decisions - right now it's just a lot
+of picks."
+
+**Every column sorts on click**, with a visible indicator. Three things make it
+safe rather than merely convenient:
+
+- **Sorting is presentation.** It re-orders rows already in hand and touches
+  neither the service nor the network, so a header click can never cost a
+  refetch. A test asserts the service is not called at all.
+- **Qt's own `setSortingEnabled` is deliberately NOT used.** The last column
+  holds a per-row cell *widget* (the Add button), and `QTableWidget` moves items
+  when it sorts while leaving cell widgets where they are — the button would end
+  up on its neighbour's row. Owning the order also lets a blank cell sort **last
+  in both directions**: an unmeasured field is an absence, not a small number.
+- **The default order is unchanged and now stated.** `strength_scan.top_fraction`
+  ranks longs strength-descending and shorts strength-ascending — strongest for
+  that side first — and the indicator says so instead of leaving the trader to
+  re-derive it.
+
+Every add still re-runs the adoption gate at click time; the button is bound to
+its symbol, not its row index.
+
+**Selecting a row charts it**, in the desk's existing snapshot popup — the same
+one the RS/RW, entry and Industry boards open, owned by the Alert Center, so the
+chart carries the same bot-backed series, painted levels and CaptureRail. No new
+chart widget exists anywhere (R4's unification pattern). `show_symbol_snapshot`
+already reuses one dialog per owner, so re-selecting re-points the same window
+rather than stacking dialogs. Selecting on one side clears the other, so "the
+charted name" is never ambiguous, and a refresh that keeps the same row selected
+is not a new chart request. Double-click still works.
+
+**A docked, always-visible chart inside the board is the follow-up option**, not
+this build: it needs its own layout budget on a two-table page and a decision
+about what happens to the tables' width, which is a desk-layout judgement rather
+than a wiring one. The popup reuses a surface the trader already knows.

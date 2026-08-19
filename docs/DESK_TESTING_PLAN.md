@@ -61,11 +61,41 @@ Auto Pilot waking up. The line that would mean Auto Pilot woke up is
 `Starting BounceBot` — and that one was correctly absent. §1's GOOD list below
 now says so.
 
+## The 2026-08-19 DESK morning: the gate never ran
+
+Read this before §2.5-§2.8 — it is why they are still owed after a DESK day.
+
+Every adoption attempt crashed inside the gate itself
+(`TypeError: can't subtract offset-naive and offset-aware datetimes`), the Alert
+Center refused each pick fail-closed, and **121 picks were refused every 30
+seconds all session with zero adoptions**. The cause was a clock, not a
+judgement: the stored *measured bar* carries a timezone offset and the desk's
+clock did not, so the two could not be compared at all.
+
+**What that means for these proofs.** Nothing about the PDH/VWAP rule was
+exercised on 2026-08-19, so §2.5 and §2.6 are **not** partially done — they are
+untouched, and they are re-owed in full on the fixed build. The one thing the
+morning did prove is that fail-closed works: a gate that could not answer
+adopted nothing.
+
+**What to look for on the next DESK day**, beyond the checks below:
+
+- **Adoptions happen at all.** Within a poll cycle or two of the first staged
+  picks, names should appear in M5 Focus and the status line should say
+  `N auto pick(s) added to M5 Focus for today`.
+- **`focus_auto_picks.json` is not empty.** It records what the machine adopted;
+  on 08-19 its `picks` map stayed `{}` all day.
+- **The log is readable.** If the gate ever fails again you should see **one**
+  traceback and **one** `Focus gate check unavailable for N staged pick(s) this
+  cycle` line per 30-second cycle — not one traceback per pick. If you see a
+  flood, that is a regression worth reporting on its own.
+
 ## What is still waiting
 
 | Check | Needs |
 |---|---|
-| §2.6 adoption refusal, §2.7 "Not today", §2.8 strength board | **one DESK day** |
+| §2.5 adoption happens, §2.6 adoption refusal, §2.7 "Not today", §2.8 strength board | **one DESK day** (re-owed in full: 2026-08-19 crashed before the gate ran) |
+| §2.7a strength-board sorting and charts (new, 2026-08-19) | the same DESK day |
 | §2.2 EVENING stop, §2.4 SPY wake alarm | **one EVENING night** |
 
 That is the whole remaining list: **one DESK day and one EVENING night.**
@@ -550,6 +580,41 @@ Do as many as you have appetite for. Each is short. **None of them can lose
 money** — the worst case is a name you have to re-add by hand.
 
 ---
+
+
+## 2.7a The strength board: sorting and charts (new, 2026-08-19)
+
+**The question:** can you read the board as charts instead of as a list?
+
+### WHEN
+Any time the board has rows — same session as §2.7 is ideal.
+
+### DO
+1. Click each column heading in turn: **Symbol, Strength, Day %, vs VWAP, Last**.
+   Click one of them twice.
+2. Click a row (a single click, not a double).
+3. Click a different row, then a row on the other side.
+4. With a sort applied, press one row's **Add to Focus**.
+
+### GOOD
+- Every heading sorts, and a small arrow shows which column and which direction.
+  Clicking the same heading again flips the arrow.
+- Rows with a blank cell (`—`) stay at the BOTTOM whichever way the arrow points.
+  A blank is a name the board could not measure, not a zero.
+- **Sorting is instant and the status line does not change.** A sort must never
+  trigger a refresh — if the status time updates when you sort, report it.
+- Selecting a row opens the usual chart popup on that symbol, with the same
+  levels and buttons every other board's chart has. Selecting another row
+  re-points the same window rather than opening a second one.
+- Selecting on the other side clears the first side's highlight.
+- After sorting, **Add to Focus** adds the symbol on that row — not its
+  neighbour — and a name that has fallen back through VWAP is still refused with
+  its reason.
+
+### BAD, and worth reporting
+- The Add button adds the wrong symbol after a sort.
+- A second, third, fourth chart window stacking up as you click through rows.
+- The board refetching (status line time changing) when you only sorted.
 
 ## 2.8a Can the machine steal one of your picks?
 

@@ -605,6 +605,71 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Revision history
 
+### 2026-08-19 — the adoption gate could not compare two clocks
+
+`FIXED`, live proof re-owed. The first DESK morning adopted nothing: every
+attempt raised `TypeError: can't subtract offset-naive and offset-aware
+datetimes` inside `pending_pick_gate_ok`, the Alert Center refused each pick
+fail-closed, and 121 picks were refused every 30 seconds from 08:07 onward.
+
+**Root cause.** A stored verdict carries two stamps written by different paths.
+`gate_bar_end` is the intraday profile's `as_of`, which
+`_intraday_extreme_metrics` writes **always aware** — the provider's own offset
+when it has one, market-local otherwise. `gate_checked_at` and the caller's
+clock are plain `datetime.now()`, **naive**. So the wall-clock age check
+(naive − naive) passed and the bar-lag check (naive − aware) raised. The gate did
+not judge the picks wrongly; it never ran.
+
+**Fix.** Every datetime `pending_pick_gate_ok` compares — the caller's clock,
+both stored stamps and the flip barrier — is normalized at the seam through
+`market_session.normalize_market_local_datetime`, which ATTACHES market-local to
+a naive stamp and converts an aware one. Stripping offsets instead would have
+ended the crash and kept the outage: an aware 11:05 ET bar read as naive against
+an 08:07 PT clock is three hours "ahead of the tape", so every pick would still
+have been refused, silently. A test pins that direction. `minutes_since_open`
+carried the identical subtraction and is hardened the same way; every caller
+passes a naive clock today, so its answers are unchanged.
+
+**The log flood is bounded.** The refusal wrapper logged a traceback per pick,
+so one systematic fault wrote 121 tracebacks every 30 seconds and rotated the log
+that held the evidence. Now the first failure of a poll cycle carries the
+traceback and the cycle ends with one WARNING naming the count and the exception.
+Fail-closed semantics are unchanged.
+
+**The retry investigation found no disagreement.** R2.2's 60-second, five-attempt
+budget governs only a failed flip re-measurement; the desk was in DESK mode from
+the start on 08-19, so it was never engaged. The 30-second cadence in the log is
+the ordinary poll, and a refused pick is deliberately not marked seen so every
+cycle re-attempts the queue — which is what made recovery automatic once the code
+was fixed. Recorded in the R2 spec so it is not re-litigated.
+
+### 2026-08-19 — the strength board becomes readable
+
+`IMPLEMENTED`, live proof owed (`docs/DESK_TESTING_PLAN.md` §2.7a). Two trader
+requests against a board that was "just a lot of picks".
+
+**Every column sorts on click**, with a visible indicator. Sorting is
+presentation: it re-orders rows already in hand, never calls the service and
+therefore can never cost a refetch — the board's data budget stays one batched
+yfinance pull every 15 minutes and zero IB traffic. Qt's own `setSortingEnabled`
+is deliberately not used, because the last column holds a per-row cell *widget*
+and `QTableWidget` leaves cell widgets behind when it sorts — the Add button
+would end up on its neighbour's row. Owning the order also puts blank cells last
+in BOTH directions: an unmeasured field is an absence, not a small number. The
+default order is unchanged and now stated by the indicator (longs
+strength-descending, shorts ascending — strongest for that side first). Every add
+still re-runs the adoption gate at click time.
+
+**Selecting a row charts it** in the desk's existing snapshot popup — the same
+one the RS/RW, entry and Industry boards open, owned by the Alert Center, so the
+chart carries the same bot-backed series, painted levels and CaptureRail. No new
+chart widget exists anywhere; `show_symbol_snapshot` already reuses one dialog
+per owner, so re-selecting re-points that window instead of stacking dialogs.
+Selecting on one side clears the other, and a refresh that keeps the same row
+selected is not a new chart request. A docked always-visible chart is recorded as
+the follow-up option: it needs a desk-layout decision about the two tables' width
+rather than more wiring.
+
 ### 2026-08-18 — R7/R8's deferred visuals, and the one buildable wishlist item
 
 `IMPLEMENTED`, live proof owed. Same branch and same redirect as the entry

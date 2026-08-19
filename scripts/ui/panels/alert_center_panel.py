@@ -558,6 +558,13 @@ class AlertCenterPanel(QFrame):
         #: start, so a failure retries on a later poll instead of falling
         #: through. None means nothing is owed.
         self._reverify_retry_at: datetime | None = None
+        #: Per-poll-cycle bookkeeping for gate-check FAILURES (2026-08-19). On
+        #: the morning the gate raised, the wrapper logged one traceback per
+        #: pick: 121 tracebacks every 30 seconds rotated `trading_bot.log` and
+        #: nearly took the evidence with it. One traceback and one summary per
+        #: cycle keeps the fault just as loud and the record survivable.
+        self._gate_check_errors = 0
+        self._gate_check_error_reason = ""
         #: Consecutive failures of the owed re-verification, capped by
         #: FLIP_REVERIFY_MAX_ATTEMPTS.
         self._reverify_failures = 0
@@ -1960,6 +1967,9 @@ class AlertCenterPanel(QFrame):
         day = str(payload.get("date") or "")
         adopted: list[str] = []
         refused: list[str] = []
+        # One cycle, one traceback (see `_pending_pick_gate_ok`).
+        self._gate_check_errors = 0
+        self._gate_check_error_reason = ""
         for side_key, side_label in (("long", "LONG"), ("short", "SHORT")):
             entries = payload.get("pending", {}).get(side_key) or {}
             for symbol, entry in entries.items():
@@ -2013,6 +2023,16 @@ class AlertCenterPanel(QFrame):
                         payload={"auto_pick": dict(entry), "auto_pick_side": side_key},
                     )
                 )
+        if self._gate_check_errors:
+            # The summary the flood used to bury. WARNING, not INFO: every pick
+            # in this cycle was refused for a reason that is a fault in the
+            # desk, not a judgement about the picks.
+            logging.warning(
+                "Focus gate check unavailable for %d staged pick(s) this cycle; "
+                "all refused (%s). One traceback logged above.",
+                self._gate_check_errors,
+                self._gate_check_error_reason,
+            )
         if refused:
             # Logged, not surfaced: the trader asked for eviction to be silent,
             # and a refusal is the same event one step later. It has to be
@@ -2186,22 +2206,35 @@ class AlertCenterPanel(QFrame):
                 f"({', '.join(dropped[:8])}{'...' if len(dropped) > 8 else ''})."
             )
 
-    @staticmethod
     def _pending_pick_gate_ok(
-        entry: dict, *, not_before: datetime | None = None
+        self, entry: dict, *, not_before: datetime | None = None
     ) -> tuple[bool, str]:
         """Thin wrapper so the import stays local to the poll (headless paths
         construct this panel without `autopilot_core` on the path).
 
         `not_before` is the flip barrier: after a return to the desk, only a
-        verdict stamped at or after the flip may be adopted."""
+        verdict stamped at or after the flip may be adopted.
+
+        Failure stays FAIL-CLOSED and stays loud; what is bounded is the
+        VOLUME. Before 2026-08-19 this logged a full traceback per pick, so a
+        single systematic fault (the naive/aware gate crash) wrote 121
+        tracebacks every 30 seconds, rotated the log, and nearly destroyed the
+        evidence needed to diagnose it. The first failure of each poll cycle
+        carries the traceback; the rest are counted and reported once by the
+        caller.
+        """
         try:
             from autopilot_core import pending_pick_gate_ok
 
             return pending_pick_gate_ok(entry, not_before=not_before)
-        except Exception:
+        except Exception as exc:
             # Fail CLOSED: an unverifiable pick is not an approved pick.
-            logging.warning("Focus gate check unavailable; refusing adoption.", exc_info=True)
+            self._gate_check_errors += 1
+            self._gate_check_error_reason = f"{type(exc).__name__}: {exc}"
+            if self._gate_check_errors == 1:
+                logging.warning(
+                    "Focus gate check unavailable; refusing adoption.", exc_info=True
+                )
             return False, "gate check unavailable"
 
     def _adopt_auto_pick_into_focus(
@@ -3778,6 +3811,17 @@ class AlertCenterPanel(QFrame):
         if not alert.symbol:
             return
         self._show_board_symbol_snapshot(alert.symbol, alert.side)
+
+    def show_board_symbol(self, symbol: str, side: str = "") -> None:
+        """Public entry for boards that live on OTHER pages.
+
+        The RS/RW, entry and Focus-strength boards are children of this
+        panel and call the private opener directly. The M5 strength board
+        is a page of its own, so it needs a named door rather than a
+        reach into a private method - same popup, same owner, same capture
+        rail and painted levels (R4 unification, 2026-08-19).
+        """
+        self._show_board_symbol_snapshot(symbol, side)
 
     def _show_board_symbol_snapshot(self, symbol: str, side: str = "") -> None:
         """RS/RW-board ticker click: use the same cache-only quick look."""

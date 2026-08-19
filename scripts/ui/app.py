@@ -216,6 +216,14 @@ class MainWindow(QMainWindow):
             service=self.strength_board_service,
             focus_service=self.trading_panel.focus_service,
         )
+        # Selecting a row on the strength board charts it in the desk's
+        # existing snapshot popup - the same one the RS/RW and Industry
+        # boards open, owned by the Alert Center, so the chart carries the
+        # bot-backed series, the painted levels and the capture rail
+        # without a second chart widget existing anywhere (R4 pattern).
+        self.strength_board_panel.symbolActivated.connect(
+            self.trading_panel.alert_center.show_board_symbol
+        )
         self.chart_review_panel = ChartReviewPanel(
             bot_provider=self.trading_panel.bounce_panel.service.current_bot
         )

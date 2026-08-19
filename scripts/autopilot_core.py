@@ -185,9 +185,18 @@ def minutes_since_open(
     now: datetime,
     local_timezone_name: str | None = None,
 ) -> float:
+    """Minutes since the session open, for whichever clock the caller has.
+
+    Every caller today passes a naive `datetime.now()` and the answer is
+    unchanged for them. What changed on 2026-08-19 is that an AWARE `now` no
+    longer raises: this was the same naive/aware subtraction that took the
+    adoption gate down for a whole session, one function away, and the
+    scheduler is not a place to find that out live.
+    """
     session = get_market_session_window(reference=now, local_timezone_name=local_timezone_name)
-    open_naive = session.open_local.replace(tzinfo=None)
-    return (now - open_naive).total_seconds() / 60.0
+    moment = normalize_market_local_datetime(now)
+    open_local = normalize_market_local_datetime(session.open_local)
+    return (moment - open_local).total_seconds() / 60.0
 
 
 # BounceBot's intraday sweep only earns its IB traffic while the tape moves.
@@ -2550,6 +2559,32 @@ FOCUS_GATE_MAX_BAR_LAG = 2
 M5_BAR_MINUTES = 5
 
 
+def _gate_moment(value: datetime | None) -> datetime | None:
+    """One market-local AWARE datetime, from whatever the caller had.
+
+    THE 2026-08-19 OUTAGE LIVED HERE. `gate_bar_end` is the intraday profile's
+    `as_of`, and `_intraday_extreme_metrics` stamps that ALWAYS aware - the
+    source bar's own offset when the provider supplies one, market-local
+    otherwise. `gate_checked_at` and the caller's `now` are plain
+    `datetime.now()`, naive. The age check (naive - naive) therefore passed and
+    the bar-lag check (naive - aware) raised
+    `TypeError: can't subtract offset-naive and offset-aware datetimes`, the
+    Alert Center caught it, called the pick unverifiable, and refused all 121
+    staged picks every 30 seconds for a whole session.
+
+    Normalizing ATTACHES the market-local zone to a naive stamp and CONVERTS an
+    aware one (`normalize_market_local_datetime`'s own semantics), rather than
+    stripping offsets to make the subtraction legal. Stripping would end the
+    crash and keep the outage: an aware 11:05 ET bar read as naive 11:05 against
+    an 08:07 PT clock is three hours "ahead of the tape", so every pick would
+    still be refused - just quietly. plan.md sec 5 requires explicit timezones;
+    this is that rule applied at the comparison rather than at the writer.
+    """
+    if value is None:
+        return None
+    return normalize_market_local_datetime(value)
+
+
 def latest_completed_m5_end(now: datetime | None = None) -> datetime:
     """End of the most recent M5 bar that can possibly have completed.
 
@@ -2596,12 +2631,16 @@ def pending_pick_gate_ok(
     if not raw:
         return False, "no gate check recorded"
     try:
-        checked = datetime.fromisoformat(raw)
+        checked = _gate_moment(datetime.fromisoformat(raw))
     except ValueError:
         return False, "unreadable gate timestamp"
-    if not_before is not None and checked < not_before:
+    # Every datetime below is normalized at this seam - the stored stamps, the
+    # caller's clock and the flip barrier - because they come from three
+    # different writers and only two of them ever agreed. See `_gate_moment`.
+    barrier = _gate_moment(not_before)
+    if barrier is not None and checked < barrier:
         return False, f"gate check predates the return to the desk ({raw})"
-    moment = now or datetime.now()
+    moment = _gate_moment(now) or normalize_market_local_datetime(None)
     age = (moment - checked).total_seconds() / 60.0
     if age > float(max_age_minutes) or age < 0:
         return False, f"gate check is {age:.0f} min old (limit {max_age_minutes})"
@@ -2610,9 +2649,10 @@ def pending_pick_gate_ok(
     if not bar_raw:
         return False, "no measured bar recorded"
     try:
-        bar_end = datetime.fromisoformat(bar_raw)
+        bar_end = _gate_moment(datetime.fromisoformat(bar_raw))
     except ValueError:
         return False, "unreadable measured-bar timestamp"
+    # `moment` is already market-local aware, so the floor it produces is too.
     latest = latest_completed_m5_end(moment)
     lag_bars = (latest - bar_end).total_seconds() / (M5_BAR_MINUTES * 60.0)
     if lag_bars > float(max_bar_lag):
