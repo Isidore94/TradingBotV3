@@ -687,14 +687,22 @@ class AlertCenterPanel(QFrame):
         self.armed_list.symbolActivated.connect(self.chart_symbol)
         self.armedWatchesChanged.connect(self._refresh_armed_list)
 
-        # Built BEFORE the tab strip, because the tab strip now hosts two of
-        # its widgets. Trader, 2026-08-20, on the desk column: "I cannot see
-        # the charts at all". The pane used to stack title -> setup text ->
-        # charts -> two arm rows -> a ~600px capture rail -> the verb row, so
-        # the charts - the whole point of the surface - got whatever was left.
-        # The arm bar and the capture rail become tabs; the charts and ONE
-        # slim verb row are all that stays in the vertical stack.
-        self.chart_review = AlertChartReview(self, docked_controls=False)
+        # Built BEFORE the tab strip, because the tab strip hosts one of its
+        # widgets. Trader, 2026-08-20, on the desk column: "I cannot see the
+        # charts at all". The pane used to stack title -> setup text -> charts
+        # -> two arm rows -> a ~600px capture rail -> the verb row, so the
+        # charts - the whole point of the surface - got whatever was left.
+        #
+        # Only the capture rail goes to a tab. Measured at this column's 420px
+        # the rail is 697px and the arm bar 131px, so the rail was 84% of the
+        # problem, and the arm bar carries the controls the trader reaches for
+        # per-chart: the M5 and D1 alert hotbuttons and the type-a-ticker box
+        # ("I also need my m5 and D1 alert hotbuttons back on the bottom of
+        # the visual chart... I also need the ability to input a ticker
+        # manually as well", same day). It stays welded under the chart.
+        self.chart_review = AlertChartReview(
+            self, dock_arm_bar=True, dock_capture_rail=False
+        )
         self.chart_review.removeTodayRequested.connect(
             self._remove_review_alert_for_today
         )
@@ -711,6 +719,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
         self.chart_review.levelDisarmRequested.connect(self._disarm_level_from_dock)
         self.chart_review.levelAlertRequested.connect(self._arm_price_alert_from_level)
+        self.chart_review.vetoDayTradeRequested.connect(self._veto_but_day_trade)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(feed_scroll, "Alerts")
@@ -749,18 +758,10 @@ class AlertCenterPanel(QFrame):
         self._d1_tab_index = self.tabs.addTab(d1_section, "D1 Focus")
         self.tabs.addTab(board_tab, "RS/RW Board")
 
-        # The arm bar joins the inventory it fills instead of becoming a sixth
-        # tab: "Arm" and "Armed" a millimetre apart on the same strip is a
-        # misclick waiting to happen, and the controls and the list they
-        # produce are one subject. Arming is also a deliberate act - unlike the
-        # verb row, it is fine for it to cost a click.
-        armed_tab = QWidget()
-        armed_tab_layout = QVBoxLayout(armed_tab)
-        armed_tab_layout.setContentsMargins(0, 0, 0, 0)
-        armed_tab_layout.setSpacing(theme.px(4))
-        armed_tab_layout.addWidget(self.chart_review.arm_bar)
-        armed_tab_layout.addWidget(self.armed_list, 1)
-        self._armed_tab_index = self.tabs.addTab(armed_tab, "Armed")
+        # The Armed tab is the INVENTORY across every symbol. The controls that
+        # fill it live under the chart, on the arm bar, where the symbol they
+        # act on is the one being looked at.
+        self._armed_tab_index = self.tabs.addTab(self.armed_list, "Armed")
 
         # The capture rail. Scrolled, because its four sections are taller than
         # this column's tab body and a rail whose Note field is below the fold
@@ -2056,6 +2057,61 @@ class AlertCenterPanel(QFrame):
         )
         self.statusChanged.emit(message)
         self._advance_review_queue()
+
+    def _veto_but_day_trade(self, alert: BounceAlert) -> None:
+        """Trader vetoed the D1 chart and still wants the name for the day.
+
+        Trader, 2026-08-20: "it may be a shit D1 chart but its a good
+        daytrade." The veto row is already on disk - the rail wrote it before
+        emitting - so this only does the two things the rail is not allowed to
+        do: place the name on M5 Focus (this panel owns that store; the rail
+        has never written a list and still does not), then retire the chart
+        from today's queue exactly as "Not today" does.
+
+        Order matters and is not incidental: retiring the chart is what drops
+        the alert object the placement needs, so the placement goes first. A
+        failed placement still retires the chart, because the veto has already
+        been recorded and leaving the name on screen would invite a second one.
+
+        The Focus entry carries NO auto-pick marker, so it is the trader's own
+        - "Not today" and the desync repair cannot reach it (packet R2
+        provenance rule).
+        """
+        if alert is None:
+            return
+        added = False
+        if self.focus_service is not None and alert.symbol:
+            side = "short" if alert.side == "SHORT" else "long"
+            try:
+                added = bool(
+                    self.focus_service.add(
+                        alert.symbol,
+                        side,
+                        "m5",
+                        origin="veto_day_trade",
+                        context=alert.raw_text,
+                    )
+                )
+            except Exception:
+                logging.warning(
+                    "Veto day-trade: M5 Focus add failed for %s.",
+                    alert.symbol,
+                    exc_info=True,
+                )
+                added = False
+        self._record_review_event(
+            "veto_day_trade",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+            detail={"category": "m5", "added": added},
+        )
+        self.statusChanged.emit(
+            f"✕ {alert.symbol}: D1 vetoed, added to M5 Focus for today."
+            if added
+            else f"✕ {alert.symbol}: D1 vetoed - M5 Focus unchanged (already there or unavailable)."
+        )
+        self._remove_review_alert_for_today(alert)
 
     def _remove_alert_from_focus(self, alert: BounceAlert, *, origin: str) -> None:
         """Delete the charted name from Focus Picks and walk on."""

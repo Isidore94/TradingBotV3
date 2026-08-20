@@ -71,6 +71,13 @@ class CaptureRail(QFrame):
 
     #: (event_type, row) after a row reaches disk. Analysis-only consumers.
     captured = Signal(str, dict)
+    #: (row) after a veto whose D1 chart the trader rejected but whose NAME
+    #: they still want to day-trade. A REQUEST, not a write: the rail has
+    #: never placed a name on a list and still does not (see the module
+    #: docstring - an earlier draft routed likes through FocusService.add and
+    #: had to be torn back out). The host that owns the Focus store performs
+    #: the placement, so that store keeps exactly one writer.
+    vetoDayTradeRequested = Signal(dict)
 
     def __init__(
         self,
@@ -95,6 +102,13 @@ class CaptureRail(QFrame):
         self._timeframe = "D1"
         self._ref_level_id = ""
         self._ref_level_family = ""
+        # True only for the duration of a "veto but day-trade it" commit.
+        # `captured` fires synchronously from inside commit_veto(), i.e.
+        # BEFORE commit_veto_day_trade() can emit its own request, so a host
+        # that retires the chart on any veto would retire this one too - and
+        # the object the Focus placement needs would already be gone. This is
+        # how that host is told to hold the chart for one commit.
+        self._veto_keeps_chart = False
 
         if veto_cohort_merge is not None:
             self._merge_veto_cohort = veto_cohort_merge
@@ -186,6 +200,19 @@ class CaptureRail(QFrame):
 
         self.veto_button = QPushButton("Veto - not for today")
         self.veto_button.clicked.connect(self.commit_veto)
+        # Trader, 2026-08-20: "it may be a shit D1 chart but its a good
+        # daytrade." The veto is about the DAILY chart in front of them; the
+        # name can still be worth a 5-minute trade. Without this the trader
+        # has to choose between recording the honest D1 judgement and keeping
+        # the day trade, and the dataset loses whichever one they drop.
+        self.veto_day_trade_button = QPushButton("Veto D1 - but M5 today")
+        self.veto_day_trade_button.setToolTip(
+            "Record exactly the same D1 veto, then put the name on M5 Focus "
+            "as a day trade. The veto is written by this rail; the Focus "
+            "entry is made by the panel that owns that list, and it is yours "
+            "- nothing auto-removes it."
+        )
+        self.veto_day_trade_button.clicked.connect(self.commit_veto_day_trade)
         if self._vocabulary is None:
             self.veto_button.setEnabled(False)
             self.veto_button.setToolTip(self._vocabulary_error)
@@ -193,6 +220,7 @@ class CaptureRail(QFrame):
             warning.setWordWrap(True)
             inner.addWidget(warning)
         inner.addWidget(self.veto_button)
+        inner.addWidget(self.veto_day_trade_button)
         return frame
 
     def _like_section(self) -> QFrame:
@@ -300,10 +328,17 @@ class CaptureRail(QFrame):
         self._ref_level_family = str(ref_level_family or "")
         self.symbol_label.setText(self._symbol or "-")
         armed = bool(self._symbol)
-        for button in (self.veto_button, self.like_button, self.stop_button, self.note_button):
+        for button in (
+            self.veto_button,
+            self.veto_day_trade_button,
+            self.like_button,
+            self.stop_button,
+            self.note_button,
+        ):
             button.setEnabled(armed)
         if self._vocabulary is None:
             self.veto_button.setEnabled(False)
+            self.veto_day_trade_button.setEnabled(False)
         if self._last_price and self.stop_input.value() == 0.0:
             self.stop_input.setValue(float(self._last_price))
         self._set_status("" if armed else "Look up a symbol to start capturing.")
@@ -421,6 +456,30 @@ class CaptureRail(QFrame):
         self.veto_note_input.clear()
         detail = self._merge_veto_cohort_safely()
         self._set_status(f"VETO {row['symbol']} - {code}{detail}")
+        return row
+
+    def veto_keeps_chart(self) -> bool:
+        """True while a day-trade veto is mid-commit; see ``_veto_keeps_chart``."""
+        return self._veto_keeps_chart
+
+    def commit_veto_day_trade(self) -> dict | None:
+        """Veto the D1 chart, then ASK the host to day-trade the name.
+
+        The veto row written here is an ordinary veto - identical bytes,
+        identical validation, identical cohort merge. Nothing about the
+        annotation schema changes and nothing new is written: the request
+        that follows is a signal, and the Focus store's own writer decides
+        what to do with it. If that placement fails the veto still stands,
+        which is the right way round - the judgement is the evidence.
+        """
+        self._veto_keeps_chart = True
+        try:
+            row = self.commit_veto()
+        finally:
+            self._veto_keeps_chart = False
+        if row is None:
+            return None
+        self.vetoDayTradeRequested.emit(dict(row))
         return row
 
     def _merge_veto_cohort_safely(self) -> str:

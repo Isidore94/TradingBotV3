@@ -15,6 +15,7 @@ from ui.models.bounce import (
     is_auto_pick_alert,
 )
 from ui import theme
+from ui.annotations.store import EVENT_VETO
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
@@ -73,21 +74,36 @@ class AlertChartReview(QWidget):
     # charted symbol. Emitted so a host that took the arm bar onto a tab can
     # keep the armed state legible without the trader opening that tab.
     armedSummaryChanged = Signal(int)
+    # (alert) - the trader vetoed this D1 chart but wants the name as a day
+    # trade. Two things the host must do, in this order: place it on M5 Focus,
+    # then retire it from today's review queue. A request, never a write.
+    vetoDayTradeRequested = Signal(object)
 
     def __init__(
-        self, parent=None, *, annotations_path=None, docked_controls: bool = True
+        self,
+        parent=None,
+        *,
+        annotations_path=None,
+        dock_arm_bar: bool = True,
+        dock_capture_rail: bool = True,
     ) -> None:
         super().__init__(parent)
         self.alert: BounceAlert | None = None
         self._cross_labels = ("Add to D1 Focus", "✓ In D1 Focus")
-        # Where the two control docks go is the HOST's decision, not this
-        # widget's. Docked (the default) keeps the historical single-column
-        # stack that the snapshot popup and the Chart Review workspace expect.
-        # The Alert Center passes False and hosts `arm_bar` and `capture_rail`
-        # on its own tab strip, because in that column the two of them cost
-        # the charts most of their height (trader, 2026-08-20: "I cannot see
-        # the charts at all").
-        self._docked_controls = bool(docked_controls)
+        # Where each control dock goes is the HOST's decision, not this
+        # widget's, and the two are decided SEPARATELY because they cost very
+        # different amounts of the thing the pane is short of. Measured at the
+        # desk column's 420px: the arm bar is 131px, the capture rail is 697px.
+        #
+        # So the Alert Center keeps the arm bar welded under the chart where
+        # the trader wants their M5/D1 hotbuttons and the type-a-ticker box
+        # (trader, 2026-08-20: "I also need my m5 and D1 alert hotbuttons back
+        # on the bottom of the visual chart"), and sends only the rail to a
+        # tab. That is 84% of the reclaimed height kept and the fast controls
+        # back within reach - the earlier all-or-nothing flag could not
+        # express it.
+        self._dock_arm_bar = bool(dock_arm_bar)
+        self._dock_capture_rail = bool(dock_capture_rail)
         self._armed_watch_count = 0
         self._armed_level_count = 0
         self._armed_d1_event_count = 0
@@ -195,9 +211,10 @@ class AlertChartReview(QWidget):
             # Undocked, the rail sits on a tab page that is hidden most of the
             # time, and a shortcut bound inside a hidden page never fires. The
             # host rebinds `action_shortcuts()` at a scope the trader reaches.
-            bind_action_shortcuts=self._docked_controls,
+            bind_action_shortcuts=self._dock_capture_rail,
         )
         self.capture_rail.captured.connect(self._on_captured)
+        self.capture_rail.vetoDayTradeRequested.connect(self._on_veto_day_trade)
         self.snapshot.d1LevelSelected.connect(self._on_capture_level_selected)
 
         # R4 section 5, on the surface the trader stares at most.
@@ -241,7 +258,10 @@ class AlertChartReview(QWidget):
             "Session watches, D1 event alerts and price levels armed on this "
             "symbol. Open the Armed tab to add or cancel one."
         )
-        self.armed_summary.setVisible(not self._docked_controls)
+        # Only earns its pixels when the arm bar is NOT under the chart. With
+        # the bar docked its own "Nothing armed" line and chips are right
+        # there, and two copies of one state is noise.
+        self.armed_summary.setVisible(not self._dock_arm_bar)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.reviewed_badge)
@@ -262,16 +282,18 @@ class AlertChartReview(QWidget):
         layout.addWidget(self.alert_text)
         layout.addWidget(self.guidance_label)
         layout.addWidget(self.snapshot, 1)
-        if self._docked_controls:
+        # Detached, not destroyed: this widget keeps the Python references (and
+        # every signal already wired through them), and the host calls
+        # addWidget to adopt what it took. Without the explicit unparenting an
+        # undocked control would be a laid-out-less child painting over the
+        # charts until the host got round to it.
+        if self._dock_arm_bar:
             layout.addWidget(self.arm_bar)
+        else:
+            self.arm_bar.setParent(None)
+        if self._dock_capture_rail:
             layout.addWidget(self.capture_rail)
         else:
-            # Detached, not destroyed: this widget keeps the Python references
-            # (and every signal already wired through them), and the host calls
-            # addWidget to adopt them. Without the explicit unparenting they
-            # would be laid-out-less children painting over the charts until
-            # the host got round to it.
-            self.arm_bar.setParent(None)
             self.capture_rail.setParent(None)
         layout.addLayout(buttons)
         self._refresh_armed_summary()
@@ -291,14 +313,44 @@ class AlertChartReview(QWidget):
             ref_level_family=family,
         )
 
-    def _on_captured(self, _event_type: str, _row: dict) -> None:
+    def _on_captured(self, event_type: str, _row: dict) -> None:
         """Capture is a decision, so the badge updates without a re-chart.
 
-        Deliberately does NOT advance the review queue: only the three queue
-        verbs move it. A rail that skipped to the next chart would make every
+        A LIKE, a hypothetical stop and a note deliberately do NOT advance the
+        review queue: a rail that skipped to the next chart would make every
         note cost the trader the chart they were writing it about.
+
+        A VETO is the exception, by trader rule (2026-08-20): "when I click
+        veto it should just disappear as 'not for today'". A veto is not an
+        annotation about a chart the trader is still reading - it is the
+        decision that they are done with the name today, which is exactly what
+        the "Not today" verb already means. So it takes that verb's path: the
+        host removes it from today's feed and chart queue and shows the next
+        chart. The annotation is written first and is never conditional on the
+        queue move (`_record` has already returned by the time we get here).
+
+        The day-trade variant does NOT come through here - it needs the Focus
+        placement to happen before the chart is retired, so it has its own
+        route (`_on_veto_day_trade`) and this deliberately ignores it.
         """
         self._refresh_reviewed_badge()
+        if (
+            event_type == EVENT_VETO
+            and self.alert is not None
+            and not self.capture_rail.veto_keeps_chart()
+        ):
+            self.removeTodayRequested.emit(self.alert)
+
+    def _on_veto_day_trade(self, _row: dict) -> None:
+        """Vetoed the D1, keeping the name for an M5 trade.
+
+        The plain-veto auto-advance is suppressed for this one commit: the
+        host has to place the name on M5 Focus BEFORE the alert is retired
+        from the queue, because retiring it is what drops the object both
+        steps need. The host does both, in that order.
+        """
+        if self.alert is not None:
+            self.vetoDayTradeRequested.emit(self.alert)
 
     def _reviewed_symbols(self) -> set:
         """Today's decided set. Seam so tests read a fixture, not live files."""

@@ -225,29 +225,51 @@ def _tab_labels(panel) -> list[str]:
     return [panel.tabs.tabText(index) for index in range(panel.tabs.count())]
 
 
-def test_the_charts_own_the_pane_with_one_control_row_under_them(panel):
-    """Between the charts and the tab strip: the verb row, and nothing else."""
+def test_the_capture_rail_is_off_the_pane_and_the_arm_bar_is_not(panel):
+    """Trader, 2026-08-20, in two passes.
+
+    First: "I cannot see the charts at all." Then, once the rail was gone:
+    "I also need my m5 and D1 alert hotbuttons back on the bottom of the
+    visual chart... I also need the ability to input a ticker manually."
+
+    Measured at this column's width the rail is ~697px and the arm bar ~131px,
+    so the split is not a compromise - it drops 84% of the height and keeps
+    every control the trader reaches for per-chart.
+    """
     review = panel.chart_review
     layout = review.layout()
     rows = [layout.itemAt(i) for i in range(layout.count())]
-    # ... the charts, then exactly one trailing item, and it is a layout (the
-    # verb row), not another docked control widget.
     chart_index = next(
         i for i, item in enumerate(rows) if item.widget() is review.snapshot
     )
-    assert chart_index == layout.count() - 2, "something is stacked under the charts"
-    assert rows[-1].layout() is not None
-    # The two docks are elsewhere, and neither is a child of the review pane.
-    assert not review.isAncestorOf(review.capture_rail)
-    assert not review.isAncestorOf(review.arm_bar)
+    # Under the charts: the arm bar, then the verb row. Nothing else.
+    assert chart_index == layout.count() - 3
+    assert rows[chart_index + 1].widget() is review.arm_bar
+    assert rows[-1].layout() is not None, "the verb row must stay a layout row"
+
+    assert review.isAncestorOf(review.arm_bar), "the hotbuttons come back"
+    assert not review.isAncestorOf(review.capture_rail), "the rail does not"
 
 
-def test_the_rail_and_the_arm_bar_are_reachable_as_tabs(panel):
+def test_the_named_controls_are_the_ones_that_came_back(panel):
+    """The three things the trader asked for by name, under the chart."""
+    review = panel.chart_review
+    bar = review.arm_bar
+    assert review.isAncestorOf(bar.symbol_input), "type-a-ticker"
+    assert bar.watch_buttons and all(
+        review.isAncestorOf(button) for button in bar.watch_buttons.values()
+    ), "M5 hotbuttons"
+    assert bar.d1_event_buttons and all(
+        review.isAncestorOf(button) for button in bar.d1_event_buttons.values()
+    ), "D1 hotbuttons"
+
+
+def test_the_rail_is_reachable_as_a_tab(panel):
     assert "Capture" in _tab_labels(panel)
     assert panel.isAncestorOf(panel.chart_review.capture_rail)
-    assert panel.isAncestorOf(panel.chart_review.arm_bar)
-    # The arm bar joins the inventory it fills rather than becoming a sixth tab.
-    assert _tab_labels(panel)[panel._armed_tab_index].startswith("Armed")
+    # The Armed tab keeps the cross-symbol inventory; the controls that fill
+    # it are under the chart, on the symbol being looked at.
+    assert panel.tabs.widget(panel._armed_tab_index) is panel.armed_list
 
 
 @pytest.mark.parametrize(
@@ -331,23 +353,41 @@ def test_the_rail_still_writes_through_record_annotation_after_reparenting(
     assert {path.name for path in tmp_path.iterdir()} == {"ann.jsonl"}
 
 
-def test_the_armed_state_is_legible_without_opening_the_tab(panel):
-    """The arm bar's own "Nothing armed" line went onto the tab with it."""
+def test_the_armed_count_rides_the_tab_title(panel):
+    """The tab still carries the count, in peripheral vision.
+
+    The duplicate line on the verb row is OFF here: with the arm bar back
+    under the chart its own armed text and chips are right there, and two
+    copies of one state is noise.
+    """
     review = panel.chart_review
-    assert review.armed_summary.isVisibleTo(review)
-    assert review.armed_summary.text() == "Nothing armed"
+    assert not review.armed_summary.isVisibleTo(review)
     assert panel.tabs.tabText(panel._armed_tab_index) == "Armed"
 
     panel.chart_symbol("NVDA")
     review.set_armed_kinds(("hod_avwap",))
     review.set_armed_d1_events(("new_5d_high",))
     assert review.armed_count() == 2
-    assert review.armed_summary.text() == "⚡ 2 armed"
     assert panel.tabs.tabText(panel._armed_tab_index) == "Armed (2)"
 
     review.clear()
-    assert review.armed_summary.text() == "Nothing armed"
     assert panel.tabs.tabText(panel._armed_tab_index) == "Armed"
+
+
+def test_an_undocked_arm_bar_still_surfaces_the_armed_line(tmp_path):
+    """The verb-row line is the affordance for a host that TOOK the bar."""
+    from ui.widgets.alert_chart_review import AlertChartReview
+
+    review = AlertChartReview(
+        annotations_path=tmp_path / "a.jsonl", dock_arm_bar=False
+    )
+    try:
+        assert review.armed_summary.isVisibleTo(review)
+        assert review.armed_summary.text() == "Nothing armed"
+        review.set_armed_kinds(("hod_avwap",))
+        assert review.armed_summary.text() == "⚡ 1 armed"
+    finally:
+        review.deleteLater()
 
 
 def test_a_docked_host_keeps_the_rail_in_its_own_stack(tmp_path):
@@ -356,6 +396,7 @@ def test_a_docked_host_keeps_the_rail_in_its_own_stack(tmp_path):
     from ui.widgets.alert_chart_review import AlertChartReview
 
     docked = AlertChartReview(annotations_path=tmp_path / "a.jsonl")
+    # Fully docked is still the default: both controls in its own stack.
     try:
         assert docked.isAncestorOf(docked.capture_rail)
         assert docked.isAncestorOf(docked.arm_bar)
@@ -372,3 +413,166 @@ def test_a_docked_host_keeps_the_rail_in_its_own_stack(tmp_path):
         assert not docked.armed_summary.isVisibleTo(docked)
     finally:
         docked.deleteLater()
+
+
+# --------------------------------------------------------------------------
+# 2026-08-20, second pass: veto IS a queue verb, and the day-trade exception
+#
+# Trader: "when I click veto it should just disappear as 'not for today'. the
+# only exception is I want an option to hit 'veto but add to M5 focus' because
+# it may be a shit D1 chart but its a good daytrade."
+# --------------------------------------------------------------------------
+def _pick_reason(rail) -> str:
+    """Select the first veto reason that does NOT require a note.
+
+    A note-required reason is refused at the schema, not the button, so a
+    bare commit against one would fail for the wrong reason and these tests
+    would stop measuring the queue behaviour they exist for.
+    """
+    from ui.widgets.capture_rail import _REASON_ROLE
+
+    for row in range(rail.reason_list.count()):
+        rail.reason_list.setCurrentRow(row)
+        if not rail._selected_reason_requires_note():
+            return rail.reason_list.item(row).data(_REASON_ROLE)
+    raise AssertionError("no note-free veto reason in the vocabulary")
+
+
+def test_a_veto_retires_the_chart_as_not_today(pane, monkeypatch):
+    _show(pane, monkeypatch, "AAPL")
+    retired: list = []
+    pane.removeTodayRequested.connect(retired.append)
+    _pick_reason(pane.capture_rail)
+    assert pane.capture_rail.commit_veto() is not None
+    assert [alert.symbol for alert in retired] == ["AAPL"]
+
+
+def test_a_like_a_stop_and_a_note_still_hold_the_chart(pane, monkeypatch):
+    """Only the veto moves the queue. A note must not cost the trader the
+    chart they were writing it about."""
+    _show(pane, monkeypatch, "AAPL")
+    moved: list = []
+    pane.removeTodayRequested.connect(moved.append)
+    pane.skipRequested.connect(moved.append)
+    pane.focusRequested.connect(moved.append)
+
+    pane.capture_rail.setup_input.setCurrentIndex(0)
+    pane.capture_rail.commit_like()
+    pane.capture_rail.stop_input.setValue(101.25)
+    pane.capture_rail.commit_hypo_stop()
+    pane.capture_rail.note_input.setText("watching the 50")
+    pane.capture_rail.commit_note()
+    assert moved == []
+
+
+def test_a_refused_veto_retires_nothing(pane, monkeypatch):
+    """No reason picked -> no row, no queue move. The chart stays put."""
+    _show(pane, monkeypatch, "AAPL")
+    retired: list = []
+    pane.removeTodayRequested.connect(retired.append)
+    pane.capture_rail.reason_list.setCurrentRow(-1)
+    assert pane.capture_rail.commit_veto() is None
+    assert retired == []
+
+
+def test_the_day_trade_veto_asks_for_placement_instead_of_retiring(pane, monkeypatch):
+    """It must NOT take the plain-veto path: the host needs the alert object
+    to place the name BEFORE the chart is retired."""
+    _show(pane, monkeypatch, "AAPL")
+    retired: list = []
+    day_traded: list = []
+    pane.removeTodayRequested.connect(retired.append)
+    pane.vetoDayTradeRequested.connect(day_traded.append)
+
+    _pick_reason(pane.capture_rail)
+    row = pane.capture_rail.commit_veto_day_trade()
+
+    assert row is not None, "the veto is still recorded, identically"
+    assert [alert.symbol for alert in day_traded] == ["AAPL"]
+    assert retired == [], "the pane must not retire it behind the host's back"
+
+
+def test_the_day_trade_veto_writes_an_ordinary_veto_row(pane, monkeypatch, tmp_path):
+    """No schema change, no new field, no second row. The annotation is the
+    same D1 judgement it would have been."""
+    _show(pane, monkeypatch, "AAPL")
+    _pick_reason(pane.capture_rail)
+    pane.capture_rail.commit_veto_day_trade()
+    lines = (tmp_path / "trader_annotations.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    written = json.loads(lines[0])
+    assert written["event_type"] == "veto"
+    assert written["symbol"] == "AAPL"
+    assert written["schema_version"] == 1
+
+
+def test_the_rail_still_places_nothing_itself(pane, monkeypatch, tmp_path):
+    """The boundary the rail exists behind: it asks, the host writes."""
+    _show(pane, monkeypatch, "AAPL")
+    placed: list = []
+    pane.focusRequested.connect(placed.append)
+    _pick_reason(pane.capture_rail)
+    pane.capture_rail.commit_veto_day_trade()
+    assert placed == [], "a request is not a placement verb"
+    # Nothing but the annotation file exists - no watchlist, no focus store.
+    assert {path.name for path in tmp_path.iterdir()} == {"trader_annotations.jsonl"}
+
+
+def test_the_panel_places_on_m5_focus_then_retires_the_chart(panel, monkeypatch):
+    """End to end, in the order that matters."""
+    from ui.models.bounce import BounceAlert
+
+    calls: list = []
+
+    class _Focus:
+        def add(self, symbol, side, category, **kwargs):
+            calls.append(("add", symbol, side, category, kwargs.get("origin")))
+            return True
+
+    monkeypatch.setattr(panel, "focus_service", _Focus())
+    retired: list = []
+    monkeypatch.setattr(
+        panel,
+        "_remove_review_alert_for_today",
+        lambda alert: (calls.append(("retire", alert.symbol)), retired.append(alert)),
+    )
+    alert = BounceAlert(
+        time_text="09:31:00",
+        symbol="NVDA",
+        side="LONG",
+        trigger="Bounce confirmed",
+        timeframe="M5",
+        tag="green",
+        raw_text="[B-TIER] NVDA: Bounce confirmed",
+    )
+    panel._veto_but_day_trade(alert)
+
+    assert [step[0] for step in calls] == ["add", "retire"], "place, THEN retire"
+    assert calls[0] == ("add", "NVDA", "long", "m5", "veto_day_trade")
+    assert [a.symbol for a in retired] == ["NVDA"]
+
+
+def test_a_failed_placement_still_retires_the_chart(panel, monkeypatch):
+    """The veto is already on disk. Leaving the name up invites a second one."""
+    from ui.models.bounce import BounceAlert
+
+    class _Broken:
+        def add(self, *_a, **_k):
+            raise OSError("focus store went away")
+
+    monkeypatch.setattr(panel, "focus_service", _Broken())
+    retired: list = []
+    monkeypatch.setattr(
+        panel, "_remove_review_alert_for_today", lambda alert: retired.append(alert)
+    )
+    alert = BounceAlert(
+        time_text="09:31:00",
+        symbol="NVDA",
+        side="SHORT",
+        trigger="Bounce confirmed",
+        timeframe="M5",
+        tag="green",
+        raw_text="[B-TIER] NVDA",
+    )
+    panel._veto_but_day_trade(alert)
+    assert [a.symbol for a in retired] == ["NVDA"]
