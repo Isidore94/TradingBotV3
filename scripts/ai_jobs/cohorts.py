@@ -1,0 +1,174 @@
+"""Nightly grading of the veto cohort.
+
+``update_veto_cohort_outcomes`` has existed since the cohort packet shipped and
+had **zero callers** — the picks accumulated on every veto commit and nothing
+ever graded them, so "are my vetoes any good?" stayed computable-but-unanswered.
+This is the caller.
+
+Deterministic, not a model job. It reads daily bars off disk and does
+close-to-close side-adjusted return math; no LLM is involved, nothing is sent
+anywhere, and the output is two CSVs. It lives in ``ai_jobs`` because that is
+where the desk's overnight slate runs, not because it is an AI job.
+
+**It informs nothing the desk decides.** No score, no watchlist, no Focus
+entry, no alert, no queue order, and nothing in ``review_policy.json`` reads
+these files. The cohort exists so a question becomes answerable.
+"""
+
+from __future__ import annotations
+
+import csv
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+_log = logging.getLogger(__name__)
+
+#: Sides the outcome math can grade. Matches ``veto_cohort._SIDES``.
+GRADEABLE_SIDES = ("LONG", "SHORT")
+
+
+def _read_pick_rows(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", newline="", encoding="utf-8") as handle:
+            return [dict(row) for row in csv.DictReader(handle)]
+    except OSError:
+        _log.debug("Veto cohort picks unreadable at %s.", path, exc_info=True)
+        return []
+
+
+def partition_by_gradeable_side(
+    rows: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(gradeable, ungradeable) — split on an EXPLICIT side, never a guess.
+
+    This is the whole reason the job does not simply hand the picks file to
+    the outcome math. ``human_focus_tracking._side_label`` reads anything that
+    is not "SHORT..." as LONG, blank included, so a row with no side would be
+    graded as a long — manufacturing a directional claim the trader never made
+    and folding a fabricated return into a cohort average.
+
+    ``veto_pick_rows`` already refuses to WRITE a sideless row, so in a healthy
+    file this partition finds nothing. A row here therefore means legacy data
+    or a hand edit, which is exactly when silently defaulting would be worst.
+    """
+    gradeable: list[dict[str, Any]] = []
+    ungradeable: list[dict[str, Any]] = []
+    for row in rows:
+        side = str(row.get("side") or "").strip().upper()
+        (gradeable if side in GRADEABLE_SIDES else ungradeable).append(row)
+    return gradeable, ungradeable
+
+
+def run_veto_cohort_grading(
+    *,
+    session_date: str = "",
+    now: datetime | None = None,
+    picks_path: Path | None = None,
+    outcomes_path: Path | None = None,
+    performance_path: Path | None = None,
+    daily_bars_dir: Path | None = None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Grade every gradeable veto pick. Idempotent; never destructive.
+
+    Idempotent because the underlying math is: a fully matured pick is skipped
+    on re-read, and both CSVs are rewritten in full from the merged set rather
+    than appended to. Running twice in one night produces identical files.
+
+    A failure leaves the previous ``veto_cohort_outcomes.csv`` and
+    ``veto_cohort_performance.csv`` exactly as they were —
+    ``human_focus_tracking._write_csv_rows`` stages to ``<name>.tmp`` and
+    ``os.replace``s, and swallows OSError, so a half-written file can never
+    land. An unreadable bar store simply produces no new outcome rows.
+    """
+    from project_paths import (
+        MASTER_AVWAP_DAILY_BARS_DIR,
+        VETO_COHORT_OUTCOMES_FILE,
+        VETO_COHORT_PERFORMANCE_FILE,
+        VETO_COHORT_PICKS_FILE,
+    )
+    from ui.annotations.veto_cohort import update_veto_cohort_outcomes
+
+    picks = Path(picks_path or VETO_COHORT_PICKS_FILE)
+    outcomes = Path(outcomes_path or VETO_COHORT_OUTCOMES_FILE)
+    performance = Path(performance_path or VETO_COHORT_PERFORMANCE_FILE)
+    bars_dir = Path(daily_bars_dir or MASTER_AVWAP_DAILY_BARS_DIR)
+
+    rows = _read_pick_rows(picks)
+    if not rows:
+        return {
+            "status": "skipped",
+            "reason": f"no veto cohort picks yet at {picks.name}",
+            "picks": 0,
+        }
+
+    gradeable, ungradeable = partition_by_gradeable_side(rows)
+    if not gradeable:
+        return {
+            "status": "skipped",
+            "reason": (
+                f"{len(ungradeable)} veto pick(s) carry no side and none can be "
+                "graded; a side is never assumed"
+            ),
+            "picks": len(rows),
+            "skipped_no_side": len(ungradeable),
+        }
+
+    staged: Path | None = None
+    try:
+        source = picks
+        if ungradeable:
+            # Only sideless rows force a staged copy, so the healthy path
+            # touches no extra file. The copy is what keeps the guarantee
+            # honest: the outcome math never sees a row it would guess about.
+            staged = picks.with_name(picks.name + ".gradeable.tmp")
+            _write_pick_subset(staged, rows[0].keys(), gradeable)
+            source = staged
+        result = update_veto_cohort_outcomes(
+            reference_date=None,
+            picks_path=source,
+            outcomes_path=outcomes,
+            performance_path=performance,
+            daily_bars_dir=bars_dir,
+            now=now,
+        )
+    finally:
+        if staged is not None:
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                _log.debug("Could not remove %s.", staged, exc_info=True)
+
+    reason = (
+        f"graded {len(gradeable)} pick(s); "
+        f"{result.get('updated_outcomes', 0)} outcome row(s) updated, "
+        f"{result.get('performance_rows', 0)} cohort(s)"
+    )
+    if ungradeable:
+        # Counted and named, never graded and never silently dropped.
+        reason += f"; {len(ungradeable)} skipped for no side"
+    return {
+        "status": "ok",
+        "reason": reason,
+        "picks": len(rows),
+        "graded": len(gradeable),
+        "skipped_no_side": len(ungradeable),
+        "outcome_rows": result.get("outcome_rows", 0),
+        "updated_outcomes": result.get("updated_outcomes", 0),
+        "performance_rows": result.get("performance_rows", 0),
+        "outputs": [str(outcomes), str(performance)],
+    }
+
+
+def _write_pick_subset(path: Path, columns: Any, rows: list[dict[str, Any]]) -> None:
+    fieldnames = list(columns)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: row.get(column, "") for column in fieldnames})

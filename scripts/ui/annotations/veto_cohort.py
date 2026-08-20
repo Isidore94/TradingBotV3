@@ -45,12 +45,57 @@ from ui.annotations.store import EVENT_VETO, load_annotations
 _SIDES = ("LONG", "SHORT")
 
 
-def veto_cohort_source(reason_code: str) -> str:
-    """``veto_<reason_code>`` - the cohort a veto with this reason grades in."""
+def veto_cohort_source(reason_code: str, vocab_version: Any = None) -> str:
+    """``veto_v<version>_<reason_code>`` - the cohort this veto grades in.
+
+    The cohort identity is **(vocab_version, reason_code)**, not the code
+    alone. A code is a permanent identifier within one vocabulary, but the
+    guarantee that it never changes meaning is a rule written in the
+    vocabulary file, not something this module can verify - and the cost of
+    trusting it wrongly is two different judgements averaged into one number
+    that reads as evidence. Carrying the version makes the key self-describing
+    instead.
+
+    ``vocab_version`` omitted returns the historical unversioned form. That is
+    what keeps rows already in ``veto_cohort_picks.csv`` valid: they were
+    written before the key carried a version and are never rewritten, so they
+    keep grading in the cohort they were filed under.
+
+    KNOWN CONSEQUENCE, flagged rather than hidden: a reason whose meaning did
+    NOT change across a version bump now grades in two cohorts. Of the nine v2
+    reasons, eight are byte-identical to their v1 entry (same label, same
+    hotkey) and only ``compressed`` is new, so this splits eight cohorts that
+    could legitimately have been pooled. That is deliberate - it is recoverable
+    by analysis (the version is right there in the key) whereas a wrongly
+    pooled cohort is not - but it halves the sample size per reason across the
+    bump, and with 66 annotation rows on day one that matters. See
+    ``docs/CHART_REVIEW_WORKSPACE_PLAN.md``.
+    """
     code = str(reason_code or "").strip().lower()
     if not code:
         raise ValueError("reason_code is required to build a veto cohort source")
-    return f"{VETO_SOURCE_PREFIX}_{code}"
+    version = _vocab_version_tag(vocab_version)
+    if not version:
+        return f"{VETO_SOURCE_PREFIX}_{code}"
+    return f"{VETO_SOURCE_PREFIX}_{version}_{code}"
+
+
+def _vocab_version_tag(vocab_version: Any) -> str:
+    """``v2`` from 2 / "2" / "v2"; "" when there is no usable version.
+
+    Unparseable is treated as absent rather than as an error: a cohort row is
+    evidence, and refusing to file one because a version field was malformed
+    would lose the veto entirely.
+    """
+    text = str(vocab_version if vocab_version is not None else "").strip().lower()
+    if text.startswith("v"):
+        text = text[1:]
+    if not text:
+        return ""
+    try:
+        return f"v{int(text)}"
+    except (TypeError, ValueError):
+        return ""
 
 
 def _pick_key(row: dict[str, Any]) -> tuple[str, str, str]:
@@ -132,7 +177,7 @@ def veto_pick_rows(
             "trade_date": trade_date,
             "symbol": symbol,
             "side": side,
-            "source": veto_cohort_source(reason),
+            "source": veto_cohort_source(reason, annotation.get("vocab_version")),
             "snapshotted_at": timestamp,
             "active_at_snapshot": "1",
         }

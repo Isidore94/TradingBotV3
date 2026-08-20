@@ -580,7 +580,11 @@ class CaptureRailTests(unittest.TestCase):
         self.rail.select_reason("incoming_trendline")
         self.assertEqual(len(calls), 1)
         self.assertTrue(picks.exists())
-        self.assertIn("veto_incoming_trendline", picks.read_text(encoding="utf-8"))
+        # The cohort key carries its vocabulary version (2026-08-20): a code
+        # is only guaranteed stable WITHIN a vocabulary, so pooling two
+        # versions under one key would average two judgements into a number
+        # that reads as evidence.
+        self.assertIn("veto_v2_incoming_trendline", picks.read_text(encoding="utf-8"))
 
 
 class NavigationRegistrationTests(unittest.TestCase):

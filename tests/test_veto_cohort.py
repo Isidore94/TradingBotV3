@@ -84,6 +84,10 @@ class VetoPickRowTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["symbol"], "NVDA")
         self.assertEqual(rows[0]["side"], "LONG")
+        # This fixture is a bare dict with no vocab_version, so the key falls
+        # back to the unversioned form - which is exactly what keeps rows
+        # already on disk grading in the cohort they were filed under. A
+        # version-carrying annotation is covered in test_veto_cohort_grading.
         self.assertEqual(rows[0]["source"], "veto_volume_dry")
         self.assertEqual(rows[0]["trade_date"], "2026-08-07")
         self.assertEqual(sorted(rows[0]), sorted(HUMAN_FOCUS_DAILY_PICK_COLUMNS))
@@ -163,7 +167,9 @@ class VetoCohortMergeTests(unittest.TestCase):
         self.assertTrue(result["written"])
         rows = self._rows()
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["source"], "veto_volume_dry")
+        # record_annotation stamps vocab_version, so a row written through the
+        # real writer carries the versioned key (2026-08-20).
+        self.assertEqual(rows[0]["source"], "veto_v2_volume_dry")
 
     def test_merge_is_idempotent(self) -> None:
         self._veto("NVDA", "volume_dry")
