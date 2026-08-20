@@ -931,7 +931,11 @@ def test_snapshot_popup_dislike_advances_to_next_chart(monkeypatch, tmp_path):
     assert rows[0]["bucket"] == "favorite_setup"
     assert rows[0]["detail"]["reason"] == "too extended from the level"
     assert rows[0]["detail"]["reason_codes"] == ["too_extended_from_base"]
-    assert rows[0]["detail"]["vocab_version"] == 1
+    # The active vocabulary, not a literal: v2 shipped 2026-08-20 and this
+    # assertion is about the stamp travelling with the row, not its value.
+    from ui.annotations.vocabulary import load_veto_vocabulary
+
+    assert rows[0]["detail"]["vocab_version"] == load_veto_vocabulary().vocab_version
     assert dialog._symbol == "TSLA"
 
     # A cancelled reason prompt = no dislike, no advance.

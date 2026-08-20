@@ -96,7 +96,7 @@ def test_a_selected_level_becomes_the_capture_reference(pane, monkeypatch):
 # --------------------------------------------------------------------------
 def test_like_writes_one_annotation_row(pane, monkeypatch, tmp_path):
     _show(pane, monkeypatch, "AAPL")
-    pane.capture_rail.setup_input.setCurrentIndex(0)
+    pane.capture_rail.setup_list.setCurrentRow(0)
     row = pane.capture_rail.commit_like()
     assert row is not None
     lines = (tmp_path / "trader_annotations.jsonl").read_text(encoding="utf-8").strip().splitlines()
@@ -109,7 +109,7 @@ def test_like_never_writes_focus_membership(pane, monkeypatch, tmp_path):
     _show(pane, monkeypatch, "AAPL")
     placed: list = []
     pane.focusRequested.connect(placed.append)
-    pane.capture_rail.setup_input.setCurrentIndex(0)
+    pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.commit_like()
     assert placed == []
     # And nothing but the annotation file appeared.
@@ -277,7 +277,7 @@ def test_the_rail_is_reachable_as_a_tab(panel):
     "sequence, widget_name",
     [
         ("Alt+V", "reason_list"),
-        ("Alt+K", "setup_input"),
+        ("Alt+K", "setup_list"),
         ("Alt+N", "note_input"),
     ],
 )
@@ -453,7 +453,7 @@ def test_a_like_also_retires_the_chart(pane, monkeypatch):
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
     pane.removeTodayRequested.connect(retired.append)
-    pane.capture_rail.setup_input.setCurrentIndex(0)
+    pane.capture_rail.setup_list.setCurrentRow(0)
     assert pane.capture_rail.commit_like() is not None
     assert [alert.symbol for alert in retired] == ["AAPL"]
 
@@ -662,3 +662,67 @@ def test_the_placeholder_says_how_to_get_a_chart(panel):
     review.clear()
     text = review.empty_state.message_label.text().lower()
     assert "ticker" in text and "alert" in text
+
+
+# --------------------------------------------------------------------------
+# Like + claim becomes a numbered list (trader, 2026-08-20): "layout the like
+# + claim similiar to the veto but only do the main setups for now."
+# --------------------------------------------------------------------------
+def test_the_claim_list_offers_the_main_setups_only(pane):
+    from ui.annotations.setup_claims import setup_claim_groups
+    from ui.widgets.capture_rail import MAIN_CLAIM_GROUP
+
+    rail = pane.capture_rail
+    offered = {
+        rail.setup_list.item(row).data(
+            __import__("ui.widgets.capture_rail", fromlist=["x"])._CLAIM_ROLE
+        )
+        for row in range(rail.setup_list.count())
+    }
+    groups = dict(setup_claim_groups())
+    assert offered == {claim.setup_id for claim in groups[MAIN_CLAIM_GROUP]}
+    # The other groups are deliberately unreachable from this rail for now.
+    for name, claims in groups.items():
+        if name == MAIN_CLAIM_GROUP:
+            continue
+        assert not offered & {claim.setup_id for claim in claims}
+
+
+def test_the_claims_are_numbered_like_the_veto_reasons(pane):
+    rail = pane.capture_rail
+    labels = [rail.setup_list.item(row).text() for row in range(rail.setup_list.count())]
+    assert labels[0].startswith("1 ")
+    assert labels[-1].startswith(f"{len(labels)} ")
+    assert set(rail._claim_hotkeys) == {str(n) for n in range(1, len(labels) + 1)}
+
+
+def test_a_digit_commits_the_claim_and_retires_the_chart(pane, monkeypatch, tmp_path):
+    """Alt+K then a digit is the whole like, exactly as Alt+V then a digit is
+    the whole veto."""
+    import json
+
+    _show(pane, monkeypatch, "AAPL")
+    retired: list = []
+    pane.removeTodayRequested.connect(retired.append)
+    rail = pane.capture_rail
+    rail.select_setup(rail._claim_hotkeys["2"])
+
+    lines = (tmp_path / "trader_annotations.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["claimed_setup_id"] == rail._claim_hotkeys["2"]
+    assert [alert.symbol for alert in retired] == ["AAPL"]
+
+
+def test_committing_with_nothing_picked_says_so_and_writes_nothing(pane, monkeypatch, tmp_path):
+    _show(pane, monkeypatch, "AAPL")
+    rail = pane.capture_rail
+    rail.setup_list.setCurrentRow(-1)
+    assert rail.commit_like() is None
+    assert not (tmp_path / "trader_annotations.jsonl").exists()
+
+
+def test_the_compressed_reason_replaced_the_cluttered_one(pane):
+    rail = pane.capture_rail
+    labels = [rail.reason_list.item(row).text() for row in range(rail.reason_list.count())]
+    assert any("Compressed" in label for label in labels)
+    assert not any("cluttered" in label.lower() for label in labels)

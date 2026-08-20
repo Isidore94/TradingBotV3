@@ -45,6 +45,17 @@ _CANDLE_HALF_WIDTH = 0.27
 # that a continuous drag never re-enables it mid-gesture, short enough that
 # the lines look right again as soon as the trader lets go.
 _AA_RESTORE_MS = 150
+# Where the earnings ribbon sits, as a fraction of the view height measured
+# down from the top. The E glyphs ride the first line and their connectors
+# start just under it.
+#
+# The glyph line is deliberately BELOW the very top: the projection label is
+# pinned to the viewport's top-right corner, and at the first fraction tried
+# (0.0275) an earnings candle near the right edge put its E straight through
+# that label. Both are small and both belong at the top, so the ribbon gets
+# the second line and the pinned label keeps the first.
+_EARNINGS_GLYPH_FRACTION = 0.075
+_EARNINGS_RIBBON_FRACTION = 0.10
 # A log axis is undefined at or below zero. Prices are positive in practice
 # (CandleChart falls back to linear if they are not), so this floor only keeps
 # a bad cache row from raising mid-render.
@@ -432,6 +443,90 @@ class VolumeItem(pg.GraphicsObject):
         self.update()
 
 
+class EarningsDropLines(pg.GraphicsObject):
+    """Faint verticals joining each E on the ribbon to the candle it marks.
+
+    The E glyphs themselves are pooled TextItems on the chart, because text has
+    to be drawn in SCREEN space to stay legible - a glyph recorded in data
+    coordinates stretches with the zoom. The connectors are geometry, so they
+    live here.
+
+    Re-rendered on every view change rather than transformed like the volume
+    underlay, because a chart has a handful of earnings dates and not hundreds
+    of bars: the loop is over ~4-12 items and costs nothing worth optimising.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._marks: list[tuple[int, float]] = []  # (bar index, candle high)
+        self._picture = QPicture()
+        self._bounds = QRectF()
+        self.setZValue(-15)  # above the volume underlay, below the candles
+
+    def set_marks(self, marks) -> None:
+        self._marks = [(int(index), float(top)) for index, top in marks or ()]
+        self.prepareGeometryChange()
+        self._render()
+        self.update()
+
+    def _ribbon_y(self) -> tuple[float, float] | None:
+        view = self.getViewBox()
+        if view is None or not self._marks:
+            return None
+        try:
+            (_x_min, _x_max), (y_min, y_max) = view.viewRange()
+        except Exception:
+            return None
+        span = float(y_max) - float(y_min)
+        if span <= 0:
+            return None
+        return float(y_min), float(y_max) - span * _EARNINGS_RIBBON_FRACTION
+
+    def _render(self) -> None:
+        self._picture = QPicture()
+        self._bounds = QRectF()
+        band = self._ribbon_y()
+        if band is None:
+            return
+        y_min, ribbon_bottom = band
+        pen = QPen(QColor(theme.color("text_muted")))
+        pen.setCosmetic(True)
+        pen.setWidthF(1.0)
+        pen.setStyle(Qt.PenStyle.DotLine)
+        painter = QPainter(self._picture)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(pen)
+        lowest = ribbon_bottom
+        for index, top in self._marks:
+            # Stop AT the candle, not through it: the connector says which bar
+            # the E belongs to, and drawing over the candle would hide the very
+            # thing the trader is looking at.
+            painter.drawLine(
+                pg.QtCore.QPointF(index, ribbon_bottom),
+                pg.QtCore.QPointF(index, top),
+            )
+            lowest = min(lowest, top)
+        painter.end()
+        indexes = [index for index, _top in self._marks]
+        self._bounds = QRectF(
+            min(indexes) - 1.0,
+            lowest,
+            (max(indexes) - min(indexes)) + 2.0,
+            max(ribbon_bottom - lowest, 1e-9),
+        )
+
+    def paint(self, painter, *_args) -> None:
+        painter.drawPicture(0, 0, self._picture)
+
+    def boundingRect(self) -> QRectF:
+        return self._bounds
+
+    def viewRangeChanged(self) -> None:  # noqa: N802 (pyqtgraph override)
+        self.prepareGeometryChange()
+        self._render()
+        self.update()
+
+
 class CandleChart(pg.PlotWidget):
     """Candles + overlay lines; y-range follows the candles (overlays clip).
 
@@ -491,6 +586,20 @@ class CandleChart(pg.PlotWidget):
         self._show_volume = False
         self._volume.setVisible(False)
         plot.addItem(self._volume, ignoreBounds=True)
+        # Earnings ribbon: connectors as one item, the E glyphs as a pooled
+        # set of TextItems (text must be screen-space to stay legible), and one
+        # projection label PINNED to the viewport rather than to the data - it
+        # names a date beyond the last bar, so it has no x to sit at, and the
+        # trader chose "no axis change" over compressing the candles by ~40%
+        # to reach a date typically 48 sessions out.
+        self._earnings_marks: dict = {}
+        self._show_earnings = False
+        self._earnings_lines = EarningsDropLines()
+        plot.addItem(self._earnings_lines, ignoreBounds=True)
+        self._earnings_text_items: list[pg.TextItem] = []
+        self._earnings_projection: pg.TextItem | None = None
+        plot.vb.sigRangeChanged.connect(self._position_earnings_glyphs)
+        plot.vb.sigResized.connect(self._position_earnings_projection)
         # Crosshair/readout items are deliberately NOT built here. They are a
         # hover decoration, and building them at construction gave every
         # CandleChart in the app three extra native scene items plus a
@@ -537,6 +646,117 @@ class CandleChart(pg.PlotWidget):
             axis.setPen(pg.mkPen(theme.color("border")))
             axis.setStyle(hideOverlappingLabels=True, tickTextOffset=7)
 
+    # ------------------------------------------------------------------
+    # earnings ribbon
+    # ------------------------------------------------------------------
+    def set_earnings_visible(self, visible: bool) -> None:
+        """Reserve the ribbon's headroom on this chart, for every symbol.
+
+        Called once by the host, NOT per payload, and deliberately so: the
+        headroom is part of the chart's y-range, and making it appear only for
+        symbols that happen to have an earnings date would mean two symbols
+        with identical prices drew at different scales. A reserved rail is
+        also the only thing that makes it a ribbon rather than a marker in the
+        price action - without it, a chart running to the top-right puts its E
+        straight through the candles that produced it.
+        """
+        self._show_earnings = bool(visible)
+
+    def set_earnings(self, marks: dict | None) -> None:
+        """Draw the earnings ribbon from an ``earnings_projection`` payload.
+
+        ``marks`` is ``{"indexes": [...], "projected": {...}}`` built on the
+        chart-data worker, so this never reads the earnings cache on the paint
+        path (the rule the A4 paint lines already follow). Anything missing
+        simply draws nothing.
+        """
+        self._earnings_marks = dict(marks or {})
+        self._sync_earnings()
+
+    def earnings_marker_count(self) -> int:
+        """How many E glyphs are actually drawn."""
+        return sum(1 for item in self._earnings_text_items if item.isVisible())
+
+    def earnings_projection_text(self) -> str:
+        """The pinned projection label's text, or "" when none is shown."""
+        item = self._earnings_projection
+        return item.toPlainText() if item is not None and item.isVisible() else ""
+
+    def _sync_earnings(self) -> None:
+        indexes = [
+            index
+            for index in self._earnings_marks.get("indexes") or ()
+            if isinstance(index, int) and 0 <= index < len(self._bars)
+        ]
+        marks = [(index, self._y(self._bars[index]["high"])) for index in indexes]
+        self._earnings_lines.set_marks(marks)
+        self._earnings_lines.setVisible(bool(marks))
+
+        # Pool the glyphs: one TextItem per marker, hidden rather than
+        # destroyed, exactly as the level and overlay pools work (C5).
+        while len(self._earnings_text_items) < len(indexes):
+            item = pg.TextItem("E", color=theme.color("caution"), anchor=(0.5, 0.5))
+            item.setZValue(20)
+            self.getPlotItem().addItem(item, ignoreBounds=True)
+            self._earnings_text_items.append(item)
+        for position, item in enumerate(self._earnings_text_items):
+            item.setVisible(position < len(indexes))
+        self._position_earnings_glyphs()
+        self._position_earnings_projection()
+
+    def _position_earnings_glyphs(self, *_args) -> None:
+        """Park every E on the ribbon line at the top of the CURRENT view."""
+        indexes = [
+            index
+            for index in self._earnings_marks.get("indexes") or ()
+            if isinstance(index, int) and 0 <= index < len(self._bars)
+        ]
+        if not indexes:
+            return
+        try:
+            (_x_min, _x_max), (y_min, y_max) = self.getPlotItem().vb.viewRange()
+        except Exception:
+            return
+        span = float(y_max) - float(y_min)
+        ribbon = float(y_max) - span * _EARNINGS_GLYPH_FRACTION
+        for position, index in enumerate(indexes):
+            if position >= len(self._earnings_text_items):
+                break
+            self._earnings_text_items[position].setPos(float(index), ribbon)
+
+    def _position_earnings_projection(self, *_args) -> None:
+        """Pin the projection to the viewport's top-right corner.
+
+        Parented to the ViewBox rather than added as a data item, so its
+        position is in pixels and it does not move when the trader pans. A
+        label that scrolled off the chart would be worse than no label.
+        """
+        projected = self._earnings_marks.get("projected") or None
+        view = self.getPlotItem().vb
+        if not projected:
+            if self._earnings_projection is not None:
+                self._earnings_projection.setVisible(False)
+            return
+        if self._earnings_projection is None:
+            item = pg.TextItem("", color=theme.color("caution"), anchor=(1.0, 0.0))
+            item.setZValue(30)
+            item.setParentItem(view)
+            self._earnings_projection = item
+        sessions = projected.get("sessions_ahead")
+        stamp = projected.get("date")
+        stamp_text = stamp.strftime("%m/%d") if hasattr(stamp, "strftime") else str(stamp)
+        # "est" is not decoration. This date is projected from the symbol's own
+        # cadence because the earnings cache holds no future dates at all, and
+        # a trader planning around it has to know that.
+        if projected.get("overdue"):
+            label = f"E due (est {stamp_text})"
+        else:
+            label = f"E ~{sessions}d  (est {stamp_text})"
+        self._earnings_projection.setText(label)
+        self._earnings_projection.setVisible(True)
+        # anchor=(1, 0) is the label's top-RIGHT, so this is the inset corner.
+        self._earnings_projection.setPos(max(0.0, view.width() - 6.0), 4.0)
+
     def set_volume_visible(self, visible: bool) -> None:
         """Draw the volume underlay (D1 today; see VolumeItem for why it is
         an underlay and not a stacked sub-plot)."""
@@ -564,6 +784,7 @@ class CandleChart(pg.PlotWidget):
             self._candles.set_bars([], log_y=False)
             self._sync_overlays(0)
             self._sync_volume()
+            self._sync_earnings()
             self._push_levels()  # nothing to hang a level on; hide them all
             return
         lows = [bar["low"] for bar in self._bars]
@@ -579,8 +800,21 @@ class CandleChart(pg.PlotWidget):
         # The y-range comes from the candles and nothing else. Every level and
         # overlay is drawn inside whatever range this produces; none of them
         # gets a vote in what it is.
-        plot.setYRange(self._y(min(lows)), self._y(max(highs)), padding=0.05)
+        #
+        # The one asymmetry is the earnings ribbon's reserved headroom, which
+        # is a fixed property of the chart rather than of the data: it is added
+        # for every symbol when the rail is enabled, so the scale never depends
+        # on whether this particular name happens to have an earnings date.
+        low_y, high_y = self._y(min(lows)), self._y(max(highs))
+        span = (high_y - low_y) or abs(high_y) or 1.0
+        headroom = _EARNINGS_RIBBON_FRACTION if self._show_earnings else 0.0
+        plot.setYRange(
+            low_y - span * 0.05,
+            high_y + span * (0.05 + headroom),
+            padding=0,
+        )
         self._sync_volume()
+        self._sync_earnings()
         # Levels last: a log/linear flip or a bar change moves where they sit.
         self._push_levels()
 

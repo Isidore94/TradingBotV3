@@ -206,6 +206,24 @@ def _earnings_dates_map() -> dict[str, list[str]]:
     return symbols
 
 
+def symbol_earnings_dates(symbol: str) -> list[str]:
+    """Every known earnings date for a symbol, as ISO strings.
+
+    Read-only accessor over the same mtime-cached map the AVWAPE anchors use,
+    so the chart's earnings ribbon costs no extra file read. The cache is
+    HISTORY only - it carries no future dates for any symbol - which is why
+    the next report has to be projected (``earnings_projection``).
+    """
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return []
+    dates_map = _earnings_dates_map()
+    dates = dates_map.get(symbol)
+    if not dates and "." in symbol:
+        dates = dates_map.get(symbol.replace(".", "-"))
+    return list(dates or [])
+
+
 def earnings_anchor_dates(
     symbol: str, *, today: date | None = None
 ) -> tuple[date | None, date | None]:

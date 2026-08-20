@@ -68,6 +68,10 @@ from ui.annotations.vocabulary import VocabularyError, load_veto_vocabulary
 from ui.widgets.flow_layout import FlowLayout
 
 _REASON_ROLE = Qt.ItemDataRole.UserRole
+_CLAIM_ROLE = Qt.ItemDataRole.UserRole
+#: The only claim group this rail offers (trader, 2026-08-20: "only do
+#: the main setups for now").
+MAIN_CLAIM_GROUP = "Main swing"
 
 
 class CaptureRail(QFrame):
@@ -253,19 +257,43 @@ class CaptureRail(QFrame):
         return frame
 
     def _like_section(self) -> QFrame:
-        frame, inner = self._section("Like + claim  (Alt+K)")
-        self.setup_input = QComboBox()
+        """Same shape as the veto: a numbered picklist, not a dropdown.
+
+        Trader, 2026-08-20: "layout the like + claim similiar to the veto but
+        only do the main setups for now." A combo hides every option until it
+        is opened and costs a click to read, which is the opposite of the
+        five-second contract the veto list is built to. Main swing holds nine
+        claims, so the same 1-9 digits work here, and double-click and Enter
+        commit it exactly as they do a veto.
+
+        MAIN SWING ONLY, deliberately and temporarily. The earnings-cycle,
+        study and playbook groups are unreachable from this rail while this
+        stands, so a claim made here can only be one of the nine. That is the
+        trader's "for now"; re-admitting a group means adding it back to
+        MAIN_CLAIM_GROUP, not a migration.
+        """
+        frame, inner = self._section("Like + claim  (Alt+K, then 1-9)")
+        self.setup_list = QListWidget()
+        self.setup_list.setObjectName("SetupClaimList")
+        self.setup_list.setAlternatingRowColors(False)
+        self._claim_hotkeys: dict[str, str] = {}
         for group_name, claims in setup_claim_groups():
-            for claim in claims:
-                self.setup_input.addItem(f"{claim.label}   [{group_name}]", claim.setup_id)
+            if group_name != MAIN_CLAIM_GROUP:
+                continue
+            for position, claim in enumerate(claims, start=1):
+                hotkey = str(position) if position <= 9 else ""
+                item = QListWidgetItem(f"{hotkey or ' '}  {claim.label}")
+                item.setData(_CLAIM_ROLE, claim.setup_id)
                 if claim.summary:
-                    index = self.setup_input.count() - 1
-                    self.setup_input.setItemData(index, claim.summary, Qt.ItemDataRole.ToolTipRole)
-        # The claim labels are long; without a cap this combo made the LIKE
-        # section three times the width of its neighbours and pushed NOTE off
-        # the row on anything but the widest host.
-        self.setup_input.setMaximumWidth(theme.px(420))
-        inner.addWidget(self.setup_input)
+                    item.setToolTip(claim.summary)
+                self.setup_list.addItem(item)
+                if hotkey:
+                    self._claim_hotkeys[hotkey] = claim.setup_id
+        self.setup_list.itemActivated.connect(lambda _item: self.commit_like())
+        rows = max(1, min(self.setup_list.count(), 14))
+        self.setup_list.setMaximumHeight(rows * theme.px(21) + theme.px(10))
+        inner.addWidget(self.setup_list)
+
         self.like_note_input = QLineEdit()
         self.like_note_input.setPlaceholderText("note (optional)")
         self.like_note_input.returnPressed.connect(self.commit_like)
@@ -317,6 +345,12 @@ class CaptureRail(QFrame):
                 shortcut.activated.connect(
                     lambda code=reason.code: self.select_reason(code)
                 )
+        # The claim list gets the identical treatment, scoped to itself, so
+        # Alt+K then 3 is a whole like - and a 3 typed into a note stays a 3.
+        for hotkey, setup_id in self._claim_hotkeys.items():
+            shortcut = QShortcut(QKeySequence(hotkey), self.setup_list)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(lambda claim=setup_id: self.select_setup(claim))
 
     # ------------------------------------------------------------------
     # context
@@ -381,7 +415,9 @@ class CaptureRail(QFrame):
         self.reason_list.setFocus()
 
     def focus_like(self) -> None:
-        self.setup_input.setFocus()
+        if self.setup_list.currentRow() < 0 and self.setup_list.count():
+            self.setup_list.setCurrentRow(0)
+        self.setup_list.setFocus()
 
     def focus_note(self) -> None:
         self.note_input.setFocus()
@@ -507,10 +543,25 @@ class CaptureRail(QFrame):
             return "  (cohort update deferred)"
         return ""
 
+    def selected_setup_id(self) -> str:
+        item = self.setup_list.currentItem()
+        return str(item.data(_CLAIM_ROLE) or "") if item is not None else ""
+
+    def select_setup(self, setup_id: str) -> None:
+        """Select a claim by id and commit it - the digit IS the decision,
+        exactly as it is on the veto list."""
+        for row in range(self.setup_list.count()):
+            if self.setup_list.item(row).data(_CLAIM_ROLE) == setup_id:
+                self.setup_list.setCurrentRow(row)
+                break
+        else:
+            return
+        self.commit_like()
+
     def commit_like(self) -> dict | None:
-        setup_id = self.setup_input.currentData()
+        setup_id = self.selected_setup_id()
         if not setup_id:
-            self._set_status("Pick a setup to claim.", ok=False)
+            self._set_status("Pick a setup to claim (1-9).", ok=False)
             return None
         row = self._record(
             EVENT_LIKE_CLAIM,

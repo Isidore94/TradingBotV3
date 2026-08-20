@@ -391,7 +391,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         panel = _panel(self.tmp)
         panel.open_symbol("NVDA")
         panel._on_d1_level_selected("NVDA", "hv:NVDA:42", "hv_horizontal", 101.5)
-        panel.capture_rail.setup_input.setCurrentIndex(0)
+        panel.capture_rail.setup_list.setCurrentRow(0)
         row = panel.capture_rail.commit_like()
         self.assertIsNotNone(row)
         self.assertEqual(row["ref_level_id"], "hv:NVDA:42")
@@ -506,8 +506,8 @@ class CaptureRailTests(unittest.TestCase):
         repair behaviorally: after a like, the working directory holds only
         the annotation log and the lookup's own recents file.
         """
-        self.rail.setup_input.setCurrentIndex(0)
-        claimed = self.rail.setup_input.currentData()
+        self.rail.setup_list.setCurrentRow(0)
+        claimed = self.rail.selected_setup_id()
         self.rail.commit_like()
         rows = self._rows()
         self.assertEqual(len(rows), 1)
@@ -627,3 +627,64 @@ class NavigationRegistrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VetoVocabularyV2Tests(unittest.TestCase):
+    """v2 replaces the S/R slot with "Compressed" (trader, 2026-08-20).
+
+    A NEW code, not a rename. v1's own description states the rule: "a code is
+    never renamed or reused for a different meaning, because rows already
+    written carry it". "S/R cluttered" meant too many levels in the path;
+    "compressed" means the range is too tight to work with. Different
+    judgements, so reusing the code would silently re-label history.
+    """
+
+    def setUp(self) -> None:
+        from ui.annotations.vocabulary import clear_vocabulary_cache
+
+        clear_vocabulary_cache()
+
+    def test_v2_is_the_default_and_carries_compressed(self) -> None:
+        from ui.annotations.vocabulary import load_veto_vocabulary
+
+        vocab = load_veto_vocabulary()
+        self.assertEqual(vocab.vocab_version, 2)
+        self.assertIsNotNone(vocab.reason("compressed"))
+        self.assertEqual(vocab.reason("compressed").label, "Compressed")
+
+    def test_the_old_code_is_gone_from_v2(self) -> None:
+        from ui.annotations.vocabulary import load_veto_vocabulary
+
+        self.assertIsNone(
+            load_veto_vocabulary().reason("support_resistance_cluttered")
+        )
+
+    def test_v1_is_still_loadable_so_old_rows_stay_readable(self) -> None:
+        from ui.annotations.vocabulary import load_veto_vocabulary
+
+        v1 = load_veto_vocabulary(version=1)
+        self.assertEqual(v1.vocab_version, 1)
+        reason = v1.reason("support_resistance_cluttered")
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason.label, "S/R cluttered")
+
+    def test_the_new_code_never_appears_in_v1(self) -> None:
+        """The other half of "a code is never reused": if 'compressed' existed
+        in v1 with another meaning, a v1-stamped row would be misread."""
+        from ui.annotations.vocabulary import load_veto_vocabulary
+
+        self.assertIsNone(load_veto_vocabulary(version=1).reason("compressed"))
+
+    def test_every_surviving_code_kept_its_meaning_and_its_digit(self) -> None:
+        from ui.annotations.vocabulary import load_veto_vocabulary
+
+        v1 = {r.code: r for r in load_veto_vocabulary(version=1).reasons}
+        v2 = {r.code: r for r in load_veto_vocabulary(version=2).reasons}
+        for code, reason in v2.items():
+            if code == "compressed":
+                continue
+            self.assertIn(code, v1, f"{code} appeared without a v1 counterpart")
+            self.assertEqual(reason.label, v1[code].label)
+            self.assertEqual(
+                reason.hotkey, v1[code].hotkey, f"{code} moved digit - muscle memory"
+            )

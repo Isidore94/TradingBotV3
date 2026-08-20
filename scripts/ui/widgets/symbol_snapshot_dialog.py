@@ -337,6 +337,9 @@ class SymbolSnapshotWidget(QWidget):
         # traffic - the locked pacing budget is untouched, and it works with
         # the network down like the rest of the cached chart path.
         self.d1_chart.set_volume_visible(True)
+        # Reserve the earnings ribbon's strip for every symbol; see
+        # CandleChart.set_earnings_visible for why this is not per-payload.
+        self.d1_chart.set_earnings_visible(True)
         if self._allow_alerts:
             self.d1_chart.barClicked.connect(self._on_d1_bar_clicked)
         self.d1_chart.levelSelected.connect(self._on_d1_level_selected)
@@ -740,6 +743,7 @@ class SymbolSnapshotWidget(QWidget):
         overlays, levels = self._visible_d1_lines(d1)
         self.d1_chart.set_data(d1["bars"], overlays, timeframe="d1")
         self.d1_chart.set_levels(levels)
+        self.d1_chart.set_earnings(d1.get("earnings"))
         self.d1_chart.setVisible(bool(d1["bars"]))
         self._set_d1_legend(d1, overlays)
         self.d1_note.setVisible(not d1["bars"])

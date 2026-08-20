@@ -211,7 +211,11 @@ class AnnotationSchemaTests(unittest.TestCase):
         self.assertEqual(row["source"], "chart_review")
         self.assertEqual(row["session_date"], "2026-08-07")
         self.assertEqual(row["reason_code"], "volume_dry")
-        self.assertEqual(row["vocab_version"], 1)
+        # The row stamps the vocabulary it was BUILT with, not a fixed number.
+        # Asserting the literal made this test fail the day v2 shipped, while
+        # the property it exists to protect - that a row can always be read
+        # back against the list it was written from - was never at risk.
+        self.assertEqual(row["vocab_version"], load_veto_vocabulary().vocab_version)
         self.assertEqual(row["side"], "LONG")
         self.assertEqual(row["last_price"], 100.5)
         self.assertEqual(row["ref_level_id"], "sma_200")

@@ -260,6 +260,7 @@ class ChartDataService(QObject):
         d1 = chart_snapshot.build_d1_snapshot(symbol, **kwargs)
         m5 = chart_snapshot.build_m5_snapshot(symbol, list(m5_bars or []))
         d1["levels"] = self._build_levels(symbol, d1.get("bars") or [])
+        d1["earnings"] = self._build_earnings(symbol, d1.get("bars") or [])
 
         meta: dict[str, Any] = {
             "source": str(source or tier),
@@ -285,6 +286,24 @@ class ChartDataService(QObject):
         except Exception:
             _log.debug("D1 freshness probe failed for %s.", symbol, exc_info=True)
         return d1, m5, meta
+
+    @staticmethod
+    def _build_earnings(symbol: str, bars: Sequence[Mapping[str, Any]]) -> dict:
+        """The earnings ribbon payload, built HERE for the same reason as the
+        levels: this is the worker, and the paint path reads no caches.
+
+        A failure costs the E markers, never the chart.
+        """
+        try:
+            import chart_snapshot as _snapshot
+            import earnings_projection
+
+            return earnings_projection.earnings_marks(
+                _snapshot.symbol_earnings_dates(symbol), bars
+            )
+        except Exception:
+            _log.debug("Earnings marks failed for %s.", symbol, exc_info=True)
+            return {}
 
     @staticmethod
     def _build_levels(symbol: str, bars: Sequence[Mapping[str, Any]]) -> list[dict]:
