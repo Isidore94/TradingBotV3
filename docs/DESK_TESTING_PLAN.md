@@ -98,8 +98,13 @@ adopted nothing.
 | §2.7a strength-board sorting and charts (new, 2026-08-19) | the same DESK day |
 | §2.10 movers-only chart review (new, 2026-08-19 evening) | the same DESK day |
 | §2.2 EVENING stop, §2.4 SPY wake alarm | **one EVENING night** |
+| §2.11 the rebuilt review pane (new, 2026-08-20) | the same DESK day |
+| §2.12 the phone actually wakes you (new, 2026-08-20) | the same EVENING night, **with Sleep Focus on** |
+| §2.13 the graded veto cohort (new, 2026-08-20) | **one weekend**, after two weeks of vetoes |
 
-That is the whole remaining list: **one DESK day and one EVENING night.**
+Still: **one DESK day and one EVENING night** — §2.11 and §2.12 ride the two
+already owed. §2.13 is the only genuinely new sitting, and it cannot happen
+until the cohort has forward returns to grade.
 
 ## Two things were broken, and both are fixed
 
@@ -658,6 +663,100 @@ Any session, once alerts are flowing. Mid-morning is ideal.
 It hides charts; it changes nothing else. No alert is muted, no push is
 suppressed, nothing is removed from any store, and the file that ranks your
 alerts is untouched. If you dislike it, one click reveals everything for the day.
+
+## 2.11 The rebuilt review pane (new, 2026-08-20)
+
+**The question:** can you actually read the charts now, and did anything you
+rely on go missing when the pane was rearranged?
+
+### WHEN
+Any DESK day, first time you work the review queue. Ride it on the §2.5 day.
+
+### DO
+1. Look at the pane with **no alert charted** (queue clear). It should show a
+   placeholder telling you how to get a chart — not a title, a "waiting" line
+   and an arm bar spread across a screen of blank space.
+2. Chart something. The candles should own the pane; under them there should be
+   the arm bar and **one** row of verbs, nothing else.
+3. Type a ticker into the box under the chart and press Enter.
+4. Arm an M5 watch and a D1 event from the hotbuttons under the chart.
+5. Press **Alt+V** from the charts — not from the Capture tab. Then a digit.
+6. Press **Alt+K**, then a digit.
+7. Open the **Capture** tab and read it without scrolling.
+
+### GOOD
+- The empty pane says something useful instead of nothing.
+- Charts dominate; one slim verb row under the arm bar.
+- Alt+V raises the Capture tab, highlights a veto reason, and the digit files
+  it. The chart then **disappears as "not for today"** and the next one comes up.
+- Alt+K does the same for a setup claim, and also moves to the next chart.
+- Veto, Like and Note all sit **side by side** on a wide window, and all nine
+  veto reasons are visible without scrolling.
+- The Armed tab title carries a count.
+
+### BAD, and worth reporting
+- **Any Alt key doing nothing.** That is the failure this rearrangement risked:
+  a shortcut bound inside a hidden tab never fires, and two bindings for one key
+  make Qt fire neither. Silence is the symptom.
+- Enter in a note field not committing it.
+- A note jumping you to the next chart — only veto and like should do that.
+- The hypothetical-stop control reappearing (deliberately removed).
+- The charts still unreadable, which would mean the arm bar came back too big.
+
+## 2.12 Does the phone actually wake you? (new, 2026-08-20)
+
+**The question:** urgent priority alone does **not** override iOS Sleep Focus —
+ntfy has no Apple critical-alert entitlement. So this is a phone-configuration
+test, not a desk test, and it has never been run.
+
+### WHEN
+Before an EVENING night you actually intend to sleep through. Five minutes.
+
+### DO
+1. Work through the **Sleep breakthrough checklist** in
+   `docs/EVENING_MODE_RUNBOOK.md` — ntfy allowed in Settings ▸ Focus ▸ Sleep,
+   notifications not set to Deliver Quietly, topic not muted in the app.
+2. Turn **Sleep Focus on** on the phone. Put it down.
+3. On the desk: Focus ▸ Phone Price Alerts ▸ **Test wake alert (urgent)**.
+
+### GOOD
+- It sounds **through** Sleep Focus, and the message on screen tells you that is
+  what should have happened.
+
+### BAD, and worth reporting
+- Silence, or a notification that arrives without sound. Work back up the
+  checklist and re-run. If it will not break through after that, iOS is
+  refusing it and the remaining options are outside this app.
+- Note the ordinary **Test Push** proves nothing here — it goes out at `high`,
+  not the `urgent` your real alerts use. Passing it is not passing this.
+
+## 2.13 Is the veto cohort telling you anything? (new, 2026-08-20)
+
+**The question:** the desk now grades your vetoes forward every night. Do the
+reasons that score badly match the ones you would name yourself?
+
+### WHEN
+**A weekend, after roughly two weeks of vetoing.** Not before — the returns
+need horizons to mature, and on day one every cohort is empty by construction.
+
+### DO
+1. `.venv\Scripts\python.exe scripts\run_ai_jobs.py --scopes trader_judgement --force`
+2. Read the summary it publishes.
+3. Open `veto_cohort_performance.csv` and look at the reasons by forward return.
+
+### GOOD
+- The reasons that saved you money are ones you recognise as good calls.
+- The write-up states its two caveats: that only "Main swing" claims are
+  offered, and that some vetoed names were day-traded anyway.
+
+### BAD, and worth reporting
+- A reason ranked confidently off two or three rows — sample size is the whole
+  risk here, and the write-up should say so rather than assert.
+- Any suggestion that a veto reason should mute, filter, rank or gate anything.
+  This stream is analysis-only and must stay that way.
+- Cohorts split across `v1`/`v2` of the same reason making a number look thin.
+  That is expected after the vocabulary bump and is recorded — worth knowing,
+  not worth alarm.
 
 ## 2.8a Can the machine steal one of your picks?
 

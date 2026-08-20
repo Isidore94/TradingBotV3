@@ -770,6 +770,7 @@ scripts/ai_jobs/
   digest.py         # Phase 2: digest writer (LLM narrates around extract.py facts)
   journal_enrich.py # Phase 3: tagging assist, scaffolding, weekly retro
   policy_draft.py   # Phase 4: review_policy_draft.json writer
+  cohorts.py        # 2026-08-20: deterministic veto-cohort grading (NO model)
 ```
 
 Tests land as `tests/test_ai_jobs_*.py` per module. Every job writes a ledger
@@ -1367,3 +1368,87 @@ the server reports having seen materially less prompt than was sent. 80,000
 remains the cloud ceiling, so metered models are not penalised by a local limit.
 
 Still open: the tracker file itself is 762 MB.
+
+
+---
+
+## 7. Addendum, 2026-08-20 — a deterministic slot, and an opt-in scope
+
+Two changes to this layer, both trader-authorized, both outside the phase
+ladder above because neither is an inference job.
+
+### 7.1 A fourth slot: `veto_cohort_grading`
+
+`ui.annotations.veto_cohort.update_veto_cohort_outcomes` shipped with the
+Chart Review packet and had **zero callers** from that day until now. Veto
+picks accumulated on every capture-rail commit and nothing ever graded them,
+so "are my vetoes any good?" stayed computable-but-unanswered.
+`ai_jobs/cohorts.py` is the caller.
+
+**It is not an AI job.** No model is consulted (a test asserts the local
+provider is never even reached), nothing is transmitted, and the output is two
+CSVs. It lives here because this is where the desk's overnight slate runs.
+
+Registered by **appending** to `default_slots()`, per that function's own rule
+— *"later phases append; they never reorder these."* A slot rather than a step
+inside `journal_import`, because the slot is the unit this runner already
+gives every job: its own ledger row, retry budget, reserve check and failure
+isolation. Folding it in would make a grading failure read as a journal
+failure. Placed **last** at a 5-minute reserve because it costs seconds,
+nothing downstream reads it, and the briefs must not lose window time to it.
+
+Contract, tested:
+
+- **Idempotent in the sense that matters.** A re-run the same night moves
+  exactly one column, `updated_at`, and nothing measured. Byte-identical is
+  deliberately not claimed — a provenance stamp is supposed to move. A fully
+  matured pick is never recomputed at all.
+- **A failure leaves both CSVs byte-identical**, per this section's own
+  atomic-publish rule.
+- **Sideless picks are counted and named, never graded.**
+  `human_focus_tracking._side_label` reads a blank side as LONG, so grading one
+  would manufacture a directional claim the trader never made.
+- The forward return is **close-to-close only** — it does not read volume or
+  AVWAP bands, so the known IBKR/Yahoo volume-unit defect does not reach these
+  numbers.
+
+First desk run: 45 picks → 44 graded rows, 0 sideless, 0 cohorts (nothing had
+matured on day one).
+
+### 7.2 `trader_judgement`: a scope that is registered but not nightly
+
+The capture rail's stream (`trader_annotations.jsonl` — vetoes, setup claims,
+notes) had **no overnight reader at all**. It now has a scope in
+`ai_summary.py`, with sources in funding order: the veto performance rollup,
+then the outcomes, then the raw annotation log **last** (§6.4b's rule — the
+raw tracker leading its own scope is what starved every analysis derived from
+it).
+
+**Deliberately absent from `DEFAULT_SCOPES` and `TICKER_BRIEF_SCOPES.`**
+`pick_feedback` is the precedent for a registered-but-not-nightly scope. The
+reason here is evidence density, not caution: veto cohorts need forward
+returns before they mean anything, so an unattended nightly read would narrate
+"too early" over a stream still filling.
+
+Exercised on demand: `run_ai_jobs.py --scopes trader_judgement`. The override
+is constructed per call, so the unattended path passes nothing and gets
+`DEFAULT_SCOPES` — an opt-in scope cannot leak into the slate by being set
+once. Unknown names are rejected at the CLI against the registry.
+
+Two **machine-written caveats** travel with the scope in the package as data,
+in the same sense `coverage` is — exact, code-owned, never inferred. Both are
+properties of the capture UI rather than of the trader's judgement, and a
+reader without them draws a confident wrong conclusion from a correct file:
+the like+claim control currently offers only the "Main swing" group, and the
+"Veto D1 — but M5 today" verb writes an ordinary veto row so some vetoed names
+were traded the same day.
+
+### 7.3 What is NOT built
+
+A weekly synthesis pass over the graded cohort. The **cadence is decided**
+(weekly, on the weekend surface — recorded against R8 in `plan.md`) and it is
+**gated on two weeks of graded rows**. It is not authorized. Nor is any
+frontier call, any nightly LLM read of the raw annotation stream, or any path
+by which these files reach a detector, a score, an alert, a watchlist, Focus,
+the review queue or `review_policy.json`.
+
