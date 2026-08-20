@@ -21,6 +21,21 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-20 (fifth pass) — The chart popup accepts keyboard input again
+
+`IMPLEMENTED` + `GREEN`. Bug fix.
+
+- **`SymbolSnapshotDialog` dropped `Qt.WindowDoesNotAcceptFocus`.** The flag
+  means "may never hold keyboard focus", not "do not steal focus", so every
+  field in the Master AVWAP chart popup was untypeable — clicking worked,
+  typing did nothing. Pre-existing since the dialog was written.
+- The non-stealing intent is kept by `WA_ShowWithoutActivating` +
+  `show()`/`raise_()` with no `activateWindow()`, which is what governs the
+  popup's appearance rather than its whole lifetime.
+- The test asserts the **flag**, not a keystroke: the offscreen platform does
+  not enforce OS focus rules, so a typing test passes either way.
+- Gate: 3902 passed, 1 pre-existing flake. Smoke 7/7, selftest 56/56.
+
 ### 2026-08-20 (fourth pass) — Earnings markers, projection, and veto vocabulary v2
 
 `IMPLEMENTED` + `GREEN`.

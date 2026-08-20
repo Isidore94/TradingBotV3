@@ -8,6 +8,63 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-20, fifth pass — THE CHART POPUP WAS UNTYPEABLE BY DESIGN
+
+**Branch `phase05-integration-blitz`.** Trader: "i cant type in the master
+avwap charts that I double click on in the notes section."
+
+### One flag
+
+`SymbolSnapshotDialog` set **`Qt.WindowDoesNotAcceptFocus`**. That flag does
+not mean "do not steal focus" — it tells the window system the window may
+**never hold keyboard focus**, so no widget inside it could receive a
+keystroke. The note field, the veto note, the like note and the symbol box were
+all dead: clicking in worked, typing did nothing.
+
+**Pre-existing.** The flag has been there since the dialog was written; the
+capture rail becoming the product is what made it matter.
+
+### The intent was right, the mechanism was not
+
+A chart popping up must not pull the caret out of a watchlist editor or the
+live feed. That is `WA_ShowWithoutActivating`'s job (on Windows it maps to
+`SW_SHOWNOACTIVATE`), together with `show()` + `raise_()` and **no**
+`activateWindow()` in `show_symbol` — all kept. Those govern what happens when
+the popup **appears**. `WindowDoesNotAcceptFocus` governed what could ever
+happen afterwards, which is a different question and the wrong answer to it.
+
+The two other users of the flag are correct and untouched: the price-alert
+toast has no input and must never take focus, and the satellite window is
+retired.
+
+### Why the test asserts a flag and not a keystroke
+
+**The offscreen platform does not enforce OS focus rules.** A test that focuses
+the note field and types passes with the flag set *and* unset, so it would
+never have caught this. The flag's absence is the contract, so the flag is what
+is pinned — verified failing on the pre-change tree.
+
+For the same reason the neighbouring "does not steal focus" test no longer
+asserts `editor.hasFocus()`: offscreen has no show-without-activate, so that
+assertion measured the test platform rather than the behaviour.
+
+### One thing to confirm on the desk
+
+Focus-stealing is the half that cannot be tested here. If the popup now pulls
+the caret when it opens, that is this change and it is one line to revisit —
+but `WA_ShowWithoutActivating` is the documented mechanism for exactly this and
+is still set.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3902 passed / 19 subtests, 1 failed** — the pre-existing full-suite flake |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+
+---
+
 ## 2026-08-20, fourth pass — EARNINGS ON THE CHART, AND VETO VOCABULARY v2
 
 **Branch `phase05-integration-blitz`.** All trader-authorized, same day.
