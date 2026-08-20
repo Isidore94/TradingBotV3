@@ -611,6 +611,18 @@ are listed in `CURRENT_CHECKPOINT.md`.
    from the R7 tip. **§5's filter table is trader-approved as proposed
    (2026-08-15)**, so the discovery step is no longer blocked.
 
+   **OWED, not built (2026-08-20): the weekly trader-judgement synthesis.**
+   Nightly deterministic grading of the veto cohort now runs
+   (`ai_jobs.cohorts`, slot `veto_cohort_grading`) and the `trader_judgement`
+   evidence scope exists but is **opt-in** — deliberately absent from
+   `DEFAULT_SCOPES`. The cadence is decided (**weekly, on the weekend
+   surface**, which is why it is recorded here rather than under the AI plan),
+   but it is **gated on two weeks of graded rows** and is **NOT authorized to
+   build**. Until then the scope is exercised by hand:
+   `run_ai_jobs.py --scopes trader_judgement`. Live gate: one weekend where
+   the graded cohort is read and the trader confirms the reasons ranked
+   against forward returns are the ones they recognise.
+
    **Deterministic gates green after the adversarial repair pass: 3354 passed / 19 subtests, smoke 7/7, frozen
    selftest 49/49 `(frozen)`, all exit 0.**
 

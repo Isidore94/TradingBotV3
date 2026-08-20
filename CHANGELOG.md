@@ -21,6 +21,33 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-20 (sixth pass) — The veto cohort is graded nightly
+
+`IMPLEMENTED` + `GREEN`.
+
+- **`scripts/ai_jobs/cohorts.py`** (new) + slot `veto_cohort_grading` appended
+  to the overnight runner. `update_veto_cohort_outcomes` had **zero callers**
+  since it shipped; this is the caller. Deterministic, no model. Sideless picks
+  are counted and named, never graded as LONG. Re-runs change only
+  `updated_at`. 45 picks → 44 graded on the desk's real data.
+- **Vocabulary-aware cohort key**: `veto_cohort_source(code, vocab_version)`
+  → `veto_v2_<code>`; an omitted version keeps the historical unversioned form
+  so existing rows are never rewritten. Splits eight unchanged cohorts across
+  the v1→v2 bump — recorded as a known cost in
+  `docs/CHART_REVIEW_WORKSPACE_PLAN.md`.
+- **`trader_judgement` evidence scope**, opt-in (absent from `DEFAULT_SCOPES`
+  and `TICKER_BRIEF_SCOPES`), sources in funding order with the raw annotation
+  log last, and two machine-written caveats carried as package data. Run on
+  demand via `run_ai_jobs.py --scopes trader_judgement`.
+- **Review-event freshness in `review_capture_audit`**: newest merged `ts` in
+  the summary, staleness counted in sessions (holiday-aware) against a
+  2-session threshold. Confirms the store is healthy — 8,077 decisions over 19
+  sessions, newest today; the legacy file's 07-30 silence was the shards taking
+  over by design.
+- Confirmed by inspection: the forward-return metric is close-to-close only, so
+  the known IBKR/Yahoo volume-unit defect does not reach cohort numbers.
+- Gate: 3942 passed, 0 failed. Smoke 7/7, selftest 56/56.
+
 ### 2026-08-20 (fifth pass) — The chart popup accepts keyboard input again
 
 `IMPLEMENTED` + `GREEN`. Bug fix.

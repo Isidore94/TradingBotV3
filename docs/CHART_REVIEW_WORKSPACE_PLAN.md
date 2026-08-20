@@ -221,7 +221,71 @@ side as `LONG`. Guessing would manufacture a directional claim the trader never
 made, so a veto with no side is **counted and skipped**, and the count is
 returned so the caller can say so.
 
-`update_veto_cohort_outcomes()` exists but **is not wired to any timer, scan,
+### Grading is wired, as of 2026-08-20
+
+`update_veto_cohort_outcomes()` had **zero callers** from the day it shipped
+until now: picks accumulated on every veto commit and nothing graded them.
+`ai_jobs.cohorts.run_veto_cohort_grading` is the caller, registered as a
+fourth slot on the existing overnight runner (`veto_cohort_grading`, 5-minute
+reserve, appended — the runner never reorders). It is **deterministic**: no
+model, nothing transmitted, two CSVs out.
+
+Contract:
+
+- **Idempotent in the sense that matters.** A re-run the same night changes
+  exactly one column, `updated_at`, and nothing measured — not the row set,
+  the ordering, an entry price or a forward return. Byte-identical is
+  deliberately *not* claimed: a provenance stamp saying when grading last ran
+  is correct behaviour. A fully matured pick is never recomputed at all.
+- **A failure never destroys the last verified artifact.**
+  `_write_csv_rows` stages to `<name>.tmp` and `os.replace`s, so a half-written
+  outcomes file cannot land; an exception mid-grade leaves both CSVs byte-identical.
+- **Sideless rows are counted and named, never graded** — see below.
+- The forward-return metric is **close-to-close only**. It does not read
+  volume or AVWAP bands, so the known IBKR/Yahoo volume-unit defect
+  (~17% of stored symbols) does **not** reach these numbers. Verified
+  2026-08-20 by inspection: `human_focus_tracking` contains no reference to
+  volume, AVWAP or bands.
+
+### The cohort key carries its vocabulary version
+
+`veto_cohort_source(reason_code, vocab_version)` produces
+`veto_v<version>_<code>`. A reason code is a permanent identifier *within* one
+vocabulary, but that guarantee is a rule written in the vocabulary JSON, not
+something the cohort module can verify — and the cost of trusting it wrongly is
+two different judgements averaged into one number that reads as evidence.
+
+An **omitted** version yields the historical unversioned `veto_<code>`. That is
+what keeps rows already in `veto_cohort_picks.csv` valid: they were written
+before the key carried a version, they are never rewritten, and they keep
+grading in the cohort they were filed under.
+
+**Known consequence, recorded rather than hidden.** Eight of the nine v2
+reasons are byte-identical to their v1 entry (same label, same hotkey); only
+`compressed` is new. So this splits eight cohorts that could legitimately have
+been pooled, halving the sample per reason across the bump. It is the right way
+round — the version is in the key, so pooling stays recoverable by analysis,
+whereas a wrongly pooled cohort is not — but on day one, with 66 annotation
+rows, it is a real cost and analysis should expect it.
+
+### Reading the cohort
+
+`trader_judgement` is an **opt-in** AI evidence scope (`ai_summary.py`), not in
+`DEFAULT_SCOPES` or `TICKER_BRIEF_SCOPES`. Sources in funding order:
+`veto_cohort_performance.csv`, `veto_cohort_outcomes.csv`, then
+`trader_annotations.jsonl` last. Run it on demand with
+`run_ai_jobs.py --scopes trader_judgement`. Two machine-written caveats travel
+with it: the like+claim control currently offers only the "Main swing" group,
+and "Veto D1 — but M5 today" writes an ordinary veto row so some vetoed names
+were traded the same day.
+
+Nothing reads these files back into a detector, a score, an alert, a watchlist,
+Focus, the review queue, or `review_policy.json`.
+
+---
+
+**Historical note (superseded above):** `update_veto_cohort_outcomes()` exists but
+**was not wired to any timer, scan,
 or market-hours path by this packet.** It reads daily bars off disk. Deciding
 when to run it is a separate change.
 

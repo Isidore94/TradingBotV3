@@ -8,6 +8,98 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-20, sixth pass — THE VETO COHORT IS GRADED NIGHTLY
+
+**Branch `phase05-integration-blitz`.** Agreed design, built to spec (W1–W5).
+
+### W1 — the function with zero callers now has one
+
+`update_veto_cohort_outcomes` shipped with the cohort packet and was **never
+called**. Picks accumulated on every veto commit; nothing graded them.
+
+`ai_jobs/cohorts.py` → slot **`veto_cohort_grading`**, appended fourth
+(5-minute reserve, 3 attempts). A slot rather than a step inside
+`journal_import`, because the slot is the unit the runner already gives every
+job — own ledger row, retry budget, reserve check, failure isolation — and
+folding it in would make a grading failure read as a journal failure. Last,
+not first: it costs seconds and the briefs must not lose window time to it.
+**Deterministic — no model is called**, and a test asserts the provider is
+never even consulted.
+
+**Measured on the desk's real data:** 45 picks → 44 graded outcome rows,
+0 sideless. `performance_rows: 0`, correctly — every pick is from today, so no
+horizon has matured yet.
+
+**Sideless rows are counted and named, never graded.**
+`human_focus_tracking._side_label` reads anything that is not "SHORT…" as LONG,
+blank included, so handing it one would manufacture a directional claim the
+trader never made. Only their presence stages a filtered copy; the healthy path
+touches no extra file.
+
+**Idempotence, stated precisely.** A re-run changes exactly one column —
+`updated_at` — and nothing measured. Byte-identical is deliberately *not* the
+claim: a provenance stamp is supposed to move. Writing the failure test
+surfaced the mechanism behind it — a fully matured pick is never recomputed,
+which is why patching the outcome computer to raise did not raise.
+
+**The volume defect does not reach these numbers.** Confirmed by inspection:
+`human_focus_tracking` contains no reference to volume, AVWAP or bands. The
+forward return is close-to-close only.
+
+### W2 — the cohort key carries its vocabulary version
+
+`veto_cohort_source(code, vocab_version)` → `veto_v2_compressed`. An omitted
+version keeps the historical `veto_<code>`, which is what lets the 45 rows
+already on disk keep grading in the cohort they were filed under — they are
+not rewritten.
+
+**Cost recorded, not hidden:** eight of nine v2 reasons are byte-identical to
+their v1 entry, so this splits eight cohorts that could have been pooled. Right
+way round (pooling stays recoverable from the key; a wrongly pooled cohort is
+not), but it halves the sample per reason across the bump.
+
+### W3 — `trader_judgement`, opt-in
+
+Three sources in funding order — performance rollup, outcomes, then the raw
+annotation log **last** (the same rule that stopped the setup tracker starving
+its own scope). **Not** in `DEFAULT_SCOPES` or `TICKER_BRIEF_SCOPES`. Two
+machine-written caveats travel with it as data: Main-swing-only claims, and
+"Veto D1 — but M5 today" writing an ordinary veto row.
+
+On demand: `run_ai_jobs.py --scopes trader_judgement`. The override is built
+per call, so an opt-in scope cannot leak into the unattended slate by being set
+once; unknown names are rejected at the CLI.
+
+### W4 — review-event freshness, and the number that settles it
+
+**The store is healthy: 8,077 decisions over 19 sessions, newest today.** The
+legacy `.jsonl` going quiet on 07-30 was the shards taking over by design.
+
+The audit already computed the newest merged timestamp and hid it in `details`.
+It is now in the summary line System Health renders, and staleness is counted
+in **sessions** via `market_calendar` (a Friday event read on Tuesday after a
+long weekend is one session behind, not four days) with a 2-session threshold.
+Unknown is never stale.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3942 passed / 19 subtests, 0 failed**; exit `0xC0000409` (known Qt-teardown crash after the summary). The intermittent `test_stale_d1_tail…` flake did not fire this run |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | **not rebuilt** — `ai_jobs` is in `PACKAGES_NOT_IN_THE_BUNDLE`, so a new module inside it is not a packaging trigger; spec-drift test passes |
+
+### Owed, live
+
+One weekend where the graded cohort is actually read (`--scopes
+trader_judgement`) and the trader confirms the reasons ranked against forward
+returns are the ones they recognise. Recorded against R8 in `plan.md`. The
+weekly synthesis job is **not authorized** — cadence decided, gated on two
+weeks of graded rows.
+
+---
+
 ## 2026-08-20, fifth pass — THE CHART POPUP WAS UNTYPEABLE BY DESIGN
 
 **Branch `phase05-integration-blitz`.** Trader: "i cant type in the master
