@@ -46,6 +46,9 @@ from project_paths import (
     MASTER_AVWAP_TIER_LIST_FILE,
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
     PICK_FEEDBACK_FILE,
+    TRADER_ANNOTATIONS_FILE,
+    VETO_COHORT_OUTCOMES_FILE,
+    VETO_COHORT_PERFORMANCE_FILE,
 )
 
 
@@ -120,6 +123,27 @@ SCOPE_LABELS = {
     "journal_review": "Trade journal review",
     "move_forensics": "Move Forensics research",
     "pick_feedback": "Likes/dislikes feedback",
+    "trader_judgement": "Trader judgement capture (vetoes, setup claims)",
+}
+
+#: Machine-written facts a scope's evidence cannot be read correctly without.
+#:
+#: These are DATA, in the same sense ``coverage`` is: the code knows them, they
+#: are exact, and the model is not asked to infer or restate them. They exist
+#: because both are properties of the capture UI rather than of the trader's
+#: judgement, and a reader who does not know them will draw a confident wrong
+#: conclusion from a correct file.
+SCOPE_CAVEATS = {
+    "trader_judgement": (
+        "The like+claim control currently offers only the 'Main swing' claim "
+        "group. The absence of earnings-cycle, study and playbook claim types "
+        "is a fact about the user interface, not a trader preference, and must "
+        "not be read as one.",
+        "The 'Veto D1 - but M5 today' verb writes an ordinary veto row and "
+        "separately adds the name to M5 Focus. Some vetoed names were "
+        "therefore traded the same day. The veto stream cannot distinguish "
+        "them, so veto cohort returns include names the trader acted on.",
+    ),
 }
 
 # --- source status vocabulary ---------------------------------------------
@@ -156,6 +180,7 @@ SCOPE_BUDGET_WEIGHTS = {
     "market_conditions": 2,
     "move_forensics": 1,
     "pick_feedback": 1,
+    "trader_judgement": 1,
 }
 
 #: Below this a grant cannot carry anything a reader could use, so the source
@@ -350,6 +375,28 @@ def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
         ],
         "pick_feedback": [
             ("feedback.pick_verdicts", "Trader likes and dislikes", PICK_FEEDBACK_FILE),
+        ],
+        # Funding order, same rule as setup_trackers above: the distilled
+        # answers first, the raw stream LAST. The per-cohort performance
+        # rollup is what answers "which veto reasons actually saved me
+        # money"; the annotation log is the rawest and largest and would
+        # starve the analysis derived from it if it led.
+        "trader_judgement": [
+            (
+                "judgement.veto_performance",
+                "Veto cohort performance by reason",
+                VETO_COHORT_PERFORMANCE_FILE,
+            ),
+            (
+                "judgement.veto_outcomes",
+                "Veto cohort forward returns",
+                VETO_COHORT_OUTCOMES_FILE,
+            ),
+            (
+                "judgement.annotations",
+                "Trader capture log (vetoes, setup claims, notes)",
+                TRADER_ANNOTATIONS_FILE,
+            ),
         ],
     }
 
@@ -1383,6 +1430,11 @@ def build_evidence_package(
             "forbidden_effects": ["scanner scores", "watchlists", "alerts", "bot state", "orders"],
         },
     }
+    caveats = [
+        text for scope in selected for text in SCOPE_CAVEATS.get(scope, ())
+    ]
+    if caveats:
+        package["scope_caveats"] = caveats
     canonical = json.dumps(package, sort_keys=True, separators=(",", ":"), default=str)
     package["evidence_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     package["package_id"] = package["evidence_hash"][:16]

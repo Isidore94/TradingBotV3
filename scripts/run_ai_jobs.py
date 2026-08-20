@@ -113,6 +113,14 @@ def main(argv: list[str] | None = None) -> int:
                              "already-completed check. Never skips the market-session "
                              "block or its pre-open reserve, and its ledger row is "
                              "manual_test, which never counts as session coverage")
+    parser.add_argument(
+        "--scopes",
+        default="",
+        help="comma-separated evidence scopes for the ai_summary slot, "
+             "overriding the nightly default. Manual runs only - this is how "
+             "an opt-in scope such as trader_judgement is exercised on a "
+             "weekend without adding it to the unattended slate.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -123,7 +131,19 @@ def main(argv: list[str] | None = None) -> int:
 
     from ai_jobs import runner
 
-    report = runner.run_slots(runner.default_slots(), force=args.force, only=args.slot)
+    scopes = tuple(
+        part.strip() for part in str(args.scopes or "").split(",") if part.strip()
+    )
+    if scopes:
+        import ai_summary
+
+        unknown = [scope for scope in scopes if scope not in ai_summary.SCOPE_LABELS]
+        if unknown:
+            parser.error(
+                f"unknown scope(s) {unknown}; known: {sorted(ai_summary.SCOPE_LABELS)}"
+            )
+    slots = runner.default_slots(summary_scopes=scopes or None)
+    report = runner.run_slots(slots, force=args.force, only=args.slot)
     logging.info("%s", report.summary())
 
     if not report.store_ok:
