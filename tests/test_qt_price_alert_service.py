@@ -77,3 +77,112 @@ def test_phone_push_is_urgent_and_precedes_desktop_signal(monkeypatch):
         assert payloads[0]["priority"] == "urgent"
     finally:
         service.shutdown()
+
+
+# --------------------------------------------------------------------------
+# 2026-08-20: the wake test.
+#
+# Both EVENING-permitted senders already push at ntfy's maximum - the price
+# alerts here and the SPY +/-1% alarm in AutopilotService - but the only test
+# push the desk could produce went out at "high", so "will an urgent push
+# actually break through Sleep Focus" had never been answerable. This adds a
+# way to ASK, not a new sender.
+# --------------------------------------------------------------------------
+def test_the_ordinary_test_push_is_unchanged(monkeypatch):
+    import push_notify
+    from ui.services.price_alert_service import PriceAlertService
+
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        push_notify,
+        "send_push",
+        lambda *args, **kwargs: (sent.append({"args": args, **kwargs}), {"ok": True, "error": ""})[1],
+    )
+    service = PriceAlertService()
+    try:
+        assert service.test_push()["ok"] is True
+        assert sent[0]["priority"] == "high"
+    finally:
+        service.shutdown()
+
+
+def test_the_wake_test_pushes_at_the_priority_the_real_alerts_use(monkeypatch):
+    import push_notify
+    from ui.services.price_alert_service import PriceAlertService
+
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        push_notify,
+        "send_push",
+        lambda *args, **kwargs: (sent.append({"args": args, **kwargs}), {"ok": True, "error": ""})[1],
+    )
+    service = PriceAlertService()
+    try:
+        result = service.test_push(urgent=True)
+        assert result["ok"] is True
+        assert len(sent) == 1
+        assert sent[0]["priority"] == "urgent", "a 'high' wake test proves nothing"
+        title, message = sent[0]["args"]
+        # It has to be self-describing: the trader reads it half asleep.
+        assert "WAKE TEST" in title
+        assert "Sleep Focus" in message
+    finally:
+        service.shutdown()
+
+
+def test_the_wake_test_fails_quiet_exactly_like_the_ordinary_one(monkeypatch):
+    import push_notify
+    from ui.services.price_alert_service import PriceAlertService
+
+    monkeypatch.setattr(
+        push_notify, "send_push", lambda *_a, **_k: {"ok": False, "error": ""}
+    )
+    service = PriceAlertService()
+    try:
+        result = service.test_push(urgent=True)
+        assert result["ok"] is False
+        # An unconfigured topic is REPORTED, never logged as a delivery.
+        assert result["error"] == "No ntfy topic configured yet."
+        assert service.status_snapshot()["push_error"] == "No ntfy topic configured yet."
+    finally:
+        service.shutdown()
+
+
+def test_a_satellite_never_sends_a_wake_test_either(monkeypatch):
+    import push_notify
+    from ui.services.price_alert_service import PriceAlertService
+
+    monkeypatch.setattr(
+        push_notify,
+        "send_push",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("push attempted")),
+    )
+    service = PriceAlertService(engine_enabled=False)
+    try:
+        assert service.test_push(urgent=True)["ok"] is False
+    finally:
+        service.shutdown()
+
+
+def test_the_panel_offers_the_wake_test_beside_the_ordinary_one(monkeypatch):
+    import push_notify
+    from ui.panels import price_alerts_panel as panel_module
+    from ui.panels.price_alerts_panel import PriceAlertsPanel
+
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        push_notify,
+        "send_push",
+        lambda *args, **kwargs: (sent.append(kwargs), {"ok": True, "error": ""})[1],
+    )
+    # The button saves the push settings first, exactly as the ordinary test
+    # does. Keep that off this machine's real local_settings.json.
+    monkeypatch.setattr(panel_module, "save_local_setting", lambda *_a, **_k: None)
+    panel = PriceAlertsPanel()
+    try:
+        panel.wake_button.click()
+        assert [entry["priority"] for entry in sent] == ["urgent"]
+        assert "Sleep Focus" in panel.status_label.text()
+    finally:
+        panel.close()
+        panel.deleteLater()

@@ -88,18 +88,48 @@ class PriceAlertService(QObject):
             "push_error": self._last_push_error,
         }
 
-    def test_push(self) -> dict[str, Any]:
-        """Panel button: verify the phone actually buzzes before relying on it."""
+    #: What the urgent test says on the phone. It has to be self-describing:
+    #: the trader reads it half asleep, and the whole point of the test is
+    #: that they can tell the difference between "it woke me" and "it did
+    #: not" without going back to the desk to check what was sent.
+    WAKE_TEST_TITLE = "TradingBotV3 WAKE TEST"
+    WAKE_TEST_MESSAGE = (
+        "This should have sounded through Sleep Focus. If it did not: add ntfy "
+        "to iOS Settings > Focus > Sleep > Allowed Apps, and make sure this "
+        "topic is not set to Deliver Quietly. Your price alerts and the SPY "
+        "wake alarm push at exactly this priority."
+    )
+
+    def test_push(self, *, urgent: bool = False) -> dict[str, Any]:
+        """Panel button: verify the phone actually buzzes before relying on it.
+
+        ``urgent`` is the overnight question. Both EVENING-permitted senders -
+        the Focus/Research price alerts (``_notify`` below) and the SPY +/-1%
+        wake alarm in ``AutopilotService`` - already push at ntfy's maximum
+        priority, but nothing on the desk could produce one on demand, so
+        "will this actually wake me through Sleep Focus" had never been
+        answered. This is a TEST of the channel those two already use, not a
+        new sender: nothing schedules it and nothing but the panel button
+        calls it, so the phone-push policy is untouched.
+
+        Same fail-quiet contract as the ordinary test either way: the dict
+        says what happened, ``send_push`` never raises, and an unconfigured
+        topic is reported rather than logged as a delivery.
+        """
         if not self.engine_enabled:
             result = {"ok": False, "error": "Phone pushes originate from the main desk only."}
             self._last_push_error = str(result["error"])
             self.statusChanged.emit(self.status_snapshot())
             return result
+        if urgent:
+            title, message = self.WAKE_TEST_TITLE, self.WAKE_TEST_MESSAGE
+            priority, tags = "urgent", "rotating_light"
+        else:
+            title = "TradingBotV3 test"
+            message = "Price alert channel is working. Sleep well."
+            priority, tags = "high", "white_check_mark"
         result = push_notify.send_push(
-            "TradingBotV3 test",
-            "Price alert channel is working. Sleep well.",
-            priority="high",
-            tags="white_check_mark",
+            title, message, priority=priority, tags=tags
         )
         if not result.get("ok") and not result.get("error"):
             result["error"] = "No ntfy topic configured yet."

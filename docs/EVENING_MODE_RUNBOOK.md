@@ -58,6 +58,53 @@ work.
    view): enter each position, and SPY if you want an index tripwire, with an
    *Alert Above* and/or *Alert Below* level armed.
 4. Hit **Test Push** and confirm the phone (and watch) buzz.
+5. If you are relying on being woken: run the **Sleep breakthrough checklist**
+   below at least once, and re-run it after any iOS update.
+
+## Sleep breakthrough checklist (2026-08-20)
+
+**Urgent priority alone does not override iOS Sleep Focus.** ntfy has no Apple
+critical-alert entitlement - that is a per-app entitlement Apple grants, and
+without it no notification of any priority can break a Focus mode on its own.
+The ntfy priority header only decides how the *app* treats the message once
+iOS has already let it through. So the desk's side of this is already at
+maximum and cannot be improved by changing any code:
+
+| Sender | Priority | Verified |
+|---|---|---|
+| Focus/Research price alerts (`price_alert_service._notify`) | `urgent` | code, 2026-08-20 |
+| EVENING SPY +/-1% wake alarm (`AutopilotService._maybe_push_spy_alarm`) | `urgent` | code, 2026-08-20 |
+
+Everything that decides whether you actually wake up is on the phone:
+
+1. **iOS Settings > Focus > Sleep > Allowed Notifications > Apps** - add
+   **ntfy**. Without this, Sleep Focus silences it no matter what the desk
+   sends. *(to be confirmed on the desk/phone)*
+2. **iOS Settings > Notifications > ntfy** - Alerts on, **Sounds on**, and the
+   delivery style must NOT be *Deliver Quietly* (check the notification's own
+   `...` menu too; one swipe sets Deliver Quietly permanently and it is easy to
+   do by accident). *(to be confirmed on the desk/phone)*
+3. **In the ntfy app, per subscribed topic** - open the topic, and make sure
+   its notification setting is not muted and not set to a silent sound.
+   Some ntfy versions expose "Time Sensitive"/priority-to-channel mapping
+   here; enable the loudest option available. *(to be confirmed on the
+   desk/phone)*
+4. **Verify it, do not assume it.** Turn Sleep Focus ON on the phone, put it
+   down, then on the desk open Focus -> Phone Price Alerts (or Research ->
+   Price Alerts) and click **Test wake alert (urgent)**. That button sends one
+   push at exactly the priority the two senders above use - the ordinary
+   **Test Push** goes out at `high`, which proves nothing about the overnight
+   path. The message on the phone says what should have happened, so a silent
+   phone and a sounding phone are told apart without walking back to the desk.
+5. If it did not sound: work back up this list (1 -> 3), then re-run step 4.
+   If it still will not break through, iOS is refusing it and the remaining
+   options are outside this app - the phone's own alarm clock, or an ntfy
+   build carrying an Apple critical-alert entitlement.
+
+The wake test is a **test**, not a sender: nothing schedules it, only that
+button calls it, and it does not change the phone push policy (AWAY is still
+the only Auto mode that pushes routine output; the price alerts and the SPY
+wake alarm remain the two deliberate exceptions).
 
 ## Price alerts - one-time phone setup
 
@@ -76,7 +123,9 @@ is just pointing the *ntfy server* field at your own instance.
 4. In iPhone Settings, allow ntfy notifications and sounds. Allow ntfy through
    the Focus modes you rely on, or enable Time Sensitive/Critical delivery when
    that option is available in the installed ntfy/iOS version. Do not assume
-   the priority header alone overrides an iPhone Focus configuration.
+   the priority header alone overrides an iPhone Focus configuration - it does
+   not, and the Sleep breakthrough checklist above is how you find out before
+   the night you need it.
 5. The Apple Watch mirrors iPhone notifications automatically - no extra
    setup.
 

@@ -71,18 +71,37 @@ class PriceAlertsPanel(QFrame):
         rearm_button = QPushButton("Re-arm All")
         check_button = QPushButton("Check Now")
         test_button = QPushButton("Test Push")
+        # The one that answers the overnight question. Ordinary "Test Push"
+        # goes out at priority "high", which is NOT what the two
+        # EVENING-permitted senders use - so passing it proved nothing about
+        # whether a real 3am alert breaks through Sleep Focus. This sends at
+        # the same "urgent" the price alerts and the SPY wake alarm send at,
+        # and says so on the phone. See docs/EVENING_MODE_RUNBOOK.md.
+        wake_button = QPushButton("Test wake alert (urgent)")
+        wake_button.setToolTip(
+            "Send one push at the SAME priority as your price alerts and the "
+            "SPY wake alarm. Run it with Sleep Focus ON: ntfy has no Apple "
+            "critical-alert entitlement, so urgent priority alone does not "
+            "override Sleep Focus - the app also has to be allowed in "
+            "Settings > Focus > Sleep, and the topic must not be set to "
+            "Deliver Quietly."
+        )
         add_button.clicked.connect(self._add_row)
         remove_button.clicked.connect(self._remove_selected)
         rearm_button.clicked.connect(self._rearm_all)
         check_button.clicked.connect(self.service.check_now)
         test_button.clicked.connect(self._test_push)
+        wake_button.clicked.connect(self._test_wake_push)
+        self.test_button = test_button
+        self.wake_button = wake_button
+        buttons = (add_button, remove_button, rearm_button, check_button, test_button, wake_button)
         if self.read_only:
-            for button in (add_button, remove_button, rearm_button, check_button, test_button):
+            for button in buttons:
                 button.setEnabled(False)
 
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
-        for button in (add_button, remove_button, rearm_button, check_button, test_button):
+        for button in buttons:
             action_row.addWidget(button)
         action_row.addStretch(1)
 
@@ -279,6 +298,24 @@ class PriceAlertsPanel(QFrame):
             self.status_label.setText("Test push sent - check the phone (and watch).")
         else:
             self.status_label.setText(f"Test push FAILED: {result.get('error') or 'unknown'}")
+
+    def _test_wake_push(self) -> None:
+        """Same fail-quiet contract, at the priority that matters overnight."""
+        if self.read_only:
+            return
+        self._save_push_settings()
+        result = self.service.test_push(urgent=True)
+        if result.get("ok"):
+            self.status_label.setText(
+                "Wake alert sent at urgent priority - it should have sounded "
+                "THROUGH Sleep Focus. If it did not, ntfy is not allowed in "
+                "iOS Settings > Focus > Sleep, or the topic is set to Deliver "
+                "Quietly."
+            )
+        else:
+            self.status_label.setText(
+                f"Wake alert FAILED: {result.get('error') or 'unknown'}"
+            )
 
     def _save_push_settings(self) -> None:
         if self.read_only:
