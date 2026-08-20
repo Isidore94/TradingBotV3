@@ -884,7 +884,21 @@ class SymbolSnapshotDialog(QDialog):
         super().__init__(parent)
         self.setModal(False)
         self.setWindowFlag(Qt.WindowType.Tool, True)
-        self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
+        # WA_ShowWithoutActivating alone. `WindowDoesNotAcceptFocus` used to be
+        # set here too and it made the popup UNTYPEABLE (trader, 2026-08-20:
+        # "i cant type in the master avwap charts that I double click on in
+        # the notes section"): that flag tells the window system this window
+        # may never take keyboard focus, so no widget inside it can ever
+        # receive a keystroke - not the note field, not the veto note, not the
+        # symbol box. Clicking in worked and typing did nothing.
+        #
+        # The intent behind it was right and is kept: the popup must not STEAL
+        # focus from a watchlist editor or the live feed when it appears. That
+        # is what WA_ShowWithoutActivating does, together with show()+raise_()
+        # and no activateWindow() in show_symbol. The difference is that those
+        # govern what happens when the popup APPEARS, and leave the trader free
+        # to click into it and type - which is the whole point of a surface
+        # whose capture rail is the product.
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self._resize_to_desk_height()
         self.watch_host = None

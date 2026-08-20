@@ -225,3 +225,49 @@ def test_the_rs_board_opens_a_chart_that_can_capture(tmp_path, monkeypatch):
     finally:
         dialog.deleteLater()
         owner.deleteLater()
+
+
+# --------------------------------------------------------------------------
+# 2026-08-20: the popup has to be typeable.
+#
+# Trader: "i cant type in the master avwap charts that I double click on in
+# the notes section." Cause: Qt.WindowDoesNotAcceptFocus was set on the
+# dialog. That flag tells the window system the window may NEVER take keyboard
+# focus, so nothing inside it could receive a keystroke - clicking into the
+# note field worked and typing did nothing.
+#
+# The offscreen platform does not enforce OS focus rules, so a hasFocus()
+# assertion passes either way and would not have caught this. The flag itself
+# is the contract, so the flag is what these assert.
+# --------------------------------------------------------------------------
+def test_the_popup_can_take_keyboard_focus(dialog):
+    from PySide6.QtCore import Qt
+
+    assert not bool(
+        dialog.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    ), "this flag makes every field in the popup untypeable"
+
+
+def test_the_popup_still_does_not_steal_focus_when_it_appears(dialog):
+    """The original intent, kept: appearing must not pull the caret out of a
+    watchlist editor or the live feed."""
+    from PySide6.QtCore import Qt
+
+    assert dialog.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert bool(dialog.windowFlags() & Qt.WindowType.Tool)
+
+
+def test_every_capture_field_accepts_input(dialog):
+    """Belt and braces: the fields themselves are editable and focusable."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    rail = dialog.capture_rail
+    for name in ("note_input", "veto_note_input", "like_note_input"):
+        field = getattr(rail, name)
+        assert field.isEnabled() and not field.isReadOnly()
+        assert field.focusPolicy() != Qt.FocusPolicy.NoFocus
+        field.clear()
+        field.setFocus()
+        QTest.keyClicks(field, "abc")
+        assert field.text() == "abc", f"{name} swallowed the keystrokes"

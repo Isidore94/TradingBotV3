@@ -804,8 +804,21 @@ def test_snapshot_dialog_reuses_owner_child_without_stealing_editor_focus(monkey
 
     first = show_symbol_snapshot(owner, "AAPL")
     app.processEvents()
+    # Not stealing focus is WA_ShowWithoutActivating's job, and the editor
+    # keeping the caret below is the property this test is named for.
     assert first.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-    assert first.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus
+    # WindowDoesNotAcceptFocus was ALSO asserted here and had to go: it does
+    # not mean "do not steal focus", it means "may never hold focus", which
+    # made every field in the popup untypeable (trader, 2026-08-20 - the note
+    # section of a chart opened from Master AVWAP). Pinning its absence keeps
+    # the two ideas from being conflated again.
+    assert not (first.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus)
+    # Deliberately NOT asserting editor.hasFocus(): the offscreen platform does
+    # not implement show-without-activate, so it moves focus here regardless of
+    # the attribute and the assertion would measure the test platform rather
+    # than the behaviour. On Windows WA_ShowWithoutActivating maps to
+    # SW_SHOWNOACTIVATE, which is what actually holds the caret in place; it is
+    # verified on the desk, not here.
     assert show_symbol_snapshot(owner, "MSFT") is first
     assert first.parent() is owner
     first.close()
