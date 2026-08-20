@@ -132,6 +132,52 @@ def _review_store_mtime_text(path: Path, *, shards_dir: Path | None = None) -> s
     )
 
 
+#: How many completed sessions the merged review-event store may lag before
+#: the audit says so. Two, because one is ordinary (today's rows land tonight)
+#: and three is the shape of an outage.
+REVIEW_EVENT_STALE_SESSIONS = 2
+
+
+def _sessions_since(value: str, now: datetime) -> int | None:
+    """Completed trading sessions between ``value``'s date and ``now``.
+
+    SESSIONS, not calendar days, and via ``market_calendar`` so holidays count
+    correctly: a Friday event read on Tuesday after a long weekend is one
+    session behind, not four days behind, and flagging it as stale would be a
+    false alarm on the one measure whose entire job is to distinguish a real
+    outage from a quiet stretch.
+
+    None when it cannot be established (unparseable stamp, or a date outside
+    the calendar's modelled range). Unknown is never treated as stale - this
+    check exists because a silence was misread as an outage once already.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    last_day = stamp.date()
+    today = now.date()
+    if today <= last_day:
+        return 0
+    try:
+        from datetime import timedelta
+
+        import market_calendar
+
+        sessions = 0
+        cursor = last_day
+        while cursor < today:
+            cursor += timedelta(days=1)
+            if market_calendar.is_session(cursor):
+                sessions += 1
+        return sessions
+    except Exception:
+        return None
+
+
 def _age_days(value: str, now: datetime) -> float | None:
     """Age in days, comparing both sides as local wall clock.
 
@@ -424,16 +470,42 @@ def review_log_check(
     last_age = _age_days(stats["last_ts"], moment)
     details["last_event_age_days"] = round(last_age, 2) if last_age is not None else None
 
+    # Freshness of the MERGED store (legacy file + shards). This is here
+    # because the legacy .jsonl stopping on 2026-07-30 - which is by design,
+    # the shards took over - was read as a three-week capture outage. The
+    # newest merged timestamp is the number that would have settled it in one
+    # glance, and it was computed but never shown.
+    sessions_behind = _sessions_since(stats["last_ts"], moment)
+    details["last_event_sessions_behind"] = sessions_behind
+    details["stale_after_sessions"] = REVIEW_EVENT_STALE_SESSIONS
+    if sessions_behind is not None and sessions_behind > REVIEW_EVENT_STALE_SESSIONS:
+        warnings.append(
+            f"newest review event is {sessions_behind} session(s) old "
+            f"({stats['last_ts']}); capture may have stopped"
+        )
+
     if problems:
         status = "unhealthy"
     elif warnings or stats["rows"] == 0:
         status = "degraded"
     else:
         status = "healthy"
+    if stats["last_ts"]:
+        if sessions_behind is None:
+            freshness = f" Newest event {stats['last_ts']}."
+        elif sessions_behind == 0:
+            freshness = f" Newest event {stats['last_ts']} (today)."
+        else:
+            freshness = (
+                f" Newest event {stats['last_ts']} "
+                f"({sessions_behind} session(s) behind)."
+            )
+    else:
+        freshness = ""
     summary = (
         f"{stats['rows']} decision(s) over {stats['sessions']}/{CAPTURE_SESSION_FLOOR} "
         f"session(s), {len(stats['installations'])} partitioned installation(s); "
-        f"{stats['malformed_lines']} malformed."
+        f"{stats['malformed_lines']} malformed.{freshness}"
     )
     if problems:
         summary += " " + "; ".join(problems) + "."

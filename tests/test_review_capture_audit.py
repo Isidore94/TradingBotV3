@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import sys
+import unittest
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
@@ -20,6 +22,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from review_capture_audit import (  # noqa: E402
     CAPTURE_SESSION_FLOOR,
     EVIDENCE_LABEL,
+    REVIEW_EVENT_STALE_SESSIONS,
     build_review_capture_audit,
     evidence_label_check,
     outcome_join_check,
@@ -29,6 +32,7 @@ from review_capture_audit import (  # noqa: E402
     scoreboard_check,
     scoring_config_check,
 )
+from review_events import REVIEW_EVENTS_SCHEMA  # noqa: E402
 
 NOW = datetime(2026, 7, 28, 16, 34, 0)
 
@@ -398,3 +402,99 @@ def test_audit_never_writes_to_the_artifacts_it_reads(tmp_path):
     )
     after = {item.name: item.read_bytes() for item in tmp_path.iterdir()}
     assert after == before
+
+
+# ==========================================================================
+# W4 - review-event freshness, surfaced.
+#
+# This exists because the legacy alert_review_events.jsonl going quiet on
+# 2026-07-30 was read as a three-week capture outage. It was not: the
+# partitioned shards took over that day by design, and the merged store is
+# current. The newest merged timestamp is the number that settles it in one
+# glance, and the audit computed it but never showed it.
+# ==========================================================================
+class ReviewEventFreshnessTests(unittest.TestCase):
+    def _log(self, tmp: Path, stamps: list[str]) -> Path:
+        path = tmp / "alert_review_events.jsonl"
+        rows = [
+            json.dumps(
+                {
+                    "schema": REVIEW_EVENTS_SCHEMA,
+                    "ts": stamp,
+                    "trade_date": stamp[:10],
+                    "action": "shown",
+                    "symbol": "NVDA",
+                    "record_id": f"r{index}",
+                    "machine": "desk",
+                }
+            )
+            for index, stamp in enumerate(stamps)
+        ]
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        return path
+
+    def test_the_newest_event_is_stated_in_the_summary(self) -> None:
+        with TemporaryDirectory() as name:
+            tmp = Path(name)
+            path = self._log(tmp, ["2026-08-20T09:31:00"])
+            check = review_log_check(path, now=datetime(2026, 8, 20, 16, 0))
+            self.assertIn("2026-08-20T09:31:00", check["summary"])
+            self.assertIn("today", check["summary"])
+            self.assertEqual(check["details"]["last_event_sessions_behind"], 0)
+
+    def test_a_store_more_than_two_sessions_behind_is_flagged(self) -> None:
+        with TemporaryDirectory() as name:
+            tmp = Path(name)
+            # Mon 2026-08-10 read on Fri 2026-08-14 is four sessions behind.
+            path = self._log(tmp, ["2026-08-10T09:31:00"])
+            check = review_log_check(path, now=datetime(2026, 8, 14, 16, 0))
+            self.assertEqual(check["details"]["last_event_sessions_behind"], 4)
+            self.assertIn("capture may have stopped", " ".join(check["details"]["warnings"]))
+            self.assertIn("session(s) behind", check["summary"])
+
+    def test_two_sessions_behind_is_not_yet_a_warning(self) -> None:
+        """One session behind is ordinary; the threshold is where an outage
+        starts to look like one."""
+        with TemporaryDirectory() as name:
+            tmp = Path(name)
+            path = self._log(tmp, ["2026-08-12T09:31:00"])
+            check = review_log_check(path, now=datetime(2026, 8, 14, 16, 0))
+            self.assertEqual(check["details"]["last_event_sessions_behind"], 2)
+            self.assertNotIn(
+                "capture may have stopped", " ".join(check["details"]["warnings"])
+            )
+
+    def test_a_long_weekend_is_counted_in_SESSIONS_not_days(self) -> None:
+        """The false-alarm this measure exists to avoid.
+
+        Fri 2026-07-03 to Tue 2026-07-07 is four calendar days but only ONE
+        session: 07-04 is a holiday and the weekend is not a session. Counting
+        days would have flagged a perfectly healthy store.
+        """
+        with TemporaryDirectory() as name:
+            tmp = Path(name)
+            path = self._log(tmp, ["2026-07-02T09:31:00"])
+            check = review_log_check(path, now=datetime(2026, 7, 6, 16, 0))
+            behind = check["details"]["last_event_sessions_behind"]
+            age_days = check["details"]["last_event_age_days"]
+            self.assertLess(behind, age_days)
+            self.assertNotIn(
+                "capture may have stopped", " ".join(check["details"]["warnings"])
+            )
+
+    def test_an_unreadable_stamp_is_unknown_and_never_stale(self) -> None:
+        """Unknown is not an outage - this check exists because a silence was
+        misread once already."""
+        from review_capture_audit import _sessions_since
+
+        moment = datetime(2026, 8, 20, 16, 0)
+        self.assertIsNone(_sessions_since("", moment))
+        self.assertIsNone(_sessions_since("not-a-timestamp", moment))
+        self.assertEqual(_sessions_since("2026-08-21T09:00:00", moment), 0)
+
+    def test_the_threshold_is_reported_alongside_the_measurement(self) -> None:
+        with TemporaryDirectory() as name:
+            tmp = Path(name)
+            path = self._log(tmp, ["2026-08-20T09:31:00"])
+            details = review_log_check(path, now=datetime(2026, 8, 20, 16, 0))["details"]
+            self.assertEqual(details["stale_after_sessions"], REVIEW_EVENT_STALE_SESSIONS)
