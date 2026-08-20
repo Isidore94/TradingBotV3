@@ -306,7 +306,14 @@ def test_default_slate_registers_the_journal_pull_before_the_phase_1_jobs():
     from ai_jobs import runner
 
     slots = runner.default_slots()
-    assert [slot.name for slot in slots] == ["journal_import", "ai_summary", "ticker_briefs"]
+    names = [slot.name for slot in slots]
+    # The ORDERING is what this test is for, not the length. Asserting the
+    # exact list made it fail the moment `veto_cohort_grading` was appended -
+    # which is the sanctioned way to add a slot, so the assertion was
+    # forbidding the rule it exists to describe.
+    assert names[:3] == ["journal_import", "ai_summary", "ticker_briefs"]
+    assert names[0] == "journal_import", "the one sanctioned reordering"
+    assert "veto_cohort_grading" in names[3:], "later phases append"
     assert all(slot.enabled for slot in slots)
     by_name = {slot.name: slot for slot in slots}
     # The long slot is capped; the cheap one keeps retrying all window.

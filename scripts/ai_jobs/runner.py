@@ -347,7 +347,7 @@ def run_slots(
     return report
 
 
-def default_slots() -> list[JobSlot]:
+def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobSlot]:
     """The Phase 1 slate, plus R7's journal pull at the front.
 
     ``journal_import`` is deliberately **first**, and it is the one sanctioned
@@ -357,7 +357,7 @@ def default_slots() -> list[JobSlot]:
     night's trades are in it means they read yesterday's. It also costs seconds
     rather than the briefs' hours, so putting it first spends nothing.
     """
-    from ai_jobs import briefs
+    from ai_jobs import briefs, cohorts
     from journal_runner import run_nightly_journal_import
 
     return [
@@ -370,7 +370,19 @@ def default_slots() -> list[JobSlot]:
         ),
         JobSlot(
             name="ai_summary",
-            run=briefs.run_daily_summary,
+            # ``summary_scopes`` is an OPERATOR override for a manual run, not
+            # a configuration knob: the nightly path passes nothing and gets
+            # briefs.DEFAULT_SCOPES, so an opt-in scope stays opt-in and
+            # cannot leak into the unattended slate by being set once.
+            run=(
+                briefs.run_daily_summary
+                if summary_scopes is None
+                else (
+                    lambda scopes=tuple(summary_scopes), **kwargs: briefs.run_daily_summary(
+                        scopes=scopes, **kwargs
+                    )
+                )
+            ),
             reserve_minutes=20.0,
             description="Advisory evidence summary over the day's artifacts",
         ),
@@ -380,5 +392,25 @@ def default_slots() -> list[JobSlot]:
             reserve_minutes=120.0,
             description="Medium-tier advisory briefs for Focus/watchlist tickers",
             max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
+        ),
+        # APPENDED, per this function's own rule: "later phases append; they
+        # never reorder these". A fourth slot rather than a step bolted onto
+        # journal_import, because the slot IS the unit the runner already
+        # gives every job - its own ledger row, its own retry budget, its own
+        # reserve check, and its own failure isolation. Folding grading into
+        # journal_import would make a grading failure read as a journal
+        # failure in the ledger, and the two have nothing to do with each
+        # other.
+        #
+        # Last, not first: it costs seconds, nothing downstream reads it, and
+        # the briefs must not lose window time to it. Deterministic - no model
+        # is called - so it is cheap to retry, hence journal_import's
+        # attempt budget rather than the briefs'.
+        JobSlot(
+            name="veto_cohort_grading",
+            run=cohorts.run_veto_cohort_grading,
+            reserve_minutes=5.0,
+            description="Forward-grade the trader's veto cohort (deterministic, no model)",
+            max_attempts=3,
         ),
     ]
