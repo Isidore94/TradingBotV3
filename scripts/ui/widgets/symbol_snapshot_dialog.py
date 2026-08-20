@@ -328,6 +328,14 @@ class SymbolSnapshotWidget(QWidget):
         header_layout.addWidget(self.paint_lines_button, 0)
 
         self.d1_chart = CandleChart()
+        # Volume on the daily, as an underlay (trader, 2026-08-20). The bars
+        # already carry it: chart_snapshot.load_d1_bars reads the volume
+        # column straight out of the durable daily store that the Master AVWAP
+        # pipeline writes, and forming_d1_bar sums the session's M5 volume for
+        # today's preview candle. So this needs NO new fetch and adds NO IB
+        # traffic - the locked pacing budget is untouched, and it works with
+        # the network down like the rest of the cached chart path.
+        self.d1_chart.set_volume_visible(True)
         if self._allow_alerts:
             self.d1_chart.barClicked.connect(self._on_d1_bar_clicked)
         self.d1_chart.levelSelected.connect(self._on_d1_level_selected)

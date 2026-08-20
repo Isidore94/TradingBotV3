@@ -313,6 +313,125 @@ class CandleItem(pg.GraphicsObject):
         return self._bounds
 
 
+class VolumeItem(pg.GraphicsObject):
+    """Translucent volume columns hugging the bottom of the view.
+
+    Deliberately NOT a second stacked plot. The desk's alert column is short
+    of vertical space (that is the whole reason the capture rail moved to a
+    tab), and a volume sub-panel would take 20-25% of the candles to show a
+    series the trader reads as context rather than studies. Drawn as an
+    underlay it costs zero height.
+
+    The columns are laid out against the CURRENT view, not the data: the
+    picture is recorded once in a normalized 0..1 band and ``paint`` maps that
+    band onto the bottom ``height_fraction`` of whatever the y-range happens
+    to be. So a pan or a log/linear flip is a transform, never a re-render,
+    and the item never has an opinion about the price range - it reads it.
+
+    Scaling is by the PEAK of the drawn bars. That makes the columns a
+    relative read ("today is heavy for this name"), which is what a volume
+    underlay is for; it is not an axis and it deliberately has no ticks.
+    """
+
+    def __init__(self, bars: list[dict] = (), *, height_fraction: float = 0.18) -> None:
+        super().__init__()
+        self._bars: list[dict] = []
+        self._fraction = float(height_fraction)
+        self._picture = QPicture()
+        self._peak = 0.0
+        self.setZValue(-20)  # under the candles, the overlays and the levels
+        self.set_bars(bars)
+
+    def set_bars(self, bars: list[dict]) -> None:
+        """Re-record in place (C5: never rebuild scene items)."""
+        self._bars = list(bars or [])
+        self.prepareGeometryChange()
+        self._render()
+        self.update()
+
+    def has_volume(self) -> bool:
+        """False when nothing measurable was supplied, so nothing is drawn.
+
+        Missing volume is uncertainty, never zero: a store that carries no
+        volume column, or a symbol whose rows are all 0, draws NO columns
+        rather than a flat row of nothing, which would read as "no volume
+        traded" when the truth is "not measured here".
+        """
+        return self._peak > 0.0
+
+    def _render(self) -> None:
+        self._picture = QPicture()
+        volumes = []
+        for bar in self._bars:
+            try:
+                value = float(bar.get("volume") or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+            # NaN fails this compare, which is the intent.
+            volumes.append(value if value > 0 else 0.0)
+        self._peak = max(volumes) if volumes else 0.0
+        if not self._peak:
+            return
+        up = QColor(theme.color("long"))
+        down = QColor(theme.color("short"))
+        # Translucent: the candles, the overlays and the paint lines all draw
+        # over this, and none of them may become harder to read for it.
+        up.setAlphaF(0.38)
+        down.setAlphaF(0.38)
+        painter = QPainter(self._picture)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index, bar in enumerate(self._bars):
+            value = volumes[index]
+            if value <= 0.0:
+                continue
+            painter.setBrush(up if bar.get("close", 0) >= bar.get("open", 0) else down)
+            painter.drawRect(
+                QRectF(
+                    index - _CANDLE_HALF_WIDTH,
+                    0.0,
+                    _CANDLE_HALF_WIDTH * 2,
+                    value / self._peak,
+                )
+            )
+        painter.end()
+
+    def _band(self) -> tuple[float, float] | None:
+        """(bottom, height) of the volume band in current view coordinates."""
+        if not self._peak:
+            return None
+        view = self.getViewBox()
+        if view is None:
+            return None
+        try:
+            (_x_min, _x_max), (y_min, y_max) = view.viewRange()
+        except Exception:
+            return None
+        height = (float(y_max) - float(y_min)) * self._fraction
+        return (float(y_min), height) if height > 0 else None
+
+    def paint(self, painter, *_args) -> None:
+        band = self._band()
+        if band is None:
+            return
+        bottom, height = band
+        painter.translate(0.0, bottom)
+        painter.scale(1.0, height)
+        painter.drawPicture(0, 0, self._picture)
+
+    def boundingRect(self) -> QRectF:
+        band = self._band()
+        if band is None:
+            return QRectF()
+        bottom, height = band
+        return QRectF(-1.0, bottom, len(self._bars) + 1.0, height)
+
+    def viewRangeChanged(self) -> None:  # noqa: N802 (pyqtgraph override)
+        """The band is defined by the view, so its geometry moved with it."""
+        self.prepareGeometryChange()
+        self.update()
+
+
 class CandleChart(pg.PlotWidget):
     """Candles + overlay lines; y-range follows the candles (overlays clip).
 
@@ -364,6 +483,14 @@ class CandleChart(pg.PlotWidget):
         plot = self.getPlotItem()
         self._candles = CandleItem()
         plot.addItem(self._candles)
+        # Volume underlay. ignoreBounds because it reads the view range to
+        # place itself - letting it vote on that range would be circular, and
+        # the price scale must come from the candles and nothing else (the
+        # same rule the paint lines follow).
+        self._volume = VolumeItem()
+        self._show_volume = False
+        self._volume.setVisible(False)
+        plot.addItem(self._volume, ignoreBounds=True)
         # Crosshair/readout items are deliberately NOT built here. They are a
         # hover decoration, and building them at construction gave every
         # CandleChart in the app three extra native scene items plus a
@@ -410,6 +537,20 @@ class CandleChart(pg.PlotWidget):
             axis.setPen(pg.mkPen(theme.color("border")))
             axis.setStyle(hideOverlappingLabels=True, tickTextOffset=7)
 
+    def set_volume_visible(self, visible: bool) -> None:
+        """Draw the volume underlay (D1 today; see VolumeItem for why it is
+        an underlay and not a stacked sub-plot)."""
+        self._show_volume = bool(visible)
+        self._sync_volume()
+
+    def volume_is_drawn(self) -> bool:
+        """True only when volume is both wanted AND actually measurable."""
+        return self._show_volume and self._volume.has_volume() and bool(self._bars)
+
+    def _sync_volume(self) -> None:
+        self._volume.set_bars(self._bars if self._show_volume else [])
+        self._volume.setVisible(self.volume_is_drawn())
+
     def set_data(self, bars: list[dict], overlays: list[dict] = (), *, timeframe: str = "m5") -> None:
         self._bars = [dict(bar) for bar in bars or []]
         self._set_crosshair_visible(False)
@@ -422,6 +563,7 @@ class CandleChart(pg.PlotWidget):
             self._apply_log_active(False)
             self._candles.set_bars([], log_y=False)
             self._sync_overlays(0)
+            self._sync_volume()
             self._push_levels()  # nothing to hang a level on; hide them all
             return
         lows = [bar["low"] for bar in self._bars]
@@ -438,6 +580,7 @@ class CandleChart(pg.PlotWidget):
         # overlay is drawn inside whatever range this produces; none of them
         # gets a vote in what it is.
         plot.setYRange(self._y(min(lows)), self._y(max(highs)), padding=0.05)
+        self._sync_volume()
         # Levels last: a log/linear flip or a bar change moves where they sit.
         self._push_levels()
 
