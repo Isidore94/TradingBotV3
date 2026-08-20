@@ -8,6 +8,78 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-20, third pass — THE PANE WAS SPENDING 1240px ON WHITESPACE
+
+**Branch `phase05-integration-blitz`.** Trader, with a full-desk screenshot:
+"look at how inefficient this GUI is. this bot basically gets an entire 4k
+monitor and we cant fit everything in cleanly?"
+
+### The measurement, before any change
+
+`AlertChartReview` at 2000x1900 with **no alert charted**:
+
+| Row | Height | Needs |
+|---|---|---|
+| title (one line) | **346px** | 17 |
+| setup line ("Waiting for the next ticker alert.") | **346px** | 16 |
+| arm bar | **346px** | 107 |
+| verb row | **346px** | 28 |
+
+~1240px of a 4K screen on whitespace, for ~170px of content — in the state the
+desk sits in **whenever the review queue is clear**.
+
+**One-line cause.** The snapshot carries the pane's only expanding stretch, so
+HIDING it left Qt with four `Preferred` widgets and a column of slack, which it
+split equally. Charted, the same pane was already correct (chart 1212 of
+1408px) — which is exactly why this never showed up in a charted screenshot.
+
+**Fix.** An expanding `EmptyState` occupies the chart's slot whenever the chart
+is hidden, so a stretch item is always present and the slack collects in one
+place that explains how to get a chart. Title / setup line / arm bar pinned to
+`Maximum` vertically — a `QLabel` defaults to `Preferred`, i.e. "I will happily
+take more".
+
+### The capture rail: 900px column → 379px of columns
+
+Sections now **flow** (the primitive the arm bar already uses): wide hosts put
+veto / like / note side by side, the narrow Capture tab still stacks them with
+nothing clipped. Symbol and side share one line. The veto list is sized **from
+the vocabulary** instead of a hardcoded 190px cap, so all nine reasons are
+visible — a surface built for two keystrokes cannot ask for a digit the trader
+cannot see. Deliberately NOT a wrapped multi-column list: those labels only fit
+in columns by eliding them.
+
+### Capture verbs
+
+- **LIKE now retires the chart**, like a veto — in the Alert Center queue and
+  in the Master AVWAP snapshot popup, which already had
+  `snapshot_review_advance` for exactly this.
+- **NOTE still holds the chart.** It is written ABOUT the thing in front of
+  you; a rail that skipped would make every note cost the trader that chart.
+- **Hypothetical stop removed** from the rail. The **control only** —
+  `ui.annotations.store` still builds and validates `hypo_stop` rows, because
+  the stream is append-only evidence and rows already on disk have to stay
+  readable. Re-adding it is a layout change, not a migration.
+
+### Still open, deliberately
+
+The **horizontal** split was not touched. The screenshot shows the Setups table
+truncating columns ("Diagnostics & Li...", "AVWAP_BAND...") while the alert
+column holds an empty chart — but that split is **persisted** (`qt_desk_split_sizes_v2`)
+and may be one the trader dragged themselves, so re-weighting it silently would
+overwrite their own choice. Needs a decision, not a guess.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3860 passed / 19 subtests, 1 failed** — the pre-existing full-suite flake, verified failing identically on the pre-change tree |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | **not rebuilt** — no packaging trigger hit |
+
+---
+
 ## 2026-08-20, second pass — OPEN DEFECT: THE DAILY STORE MIXES TWO VOLUME UNITS
 
 **Branch `phase05-integration-blitz`.** Found while wiring D1 volume bars.

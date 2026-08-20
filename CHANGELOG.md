@@ -21,6 +21,26 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-20 (third pass) — The review pane stops wasting the monitor
+
+`IMPLEMENTED` + `GREEN`. Layout and capture-verb changes, trader-authorized.
+
+- **~1240px reclaimed on an idle pane.** Measured: with no alert charted,
+  `AlertChartReview` gave a one-line title 346px, the setup line 346px, the arm
+  bar 346px and the verb row 346px at 2000x1900. The snapshot holds the pane's
+  only expanding stretch, so hiding it left four `Preferred` widgets to split
+  the slack. An expanding `EmptyState` now holds the chart's slot when the
+  chart is hidden, and the other rows are pinned to `Maximum` vertically.
+- **Capture rail: ~900px single column → ~379px of columns.** Sections flow via
+  `FlowLayout`; symbol and side share a line; the veto list is sized from the
+  vocabulary so all nine reasons are visible instead of six-plus-scrollbar.
+- **LIKE retires the chart** like a veto does, in both the Alert Center queue
+  and the snapshot popup (`snapshot_review_advance`). **NOTE still holds it.**
+- **Hypothetical stop removed from the rail** — the control only;
+  `EVENT_HYPO_STOP` stays in the annotation schema so existing evidence rows
+  remain readable.
+- Gate: 3860 passed, 1 pre-existing flake. Smoke 7/7, selftest 56/56.
+
 ### 2026-08-20 (second pass) — Veto becomes a verb, the hotbuttons return, D1 gets volume
 
 `IMPLEMENTED` + `GREEN`. Four trader-authorized changes from one message, plus
