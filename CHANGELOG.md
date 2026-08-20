@@ -21,6 +21,28 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-20 (fourth pass) — Earnings markers, projection, and veto vocabulary v2
+
+`IMPLEMENTED` + `GREEN`.
+
+- **`scripts/earnings_projection.py`** (new, pure): median-cadence projection of
+  the next report. Needed because the earnings cache holds **no future dates at
+  all** (1,885 symbols, zero forward dates). `OVERDUE_GRACE_DAYS` keeps a
+  just-passed projection instead of skipping a quarter — the NVDA case, where
+  the first draft reported November for a report landing that week.
+- **Earnings ribbon on the D1 chart**: `E` glyphs on a reserved top rail with a
+  dotted connector to their candle, plus a projection pinned to the viewport's
+  top-right. The axis is **not** extended (the projection sits a median 48
+  sessions out; drawing it in place cost ~40% of candle width). Headroom is
+  reserved for every symbol so the price scale never depends on whether a name
+  has an earnings date. Built on the chart-data worker beside the levels.
+- **`veto_reasons_v2.json`**: "S/R cluttered" → "Compressed" as a NEW code, not
+  a rename. v1 remains on disk and loadable so existing rows stay readable;
+  every surviving code keeps its meaning and its digit.
+- **Like + claim is a numbered picklist**, Main swing only for now — same shape
+  and same digit-commits-it behaviour as the veto list.
+- Gate: 3899 passed, 1 pre-existing flake. Smoke 7/7, selftest 56/56.
+
 ### 2026-08-20 (third pass) — The review pane stops wasting the monitor
 
 `IMPLEMENTED` + `GREEN`. Layout and capture-verb changes, trader-authorized.

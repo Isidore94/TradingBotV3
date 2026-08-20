@@ -8,6 +8,84 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-20, fourth pass — EARNINGS ON THE CHART, AND VETO VOCABULARY v2
+
+**Branch `phase05-integration-blitz`.** All trader-authorized, same day.
+
+### The finding that shaped the earnings work
+
+**The earnings cache holds NO future dates.** Measured on the desk's own
+(`earnings_dates_cache.json`, refreshed 2026-08-20): **1,885 symbols, not one
+forward date.** So "when does this name report next" is not a lookup — it is a
+projection from the symbol's own cadence, and it is labelled `est` everywhere
+it appears.
+
+(A first read of that file suggested it was a year stale. It is not — the date
+lists are stored **newest-first**, so a tail slice shows the OLDEST entries.
+Median newest date is 2026-07-29. No staleness problem exists.)
+
+`scripts/earnings_projection.py` is the math: pure, no I/O, no detector
+contact. **Median** gap, not mean — one moved report would drag a mean around.
+Gaps outside 40–200 days are dropped before the median (duplicated rows and
+cache holes are not a rhythm). Measured cadence across the cache: **91 days**.
+
+### Two things real symbols caught that fixtures would not have
+
+1. **NVDA projected 08/19, one day before the reference.** The first draft
+   rolled that forward a whole quarter and reported **November** for a report
+   landing that week. `OVERDUE_GRACE_DAYS` (10) now keeps a just-passed
+   projection and flags it **"E due"** instead.
+2. **`MAX_PROJECTION_DAYS` was dead code** — a projection lands at most one
+   cadence past the last report, and `MAX_CADENCE_DAYS` already bounds that at
+   200, so a 200-day cap could never fire. Removed rather than left looking
+   like a guard.
+
+### Presentation, as the trader chose
+
+- **E on a top ribbon**, dotted connector down to its own candle, never buried
+  in price action. A report on a day the chart does not hold gets **no**
+  marker — it is never nudged onto a neighbouring candle.
+- **Reserved headroom on every symbol**, not only ones with an earnings date:
+  otherwise two names at the same price draw at different scales. Without it a
+  chart running to the top-right puts its E through the candles that made it —
+  pinned by a test.
+- **Projection pinned to the viewport's top-right, axis NOT extended.** It sits
+  a median **48 sessions** past the last bar, so drawing it in place would cost
+  ~40% of candle width to reach a date that is an estimate anyway.
+- Built on the chart-data worker beside the levels, so the paint path still
+  reads no caches; a failed lookup costs the markers, never the chart.
+
+### Veto vocabulary v2
+
+"S/R cluttered" → **"Compressed"**, as a **NEW code in `veto_reasons_v2.json`,
+not a rename.** v1's own description sets that rule: a code is never reused for
+a different meaning, because rows already carry it — and "too many levels in
+the path" is not "range too tight to work with". v1 stays on disk and stays
+loadable; every surviving code keeps its meaning **and its digit**.
+
+Two tests hardcoded `vocab_version == 1` and failed the moment v2 shipped. They
+now assert against the loaded vocabulary — the property they were always about
+is that a row stamps the list it was written from, not that the number is 1.
+
+### Like + claim
+
+A numbered picklist like the veto, **Main swing only, for now** (trader's
+words). A combo hides every option until opened, which is the opposite of the
+rail's five-second contract; Alt+K then a digit is now a whole like. The
+earnings-cycle, study and playbook groups are unreachable from this rail while
+this stands — re-admitting one is adding it to `MAIN_CLAIM_GROUP`.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3899 passed / 19 subtests, 1 failed** — the pre-existing full-suite flake, verified failing identically on the pre-change tree |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | **not rebuilt.** `veto_reasons_v2.json` is a new runtime asset (trigger 2) and `earnings_projection.py` a new lazily-imported module, but the spec-drift test passes — the spec mirrors every non-`.py` file under each first-party tree, and the loose module is collected exactly as `chart_levels` already is from the same call site |
+
+---
+
 ## 2026-08-20, third pass — THE PANE WAS SPENDING 1240px ON WHITESPACE
 
 **Branch `phase05-integration-blitz`.** Trader, with a full-desk screenshot:
