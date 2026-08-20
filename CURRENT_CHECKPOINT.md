@@ -8,6 +8,136 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-20, second pass — OPEN DEFECT: THE DAILY STORE MIXES TWO VOLUME UNITS
+
+**Branch `phase05-integration-blitz`.** Found while wiring D1 volume bars.
+**Not fixed — it needs a trader decision, and the fix is inside detector
+input data (ask-first rule).**
+
+### What is wrong
+
+`data/daily_bars/*.parquet` carries volume from two sources with **no unit
+normalization between them**. `master_avwap_lib.legacy._normalize_daily_bar_frame`
+normalizes column names, dtypes and duplicate dates — and nothing else. IBKR
+rows and Yahoo rows are appended into one column as-is.
+
+Proven against a reference, NVDA, same file:
+
+| Session | Daily store | yfinance | Ratio |
+|---|---|---|---|
+| 2026-05-18 | 934,776 | 146,280,900 | 156× |
+| 2026-05-19 | 823,818 | 140,948,200 | 171× |
+| 2026-05-20 | 940,980 | 184,201,600 | 196× |
+| 2026-05-27 | 167,601,200 | 167,601,200 | **1× (exact)** |
+| 2026-06-01 | 212,850,700 | 212,850,700 | **1× (exact)** |
+
+The Yahoo-sourced rows are exact. The IBKR-sourced rows are low by a
+**variable** 150–200×, so it is not a clean 100-share-lot conversion and a
+constant rescale would be a guess. It alternates in blocks, following whichever
+source answered on the day.
+
+**Scale: 338 of 1,949 stored symbols (17.3%)** have a volume series straddling
+two magnitudes (p90/p10 > 20×). That is an upper bound — a genuinely spiky name
+can trip the same test — but the mechanism is confirmed by reading the code,
+not inferred from the statistic.
+
+### Why it matters beyond the chart
+
+`calc_anchored_vwap_bands` is **volume-weighted** over this frame's `volume`
+column. A day under-reported 150× contributes ~0.6% of its true weight, so on
+an affected symbol the D1 anchored VWAP is effectively computed from the
+Yahoo-sourced days alone. Every band consumer — events, zones, tracker
+families, scoring history — sits downstream of that.
+
+This is not a new regression. It has been true for as long as the store has
+mixed sources; the volume bars only made it visible.
+
+### Why nothing was changed
+
+- The fix lands in detector **input** data. plan.md sec 5: no detector/scoring
+  behavior change without golden-result fixtures first, and the file-scoped
+  ask-first rule covers `master_avwap_lib/legacy.py`.
+- Re-weighting AVWAP would move every band on affected symbols. That is a
+  recalibration, not a bug fix, and it is the trader's call.
+- The correction factor is not constant, so there is no safe silent repair.
+
+### The decision owed
+
+1. Normalize at the writer and **backfill** the store from one source — moves
+   the bands, needs golden fixtures first.
+2. Normalize at the writer for **new rows only** — stops the bleed, leaves a
+   discontinuity mid-history.
+3. Drop volume from the IBKR path and take it from Yahoo only — one unit, one
+   source, at the cost of an extra fetch.
+4. Leave it, and treat D1 volume (and the volume-weighting of D1 AVWAP) as
+   approximate on affected names.
+
+Until one is chosen: **the D1 volume underlay is honest about what it was
+given and nothing more.** It draws the numbers in the store. On an affected
+symbol roughly half the sessions will render as near-nothing columns. It does
+NOT invent a correction.
+
+### Also open (pre-existing, not mine)
+
+`tests/test_chart_snapshot.py::test_stale_d1_tail_triggers_one_backfill_with_cooldown`
+fails intermittently in a **full-suite** run and passes alone. Verified to fail
+identically on the pre-change tree, so it is not caused by this work. It is a
+threaded backfill test spinning the event loop against a 10s deadline; under
+full-suite load it can miss it. Left alone deliberately — unlike this morning's
+clock fixture, this one needs an investigation of shared state in a
+chart/alert-adjacent widget, not a three-line repair.
+
+---
+
+## 2026-08-20, second pass — WHAT THE TRADER ASKED FOR AFTER USING IT
+
+Four changes, all trader-authorized in one message.
+
+1. **Veto retires the chart.** "When I click veto it should just disappear as
+   'not for today'." A veto now takes the "Not today" path: recorded, removed
+   from today's feed and chart queue, next chart up. LIKE, hypothetical stop
+   and note still hold the chart — a note that skipped to the next symbol
+   would cost the trader the chart they were writing it about.
+2. **"Veto D1 - but M5 today".** "It may be a shit D1 chart but its a good
+   daytrade." The rail does not place the name; it emits a REQUEST and the
+   panel that owns the Focus store does the placement, same shape as
+   BounceBot's desync request, one writer per store. Place first, retire
+   second — retiring is what drops the alert object the placement needs. A
+   failed placement still retires the chart, because the veto is already on
+   disk. **Known limitation, deliberately not papered over:** the veto row is
+   an ordinary veto with no new field, so the veto cohort study will count a
+   day-traded name as vetoed. Making that queryable is a schema v2 decision.
+3. **The arm bar comes back under the chart.** "I also need my m5 and D1 alert
+   hotbuttons back on the bottom of the visual chart... I also need the ability
+   to input a ticker manually as well." Only the capture rail stays on a tab.
+   Measured at this column's 420px: rail 697px, arm bar 131px — sending only
+   the rail away keeps 84% of the reclaimed height. `docked_controls` splits
+   into `dock_arm_bar` / `dock_capture_rail`. The Armed tab is the
+   cross-symbol inventory again; the verb-row armed line switches off with the
+   bar docked (its own chips are right there), and the tab keeps its count.
+4. **D1 volume bars** — an underlay in the bottom 18% of the price view, not a
+   stacked sub-plot, so they cost no chart height. No fetch: the daily store
+   already carries volume. **Read the open-defect entry above before trusting
+   what they show.**
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3847 passed / 19 subtests, 1 failed** — the failure is the pre-existing full-suite flake named above, which fails identically on the pre-change tree |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | **not rebuilt** — no packaging trigger hit |
+
+Fail-before-feature: all 10 volume tests and the new veto/layout tests were run
+against the pre-change tree and failed there.
+
+### A desk restart IS needed
+
+Source-level only, as before.
+
+---
+
 ## 2026-08-20, morning — THE CHARTS GET THE PANE. READ THIS FIRST.
 
 **Branch `phase05-integration-blitz`.** Built on the desk's live checkout

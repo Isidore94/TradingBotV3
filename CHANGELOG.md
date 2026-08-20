@@ -21,6 +21,50 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-20 (second pass) — Veto becomes a verb, the hotbuttons return, D1 gets volume
+
+`IMPLEMENTED` + `GREEN`. Four trader-authorized changes from one message, plus
+one **open defect found and deliberately not fixed** (see
+`CURRENT_CHECKPOINT.md`).
+
+- **A veto retires the chart.** "When I click veto it should just disappear as
+  'not for today'." `AlertChartReview._on_captured` routes `EVENT_VETO` to the
+  existing "Not today" path. LIKE / hypothetical stop / note still hold the
+  chart deliberately.
+- **"Veto D1 - but M5 today".** A second veto button for the case the trader
+  named: a bad daily chart on a name still worth a day trade. **The rail places
+  nothing** — it emits `vetoDayTradeRequested` and `AlertCenterPanel` performs
+  the M5 Focus add, preserving one writer per store. Place-then-retire ordering
+  is load-bearing; a failed placement still retires the chart because the veto
+  is already on disk. The annotation row is an ordinary veto — no new field, no
+  schema change. Known limitation recorded rather than hidden: the veto cohort
+  study counts a day-traded name as vetoed.
+- **The arm bar returns under the chart** with the M5 hotbuttons, the D1 event
+  hotbuttons and the type-a-ticker box. `docked_controls` splits into
+  `dock_arm_bar` / `dock_capture_rail`; only the rail stays on a tab. Measured
+  at the alert column's 420px the rail is 697px and the bar 131px, so this
+  keeps 84% of yesterday's reclaimed height. The Armed tab returns to being the
+  cross-symbol inventory; the verb-row armed line hides when the bar is docked.
+- **D1 volume underlay** (`VolumeItem` in `candle_chart.py`). Translucent
+  columns in the bottom 18% of the price view — **not** a stacked sub-plot,
+  which would have taken back a fifth of the candles this pane just fought for.
+  The picture is recorded once in normalized space and `paint` maps it onto the
+  current view, so a pan/zoom/log-flip is a transform rather than a re-render,
+  and volume never votes on the price range. **No fetch and no IB request**:
+  `chart_snapshot.load_d1_bars` already carries volume from the durable daily
+  store. Nothing measurable draws nothing, rather than a flat row of zeros.
+  10 new tests, all failing before.
+- **OPEN DEFECT (not fixed, needs a trader decision):** the daily store mixes
+  IBKR and Yahoo volume with no unit normalization — IBKR rows measured 150-200×
+  low against yfinance on the same sessions, affecting ~17% of stored symbols.
+  Because `calc_anchored_vwap_bands` is volume-weighted, this distorts D1
+  anchored VWAP on affected names, so the fix is a recalibration governed by
+  plan.md sec 5 and the ask-first rule, not a bug fix. Full evidence, scale and
+  the four options are in `CURRENT_CHECKPOINT.md`.
+- Gate: **3847 passed / 19 subtests, 1 failed** — a pre-existing full-suite
+  flake (`test_stale_d1_tail_triggers_one_backfill_with_cooldown`) that fails
+  identically on the pre-change tree. Smoke 7/7, selftest 56/56, both exit 0.
+
 ### 2026-08-20 — The charts get their pane back, and the wake alert gets a test
 
 `IMPLEMENTED` + `GREEN`. Two trader-authorized presentation/delivery changes.
