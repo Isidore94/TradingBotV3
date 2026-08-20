@@ -77,11 +77,18 @@ class CaptureRail(QFrame):
         *,
         annotations_path: Any = None,
         veto_cohort_merge: Callable[..., dict] | None = None,
+        bind_action_shortcuts: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("CaptureRail")
         self._annotations_path = annotations_path
+        # A host that puts the rail on a hidden tab page has to own the four
+        # Alt+ keys itself: a QShortcut bound inside a page the trader is not
+        # looking at never fires, and binding one HERE as well as there makes
+        # the sequence ambiguous in Qt, which fires neither. So such a host
+        # passes False and rebinds `action_shortcuts()` at its own scope.
+        self._bind_action_shortcuts = bool(bind_action_shortcuts)
         self._symbol = ""
         self._side = "LONG"
         self._last_price: float | None = None
@@ -231,18 +238,28 @@ class CaptureRail(QFrame):
         inner.addWidget(self.note_button)
         return frame
 
-    def _bind_shortcuts(self) -> None:
-        """Alt+letter, not bare letters: the rail is full of text inputs and a
-        bare 'v' has to stay a 'v' when the trader is typing a note."""
-        for sequence, handler in (
+    def action_shortcuts(self) -> tuple[tuple[str, Callable[[], None]], ...]:
+        """The rail's four key bindings, as (sequence, handler) pairs.
+
+        Public so a host that took the rail onto a tab of its own can bind the
+        identical keys at a scope the trader can actually reach, instead of
+        hardcoding a second copy of this list that drifts.
+        """
+        return (
             ("Alt+V", self.focus_veto),
             ("Alt+K", self.focus_like),
             ("Alt+S", self.focus_hypo_stop),
             ("Alt+N", self.focus_note),
-        ):
-            shortcut = QShortcut(QKeySequence(sequence), self)
-            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-            shortcut.activated.connect(handler)
+        )
+
+    def _bind_shortcuts(self) -> None:
+        """Alt+letter, not bare letters: the rail is full of text inputs and a
+        bare 'v' has to stay a 'v' when the trader is typing a note."""
+        if self._bind_action_shortcuts:
+            for sequence, handler in self.action_shortcuts():
+                shortcut = QShortcut(QKeySequence(sequence), self)
+                shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+                shortcut.activated.connect(handler)
 
         # Digits pick a reason, but only while the reason list has focus, so
         # they never swallow a keystroke meant for a note field.

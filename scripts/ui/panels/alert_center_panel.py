@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -686,6 +687,31 @@ class AlertCenterPanel(QFrame):
         self.armed_list.symbolActivated.connect(self.chart_symbol)
         self.armedWatchesChanged.connect(self._refresh_armed_list)
 
+        # Built BEFORE the tab strip, because the tab strip now hosts two of
+        # its widgets. Trader, 2026-08-20, on the desk column: "I cannot see
+        # the charts at all". The pane used to stack title -> setup text ->
+        # charts -> two arm rows -> a ~600px capture rail -> the verb row, so
+        # the charts - the whole point of the surface - got whatever was left.
+        # The arm bar and the capture rail become tabs; the charts and ONE
+        # slim verb row are all that stays in the vertical stack.
+        self.chart_review = AlertChartReview(self, docked_controls=False)
+        self.chart_review.removeTodayRequested.connect(
+            self._remove_review_alert_for_today
+        )
+        self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
+        self.chart_review.skipRequested.connect(self._skip_review_alert)
+        self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
+        self.chart_review.watchToggled.connect(self._toggle_chart_watch)
+        self.chart_review.d1EventToggled.connect(self._toggle_d1_event_watch)
+        self.chart_review.anyBounceToggled.connect(self._toggle_any_bounce_watch)
+        self.chart_review.externalChartRequested.connect(self._open_external_chart)
+        self.chart_review.revealHiddenRequested.connect(self.reveal_hidden_reviews)
+        self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
+        self.chart_review.symbolRequested.connect(self.chart_symbol)
+        self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
+        self.chart_review.levelDisarmRequested.connect(self._disarm_level_from_dock)
+        self.chart_review.levelAlertRequested.connect(self._arm_price_alert_from_level)
+
         self.tabs = QTabWidget()
         self.tabs.addTab(feed_scroll, "Alerts")
 
@@ -722,8 +748,34 @@ class AlertCenterPanel(QFrame):
         # retention would be lost.
         self._d1_tab_index = self.tabs.addTab(d1_section, "D1 Focus")
         self.tabs.addTab(board_tab, "RS/RW Board")
-        self._armed_tab_index = self.tabs.addTab(self.armed_list, "Armed")
+
+        # The arm bar joins the inventory it fills instead of becoming a sixth
+        # tab: "Arm" and "Armed" a millimetre apart on the same strip is a
+        # misclick waiting to happen, and the controls and the list they
+        # produce are one subject. Arming is also a deliberate act - unlike the
+        # verb row, it is fine for it to cost a click.
+        armed_tab = QWidget()
+        armed_tab_layout = QVBoxLayout(armed_tab)
+        armed_tab_layout.setContentsMargins(0, 0, 0, 0)
+        armed_tab_layout.setSpacing(theme.px(4))
+        armed_tab_layout.addWidget(self.chart_review.arm_bar)
+        armed_tab_layout.addWidget(self.armed_list, 1)
+        self._armed_tab_index = self.tabs.addTab(armed_tab, "Armed")
+
+        # The capture rail. Scrolled, because its four sections are taller than
+        # this column's tab body and a rail whose Note field is below the fold
+        # is a rail that does not get used. Its contract is unchanged by moving
+        # it: it records, and it has never muted, suppressed, scored, gated,
+        # alerted or written a watchlist.
+        capture_scroll = QScrollArea()
+        capture_scroll.setWidgetResizable(True)
+        capture_scroll.setWidget(self.chart_review.capture_rail)
+        self._capture_tab_index = self.tabs.addTab(capture_scroll, "Capture")
+
         self._refresh_armed_list()
+        self.chart_review.armedSummaryChanged.connect(self._refresh_armed_tab_label)
+        self._refresh_armed_tab_label(self.chart_review.armed_count())
+        self._bind_capture_shortcuts()
         self._d1_unread = 0
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._refresh_d1_tab_label()
@@ -764,23 +816,6 @@ class AlertCenterPanel(QFrame):
         desk_layout.persist_sizes(self, self.tabs_row, ALERT_TABS_SPLIT_KEY)
 
         self.detail_view = SetupDetailView(self)
-        self.chart_review = AlertChartReview(self)
-        self.chart_review.removeTodayRequested.connect(
-            self._remove_review_alert_for_today
-        )
-        self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
-        self.chart_review.skipRequested.connect(self._skip_review_alert)
-        self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
-        self.chart_review.watchToggled.connect(self._toggle_chart_watch)
-        self.chart_review.d1EventToggled.connect(self._toggle_d1_event_watch)
-        self.chart_review.anyBounceToggled.connect(self._toggle_any_bounce_watch)
-        self.chart_review.externalChartRequested.connect(self._open_external_chart)
-        self.chart_review.revealHiddenRequested.connect(self.reveal_hidden_reviews)
-        self.chart_review.d1LevelAlertRequested.connect(self._arm_d1_level_from_chart)
-        self.chart_review.symbolRequested.connect(self.chart_symbol)
-        self.chart_review.levelArmRequested.connect(self._arm_level_from_dock)
-        self.chart_review.levelDisarmRequested.connect(self._disarm_level_from_dock)
-        self.chart_review.levelAlertRequested.connect(self._arm_price_alert_from_level)
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -1230,6 +1265,52 @@ class AlertCenterPanel(QFrame):
     def _refresh_d1_tab_label(self) -> None:
         label = f"D1 Focus ({self._d1_unread})" if self._d1_unread else "D1 Focus"
         self.tabs.setTabText(self._d1_tab_index, label)
+
+    def _refresh_armed_tab_label(self, count: int = 0) -> None:
+        """Armed state stays readable with the Armed tab closed.
+
+        Two places carry it, deliberately: this count in the tab title, in
+        peripheral vision, and the always-visible line on the review pane's
+        verb row. The arm bar's own "Nothing armed" text went onto the tab
+        with the bar, and a state the trader has to go looking for is a state
+        that gets forgotten while a watch is live.
+        """
+        count = max(0, int(count or 0))
+        self.tabs.setTabText(
+            self._armed_tab_index, f"Armed ({count})" if count else "Armed"
+        )
+
+    # ------------------------------------------------------------------
+    # R4 section 2.3's founding contract: every capture under five seconds,
+    # no mouse.
+    # ------------------------------------------------------------------
+    def _bind_capture_shortcuts(self) -> None:
+        """Own Alt+V / Alt+K / Alt+S / Alt+N at PANEL scope.
+
+        The rail is on a tab page now, and a QShortcut bound inside a page the
+        trader is not looking at never fires - so the keys would have silently
+        stopped working the moment the rail moved. They are bound here, on the
+        panel, with WidgetWithChildrenShortcut: focus anywhere in the Alert
+        Center reaches them, including the charts and the verb row.
+
+        The rail's own copies are switched off for this host
+        (``bind_action_shortcuts=False``); two live bindings for one sequence
+        is an ambiguous shortcut in Qt, and Qt fires NEITHER. The handlers come
+        from the rail itself, so this is a rebinding, not a second list.
+        """
+        self._capture_shortcuts: dict[str, QShortcut] = {}
+        for sequence, handler in self.chart_review.capture_rail.action_shortcuts():
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(
+                lambda bound=handler: self._focus_capture_action(bound)
+            )
+            self._capture_shortcuts[sequence] = shortcut
+
+    def _focus_capture_action(self, handler) -> None:
+        """Raise the Capture tab, then arm/focus the rail exactly as before."""
+        self.tabs.setCurrentIndex(self._capture_tab_index)
+        handler()
 
     def _emit_feed_status(self) -> None:
         loud = sum(

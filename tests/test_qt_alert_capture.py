@@ -195,3 +195,180 @@ def test_a_badge_lookup_failure_never_takes_down_the_pane(pane, monkeypatch):
     monkeypatch.setattr(pane, "_reviewed_symbols", boom)
     _show(pane, monkeypatch, "AAPL")
     assert pane.reviewed_badge.text() == ""
+
+
+# --------------------------------------------------------------------------
+# 2026-08-20: the rail moved onto a tab, and the keyboard contract came with it
+#
+# The trader could not read the charts at all: title -> setup text -> charts ->
+# two arm rows -> a ~600px rail -> the verb row, in one column. The rail and the
+# arm bar became tabs. The founding contract of the rail (capture_rail module
+# docstring) is that every capture is under five seconds without the mouse, so
+# these pin that the keys still reach it from a tab that is not on screen.
+# --------------------------------------------------------------------------
+@pytest.fixture
+def panel(tmp_path, monkeypatch):
+    from ui.panels.alert_center_panel import AlertCenterPanel
+    from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+
+    monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *a, **k: None)
+    widget = AlertCenterPanel()
+    monkeypatch.setattr(
+        widget.chart_review.capture_rail, "_annotations_path", tmp_path / "ann.jsonl"
+    )
+    yield widget
+    widget.close()
+    widget.deleteLater()
+
+
+def _tab_labels(panel) -> list[str]:
+    return [panel.tabs.tabText(index) for index in range(panel.tabs.count())]
+
+
+def test_the_charts_own_the_pane_with_one_control_row_under_them(panel):
+    """Between the charts and the tab strip: the verb row, and nothing else."""
+    review = panel.chart_review
+    layout = review.layout()
+    rows = [layout.itemAt(i) for i in range(layout.count())]
+    # ... the charts, then exactly one trailing item, and it is a layout (the
+    # verb row), not another docked control widget.
+    chart_index = next(
+        i for i, item in enumerate(rows) if item.widget() is review.snapshot
+    )
+    assert chart_index == layout.count() - 2, "something is stacked under the charts"
+    assert rows[-1].layout() is not None
+    # The two docks are elsewhere, and neither is a child of the review pane.
+    assert not review.isAncestorOf(review.capture_rail)
+    assert not review.isAncestorOf(review.arm_bar)
+
+
+def test_the_rail_and_the_arm_bar_are_reachable_as_tabs(panel):
+    assert "Capture" in _tab_labels(panel)
+    assert panel.isAncestorOf(panel.chart_review.capture_rail)
+    assert panel.isAncestorOf(panel.chart_review.arm_bar)
+    # The arm bar joins the inventory it fills rather than becoming a sixth tab.
+    assert _tab_labels(panel)[panel._armed_tab_index].startswith("Armed")
+
+
+@pytest.mark.parametrize(
+    "sequence, widget_name",
+    [
+        ("Alt+V", "reason_list"),
+        ("Alt+K", "setup_input"),
+        ("Alt+S", "stop_input"),
+        ("Alt+N", "note_input"),
+    ],
+)
+def test_every_capture_key_raises_the_tab_and_focuses_its_input(
+    panel, sequence, widget_name
+):
+    panel.tabs.setCurrentIndex(0)
+    shortcut = panel._capture_shortcuts[sequence]
+    from PySide6.QtCore import Qt
+
+    # Panel scope, not rail scope: a shortcut bound inside a hidden tab page
+    # never fires, which is exactly how this contract would have died quietly.
+    assert shortcut.parent() is panel
+    assert shortcut.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut
+
+    shortcut.activated.emit()
+    assert panel.tabs.currentIndex() == panel._capture_tab_index
+    rail = panel.chart_review.capture_rail
+    assert rail.focusWidget() is getattr(rail, widget_name)
+
+
+def test_alt_v_arms_the_veto_flow_not_just_the_tab(panel, monkeypatch):
+    """Alt+V, then a digit, is the whole veto. The digit needs a selection."""
+    rail = panel.chart_review.capture_rail
+    rail.reason_list.setCurrentRow(-1)
+    panel.tabs.setCurrentIndex(0)
+    panel._capture_shortcuts["Alt+V"].activated.emit()
+    assert panel.tabs.currentIndex() == panel._capture_tab_index
+    assert rail.reason_list.currentRow() == 0
+
+
+def test_the_rail_binds_no_duplicate_of_a_key_its_host_owns(panel):
+    """Two live bindings for one sequence is an ambiguous shortcut, and Qt
+    fires NEITHER - the failure mode is the keys going dead, silently."""
+    from PySide6.QtGui import QShortcut
+
+    rail = panel.chart_review.capture_rail
+    owned = {
+        shortcut.key().toString()
+        for shortcut in rail.findChildren(QShortcut)
+        if shortcut.parent() is rail
+    }
+    assert not owned & {"Alt+V", "Alt+K", "Alt+S", "Alt+N"}
+
+
+def test_the_rail_still_writes_through_record_annotation_after_reparenting(
+    panel, monkeypatch, tmp_path
+):
+    """The move is layout. The recorder is untouched, and still the only
+    thing a capture reaches."""
+    from ui.widgets import capture_rail as capture_rail_module
+
+    seen: list = []
+    real = capture_rail_module.record_annotation
+
+    def _spy(*args, **kwargs):
+        seen.append((args, kwargs))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(capture_rail_module, "record_annotation", _spy)
+    panel.chart_symbol("NVDA")
+    rail = panel.chart_review.capture_rail
+    assert rail.symbol == "NVDA"
+    rail.note_input.setText("held the 50 all morning")
+    row = rail.commit_note()
+
+    assert row is not None and len(seen) == 1
+    assert row["symbol"] == "NVDA"
+    written = (tmp_path / "ann.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert len(written) == 1
+    assert json.loads(written[0])["note"] == "held the 50 all morning"
+    # Still a recorder: nothing else on disk, and the queue did not move.
+    assert {path.name for path in tmp_path.iterdir()} == {"ann.jsonl"}
+
+
+def test_the_armed_state_is_legible_without_opening_the_tab(panel):
+    """The arm bar's own "Nothing armed" line went onto the tab with it."""
+    review = panel.chart_review
+    assert review.armed_summary.isVisibleTo(review)
+    assert review.armed_summary.text() == "Nothing armed"
+    assert panel.tabs.tabText(panel._armed_tab_index) == "Armed"
+
+    panel.chart_symbol("NVDA")
+    review.set_armed_kinds(("hod_avwap",))
+    review.set_armed_d1_events(("new_5d_high",))
+    assert review.armed_count() == 2
+    assert review.armed_summary.text() == "⚡ 2 armed"
+    assert panel.tabs.tabText(panel._armed_tab_index) == "Armed (2)"
+
+    review.clear()
+    assert review.armed_summary.text() == "Nothing armed"
+    assert panel.tabs.tabText(panel._armed_tab_index) == "Armed"
+
+
+def test_a_docked_host_keeps_the_rail_in_its_own_stack(tmp_path):
+    """Placement is the HOST's decision: the snapshot popup and the Chart
+    Review workspace must not inherit a missing rail."""
+    from ui.widgets.alert_chart_review import AlertChartReview
+
+    docked = AlertChartReview(annotations_path=tmp_path / "a.jsonl")
+    try:
+        assert docked.isAncestorOf(docked.capture_rail)
+        assert docked.isAncestorOf(docked.arm_bar)
+        # And it keeps its own keys, because nothing above it took them.
+        from PySide6.QtGui import QShortcut
+
+        owned = {
+            shortcut.key().toString()
+            for shortcut in docked.capture_rail.findChildren(QShortcut)
+            if shortcut.parent() is docked.capture_rail
+        }
+        assert {"Alt+V", "Alt+K", "Alt+S", "Alt+N"} <= owned
+        # The duplicated armed line is the undocked host's affordance only.
+        assert not docked.armed_summary.isVisibleTo(docked)
+    finally:
+        docked.deleteLater()

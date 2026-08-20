@@ -69,11 +69,29 @@ class AlertChartReview(QWidget):
     # (plan.md sec 5; trader decision 2026-08-09). Nothing on this path mutes,
     # suppresses, scores, gates or reorders anything - it arms an alert.
     levelAlertRequested = Signal(str, str, float)
+    # (count) - how many watches / D1 events / price levels are armed on the
+    # charted symbol. Emitted so a host that took the arm bar onto a tab can
+    # keep the armed state legible without the trader opening that tab.
+    armedSummaryChanged = Signal(int)
 
-    def __init__(self, parent=None, *, annotations_path=None) -> None:
+    def __init__(
+        self, parent=None, *, annotations_path=None, docked_controls: bool = True
+    ) -> None:
         super().__init__(parent)
         self.alert: BounceAlert | None = None
         self._cross_labels = ("Add to D1 Focus", "✓ In D1 Focus")
+        # Where the two control docks go is the HOST's decision, not this
+        # widget's. Docked (the default) keeps the historical single-column
+        # stack that the snapshot popup and the Chart Review workspace expect.
+        # The Alert Center passes False and hosts `arm_bar` and `capture_rail`
+        # on its own tab strip, because in that column the two of them cost
+        # the charts most of their height (trader, 2026-08-20: "I cannot see
+        # the charts at all").
+        self._docked_controls = bool(docked_controls)
+        self._armed_watch_count = 0
+        self._armed_level_count = 0
+        self._armed_d1_event_count = 0
+        self._any_bounce_armed = False
 
         self.title = QLabel("Visual Alert Review")
         self.title.setObjectName("SectionTitle")
@@ -172,7 +190,13 @@ class AlertChartReview(QWidget):
         # privileges, and it had to be torn back out. Keep the two apart.
         from ui.widgets.capture_rail import CaptureRail
 
-        self.capture_rail = CaptureRail(annotations_path=annotations_path)
+        self.capture_rail = CaptureRail(
+            annotations_path=annotations_path,
+            # Undocked, the rail sits on a tab page that is hidden most of the
+            # time, and a shortcut bound inside a hidden page never fires. The
+            # host rebinds `action_shortcuts()` at a scope the trader reaches.
+            bind_action_shortcuts=self._docked_controls,
+        )
         self.capture_rail.captured.connect(self._on_captured)
         self.snapshot.d1LevelSelected.connect(self._on_capture_level_selected)
 
@@ -206,6 +230,19 @@ class AlertChartReview(QWidget):
         )
         self.hidden_button.clicked.connect(self.revealHiddenRequested)
 
+        # The arm bar's own "Nothing armed" line goes with it when the host
+        # takes the bar onto a tab, so the state it carried has to survive on
+        # the row that never hides. It is a COUNT, not the inventory: the
+        # question a glance asks is "is anything live on this name", and the
+        # tab (and the Armed inventory under it) answers the rest.
+        self.armed_summary = QLabel("")
+        self.armed_summary.setObjectName("MutedLabel")
+        self.armed_summary.setToolTip(
+            "Session watches, D1 event alerts and price levels armed on this "
+            "symbol. Open the Armed tab to add or cancel one."
+        )
+        self.armed_summary.setVisible(not self._docked_controls)
+
         buttons = QHBoxLayout()
         buttons.addWidget(self.reviewed_badge)
         buttons.addWidget(self.mover_badge)
@@ -215,6 +252,7 @@ class AlertChartReview(QWidget):
         buttons.addWidget(self.cross_focus_button)
         buttons.addStretch(1)
         buttons.addWidget(self.hidden_button)
+        buttons.addWidget(self.armed_summary)
         buttons.addWidget(self.queue_label)
 
         layout = QVBoxLayout(self)
@@ -224,9 +262,19 @@ class AlertChartReview(QWidget):
         layout.addWidget(self.alert_text)
         layout.addWidget(self.guidance_label)
         layout.addWidget(self.snapshot, 1)
-        layout.addWidget(self.arm_bar)
-        layout.addWidget(self.capture_rail)
+        if self._docked_controls:
+            layout.addWidget(self.arm_bar)
+            layout.addWidget(self.capture_rail)
+        else:
+            # Detached, not destroyed: this widget keeps the Python references
+            # (and every signal already wired through them), and the host calls
+            # addWidget to adopt them. Without the explicit unparenting they
+            # would be laid-out-less children painting over the charts until
+            # the host got round to it.
+            self.arm_bar.setParent(None)
+            self.capture_rail.setParent(None)
         layout.addLayout(buttons)
+        self._refresh_armed_summary()
         self._set_actions_enabled(False)
 
     # -- R4 sections 2.3 and 5 ------------------------------------------
@@ -527,6 +575,7 @@ class AlertChartReview(QWidget):
         self._clear_selected_level()
         self._set_actions_enabled(False)
         self.set_armed_kinds(())
+        self.set_armed_levels(())
         self.set_armed_d1_events(())
         self.set_any_bounce_armed(False)
         self.set_mover_state("")
@@ -538,15 +587,42 @@ class AlertChartReview(QWidget):
     def set_armed_kinds(self, kinds: Iterable[str]) -> None:
         """Reflect this symbol's armed watches; buttons stay clickable so a
         second click disarms."""
+        kinds = list(kinds or ())
+        self._armed_watch_count = len(set(kinds))
         self.arm_bar.set_armed_kinds(kinds)
+        self._refresh_armed_summary()
 
     def set_armed_levels(self, levels: Iterable = ()) -> None:
         """Show this symbol's armed price levels as dismissable chips."""
+        levels = list(levels or ())
+        self._armed_level_count = len(levels)
         self.arm_bar.set_armed_levels(levels)
+        self._refresh_armed_summary()
 
     def set_armed_d1_events(self, kinds: Iterable[str] = ()) -> None:
         """Reflect this symbol's armed D1 event watches on the dock's D1 row."""
+        kinds = list(kinds or ())
+        self._armed_d1_event_count = len(set(kinds))
         self.arm_bar.set_armed_d1_events(kinds)
+        self._refresh_armed_summary()
+
+    def armed_count(self) -> int:
+        """Everything armed on the charted symbol, as one number."""
+        return (
+            self._armed_watch_count
+            + self._armed_level_count
+            + self._armed_d1_event_count
+            + (1 if self._any_bounce_armed else 0)
+        )
+
+    def _refresh_armed_summary(self) -> None:
+        """Keep the always-visible armed line (and the host's tab) honest."""
+        count = self.armed_count()
+        self.armed_summary.setText(f"⚡ {count} armed" if count else "Nothing armed")
+        color = theme.color("favorite" if count else "text_muted")
+        weight = 700 if count else 400
+        self.armed_summary.setStyleSheet(f"color: {color}; font-weight: {weight};")
+        self.armedSummaryChanged.emit(count)
 
     def set_mover_state(self, state: str = "") -> None:
         """Say which of the three answers this chart is showing.
@@ -580,7 +656,9 @@ class AlertChartReview(QWidget):
 
     def set_any_bounce_armed(self, armed: bool = False) -> None:
         """Reflect this symbol's any-bounce watch on the dock's D1 row."""
+        self._any_bounce_armed = bool(armed)
         self.arm_bar.set_any_bounce_armed(armed)
+        self._refresh_armed_summary()
 
     def set_cross_active(self, active: bool) -> None:
         self.cross_focus_button.setText(self._cross_labels[1 if active else 0])

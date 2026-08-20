@@ -36,6 +36,18 @@ A rail that costs ten seconds per decision gets used twice and abandoned, and
 an abandoned rail produces no dataset at all. Every layout and keybinding
 choice below follows from that.
 
+**2026-08-20 — the rail is portable, the contract is not.** The Alert Center
+moved its rail off the review pane's vertical stack and onto a **Capture** tab,
+because in that column the rail's ~600px was costing the charts the space they
+exist for. Nothing about what the rail IS changed: it is still a recorder that
+writes annotation rows and has never muted, suppressed, scored, gated, ranked,
+alerted or written a watchlist (§7). The five-second/no-mouse constraint above
+moved WITH it rather than being spent on the layout — a `QShortcut` bound
+inside a hidden tab page never fires, so that host rebinds
+`CaptureRail.action_shortcuts()` at panel scope and each key raises the Capture
+tab before arming the same handler. Hosts that have the room
+(`SymbolSnapshotDialog`, this workspace) keep the docked rail unchanged.
+
 ---
 
 ## 2. Invariant compliance (plan.md sec 5)

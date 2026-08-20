@@ -64,6 +64,33 @@ Design:
    reused floating QDialog) and in `AlertChartReview`'s pane, wired exactly as
    `chart_review_panel.py:384-415` does (`set_context` on every symbol change,
    `d1LevelSelected` connection).
+
+   **Amended 2026-08-20 (trader, with screenshot): where the rail sits is the
+   HOST's decision, not `AlertChartReview`'s.** "Layout room exists" held for
+   the floating dialog and the Chart Review workspace; it did not hold in the
+   desk's alert column, where title → setup text → charts → two arm rows → a
+   ~600px rail → the verb row left the charts unreadable ("I cannot see the
+   charts at all… I am ok with them being tabbed where alerts/D1 focus/RSRW
+   board is and clicking into them"). `AlertChartReview` takes
+   `docked_controls` (default `True` — the historical single-column stack, and
+   what the snapshot dialog and workspace keep); the Alert Center passes
+   `False` and hosts `arm_bar` on its existing **Armed** tab and `capture_rail`
+   on a new **Capture** tab. Under the charts there is now exactly one row: the
+   verb row, which advances the review queue and must never cost a click.
+
+   The rail's five-second contract survives the move rather than being traded
+   away for it: a `QShortcut` bound inside a hidden tab page never fires, so
+   Alt+V / Alt+K / Alt+S / Alt+N are rebound at **panel** scope
+   (`WidgetWithChildrenShortcut`), each raising the Capture tab before handing
+   off to the rail's own handler, and the rail's copies are switched off for
+   that host (`bind_action_shortcuts=False`) because two live bindings for one
+   sequence is an ambiguous shortcut and Qt fires neither. The handler list
+   comes from `CaptureRail.action_shortcuts()`, so it is a rebinding, not a
+   second copy. Enter-to-commit is untouched.
+
+   Armed state stays legible with the Armed tab closed: the tab title carries
+   a count and the review pane's verb row carries an always-visible armed line
+   (`AlertChartReview.armed_summary`, fed by `armedSummaryChanged`).
 2. Give the RS/RW board and Industry panel the same `review_host`/`watch_host`
    wiring Master AVWAP already has, so Dislike/D1-Focus/watch controls appear
    there too.
