@@ -288,14 +288,28 @@ class TestTheMeasurementIsCacheOnly:
     def test_it_reads_the_gates_predicate_over_the_desks_own_bars(self, monkeypatch):
         """No fetch: cached M5 bars and the local daily store, nothing else."""
         QApplication.instance() or QApplication([])
+        from ui.panels import alert_center_panel
         from ui.panels.alert_center_panel import AlertCenterPanel
         from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
         monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *a, **k: None)
         panel = AlertCenterPanel()
 
+        # The measurement reads the wall clock (`_measure_mover_state` calls
+        # datetime.now()), so the fixture has to pin it. It used to build an
+        # 11:00 session against whatever hour the suite happened to run at: a
+        # bar stamped 10:50 is in the FUTURE at 07:34, completed_session_bars
+        # discarded it, and the assertion read UNKNOWN. The test measured the
+        # time of day, not the predicate.
         today = datetime.now().replace(hour=11, minute=0, second=0, microsecond=0)
         yesterday = today - timedelta(days=1)
+
+        class _At11(datetime):
+            @classmethod
+            def now(cls, tz=None):  # noqa: D102 - stdlib signature
+                return today if tz is None else today.astimezone(tz)
+
+        monkeypatch.setattr(alert_center_panel, "datetime", _At11)
         d1 = [
             {
                 "dt": yesterday.replace(hour=0, minute=0),
