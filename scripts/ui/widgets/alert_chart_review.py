@@ -5,7 +5,14 @@ from __future__ import annotations
 from typing import Iterable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from chart_watch import WATCH_KINDS
 from ui.models.bounce import (
@@ -15,8 +22,9 @@ from ui.models.bounce import (
     is_auto_pick_alert,
 )
 from ui import theme
-from ui.annotations.store import EVENT_VETO
+from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_VETO
 from ui.widgets.arm_bar import ArmBar
+from ui.widgets.empty_state import EmptyState
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
 
 _NO_M5_WATCH_REASON = (
@@ -263,6 +271,30 @@ class AlertChartReview(QWidget):
         # there, and two copies of one state is noise.
         self.armed_summary.setVisible(not self._dock_arm_bar)
 
+        # What stands in the chart's slot when there is no chart.
+        #
+        # This is not decoration - it is the fix for a measured layout fault.
+        # The snapshot carries this pane's only expanding stretch, so HIDING it
+        # left Qt with four Preferred widgets and a column of slack, which it
+        # smeared equally across all of them: at 2000x1900 the one-line title
+        # got 346px, the "waiting" line got 346px, the arm bar got 346px and
+        # the verb row got 346px, for ~170px of actual content. That is
+        # ~1240px of a 4K screen spent on label padding, and it is the state
+        # the desk sits in whenever the review queue is empty.
+        #
+        # An expanding placeholder keeps a stretch item in the layout at all
+        # times, so the slack collects in ONE place that can say something
+        # useful instead of being distributed into whitespace.
+        self.empty_state = EmptyState(
+            "No chart up",
+            "The review queue is clear. Type a ticker in the box below to "
+            "chart anything on demand - it does not have to have alerted - "
+            "or wait for the next scanner alert to put one here.",
+        )
+        self.empty_state.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+
         buttons = QHBoxLayout()
         buttons.addWidget(self.reviewed_badge)
         buttons.addWidget(self.mover_badge)
@@ -278,10 +310,19 @@ class AlertChartReview(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(4)
+        # Everything that is not the chart is pinned to its size hint. A
+        # QLabel defaults to Preferred vertically, which means "I will happily
+        # take more" - and more is exactly what it got every time the chart
+        # was hidden.
+        for fixed in (self.title, self.alert_text, self.guidance_label, self.arm_bar):
+            fixed.setSizePolicy(
+                fixed.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Maximum
+            )
         layout.addWidget(self.title)
         layout.addWidget(self.alert_text)
         layout.addWidget(self.guidance_label)
         layout.addWidget(self.snapshot, 1)
+        layout.addWidget(self.empty_state, 1)
         # Detached, not destroyed: this widget keeps the Python references (and
         # every signal already wired through them), and the host calls
         # addWidget to adopt what it took. Without the explicit unparenting an
@@ -297,6 +338,10 @@ class AlertChartReview(QWidget):
             self.capture_rail.setParent(None)
         layout.addLayout(buttons)
         self._refresh_armed_summary()
+        # Open in the empty state rather than falling into it on the first
+        # clear(): a pane built with no alert had the placeholder hidden AND
+        # the chart hidden, i.e. no stretch item at all.
+        self._show_chart(False)
         self._set_actions_enabled(False)
 
     # -- R4 sections 2.3 and 5 ------------------------------------------
@@ -316,26 +361,29 @@ class AlertChartReview(QWidget):
     def _on_captured(self, event_type: str, _row: dict) -> None:
         """Capture is a decision, so the badge updates without a re-chart.
 
-        A LIKE, a hypothetical stop and a note deliberately do NOT advance the
-        review queue: a rail that skipped to the next chart would make every
-        note cost the trader the chart they were writing it about.
+        A VETO and a LIKE both RETIRE the chart, by trader rule (2026-08-20):
+        "when I click veto it should just disappear as 'not for today'" and
+        "when I pick a like and claim setup reason, we should just move onto
+        the next chart". Neither is an annotation about a chart still being
+        read - each is the decision that this name is settled, which is
+        exactly what the "Not today" verb already means, so both take that
+        verb's path.
 
-        A VETO is the exception, by trader rule (2026-08-20): "when I click
-        veto it should just disappear as 'not for today'". A veto is not an
-        annotation about a chart the trader is still reading - it is the
-        decision that they are done with the name today, which is exactly what
-        the "Not today" verb already means. So it takes that verb's path: the
-        host removes it from today's feed and chart queue and shows the next
-        chart. The annotation is written first and is never conditional on the
-        queue move (`_record` has already returned by the time we get here).
+        A NOTE deliberately does not. It is written ABOUT the chart in front
+        of the trader, and a rail that skipped to the next one would make
+        every note cost them the thing they were writing it about.
 
-        The day-trade variant does NOT come through here - it needs the Focus
+        The annotation is written first and the queue move is never
+        conditional on it - `_record` has already returned by the time we get
+        here, so a retired chart always has a row behind it.
+
+        The day-trade veto does NOT come through here: it needs the Focus
         placement to happen before the chart is retired, so it has its own
         route (`_on_veto_day_trade`) and this deliberately ignores it.
         """
         self._refresh_reviewed_badge()
         if (
-            event_type == EVENT_VETO
+            event_type in (EVENT_VETO, EVENT_LIKE_CLAIM)
             and self.alert is not None
             and not self.capture_rail.veto_keeps_chart()
         ):
@@ -561,7 +609,7 @@ class AlertChartReview(QWidget):
         # picked on the old chart is not on this one.
         self._clear_selected_level()
         self.snapshot.set_symbol(alert.symbol, bot=bot)
-        self.snapshot.setVisible(True)
+        self._show_chart(True)
         self.queue_label.setText(f"{queued} waiting" if queued else "queue clear")
         self._set_actions_enabled(True)
         self.set_armed_kinds(armed_kinds)
@@ -622,7 +670,7 @@ class AlertChartReview(QWidget):
         self._set_setup_text_live(False)
         self.guidance_label.setText("")
         self.guidance_label.setVisible(False)
-        self.snapshot.setVisible(False)
+        self._show_chart(False)
         self.queue_label.setText("")
         self._clear_selected_level()
         self._set_actions_enabled(False)
@@ -632,6 +680,21 @@ class AlertChartReview(QWidget):
         self.set_any_bounce_armed(False)
         self.set_mover_state("")
         self.set_cross_active(False)
+
+    def _show_chart(self, charted: bool) -> None:
+        """Exactly one of the chart and the placeholder is ever in the layout.
+
+        They share the pane's only expanding slot, so swapping them keeps a
+        stretch item present at all times - which is what stops the slack
+        being smeared into the labels and the arm bar (see ``empty_state``).
+        The title and the setup line have nothing to say with no chart up, and
+        the placeholder says it better, so they stand down together.
+        """
+        charted = bool(charted)
+        self.snapshot.setVisible(charted)
+        self.empty_state.setVisible(not charted)
+        self.title.setVisible(charted)
+        self.alert_text.setVisible(charted)
 
     def set_queued_count(self, count: int) -> None:
         self.queue_label.setText(f"{count} waiting" if count else "queue clear")

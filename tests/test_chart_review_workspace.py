@@ -517,19 +517,27 @@ class CaptureRailTests(unittest.TestCase):
         written = {path.name for path in self.tmp.iterdir()}
         self.assertEqual(written, {"trader_annotations.jsonl", "recents.json"})
 
-    def test_hypothetical_stop_records_a_price_and_no_order(self) -> None:
-        self.rail.stop_input.setValue(101.25)
-        self.rail.commit_hypo_stop()
-        row = self._rows()[0]
-        self.assertEqual(row["event_type"], "hypo_stop")
-        self.assertEqual(row["stop_price"], 101.25)
-        self.assertEqual(row["side"], "LONG")
-        self.assertIn("no order", self.rail.status_text().lower())
+    def test_the_hypothetical_stop_control_is_gone_but_its_rows_still_parse(self) -> None:
+        """Trader, 2026-08-20: "get rid of hypothetical stop for now its not
+        useful."
 
-    def test_hypothetical_stop_needs_a_price(self) -> None:
-        self.rail.stop_input.setValue(0.0)
-        self.assertIsNone(self.rail.commit_hypo_stop())
-        self.assertEqual(self._rows(), [])
+        The CONTROL is what was removed. `ui.annotations.store` still builds
+        and validates hypo_stop rows, because the annotation stream is
+        append-only evidence: deleting the schema would make rows already on
+        disk unreadable to buy nothing. Re-adding the control later is a
+        layout change, not a migration.
+        """
+        from ui.annotations.store import EVENT_HYPO_STOP, EVENT_TYPES, build_annotation
+
+        self.assertFalse(hasattr(self.rail, "stop_input"))
+        self.assertFalse(hasattr(self.rail, "commit_hypo_stop"))
+        self.assertNotIn("Alt+S", dict(self.rail.action_shortcuts()))
+
+        self.assertIn(EVENT_HYPO_STOP, EVENT_TYPES)
+        row = build_annotation(
+            EVENT_HYPO_STOP, symbol="NVDA", stop_price=101.25, side="LONG"
+        )
+        self.assertEqual(row["stop_price"], 101.25)
 
     def test_note_is_recorded_and_cleared(self) -> None:
         self.rail.note_input.setText("watching the 200 into the close")

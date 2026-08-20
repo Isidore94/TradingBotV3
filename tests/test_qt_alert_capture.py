@@ -127,8 +127,8 @@ def test_the_focus_verb_still_places(pane, monkeypatch):
     assert placed[0].symbol == "AAPL"
 
 
-def test_capture_does_not_advance_the_review_queue(pane, monkeypatch):
-    """Capture is a recorder. Only the three queue verbs move the queue."""
+def test_a_note_is_still_only_a_recorder(pane, monkeypatch):
+    """Veto and like retire the chart now; a note remains pure capture."""
     _show(pane, monkeypatch, "AAPL")
     moved: list = []
     pane.skipRequested.connect(moved.append)
@@ -239,12 +239,13 @@ def test_the_capture_rail_is_off_the_pane_and_the_arm_bar_is_not(panel):
     review = panel.chart_review
     layout = review.layout()
     rows = [layout.itemAt(i) for i in range(layout.count())]
-    chart_index = next(
-        i for i, item in enumerate(rows) if item.widget() is review.snapshot
-    )
-    # Under the charts: the arm bar, then the verb row. Nothing else.
-    assert chart_index == layout.count() - 3
-    assert rows[chart_index + 1].widget() is review.arm_bar
+    widgets = [item.widget() for item in rows]
+    # The chart slot is the snapshot and its placeholder - mutually exclusive,
+    # so they count as one row of the stack.
+    slot_end = max(widgets.index(review.snapshot), widgets.index(review.empty_state))
+    # Under it: the arm bar, then the verb row. Nothing else.
+    assert widgets[slot_end + 1] is review.arm_bar
+    assert slot_end + 2 == layout.count() - 1, "something is stacked under the charts"
     assert rows[-1].layout() is not None, "the verb row must stay a layout row"
 
     assert review.isAncestorOf(review.arm_bar), "the hotbuttons come back"
@@ -277,7 +278,6 @@ def test_the_rail_is_reachable_as_a_tab(panel):
     [
         ("Alt+V", "reason_list"),
         ("Alt+K", "setup_input"),
-        ("Alt+S", "stop_input"),
         ("Alt+N", "note_input"),
     ],
 )
@@ -320,7 +320,7 @@ def test_the_rail_binds_no_duplicate_of_a_key_its_host_owns(panel):
         for shortcut in rail.findChildren(QShortcut)
         if shortcut.parent() is rail
     }
-    assert not owned & {"Alt+V", "Alt+K", "Alt+S", "Alt+N"}
+    assert not owned & {"Alt+V", "Alt+K", "Alt+N"}
 
 
 def test_the_rail_still_writes_through_record_annotation_after_reparenting(
@@ -408,7 +408,7 @@ def test_a_docked_host_keeps_the_rail_in_its_own_stack(tmp_path):
             for shortcut in docked.capture_rail.findChildren(QShortcut)
             if shortcut.parent() is docked.capture_rail
         }
-        assert {"Alt+V", "Alt+K", "Alt+S", "Alt+N"} <= owned
+        assert {"Alt+V", "Alt+K", "Alt+N"} <= owned
         # The duplicated armed line is the undocked host's affordance only.
         assert not docked.armed_summary.isVisibleTo(docked)
     finally:
@@ -447,22 +447,45 @@ def test_a_veto_retires_the_chart_as_not_today(pane, monkeypatch):
     assert [alert.symbol for alert in retired] == ["AAPL"]
 
 
-def test_a_like_a_stop_and_a_note_still_hold_the_chart(pane, monkeypatch):
-    """Only the veto moves the queue. A note must not cost the trader the
-    chart they were writing it about."""
+def test_a_like_also_retires_the_chart(pane, monkeypatch):
+    """Trader, 2026-08-20: "when I pick a like and claim setup reason, we
+    should just move onto the next chart"."""
+    _show(pane, monkeypatch, "AAPL")
+    retired: list = []
+    pane.removeTodayRequested.connect(retired.append)
+    pane.capture_rail.setup_input.setCurrentIndex(0)
+    assert pane.capture_rail.commit_like() is not None
+    assert [alert.symbol for alert in retired] == ["AAPL"]
+
+
+def test_a_note_still_holds_the_chart(pane, monkeypatch):
+    """The one capture that must not move the queue: a note is written ABOUT
+    the chart in front of you."""
     _show(pane, monkeypatch, "AAPL")
     moved: list = []
     pane.removeTodayRequested.connect(moved.append)
     pane.skipRequested.connect(moved.append)
     pane.focusRequested.connect(moved.append)
-
-    pane.capture_rail.setup_input.setCurrentIndex(0)
-    pane.capture_rail.commit_like()
-    pane.capture_rail.stop_input.setValue(101.25)
-    pane.capture_rail.commit_hypo_stop()
     pane.capture_rail.note_input.setText("watching the 50")
     pane.capture_rail.commit_note()
     assert moved == []
+
+
+def test_the_hypothetical_stop_control_is_gone(pane):
+    """Trader: "get rid of hypothetical stop for now its not useful."
+
+    The CONTROL only. `ui.annotations.store` still validates hypo_stop rows,
+    because the stream is append-only evidence and rows already written have
+    to stay readable."""
+    rail = pane.capture_rail
+    assert not hasattr(rail, "stop_input")
+    assert not hasattr(rail, "commit_hypo_stop")
+    assert "Alt+S" not in dict(rail.action_shortcuts())
+
+    from ui.annotations.store import EVENT_HYPO_STOP, build_annotation
+
+    row = build_annotation(EVENT_HYPO_STOP, symbol="NVDA", stop_price=10.5, side="LONG")
+    assert row["event_type"] == "hypo_stop", "history must stay readable"
 
 
 def test_a_refused_veto_retires_nothing(pane, monkeypatch):
@@ -576,3 +599,66 @@ def test_a_failed_placement_still_retires_the_chart(panel, monkeypatch):
     )
     panel._veto_but_day_trade(alert)
     assert [a.symbol for a in retired] == ["NVDA"]
+
+
+# --------------------------------------------------------------------------
+# 2026-08-20, third pass: the pane stops wasting a 4K monitor
+#
+# Trader, with a screenshot of the desk: "look at how inefficient this GUI is.
+# this bot basically gets an entire 4k monitor and we cant fit everything in
+# cleanly?" The measurement behind the fix is in the test below.
+# --------------------------------------------------------------------------
+def test_an_empty_pane_does_not_smear_its_slack_into_the_labels(panel):
+    """The measured fault, pinned.
+
+    The snapshot carries this pane's only expanding stretch. HIDING it left Qt
+    with four Preferred widgets and a column of slack, which it split equally:
+    at 2000x1900 the one-line title got 346px, the setup line 346px, the arm
+    bar 346px and the verb row 346px - about 1240px of a 4K screen spent on
+    label padding, in the state the desk sits in whenever the queue is clear.
+    """
+    review = panel.chart_review
+    panel.resize(2000, 1900)
+    panel.show()
+    review.clear()
+    for _ in range(4):
+        _QT.QApplication.instance().processEvents()
+
+    assert review.empty_state.isVisibleTo(review)
+    assert not review.snapshot.isVisibleTo(review)
+    # The slack lands in ONE place, and it is the placeholder.
+    assert review.empty_state.height() > review.height() * 0.7
+    # Every other row in the stack sits at its size hint. Hidden rows are
+    # excluded because they hold no layout space and report a stale geometry.
+    layout = review.layout()
+    for index in range(layout.count()):
+        widget = layout.itemAt(index).widget()
+        if widget is None or widget is review.empty_state:
+            continue
+        if not widget.isVisibleTo(review):
+            continue
+        assert widget.height() <= widget.sizeHint().height() + 40, (
+            f"{widget.objectName() or type(widget).__name__} inflated to "
+            f"{widget.height()}px against a {widget.sizeHint().height()}px hint"
+        )
+
+
+def test_charting_gives_every_reclaimed_pixel_to_the_candles(panel, monkeypatch):
+    review = panel.chart_review
+    panel.resize(2000, 1900)
+    panel.show()
+    panel.chart_symbol("NVDA")
+    for _ in range(4):
+        _QT.QApplication.instance().processEvents()
+
+    assert review.snapshot.isVisibleTo(review)
+    assert not review.empty_state.isVisibleTo(review)
+    assert review.snapshot.height() > review.height() * 0.7
+
+
+def test_the_placeholder_says_how_to_get_a_chart(panel):
+    """Dead space that explains itself beats dead space that does not."""
+    review = panel.chart_review
+    review.clear()
+    text = review.empty_state.message_label.text().lower()
+    assert "ticker" in text and "alert" in text

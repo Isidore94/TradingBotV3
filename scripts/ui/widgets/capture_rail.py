@@ -12,9 +12,14 @@ What it writes:
 * VETO      -> ui.annotations.store, plus a veto cohort row so forward returns
                accrue against the reason (ui.annotations.veto_cohort).
 * LIKE      -> ui.annotations.store, one row carrying the claimed setup id.
-* HYPO STOP -> ui.annotations.store. A price the trader would have used. No
-               order is placed, ever; nothing downstream reads it.
 * NOTE      -> ui.annotations.store.
+
+The hypothetical stop was removed from this surface on 2026-08-20 (trader:
+"get rid of hypothetical stop for now its not useful"). Only the CONTROL is
+gone. `ui.annotations.store` still builds and validates `hypo_stop` rows,
+because the stream is append-only evidence and rows already written have to
+stay readable - deleting the schema would make history unparseable to buy
+nothing. Re-adding the control is a layout change, not a migration.
 
 What it never does: mute, suppress, score, gate, rank, or alert (plan.md
 sec 5) - and it never writes a Focus list or watchlist either. An earlier
@@ -39,7 +44,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -54,7 +58,6 @@ from PySide6.QtWidgets import (
 from ui import theme
 from ui.annotations.setup_claims import setup_claim_groups
 from ui.annotations.store import (
-    EVENT_HYPO_STOP,
     EVENT_LIKE_CLAIM,
     EVENT_NOTE,
     EVENT_VETO,
@@ -62,12 +65,13 @@ from ui.annotations.store import (
     record_annotation,
 )
 from ui.annotations.vocabulary import VocabularyError, load_veto_vocabulary
+from ui.widgets.flow_layout import FlowLayout
 
 _REASON_ROLE = Qt.ItemDataRole.UserRole
 
 
 class CaptureRail(QFrame):
-    """Veto / like+claim / hypothetical stop / note for the focused symbol."""
+    """Veto / like+claim / note for the focused symbol."""
 
     #: (event_type, row) after a row reaches disk. Analysis-only consumers.
     captured = Signal(str, dict)
@@ -138,23 +142,34 @@ class CaptureRail(QFrame):
         layout.setContentsMargins(*(theme.px(10),) * 4)
         layout.setSpacing(theme.px(8))
 
+        # Symbol and side share one line. They were two, which cost a row of
+        # height on every host for one combo box and one word.
+        head_row = QHBoxLayout()
+        head_row.setSpacing(theme.px(6))
         self.symbol_label = QLabel("-")
         self.symbol_label.setObjectName("SectionTitle")
-        layout.addWidget(self.symbol_label)
-
-        side_row = QHBoxLayout()
-        side_row.setSpacing(theme.px(4))
-        side_row.addWidget(QLabel("Side"))
+        head_row.addWidget(self.symbol_label)
+        head_row.addSpacing(theme.px(10))
+        head_row.addWidget(QLabel("Side"))
         self.side_input = QComboBox()
         self.side_input.addItems(["LONG", "SHORT"])
         self.side_input.currentTextChanged.connect(self._on_side_changed)
-        side_row.addWidget(self.side_input, 1)
-        layout.addLayout(side_row)
+        head_row.addWidget(self.side_input)
+        head_row.addStretch(1)
+        layout.addLayout(head_row)
 
-        layout.addWidget(self._veto_section())
-        layout.addWidget(self._like_section())
-        layout.addWidget(self._stop_section())
-        layout.addWidget(self._note_section())
+        # The sections FLOW rather than stack (trader, 2026-08-20: "I do think
+        # we can sort some of these into columns so we can see more"). Stacked,
+        # the rail was ~900px of single-column controls in a dialog 1700px
+        # wide - two thirds of that width was blank while the trader scrolled
+        # to reach Note. FlowLayout is the same primitive the arm bar uses for
+        # the same reason: wide hosts get them side by side, and the narrow
+        # Capture tab still gets a single column with nothing clipped.
+        sections = FlowLayout(margin=0, spacing=theme.px(8))
+        for section in (self._veto_section(), self._like_section(), self._note_section()):
+            section.setMinimumWidth(theme.px(280))
+            sections.addWidget(section)
+        layout.addLayout(sections)
         layout.addStretch(1)
 
         self.status_label = QLabel("")
@@ -190,7 +205,21 @@ class CaptureRail(QFrame):
         else:
             self.reason_list.setEnabled(False)
             self.reason_list.addItem("vocabulary unavailable")
-        self.reason_list.setMaximumHeight(theme.px(190))
+        # Show EVERY reason. A fixed 190px cap showed six of nine and scrolled
+        # the rest, which is the opposite of a surface built for two
+        # keystrokes: the trader cannot press the digit for a reason they
+        # cannot see. Sized from the vocabulary rather than hardcoded, so
+        # adding a reason does not quietly push one below the fold.
+        #
+        # Deliberately NOT a wrapped multi-column list: the labels ("Sector
+        # mate earnings pending") are long enough that columns only fit by
+        # eliding them, and a veto vocabulary the trader has to guess at is
+        # worse than one that takes a few more pixels of a row that now sits
+        # beside two other sections instead of above them.
+        rows = max(1, min(self.reason_list.count(), 14))
+        self.reason_list.setMaximumHeight(
+            rows * theme.px(21) + theme.px(10)
+        )
         inner.addWidget(self.reason_list)
 
         self.veto_note_input = QLineEdit()
@@ -232,6 +261,10 @@ class CaptureRail(QFrame):
                 if claim.summary:
                     index = self.setup_input.count() - 1
                     self.setup_input.setItemData(index, claim.summary, Qt.ItemDataRole.ToolTipRole)
+        # The claim labels are long; without a cap this combo made the LIKE
+        # section three times the width of its neighbours and pushed NOTE off
+        # the row on anything but the widest host.
+        self.setup_input.setMaximumWidth(theme.px(420))
         inner.addWidget(self.setup_input)
         self.like_note_input = QLineEdit()
         self.like_note_input.setPlaceholderText("note (optional)")
@@ -240,19 +273,6 @@ class CaptureRail(QFrame):
         self.like_button = QPushButton("Like + claim setup")
         self.like_button.clicked.connect(self.commit_like)
         inner.addWidget(self.like_button)
-        return frame
-
-    def _stop_section(self) -> QFrame:
-        frame, inner = self._section("Hypothetical stop  (Alt+S)")
-        self.stop_input = QDoubleSpinBox()
-        self.stop_input.setDecimals(4)
-        self.stop_input.setRange(0.0, 1_000_000.0)
-        self.stop_input.setSingleStep(0.05)
-        self.stop_input.setSpecialValueText("")  # 0 reads as "unset"
-        inner.addWidget(self.stop_input)
-        self.stop_button = QPushButton("Record stop (no order)")
-        self.stop_button.clicked.connect(self.commit_hypo_stop)
-        inner.addWidget(self.stop_button)
         return frame
 
     def _note_section(self) -> QFrame:
@@ -276,7 +296,6 @@ class CaptureRail(QFrame):
         return (
             ("Alt+V", self.focus_veto),
             ("Alt+K", self.focus_like),
-            ("Alt+S", self.focus_hypo_stop),
             ("Alt+N", self.focus_note),
         )
 
@@ -332,15 +351,12 @@ class CaptureRail(QFrame):
             self.veto_button,
             self.veto_day_trade_button,
             self.like_button,
-            self.stop_button,
             self.note_button,
         ):
             button.setEnabled(armed)
         if self._vocabulary is None:
             self.veto_button.setEnabled(False)
             self.veto_day_trade_button.setEnabled(False)
-        if self._last_price and self.stop_input.value() == 0.0:
-            self.stop_input.setValue(float(self._last_price))
         self._set_status("" if armed else "Look up a symbol to start capturing.")
 
     @property
@@ -366,10 +382,6 @@ class CaptureRail(QFrame):
 
     def focus_like(self) -> None:
         self.setup_input.setFocus()
-
-    def focus_hypo_stop(self) -> None:
-        self.stop_input.setFocus()
-        self.stop_input.selectAll()
 
     def focus_note(self) -> None:
         self.note_input.setFocus()
@@ -516,22 +528,6 @@ class CaptureRail(QFrame):
         self._set_status(f"LIKE {row['symbol']} - {setup_id}")
         return row
 
-    def commit_hypo_stop(self) -> dict | None:
-        price = float(self.stop_input.value())
-        if price <= 0:
-            self._set_status("Enter a stop price.", ok=False)
-            return None
-        setup_id = self.setup_input.currentData()
-        row = self._record(
-            EVENT_HYPO_STOP,
-            stop_price=price,
-            side=self._side,
-            claimed_setup_id=str(setup_id or ""),
-        )
-        if row is None:
-            return None
-        self._set_status(f"STOP {row['symbol']} {self._side} @ {price:g} (no order placed)")
-        return row
 
     def commit_note(self) -> dict | None:
         text = self.note_input.text().strip()

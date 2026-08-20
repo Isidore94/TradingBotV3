@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import chart_levels
 from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
+from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_VETO
 from ui.widgets.candle_chart import CandleChart
 from ui.widgets.paint_lines_button import PaintLinesButton
 
@@ -1121,14 +1122,27 @@ class SymbolSnapshotDialog(QDialog):
             ref_level_family=family,
         )
 
-    def _on_captured(self, _event_type: str, _row: dict) -> None:
+    def _on_captured(self, event_type: str, _row: dict) -> None:
         """A capture IS a decision, so the badge must appear immediately.
 
         The trader asked to see that a chart was already checked today; a badge
         that only lands on the next open would miss the case that matters most
         - the same chart resurfacing minutes later in another slot's list.
+
+        A veto or a like is also a FINISHED decision, so it moves on to the
+        next chart the same way filing into D1 Focus already does (trader,
+        2026-08-20: "when I double click a veto reason we should just move on
+        to the next chart... when I pick a like and claim setup reason, we
+        should just move onto the next chart"). A note does not: it is written
+        ABOUT the chart in front of you, and taking that chart away mid-thought
+        is how a capture surface gets abandoned.
+
+        With no review host - a typed lookup rather than a walkthrough - there
+        is no next chart, so the popup simply stays put.
         """
         self._refresh_reviewed_badge()
+        if event_type in (EVENT_VETO, EVENT_LIKE_CLAIM) and self.review_host is not None:
+            self.review_host.snapshot_review_advance()
 
     def _reviewed_symbols(self) -> set:
         """Today's decided set. Split out so tests can point it at a fixture
