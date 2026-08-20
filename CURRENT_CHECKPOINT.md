@@ -8,6 +8,130 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-20, morning — THE CHARTS GET THE PANE. READ THIS FIRST.
+
+**Branch `phase05-integration-blitz`.** Built on the desk's live checkout
+(`C:\Users\Aaron\TradingBotV3`) while the desk was running. **Nothing was
+restarted and no scheduled task was touched.**
+
+### What the trader asked for, and got
+
+> "I cannot see the charts at all… I am ok with them being tabbed where
+> alerts/D1 focus/RSRW board is and clicking into them. But I need to be able
+> to see the charts."
+
+The Alert Center review pane stacked title → setup text → charts → a two-row
+arm bar → a ~600px capture rail → the verb row, all in the desk's narrow alert
+column. The charts — the point of the surface — got whatever was left.
+
+**Now: charts, then one row.** The arm bar moved onto the existing **Armed**
+tab, above the inventory it fills. The capture rail became a new scrolled
+**Capture** tab. Under the charts there is exactly one row left: the verb row
+(Remove/Skip/Not today/Add + queue count), which advances the review queue and
+must never cost a click.
+
+Tab strip is now `Alerts | D1 Focus | RS/RW Board | Armed | Capture`.
+
+### Why the arm bar joined "Armed" instead of becoming a sixth tab
+
+"Arm" and "Armed" a millimetre apart on one strip is a misclick waiting to
+happen, and the controls and the list they produce are one subject. Arming is
+also deliberate enough that a click is fine — unlike the verb row.
+
+Armed state stays legible with that tab closed, in two places: a count in the
+tab title (`Armed (2)`) and an always-visible line on the verb row
+(`AlertChartReview.armed_summary`), which replaces the "Nothing armed" text
+that went onto the tab with the bar.
+
+### The keyboard contract moved WITH the rail
+
+The rail's founding constraint is every capture under five seconds, no mouse.
+**A `QShortcut` bound inside a hidden tab page never fires**, so moving the
+rail would have killed Alt+V/K/S/N silently. They are rebound at **panel**
+scope (`WidgetWithChildrenShortcut`), and each one raises the Capture tab
+before handing off to the rail's own handler.
+
+`CaptureRail` gained `bind_action_shortcuts` (default `True`) and a public
+`action_shortcuts()`. The Alert Center's rail binds **none** of its own,
+because two live bindings for one sequence is an ambiguous shortcut in Qt and
+Qt fires **neither** — the failure mode is the keys going dead with nothing on
+screen to say so. A test asserts the rail owns no duplicate of a key its host
+took. The 1-9 veto digits and every Enter-to-commit path are untouched.
+
+### Placement is a host decision now
+
+`AlertChartReview(docked_controls=...)`, default `True` = the historical
+single-column stack. `SymbolSnapshotDialog` and the Chart Review workspace
+build their own rails and are unaffected; a docked `AlertChartReview` keeps
+its rail, its own keys, and no duplicated armed line. Undocked, the two docks
+are `setParent(None)`-detached (references kept, signals intact) so they cannot
+paint over the charts before the host adopts them.
+
+### What was NOT touched
+
+CaptureRail semantics (still a recorder: no mute, suppress, score, gate, alert
+or watchlist write — this was re-parenting only), the movers-only presentation
+filter, the repetition fold, and every line of adoption-gate code.
+
+### Second change: a wake alert the trader can verify
+
+Audit confirmed both EVENING-permitted senders already push at ntfy's maximum
+(`price_alert_service._notify` and `AutopilotService._maybe_push_spy_alarm`,
+both `priority="urgent"`). The gap was the channel **test**, which went out at
+`high` — so "will this break through iOS Sleep Focus" had never been
+answerable.
+
+New **Test wake alert (urgent)** button beside Test Push
+(`PriceAlertService.test_push(urgent=True)`), sending one urgent push whose
+message says what should have happened. **Not a new sender**: nothing
+schedules it, only that button calls it, and the phone push policy is
+unchanged. `docs/EVENING_MODE_RUNBOOK.md` gains a Sleep breakthrough checklist
+— ntfy has no Apple critical-alert entitlement, so urgent priority alone cannot
+override Sleep Focus; the device steps are marked to-be-confirmed-on-desk.
+
+### One pre-existing failure repaired
+
+`test_it_reads_the_gates_predicate_over_the_desks_own_bars` was **already red
+on this branch before any change here** — it built an 11:00 session while
+`_measure_mover_state` reads the real wall clock, so at 07:34 its M5 bar was in
+the future, was correctly discarded as incomplete, and the assertion read
+UNKNOWN. The fixture now pins the clock. It was measuring the time of day, not
+the predicate.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3838 passed / 19 subtests, 0 failed**; process exit `0xC0000409` (the known intermittent Qt-teardown crash, measured through Python's `returncode`, raised after the summary printed) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | **deliberately not rebuilt** — no packaging trigger is hit (no new dependency, asset, top-level package or dynamic import). Smart App Control still blocks the built exe on this machine; see the 2026-08-19 midday entry, unchanged and unresolved |
+
+Fail-before-feature: 10 of the 11 new Alert Center capture tests were run
+against `d60cbaf` and **all 10 failed**; the eleventh is a deliberate
+regression guard on the unchanged recorder path.
+
+### A desk restart IS needed
+
+Source-level only, so **the trader sees none of this until the desk is
+restarted.** Nothing is urgent: what changed is where controls sit and one new
+test button — nothing about what is detected, recorded, alerted or pushed.
+Cleanest moment is the usual one: let the 07:00 scheduled task relaunch it from
+source, or close the desk and relaunch via `scripts/launch_gui_auto.ps1`. No
+task disarm is needed, because the branch is not changing.
+
+### Owed, live
+
+- One review session where the trader confirms the charts are readable, the
+  four Alt keys still land in the rail from the charts, and the armed count is
+  honest.
+- The Sleep breakthrough checklist, run once on the phone with Sleep Focus ON,
+  ending in a **Test wake alert (urgent)** that actually sounds. Until that
+  passes, treat the SPY wake alarm as unverified on the device side.
+- Everything owed by the 2026-08-19 entries below still stands.
+
+---
+
 ## 2026-08-19, evening — MOVERS ONLY IN CHART REVIEW. READ THIS FIRST.
 
 Built on the desk's live checkout (`C:\Users\Aaron\TradingBotV3`, branch

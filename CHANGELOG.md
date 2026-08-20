@@ -21,6 +21,88 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-20 — The charts get their pane back, and the wake alert gets a test
+
+`IMPLEMENTED` + `GREEN`. Two trader-authorized presentation/delivery changes.
+No detector, scoring, gating or alert *decision* code was touched.
+
+- **Alert Center review pane: charts, then one row.** The pane stacked title →
+  setup text → charts → a two-row arm bar → a ~600px capture rail → the verb
+  row, in the desk's narrow alert column. Trader, with a screenshot: "I cannot
+  see the charts at all… I am ok with them being tabbed where alerts/D1
+  focus/RSRW board is and clicking into them."
+  - `AlertChartReview` gains `docked_controls` (default `True`). Docked is the
+    historical stack, which `SymbolSnapshotDialog` and the Chart Review
+    workspace keep; the Alert Center passes `False`, and the two control docks
+    are `setParent(None)`-detached for the host to adopt. **Placement is a host
+    decision now** — the widget no longer dictates it.
+  - `AlertCenterPanel` hosts `arm_bar` on its existing **Armed** tab, above the
+    inventory it fills, and `capture_rail` on a new scrolled **Capture** tab.
+    The arm bar joins the inventory rather than becoming a sixth tab because
+    "Arm" and "Armed" a millimetre apart on one strip is a misclick waiting to
+    happen, and arming is deliberate enough to cost a click. Between the charts
+    and the tab strip there is now exactly one row: the verb row, which
+    advances the review queue and must not cost a click.
+  - **The rail's five-second/no-mouse contract survives the move.** A
+    `QShortcut` bound inside a hidden tab page never fires, so Alt+V / Alt+K /
+    Alt+S / Alt+N are rebound at **panel** scope
+    (`WidgetWithChildrenShortcut`), each raising the Capture tab before handing
+    off to the rail's own handler. `CaptureRail` gains
+    `bind_action_shortcuts` (default `True`) and a public
+    `action_shortcuts()`; the Alert Center's rail binds none of its own,
+    because two live bindings for one sequence is an ambiguous shortcut and Qt
+    fires **neither**. It is a rebinding of the rail's own handler list, not a
+    second copy. The 1-9 veto digits (bound on the reason list) and every
+    Enter-to-commit path are untouched.
+  - Armed state stays legible with the tab closed: `armedSummaryChanged` feeds
+    a count into the Armed tab title *and* an always-visible line
+    (`armed_summary`) on the verb row, replacing the arm bar's own "Nothing
+    armed" text that went onto the tab with it. `clear()` now also drops the
+    armed level chips, which it had always been the only `set_armed_*` call to
+    omit.
+  - **CaptureRail semantics are untouched** — a re-parenting, not a behavior
+    change. It still records annotation rows and still never mutes,
+    suppresses, scores, gates, alerts or writes a watchlist. The movers-only
+    filter, the repetition fold and the adoption gate were not touched.
+  - 11 new tests in `tests/test_qt_alert_capture.py`; 10 of them fail against
+    the previous commit, and the eleventh is a regression guard on the
+    unchanged recorder path.
+
+- **A wake alert you can verify.** Audit first: both EVENING-permitted senders
+  already push at ntfy's maximum — the Focus/Research price alerts
+  (`price_alert_service._notify`) and the SPY ±1% wake alarm
+  (`AutopilotService._maybe_push_spy_alarm`), both `priority="urgent"`. The gap
+  was that the channel **test** went out at `high`, so "does an urgent push
+  break through iOS Sleep Focus" had never been answerable.
+  - `PriceAlertService.test_push(urgent=True)` sends one `urgent` push whose
+    message says what should have happened ("This should have sounded through
+    Sleep Focus…"), behind a new **Test wake alert (urgent)** button beside the
+    existing Test Push. Same fail-quiet contract: `send_push` never raises, an
+    unconfigured topic is reported rather than logged as a delivery.
+  - **No new sender.** Nothing schedules it and only that button calls it, so
+    the phone push policy is unchanged (AWAY remains the only Auto mode that
+    pushes routine output; the price alerts and the SPY alarm remain the two
+    deliberate exceptions).
+  - `docs/EVENING_MODE_RUNBOOK.md` gains a **Sleep breakthrough checklist**:
+    ntfy has no Apple critical-alert entitlement, so urgent priority alone
+    cannot override Sleep Focus — the app must be in iOS Settings ▸ Focus ▸
+    Sleep ▸ Allowed Apps, the topic must not be "Deliver Quietly", and the
+    trader verifies with the new button while Sleep Focus is ON. Device steps
+    are marked to-be-confirmed-on-desk.
+
+- **Repaired a clock-fragile test.** `test_it_reads_the_gates_predicate_over_the_desks_own_bars`
+  built an 11:00 session while `_measure_mover_state` read the real wall clock,
+  so a bar stamped 10:50 was in the FUTURE at 07:34, was discarded as
+  incomplete, and the assertion read UNKNOWN. It failed on this branch before
+  any change here. The fixture now pins the clock; the test measures the
+  predicate instead of the time of day.
+
+- Gate: **3838 passed / 19 subtests, 0 failed**; process exit `0xC0000409` (the
+  known intermittent Qt-teardown crash, after the summary printed). Smoke 7/7,
+  source selftest 56/56, both exit 0. No packaging trigger hit — no new
+  dependency, asset, top-level package or dynamic import — so the frozen exe
+  was deliberately not rebuilt.
+
 ### 2026-08-17 — The technical-integrity replay contract is pinned (R6b)
 
 `IMPLEMENTED` + `GREEN`. Tests and fixtures only — no source file was edited.
