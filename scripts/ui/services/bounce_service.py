@@ -15,6 +15,7 @@ from market_environment_annotations import record_market_environment_annotation
 from project_paths import MARKET_ENVIRONMENT_ANNOTATIONS_FILE
 from technical_integrity import load_technical_integrity_snapshot
 from ui.models.bounce import BounceAlert
+from ui.timer_utils import start_staggered, stop_staggered
 
 try:  # pragma: no cover - shiboken6 ships with PySide6; guard for odd builds
     from shiboken6 import isValid as _shiboken_is_valid
@@ -148,6 +149,7 @@ class BounceService(QObject):
     statusChanged = Signal(str)
     connectionChanged = Signal(str)
     activeBouncesChanged = Signal(int)
+    _activeBouncesReady = Signal(object)
     scanningChanged = Signal(bool)
     autoRegimeChanged = Signal(object)  # reading dict from get_auto_regime_reading(), or {}
     technicalIntegrityChanged = Signal(object)  # advisory completed-M5 hierarchy, or {}
@@ -214,6 +216,14 @@ class BounceService(QObject):
         # daemon=True is a backstop, never the only mechanism.
         self._unretired: list[tuple[threading.Thread, str, _StartupSession | None]] = []
         self._start_deferred_reported = False
+        # GUI health displays the last completed worker result. The historical
+        # AVWAP event ledger is tens of MB, so no health tick may parse it on
+        # the Qt thread. A single-flight worker prefers the scanner's compact
+        # validated projection and falls back to the ledger off-thread.
+        self._active_bounces_count = 0
+        self._active_bounces_signature: tuple[int, int] | None = None
+        self._active_bounces_refreshing = False
+        self._activeBouncesReady.connect(self._on_active_bounces_ready)
         _SERVICE_REFS.add(self)
 
         self._health_timer = QTimer(self)
@@ -535,7 +545,7 @@ class BounceService(QObject):
             self._warehouse_timer,
         ):
             try:
-                timer.stop()
+                stop_staggered(timer)
             except RuntimeError as exc:
                 if _qobject_is_alive(self):
                     if error is None:
@@ -690,22 +700,22 @@ class BounceService(QObject):
     def _start_health_timer(self) -> None:
         if not self._may_arm_timers():
             return
-        self._health_timer.start()
         self.refresh_health()
+        start_staggered(self._health_timer, 4_000)
 
     @Slot()
     def _start_regime_timer(self) -> None:
         if not self._may_arm_timers():
             return
-        self._regime_timer.start()
         self.refresh_auto_regime()
+        start_staggered(self._regime_timer, 37_000)
 
     @Slot()
     def _start_integrity_timer(self) -> None:
         if not self._may_arm_timers():
             return
-        self._integrity_timer.start()
         self.refresh_technical_integrity()
+        start_staggered(self._integrity_timer, 43_000)
 
     @Slot()
     def refresh_technical_integrity(self) -> None:
@@ -717,15 +727,15 @@ class BounceService(QObject):
     def _start_board_timer(self) -> None:
         if not self._may_arm_timers():
             return
-        self._board_timer.start()
         self.refresh_entry_board()
+        start_staggered(self._board_timer, 79_000)
 
     @Slot()
     def _start_warehouse_timer(self) -> None:
         if not self._may_arm_timers():
             return
-        self._warehouse_timer.start()
         self.capture_warehouse_tee()
+        start_staggered(self._warehouse_timer, 89_000)
 
     @Slot()
     def capture_warehouse_tee(self) -> None:
@@ -863,11 +873,79 @@ class BounceService(QObject):
 
         connected = bool(getattr(bot, "connection_status", False))
         self._emit(self.connectionChanged, "IB: connected" if connected else "IB: retrying")
+        self._emit(self.activeBouncesChanged, self._active_bounces_count)
+        if self._active_bounces_refreshing:
+            return
+        self._active_bounces_refreshing = True
+        threading.Thread(
+            target=self._load_active_bounces_worker,
+            name="qt-bounce-health",
+            daemon=True,
+        ).start()
+
+    def _load_active_bounces_worker(self) -> None:
+        count = self._active_bounces_count
+        signature = self._active_bounces_signature
         try:
-            count = len(bot.find_active_master_avwap_bounces())
-        except Exception:
+            from datetime import date
+
+            from master_avwap_shared import (
+                load_active_bounce_summary,
+                load_master_avwap_events_for_date,
+            )
+            from project_paths import AVWAP_SIGNALS_FILE, MASTER_AVWAP_ACTIVE_EVENTS_FILE
+
+            stat = Path(AVWAP_SIGNALS_FILE).stat()
+            current_signature = (int(stat.st_size), int(stat.st_mtime_ns))
+            if current_signature != signature:
+                compact = load_active_bounce_summary(
+                    Path(MASTER_AVWAP_ACTIVE_EVENTS_FILE),
+                    signals_path=Path(AVWAP_SIGNALS_FILE),
+                    trade_date=date.today(),
+                )
+                if compact is not None:
+                    count = len(compact)
+                else:
+                    events = load_master_avwap_events_for_date(
+                        trade_date=date.today(),
+                        signals_path=Path(AVWAP_SIGNALS_FILE),
+                    )
+                    count = len(
+                        {
+                            symbol
+                            for symbol, rows in events.items()
+                            if any(
+                                str(row.get("signal_type") or "").upper().startswith("BOUNCE")
+                                for row in rows
+                            )
+                        }
+                    )
+                signature = current_signature
+        except OSError:
             count = 0
-        self._emit(self.activeBouncesChanged, count)
+            signature = None
+        except Exception:
+            logging.debug("Active AVWAP health refresh failed.", exc_info=True)
+        self._emit(
+            self._activeBouncesReady,
+            {"count": int(count), "signature": signature},
+        )
+
+    @Slot(object)
+    def _on_active_bounces_ready(self, payload: object) -> None:
+        self._active_bounces_refreshing = False
+        if not self._is_live() or not isinstance(payload, dict):
+            return
+        if self._current_bot() is None:
+            self._active_bounces_count = 0
+            self._emit(self.activeBouncesChanged, 0)
+            return
+        self._active_bounces_count = max(0, int(payload.get("count") or 0))
+        raw_signature = payload.get("signature")
+        self._active_bounces_signature = (
+            tuple(raw_signature) if isinstance(raw_signature, (tuple, list)) else None
+        )
+        self._emit(self.activeBouncesChanged, self._active_bounces_count)
 
     def _start_worker(self, session: _StartupSession) -> None:
         """Own one startup generation end to end.

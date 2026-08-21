@@ -1536,7 +1536,6 @@ def test_dock_d1_event_buttons_arm_poll_and_fire_red(monkeypatch):
         }
         for offset in range(6, 0, -1)
     ]
-    monkeypatch.setattr(chart_snapshot, "load_d1_bars", lambda _s: daily)
 
     def bar(minute, high, low):
         mid = (high + low) / 2
@@ -1565,6 +1564,7 @@ def test_dock_d1_event_buttons_arm_poll_and_fire_red(monkeypatch):
 
     bot = _Bot()
     panel = AlertCenterPanel()
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda _symbol: list(daily))
     panel._bounce_service = _Service(bot)
     # This test is about the D1 event buttons, not about the movers-only review
     # filter (trader rule 2026-08-19), and NVDA here sits inside yesterday's
@@ -1880,8 +1880,8 @@ def test_d1_candle_click_arms_persistent_level_alert_and_flags(tmp_path, monkeyp
         hour=0, minute=0, second=0, microsecond=0
     ) - timedelta(days=1)
     monkeypatch.setattr(
-        chart_snapshot,
-        "load_d1_bars",
+        panel,
+        "_d1_bars_for",
         lambda symbol: [
             {
                 "dt": breaking_day,
@@ -2368,3 +2368,38 @@ def test_focus_picks_flag_on_any_d1_interest_once_per_day(tmp_path, monkeypatch)
         focus_d1_flags_path=tmp_path / "focus_d1_flags.json",
     )
     assert "NVDA|new_5d_high" in rebuilt._focus_d1_flags
+
+
+def test_d1_watch_read_is_memory_only_and_prefetches_off_thread(monkeypatch):
+    from datetime import datetime
+
+    try:
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.services import chart_data_service
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    bars = [{"dt": datetime.now(), "close": 101.0}]
+
+    class _Series:
+        def as_bar_dicts(self):
+            return list(bars)
+
+    class _Service:
+        def __init__(self):
+            self.requests = []
+
+        def cached_series(self, symbol):
+            return _Series()
+
+        def prefetch(self, symbols):
+            self.requests.append(list(symbols))
+
+    service = _Service()
+    monkeypatch.setattr(chart_data_service, "shared_service", lambda: service)
+    panel = AlertCenterPanel()
+
+    assert panel._d1_bars_for(" nvda ") == bars
+    assert service.requests == [["NVDA"]]

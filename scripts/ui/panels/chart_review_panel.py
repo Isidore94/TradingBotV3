@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 from project_paths import MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
 from ui import theme
 from ui.services.symbol_lookup import RecentLookups, normalize_symbol
+from ui.timer_utils import start_staggered
 from ui.widgets.capture_rail import CaptureRail
 from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.symbol_snapshot_dialog import REFRESH_INTERVAL_MS, SymbolSnapshotWidget
@@ -242,7 +243,7 @@ class ChartReviewPanel(QFrame):
         self._chart_refresh_timer = QTimer(self)
         self._chart_refresh_timer.setInterval(REFRESH_INTERVAL_MS)
         self._chart_refresh_timer.timeout.connect(self._refresh_visible_chart)
-        self._chart_refresh_timer.start()
+        start_staggered(self._chart_refresh_timer, 53_000)
 
     # ------------------------------------------------------------------
     def _build(self) -> None:

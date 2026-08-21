@@ -80,7 +80,7 @@ def test_only_away_profile_runs_the_hourly_google_drive_report():
     writes = []
     away = _bare_service(enabled=True, profile=AUTO_PROFILE_AWAY)
     away._state = {"hourly_report_slot": None}
-    away._write_report = lambda: writes.append("write") or {"ok": True}
+    away._request_report_write = lambda reason="": writes.append(reason) or True
     away._save_state = lambda: None
     away._log = lambda _message: None
 
@@ -88,13 +88,13 @@ def test_only_away_profile_runs_the_hourly_google_drive_report():
     away._maybe_hourly_away_report(moment)
     away._maybe_hourly_away_report(moment)
 
-    assert writes == ["write"]
-    assert away._state["hourly_report_slot"] == "2026-07-10|07:00"
+    assert writes == ["hourly:2026-07-10|07:00"]
+    assert away._state["hourly_report_slot"] is None
 
     desk = _bare_service(enabled=True, profile=AUTO_PROFILE_DESK)
-    desk._write_report = lambda: writes.append("desk") or {"ok": True}
+    desk._request_report_write = lambda reason="": writes.append("desk") or True
     desk._maybe_hourly_away_report(datetime(2026, 7, 10, 8, 0))
-    assert writes == ["write"]
+    assert writes == ["hourly:2026-07-10|07:00"]
 
 
 def test_day_roll_preserves_away_profile_and_resets_hourly_report_slot():

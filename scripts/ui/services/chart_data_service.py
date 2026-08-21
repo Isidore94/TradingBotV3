@@ -102,6 +102,8 @@ class _PrefetchTask(QRunnable):
             return
         try:
             warmed = self._service.store.prefetch(self._symbols)
+            for symbol in self._symbols:
+                self._service._cache_earnings_anchor_from_source(symbol)
         except Exception:
             _log.debug("Chart prefetch failed.", exc_info=True)
             return
@@ -158,6 +160,7 @@ class ChartDataService(QObject):
         self._lock = threading.Lock()
         self._newest: dict[str, int] = {}
         self._last: "OrderedDict[str, tuple[dict, dict]]" = OrderedDict()
+        self._earnings_anchors: dict[str, Any] = {}
         #: Set by shutdown(). Queued tasks check it and return without
         #: touching anything - see the note on shutdown() for why.
         self._closing = False
@@ -202,8 +205,9 @@ class ChartDataService(QObject):
     def prefetch(self, symbols: Iterable[str]) -> int:
         """Warm the bar cache for a watchlist off-thread (D4).
 
-        Symbols already resident are skipped inside the store, so calling
-        this on every workspace open is cheap after the first time.
+        Resident symbols are mtime-validated inside the store on this worker,
+        so callers may use prefetch as the asynchronous freshness path for a
+        memory-only GUI consumer.
         """
         wanted = []
         seen = set()
@@ -261,6 +265,7 @@ class ChartDataService(QObject):
         m5 = chart_snapshot.build_m5_snapshot(symbol, list(m5_bars or []))
         d1["levels"] = self._build_levels(symbol, d1.get("bars") or [])
         d1["earnings"] = self._build_earnings(symbol, d1.get("bars") or [])
+        self._cache_earnings_anchor_from_source(symbol)
 
         meta: dict[str, Any] = {
             "source": str(source or tier),
@@ -329,6 +334,27 @@ class ChartDataService(QObject):
     def cached_series(self, symbol: str) -> BarSeries | None:
         """Memory-only peek, safe on the GUI thread (for skeleton decisions)."""
         return self.store.cached(symbol)
+
+    def cached_earnings_anchor(self, symbol: str):
+        """Memory-only earnings anchor warmed by snapshot/prefetch workers."""
+
+        with self._lock:
+            return self._earnings_anchors.get(str(symbol or "").strip().upper())
+
+    def _cache_earnings_anchor_from_source(self, symbol: str) -> None:
+        """Resolve the disk-backed earnings map on a chart worker only."""
+
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return
+        try:
+            import chart_snapshot
+
+            anchor = chart_snapshot.earnings_anchor_date(symbol)
+        except Exception:
+            anchor = None
+        with self._lock:
+            self._earnings_anchors[symbol] = anchor
 
     # -- completion ------------------------------------------------------
     def _finish(

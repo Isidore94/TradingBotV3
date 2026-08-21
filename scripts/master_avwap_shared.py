@@ -320,6 +320,88 @@ def load_master_avwap_events_for_date(
     return events_by_symbol
 
 
+def build_active_bounce_summary(
+    rows,
+    *,
+    trade_date: date,
+    source_size: int,
+    source_mtime_ns: int,
+) -> dict[str, Any]:
+    """Compact projection consumed by GUI health instead of historical CSV.
+
+    ``rows`` may contain historical records; only the requested session and
+    BOUNCE events survive. This is a delivery projection only. It does not
+    change, rank, or suppress any scanner event.
+    """
+
+    target = trade_date.isoformat()
+    levels: dict[str, set[str]] = {}
+    for raw in rows or ():
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("trade_date") or "")[:10] != target:
+            continue
+        signal_type = str(raw.get("signal_type") or "").strip().upper()
+        if not signal_type.startswith("BOUNCE"):
+            continue
+        symbol = str(raw.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        level = signal_type[len("BOUNCE_") :] if signal_type.startswith("BOUNCE_") else signal_type
+        levels.setdefault(symbol, set()).add(level)
+    return {
+        "schema": "master_avwap_active_events_v1",
+        "trade_date": target,
+        "source": {
+            "size": int(source_size),
+            "mtime_ns": int(source_mtime_ns),
+        },
+        "active_bounces": {
+            symbol: sorted(values) for symbol, values in sorted(levels.items())
+        },
+    }
+
+
+def load_active_bounce_summary(
+    summary_path: Path,
+    *,
+    signals_path: Path,
+    trade_date: date | None = None,
+) -> dict[str, list[str]] | None:
+    """Validated compact projection, or ``None`` when fallback is required."""
+
+    target = trade_date or datetime.now().date()
+    try:
+        payload = json.loads(Path(summary_path).read_text(encoding="utf-8"))
+        source = payload.get("source") or {}
+        stat = Path(signals_path).stat()
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    try:
+        signature_matches = (
+            int(source.get("size") or -1) == int(stat.st_size)
+            and int(source.get("mtime_ns") or -1) == int(stat.st_mtime_ns)
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if (
+        payload.get("schema") != "master_avwap_active_events_v1"
+        or payload.get("trade_date") != target.isoformat()
+        or not signature_matches
+    ):
+        return None
+    raw = payload.get("active_bounces")
+    if not isinstance(raw, dict):
+        return None
+    return {
+        str(symbol).strip().upper(): sorted(
+            {str(level).strip().upper() for level in values or () if str(level).strip()}
+        )
+        for symbol, values in raw.items()
+        if str(symbol).strip()
+    }
+
+
 def build_master_avwap_active_level_map(
     events_by_symbol: dict[str, list[dict[str, Any]]],
 ) -> dict[str, list[str]]:

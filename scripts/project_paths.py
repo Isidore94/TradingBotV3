@@ -420,6 +420,10 @@ INTRADAY_BARS_CACHE_DIR = CACHE_DIR / "intraday_bars"
 CHART_BAR_CACHE_DIR = CACHE_DIR / "chart_bars"
 
 AVWAP_SIGNALS_FILE = RUNTIME_DATA_DIR / "avwap_signals.csv"
+# Compact, current-session projection of ``avwap_signals.csv`` for GUI health.
+# The scanner is the sole writer; readers validate the source signature before
+# trusting it and fall back to the historical CSV when an older build omitted it.
+MASTER_AVWAP_ACTIVE_EVENTS_FILE = RUNTIME_DATA_DIR / "master_avwap_active_events.json"
 D1_FEATURES_FILE = RUNTIME_DATA_DIR / "d1_features.csv"
 D1_FEATURES_HISTORY_FILE = RUNTIME_DATA_DIR / "d1_features_history.csv"
 INTRADAY_BOUNCES_FILE = RUNTIME_DATA_DIR / "intraday_bounces.csv"

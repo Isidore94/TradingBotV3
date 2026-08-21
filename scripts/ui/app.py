@@ -7,12 +7,13 @@ import argparse
 import gc
 import logging
 import sys
+import time
 from pathlib import Path
 
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QProcess, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QProcess, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -832,7 +833,79 @@ def _universe_status_text() -> str:
     return f"Universe: {state} ({built_at:%b %d %H:%M})"
 
 
-def install_gui_thread_gc(app: QApplication, interval_ms: int = 2_000) -> QTimer:
+class UiActivityMonitor(QObject):
+    """Monotonic timestamp of the latest user input delivered by Qt."""
+
+    _INPUT_EVENTS = {
+        QEvent.Type.KeyPress,
+        QEvent.Type.MouseButtonPress,
+        QEvent.Type.MouseButtonDblClick,
+        QEvent.Type.Wheel,
+        QEvent.Type.TouchBegin,
+    }
+
+    def __init__(self, parent=None, *, clock=time.perf_counter) -> None:
+        super().__init__(parent)
+        self._clock = clock
+        self._last_input = float(clock())
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 (Qt override)
+        if event.type() in self._INPUT_EVENTS:
+            self._last_input = float(self._clock())
+        return False
+
+    def mark_input(self) -> None:
+        """Testable/manual equivalent of receiving an input event."""
+
+        self._last_input = float(self._clock())
+
+    def idle_ms(self) -> float:
+        return max(0.0, (float(self._clock()) - self._last_input) * 1000.0)
+
+
+class _GuiGcController(QObject):
+    """Keep Qt-wrapper collection on the GUI thread, but never over a click."""
+
+    def __init__(
+        self,
+        activity: UiActivityMonitor,
+        *,
+        collector=gc.collect,
+        full_every_ticks: int = 30,
+        young_idle_ms: float = 250.0,
+        full_idle_ms: float = 2_000.0,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.activity = activity
+        self.collector = collector
+        self.full_every_ticks = max(1, int(full_every_ticks))
+        self.young_idle_ms = max(0.0, float(young_idle_ms))
+        self.full_idle_ms = max(self.young_idle_ms, float(full_idle_ms))
+        self.tick = 0
+        self.full_due = False
+
+    def sweep(self) -> None:
+        self.tick += 1
+        if self.tick % self.full_every_ticks == 0:
+            self.full_due = True
+        idle_ms = self.activity.idle_ms()
+        if idle_ms < self.young_idle_ms:
+            return
+        if self.full_due and idle_ms >= self.full_idle_ms:
+            self.collector(2)
+            self.full_due = False
+            return
+        self.collector(0)
+
+
+def install_gui_thread_gc(
+    app: QApplication,
+    interval_ms: int = 2_000,
+    *,
+    activity_monitor: UiActivityMonitor | None = None,
+    collector=None,
+) -> QTimer:
     """Run all cyclic garbage collection on the GUI thread.
 
     Every GUI session on 2026-07-29 died with an access violation inside
@@ -845,21 +918,24 @@ def install_gui_thread_gc(app: QApplication, interval_ms: int = 2_000) -> QTimer
     timer keeps every Qt destructor on the owning thread. Reference
     counting still frees non-cyclic garbage immediately on any thread.
 
-    Young objects are swept every tick; the full heap every 30th tick —
-    a full collection of this app's pandas-heavy heap is too slow to run
-    every 2 seconds without stuttering the UI.
+    Young objects are swept only after 250 ms without input. A full heap sweep
+    becomes due every 30th tick but waits for two seconds of user idleness.
+    This retains GUI-thread ownership of Qt wrapper destruction without
+    scheduling the largest pause directly on top of a click or wheel event.
     """
     gc.disable()
+    activity = activity_monitor or UiActivityMonitor(app)
+    if activity_monitor is None:
+        app.installEventFilter(activity)
     timer = QTimer(app)
     timer.setInterval(interval_ms)
-    tick = 0
-
-    def _sweep() -> None:
-        nonlocal tick
-        tick += 1
-        gc.collect(2 if tick % 30 == 0 else 0)
-
-    timer.timeout.connect(_sweep)
+    controller = _GuiGcController(
+        activity,
+        collector=collector if collector is not None else gc.collect,
+        parent=timer,
+    )
+    timer._gc_controller = controller  # type: ignore[attr-defined]
+    timer.timeout.connect(controller.sweep)
     timer.start()
     return timer
 
@@ -937,7 +1013,9 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv[:1])
     app.setApplicationName("TradingBotV3")
     app.setOrganizationName("TradingBotV3")
-    install_gui_thread_gc(app)
+    app.ui_activity_monitor = UiActivityMonitor(app)
+    app.installEventFilter(app.ui_activity_monitor)
+    install_gui_thread_gc(app, activity_monitor=app.ui_activity_monitor)
     # Scale first: every widget built below reads theme.px() at construction.
     apply_theme(
         app,

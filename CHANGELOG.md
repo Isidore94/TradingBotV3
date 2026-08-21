@@ -1,6 +1,6 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-18** from the working copy of
+Last reconciled: **2026-08-20** from the working copy of
 `phase05-integration-blitz` (cut from `testing-week-2026-08-17`, which carries
 testing-week + R1 + R1.1 + R2 + R3 + R4 + R5 + R6 + R7 + R8, with the four later
 `phase05-r2-focus-gating-strength-board` commits merged in on 2026-08-18)
@@ -20,6 +20,32 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-20 (seventh pass) — Evidence-led GUI hang repair
+
+`IMPLEMENTED` + `GREEN`; R6(c) live diagnostic week active.
+
+- Confirmed two Windows `AppHangB1` events and measured the principal Qt-thread
+  blockers: the 63.88 MB / 370,109-row AVWAP history parse on a 3-second health
+  tick (1.268 s warm) and GUI-originated Away report/operations audit work
+  (0.540 s measured).
+- The Master scanner publishes a signature-validated, current-session
+  `master_avwap_active_events.json`; Bounce health consumes it on a
+  single-flight worker and falls back to the historical CSV off-thread only.
+- GUI-originated Away report/audit publication is backgrounded, coalesced and
+  serialized with every existing worker through one writer lock. Verified
+  publish semantics and hourly state advancement are unchanged.
+- Alert Center D1 watches are memory-only on Qt. D1 freshness/parsing and
+  earnings-anchor reads use the shared chart worker pool; cold data remains
+  UNKNOWN for one poll rather than blocking interaction.
+- Major 30/60-second timers have distinct first phases, and generation-2 GUI
+  collection waits for two seconds of input idleness (young collection waits
+  250 ms). Periodic cadence is unchanged after the phase offset.
+- Enabled the existing bounded `ui_stall_watchdog` machine-locally at 50 ms for
+  the owed R6(c) week. It begins on the next desk launch.
+- No detector/scoring/alert-decision behavior changed. Gate: 3945 passed + 19
+  subtests, clean exit; smoke 7/7; source selftest 56/56. No frozen rebuild
+  trigger applies.
 
 ### 2026-08-20 (sixth pass) — The veto cohort is graded nightly
 

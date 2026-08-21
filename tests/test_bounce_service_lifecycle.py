@@ -198,6 +198,59 @@ def _await(predicate, timeout: float = JOIN_TIMEOUT) -> bool:
     return predicate()
 
 
+def test_health_count_uses_compact_projection_on_worker(
+    service_factory, thread_exceptions, monkeypatch, tmp_path
+):
+    """The 3-second Qt health slot never calls the bot's CSV parser."""
+
+    import json
+    from datetime import date
+
+    import project_paths
+    from master_avwap_shared import build_active_bounce_summary
+
+    signals = tmp_path / "avwap_signals.csv"
+    summary = tmp_path / "master_avwap_active_events.json"
+    signals.write_text("header\nrow\n", encoding="utf-8")
+    stat = signals.stat()
+    summary.write_text(
+        json.dumps(
+            build_active_bounce_summary(
+                [
+                    {
+                        "trade_date": date.today().isoformat(),
+                        "symbol": "NVDA",
+                        "signal_type": "BOUNCE_LOWER_1",
+                    }
+                ],
+                trade_date=date.today(),
+                source_size=stat.st_size,
+                source_mtime_ns=stat.st_mtime_ns,
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_paths, "AVWAP_SIGNALS_FILE", signals)
+    monkeypatch.setattr(project_paths, "MASTER_AVWAP_ACTIVE_EVENTS_FILE", summary)
+
+    service = service_factory(lambda *_args, **_kwargs: FakeBot())
+    bot = FakeBot("health")
+    # If refresh_health regresses to the historical implementation, this is a
+    # loud failure rather than a swallowed zero count.
+    bot.find_active_master_avwap_bounces = lambda: (_ for _ in ()).throw(
+        AssertionError("bot CSV parser ran on GUI health")
+    )
+    with service._lock:
+        service._bot = bot
+    counts: list[int] = []
+    service.activeBouncesChanged.connect(counts.append)
+
+    service.refresh_health()
+
+    assert _await(lambda: counts and counts[-1] == 1)
+    assert thread_exceptions.events == []
+
+
 # ----------------------------------------------------------------------
 # Race 1: shutdown before startup begins
 # ----------------------------------------------------------------------
@@ -575,10 +628,10 @@ def test_normal_startup_still_starts_the_bot_and_its_timers(service_factory, thr
     from PySide6.QtWidgets import QApplication
 
     QApplication.processEvents()
-    assert service._health_timer.isActive()
-    assert service._regime_timer.isActive()
-    assert service._integrity_timer.isActive()
-    assert service._board_timer.isActive()
+    assert service._health_timer._stagger_starter.isActive()
+    assert service._regime_timer._stagger_starter.isActive()
+    assert service._integrity_timer._stagger_starter.isActive()
+    assert service._board_timer._stagger_starter.isActive()
 
     service.stop()
     assert bot.stopped_with == 5.0

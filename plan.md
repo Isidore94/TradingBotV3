@@ -1,6 +1,6 @@
 # TradingBotV3 remaining roadmap
 
-Last reconciled: **2026-08-18**
+Last reconciled: **2026-08-20**
 
 Authoritative for: **work that is not finished, validation gates, promotion rules,
 and execution order**
@@ -483,16 +483,19 @@ are listed in `CURRENT_CHECKPOINT.md`.
    frozen selftest update when `scripts/indicators` gains its first importer.
    Spec: `docs/M5_SIGNAL_ENGINES_PLAN.md`.
 6. **R6 Small operational wins. — (a) BUILT 2026-08-17; (b) DECIDED 2026-08-17
-   and narrowed to tests/docs; (c) was ALREADY BUILT.** (a) AI-jobs visibility:
+   and narrowed to tests/docs; (c) diagnostic ACTIVE + evidence-led repair BUILT
+   2026-08-20.** (a) AI-jobs visibility:
    the routine log line in `scripts/run_ai_jobs.ps1` no longer reads as a caller
    error, and `operations_audit` gained an **`ai_jobs` row** over the AI job
    ledger. It resolves the store by path and never imports `ai_jobs`, because
    that package is in `PACKAGES_NOT_IN_THE_BUNDLE` and System Health is frozen;
    four pins keep the duplicated rule honest. An unset store reads HEALTHY ("off
-   by choice"), never UNKNOWN. (c) The `ui_stall_watchdog` **already exists** —
-   `scripts/ui/stall_watchdog.py`, off by default, installed from `ui/app.py`,
-   with setting + env overrides, a reader CLI and its own tests. **No code is
-   owed there; only the bounded diagnostic week, which is a live gate.**
+   by choice"), never UNKNOWN. (c) The `ui_stall_watchdog` **already existed** —
+   `scripts/ui/stall_watchdog.py`, installed from `ui/app.py`, with setting +
+   env overrides, a reader CLI and its own tests. Two measured AppHang events
+   on 2026-08-20 justified activating it machine-locally and repairing the
+   delivery seams it exposed; the watchdog implementation itself was not
+   changed. The bounded diagnostic week remains the live gate.
    (b) Evidence-ledger rotation — **DECIDED 2026-08-17
    (delegated, R5 §8.1 pattern): do NOT rotate the live file now.** Measured
    that day: 370 MB / 318,040 rows / 25 sessions (~15 MB/session; the ~247 MB
@@ -547,8 +550,21 @@ are listed in `CURRENT_CHECKPOINT.md`.
    free space approaching the 5 GB floor with this file the driver; the
    calibration replay overrunning its overnight window (that is a separate
    windowing decision, not rotation).
-   (c) A bounded stall-watchdog diagnostic week (`ui_stall_watchdog`
-   setting only) before prioritizing any worker-offload work. (d) **Auto journal
+   (c) **ACTIVE 2026-08-20 — evidence-led hang repair is BUILT; bounded live
+   week owed.** Two Windows `AppHangB1` events (07:19 frozen exe, 14:16 source)
+   triggered measurement rather than speculative tuning. The 3-second Qt
+   health tick was parsing the 63.88 MB / 370,109-row AVWAP history (1.268 s
+   warm); GUI report/audit work measured 0.540 s; aligned 30/60-second timers
+   and fixed-boundary full GC amplified the stalls. The scanner now publishes a
+   signature-validated compact active-bounce projection; health fallback is
+   single-flight off-thread; GUI report/audit writes are serialized off-thread;
+   Alert Center D1/earnings reads are memory-only with chart-worker prefetch;
+   timer phases are staggered; full GC waits for input idleness. The existing
+   watchdog is enabled machine-locally at 50 ms from the next launch. **Gate:**
+   run it for one bounded live week and require no new Application Hang, no
+   repeated repaired-seam culprit, and verified scan/report behavior. This is a
+   delivery/responsiveness repair only — no detector, score, threshold or alert
+   decision changed. (d) **Auto journal
    is a mapping, not new work**: the trader's ask resolves to the QUEUED nightly
    `journal_import` slot (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c — build
    only after the 6.4b live proof passes and the trader says go) plus the P3.5

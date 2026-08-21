@@ -301,9 +301,13 @@ class D1BarStore:
         warmed = 0
         for symbol in symbols:
             symbol = _normalize(symbol)
-            if not symbol or self.cached(symbol) is not None:
+            if not symbol:
                 continue
             try:
+                # load() re-stats resident disk-backed series and refreshes a
+                # changed source. This remains entirely on the prefetch worker;
+                # skipping residents here made a GUI memory-only consumer stay
+                # stale until another full chart request happened to reload it.
                 if self.load(symbol) is not None:
                     warmed += 1
             except Exception:

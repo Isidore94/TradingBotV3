@@ -6,7 +6,7 @@ Applies to: `plan.md` Section 6 and P0.2–P0.5
 
 Topology: **single main desk**
 
-Last reconciled: **2026-08-18** (2026-08-17/18 AWAY-session results filled in)
+Last reconciled: **2026-08-20** (R6(c) hang repair + bounded watchdog week)
 
 This checklist turns an implemented/green build into real operational evidence. A
 deterministic test cannot satisfy a live row. Record failures and UNKNOWN states
@@ -86,7 +86,7 @@ Check each row from real behavior:
 | Stale drain | a flip back to DESK after a long AWAY stretch re-measures before adopting; picks measured more than 2 M5 bars ago are refused, not adopted | **UNKNOWN** — the trader never flipped back on 08-17 or 08-18 |
 | Strength board | ~20-40 names a side; refresh completes; a row that has fallen back is refused at click time with its reason | **UNKNOWN** — never opened during a session |
 | Warehouse | live tee/Health tiles advance if enabled; disabled path is a no-op | |
-| GUI | no sustained event-loop stall or main-thread I/O regression | |
+| GUI | click/type/scroll stays responsive through scan + wrap-up; no new Windows Application Hang; `ui_stalls.jsonl` has no repeated repaired-seam culprit over 50 ms | |
 
 For the first session/config rollover on the build, also verify:
 
@@ -127,6 +127,10 @@ Run and preserve:
 
 Inspect:
 
+- `%LOCALAPPDATA%\TradingBotV3\diagnostics\ui_stalls.jsonl` (R6(c), enabled
+  machine-locally at 50 ms on 2026-08-20). Summarize it with
+  `.venv\Scripts\python.exe scripts\ui\stall_watchdog.py`; preserve the raw log
+  for the bounded week and record any repeated culprit before changing code;
 - `%LOCALAPPDATA%\TradingBotV3\diagnostics\run_manifests\`;
 - `heartbeat.json` and `job_ledger.jsonl`;
 - `spy_state_shadow.jsonl` and `greatness_shadow.jsonl` plus summaries;

@@ -35,6 +35,7 @@ import evening_mode
 import price_alerts
 import push_notify
 from ui.services.scan_service import ScanService, active_scan_label
+from ui.timer_utils import start_staggered, stop_staggered
 
 
 _TICK_INTERVAL_MS = 30_000
@@ -132,6 +133,7 @@ class AutopilotService(QObject):
     logMessage = Signal(str)
     enabledChanged = Signal(bool)
     statusChanged = Signal(dict)
+    _reportFinished = Signal(object, str)
 
     def __init__(self, bounce_service, parent=None) -> None:
         super().__init__(parent)
@@ -174,6 +176,15 @@ class AutopilotService(QObject):
         self._last_report_write: datetime | None = None
         self._last_report_attempt: datetime | None = None
         self._last_report_error = ""
+        # One writer owns the report publication. GUI-originated requests are
+        # single-flight and execute on a background thread; existing scan and
+        # wrap-up workers use the same lock when they publish synchronously.
+        self._report_build_lock = threading.Lock()
+        self._report_async_running = False
+        self._report_async_pending = False
+        self._report_async_pending_reason = ""
+        self._report_shutdown = False
+        self._reportFinished.connect(self._on_report_finished)
         self._last_hourly_report_attempt_slot = ""
         self._last_hourly_report_attempt_at: datetime | None = None
         self._last_d1_push_slot = ""
@@ -199,7 +210,7 @@ class AutopilotService(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
-        self._timer.start()
+        start_staggered(self._timer, 35_000)
 
         if self._enabled:
             # Quiet hours (packet R1): a desk booted at 21:00 with Auto left ON
@@ -243,7 +254,7 @@ class AutopilotService(QObject):
             self._save_state()
             self._log("AUTO PILOT OFF - automation paused for today (BounceBot keeps running; stop it from the desk if needed).")
         self.enabledChanged.emit(enabled)
-        self._write_report()
+        self._request_report_write()
 
     @property
     def auto_mode(self) -> str:
@@ -270,7 +281,7 @@ class AutopilotService(QObject):
             )
         else:
             self._log(f"Auto profile -> {profile} (same decisions; presentation/cadence only).")
-        self._write_report()
+        self._request_report_write()
 
     def _shadow_research_allowed(self) -> bool:
         """OFF-mode suggestion scans may run only with explicit consent."""
@@ -322,11 +333,7 @@ class AutopilotService(QObject):
         self._start_watchlist_build(manual=True)
 
     def write_report_now(self) -> None:
-        publish = self._write_report()
-        if publish.get("ok"):
-            self._log(f"Away report verified at {AUTOPILOT_REPORT_FILE}")
-        else:
-            self._log(f"Away report NOT updated: {publish.get('error') or 'unknown failure'}")
+        self._request_report_write("manual")
 
     def status_snapshot(self) -> dict[str, Any]:
         now = datetime.now()
@@ -405,7 +412,8 @@ class AutopilotService(QObject):
         )
 
     def shutdown(self) -> None:
-        self._timer.stop()
+        self._report_shutdown = True
+        stop_staggered(self._timer)
         self._save_state()
         # Hand the shared writer lease back before the scan service goes away:
         # a clean exit must not leave the other machine locked out for the rest
@@ -1132,7 +1140,7 @@ class AutopilotService(QObject):
         self._log(f"Swing scan for slot {slot} finished at {stamp} ({len(rows)} setup rows).")
         self._active_scan_slot = None
         self._waiting_scan_slot = None
-        self._write_report()
+        self._request_report_write()
         self._maybe_run_wrapup(datetime.now())
 
     @Slot(str)
@@ -1148,7 +1156,7 @@ class AutopilotService(QObject):
             logging.error("Auto Pilot swing scan for slot %s failed:\n%s", slot, detail)
         self._active_scan_slot = None
         self._waiting_scan_slot = None
-        self._write_report()
+        self._request_report_write()
         self._maybe_run_wrapup(datetime.now())
 
     def _mark_slots_done(self) -> None:
@@ -1651,13 +1659,64 @@ class AutopilotService(QObject):
             return
         self._last_hourly_report_attempt_slot = slot
         self._last_hourly_report_attempt_at = now
-        publish = self._write_report()
-        if publish.get("ok"):
-            self._state["hourly_report_slot"] = slot
-            self._save_state()
-            self._log(f"Hourly Away swing report verified for {slot.split('|', 1)[1]}.")
+        self._request_report_write(f"hourly:{slot}")
 
     def _write_report(self) -> dict[str, Any]:
+        with self._report_build_lock:
+            return self._write_report_locked()
+
+    def _request_report_write(self, reason: str = "") -> bool:
+        """Queue a report publish without doing audit or file I/O on Qt."""
+
+        if self._report_shutdown:
+            return False
+        if self._report_async_running:
+            self._report_async_pending = True
+            if reason == "manual" or (
+                reason and self._report_async_pending_reason != "manual"
+            ):
+                self._report_async_pending_reason = str(reason)
+            return False
+        self._report_async_running = True
+
+        def worker() -> None:
+            _enter_background_thread_mode()
+            publish = self._write_report()
+            if self._report_shutdown:
+                return
+            try:
+                self._reportFinished.emit(publish, str(reason or ""))
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=worker, name="autopilot-report", daemon=True).start()
+        return True
+
+    @Slot(object, str)
+    def _on_report_finished(self, publish: object, reason: str) -> None:
+        self._report_async_running = False
+        result = publish if isinstance(publish, dict) else {}
+        if reason == "manual":
+            if result.get("ok"):
+                self._log(f"Away report verified at {AUTOPILOT_REPORT_FILE}")
+            else:
+                self._log(
+                    f"Away report NOT updated: {result.get('error') or 'unknown failure'}"
+                )
+        elif reason.startswith("hourly:") and result.get("ok"):
+            slot = reason[len("hourly:") :]
+            self._state["hourly_report_slot"] = slot
+            self._save_state()
+            label = slot.split("|", 1)[1] if "|" in slot else slot
+            self._log(f"Hourly Away swing report verified for {label}.")
+
+        if self._report_async_pending and not self._report_shutdown:
+            pending_reason = self._report_async_pending_reason
+            self._report_async_pending = False
+            self._report_async_pending_reason = ""
+            self._request_report_write(pending_reason)
+
+    def _write_report_locked(self) -> dict[str, Any]:
         try:
             longs, shorts = self._read_watchlists()
             snapshot = self.status_snapshot()

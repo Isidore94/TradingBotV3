@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import chart_levels
 from chart_watch import D1_EVENT_KINDS, WATCH_KINDS
 from ui import theme
+from ui.timer_utils import start_staggered
 from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_VETO
 from ui.widgets.candle_chart import CandleChart
 from ui.widgets.paint_lines_button import PaintLinesButton
@@ -1036,7 +1037,7 @@ class SymbolSnapshotDialog(QDialog):
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(REFRESH_INTERVAL_MS)
         self._refresh_timer.timeout.connect(self._auto_refresh)
-        self._refresh_timer.start()
+        start_staggered(self._refresh_timer, 57_000)
 
     def _resize_to_desk_height(self) -> None:
         """Open as tall as the desk window itself (trader ask 2026-08-11).

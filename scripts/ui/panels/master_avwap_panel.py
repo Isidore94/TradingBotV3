@@ -41,6 +41,7 @@ from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
 from ui.services.data_feed import copy_symbols, load_latest_setup_rows_with_meta
 from ui.services.scan_service import ScanService
+from ui.timer_utils import start_staggered
 from ui.widgets.data_table import DataTable
 from ui.widgets.setup_delegate import SetupTableDelegate
 from ui.widgets.empty_state import EmptyState
@@ -312,7 +313,7 @@ class MasterAvwapPanel(QWidget):
         self.report_poll_timer = QTimer(self)
         self.report_poll_timer.setInterval(30_000)
         self.report_poll_timer.timeout.connect(self._poll_report_changes)
-        self.report_poll_timer.start()
+        start_staggered(self.report_poll_timer, 43_000)
         self.scheduler_timer = QTimer(self)
         self.scheduler_timer.setInterval(15_000)
         self.scheduler_timer.timeout.connect(self._scheduler_tick)

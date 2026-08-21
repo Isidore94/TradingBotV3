@@ -29,6 +29,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 import autopilot_core as core
 import strength_scan
+from ui.timer_utils import start_staggered, stop_staggered
 
 #: Refresh cadence, in minutes. Settings-tunable; the default comes from the
 #: 27.6 s measurement rather than a guess.
@@ -55,7 +56,7 @@ class StrengthBoardService(QObject):
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
-        self._timer.start()
+        start_staggered(self._timer, 41_000)
 
     # ------------------------------------------------------------------ reads
     @property
@@ -89,7 +90,7 @@ class StrengthBoardService(QObject):
         return self._start(manual=True)
 
     def shutdown(self) -> None:
-        self._timer.stop()
+        stop_staggered(self._timer)
 
     # ------------------------------------------------------------------ timer
     def _tick(self) -> None:

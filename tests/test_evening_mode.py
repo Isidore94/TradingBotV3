@@ -62,14 +62,14 @@ def test_evening_hourly_report_publishes_like_away():
     service._enabled = True
     service._profile = AUTO_PROFILE_EVENING
     service._state = {"hourly_report_slot": None}
-    service._write_report = lambda: writes.append("write") or {"ok": True}
+    service._request_report_write = lambda reason="": writes.append(reason) or True
     service._save_state = lambda: None
     service._log = lambda _message: None
 
     moment = datetime(2026, 8, 3, 7, 0)  # a Monday
     service._maybe_hourly_away_report(moment)
     service._maybe_hourly_away_report(moment)
-    assert writes == ["write"]
+    assert writes == ["hourly:2026-08-03|07:00"]
 
 
 def test_early_swing_slot_only_in_evening():

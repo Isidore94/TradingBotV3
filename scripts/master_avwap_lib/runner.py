@@ -9,6 +9,7 @@ from copy import deepcopy
 from . import legacy as _legacy
 from .d1_zone_arms import build_d1_zone_arms
 from .setup_tagging import apply_setup_tag_payload, canonicalize_priority_setup_tags
+from master_avwap_shared import build_active_bounce_summary, load_master_avwap_events_for_date
 
 # Scanner orchestration is extracted while helper functions continue to migrate.
 globals().update(
@@ -2227,6 +2228,24 @@ def _run_master_impl(
             df_signals.sort_values(["run_date", "trade_date", "symbol", "signal_type"], inplace=True)
 
         _write_dataframe_csv_atomic(df_signals, AVWAP_SIGNALS_FILE, index=False)
+        try:
+            signal_stat = AVWAP_SIGNALS_FILE.stat()
+            target_date = today_run.isoformat()
+            active_rows = df_signals.loc[
+                df_signals["trade_date"].astype(str).str[:10] == target_date,
+                ["trade_date", "symbol", "signal_type"],
+            ].to_dict(orient="records")
+            active_payload = build_active_bounce_summary(
+                active_rows,
+                trade_date=today_run,
+                source_size=signal_stat.st_size,
+                source_mtime_ns=signal_stat.st_mtime_ns,
+            )
+            save_json(MASTER_AVWAP_ACTIVE_EVENTS_FILE, active_payload, pretty=True)
+        except Exception as exc:
+            # Compatibility fallback remains the historical CSV. A compact
+            # projection failure may cost responsiveness, never scan output.
+            logging.warning("Active AVWAP event summary publish failed: %s", exc)
         logging.info(
             f"Appended {new_signal_count} AVWAP signals to {AVWAP_SIGNALS_FILE} "
             f"({len(df_signals)} total rows)."
@@ -2235,6 +2254,27 @@ def _run_master_impl(
         logging.info(
             f"No AVWAP signals generated for {today_run.isoformat()}; nothing appended."
         )
+        # Still stamp today's empty/current projection. Otherwise a quiet
+        # session leaves yesterday's sidecar in place and makes the GUI fall
+        # back to parsing the complete historical ledger on every restart.
+        try:
+            signal_stat = AVWAP_SIGNALS_FILE.stat()
+            existing_today = load_master_avwap_events_for_date(
+                trade_date=today_run,
+                signals_path=AVWAP_SIGNALS_FILE,
+            )
+            active_rows = [row for rows in existing_today.values() for row in rows]
+            active_payload = build_active_bounce_summary(
+                active_rows,
+                trade_date=today_run,
+                source_size=signal_stat.st_size,
+                source_mtime_ns=signal_stat.st_mtime_ns,
+            )
+            save_json(MASTER_AVWAP_ACTIVE_EVENTS_FILE, active_payload, pretty=True)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logging.warning("Active AVWAP event summary publish failed: %s", exc)
     _output_t = _log_phase_duration("output/signals", _output_t)
 
     # trim history to last N days

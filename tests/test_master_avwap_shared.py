@@ -11,6 +11,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from master_avwap_shared import (  # noqa: E402
+    build_active_bounce_summary,
     build_master_avwap_active_level_map,
     build_master_avwap_d1_flag_events,
     build_master_avwap_second_stdev_cross_map,
@@ -18,12 +19,63 @@ from master_avwap_shared import (  # noqa: E402
     load_master_avwap_d1_upgrade_alerts,
     load_master_avwap_d1_watchlist,
     load_master_avwap_events_for_date,
+    load_active_bounce_summary,
     load_master_avwap_focus_map,
     load_tradingview_groups,
 )
 
 
 class MasterAvwapSharedTests(unittest.TestCase):
+    def test_compact_active_bounce_summary_requires_exact_source_signature(self):
+        trade_date = date.today()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            signals_path = root / "avwap_signals.csv"
+            summary_path = root / "master_avwap_active_events.json"
+            signals_path.write_text("header\nrow\n", encoding="utf-8")
+            stat = signals_path.stat()
+            payload = build_active_bounce_summary(
+                [
+                    {
+                        "trade_date": trade_date.isoformat(),
+                        "symbol": "tsla",
+                        "signal_type": "BOUNCE_LOWER_1",
+                    },
+                    {
+                        "trade_date": trade_date.isoformat(),
+                        "symbol": "AAPL",
+                        "signal_type": "CROSS_UP_UPPER_2",
+                    },
+                    {
+                        "trade_date": (trade_date - timedelta(days=1)).isoformat(),
+                        "symbol": "OLD",
+                        "signal_type": "BOUNCE_VWAP",
+                    },
+                ],
+                trade_date=trade_date,
+                source_size=stat.st_size,
+                source_mtime_ns=stat.st_mtime_ns,
+            )
+            summary_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            self.assertEqual(
+                load_active_bounce_summary(
+                    summary_path,
+                    signals_path=signals_path,
+                    trade_date=trade_date,
+                ),
+                {"TSLA": ["LOWER_1"]},
+            )
+
+            signals_path.write_text("header\nrow\nchanged\n", encoding="utf-8")
+            self.assertIsNone(
+                load_active_bounce_summary(
+                    summary_path,
+                    signals_path=signals_path,
+                    trade_date=trade_date,
+                )
+            )
+
     def test_event_loading_and_maps(self):
         trade_date = date.today()
         prior_date = trade_date - timedelta(days=1)

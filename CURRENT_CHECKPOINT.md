@@ -8,6 +8,84 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-20, seventh pass — THE DESK NO LONGER PARSES HISTORY ON A HEALTH TICK
+
+**Branch `phase05-integration-blitz`.** Trader-authorized Phase-0 GUI
+responsiveness repair and R6(c) diagnostic activation. Code is complete and
+deterministically green; the bounded live week is now running.
+
+### Evidence, not a resource guess
+
+Windows recorded two real `AppHangB1` events today: frozen
+`TradingBotV3.exe` at **07:19** and source `python.exe` at **14:16**. The desk
+had CPU, RAM and GPU headroom. The blocking work was application-side:
+
+- `BounceService.refresh_health()` ran every 3 seconds on Qt and, whenever
+  `avwap_signals.csv` changed, parsed the complete **63.88 MB / 370,109-row**
+  history. A warm parse measured **1.268 s**.
+- GUI-originated Away-report publication included the operations audit, which
+  measured **0.540 s**; the Focus JSON was **13.88 MB** (about **0.079 s** to
+  parse).
+- independently-created 30/60-second timers retained the same phase, so their
+  work arrived as a herd; the full generation-2 GUI garbage collection was
+  also scheduled on the fixed 60-second boundary.
+
+The 07:19 hang landed 63 seconds after `IB: connected`, consistent with the
+first timer cohort. The 14:16 hang followed scan/wrap-up activity. These are
+the causal seams repaired here; no detector, score, threshold, alert decision
+or completed-bar rule changed.
+
+### Repair
+
+- The Master scanner now atomically publishes
+  `master_avwap_active_events.json`, a current-session BOUNCE-only projection
+  carrying the exact source size/mtime signature. GUI health validates that
+  tiny projection. A missing/stale projection falls back to the historical CSV
+  **once on a single-flight worker**, never on Qt; unchanged signatures reuse
+  the last count.
+- GUI-originated Away-report/audit writes now run on a background thread behind
+  one publication lock. Requests coalesce, while hourly completion state still
+  advances only after a verified publish. Existing scan/wrap-up workers share
+  the same writer lock.
+- Alert Center D1 watches now read only the shared chart service's memory cache.
+  D1 store freshness, parsing and earnings-anchor resolution run through the
+  existing two-thread chart pool; an unwarmed symbol is honestly UNKNOWN for a
+  poll instead of freezing the desk.
+- `timer_utils.start_staggered` gives the major 30/60-second jobs distinct first
+  phases without changing their recurring intervals. The initial phase is
+  never earlier than the timer's original cadence (except the intentionally
+  fast 3-second health display).
+- Cyclic GC still owns Qt-wrapper destruction on the GUI thread, but a young
+  sweep waits for 250 ms without input and a due full sweep waits for 2 seconds
+  of idleness. A click/wheel/key event cannot have a full heap sweep scheduled
+  directly on top of it.
+- Machine-local `ui_stall_watchdog=true`, threshold **50 ms**, is saved now.
+  It takes effect at the next launch and writes bounded diagnostics to
+  `%LOCALAPPDATA%\TradingBotV3\diagnostics\ui_stalls.jsonl`.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| focused responsiveness/lifecycle/cache/mode tests | **75 passed**, exit 0 |
+| Alert Center/watch regression slice | **128 passed**, exit 0 |
+| service/chart/report regression slice | **182 passed**, exit 0 |
+| `pytest tests/ -q` | **3945 passed / 19 subtests**, exit **0** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | **not rebuilt** — no dependency, runtime asset, new top-level package, dynamic import or root-path trigger; the new module is an ordinary import inside the already-collected `ui` package |
+
+### Owed, live
+
+Restart the desk, then run the R6(c) bounded diagnostic week. Require no new
+Windows `Application Hang` event, no repeated >50 ms culprit at a repaired
+seam, and no responsiveness regression while clicking/typing during scan and
+wrap-up. Confirm the next Master scan writes the compact active-event file and
+that Away reports still verify. Inspect the watchdog log after each session;
+do not tune a detector or threshold from this diagnostic.
+
+---
+
 ## 2026-08-20, sixth pass — THE VETO COHORT IS GRADED NIGHTLY
 
 **Branch `phase05-integration-blitz`.** Agreed design, built to spec (W1–W5).

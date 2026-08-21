@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from operations_audit import build_operations_audit
 from ui import theme
+from ui.timer_utils import start_staggered
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
 
@@ -240,7 +241,7 @@ class HealthPanel(QFrame):
         self._timer = QTimer(self)
         self._timer.setInterval(max(5_000, int(refresh_interval_ms)))
         self._timer.timeout.connect(self.refresh)
-        self._timer.start()
+        start_staggered(self._timer, 81_000)
         QTimer.singleShot(0, self.refresh)
 
     def refresh(self) -> None:

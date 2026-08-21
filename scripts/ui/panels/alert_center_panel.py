@@ -89,6 +89,7 @@ from review_events import record_review_event
 from review_guidance import ORDERING_ANNOTATION_ONLY, AlertGuidance, ReviewGuide
 from ui import theme
 from ui.panels import desk_layout
+from ui.timer_utils import start_staggered
 from ui.models.bounce import (
     AUTO_PICK_TAG,
     BounceAlert,
@@ -817,6 +818,11 @@ class AlertCenterPanel(QFrame):
         desk_layout.persist_sizes(self, self.tabs_row, ALERT_TABS_SPLIT_KEY)
 
         self.detail_view = SetupDetailView(self)
+        # D1 watches consume only the shared chart service's in-memory series.
+        # A throttled prefetch request performs every stat/read/parse on the
+        # chart worker pool; the first poll may honestly be UNKNOWN rather than
+        # blocking the whole desk on one symbol's durable store.
+        self._d1_prefetch_last: dict[str, float] = {}
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -841,7 +847,7 @@ class AlertCenterPanel(QFrame):
         # adoption this runs in EVERY mode - a Focus entry whose scan line was
         # cut is wrong on the board whether the trader is at the desk or not.
         self._watch_timer.timeout.connect(self._drain_focus_desync_requests)
-        self._watch_timer.start()
+        start_staggered(self._watch_timer, 39_000)
         # A refetch finishes off-thread; repaint the moment it lands rather
         # than waiting up to 30s for the next tick. Qt queues this across the
         # thread boundary because both ends are QObjects.
@@ -862,7 +868,7 @@ class AlertCenterPanel(QFrame):
         # Focus picks are auto-watched for every D1 event kind - no arming
         # needed. Rides the same 60s cadence as the armed D1 watches.
         self._d1_watch_timer.timeout.connect(self._poll_focus_d1_interest)
-        self._d1_watch_timer.start()
+        start_staggered(self._d1_watch_timer, 77_000)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.chart_review)
@@ -3486,10 +3492,21 @@ class AlertCenterPanel(QFrame):
         return list(self._d1_level_watches)
 
     def _d1_bars_for(self, symbol: str) -> list:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return []
         try:
-            import chart_snapshot
+            from ui.services.chart_data_service import shared_service
 
-            return chart_snapshot.load_d1_bars(symbol) or []
+            service = shared_service()
+            series = service.cached_series(symbol)
+            now = time.monotonic()
+            last = self._d1_prefetch_last.get(symbol, 0.0)
+            retry_seconds = 60.0 if series is not None else 15.0
+            if now - last >= retry_seconds:
+                self._d1_prefetch_last[symbol] = now
+                service.prefetch([symbol])
+            return series.as_bar_dicts() if series is not None else []
         except Exception:
             return []
 
@@ -3617,9 +3634,11 @@ class AlertCenterPanel(QFrame):
                 avwape_anchor = None
                 if watch.kind.startswith("avwape_"):
                     try:
-                        import chart_snapshot
+                        from ui.services.chart_data_service import shared_service
 
-                        avwape_anchor = chart_snapshot.earnings_anchor_date(watch.symbol)
+                        avwape_anchor = shared_service().cached_earnings_anchor(
+                            watch.symbol
+                        )
                     except Exception:
                         avwape_anchor = None
                 try:
