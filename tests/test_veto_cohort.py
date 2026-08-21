@@ -168,8 +168,12 @@ class VetoCohortMergeTests(unittest.TestCase):
         rows = self._rows()
         self.assertEqual(len(rows), 1)
         # record_annotation stamps vocab_version, so a row written through the
-        # real writer carries the versioned key (2026-08-20).
-        self.assertEqual(rows[0]["source"], "veto_v2_volume_dry")
+        # real writer carries the versioned key (2026-08-20). Read the version
+        # from the vocabulary, never assert a literal one.
+        from ui.annotations.vocabulary import load_veto_vocabulary
+
+        version = load_veto_vocabulary().vocab_version
+        self.assertEqual(rows[0]["source"], f"veto_v{version}_volume_dry")
 
     def test_merge_is_idempotent(self) -> None:
         self._veto("NVDA", "volume_dry")
@@ -444,3 +448,159 @@ class FocusPicksFileUntouchedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CanonicalCohortTests(unittest.TestCase):
+    """An additive vocabulary bump must not restart a reason's record.
+
+    v3 (2026-08-21) added "SMA incoming" and changed nothing else. The nine
+    reasons that carried over are byte-identical, so grading them as fresh
+    cohorts would throw away the sample for no gain. Identity is the reason's
+    DEFINITION; the canonical cohort is the earliest version carrying it.
+
+    This is a READING of the record, not a rewriting of it: pick and outcome
+    rows keep the version they were captured under.
+    """
+
+    def test_an_unchanged_reason_pools_back_to_its_earliest_version(self) -> None:
+        from ui.annotations.veto_cohort import canonical_veto_cohort
+
+        self.assertEqual(canonical_veto_cohort("veto_v3_volume_dry"), "veto_v1_volume_dry")
+        self.assertEqual(canonical_veto_cohort("veto_v2_volume_dry"), "veto_v1_volume_dry")
+        self.assertEqual(canonical_veto_cohort("veto_v1_volume_dry"), "veto_v1_volume_dry")
+
+    def test_rows_written_before_versioning_pool_with_v1(self) -> None:
+        from ui.annotations.veto_cohort import canonical_veto_cohort
+
+        self.assertEqual(canonical_veto_cohort("veto_volume_dry"), "veto_v1_volume_dry")
+
+    def test_a_reason_introduced_later_keeps_its_own_cohort(self) -> None:
+        """'compressed' is new in v2 and 'sma_incoming' new in v3; neither has
+        an earlier twin, so neither may inherit one."""
+        from ui.annotations.veto_cohort import canonical_veto_cohort
+
+        self.assertEqual(canonical_veto_cohort("veto_v2_compressed"), "veto_v2_compressed")
+        self.assertEqual(canonical_veto_cohort("veto_v3_compressed"), "veto_v2_compressed")
+        self.assertEqual(
+            canonical_veto_cohort("veto_v3_sma_incoming"), "veto_v3_sma_incoming"
+        )
+
+    def test_a_retired_reason_is_never_pooled_into_a_survivor(self) -> None:
+        """v1's 'support_resistance_cluttered' was replaced, not renamed."""
+        from ui.annotations.veto_cohort import canonical_veto_cohort
+
+        self.assertEqual(
+            canonical_veto_cohort("veto_v1_support_resistance_cluttered"),
+            "veto_v1_support_resistance_cluttered",
+        )
+
+    def test_a_source_this_map_does_not_know_is_returned_unchanged(self) -> None:
+        from ui.annotations.veto_cohort import canonical_veto_cohort
+
+        self.assertEqual(canonical_veto_cohort("human_focus_auto"), "human_focus_auto")
+        self.assertEqual(canonical_veto_cohort("veto_v9_invented"), "veto_v9_invented")
+        self.assertEqual(canonical_veto_cohort(""), "")
+
+
+class PooledPerformanceTests(unittest.TestCase):
+    """The rollup groups by the canonical cohort; the outcomes keep theirs."""
+
+    def _outcome_row(self, source: str, symbol: str, ret: str) -> dict:
+        """Named ``_outcome_row``, not ``_outcome``: unittest.TestCase keeps
+        its own ``_outcome`` attribute and shadowing it breaks the runner."""
+        return {
+            "trade_date": "2026-08-18",
+            "symbol": symbol,
+            "side": "LONG",
+            "source": source,
+            "h1_return": ret,
+            "fully_matured": "",
+        }
+
+    def _write_outcomes(self, path: Path, rows: list[dict]) -> None:
+        columns = sorted({key for row in rows for key in row})
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(rows)
+
+    def test_two_versions_of_one_reason_grade_as_one_cohort(self) -> None:
+        from ui.annotations.veto_cohort import _rebuild_pooled_performance
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outcomes = root / "veto_cohort_outcomes.csv"
+            performance = root / "veto_cohort_performance.csv"
+            self._write_outcomes(
+                outcomes,
+                [
+                    self._outcome_row("veto_v2_volume_dry", "AAA", "0.01"),
+                    self._outcome_row("veto_v3_volume_dry", "BBB", "-0.02"),
+                ],
+            )
+            written = _rebuild_pooled_performance(
+                outcomes_path=outcomes, performance_path=performance, now=NOW
+            )
+            self.assertIsNotNone(written)
+            rows = list(csv.DictReader(performance.open(encoding="utf-8")))
+            cohorts = {row["cohort"] for row in rows}
+            self.assertIn("human_focus_veto_v1_volume_dry", cohorts)
+            self.assertNotIn("human_focus_veto_v2_volume_dry", cohorts)
+            self.assertNotIn("human_focus_veto_v3_volume_dry", cohorts)
+            pooled = [
+                row
+                for row in rows
+                if row["cohort"] == "human_focus_veto_v1_volume_dry"
+                and row["side"] == "ALL"
+                and row["horizon_sessions"] == "1"
+            ]
+            self.assertEqual(len(pooled), 1)
+            self.assertEqual(pooled[0]["sample_count"], "2")
+
+    def test_the_outcome_rows_themselves_are_never_rewritten(self) -> None:
+        from ui.annotations.veto_cohort import _rebuild_pooled_performance
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outcomes = root / "veto_cohort_outcomes.csv"
+            performance = root / "veto_cohort_performance.csv"
+            self._write_outcomes(
+                outcomes, [self._outcome_row("veto_v3_volume_dry", "AAA", "0.01")]
+            )
+            before = outcomes.read_bytes()
+            _rebuild_pooled_performance(
+                outcomes_path=outcomes, performance_path=performance, now=NOW
+            )
+            self.assertEqual(outcomes.read_bytes(), before)
+
+    def test_nothing_to_pool_leaves_the_delegate_s_rollup_alone(self) -> None:
+        """Only-canonical sources: the function reports it did nothing rather
+        than rewriting an identical file."""
+        from ui.annotations.veto_cohort import _rebuild_pooled_performance
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outcomes = root / "veto_cohort_outcomes.csv"
+            performance = root / "veto_cohort_performance.csv"
+            self._write_outcomes(
+                outcomes, [self._outcome_row("veto_v1_volume_dry", "AAA", "0.01")]
+            )
+            self.assertIsNone(
+                _rebuild_pooled_performance(
+                    outcomes_path=outcomes, performance_path=performance, now=NOW
+                )
+            )
+            self.assertFalse(performance.exists())
+
+    def test_no_outcomes_yet_is_not_an_error(self) -> None:
+        from ui.annotations.veto_cohort import _rebuild_pooled_performance
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertIsNone(
+                _rebuild_pooled_performance(
+                    outcomes_path=root / "missing.csv",
+                    performance_path=root / "perf.csv",
+                    now=NOW,
+                )
+            )

@@ -8,6 +8,94 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-21, ninth pass — FOUR TRADER ASKS, ONE OF THEM A ROOT CAUSE
+
+**Branch `phase05-integration-blitz`.** Trader handed over four integrations in
+one message; each ambiguity was put back to them before code was written, and
+their four answers are what got built. `plan.md` Phase 0.5 item 10 holds the
+live gates.
+
+### What was decided, not assumed
+
+| Ask | The real choice | Trader's call |
+|---|---|---|
+| "SMA incoming" veto | a v3 bump re-cohorts eight unchanged reasons a second time | v3 **and** pool identical definitions |
+| post-earnings + 2nd-dev claims | three `post_earnings_*` or the whole earnings group | the three, plus `second_dev_breakout` |
+| RS/RW board placement | new nav page vs a second half of the Strength Board page | second half, draggable splitter |
+| the giant candle | guard only, guard + log, or also hunt the source | guard, log, **and** hunt |
+
+### The candle was a real defect, not a styling problem
+
+A chart takes its y-range from bar **lows and highs** and draws the body from
+**opens and closes**. Those are the same numbers only while
+`low <= open, close <= high` holds. A bar that breaks it paints a solid column
+through the entire viewport while the axis still reads perfectly normally -
+which is exactly the GFS M5 screenshot: a full-height green bar over a session
+scaled 47.0-48.6.
+
+`scripts/ui/bar_integrity.py` now owns that judgement for both the renderer and
+the data service. A malformed bar draws **dashed, hollow, caution-coloured,
+body clamped into its own low/high**, is excluded from the scale, and is
+counted in a bottom-left note. It is never silently dropped - missing data is
+uncertainty, never confirmation - and `ChartDataService` logs each one once to
+`bad_bars.jsonl` with symbol, timestamp, OHLC and the cache it came from.
+
+**The honest limit:** if the offending bar turns out to be *well formed* and
+merely an aggregate row (a daily bar in an M5 series), this guard does not
+fire. That case is now OBSERVED rather than guessed at - `range_outliers()`
+logs a bar whose range is both 6x the series median and half its whole range -
+so the next occurrence names which failure it is.
+
+**Diagnosed in BounceBot, deliberately not edited:** `_get_cached_bars`
+(`bounce_bot_lib/legacy.py:8370-8371`) does
+`self.latest_bars.setdefault(symbol, bars_ib)` for whatever duration and bar
+size it just fetched, and `m5_chart_bars` falls back to that same plain key.
+A symbol whose `|5 D|5 mins` key is missing can therefore be charted from a
+daily or hourly series - most plausibly SPY, whose group-strength D1 fetch is
+`6 M`/`1 day`. Latent, not observed. That file houses detector code, so it is
+ask-first and stays untouched.
+
+### The other three
+
+- **Veto v3** carries "SMA incoming" on hotkey **0**; the nine existing digits
+  do not move. `canonical_veto_cohort` pools by DEFINITION (code, label, hint,
+  note rule), so v1/v2/v3 `volume_dry` grade as one cohort while `compressed`
+  (new in v2) and `sma_incoming` (new in v3) grade on their own. Pooling is a
+  reading applied at rollup time; picks and outcomes keep their captured
+  version and are never rewritten, so it is reversible.
+- **The like rail** offers Main swing plus the three post-earnings families and
+  `second_dev_breakout`, keyed `1234567890qwerty...` in list order. A test
+  fails loudly if an id in `EXTRA_CLAIM_IDS` is not one the registry names.
+- **The Strength Board page** gained an RS/RW half in a vertical splitter, fed
+  by a second listener on the existing `rrsSnapshotChanged` signal. No new nav
+  entry, no second fetch, no second chart widget.
+
+### Three tests were wrong before this and are fixed
+
+`test_chart_review_workspace` and `test_veto_cohort` asserted the literal
+string `veto_v2_...`, which the repo's own rule forbids ("never assert a
+literal `vocab_version`; assert against the loaded vocabulary"). They now read
+the version from the vocabulary, so the next bump will not have to edit them.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3987 passed / 19 subtests**, exit **0** (was 3945; +42 new) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| ruff | **not run** - not installed in this venv (`No module named ruff`) |
+| frozen exe | **not rebuilt.** `veto_reasons_v3.json` is a new runtime asset (trigger 2), but the spec mirrors every non-`.py` file under each first-party tree and `test_packaging_spec_drift` passes. Moot in practice while Smart App Control refuses the build - the desk runs from source, so this commit is live at the next restart |
+
+### Owed
+
+The four live gates in `plan.md` item 10, on top of the unchanged R6(c)
+diagnostic week. Above all: read `bad_bars.jsonl` after the next occurrence and
+find out whether the bad bar is malformed or an aggregate - that answer decides
+whether anything needs to change in `bounce_bot_lib` at all.
+
+---
+
 ## 2026-08-21, eighth pass — THE REPAIR REACHES THE DESK, AND THE FROZEN EXE NO LONGER RUNS
 
 **Branch `phase05-integration-blitz`.** No source change. This pass corrects a

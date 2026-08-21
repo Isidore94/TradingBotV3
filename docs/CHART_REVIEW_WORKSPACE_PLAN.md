@@ -268,6 +268,33 @@ round — the version is in the key, so pooling stays recoverable by analysis,
 whereas a wrongly pooled cohort is not — but on day one, with 66 annotation
 rows, it is a real cost and analysis should expect it.
 
+**And on 2026-08-21 it was recovered.** v3 added "SMA incoming" and changed
+nothing else, which made the same cost due a second time; the trader chose to
+bump *and* pool. `canonical_veto_cohort(source)` maps a cohort source to the
+earliest version carrying an identical reason DEFINITION — code, label, hint
+and note rule, all four — so v1/v2/v3 `volume_dry` grade as one
+`veto_v1_volume_dry`, while `compressed` (first in v2) and `sma_incoming`
+(first in v3) keep their own cohorts, and v1's replaced
+`support_resistance_cluttered` is never folded into a survivor.
+
+Three properties make this safe to have written down as reversible:
+
+1. **It is a reading, not a rewriting.** Pick rows and outcome rows keep the
+   exact `vocab_version` they were captured under. Only the derived rollup —
+   `veto_cohort_performance.csv`, regenerated every run — is grouped by the
+   canonical source, through `_rebuild_pooled_performance`.
+2. **It reuses the same math.** The pooled rollup is built by
+   `build_human_focus_performance_rows`, the same function the delegate uses,
+   so pooling can never introduce a second definition of a win rate.
+3. **It fails to the old behaviour.** A vocabulary that cannot be read yields
+   an empty map and no pooling — cohorts stay split, which is what happened
+   before this existed and is never a wrong number.
+
+The rule for the next bump: *additive* bumps pool automatically, because the
+carried-over definitions are identical. A bump that **changes** a label, hint
+or note rule deliberately splits that reason, and that is the signal that its
+meaning moved.
+
 ### Reading the cohort
 
 `trader_judgement` is an **opt-in** AI evidence scope (`ai_summary.py`), not in
@@ -275,9 +302,10 @@ rows, it is a real cost and analysis should expect it.
 `veto_cohort_performance.csv`, `veto_cohort_outcomes.csv`, then
 `trader_annotations.jsonl` last. Run it on demand with
 `run_ai_jobs.py --scopes trader_judgement`. Two machine-written caveats travel
-with it: the like+claim control currently offers only the "Main swing" group,
-and "Veto D1 — but M5 today" writes an ordinary veto row so some vetoed names
-were traded the same day.
+with it: the like+claim control offers a bounded picklist — Main swing plus the
+three post-earnings families and `second_dev_breakout` since 2026-08-21, so a
+claim can only ever be one of those — and "Veto D1 — but M5 today" writes an
+ordinary veto row, so some vetoed names were traded the same day.
 
 Nothing reads these files back into a detector, a score, an alert, a watchlist,
 Focus, the review queue, or `review_policy.json`.

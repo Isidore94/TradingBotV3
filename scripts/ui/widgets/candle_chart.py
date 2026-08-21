@@ -37,7 +37,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPicture, QPen
 
-from ui import theme
+from ui import bar_integrity, theme
 
 
 _CANDLE_HALF_WIDTH = 0.27
@@ -235,6 +235,7 @@ class CandleItem(pg.GraphicsObject):
         self._log_y = bool(log_y)
         self._picture = QPicture()
         self._bounds = QRectF()
+        self._defects: dict[int, bar_integrity.BarDefect] = {}
         self._render()
 
     def set_bars(self, bars: list[dict], *, log_y: bool | None = None) -> None:
@@ -262,35 +263,61 @@ class CandleItem(pg.GraphicsObject):
         # picture is not a documented reset, and allocation is negligible
         # next to the drawing loop (~7us/bar).
         self._picture = QPicture()
+        # Malformed bars are found ONCE per render and reused by the bounds,
+        # the loop and the host's warning label. A bar whose open or close
+        # sits outside its own low/high draws a body the y-range never saw,
+        # which is how a single bad row paints a solid column over a whole
+        # session (see ui.bar_integrity).
+        self._defects = {
+            defect.index: defect for defect in bar_integrity.scan_bars(self._bars)
+        }
         self._bounds = self._compute_bounds()
         if not self._bars:
             return
         up = QColor(theme.color("long"))
         down = QColor(theme.color("short"))
+        suspect_color = QColor(theme.color("caution"))
         painter = QPainter(self._picture)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         for index, bar in enumerate(self._bars):
-            color = up if bar["close"] >= bar["open"] else down
+            defect = self._defects.get(index)
+            if defect is not None and not defect.drawable:
+                # A non-finite price or an inverted range leaves nothing to
+                # stand on. Drawing "something" here would be inventing it;
+                # the bar is counted and reported instead.
+                continue
+            suspect = defect is not None
+            color = suspect_color if suspect else (up if bar["close"] >= bar["open"] else down)
             pen = QPen(color)
             pen.setCosmetic(True)
             pen.setWidthF(1.0)
+            if suspect:
+                # Dashed and in the caution role: a bar the data broke must
+                # never be mistakable for one the market made.
+                pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             # A forming (preview) candle - e.g. today's D1 synthesized from
             # cached M5 bars - draws hollow: colored outline, no body fill,
             # so a completed bar and a still-moving one never read the same.
-            if bar.get("preview"):
+            if suspect or bar.get("preview"):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
             else:
                 painter.setBrush(color)
             painter.drawLine(
-                pg.QtCore.QPointF(index, self._y(bar["low"])),
-                pg.QtCore.QPointF(index, self._y(bar["high"])),
+                pg.QtCore.QPointF(index, self._y(float(bar["low"]))),
+                pg.QtCore.QPointF(index, self._y(float(bar["high"]))),
             )
             # Take the log after the max/min: log10 is monotonic, so the body
             # edges are the same bars either way, but this keeps the compare
             # in price space where the values are exact.
-            body_top = self._y(max(bar["open"], bar["close"]))
-            body_bottom = self._y(min(bar["open"], bar["close"]))
+            if suspect:
+                body = bar_integrity.clamped_body(bar)
+                if body is None:
+                    continue
+                body_bottom, body_top = self._y(body[0]), self._y(body[1])
+            else:
+                body_top = self._y(max(bar["open"], bar["close"]))
+                body_bottom = self._y(min(bar["open"], bar["close"]))
             if body_top == body_bottom:
                 painter.drawLine(
                     pg.QtCore.QPointF(index - _CANDLE_HALF_WIDTH, body_top),
@@ -313,9 +340,16 @@ class CandleItem(pg.GraphicsObject):
     def _compute_bounds(self) -> QRectF:
         if not self._bars:
             return QRectF()
-        low = self._y(min(bar["low"] for bar in self._bars))
-        high = self._y(max(bar["high"] for bar in self._bars))
+        span = bar_integrity.price_range(self._bars)
+        if span is None:
+            return QRectF()
+        low = self._y(span[0])
+        high = self._y(span[1])
         return QRectF(-1, low, len(self._bars) + 1, high - low)
+
+    def defects(self) -> list[bar_integrity.BarDefect]:
+        """The malformed bars in the series currently recorded."""
+        return [self._defects[index] for index in sorted(self._defects)]
 
     def boundingRect(self) -> QRectF:
         # Cached, not recomputed: Qt calls this on every paint and on every
@@ -598,8 +632,10 @@ class CandleChart(pg.PlotWidget):
         plot.addItem(self._earnings_lines, ignoreBounds=True)
         self._earnings_text_items: list[pg.TextItem] = []
         self._earnings_projection: pg.TextItem | None = None
+        self._bad_bar_note: pg.TextItem | None = None
         plot.vb.sigRangeChanged.connect(self._position_earnings_glyphs)
         plot.vb.sigResized.connect(self._position_earnings_projection)
+        plot.vb.sigResized.connect(self._position_bad_bar_note)
         # Crosshair/readout items are deliberately NOT built here. They are a
         # hover decoration, and building them at construction gave every
         # CandleChart in the app three extra native scene items plus a
@@ -757,6 +793,62 @@ class CandleChart(pg.PlotWidget):
         # anchor=(1, 0) is the label's top-RIGHT, so this is the inset corner.
         self._earnings_projection.setPos(max(0.0, view.width() - 6.0), 4.0)
 
+    def bar_defects(self) -> list[bar_integrity.BarDefect]:
+        """Malformed bars in the drawn series - empty on a healthy chart.
+
+        Public because a host may want to say more about them than a corner
+        label can (Chart Review names the timestamp; the Alert Center just
+        needs the count).
+        """
+        return self._candles.defects()
+
+    def _sync_bad_bar_note(self) -> None:
+        """Say out loud that a bar could not be drawn at face value.
+
+        A silent guard would fix the picture and hide the problem, and the
+        trader would be reading a chart with a hole in it believing it was
+        whole. The count is small, permanent and in the caution role.
+        """
+        self._position_bad_bar_note()
+
+    def _position_bad_bar_note(self, *_args) -> None:
+        """Pin the malformed-bar note to the viewport's bottom-left corner.
+
+        Bottom-left because the top-right belongs to the earnings projection
+        and the top-left to the legend; parented to the ViewBox for the same
+        reason they are, so panning never carries it off the chart.
+        """
+        defects = self._candles.defects()
+        view = self.getPlotItem().vb
+        if not defects:
+            if self._bad_bar_note is not None:
+                self._bad_bar_note.setVisible(False)
+            return
+        if self._bad_bar_note is None:
+            item = pg.TextItem("", color=theme.color("caution"), anchor=(0.0, 1.0))
+            item.setZValue(30)
+            item.setParentItem(view)
+            self._bad_bar_note = item
+        count = len(defects)
+        stamps = []
+        for defect in defects[:2]:
+            stamp = defect.bar.get("dt")
+            stamps.append(stamp.strftime("%m/%d %H:%M") if hasattr(stamp, "strftime") else "")
+        shown = ", ".join(s for s in stamps if s)
+        noun = "bar" if count == 1 else "bars"
+        label = f"⚠ {count} unusable {noun}"
+        if shown:
+            label = f"{label} ({shown}{', ...' if count > len(stamps) else ''})"
+        self._bad_bar_note.setText(f"{label} - drawn dashed, kept out of the scale")
+        self._bad_bar_note.setToolTip(
+            chr(10).join(
+                f"{d.defect} at index {d.index}: {d.bar}" for d in defects[:5]
+            )
+        )
+        self._bad_bar_note.setVisible(True)
+        # anchor=(0, 1) is the label's bottom-LEFT, so this insets it.
+        self._bad_bar_note.setPos(6.0, max(0.0, view.height() - 4.0))
+
     def set_volume_visible(self, visible: bool) -> None:
         """Draw the volume underlay (D1 today; see VolumeItem for why it is
         an underlay and not a stacked sub-plot)."""
@@ -785,14 +877,19 @@ class CandleChart(pg.PlotWidget):
             self._sync_overlays(0)
             self._sync_volume()
             self._sync_earnings()
+            self._sync_bad_bar_note()
             self._push_levels()  # nothing to hang a level on; hide them all
             return
-        lows = [bar["low"] for bar in self._bars]
-        highs = [bar["high"] for bar in self._bars]
+        # The range comes from the bars a chart may honestly take a scale
+        # from: well-formed ones if there are any, otherwise the malformed
+        # ones whose low/high still hold. None means nothing was usable.
+        span_range = bar_integrity.price_range(self._bars)
         # Log scaling needs strictly positive prices. A non-positive bar means
         # a bad cache row, and a silently clamped candle would misdraw the
         # whole chart - fall back to linear and stay honest instead.
-        self._apply_log_active(self._log_y and min(lows) > 0)
+        self._apply_log_active(
+            self._log_y and span_range is not None and span_range[0] > 0
+        )
         self._candles.set_bars(self._bars, log_y=self._log_active)
         self._sync_overlays(self._push_overlays())
         self._set_ticks(timeframe)
@@ -805,16 +902,18 @@ class CandleChart(pg.PlotWidget):
         # is a fixed property of the chart rather than of the data: it is added
         # for every symbol when the rail is enabled, so the scale never depends
         # on whether this particular name happens to have an earnings date.
-        low_y, high_y = self._y(min(lows)), self._y(max(highs))
-        span = (high_y - low_y) or abs(high_y) or 1.0
-        headroom = _EARNINGS_RIBBON_FRACTION if self._show_earnings else 0.0
-        plot.setYRange(
-            low_y - span * 0.05,
-            high_y + span * (0.05 + headroom),
-            padding=0,
-        )
+        if span_range is not None:
+            low_y, high_y = self._y(span_range[0]), self._y(span_range[1])
+            span = (high_y - low_y) or abs(high_y) or 1.0
+            headroom = _EARNINGS_RIBBON_FRACTION if self._show_earnings else 0.0
+            plot.setYRange(
+                low_y - span * 0.05,
+                high_y + span * (0.05 + headroom),
+                padding=0,
+            )
         self._sync_volume()
         self._sync_earnings()
+        self._sync_bad_bar_note()
         # Levels last: a log/linear flip or a bar change moves where they sit.
         self._push_levels()
 

@@ -135,10 +135,14 @@ SCOPE_LABELS = {
 #: conclusion from a correct file.
 SCOPE_CAVEATS = {
     "trader_judgement": (
-        "The like+claim control currently offers only the 'Main swing' claim "
-        "group. The absence of earnings-cycle, study and playbook claim types "
-        "is a fact about the user interface, not a trader preference, and must "
-        "not be read as one.",
+        "The like+claim control offers a bounded picklist: the whole 'Main "
+        "swing' claim group, plus Post-Earnings 52w Break, Post-Earnings "
+        "Candle Break, Post-Earnings AVWAPE Bounce and 2nd-Dev Breakout "
+        "(added 2026-08-21). Every other earnings-cycle, study and playbook "
+        "claim type is unreachable from that control. Their absence from the "
+        "data is a fact about the user interface, not a trader preference, "
+        "and must not be read as one. The list itself is MAIN_CLAIM_GROUP + "
+        "EXTRA_CLAIM_IDS in ui/widgets/capture_rail.py.",
         "The 'Veto D1 - but M5 today' verb writes an ordinary veto row and "
         "separately adds the name to M5 Focus. Some vetoed names were "
         "therefore traded the same day. The veto stream cannot distinguish "

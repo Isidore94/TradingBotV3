@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 import focus_adoption_gate
+from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 from ui.widgets.section_header import SectionHeader
 
 _COLUMNS = ("Symbol", "Strength", "Day %", "vs VWAP", "Last")
@@ -269,6 +271,22 @@ class StrengthBoardPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(SectionHeader("M5 Strength Board"))
 
+        # The board and the RS/RW read share this page in a draggable
+        # splitter (trader, 2026-08-21: "add RS/RW board under the strength
+        # board"). One page rather than a second nav entry, because the two
+        # are read together: the board says who is strong on the day, the
+        # RS/RW read says who is strong RELATIVE to SPY, its sector and its
+        # industry, and flipping between pages to compare them is the friction
+        # the request is about.
+        #
+        # The RS/RW widget here is the SAME RrsSnapshotWidget the Alert Center
+        # tab uses, fed by the same rrsSnapshotChanged payload. It is a second
+        # VIEW, never a second source: nothing on this page fetches, and the
+        # bounce service stays the only owner of that data.
+        board_section = QWidget()
+        board_layout = QVBoxLayout(board_section)
+        board_layout.setContentsMargins(0, 0, 0, 0)
+
         controls = QHBoxLayout()
         self.status = QLabel("Strength board: never refreshed")
         controls.addWidget(self.status)
@@ -279,7 +297,7 @@ class StrengthBoardPanel(QWidget):
         )
         self.refresh_button.clicked.connect(self._refresh)
         controls.addWidget(self.refresh_button)
-        layout.addLayout(controls)
+        board_layout.addLayout(controls)
 
         self.hint = QLabel(
             "Click any column heading to sort. Select a row to chart it - the "
@@ -288,7 +306,7 @@ class StrengthBoardPanel(QWidget):
         )
         self.hint.setObjectName("MutedLabel")
         self.hint.setWordWrap(True)
-        layout.addWidget(self.hint)
+        board_layout.addWidget(self.hint)
 
         tables = QHBoxLayout()
         self.longs = _SideTable("long")
@@ -305,7 +323,32 @@ class StrengthBoardPanel(QWidget):
         self.shorts.symbolActivated.connect(
             lambda symbol: self._on_symbol_activated(symbol, self.longs)
         )
-        layout.addLayout(tables)
+        board_layout.addLayout(tables)
+
+        rs_section = QWidget()
+        rs_layout = QVBoxLayout(rs_section)
+        rs_layout.setContentsMargins(0, 0, 0, 0)
+        rs_layout.addWidget(SectionHeader("RS/RW Board"))
+        self.rrs_snapshot = RrsSnapshotWidget()
+        if focus_service is not None:
+            self.rrs_snapshot.set_focus_service(focus_service)
+        # Charting a name from here goes through the panel's existing
+        # symbolActivated, so both halves of the page open the one snapshot
+        # popup the desk already owns - no second chart widget (R4 pattern).
+        self.rrs_snapshot.symbolActivated.connect(
+            lambda symbol, _side="": self.symbolActivated.emit(str(symbol or "").upper())
+        )
+        rs_layout.addWidget(self.rrs_snapshot, 1)
+
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter.addWidget(board_section)
+        self.splitter.addWidget(rs_section)
+        # The board is what the page is named for, so it gets the larger
+        # share; both halves stay collapsible because a trader reading one of
+        # them should be able to give it the whole page.
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 2)
+        layout.addWidget(self.splitter, 1)
 
         if service is not None:
             service.boardChanged.connect(self.set_board)
@@ -326,6 +369,10 @@ class StrengthBoardPanel(QWidget):
         self.symbolActivated.emit(symbol)
 
     # ------------------------------------------------------------------ views
+    def update_rrs_snapshot(self, payload) -> None:
+        """Show a relative-strength payload. Display only - see __init__."""
+        self.rrs_snapshot.update_snapshot(payload)
+
     def set_board(self, board: dict) -> None:
         self.longs.set_rows(list(board.get("long") or []))
         self.shorts.set_rows(list(board.get("short") or []))

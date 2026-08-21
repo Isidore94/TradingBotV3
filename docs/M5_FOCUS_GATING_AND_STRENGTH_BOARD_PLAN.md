@@ -443,6 +443,36 @@ this build: it needs its own layout budget on a two-table page and a decision
 about what happens to the tables' width, which is a desk-layout judgement rather
 than a wiring one. The popup reuses a surface the trader already knows.
 
+## Addendum — 2026-08-21: the RS/RW board joins this page
+
+"add RS/RW board under the strength board" (trader). Asked where, because there
+were three defensible readings — a new sidebar page, a second half of this
+page, or a section inside Chart Review — and the trader chose the second half.
+
+The page is now a **vertical `QSplitter`**: the board (controls, hint, both side
+tables) on top, an `RS/RW Board` section beneath it, both collapsible so either
+half can be given the whole page. The board keeps the larger default share
+because it is what the page is named for.
+
+Three properties keep this from becoming a second data path:
+
+- **Same widget.** It is the `RrsSnapshotWidget` the Alert Center's RS/RW tab
+  already uses, not a reimplementation, so scope tabs, focus marking and the
+  Copy All RS/RW buttons behave identically in both places.
+- **Same payload, one owner.** `app.py` adds a **second listener** to the one
+  `rrsSnapshotChanged` signal the bounce service already emits. Nothing on this
+  page fetches, schedules or caches; the service remains the only producer, and
+  a Qt signal being multicast is exactly the mechanism for a second view.
+- **Same chart.** The RS/RW half routes through the page's existing
+  `symbolActivated`, which `app.py` points at the Alert Center's snapshot popup.
+  Still no second chart widget anywhere.
+
+Owed: the half populating from a live BounceBot sweep. Until one runs it shows
+its own honest empty state ("Connect BounceBot to stream relative-strength
+scans"), which is the correct reading of "no payload yet" rather than a blank.
+
+---
+
 ## Addendum — 2026-08-19 (evening): movers only in chart review
 
 **The trader's rule, verbatim:**

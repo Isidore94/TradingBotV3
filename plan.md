@@ -678,6 +678,43 @@ are listed in `CURRENT_CHECKPOINT.md`.
    The rest of the wishlist triage produced no code: each remaining item needs
    one trader judgment, recorded in `docs/WISHLIST_OPEN_QUESTIONS.md`.
 
+10. **Trader-directed integration set. — BUILT 2026-08-21 (trader-directed).**
+   Four asks handed over together, each answered against a decision the trader
+   made when the ambiguity was real rather than an AI's reading of it:
+   (a) **"SMA incoming" veto reason** — vocabulary **v3**, an additive bump,
+   with `canonical_veto_cohort` pooling every carried-over reason back to the
+   earliest version carrying the identical definition, so the bump costs no
+   sample and the v1/v2 split from the previous bump is recovered. Pooling is
+   applied when the performance rollup is rebuilt, never at write time.
+   (b) **Post-earnings + 2nd-dev claims on the like rail** — the three
+   `post_earnings_*` families and `second_dev_breakout`, named by id rather
+   than by admitting whole groups, because the ask was specific. The nine
+   main-swing digits do not move; the extras continue on `0` then letters.
+   (c) **RS/RW board under the M5 Strength Board** — the same
+   `RrsSnapshotWidget`, a second listener on the one `rrsSnapshotChanged`
+   signal, in a draggable splitter on the existing page. No new nav entry, no
+   second fetch, no second chart widget.
+   (d) **The candle that ate the chart** — `scripts/ui/bar_integrity.py`.
+   Root-caused rather than restyled: the y-range is built from lows/highs
+   while the body is drawn from opens/closes, so a bar violating
+   `low <= open, close <= high` paints outside a viewport that still looks
+   correct. Malformed bars now draw dashed and clamped, stay out of the scale,
+   are counted on the chart and logged once to `bad_bars.jsonl` with their
+   provenance.
+   **Live gates owed:** (a) one veto committed on the desk under v3 and the
+   pooled rollup read back; (b) one claim committed on a letter key; (c) the
+   RS/RW half populating from a live BounceBot sweep; (d) confirmation from
+   `bad_bars.jsonl` that the next occurrence is a malformed bar and not a
+   well-formed aggregate row — the second case would move the fix into
+   `bounce_bot_lib`, which is ask-first and was NOT touched here.
+   **Diagnosed and deliberately not fixed:** `_get_cached_bars`
+   (`bounce_bot_lib/legacy.py:8370-8371`) writes `latest_bars.setdefault(symbol,
+   bars_ib)` for whatever duration/bar-size it just fetched, and
+   `m5_chart_bars` falls back to that same plain key — so a symbol whose
+   `|5 D|5 mins` key is missing can be charted from a daily or hourly series.
+   Latent, not observed; detector-adjacent, so it needs the ask-first
+   conversation and golden fixtures, not a quiet edit.
+
 Exit gate: each packet exits through its own spec; R1 and R2 land first per the
 trader's ranking, then R7 before R8. **R7's code is complete**; what remains for
 it is live evidence, which is why it does not close the phase on its own. A packet's live gates may overlap the next

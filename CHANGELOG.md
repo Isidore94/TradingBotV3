@@ -21,6 +21,34 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-21 (second pass) — Four trader-directed integrations
+
+`IMPLEMENTED` + `GREEN`; four live gates owed (see `plan.md` Phase 0.5 item 10).
+
+- **Veto vocabulary v3** adds "SMA incoming" (hotkey `0`) and changes nothing
+  else. `canonical_veto_cohort` pools reasons whose definition is identical
+  across versions, so the additive bump restarts no forward record and the
+  eight cohorts the v1→v2 bump split are pooled again. Applied only when the
+  performance rollup is rebuilt; pick and outcome rows keep the version they
+  were captured under and are never rewritten.
+- **The like+claim rail** now offers the three post-earnings families and the
+  2nd-dev breakout alongside Main swing, named by setup id. The nine
+  main-swing digits are unchanged; extras continue on `0` then letters, and
+  each row's label starts with its own key so type-search and the shortcut
+  agree.
+- **The M5 Strength Board page carries the RS/RW board** beneath it in a
+  draggable splitter — the same widget the Alert Center tab uses, fed by a
+  second connection to one `rrsSnapshotChanged` signal. Display only: no
+  second fetch, no second chart widget, both halves charting through the
+  page's existing `symbolActivated`.
+- **Malformed candles can no longer paint over a chart.** `ui/bar_integrity.py`
+  enforces `low <= open, close <= high`; a bar that breaks it draws dashed and
+  clamped, stays out of the y-range, is counted in a corner note and is logged
+  once with its provenance to `diagnostics/bad_bars.jsonl`. A well-formed bar
+  whose range dwarfs its series is observed in the same log and never redrawn.
+- Test suite **3987 passed / 19 subtests**, exit 0; smoke 7/7; source selftest
+  56/56.
+
 ### 2026-08-21 — Source launch is the production launch
 
 `OPERATIONS`; no code change.

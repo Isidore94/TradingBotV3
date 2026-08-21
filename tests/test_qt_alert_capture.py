@@ -665,35 +665,76 @@ def test_the_placeholder_says_how_to_get_a_chart(panel):
 
 
 # --------------------------------------------------------------------------
-# Like + claim becomes a numbered list (trader, 2026-08-20): "layout the like
-# + claim similiar to the veto but only do the main setups for now."
+# Like + claim becomes a keyed list (trader, 2026-08-20): "layout the like
+# + claim similiar to the veto but only do the main setups for now." Widened
+# 2026-08-21: "add my post earnings setups and 2nd stdev breakout".
 # --------------------------------------------------------------------------
-def test_the_claim_list_offers_the_main_setups_only(pane):
-    from ui.annotations.setup_claims import setup_claim_groups
-    from ui.widgets.capture_rail import MAIN_CLAIM_GROUP
+def _offered_ids(rail) -> set:
+    from ui.widgets.capture_rail import _CLAIM_ROLE
 
-    rail = pane.capture_rail
-    offered = {
-        rail.setup_list.item(row).data(
-            __import__("ui.widgets.capture_rail", fromlist=["x"])._CLAIM_ROLE
-        )
+    return {
+        rail.setup_list.item(row).data(_CLAIM_ROLE)
         for row in range(rail.setup_list.count())
     }
+
+
+def test_the_claim_list_offers_main_swing_plus_the_named_extras(pane):
+    from ui.annotations.setup_claims import setup_claim_groups
+    from ui.widgets.capture_rail import EXTRA_CLAIM_IDS, MAIN_CLAIM_GROUP
+
+    rail = pane.capture_rail
     groups = dict(setup_claim_groups())
-    assert offered == {claim.setup_id for claim in groups[MAIN_CLAIM_GROUP]}
-    # The other groups are deliberately unreachable from this rail for now.
-    for name, claims in groups.items():
-        if name == MAIN_CLAIM_GROUP:
-            continue
-        assert not offered & {claim.setup_id for claim in claims}
+    expected = {claim.setup_id for claim in groups[MAIN_CLAIM_GROUP]}
+    expected |= set(EXTRA_CLAIM_IDS)
+    assert _offered_ids(rail) == expected
 
 
-def test_the_claims_are_numbered_like_the_veto_reasons(pane):
+def test_the_rail_offers_every_claim_the_trader_asked_for(pane):
+    """A typo in EXTRA_CLAIM_IDS would silently cost a claim; this is the
+    guard that stops it being silent."""
+    from ui.annotations.setup_claims import valid_setup_claim_ids
+    from ui.widgets.capture_rail import EXTRA_CLAIM_IDS
+
+    known = valid_setup_claim_ids()
+    missing = [setup_id for setup_id in EXTRA_CLAIM_IDS if setup_id not in known]
+    assert missing == [], f"the registry does not name {missing}"
+    assert set(EXTRA_CLAIM_IDS) <= _offered_ids(pane.capture_rail)
+
+
+def test_the_families_the_trader_did_not_ask_for_stay_out(pane):
+    """Mid-earnings retests and the rest of the study/playbook shelf are still
+    unreachable from this rail - the ask was specific."""
+    rail = pane.capture_rail
+    offered = _offered_ids(rail)
+    assert "mid_earnings_ema15_retest" not in offered
+    assert "first_dev_breakout" not in offered
+    assert "playbook_volume_thrust" not in offered
+
+
+def test_the_claims_are_keyed_like_the_veto_reasons(pane):
+    from ui.widgets.capture_rail import CLAIM_HOTKEYS
+
     rail = pane.capture_rail
     labels = [rail.setup_list.item(row).text() for row in range(rail.setup_list.count())]
+    # The nine main-swing digits are the ones already in the trader's fingers;
+    # a widening that renumbered them would be a regression, not a feature.
     assert labels[0].startswith("1 ")
-    assert labels[-1].startswith(f"{len(labels)} ")
-    assert set(rail._claim_hotkeys) == {str(n) for n in range(1, len(labels) + 1)}
+    assert labels[8].startswith("9 ")
+    expected_keys = set(CLAIM_HOTKEYS[: len(labels)])
+    assert set(rail._claim_hotkeys) == expected_keys
+    for index, label in enumerate(labels):
+        assert label.startswith(f"{CLAIM_HOTKEYS[index]} ")
+
+
+def test_a_letter_key_commits_a_post_earnings_claim(pane, monkeypatch, tmp_path):
+    """There is no tenth digit, so the extras continue on letters."""
+    import json
+
+    _show(pane, monkeypatch, "AAPL")
+    rail = pane.capture_rail
+    rail.select_setup(rail._claim_hotkeys["q"])
+    lines = (tmp_path / "trader_annotations.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    assert json.loads(lines[-1])["claimed_setup_id"] == "post_earnings_candle_break"
 
 
 def test_a_digit_commits_the_claim_and_retires_the_chart(pane, monkeypatch, tmp_path):

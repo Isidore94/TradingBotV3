@@ -225,6 +225,16 @@ class MainWindow(QMainWindow):
         self.strength_board_panel.symbolActivated.connect(
             self.trading_panel.alert_center.show_board_symbol
         )
+        # The page's RS/RW half reads the SAME rrsSnapshotChanged payload the
+        # Alert Center's RS/RW tab reads (trader, 2026-08-21). A second
+        # listener on one signal, not a second source: the bounce service
+        # still owns and produces that data, and nothing on this page fetches.
+        _bounce_service = getattr(
+            getattr(self.trading_panel, "bounce_panel", None), "service", None
+        )
+        _rrs_signal = getattr(_bounce_service, "rrsSnapshotChanged", None)
+        if _rrs_signal is not None:
+            _rrs_signal.connect(self.strength_board_panel.update_rrs_snapshot)
         self.chart_review_panel = ChartReviewPanel(
             bot_provider=self.trading_panel.bounce_panel.service.current_bot
         )

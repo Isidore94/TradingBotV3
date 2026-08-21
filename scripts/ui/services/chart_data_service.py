@@ -267,6 +267,25 @@ class ChartDataService(QObject):
         d1["earnings"] = self._build_earnings(symbol, d1.get("bars") or [])
         self._cache_earnings_anchor_from_source(symbol)
 
+        # A bar whose open or close escapes its own low/high paints a column
+        # through the whole viewport (the chart takes its scale from lows and
+        # highs; it draws the body from opens and closes). The renderer now
+        # refuses to draw one at face value - this names it, so the row can be
+        # traced back to the cache that produced it. Evidence only: nothing
+        # here changes a bar, a detector input or an alert.
+        try:
+            from ui import bar_integrity
+
+            provenance = str(source or tier)
+            bar_integrity.log_defects(
+                symbol, "D1", d1.get("bars") or [], source=provenance
+            )
+            bar_integrity.log_defects(
+                symbol, "M5", m5.get("bars") or [], source=provenance
+            )
+        except Exception:
+            _log.debug("Bar-integrity probe failed for %s.", symbol, exc_info=True)
+
         meta: dict[str, Any] = {
             "source": str(source or tier),
             "storage_tier": tier,

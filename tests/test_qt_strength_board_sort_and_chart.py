@@ -264,3 +264,48 @@ class TestChartOnSelection:
         panel.symbolActivated.connect(charted.append)
         panel.longs._on_double_click(1, 0)
         assert charted == [panel.longs.table.item(1, 0).text()]
+
+
+# --------------------------------------------------------------------------
+# RS/RW under the board (trader, 2026-08-21: "add RS/RW board under the
+# strength board"). One page, one payload source, no second chart widget.
+# --------------------------------------------------------------------------
+def test_the_page_carries_an_rs_rw_section_under_the_board():
+    from ui.panels.strength_board_panel import StrengthBoardPanel
+    from ui.widgets.rrs_snapshot import RrsSnapshotWidget
+
+    panel = StrengthBoardPanel()
+    assert panel.splitter.count() == 2
+    # Order matters: the board is the top half, the RS/RW read is UNDER it.
+    assert panel.splitter.widget(1).findChild(RrsSnapshotWidget) is panel.rrs_snapshot
+    assert panel.splitter.widget(0).findChild(RrsSnapshotWidget) is None
+
+
+def test_both_halves_can_be_given_the_whole_page():
+    """A trader reading one half should be able to collapse the other."""
+    from ui.panels.strength_board_panel import StrengthBoardPanel
+
+    panel = StrengthBoardPanel()
+    assert panel.splitter.childrenCollapsible() is True
+
+
+def test_the_rs_rw_half_only_displays_what_it_is_handed():
+    """No fetch, no service, no timer on this page - it renders a payload."""
+    from ui.panels.strength_board_panel import StrengthBoardPanel
+
+    panel = StrengthBoardPanel()
+    payload = {"generated_at": "2026-08-21T08:00:00", "scopes": {}}
+    panel.update_rrs_snapshot(payload)
+    assert panel.rrs_snapshot._payload == payload
+
+
+def test_charting_from_the_rs_rw_half_uses_the_page_s_one_signal():
+    """Both halves route through symbolActivated, which app.py points at the
+    Alert Center's existing snapshot popup - never a second chart widget."""
+    from ui.panels.strength_board_panel import StrengthBoardPanel
+
+    panel = StrengthBoardPanel()
+    seen: list[str] = []
+    panel.symbolActivated.connect(seen.append)
+    panel.rrs_snapshot.symbolActivated.emit("nvda", "LONG")
+    assert seen == ["NVDA"]

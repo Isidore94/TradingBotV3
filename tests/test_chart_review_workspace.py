@@ -583,8 +583,14 @@ class CaptureRailTests(unittest.TestCase):
         # The cohort key carries its vocabulary version (2026-08-20): a code
         # is only guaranteed stable WITHIN a vocabulary, so pooling two
         # versions under one key would average two judgements into a number
-        # that reads as evidence.
-        self.assertIn("veto_v2_incoming_trendline", picks.read_text(encoding="utf-8"))
+        # that reads as evidence. Asserted against the LOADED vocabulary, never
+        # a literal version - a bump must not have to edit this test.
+        from ui.annotations.vocabulary import load_veto_vocabulary
+
+        version = load_veto_vocabulary().vocab_version
+        self.assertIn(
+            f"veto_v{version}_incoming_trendline", picks.read_text(encoding="utf-8")
+        )
 
 
 class NavigationRegistrationTests(unittest.TestCase):
@@ -633,14 +639,20 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class VetoVocabularyV2Tests(unittest.TestCase):
-    """v2 replaces the S/R slot with "Compressed" (trader, 2026-08-20).
+class VetoVocabularyTests(unittest.TestCase):
+    """What every shipped vocabulary must still be true of.
 
-    A NEW code, not a rename. v1's own description states the rule: "a code is
-    never renamed or reused for a different meaning, because rows already
-    written carry it". "S/R cluttered" meant too many levels in the path;
-    "compressed" means the range is too tight to work with. Different
-    judgements, so reusing the code would silently re-label history.
+    v2 replaced the S/R slot with "Compressed" (trader, 2026-08-20) and v3
+    added "SMA incoming" (trader, 2026-08-21). Both were NEW codes, not
+    renames. v1's own description states the rule: "a code is never renamed or
+    reused for a different meaning, because rows already written carry it".
+    "S/R cluttered" meant too many levels in the path; "compressed" means the
+    range is too tight to work with. Different judgements, so reusing the code
+    would silently re-label history.
+
+    These assert against the newest vocabulary present rather than a literal
+    version number, which is the repo rule (CLAUDE.md): the next bump should
+    not have to come and edit them.
     """
 
     def setUp(self) -> None:
@@ -648,15 +660,40 @@ class VetoVocabularyV2Tests(unittest.TestCase):
 
         clear_vocabulary_cache()
 
-    def test_v2_is_the_default_and_carries_compressed(self) -> None:
-        from ui.annotations.vocabulary import load_veto_vocabulary
+    def test_the_newest_vocabulary_is_the_default_and_carries_compressed(self) -> None:
+        from ui.annotations.vocabulary import (
+            available_veto_versions,
+            load_veto_vocabulary,
+        )
 
         vocab = load_veto_vocabulary()
-        self.assertEqual(vocab.vocab_version, 2)
+        self.assertEqual(vocab.vocab_version, max(available_veto_versions()))
         self.assertIsNotNone(vocab.reason("compressed"))
         self.assertEqual(vocab.reason("compressed").label, "Compressed")
 
-    def test_the_old_code_is_gone_from_v2(self) -> None:
+    def test_the_newest_vocabulary_carries_the_sma_reason(self) -> None:
+        """v3, trader 2026-08-21. Its hotkey is 0 because 1-9 were already
+        spoken for and renumbering them would break eight learned digits."""
+        from ui.annotations.vocabulary import load_veto_vocabulary
+
+        reason = load_veto_vocabulary().reason("sma_incoming")
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason.label, "SMA incoming")
+        self.assertEqual(reason.hotkey, "0")
+        self.assertFalse(reason.note_required)
+
+    def test_every_version_keeps_its_hotkeys_unique(self) -> None:
+        from ui.annotations.vocabulary import (
+            available_veto_versions,
+            load_veto_vocabulary,
+        )
+
+        for version in available_veto_versions():
+            vocab = load_veto_vocabulary(version=version)
+            keys = [reason.hotkey for reason in vocab.reasons]
+            self.assertEqual(len(keys), len(set(keys)), f"v{version} reuses a hotkey")
+
+    def test_the_old_code_is_gone_from_the_newest_vocabulary(self) -> None:
         from ui.annotations.vocabulary import load_veto_vocabulary
 
         self.assertIsNone(

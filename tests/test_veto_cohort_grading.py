@@ -428,6 +428,10 @@ def test_the_two_caveats_travel_with_the_scope_as_data():
     joined = " ".join(caveats)
     assert len(caveats) == 2
     assert "Main swing" in joined and "user interface" in joined
+    # The picklist widened on 2026-08-21; a caveat that still described the
+    # old, narrower control would be a machine-written falsehood shipped as
+    # data - the one thing this scope's caveats exist to prevent.
+    assert "2nd-Dev Breakout" in joined and "Post-Earnings" in joined
     assert "Veto D1 - but M5 today" in joined and "traded the same day" in joined
 
 

@@ -1,0 +1,77 @@
+{
+  "vocabulary_id": "veto_reasons",
+  "vocab_version": 3,
+  "description": "Why the trader is passing on a symbol for today. v3 (2026-08-21) ADDS 'SMA incoming' at the trader's request and changes nothing else: the nine v2 reasons carry over byte-identical, same codes, same labels, same hotkeys. v1 and v2 stay on disk and stay loadable. Because this bump is purely additive, annotations.veto_cohort pools every carried-over code with its v1/v2 twin when it grades, so the forward record of a reason does not restart just because a tenth reason was added next to it - see canonical_veto_cohort there. 'sma_incoming' is new in v3 and grades on its own from today.",
+  "reasons": [
+    {
+      "code": "incoming_trendline",
+      "label": "Incoming trendline",
+      "hotkey": "1",
+      "note_required": false,
+      "hint": "A descending/ascending line arrives at price soon enough to matter today."
+    },
+    {
+      "code": "sma_incoming",
+      "label": "SMA incoming",
+      "hotkey": "0",
+      "note_required": false,
+      "hint": "A moving average arrives at price soon enough to cap or catch the move today."
+    },
+    {
+      "code": "overhead_horizontal",
+      "label": "Overhead horizontal",
+      "hotkey": "2",
+      "note_required": false,
+      "hint": "A horizontal level sits close enough above to cap the move."
+    },
+    {
+      "code": "compressed",
+      "label": "Compressed",
+      "hotkey": "3",
+      "note_required": false,
+      "hint": "Range has coiled too tight to offer a workable move from here."
+    },
+    {
+      "code": "sector_mate_earnings_pending",
+      "label": "Sector mate earnings pending",
+      "hotkey": "4",
+      "note_required": false,
+      "hint": "A peer reports before this name would resolve."
+    },
+    {
+      "code": "too_extended_from_base",
+      "label": "Too extended from base",
+      "hotkey": "5",
+      "note_required": false,
+      "hint": "Price has already travelled too far from its base to start here."
+    },
+    {
+      "code": "volume_dry",
+      "label": "Volume dry",
+      "hotkey": "6",
+      "note_required": false,
+      "hint": "Not enough participation to trust the move."
+    },
+    {
+      "code": "earnings_too_close",
+      "label": "Earnings too close",
+      "hotkey": "7",
+      "note_required": false,
+      "hint": "This name's own report lands inside the intended hold."
+    },
+    {
+      "code": "spread_liquidity",
+      "label": "Spread / liquidity",
+      "hotkey": "8",
+      "note_required": false,
+      "hint": "The spread or depth makes the risk unmanageable."
+    },
+    {
+      "code": "other",
+      "label": "Other (note required)",
+      "hotkey": "9",
+      "note_required": true,
+      "hint": "Anything not covered above. The note is what makes this row usable later."
+    }
+  ]
+}

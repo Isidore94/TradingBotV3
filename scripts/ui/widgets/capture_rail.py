@@ -56,7 +56,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui import theme
-from ui.annotations.setup_claims import setup_claim_groups
+from ui.annotations.setup_claims import setup_claim_groups  # noqa: F401  (re-exported for hosts/tests)
 from ui.annotations.store import (
     EVENT_LIKE_CLAIM,
     EVENT_NOTE,
@@ -69,9 +69,52 @@ from ui.widgets.flow_layout import FlowLayout
 
 _REASON_ROLE = Qt.ItemDataRole.UserRole
 _CLAIM_ROLE = Qt.ItemDataRole.UserRole
-#: The only claim group this rail offers (trader, 2026-08-20: "only do
+#: The claim group this rail offers whole (trader, 2026-08-20: "only do
 #: the main setups for now").
 MAIN_CLAIM_GROUP = "Main swing"
+
+#: Named claims from OTHER groups, in the order the trader asked for them
+#: (2026-08-21: "add my post earnings setups and 2nd stdev breakout"). Ids, not
+#: a group name, because that ask was specific: the three post-earnings
+#: families and the 2nd-dev breakout, not the mid-earnings retests beside them
+#: and not the rest of the study shelf. Adding one later is a line here.
+EXTRA_CLAIM_IDS = (
+    "post_earnings_52w_break",
+    "post_earnings_candle_break",
+    "post_earnings_avwap_bounce",
+    "second_dev_breakout",
+)
+
+#: One keystroke per claim, in list order. Digits first so the nine main-swing
+#: claims keep the exact keys the trader already presses; letters continue the
+#: run because there is no tenth digit and a two-key sequence would cost the
+#: five-second contract this rail exists to keep. A row's label starts with its
+#: own key, so QListWidget's type-search lands on the same row either way.
+CLAIM_HOTKEYS = "1234567890qwertyuiop"
+
+
+def offered_setup_claims() -> list:
+    """The claims this rail offers, in display order.
+
+    Main swing whole and in the registry's own order, then the named extras in
+    the order they are listed. Reads the registry rather than restating it, so
+    a label or summary edited in ``setup_docs`` shows up here unchanged.
+
+    An extra id the registry does not know is skipped rather than guessed at -
+    and ``test_the_rail_offers_every_claim_the_trader_asked_for`` fails loudly
+    if that ever happens, so a typo cannot quietly cost the trader a claim.
+    """
+    grouped = setup_claim_groups()
+    offered = []
+    for group_name, claims in grouped:
+        if group_name == MAIN_CLAIM_GROUP:
+            offered.extend(claims)
+    by_id = {claim.setup_id: claim for _group, claims in grouped for claim in claims}
+    for setup_id in EXTRA_CLAIM_IDS:
+        claim = by_id.get(setup_id)
+        if claim is not None and claim not in offered:
+            offered.append(claim)
+    return offered
 
 
 class CaptureRail(QFrame):
@@ -193,7 +236,7 @@ class CaptureRail(QFrame):
         return frame, inner
 
     def _veto_section(self) -> QFrame:
-        frame, inner = self._section("Veto  (Alt+V, then 1-9)")
+        frame, inner = self._section("Veto  (Alt+V, then the key shown)")
         self.reason_list = QListWidget()
         self.reason_list.setObjectName("VetoReasonList")
         self.reason_list.setAlternatingRowColors(False)
@@ -266,29 +309,27 @@ class CaptureRail(QFrame):
         claims, so the same 1-9 digits work here, and double-click and Enter
         commit it exactly as they do a veto.
 
-        MAIN SWING ONLY, deliberately and temporarily. The earnings-cycle,
-        study and playbook groups are unreachable from this rail while this
-        stands, so a claim made here can only be one of the nine. That is the
-        trader's "for now"; re-admitting a group means adding it back to
-        MAIN_CLAIM_GROUP, not a migration.
+        The nine main-swing claims keep digits 1-9 exactly as before; the
+        claims added on 2026-08-21 (the three post-earnings families and the
+        2nd-dev breakout) continue the run on 0 and then letters. What is
+        offered is decided by MAIN_CLAIM_GROUP + EXTRA_CLAIM_IDS, so admitting
+        another family stays a one-line change and never a migration - a claim
+        id is valid the moment the registry names it.
         """
-        frame, inner = self._section("Like + claim  (Alt+K, then 1-9)")
+        frame, inner = self._section("Like + claim  (Alt+K, then the key shown)")
         self.setup_list = QListWidget()
         self.setup_list.setObjectName("SetupClaimList")
         self.setup_list.setAlternatingRowColors(False)
         self._claim_hotkeys: dict[str, str] = {}
-        for group_name, claims in setup_claim_groups():
-            if group_name != MAIN_CLAIM_GROUP:
-                continue
-            for position, claim in enumerate(claims, start=1):
-                hotkey = str(position) if position <= 9 else ""
-                item = QListWidgetItem(f"{hotkey or ' '}  {claim.label}")
-                item.setData(_CLAIM_ROLE, claim.setup_id)
-                if claim.summary:
-                    item.setToolTip(claim.summary)
-                self.setup_list.addItem(item)
-                if hotkey:
-                    self._claim_hotkeys[hotkey] = claim.setup_id
+        for position, claim in enumerate(offered_setup_claims()):
+            hotkey = CLAIM_HOTKEYS[position] if position < len(CLAIM_HOTKEYS) else ""
+            item = QListWidgetItem(f"{hotkey or ' '}  {claim.label}")
+            item.setData(_CLAIM_ROLE, claim.setup_id)
+            if claim.summary:
+                item.setToolTip(claim.summary)
+            self.setup_list.addItem(item)
+            if hotkey:
+                self._claim_hotkeys[hotkey] = claim.setup_id
         self.setup_list.itemActivated.connect(lambda _item: self.commit_like())
         rows = max(1, min(self.setup_list.count(), 14))
         self.setup_list.setMaximumHeight(rows * theme.px(21) + theme.px(10))
