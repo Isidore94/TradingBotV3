@@ -105,7 +105,7 @@ control set is `CLAUDE.md`/`AGENTS.md`, `CHANGELOG.md`, `plan.md`,
 ## Commands
 - Test (before every commit): `.venv\Scripts\python.exe -m pytest tests/ -q` — must be fully green; current baseline lives in `CURRENT_CHECKPOINT.md`. Check pytest's own exit code, not a piped tail's. macOS/Linux: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ -q` (Qt tests need the offscreen platform when headless).
 - Smoke (offline, deterministic): `.venv\Scripts\python.exe scripts/smoke_check.py` — 7/7.
-- Run: `.venv\Scripts\python.exe launch_gui.py` (Windows) or `.venv/bin/python launch_gui.py` (macOS/Linux; `./setup_macos.command` once first). Keep the Settings ▸ Desk Link role on Main (satellite retired). IB TWS/Gateway runs on the main desk.
+- Run: `.venv\Scripts\python.exe launch_gui.py` (Windows; also the `trading_desk.cmd` launcher — **this is the production launch**, see Frozen exe rebuild policy) or `.venv/bin/python launch_gui.py` (macOS/Linux; `./setup_macos.command` once first). Keep the Settings ▸ Desk Link role on Main (satellite retired). IB TWS/Gateway runs on the main desk.
 - Audits: `scripts/operations_audit.py` (runtime), `scripts/review_capture_audit.py` (capture readiness) — both also render in System Health.
 - No deploy pipeline: the user runs the app from this repo on `main`. Never leave the working tree broken.
 
@@ -113,6 +113,28 @@ control set is `CLAUDE.md`/`AGENTS.md`, `CHANGELOG.md`, `plan.md`,
 Build: `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` → `dist/TradingBotV3/TradingBotV3.exe`
 (onedir, ~400MB, ~4 min). `dist/` and `build/` are gitignored, so the exe is never a commit artifact —
 rebuilding is verification only, and skipping it can never leave the tree broken.
+
+**Rebuilding is not the same as delivering, and a build that completes is not a build that
+runs.** `dist/` being gitignored means an unrebuilt commit cannot break the *tree*; it also
+means it cannot reach the *desk*. Always start the exe (or its `--selftest`) after building —
+success from PyInstaller is not evidence that Windows will let it launch.
+
+**The desk runs from source** — `.venv\Scripts\python.exe launch_gui.py`, normally via the
+`trading_desk.cmd` launcher — because **Windows Smart App Control is enforced** on it
+(`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 1`)
+and refuses the unsigned local build with "An Application Control policy has blocked this file".
+Open since 2026-08-19; it stopped being merely a gate problem on 2026-08-21, when the trader was
+launching the exe. **SAC verdicts are per file hash**, so one build can run for days while the next
+is refused — never assume the last successful frozen run generalizes. SAC has no exclusion list;
+the only exits are a reputable code-signing certificate or turning SAC off, which cannot be undone
+without reinstalling Windows. That is the trader's call.
+
+While this holds, **the source launch IS production**: a pushed commit is live at the trader's next
+restart and the exe is a verification artifact only. If SAC is ever turned off, the frozen exe
+becomes production again and so does the delivery gap it carries — a fix the trader will actually
+use is not delivered until the exe is rebuilt, which is what kept the `d0aebd5` responsiveness
+repair off the desk overnight on 2026-08-20 and made that night's `ui_stalls.jsonl` a pre-fix
+baseline rather than diagnostic evidence.
 
 - **Do NOT rebuild per commit.** ~4 min machine time plus 5-10 min of the user's click-through is not
   worth it on the ~90% of commits that cannot affect freezing. Logic changes inside existing modules

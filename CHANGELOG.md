@@ -1,6 +1,6 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-20** from the working copy of
+Last reconciled: **2026-08-21** from the working copy of
 `phase05-integration-blitz` (cut from `testing-week-2026-08-17`, which carries
 testing-week + R1 + R1.1 + R2 + R3 + R4 + R5 + R6 + R7 + R8, with the four later
 `phase05-r2-focus-gating-strength-board` commits merged in on 2026-08-18)
@@ -20,6 +20,28 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-21 — Source launch is the production launch
+
+`OPERATIONS`; no code change.
+
+- The 2026-08-20 GUI hang repair (`d0aebd5`) was committed but not built, and the
+  desk launches `dist\TradingBotV3\TradingBotV3.exe` — so the fix did not reach
+  the running desk until it was relaunched on 2026-08-21. Every `ui_stalls.jsonl`
+  row before that relaunch is a pre-fix baseline, not R6(c) evidence.
+- Rebuilding produced a valid bundle (`ui` 120 submodules, `timer_utils`
+  collected) that **Windows Smart App Control refuses to execute** — the open item
+  from 2026-08-19, now on the live launch path rather than only on the frozen
+  gate. SAC verdicts are per file hash: the 2026-08-20 bundle ran, the 2026-08-21
+  one does not.
+- The desk therefore runs from source (`.venv\Scripts\python.exe launch_gui.py`)
+  and that is now the production launch path; the frozen exe is a verification
+  artifact until the trader resolves SAC by signing or disabling it.
+- Added `trading_desk.cmd` and a Desktop shortcut so the source launch needs no
+  editor or terminal open. Console starts minimized and keeps the desk's log.
+- Observed and unrepaired: the desk did not complete shutdown — hung
+  (`Responding = False`, 4.0 GB) for 90 s, then survived windowless until
+  terminated. Recorded as a diagnostic-week finding.
 
 ### 2026-08-20 (seventh pass) — Evidence-led GUI hang repair
 

@@ -8,6 +8,96 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-21, eighth pass — THE REPAIR REACHES THE DESK, AND THE FROZEN EXE NO LONGER RUNS
+
+**Branch `phase05-integration-blitz`.** No source change. This pass corrects a
+delivery assumption, records a new machine constraint, and adds the launcher the
+constraint forces.
+
+### The seventh pass was green and undelivered
+
+That pass closed with `frozen exe: **not rebuilt** — no trigger`. Correct by the
+packaging rule and wrong in effect: **the trader launches
+`dist\TradingBotV3\TradingBotV3.exe`**, so `d0aebd5` never reached the desk. The
+process running overnight was the pre-fix binary.
+
+Consequences, stated plainly:
+
+- every `ui_stalls.jsonl` row written before **2026-08-21 07:52 PT** is a
+  **pre-fix baseline**, not R6(c) evidence. The bounded diagnostic week starts
+  at that launch, not at the seventh pass.
+- the desk was hung when it was asked to close this morning:
+  `Responding = False`, 4.0 GB working set, no exit after 90 s. The main window
+  closed on a second request; the process then lingered **windowless and alive**
+  until it was terminated. **Shutdown not completing is an open defect** — it is
+  unrepaired by `d0aebd5` and belongs in the diagnostic week's findings.
+
+Cheap check for "is the desk running this commit": PyInstaller writes module
+names into the bundle in plaintext, so
+`grep -ac timer_utils dist/TradingBotV3/TradingBotV3.exe` returned **0** against
+the old bundle and **1** against the rebuild.
+
+### Smart App Control refused this build too — the open item since 2026-08-19
+
+The rebuild itself succeeded — `ui: 120 submodules` (was 119), `timer_utils`
+present, spec assets unchanged. It will not start:
+
+> Program 'TradingBotV3.exe' failed to run: **An Application Control policy has
+> blocked this file**
+
+This is **not new**. It is the open item recorded on 2026-08-19 midday
+(`VerifiedAndReputablePolicyState = 1`, CodeIntegrity 3077/3118), re-confirmed
+today. What is new is that it now costs something: that entry reasoned "the desk
+is unaffected — the 07:00 task launches from source", and overnight the desk was
+in fact launched **from the frozen exe**, so the block landed on the live launch
+path rather than on a gate.
+
+SAC verdicts are **per file hash**, which is the whole shape of this problem: the
+2026-08-20 13:19 bundle ran all night, and the byte-different 2026-08-21 07:49
+bundle is refused. A rebuild is therefore a coin toss, and "the frozen selftest
+passed last week" says nothing about the next build. A routine Code Integrity
+policy refresh is logged at 07:50:44 with **no change in any active policy** —
+noted so the next reader does not mistake it for a cause.
+
+The exits are unchanged and remain a **trader decision, not an AI's**: a
+reputable code-signing certificate, or turning SAC off (irreversible without a
+Windows reinstall).
+
+While this holds, **the source launch is production**: a pushed commit is live at
+the next restart and the frozen exe is a verification artifact only. The frozen
+`--selftest` is unavailable as a gate for the same reason; the source selftest
+still runs.
+
+### Running now
+
+`.venv\Scripts\python.exe launch_gui.py`, PID 27416, responding, ~680 MB. The
+fix is confirmed live from the watchdog's own frames: `app.py:1056 main` /
+`app.py:896 sweep`, where the pre-fix bundle logged `app.py:978 main` /
+`app.py:860 _sweep`.
+
+`trading_desk.cmd` (repo root) + a **Trading Desk** Desktop shortcut launch it
+minimized, so no editor or terminal has to stay open. Both branches of the
+script were exercised in a scratch copy — happy path exit 0, missing-venv path a
+named error and exit 1 — rather than by starting a second desk against the same
+mutable state.
+
+### Verification baseline
+
+**Unchanged from the seventh pass** (`pytest tests/ -q` → 3945 passed, exit 0;
+smoke 7/7; source selftest 56/56). No source file was touched here — the changes
+are this file, `CHANGELOG.md`, `CLAUDE.md`/`AGENTS.md` and a new batch launcher
+that nothing imports. The suite was **deliberately not re-run mid-session**: a
+full-CPU run beside the live desk would manufacture exactly the stalls the
+diagnostic week is measuring. Re-run it after the close if any doubt remains.
+
+### Owed
+
+Unchanged R6(c) diagnostic week, now actually started. Additionally: decide the
+Smart App Control question, and treat the incomplete shutdown as a finding to
+reproduce.
+
+---
+
 ## 2026-08-20, seventh pass — THE DESK NO LONGER PARSES HISTORY ON A HEALTH TICK
 
 **Branch `phase05-integration-blitz`.** Trader-authorized Phase-0 GUI
@@ -74,7 +164,7 @@ or completed-bar rule changed.
 | `pytest tests/ -q` | **3945 passed / 19 subtests**, exit **0** |
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
 | source selftest | **56/56**, exit 0 |
-| frozen exe | **not rebuilt** — no dependency, runtime asset, new top-level package, dynamic import or root-path trigger; the new module is an ordinary import inside the already-collected `ui` package |
+| frozen exe | **not rebuilt** — no dependency, runtime asset, new top-level package, dynamic import or root-path trigger; the new module is an ordinary import inside the already-collected `ui` package. **Corrected 2026-08-21:** true about packaging risk, but the trader launches the exe, so this commit did not reach the desk until the eighth pass — see the top entry |
 
 ### Owed, live
 
