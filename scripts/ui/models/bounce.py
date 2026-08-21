@@ -49,6 +49,21 @@ def is_chart_watch_alert(alert: Any) -> bool:
     return str(getattr(alert, "tag", "") or "") == CHART_WATCH_TAG
 
 
+#: What `_list_m5_rows` writes as the trigger for one regime-pause symbol.
+REGIME_PAUSE_TRIGGER_PREFIX = "M5 regime-pause watch"
+
+
+def is_regime_pause_alert(alert: Any) -> bool:
+    """A row exploded out of a REGIME PAUSE WATCH summary line.
+
+    Matched on the trigger this module itself writes rather than on the raw
+    feed text, so the two cannot drift apart: the caption and the predicate
+    that expires it read the same string.
+    """
+    trigger = str(getattr(alert, "trigger", "") or "")
+    return trigger.startswith(REGIME_PAUSE_TRIGGER_PREFIX)
+
+
 @dataclass
 class BounceAlert:
     time_text: str
@@ -229,7 +244,7 @@ def _list_m5_rows(text: str) -> list[tuple[str, str]]:
         token.strip().upper() for token in pause_match.group("rows").split(",")
     ]
     return [
-        (symbol, f"M5 regime-pause watch · {pattern}")
+        (symbol, f"{REGIME_PAUSE_TRIGGER_PREFIX} · {pattern}")
         for symbol in symbols
         if SYMBOL_RE.fullmatch(symbol)
     ]

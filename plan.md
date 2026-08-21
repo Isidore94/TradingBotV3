@@ -720,6 +720,38 @@ are listed in `CURRENT_CHECKPOINT.md`.
    Latent, not observed; detector-adjacent, so it needs the ask-first
    conversation and golden fixtures, not a quiet edit.
 
+11. **Regime-pause "holding highs" - measured and expiring. - PARTIALLY BUILT
+   2026-08-21 (trader-directed).** The watch captioned MRK "holding highs" with
+   a 75-minute-old high while price faded off it. Three defects, in increasing
+   depth: the caption is a BATCH label applied to every symbol in the sweep;
+   the qualifying predicate's third branch (`window_excess >= 0.20`) admits a
+   name that is merely falling less than SPY; and nothing re-measures after the
+   alert fires.
+
+   **Built (no detector file touched):** `scripts/indicators/atr.py` (shared
+   Wilder ATR) and `scripts/regime_pause_hold.py` (distance from the session
+   extreme in ATR on completed bars, plus the queue verdict), wired into the
+   Alert Center's existing 30s tick. Trader's thresholds: **1.0 ATR** and
+   **15 minutes** from the later of the alert and the last new extreme, with a
+   new extreme refreshing the clock. Expiry deletes from the QUEUE ONLY - the
+   alert list, `alert_review_events.jsonl` (a `hold_expired` row) and the
+   tracker's outcome rows keep it, which is what makes the rule gradeable.
+   Uncertainty never deletes.
+
+   **NOT built, and the reason:** making near-extreme-in-ATR a REQUIRED
+   condition inside `check_regime_pause_setups` changes what a champion
+   detector emits, which alters the alert set, the candidate events and the
+   outcome records. plan.md sec 5 requires **golden-result fixtures first**,
+   and `bounce_bot_lib/legacy.py` is ask-first. Sequence when authorized:
+   capture fixtures of today's behaviour on recorded bars, then require the
+   near-extreme condition, then re-run the fixtures and diff deliberately.
+
+   **Live gates owed:** a session where a "holding highs" row visibly leaves
+   the queue within 15 minutes of the name rolling over; a row that keeps
+   making new highs visibly surviving past 15 minutes; and a read of
+   `hold_expired` rows against forward outcomes to confirm the rule is not
+   discarding winners.
+
 Exit gate: each packet exits through its own spec; R1 and R2 land first per the
 trader's ranking, then R7 before R8. **R7's code is complete**; what remains for
 it is live evidence, which is why it does not close the phase on its own. A packet's live gates may overlap the next

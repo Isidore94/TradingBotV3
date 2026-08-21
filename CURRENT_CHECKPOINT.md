@@ -8,6 +8,99 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-21, eleventh pass - "HOLDING HIGHS" WAS NEVER MEASURED
+
+**Branch `phase05-integration-blitz`.** Trader: "this stock is being recommended
+because its M5 regime pause watch holding highs but from the bottom M5 chart you
+can see... its not... at all."
+
+### Three defects, not one
+
+1. **The caption is a batch label.** `_emit_regime_pause_summary` writes one
+   feed line per sweep and `ui/models/bounce.py` explodes it into one row per
+   symbol, each captioned `M5 regime-pause watch - holding highs`. The
+   per-symbol numbers exist in the `hit` dict and never leave it.
+2. **The predicate does not mean "holding highs".** `legacy.py:5469` is
+   `still_trending or made_new_extreme or window_excess >= 0.20`. Only the
+   middle branch is about the extreme; the third admits a name that is falling,
+   just less than SPY.
+3. **Nothing re-measures.** One alert per symbol per day. MRK was flagged at
+   08:30 and read at 09:40 with the original claim intact.
+
+### Measured before proposing
+
+All 67 names flagged that day, each at its own flag time (yfinance 5m, +/- one
+bar against the detector's IB bars):
+
+| | longs (38) | shorts (29) |
+|---|---|---|
+| extreme older than 30 min when flagged | **10 (26%)** | **13 (45%)** |
+| more than 1% off the extreme | 8 (21%) | 5 (17%) |
+| genuinely made a new extreme in-window | 20 (53%) | 12 (41%) |
+| stalest | WT, HOD **170 min** old | ECHO, LOD 70 min old, 1.8% off |
+
+**MRK: flagged 08:30 with a 75-minute-old high, 1.6 ATR off it. By 09:40, 4.8
+ATR off with a 140-minute-old high.** GFS, the short in the earlier screenshot,
+was 1.1 ATR off its low at fire. Both fail the new rule at fire time; both are
+deleted by it later.
+
+### Why ATR and not percent - the trader was right, with a number
+
+M5 ATR across that single batch ran from **0.084% of price (HMC) to 1.160%
+(CIFR)** - a **14x spread**. A 1% threshold is 12 ATR for HMC and 0.9 ATR for
+CIFR, so no fixed percentage can serve both. Trader: "a stock like MRK moves
+slower than say MU, we can't use the 1% rule."
+
+### Built
+
+- `scripts/indicators/atr.py` - the shared Wilder ATR. The repo already had the
+  rule twice and the copies disagreed: `legacy._wilder_atr_last` is Wilder,
+  `market_state._m5_atr` is a plain mean under the same name, and neither is
+  importable as a shared rule. Unmeasurable is `None`, never 0 - a zero ATR
+  turns "I don't know how fast this moves" into "it doesn't move".
+- `scripts/regime_pause_hold.py` - distance from the session extreme in ATR on
+  completed bars, plus the queue verdict. **1.0 ATR** and **15 minutes** from
+  the later of the alert and the last new extreme (trader's numbers). The ATR
+  may use earlier sessions for warm-up while the extreme is taken from the last
+  completed bar's session, so both are right when two sessions are handed in.
+  A level merely EQUALLED does not refresh the clock.
+- `AlertCenterPanel._expire_stale_hold_alerts`, on the existing 30s chart tick
+  (connected after the bar refetch, before the re-render). Rows that survive
+  are **re-captioned with what is true now**; the feed row keeps the words it
+  was born with.
+
+**Deletion is from the queue only** - the trader's explicit call. The alert
+list, `alert_review_events.jsonl` (a new `hold_expired` action) and the
+tracker's outcome rows keep the row, so the rule itself stays gradeable.
+**Uncertainty never deletes:** no bot, no bars, no ATR, no readable stamp all
+mean KEEP.
+
+### NOT built, deliberately
+
+The detector-side gate. Making near-extreme-in-ATR a REQUIRED condition in
+`check_regime_pause_setups` changes what a champion emits - the alert set, the
+candidate events, the outcome records - and plan.md sec 5 requires golden
+fixtures first. `bounce_bot_lib/legacy.py` is also ask-first. Nothing in that
+file was touched. Sequence when authorized: fixtures of today's behaviour on
+recorded bars, then the predicate, then re-run and diff deliberately.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4020 passed / 19 subtests**, exit **0** (was 3992; +28) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | not rebuilt; Smart App Control refuses the build and the desk runs from source |
+
+### Owed
+
+The three live gates in `plan.md` item 11, and the detector-side decision
+above. Also still true from the tenth pass: **the running desk predates all of
+today's commits** and needs a restart to carry any of it.
+
+---
+
 ## 2026-08-21, tenth pass — THE DIAGNOSTIC WEEK CAUGHT THE REPAIR ITSELF
 
 **Branch `phase05-integration-blitz`.** R6(c) was activated to watch for

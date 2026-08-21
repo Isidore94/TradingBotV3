@@ -21,6 +21,30 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-21 (fourth pass) - "Holding highs" is measured, in ATR, and expires
+
+`IMPLEMENTED` + `GREEN`; the detector-side gate is NOT built (needs golden
+fixtures - see `plan.md` Phase 0.5 item 11).
+
+- `scripts/indicators/atr.py`: the shared Wilder ATR. The repo carried the rule
+  twice already and the copies disagreed (`legacy._wilder_atr_last` is Wilder,
+  `market_state._m5_atr` is a plain mean under the same name); neither was
+  importable. Unmeasurable returns None, never 0.
+- `scripts/regime_pause_hold.py`: how far price sits from its session extreme,
+  in ATR, on completed bars only - plus the queue verdict. Tolerance 1.0 ATR,
+  freshness 15 minutes from the later of the alert and the last new extreme.
+  A level merely EQUALLED does not refresh the clock.
+- The Alert Center expires stale regime-pause rows on its existing 30s chart
+  tick and re-captions the ones it keeps with what is true now. Deletion is
+  from the queue only; the alert list, the review-event stream (`hold_expired`)
+  and the tracker rows are untouched.
+- Measured on the day's own batch: 26% of flagged longs and 45% of shorts had
+  an extreme more than 30 minutes old when they were captioned "holding
+  highs"; MRK was 1.6 ATR off its high at fire time and 4.8 ATR off by the time
+  it was read.
+- Test suite **4020 passed / 19 subtests**, exit 0; smoke 7/7; source selftest
+  56/56.
+
 ### 2026-08-21 (third pass) — The GUI garbage collector could be starved
 
 `IMPLEMENTED` + `GREEN`; caught by the R6(c) diagnostic week on its first day.

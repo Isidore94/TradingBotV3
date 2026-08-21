@@ -64,6 +64,7 @@ from chart_watch import (
     watch_is_stale,
 )
 import focus_adoption_gate
+import regime_pause_hold
 from prev_day_gate import (
     CLOSED as PREV_DAY_CLOSED,
     OPEN as PREV_DAY_BREAK_OPEN,
@@ -101,6 +102,8 @@ from ui.models.bounce import (
     is_auto_pick_alert,
     is_chart_watch_alert,
     is_entry_assist_text,
+    is_regime_pause_alert,
+    REGIME_PAUSE_TRIGGER_PREFIX,
 )
 from ui.widgets.alert_chart_review import AlertChartReview
 from ui.widgets.alert_feed_item import AlertFeedItem
@@ -838,6 +841,11 @@ class AlertCenterPanel(QFrame):
         # tick are already in hand when the chart rebuilds immediately below;
         # Qt runs same-signal slots in connection order.
         self._watch_timer.timeout.connect(self._refresh_stale_queue_bars)
+        # A "holding highs" row that stopped holding is deleted from the queue
+        # (trader rule 2026-08-21). Connected AFTER the refetch so it judges
+        # bars that just landed, and BEFORE the re-render so the chart never
+        # repaints a row that is about to go.
+        self._watch_timer.timeout.connect(self._expire_stale_hold_alerts)
         self._watch_timer.timeout.connect(self._refresh_review_chart)
         # DESK-mode auto picks ride the same 30s tick: the staging file is a
         # cheap local read and a new pick is not latency-critical.
@@ -1818,6 +1826,131 @@ class AlertCenterPanel(QFrame):
     # Decision logging: the training data for learning the trader's revealed
     # preferences. Best-effort by design - a logging failure must never cost
     # a click - and disabled whenever the panel runs on non-default stores.
+    @staticmethod
+    def _alert_moment(alert: BounceAlert) -> datetime | None:
+        """When this alert landed, as a datetime on today's date.
+
+        ``time_text`` is all the alert carries (``%H:%M:%S``), and the review
+        queue is an intraday structure cleared on the day roll, so today is the
+        only date it can mean. Unparseable returns None, and the freshness rule
+        then falls back to the extreme's own timestamp rather than inventing a
+        moment.
+        """
+        text = str(getattr(alert, "time_text", "") or "").strip()
+        if not text:
+            return None
+        for shape in ("%H:%M:%S", "%H:%M"):
+            try:
+                parsed = datetime.strptime(text, shape)
+            except ValueError:
+                continue
+            return datetime.now().replace(
+                hour=parsed.hour,
+                minute=parsed.minute,
+                second=parsed.second,
+                microsecond=0,
+            )
+        return None
+
+    def _hold_verdict_for(self, alert: BounceAlert):
+        """Live "is it still holding?" for one regime-pause row, or None.
+
+        None means the question could not be answered - no bot, no bars, no
+        ATR - and every caller treats that as KEEP. Uncertainty may not delete
+        a row (see regime_pause_hold.queue_verdict).
+        """
+        try:
+            bars = self._m5_bars_for(alert.symbol, sessions=2)
+            if not bars:
+                return None
+            return regime_pause_hold.queue_verdict(
+                bars,
+                alert.side,
+                alert_time=self._alert_moment(alert),
+                now=datetime.now(),
+            )
+        except Exception:
+            logging.debug("Hold verdict failed for %s.", alert.symbol, exc_info=True)
+            return None
+
+    @staticmethod
+    def _apply_hold_caption(alert: BounceAlert, verdict) -> None:
+        """Re-caption a kept row with what is true NOW, not at alert time.
+
+        The feed row keeps the words it was born with - it is a record of what
+        was said - while the review header, rebuilt on every render, stops
+        asserting "holding highs" about a name that is merely still inside its
+        fifteen minutes.
+        """
+        if verdict.hold.reason == regime_pause_hold.UNMEASURABLE:
+            return
+        alert.trigger = f"{REGIME_PAUSE_TRIGGER_PREFIX} \u00b7 {verdict.hold.describe()}"
+
+    def _expire_stale_hold_alerts(self) -> None:
+        """Drop regime-pause rows whose claim has gone stale.
+
+        Trader rule, 2026-08-21: a "holding highs" row is good for fifteen
+        minutes and is then deleted UNLESS the name keeps making new highs. The
+        claim MRK carried that morning was over an hour past true by the time
+        it was read.
+
+        Deletion is from the QUEUE only. The alert list, the review-event
+        stream and the tracker's outcome rows already hold the row and are not
+        consulted here - the trader's explicit call, so the forward record of
+        whether stale calls were any good stays measurable. A ``hold_expired``
+        event is written for the same reason.
+
+        Rides the 30s chart tick rather than owning a timer, and is connected
+        after the bar refresh so it measures bars that just landed.
+        """
+        expired: list[BounceAlert] = []
+
+        def survives(alert: BounceAlert) -> bool:
+            if not is_regime_pause_alert(alert):
+                return True
+            verdict = self._hold_verdict_for(alert)
+            if verdict is None:
+                return True
+            self._apply_hold_caption(alert, verdict)
+            if verdict.keep:
+                return True
+            expired.append(alert)
+            self._record_review_event(
+                "hold_expired",
+                alert=alert,
+                queue_len=len(self._review_queue),
+                detail={
+                    "reason": verdict.reason,
+                    "distance_atr": verdict.hold.distance_atr,
+                    "bars_since_extreme": verdict.hold.bars_since_extreme,
+                },
+            )
+            return False
+
+        queue_before = len(self._review_queue)
+        self._review_queue = [alert for alert in self._review_queue if survives(alert)]
+        hidden_before = len(self._hidden_inside_range)
+        self._hidden_inside_range = {
+            symbol: alert
+            for symbol, alert in self._hidden_inside_range.items()
+            if survives(alert)
+        }
+        current = self._current_review_alert
+        current_expired = current is not None and not survives(current)
+        if hidden_before != len(self._hidden_inside_range):
+            self.chart_review.set_hidden_count(len(self._hidden_inside_range))
+        if current_expired:
+            # The chart in front of the trader just stopped being true. Move on
+            # to the next one exactly as a retire does.
+            self._advance_review_queue()
+        elif queue_before != len(self._review_queue):
+            self.chart_review.set_queued_count(len(self._review_queue))
+        if expired:
+            logging.info(
+                "Regime-pause rows expired (stale hold): %s",
+                ", ".join(alert.symbol for alert in expired),
+            )
+
     def _record_review_event(self, action: str, **kwargs) -> None:
         if self._review_events_path is None:
             return
@@ -3042,7 +3175,13 @@ class AlertCenterPanel(QFrame):
         symbol = str(symbol or "").strip().upper()
         return {watch.kind for watch in self._chart_watches if watch.symbol == symbol}
 
-    def _m5_bars_for(self, symbol: str) -> list:
+    def _m5_bars_for(self, symbol: str, *, sessions: int = 1) -> list:
+        """Cached M5 bars for a symbol. Reads memory only; never fetches.
+
+        ``sessions`` is 1 for anything that asks about today. Pass 2 when a
+        measure needs warm-up bars that today cannot supply - an ATR(14) needs
+        fifteen bars, and forty minutes after the open there are nine.
+        """
         bot = None
         if self._bounce_service is not None:
             try:
@@ -3052,7 +3191,7 @@ class AlertCenterPanel(QFrame):
         if bot is None:
             return []
         try:
-            return bot.m5_chart_bars(symbol, max_sessions=1) or []
+            return bot.m5_chart_bars(symbol, max_sessions=max(1, int(sessions))) or []
         except Exception:
             return []
 
