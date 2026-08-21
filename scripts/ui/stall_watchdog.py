@@ -339,8 +339,95 @@ def summarize_stalls(path: Path | str | None = None, *, top: int = 12) -> list[d
     return rows[:top]
 
 
+def session_summary(path: Path | str | None = None) -> dict:
+    """The headline numbers for one session's log.
+
+    These are what a fluidity pass is judged on, and they are the shape the
+    2026-08-21 baseline was recorded in: how many hitches, how long the typical
+    one was, how bad the tail got, and how much of the session the trader spent
+    waiting. See docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md.
+    """
+    records = load_stalls(path)
+    if not records:
+        return {"stalls": 0}
+    blocked = sorted(
+        float(record.get("blocked_ms") or 0.0) for record in records
+    )
+    stamps = sorted(str(record.get("ts") or "") for record in records if record.get("ts"))
+    count = len(blocked)
+
+    def _at(fraction: float) -> float:
+        return blocked[min(count - 1, max(0, int(fraction * count) - 1))]
+
+    return {
+        "stalls": count,
+        "median_ms": round(blocked[count // 2], 1),
+        "p90_ms": round(_at(0.90), 1),
+        "p99_ms": round(_at(0.99), 1),
+        "worst_ms": round(blocked[-1], 1),
+        "total_blocked_s": round(sum(blocked) / 1000.0, 1),
+        "over_1s": sum(1 for value in blocked if value >= 1000.0),
+        "over_5s": sum(1 for value in blocked if value >= 5000.0),
+        "first_ts": stamps[0] if stamps else "",
+        "last_ts": stamps[-1] if stamps else "",
+    }
+
+
+def _print_summary(label: str, summary: dict) -> None:
+    if not summary.get("stalls"):
+        print(f"{label}: no stalls recorded")
+        return
+    print(
+        f"{label}: {summary['stalls']} stalls  "
+        f"median {summary['median_ms']:.0f}ms  p90 {summary['p90_ms']:.0f}ms  "
+        f"worst {summary['worst_ms']:.0f}ms  "
+        f"total {summary['total_blocked_s']:.0f}s blocked  "
+        f"(>=1s: {summary['over_1s']}, >=5s: {summary['over_5s']})"
+    )
+    if summary.get("first_ts"):
+        print(f"{'':>{len(label)}}  window {summary['first_ts'][11:19]} -> {summary['last_ts'][11:19]}")
+
+
+def _print_histograms(path, limit: int = 5) -> None:
+    """Where the time went INSIDE the worst stalls.
+
+    Only records written after 2026-08-21 carry ``culprit_samples``; older ones
+    were a single stack captured at detection, and say where a stall began
+    rather than where it spent itself.
+    """
+    records = [
+        record
+        for record in load_stalls(path)
+        if record.get("culprit_samples")
+    ]
+    if not records:
+        return
+    records.sort(key=lambda record: float(record.get("blocked_ms") or 0.0), reverse=True)
+    print("\nworst stalls, by where their samples actually landed:")
+    for record in records[:limit]:
+        blocked = float(record.get("blocked_ms") or 0.0)
+        print(f"  {blocked:9.0f}ms  {record.get('ts', '')[11:19]}")
+        for frame, hits in (record.get("culprit_samples") or {}).items():
+            print(f"{'':>14}{hits:5d} samples  {frame}")
+
+
 def _main() -> int:
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else log_path()
+    # `stall_watchdog.py [LOG] [--compare BASELINE]`. Hand-parsed rather than
+    # argparse-d because this module is imported by the GUI at startup and
+    # stays deliberately import-light.
+    positional: list[str] = []
+    baseline: Path | None = None
+    remaining = list(sys.argv[1:])
+    while remaining:
+        value = remaining.pop(0)
+        if value == "--compare":
+            if remaining:
+                baseline = Path(remaining.pop(0))
+            continue
+        if value.startswith("--"):
+            continue
+        positional.append(value)
+    target = Path(positional[0]) if positional else log_path()
     rows = summarize_stalls(target)
     if not rows:
         print(f"No stalls recorded in {target}")
@@ -351,12 +438,17 @@ def _main() -> int:
         return 0
     total = len(load_stalls(target))
     print(f"{total} stalls over {threshold_ms():.0f}ms in {target}\n")
+    _print_summary("this session", session_summary(target))
+    if baseline is not None:
+        _print_summary("baseline    ", session_summary(baseline))
+    print()
     print(f"{'total':>9}  {'worst':>8}  {'median':>8}  {'n':>5}  culprit")
     for row in rows:
         print(
             f"{row['total_ms']:9.1f}  {row['worst_ms']:8.1f}  "
             f"{row['median_ms']:8.1f}  {row['count']:5d}  {row['culprit']}"
         )
+    _print_histograms(target)
     return 0
 
 

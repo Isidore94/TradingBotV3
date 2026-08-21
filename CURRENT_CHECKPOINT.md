@@ -95,11 +95,21 @@ chips are reused across a refresh, and an alert row owns no stylesheet.
 
 ### Owed
 
-A full session measured the same way: stalls per hour, median, p90, total
-blocked seconds against **1843 / 238 ms / 1.16 s / 1008 s**, targeting **no
-stall over 5 s and under ~60 s blocked**. Working set after three hours (8.1 GB
-before the GC fix). A console with no `QFont` lines. And the next
-`culprit_samples` histogram, which is what decides whether anything is left.
+A full session measured the same way. **The method is now a runbook** -
+`docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md` - so the next session does not have
+to re-derive it: one command
+(`python scripts/ui/stall_watchdog.py --compare <baseline>`), the baseline to
+beat, the targets, and how to read the result. The desk was restarted onto the
+fixed build at 12:12 and the pre-fix log archived to
+`ui_stalls_prefluidity_2026-08-21.jsonl`.
+
+**The first post-fix run already named the next target**, which is the histogram
+earning its keep on day one: a 11,970 ms stall with **210 of 361 samples inside
+`focus_picks_panel.py:419`** - that is `live_state_for`, not the widget work the
+pass just fixed. The stack names the driver: `record_bounce_alert` →
+`_refresh_all` → `refresh`, so **every bounce alert resolves `mover_state` per
+symbol across all four editors**. Fix candidates and why neither touches a
+detector are written up in the runbook's section 4.
 
 ---
 

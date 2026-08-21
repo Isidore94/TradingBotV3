@@ -793,7 +793,10 @@ are listed in `CURRENT_CHECKPOINT.md`.
    stalls per hour, median, p90, total blocked seconds, against 1843 / 238 ms /
    1.16 s / 1008 s, targeting no stall over 5 s and under ~60 s blocked; the
    working set after three hours (8.1 GB before the GC fix); and a console with
-   no `QFont::setPointSizeF` lines. That last one **cannot be verified off the
+   no `QFont::setPointSizeF` lines. The method, the baseline and the reading
+   guide are `docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md`; the first post-fix run
+   already located the next target there (`live_state_for`, resolved per symbol
+   per editor on every bounce alert). That last one **cannot be verified off the
    desk**: Qt warnings do not reach a piped stderr on Windows, so the fix rests
    on the arithmetic (unit-pinned) and the trader's next session is the proof.
 

@@ -30,6 +30,7 @@ These describe actions an operator may perform now.
 | [`EVENING_MODE_RUNBOOK.md`](EVENING_MODE_RUNBOOK.md) | Sleep-in EVENING mode and ntfy setup |
 | [`DESK_TESTING_PLAN.md`](DESK_TESTING_PLAN.md) | Plain-language testing sequence the trader follows step by step; rendered read-only in the desk at Settings ▸ Testing Plan. Restates `CURRENT_CHECKPOINT.md`'s owed live proofs for a human reader and must be updated in the same pass whenever those change |
 | [`FIRST_SESSION_CHECKLIST.md`](FIRST_SESSION_CHECKLIST.md) | Required real-session validation for a new build |
+| [`GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md`](GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md) | Measure how fluid the desk actually is: one command over the stall log, the 2026-08-21 baseline to beat, the targets, and how to read the result |
 | [`REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md`](REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md) | Live regime-evidence collection and evidence-floor rules |
 | [`MACOS_SETUP.md`](MACOS_SETUP.md) | Supported macOS setup and known Windows-only operations |
 | [`packaging/README.md`](../packaging/README.md) | Frozen build triggers, process, and self-test |
