@@ -720,7 +720,7 @@ are listed in `CURRENT_CHECKPOINT.md`.
    Latent, not observed; detector-adjacent, so it needs the ask-first
    conversation and golden fixtures, not a quiet edit.
 
-11. **Regime-pause "holding highs" - measured and expiring. - PARTIALLY BUILT
+11. **Regime-pause "holding highs" - measured and expiring. - BUILT
    2026-08-21 (trader-directed).** The watch captioned MRK "holding highs" with
    a 75-minute-old high while price faded off it. Three defects, in increasing
    depth: the caption is a BATCH label applied to every symbol in the sweep;
@@ -738,19 +738,32 @@ are listed in `CURRENT_CHECKPOINT.md`.
    tracker's outcome rows keep it, which is what makes the rule gradeable.
    Uncertainty never deletes.
 
-   **NOT built, and the reason:** making near-extreme-in-ATR a REQUIRED
-   condition inside `check_regime_pause_setups` changes what a champion
-   detector emits, which alters the alert set, the candidate events and the
-   outcome records. plan.md sec 5 requires **golden-result fixtures first**,
-   and `bounce_bot_lib/legacy.py` is ask-first. Sequence when authorized:
-   capture fixtures of today's behaviour on recorded bars, then require the
-   near-extreme condition, then re-run the fixtures and diff deliberately.
+   **The detector gate, done in that order** (trader: "yes do it properly").
+   `regime_pause_sweep_v1` was frozen against the unchanged detector first -
+   four cases per side, each entering through a different branch of the
+   defiance test - then the near-extreme condition was ADDED (never
+   substituted, so the set can only shrink), then the fixture was re-frozen and
+   a test now names exactly which rows left and which branch each had used.
+   Three champion tests caught the first version dropping names whose ATR was
+   unmeasurable; being AT the extreme needs no ATR and is holding regardless.
+   The feed line gained a per-symbol measure, so the caption is no longer one
+   batch phrase stamped on names that are not alike. Replayed on the day's real
+   batch: 34% of longs and 28% of shorts drop, MRK and GFS among them.
 
    **Live gates owed:** a session where a "holding highs" row visibly leaves
    the queue within 15 minutes of the name rolling over; a row that keeps
-   making new highs visibly surviving past 15 minutes; and a read of
-   `hold_expired` rows against forward outcomes to confirm the rule is not
-   discarding winners.
+   making new highs visibly surviving past 15 minutes; a read of `hold_expired`
+   rows against forward outcomes to confirm the rule is not discarding winners;
+   and a check that the tightened detector still produces a usable number of
+   names on a normal day rather than a handful.
+
+   **Named and NOT acted on:** `REGIME_BANGER_DAY_EXCESS_PCT` (0.75) and
+   `REGIME_BANGER_WINDOW_EXCESS_PCT` (0.20) are still percentages, and the
+   trader's own argument applies to them too - 0.75% is about nine ATR for the
+   slowest name in that batch and two thirds of one for the fastest, so the day
+   gate is biased toward fast movers. Changing it would move the flagged set in
+   BOTH directions, which is a different decision from this one and needs its
+   own fixture and its own trader call.
 
 Exit gate: each packet exits through its own spec; R1 and R2 land first per the
 trader's ranking, then R7 before R8. **R7's code is complete**; what remains for

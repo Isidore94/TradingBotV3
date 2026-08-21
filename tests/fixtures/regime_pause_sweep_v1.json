@@ -1,0 +1,1860 @@
+{
+  "schema": "regime_pause_sweep_v1",
+  "feature_version": "regime_pause_sweep@2026-08-21",
+  "raw_input_keys": [
+    "cases",
+    "spy",
+    "pause_start_index"
+  ],
+  "raw_input_sha256": "7c744fc1a001570ce6ff03a0a02dd70ec56d40862c3311bb650deeed490e64cd",
+  "acquired_at": "2026-08-21T00:00:00-07:00",
+  "as_of": "2026-08-21T13:30:00-07:00",
+  "universe_version": "synthetic-regime-pause-2026-08-21",
+  "provider_assumptions": "Hand-built M5 bars on one session opening 06:30 market-local, five minutes apart, no gaps and no forming bar. No provider is called: the sweep reads get_cached_5m_bars, which is stubbed.",
+  "intentional_difference": "AFTER the near-extreme-in-ATR gate (trader rules 2026-08-21). A flagged name must now be within 1.0 ATR of its session extreme on the last completed bar. FELL_LESS_THAN_SPY (through window_excess) and BOUNCING_OFF_LOW / BOUNCING_OFF_HIGH (through still_trending) are dropped; the two genuinely at their extreme are kept. The baseline this replaced flagged all four per side.",
+  "expected_keys": [
+    "expected"
+  ],
+  "numeric_tolerance": 0.0001,
+  "configuration": {
+    "REGIME_BANGER_DAY_EXCESS_PCT": 0.75,
+    "REGIME_BANGER_WINDOW_EXCESS_PCT": 0.2,
+    "pause_start_index": 18,
+    "session_open_local": "2026-08-21T06:30:00",
+    "measured_at": "2026-08-21T08:20:00",
+    "hold_tolerance_atr": 1.0
+  },
+  "cases": {
+    "long": {
+      "HOLDS_AT_HIGH": [
+        {
+          "index": 0,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.88,
+          "close": 100.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 1,
+          "open": 100.0,
+          "high": 100.2629,
+          "low": 99.88,
+          "close": 100.1429,
+          "volume": 100000.0
+        },
+        {
+          "index": 2,
+          "open": 100.1429,
+          "high": 100.4057,
+          "low": 100.0229,
+          "close": 100.2857,
+          "volume": 100000.0
+        },
+        {
+          "index": 3,
+          "open": 100.2857,
+          "high": 100.5486,
+          "low": 100.1657,
+          "close": 100.4286,
+          "volume": 100000.0
+        },
+        {
+          "index": 4,
+          "open": 100.4286,
+          "high": 100.6914,
+          "low": 100.3086,
+          "close": 100.5714,
+          "volume": 100000.0
+        },
+        {
+          "index": 5,
+          "open": 100.5714,
+          "high": 100.8343,
+          "low": 100.4514,
+          "close": 100.7143,
+          "volume": 100000.0
+        },
+        {
+          "index": 6,
+          "open": 100.7143,
+          "high": 100.9771,
+          "low": 100.5943,
+          "close": 100.8571,
+          "volume": 100000.0
+        },
+        {
+          "index": 7,
+          "open": 100.8571,
+          "high": 101.12,
+          "low": 100.7371,
+          "close": 101.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 8,
+          "open": 101.0,
+          "high": 101.2629,
+          "low": 100.88,
+          "close": 101.1429,
+          "volume": 100000.0
+        },
+        {
+          "index": 9,
+          "open": 101.1429,
+          "high": 101.4057,
+          "low": 101.0229,
+          "close": 101.2857,
+          "volume": 100000.0
+        },
+        {
+          "index": 10,
+          "open": 101.2857,
+          "high": 101.5486,
+          "low": 101.1657,
+          "close": 101.4286,
+          "volume": 100000.0
+        },
+        {
+          "index": 11,
+          "open": 101.4286,
+          "high": 101.6914,
+          "low": 101.3086,
+          "close": 101.5714,
+          "volume": 100000.0
+        },
+        {
+          "index": 12,
+          "open": 101.5714,
+          "high": 101.8343,
+          "low": 101.4514,
+          "close": 101.7143,
+          "volume": 100000.0
+        },
+        {
+          "index": 13,
+          "open": 101.7143,
+          "high": 101.9771,
+          "low": 101.5943,
+          "close": 101.8571,
+          "volume": 100000.0
+        },
+        {
+          "index": 14,
+          "open": 101.8571,
+          "high": 102.12,
+          "low": 101.7371,
+          "close": 102.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 15,
+          "open": 102.0,
+          "high": 102.2629,
+          "low": 101.88,
+          "close": 102.1429,
+          "volume": 100000.0
+        },
+        {
+          "index": 16,
+          "open": 102.1429,
+          "high": 102.4057,
+          "low": 102.0229,
+          "close": 102.2857,
+          "volume": 100000.0
+        },
+        {
+          "index": 17,
+          "open": 102.2857,
+          "high": 102.5486,
+          "low": 102.1657,
+          "close": 102.4286,
+          "volume": 100000.0
+        },
+        {
+          "index": 18,
+          "open": 102.4286,
+          "high": 102.6914,
+          "low": 102.3086,
+          "close": 102.5714,
+          "volume": 100000.0
+        },
+        {
+          "index": 19,
+          "open": 102.5714,
+          "high": 102.8343,
+          "low": 102.4514,
+          "close": 102.7143,
+          "volume": 100000.0
+        },
+        {
+          "index": 20,
+          "open": 102.7143,
+          "high": 102.9771,
+          "low": 102.5943,
+          "close": 102.8571,
+          "volume": 100000.0
+        },
+        {
+          "index": 21,
+          "open": 102.8571,
+          "high": 103.12,
+          "low": 102.7371,
+          "close": 103.0,
+          "volume": 100000.0
+        }
+      ],
+      "HOLDS_JUST_UNDER": [
+        {
+          "index": 0,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.88,
+          "close": 100.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 1,
+          "open": 100.0,
+          "high": 100.27,
+          "low": 99.88,
+          "close": 100.15,
+          "volume": 100000.0
+        },
+        {
+          "index": 2,
+          "open": 100.15,
+          "high": 100.42,
+          "low": 100.03,
+          "close": 100.3,
+          "volume": 100000.0
+        },
+        {
+          "index": 3,
+          "open": 100.3,
+          "high": 100.57,
+          "low": 100.18,
+          "close": 100.45,
+          "volume": 100000.0
+        },
+        {
+          "index": 4,
+          "open": 100.45,
+          "high": 100.72,
+          "low": 100.33,
+          "close": 100.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 5,
+          "open": 100.6,
+          "high": 100.87,
+          "low": 100.48,
+          "close": 100.75,
+          "volume": 100000.0
+        },
+        {
+          "index": 6,
+          "open": 100.75,
+          "high": 101.02,
+          "low": 100.63,
+          "close": 100.9,
+          "volume": 100000.0
+        },
+        {
+          "index": 7,
+          "open": 100.9,
+          "high": 101.17,
+          "low": 100.78,
+          "close": 101.05,
+          "volume": 100000.0
+        },
+        {
+          "index": 8,
+          "open": 101.05,
+          "high": 101.32,
+          "low": 100.93,
+          "close": 101.2,
+          "volume": 100000.0
+        },
+        {
+          "index": 9,
+          "open": 101.2,
+          "high": 101.47,
+          "low": 101.08,
+          "close": 101.35,
+          "volume": 100000.0
+        },
+        {
+          "index": 10,
+          "open": 101.35,
+          "high": 101.62,
+          "low": 101.23,
+          "close": 101.5,
+          "volume": 100000.0
+        },
+        {
+          "index": 11,
+          "open": 101.5,
+          "high": 101.77,
+          "low": 101.38,
+          "close": 101.65,
+          "volume": 100000.0
+        },
+        {
+          "index": 12,
+          "open": 101.65,
+          "high": 101.92,
+          "low": 101.53,
+          "close": 101.8,
+          "volume": 100000.0
+        },
+        {
+          "index": 13,
+          "open": 101.8,
+          "high": 102.07,
+          "low": 101.68,
+          "close": 101.95,
+          "volume": 100000.0
+        },
+        {
+          "index": 14,
+          "open": 101.95,
+          "high": 102.22,
+          "low": 101.83,
+          "close": 102.1,
+          "volume": 100000.0
+        },
+        {
+          "index": 15,
+          "open": 102.1,
+          "high": 102.37,
+          "low": 101.98,
+          "close": 102.25,
+          "volume": 100000.0
+        },
+        {
+          "index": 16,
+          "open": 102.25,
+          "high": 102.52,
+          "low": 102.13,
+          "close": 102.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 17,
+          "open": 102.4,
+          "high": 102.67,
+          "low": 102.28,
+          "close": 102.55,
+          "volume": 100000.0
+        },
+        {
+          "index": 18,
+          "open": 102.55,
+          "high": 102.82,
+          "low": 102.43,
+          "close": 102.7,
+          "volume": 100000.0
+        },
+        {
+          "index": 19,
+          "open": 102.7,
+          "high": 102.97,
+          "low": 102.58,
+          "close": 102.85,
+          "volume": 100000.0
+        },
+        {
+          "index": 20,
+          "open": 102.85,
+          "high": 103.12,
+          "low": 102.73,
+          "close": 103.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 21,
+          "open": 103.0,
+          "high": 103.12,
+          "low": 102.73,
+          "close": 102.85,
+          "volume": 100000.0
+        }
+      ],
+      "FELL_LESS_THAN_SPY": [
+        {
+          "index": 0,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.88,
+          "close": 100.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 1,
+          "open": 100.0,
+          "high": 101.32,
+          "low": 99.88,
+          "close": 101.2,
+          "volume": 100000.0
+        },
+        {
+          "index": 2,
+          "open": 101.2,
+          "high": 102.52,
+          "low": 101.08,
+          "close": 102.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 3,
+          "open": 102.4,
+          "high": 103.72,
+          "low": 102.28,
+          "close": 103.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 4,
+          "open": 103.6,
+          "high": 104.92,
+          "low": 103.48,
+          "close": 104.8,
+          "volume": 100000.0
+        },
+        {
+          "index": 5,
+          "open": 104.8,
+          "high": 106.12,
+          "low": 104.68,
+          "close": 106.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 6,
+          "open": 106.0,
+          "high": 106.12,
+          "low": 105.68,
+          "close": 105.8,
+          "volume": 100000.0
+        },
+        {
+          "index": 7,
+          "open": 105.8,
+          "high": 105.92,
+          "low": 105.3891,
+          "close": 105.5091,
+          "volume": 100000.0
+        },
+        {
+          "index": 8,
+          "open": 105.5091,
+          "high": 105.6291,
+          "low": 105.0982,
+          "close": 105.2182,
+          "volume": 100000.0
+        },
+        {
+          "index": 9,
+          "open": 105.2182,
+          "high": 105.3382,
+          "low": 104.8073,
+          "close": 104.9273,
+          "volume": 100000.0
+        },
+        {
+          "index": 10,
+          "open": 104.9273,
+          "high": 105.0473,
+          "low": 104.5164,
+          "close": 104.6364,
+          "volume": 100000.0
+        },
+        {
+          "index": 11,
+          "open": 104.6364,
+          "high": 104.7564,
+          "low": 104.2255,
+          "close": 104.3455,
+          "volume": 100000.0
+        },
+        {
+          "index": 12,
+          "open": 104.3455,
+          "high": 104.4655,
+          "low": 103.9345,
+          "close": 104.0545,
+          "volume": 100000.0
+        },
+        {
+          "index": 13,
+          "open": 104.0545,
+          "high": 104.1745,
+          "low": 103.6436,
+          "close": 103.7636,
+          "volume": 100000.0
+        },
+        {
+          "index": 14,
+          "open": 103.7636,
+          "high": 103.8836,
+          "low": 103.3527,
+          "close": 103.4727,
+          "volume": 100000.0
+        },
+        {
+          "index": 15,
+          "open": 103.4727,
+          "high": 103.5927,
+          "low": 103.0618,
+          "close": 103.1818,
+          "volume": 100000.0
+        },
+        {
+          "index": 16,
+          "open": 103.1818,
+          "high": 103.3018,
+          "low": 102.7709,
+          "close": 102.8909,
+          "volume": 100000.0
+        },
+        {
+          "index": 17,
+          "open": 102.8909,
+          "high": 103.0109,
+          "low": 102.48,
+          "close": 102.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 18,
+          "open": 102.6,
+          "high": 102.72,
+          "low": 102.48,
+          "close": 102.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 19,
+          "open": 102.6,
+          "high": 102.72,
+          "low": 102.48,
+          "close": 102.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 20,
+          "open": 102.6,
+          "high": 102.72,
+          "low": 102.48,
+          "close": 102.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 21,
+          "open": 102.6,
+          "high": 102.72,
+          "low": 102.48,
+          "close": 102.6,
+          "volume": 100000.0
+        }
+      ],
+      "BOUNCING_OFF_LOW": [
+        {
+          "index": 0,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.88,
+          "close": 100.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 1,
+          "open": 100.0,
+          "high": 101.32,
+          "low": 99.88,
+          "close": 101.2,
+          "volume": 100000.0
+        },
+        {
+          "index": 2,
+          "open": 101.2,
+          "high": 102.52,
+          "low": 101.08,
+          "close": 102.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 3,
+          "open": 102.4,
+          "high": 103.72,
+          "low": 102.28,
+          "close": 103.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 4,
+          "open": 103.6,
+          "high": 104.92,
+          "low": 103.48,
+          "close": 104.8,
+          "volume": 100000.0
+        },
+        {
+          "index": 5,
+          "open": 104.8,
+          "high": 106.12,
+          "low": 104.68,
+          "close": 106.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 6,
+          "open": 106.0,
+          "high": 106.12,
+          "low": 105.48,
+          "close": 105.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 7,
+          "open": 105.6,
+          "high": 105.72,
+          "low": 105.0618,
+          "close": 105.1818,
+          "volume": 100000.0
+        },
+        {
+          "index": 8,
+          "open": 105.1818,
+          "high": 105.3018,
+          "low": 104.6436,
+          "close": 104.7636,
+          "volume": 100000.0
+        },
+        {
+          "index": 9,
+          "open": 104.7636,
+          "high": 104.8836,
+          "low": 104.2255,
+          "close": 104.3455,
+          "volume": 100000.0
+        },
+        {
+          "index": 10,
+          "open": 104.3455,
+          "high": 104.4655,
+          "low": 103.8073,
+          "close": 103.9273,
+          "volume": 100000.0
+        },
+        {
+          "index": 11,
+          "open": 103.9273,
+          "high": 104.0473,
+          "low": 103.3891,
+          "close": 103.5091,
+          "volume": 100000.0
+        },
+        {
+          "index": 12,
+          "open": 103.5091,
+          "high": 103.6291,
+          "low": 102.9709,
+          "close": 103.0909,
+          "volume": 100000.0
+        },
+        {
+          "index": 13,
+          "open": 103.0909,
+          "high": 103.2109,
+          "low": 102.5527,
+          "close": 102.6727,
+          "volume": 100000.0
+        },
+        {
+          "index": 14,
+          "open": 102.6727,
+          "high": 102.7927,
+          "low": 102.1345,
+          "close": 102.2545,
+          "volume": 100000.0
+        },
+        {
+          "index": 15,
+          "open": 102.2545,
+          "high": 102.3745,
+          "low": 101.7164,
+          "close": 101.8364,
+          "volume": 100000.0
+        },
+        {
+          "index": 16,
+          "open": 101.8364,
+          "high": 101.9564,
+          "low": 101.2982,
+          "close": 101.4182,
+          "volume": 100000.0
+        },
+        {
+          "index": 17,
+          "open": 101.4182,
+          "high": 101.5382,
+          "low": 100.88,
+          "close": 101.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 18,
+          "open": 101.0,
+          "high": 101.32,
+          "low": 100.88,
+          "close": 101.2,
+          "volume": 100000.0
+        },
+        {
+          "index": 19,
+          "open": 101.2,
+          "high": 101.6533,
+          "low": 101.08,
+          "close": 101.5333,
+          "volume": 100000.0
+        },
+        {
+          "index": 20,
+          "open": 101.5333,
+          "high": 101.9867,
+          "low": 101.4133,
+          "close": 101.8667,
+          "volume": 100000.0
+        },
+        {
+          "index": 21,
+          "open": 101.8667,
+          "high": 102.32,
+          "low": 101.7467,
+          "close": 102.2,
+          "volume": 100000.0
+        }
+      ]
+    },
+    "short": {
+      "PRESSES_AT_LOW": [
+        {
+          "index": 0,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.88,
+          "close": 100.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 1,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.7371,
+          "close": 99.8571,
+          "volume": 100000.0
+        },
+        {
+          "index": 2,
+          "open": 99.8571,
+          "high": 99.9771,
+          "low": 99.5943,
+          "close": 99.7143,
+          "volume": 100000.0
+        },
+        {
+          "index": 3,
+          "open": 99.7143,
+          "high": 99.8343,
+          "low": 99.4514,
+          "close": 99.5714,
+          "volume": 100000.0
+        },
+        {
+          "index": 4,
+          "open": 99.5714,
+          "high": 99.6914,
+          "low": 99.3086,
+          "close": 99.4286,
+          "volume": 100000.0
+        },
+        {
+          "index": 5,
+          "open": 99.4286,
+          "high": 99.5486,
+          "low": 99.1657,
+          "close": 99.2857,
+          "volume": 100000.0
+        },
+        {
+          "index": 6,
+          "open": 99.2857,
+          "high": 99.4057,
+          "low": 99.0229,
+          "close": 99.1429,
+          "volume": 100000.0
+        },
+        {
+          "index": 7,
+          "open": 99.1429,
+          "high": 99.2629,
+          "low": 98.88,
+          "close": 99.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 8,
+          "open": 99.0,
+          "high": 99.12,
+          "low": 98.7371,
+          "close": 98.8571,
+          "volume": 100000.0
+        },
+        {
+          "index": 9,
+          "open": 98.8571,
+          "high": 98.9771,
+          "low": 98.5943,
+          "close": 98.7143,
+          "volume": 100000.0
+        },
+        {
+          "index": 10,
+          "open": 98.7143,
+          "high": 98.8343,
+          "low": 98.4514,
+          "close": 98.5714,
+          "volume": 100000.0
+        },
+        {
+          "index": 11,
+          "open": 98.5714,
+          "high": 98.6914,
+          "low": 98.3086,
+          "close": 98.4286,
+          "volume": 100000.0
+        },
+        {
+          "index": 12,
+          "open": 98.4286,
+          "high": 98.5486,
+          "low": 98.1657,
+          "close": 98.2857,
+          "volume": 100000.0
+        },
+        {
+          "index": 13,
+          "open": 98.2857,
+          "high": 98.4057,
+          "low": 98.0229,
+          "close": 98.1429,
+          "volume": 100000.0
+        },
+        {
+          "index": 14,
+          "open": 98.1429,
+          "high": 98.2629,
+          "low": 97.88,
+          "close": 98.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 15,
+          "open": 98.0,
+          "high": 98.12,
+          "low": 97.7371,
+          "close": 97.8571,
+          "volume": 100000.0
+        },
+        {
+          "index": 16,
+          "open": 97.8571,
+          "high": 97.9771,
+          "low": 97.5943,
+          "close": 97.7143,
+          "volume": 100000.0
+        },
+        {
+          "index": 17,
+          "open": 97.7143,
+          "high": 97.8343,
+          "low": 97.4514,
+          "close": 97.5714,
+          "volume": 100000.0
+        },
+        {
+          "index": 18,
+          "open": 97.5714,
+          "high": 97.6914,
+          "low": 97.3086,
+          "close": 97.4286,
+          "volume": 100000.0
+        },
+        {
+          "index": 19,
+          "open": 97.4286,
+          "high": 97.5486,
+          "low": 97.1657,
+          "close": 97.2857,
+          "volume": 100000.0
+        },
+        {
+          "index": 20,
+          "open": 97.2857,
+          "high": 97.4057,
+          "low": 97.0229,
+          "close": 97.1429,
+          "volume": 100000.0
+        },
+        {
+          "index": 21,
+          "open": 97.1429,
+          "high": 97.2629,
+          "low": 96.88,
+          "close": 97.0,
+          "volume": 100000.0
+        }
+      ],
+      "PRESSES_JUST_OVER": [
+        {
+          "index": 0,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.88,
+          "close": 100.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 1,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.73,
+          "close": 99.85,
+          "volume": 100000.0
+        },
+        {
+          "index": 2,
+          "open": 99.85,
+          "high": 99.97,
+          "low": 99.58,
+          "close": 99.7,
+          "volume": 100000.0
+        },
+        {
+          "index": 3,
+          "open": 99.7,
+          "high": 99.82,
+          "low": 99.43,
+          "close": 99.55,
+          "volume": 100000.0
+        },
+        {
+          "index": 4,
+          "open": 99.55,
+          "high": 99.67,
+          "low": 99.28,
+          "close": 99.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 5,
+          "open": 99.4,
+          "high": 99.52,
+          "low": 99.13,
+          "close": 99.25,
+          "volume": 100000.0
+        },
+        {
+          "index": 6,
+          "open": 99.25,
+          "high": 99.37,
+          "low": 98.98,
+          "close": 99.1,
+          "volume": 100000.0
+        },
+        {
+          "index": 7,
+          "open": 99.1,
+          "high": 99.22,
+          "low": 98.83,
+          "close": 98.95,
+          "volume": 100000.0
+        },
+        {
+          "index": 8,
+          "open": 98.95,
+          "high": 99.07,
+          "low": 98.68,
+          "close": 98.8,
+          "volume": 100000.0
+        },
+        {
+          "index": 9,
+          "open": 98.8,
+          "high": 98.92,
+          "low": 98.53,
+          "close": 98.65,
+          "volume": 100000.0
+        },
+        {
+          "index": 10,
+          "open": 98.65,
+          "high": 98.77,
+          "low": 98.38,
+          "close": 98.5,
+          "volume": 100000.0
+        },
+        {
+          "index": 11,
+          "open": 98.5,
+          "high": 98.62,
+          "low": 98.23,
+          "close": 98.35,
+          "volume": 100000.0
+        },
+        {
+          "index": 12,
+          "open": 98.35,
+          "high": 98.47,
+          "low": 98.08,
+          "close": 98.2,
+          "volume": 100000.0
+        },
+        {
+          "index": 13,
+          "open": 98.2,
+          "high": 98.32,
+          "low": 97.93,
+          "close": 98.05,
+          "volume": 100000.0
+        },
+        {
+          "index": 14,
+          "open": 98.05,
+          "high": 98.17,
+          "low": 97.78,
+          "close": 97.9,
+          "volume": 100000.0
+        },
+        {
+          "index": 15,
+          "open": 97.9,
+          "high": 98.02,
+          "low": 97.63,
+          "close": 97.75,
+          "volume": 100000.0
+        },
+        {
+          "index": 16,
+          "open": 97.75,
+          "high": 97.87,
+          "low": 97.48,
+          "close": 97.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 17,
+          "open": 97.6,
+          "high": 97.72,
+          "low": 97.33,
+          "close": 97.45,
+          "volume": 100000.0
+        },
+        {
+          "index": 18,
+          "open": 97.45,
+          "high": 97.57,
+          "low": 97.18,
+          "close": 97.3,
+          "volume": 100000.0
+        },
+        {
+          "index": 19,
+          "open": 97.3,
+          "high": 97.42,
+          "low": 97.03,
+          "close": 97.15,
+          "volume": 100000.0
+        },
+        {
+          "index": 20,
+          "open": 97.15,
+          "high": 97.27,
+          "low": 96.88,
+          "close": 97.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 21,
+          "open": 97.0,
+          "high": 97.27,
+          "low": 96.88,
+          "close": 97.15,
+          "volume": 100000.0
+        }
+      ],
+      "FELL_LESS_THAN_SPY": [
+        {
+          "index": 0,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.88,
+          "close": 100.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 1,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 98.68,
+          "close": 98.8,
+          "volume": 100000.0
+        },
+        {
+          "index": 2,
+          "open": 98.8,
+          "high": 98.92,
+          "low": 97.48,
+          "close": 97.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 3,
+          "open": 97.6,
+          "high": 97.72,
+          "low": 96.28,
+          "close": 96.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 4,
+          "open": 96.4,
+          "high": 96.52,
+          "low": 95.08,
+          "close": 95.2,
+          "volume": 100000.0
+        },
+        {
+          "index": 5,
+          "open": 95.2,
+          "high": 95.32,
+          "low": 93.88,
+          "close": 94.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 6,
+          "open": 94.0,
+          "high": 94.32,
+          "low": 93.88,
+          "close": 94.2,
+          "volume": 100000.0
+        },
+        {
+          "index": 7,
+          "open": 94.2,
+          "high": 94.6109,
+          "low": 94.08,
+          "close": 94.4909,
+          "volume": 100000.0
+        },
+        {
+          "index": 8,
+          "open": 94.4909,
+          "high": 94.9018,
+          "low": 94.3709,
+          "close": 94.7818,
+          "volume": 100000.0
+        },
+        {
+          "index": 9,
+          "open": 94.7818,
+          "high": 95.1927,
+          "low": 94.6618,
+          "close": 95.0727,
+          "volume": 100000.0
+        },
+        {
+          "index": 10,
+          "open": 95.0727,
+          "high": 95.4836,
+          "low": 94.9527,
+          "close": 95.3636,
+          "volume": 100000.0
+        },
+        {
+          "index": 11,
+          "open": 95.3636,
+          "high": 95.7745,
+          "low": 95.2436,
+          "close": 95.6545,
+          "volume": 100000.0
+        },
+        {
+          "index": 12,
+          "open": 95.6545,
+          "high": 96.0655,
+          "low": 95.5345,
+          "close": 95.9455,
+          "volume": 100000.0
+        },
+        {
+          "index": 13,
+          "open": 95.9455,
+          "high": 96.3564,
+          "low": 95.8255,
+          "close": 96.2364,
+          "volume": 100000.0
+        },
+        {
+          "index": 14,
+          "open": 96.2364,
+          "high": 96.6473,
+          "low": 96.1164,
+          "close": 96.5273,
+          "volume": 100000.0
+        },
+        {
+          "index": 15,
+          "open": 96.5273,
+          "high": 96.9382,
+          "low": 96.4073,
+          "close": 96.8182,
+          "volume": 100000.0
+        },
+        {
+          "index": 16,
+          "open": 96.8182,
+          "high": 97.2291,
+          "low": 96.6982,
+          "close": 97.1091,
+          "volume": 100000.0
+        },
+        {
+          "index": 17,
+          "open": 97.1091,
+          "high": 97.52,
+          "low": 96.9891,
+          "close": 97.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 18,
+          "open": 97.4,
+          "high": 97.52,
+          "low": 97.28,
+          "close": 97.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 19,
+          "open": 97.4,
+          "high": 97.52,
+          "low": 97.28,
+          "close": 97.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 20,
+          "open": 97.4,
+          "high": 97.52,
+          "low": 97.28,
+          "close": 97.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 21,
+          "open": 97.4,
+          "high": 97.52,
+          "low": 97.28,
+          "close": 97.4,
+          "volume": 100000.0
+        }
+      ],
+      "BOUNCING_OFF_HIGH": [
+        {
+          "index": 0,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 99.88,
+          "close": 100.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 1,
+          "open": 100.0,
+          "high": 100.12,
+          "low": 98.68,
+          "close": 98.8,
+          "volume": 100000.0
+        },
+        {
+          "index": 2,
+          "open": 98.8,
+          "high": 98.92,
+          "low": 97.48,
+          "close": 97.6,
+          "volume": 100000.0
+        },
+        {
+          "index": 3,
+          "open": 97.6,
+          "high": 97.72,
+          "low": 96.28,
+          "close": 96.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 4,
+          "open": 96.4,
+          "high": 96.52,
+          "low": 95.08,
+          "close": 95.2,
+          "volume": 100000.0
+        },
+        {
+          "index": 5,
+          "open": 95.2,
+          "high": 95.32,
+          "low": 93.88,
+          "close": 94.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 6,
+          "open": 94.0,
+          "high": 94.52,
+          "low": 93.88,
+          "close": 94.4,
+          "volume": 100000.0
+        },
+        {
+          "index": 7,
+          "open": 94.4,
+          "high": 94.9382,
+          "low": 94.28,
+          "close": 94.8182,
+          "volume": 100000.0
+        },
+        {
+          "index": 8,
+          "open": 94.8182,
+          "high": 95.3564,
+          "low": 94.6982,
+          "close": 95.2364,
+          "volume": 100000.0
+        },
+        {
+          "index": 9,
+          "open": 95.2364,
+          "high": 95.7745,
+          "low": 95.1164,
+          "close": 95.6545,
+          "volume": 100000.0
+        },
+        {
+          "index": 10,
+          "open": 95.6545,
+          "high": 96.1927,
+          "low": 95.5345,
+          "close": 96.0727,
+          "volume": 100000.0
+        },
+        {
+          "index": 11,
+          "open": 96.0727,
+          "high": 96.6109,
+          "low": 95.9527,
+          "close": 96.4909,
+          "volume": 100000.0
+        },
+        {
+          "index": 12,
+          "open": 96.4909,
+          "high": 97.0291,
+          "low": 96.3709,
+          "close": 96.9091,
+          "volume": 100000.0
+        },
+        {
+          "index": 13,
+          "open": 96.9091,
+          "high": 97.4473,
+          "low": 96.7891,
+          "close": 97.3273,
+          "volume": 100000.0
+        },
+        {
+          "index": 14,
+          "open": 97.3273,
+          "high": 97.8655,
+          "low": 97.2073,
+          "close": 97.7455,
+          "volume": 100000.0
+        },
+        {
+          "index": 15,
+          "open": 97.7455,
+          "high": 98.2836,
+          "low": 97.6255,
+          "close": 98.1636,
+          "volume": 100000.0
+        },
+        {
+          "index": 16,
+          "open": 98.1636,
+          "high": 98.7018,
+          "low": 98.0436,
+          "close": 98.5818,
+          "volume": 100000.0
+        },
+        {
+          "index": 17,
+          "open": 98.5818,
+          "high": 99.12,
+          "low": 98.4618,
+          "close": 99.0,
+          "volume": 100000.0
+        },
+        {
+          "index": 18,
+          "open": 99.0,
+          "high": 99.12,
+          "low": 98.68,
+          "close": 98.8,
+          "volume": 100000.0
+        },
+        {
+          "index": 19,
+          "open": 98.8,
+          "high": 98.92,
+          "low": 98.3467,
+          "close": 98.4667,
+          "volume": 100000.0
+        },
+        {
+          "index": 20,
+          "open": 98.4667,
+          "high": 98.5867,
+          "low": 98.0133,
+          "close": 98.1333,
+          "volume": 100000.0
+        },
+        {
+          "index": 21,
+          "open": 98.1333,
+          "high": 98.2533,
+          "low": 97.68,
+          "close": 97.8,
+          "volume": 100000.0
+        }
+      ]
+    }
+  },
+  "spy": {
+    "long": [
+      {
+        "index": 0,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 1,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 2,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 3,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 4,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 5,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 6,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 7,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 8,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 9,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 10,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 11,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 12,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 13,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 14,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 15,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 16,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 17,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 18,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.68,
+        "close": 499.8,
+        "volume": 100000.0
+      },
+      {
+        "index": 19,
+        "open": 499.8,
+        "high": 499.92,
+        "low": 499.3467,
+        "close": 499.4667,
+        "volume": 100000.0
+      },
+      {
+        "index": 20,
+        "open": 499.4667,
+        "high": 499.5867,
+        "low": 499.0133,
+        "close": 499.1333,
+        "volume": 100000.0
+      },
+      {
+        "index": 21,
+        "open": 499.1333,
+        "high": 499.2533,
+        "low": 498.68,
+        "close": 498.8,
+        "volume": 100000.0
+      }
+    ],
+    "short": [
+      {
+        "index": 0,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 1,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 2,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 3,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 4,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 5,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 6,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 7,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 8,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 9,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 10,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 11,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 12,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 13,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 14,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 15,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 16,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 17,
+        "open": 500.0,
+        "high": 500.12,
+        "low": 499.88,
+        "close": 500.0,
+        "volume": 100000.0
+      },
+      {
+        "index": 18,
+        "open": 500.0,
+        "high": 500.32,
+        "low": 499.88,
+        "close": 500.2,
+        "volume": 100000.0
+      },
+      {
+        "index": 19,
+        "open": 500.2,
+        "high": 500.6533,
+        "low": 500.08,
+        "close": 500.5333,
+        "volume": 100000.0
+      },
+      {
+        "index": 20,
+        "open": 500.5333,
+        "high": 500.9867,
+        "low": 500.4133,
+        "close": 500.8667,
+        "volume": 100000.0
+      },
+      {
+        "index": 21,
+        "open": 500.8667,
+        "high": 501.32,
+        "low": 500.7467,
+        "close": 501.2,
+        "volume": 100000.0
+      }
+    ]
+  },
+  "pause_start_index": 18,
+  "expected": {
+    "long": {
+      "flagged": [
+        "HOLDS_AT_HIGH",
+        "HOLDS_JUST_UNDER"
+      ],
+      "measures": {
+        "HOLDS_AT_HIGH": {
+          "sym_day": 3.0,
+          "sym_window": 0.5579,
+          "day_excess": 3.24
+        },
+        "HOLDS_JUST_UNDER": {
+          "sym_day": 2.85,
+          "sym_window": 0.2925,
+          "day_excess": 3.09
+        }
+      },
+      "summary_lines": [
+        "REGIME PAUSE WATCH (long): SPY paused (-0.24% window) - 2 swing longs still holding highs: HOLDS_AT_HIGH (new HOD), HOLDS_JUST_UNDER (0.7 ATR) (2 today). Recorded as swing-scan evidence, not an entry signal."
+      ]
+    },
+    "short": {
+      "flagged": [
+        "PRESSES_AT_LOW",
+        "PRESSES_JUST_OVER"
+      ],
+      "measures": {
+        "PRESSES_AT_LOW": {
+          "sym_day": -3.0,
+          "sym_window": -0.5856,
+          "day_excess": 3.24
+        },
+        "PRESSES_JUST_OVER": {
+          "sym_day": -2.85,
+          "sym_window": -0.3079,
+          "day_excess": 3.09
+        }
+      },
+      "summary_lines": [
+        "REGIME PAUSE WATCH (short): SPY paused (+0.24% window) - 2 swing shorts still pressing lows: PRESSES_AT_LOW (new LOD), PRESSES_JUST_OVER (0.7 ATR) (2 today). Recorded as swing-scan evidence, not an entry signal."
+      ]
+    }
+  }
+}

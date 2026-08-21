@@ -344,3 +344,42 @@ def test_mrk_is_deleted_from_the_queue_by_the_time_the_trader_saw_it():
     )
     assert verdict.keep is False
     assert verdict.reason == rph.EXPIRED_STALE
+
+
+# -- when the ATR itself cannot be measured ------------------------------
+
+
+def test_at_the_extreme_needs_no_atr():
+    """Nine bars into a session there is no ATR(14) - and the sweep fires
+    while there are nine. Being AT the high is a fact that needs no tolerance
+    to state, so refusing to state it would switch the rule off exactly when
+    it is needed. Caught by the champion tests, which build 12-bar sessions.
+    """
+    bars = [_bar(i, 100.5, 99.5, 100.0) for i in range(8)]
+    bars.append(_bar(8, 103.0, 101.0, 102.9))
+    state = rph.hold_state(bars, "LONG", now=_now_after(bars))
+    assert wilder_atr(bars) is None
+    assert state.holding is True
+    assert state.reason == rph.AT_EXTREME
+    assert state.distance_atr is None
+    assert state.describe() == "new HOD"
+
+
+def test_off_the_extreme_with_no_atr_stays_unmeasurable():
+    """The DISTANCE is what cannot be judged, and inventing a tolerance to
+    judge it with is the one thing not to do."""
+    bars = [_bar(i, 100.5, 99.5, 100.0) for i in range(8)]
+    bars.append(_bar(8, 103.0, 101.0, 102.9))
+    bars.append(_bar(9, 102.0, 101.0, 101.2))
+    state = rph.hold_state(bars, "LONG", now=_now_after(bars))
+    assert wilder_atr(bars) is None
+    assert state.holding is False
+    assert state.reason == rph.UNMEASURABLE
+
+
+def test_a_short_at_its_low_needs_no_atr_either():
+    bars = [_bar(i, 100.5, 99.5, 100.0) for i in range(8)]
+    bars.append(_bar(8, 99.0, 97.0, 97.1))
+    state = rph.hold_state(bars, "SHORT", now=_now_after(bars))
+    assert state.holding is True
+    assert state.describe() == "new LOD"

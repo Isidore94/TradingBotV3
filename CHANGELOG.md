@@ -21,6 +21,33 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-21 (fifth pass) - The regime-pause gate, fixtures first
+
+`IMPLEMENTED` + `GREEN`; live gates owed (`plan.md` Phase 0.5 item 11).
+
+- Golden fixture `regime_pause_sweep_v1` frozen against the UNCHANGED detector
+  first (plan.md sec 5). Four cases per side, each entering through a different
+  branch of `still_trending or made_new_extreme or window_excess`; two are
+  genuinely at their extreme and two are not.
+- `_sweep_regime_pause_bangers` now also requires
+  `regime_pause_hold.hold_state(...).holding`. Added, never substituted, so the
+  flagged set can only shrink. The fixture's re-freeze records the diff: four
+  flagged per side became two, and a test names which rows left and which
+  branch each had used.
+- **Being AT the extreme needs no ATR.** Three champion tests (12-bar sessions)
+  caught the first version switching the detector off whenever an ATR(14) was
+  unmeasurable - which is most of the first hour.
+- The feed line carries a per-symbol measure instead of one batch phrase:
+  `HTFL (new HOD), MRK (0.7 ATR)`. `ui/models/bounce.py` expands it per row and
+  still reads a bare symbol as the old wording.
+- `completed_bars` now reads attribute-shaped bars as well as dicts. BounceBot's
+  cached series is `IbBar` objects, and a shared rule that only understood
+  `bar.get` excluded every detector-side caller.
+- Replayed against the day's real batch: **34% of longs and 28% of shorts drop**,
+  including MRK (1.8 ATR off a 70-minute-old high) and GFS (1.3 ATR off).
+- Test suite **4031 passed / 19 subtests**, exit 0; smoke 7/7; source selftest
+  56/56.
+
 ### 2026-08-21 (fourth pass) - "Holding highs" is measured, in ATR, and expires
 
 `IMPLEMENTED` + `GREEN`; the detector-side gate is NOT built (needs golden

@@ -125,6 +125,8 @@ class HoldState:
         word = "LOD" if _is_short(self.side) else "HOD"
         if self.reason == AT_EXTREME:
             return f"new {word}"
+        if self.distance_atr is None:
+            return f"{word} unmeasured"
         age = ""
         if self.bars_since_extreme is not None:
             age = f", {word} {self.bars_since_extreme * 5} min old"
@@ -221,7 +223,25 @@ def hold_state(
     extreme, extreme_at, bars_since = session_extreme(session, side_text)
     close = _price(completed[-1], _CLOSE_KEYS)
     atr = wilder_atr(completed, atr_length)
+    if extreme is not None and close is not None and not atr and bars_since == 0:
+        # No ATR - too few bars, or a series with no range at all - but the
+        # extreme was set on the last completed bar. Being AT the high is a
+        # fact that needs no tolerance to state, and refusing to state it would
+        # silently switch the whole rule off early in a session: an ATR(14)
+        # needs fifteen bars, and the sweep fires while there are nine.
+        return HoldState(
+            holding=True,
+            reason=AT_EXTREME,
+            side=side_text,
+            extreme=extreme,
+            extreme_at=extreme_at,
+            close=close,
+            atr=atr,
+            bars_since_extreme=bars_since,
+        )
     if extreme is None or close is None or not atr:
+        # Off the extreme with no ATR: the DISTANCE is what cannot be judged,
+        # and inventing a tolerance to judge it with is the one thing not to do.
         return HoldState(
             holding=False,
             reason=UNMEASURABLE,

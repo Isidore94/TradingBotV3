@@ -33,6 +33,7 @@ from m5_signal_engines import (
     latest_lrsi_cross,
     latest_orb_events,
 )
+import regime_pause_hold
 from market_session import (
     get_market_local_now,
     get_market_session_close_naive,
@@ -5416,7 +5417,9 @@ class BounceBot(EWrapper, EClient):
             return []
         return self._sweep_regime_pause_bangers(state, spy_today, side)
 
-    def _sweep_regime_pause_bangers(self, state, spy_today, side):
+    def _sweep_regime_pause_bangers(self, state, spy_today, side, *, now=None):
+        """``now`` is injectable so the golden fixture is not clock-dependent;
+        production passes nothing and the wall clock is used."""
         watchlist = self.shorts if side == "short" else self.longs
         symbols = sorted(
             {str(item or "").strip().upper() for item in watchlist if str(item or "").strip()}
@@ -5434,6 +5437,7 @@ class BounceBot(EWrapper, EClient):
             return []
 
         observed = state.setdefault("observed", set())
+        moment = now or datetime.now()
         flagged = []
         observations_dirty = False
         for symbol in symbols:
@@ -5468,6 +5472,24 @@ class BounceBot(EWrapper, EClient):
                 made_new_extreme = max(bar.high for bar in window_bars) > max(bar.high for bar in pre_window)
             if not (still_trending or made_new_extreme or window_excess >= REGIME_BANGER_WINDOW_EXCESS_PCT):
                 continue
+            # "Holding highs" has to mean holding (trader, 2026-08-21). The
+            # three branches above measure DEFIANCE of the pause - all three
+            # can be true of a name that is nowhere near its extreme, and the
+            # feed line calls every one of them "still holding highs". MRK was
+            # 1.6 ATR below a high set 75 minutes earlier.
+            #
+            # ADDED, not substituted: the defiance test still has to pass, so
+            # this can only ever shrink the flagged set.
+            #
+            # The FULL cached series goes in, not sym_today: an ATR(14) needs
+            # fifteen bars and forty minutes after the open there are nine,
+            # which is exactly when this sweep fires. hold_state takes its ATR
+            # from everything supplied and its extreme from the last completed
+            # bar's session, and sym_today is non-empty here, so that session
+            # is today.
+            hold = regime_pause_hold.hold_state(bars, side, now=moment)
+            if not hold.holding:
+                continue
             observed.add(symbol)
             self._record_regime_pause_observation(
                 symbol,
@@ -5489,6 +5511,9 @@ class BounceBot(EWrapper, EClient):
                 "spy_window": spy_window,
                 "day_excess": day_excess,
                 "last_bar": sym_today[-1],
+                # Per-symbol, so the summary line stops being a batch label
+                # applied uniformly to names that are not alike.
+                "hold": hold,
             }
             self._record_regime_pause_banger(hit)
             flagged.append(hit)
@@ -5572,7 +5597,30 @@ class BounceBot(EWrapper, EClient):
         # side-aligned RS/RW measurement. Rank strongest RS longs / weakest RW
         # shorts first, with pause-window excess as the deterministic tie-break.
         ranked_hits = sorted(hits, key=display_rank)
-        symbols = ", ".join(hit["symbol"] for hit in ranked_hits)
+
+        def labelled(hit):
+            """``SYM (new HOD)`` / ``SYM (0.4 ATR)``.
+
+            The phrase after the colon used to be the only thing said about any
+            of these names, and it was the same phrase for all of them. Each
+            row now carries its own distance so the reader can tell the one
+            printing new highs from the one sitting a quarter-ATR under.
+            No comma inside the parentheses: the row list is comma-separated
+            and ui.models.bounce splits it on exactly that.
+            """
+            state = hit.get("hold")
+            if state is None:
+                return str(hit["symbol"])
+            # AT_EXTREME first: a name at its high needs no ATR to say so, and
+            # early in a session it will not have one.
+            if getattr(state, "reason", "") == regime_pause_hold.AT_EXTREME:
+                word = "LOD" if side == "short" else "HOD"
+                return f"{hit['symbol']} (new {word})"
+            if getattr(state, "distance_atr", None) is None:
+                return str(hit["symbol"])
+            return f"{hit['symbol']} ({state.distance_atr:.1f} ATR)"
+
+        symbols = ", ".join(labelled(hit) for hit in ranked_hits)
         pressing = "pressing lows" if side == "short" else "holding highs"
         total_today = len(state.get("alerted") or ())
         message = (

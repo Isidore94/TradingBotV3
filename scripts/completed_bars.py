@@ -44,13 +44,25 @@ from typing import Any, Mapping, Sequence
 _TIME_KEYS = ("dt", "timestamp", "time", "date")
 
 
-def bar_time(bar: Mapping[str, Any]) -> datetime | None:
-    """A bar's start time, whatever the producer called the field."""
+def bar_time(bar: Any) -> datetime | None:
+    """A bar's start time, whatever the producer called the field.
+
+    Dict-shaped bars and attribute-shaped ones both answer. BounceBot's cached
+    series is ``IbBar`` objects, not dicts, and a rule that only reads
+    ``bar.get`` silently excludes every detector-side caller - the shape of the
+    bar is a producer detail, not a different rule.
+    """
     value = None
-    for key in _TIME_KEYS:
-        value = bar.get(key)
-        if value:
-            break
+    if isinstance(bar, Mapping):
+        for key in _TIME_KEYS:
+            value = bar.get(key)
+            if value:
+                break
+    else:
+        for key in _TIME_KEYS:
+            value = getattr(bar, key, None)
+            if value:
+                break
     if isinstance(value, datetime):
         return value
     if isinstance(value, date):
@@ -80,9 +92,7 @@ def align_to(stamp: datetime, now: datetime) -> datetime:
     return stamp
 
 
-def is_completed_bar(
-    bar: Mapping[str, Any], bar_minutes: int, *, now: datetime
-) -> bool:
+def is_completed_bar(bar: Any, bar_minutes: int, *, now: datetime) -> bool:
     """True when this intraday bar has finished. Undateable bars are False."""
     stamp = bar_time(bar)
     if stamp is None:
@@ -92,14 +102,12 @@ def is_completed_bar(
 
 
 def completed_intraday_bars(
-    bars: Sequence[Mapping[str, Any]], bar_minutes: int, *, now: datetime
-) -> list[Mapping[str, Any]]:
+    bars: Sequence[Any], bar_minutes: int, *, now: datetime
+) -> list[Any]:
     """Every finished bar, in the order given. Forming bars are dropped."""
     return [bar for bar in bars or () if is_completed_bar(bar, bar_minutes, now=now)]
 
 
-def completed_m5_bars(
-    bars: Sequence[Mapping[str, Any]], *, now: datetime
-) -> list[Mapping[str, Any]]:
+def completed_m5_bars(bars: Sequence[Any], *, now: datetime) -> list[Any]:
     """The M5 case, which is what every R5 engine wants."""
     return completed_intraday_bars(bars, 5, now=now)

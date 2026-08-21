@@ -8,6 +8,120 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-21, twelfth pass - THE REGIME-PAUSE GATE, FIXTURES FIRST
+
+**Branch `phase05-integration-blitz`.** Trader: "yes do it properly." So the
+order was the one plan.md sec 5 asks for, and it earned its keep twice.
+
+### 1. Freeze the baseline
+
+`tests/fixtures/regime_pause_sweep_v1.json`, captured from the UNCHANGED
+detector: four long cases and four short ones, each reaching the sweep through
+a **different branch** of `still_trending or made_new_extreme or window_excess`.
+Two per side are genuinely at their extreme; two are not - one drifting flat
+while SPY falls, one bouncing off the day's low. The baseline flagged all four
+per side and captioned every one of them "holding highs".
+
+The harness drives the real `_sweep_regime_pause_bangers` on a real
+`BounceBot`; only the bookkeeping (observations, tracker row, candidate event)
+is stubbed. The method gained an injectable `now` so the replay does not depend
+on the day it runs.
+
+### 2. Add the condition
+
+```python
+hold = regime_pause_hold.hold_state(bars, side, now=moment)
+if not hold.holding:
+    continue
+```
+
+**Added, never substituted** - the defiance test still has to pass first, so
+the flagged set can only shrink. It is handed the FULL cached series rather
+than `sym_today`: an ATR(14) needs fifteen bars and this sweep fires when there
+are nine. `hold_state` takes its ATR from everything supplied and its extreme
+from the last completed bar's session.
+
+### 3. The fixture failed, which is the point
+
+Four flagged per side became two. `test_the_gate_dropped_exactly_the_documented_rows`
+now names the survivors and the departures, and a companion test asserts the
+dropped pair **still satisfies the old predicate** - so if either case ever
+stops being evidence about this gate, the fixture cannot stay quietly green
+while proving nothing.
+
+### 4. Three champion tests caught a real defect in the first version
+
+`test_regime_pause_flags_nonparticipating_weak_name`,
+`test_regime_pause_inverts_for_bullish_tape` and
+`test_spy_champion_scenario_is_a_real_exercise` all went red. Their sessions
+are **12 bars**, so there is no ATR(14) - and the first version treated
+unmeasurable as not-holding and dropped names that were making new lows on the
+pause candle. That would have switched the detector off for most of the first
+hour of every session.
+
+**Being AT the extreme needs no ATR.** A name whose extreme was set on the last
+completed bar is holding, full stop; only the DISTANCE needs a tolerance, and
+inventing one is the thing not to do. Off the extreme with no ATR stays
+UNMEASURABLE and does not qualify.
+
+### 5. The caption stopped being a batch label
+
+The feed line carries each symbol's own measure -
+`HTFL (new HOD), MRK (0.7 ATR)` - and `ui/models/bounce.py` expands it per row
+(`M5 regime-pause watch - 0.7 ATR off HOD`). A bare symbol still reads as the
+old phrase, so lines written before today, and any symbol whose hold could not
+be measured, keep their wording rather than acquiring a claim the parser
+invented.
+
+### What it does to the real batch
+
+Replayed against the 67 names actually flagged that morning, each at its own
+flag time:
+
+| | flagged | still fires | dropped |
+|---|---|---|---|
+| longs | 38 | 25 (66%) | **13 (34%)** |
+| shorts | 29 | 21 (72%) | **8 (28%)** |
+
+Worst drops: TGB 4.8 ATR off a 155-minute-old high; AMBP 4.2 ATR; ECHO 2.7 ATR
+off its low. **MRK: dropped, 1.8 ATR off a 70-minute-old high. GFS: dropped,
+1.3 ATR off.** Both of the trader's screenshots are refused at fire time now.
+
+### Also changed
+
+`completed_bars` reads attribute-shaped bars as well as dicts. BounceBot's
+cached series is `IbBar` objects, and a shared rule that only understood
+`bar.get` silently excluded every detector-side caller - the bar's shape is a
+producer detail, not a different rule.
+
+### Named, and deliberately NOT acted on
+
+`REGIME_BANGER_DAY_EXCESS_PCT` (0.75) and `REGIME_BANGER_WINDOW_EXCESS_PCT`
+(0.20) are still percentages, and the trader's own argument applies to them:
+0.75% was about nine ATR for the slowest name in that batch and two thirds of
+one for the fastest, so the day gate is biased toward fast movers. Changing it
+would move the flagged set in BOTH directions - a different decision, needing
+its own fixture and its own trader call.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4031 passed / 19 subtests**, exit **0** (was 4020) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| golden fixture | `regime_pause_sweep_v1` re-frozen, diff named in the test |
+| frozen exe | not rebuilt; Smart App Control refuses the build and the desk runs from source |
+
+### Owed
+
+The live gates in `plan.md` item 11, now including one that matters more after
+a tightening: **confirm a normal day still produces a usable number of names**
+rather than a handful. And the running desk still predates every commit made
+today.
+
+---
+
 ## 2026-08-21, eleventh pass - "HOLDING HIGHS" WAS NEVER MEASURED
 
 **Branch `phase05-integration-blitz`.** Trader: "this stock is being recommended

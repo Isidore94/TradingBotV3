@@ -213,6 +213,16 @@ _REGIME_PAUSE_LIST_RE = re.compile(
     r"\s+\(\d+\s+today\)\.",
     re.IGNORECASE,
 )
+#: One symbol in a REGIME PAUSE WATCH row list, with the optional per-symbol
+#: measure the emitter now attaches: ``AAPL``, ``AAPL (new HOD)``,
+#: ``AAPL (0.7 ATR)``. No comma may appear inside the parentheses - the list
+#: itself is comma-separated.
+_REGIME_PAUSE_ROW_RE = re.compile(
+    r"(?P<symbol>[A-Za-z][A-Za-z0-9.\-]{0,9})(?:\s+\((?P<measure>[^),]+)\))?"
+)
+#: ``0.7 ATR`` - expanded to "0.7 ATR off HOD" for the reader.
+_ATR_MEASURE_RE = re.compile(r"\d+(?:\.\d+)?\s+ATR")
+
 _M5_LIST_ROW_RE = re.compile(
     r"(?P<symbol>[A-Z][A-Z0-9.\-]{0,9})\s+"
     r"(?P<move>[+-]\d+(?:\.\d+)?)%"
@@ -240,11 +250,25 @@ def _list_m5_rows(text: str) -> list[tuple[str, str]]:
     if not pause_match:
         return []
     pattern = pause_match.group("pattern").lower()
-    symbols = [
-        token.strip().upper() for token in pause_match.group("rows").split(",")
-    ]
-    return [
-        (symbol, f"{REGIME_PAUSE_TRIGGER_PREFIX} · {pattern}")
-        for symbol in symbols
-        if SYMBOL_RE.fullmatch(symbol)
-    ]
+    extreme = "LOD" if "low" in pattern else "HOD"
+    rows: list[tuple[str, str]] = []
+    for token in pause_match.group("rows").split(","):
+        row = _REGIME_PAUSE_ROW_RE.fullmatch(token.strip())
+        if row is None:
+            continue
+        symbol = row.group("symbol").upper()
+        if not SYMBOL_RE.fullmatch(symbol):
+            continue
+        measure = (row.group("measure") or "").strip()
+        # Each symbol says where IT is, when the emitter told us. The bare
+        # pattern is the fallback for a line written before per-symbol
+        # measures existed, and for a symbol whose hold could not be measured
+        # - never a claim invented here.
+        if not measure:
+            label = pattern
+        elif _ATR_MEASURE_RE.fullmatch(measure):
+            label = f"{measure} off {extreme}"
+        else:
+            label = measure
+        rows.append((symbol, f"{REGIME_PAUSE_TRIGGER_PREFIX} · {label}"))
+    return rows

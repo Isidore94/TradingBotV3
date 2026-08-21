@@ -148,3 +148,72 @@ def test_ready_d1_alerts_are_final_bucket_upgrades_only():
     assert not is_ready_d1_alert(trigger_alert)
     assert not is_ready_d1_alert(watch_alert)
     assert not is_ready_d1_alert(generic_alert)
+
+
+def test_a_regime_pause_row_carries_its_own_measure():
+    """The line stopped being a batch label (trader, 2026-08-21).
+
+    Every symbol used to inherit the same phrase - "holding highs" - whatever
+    its own distance from the high was. Each row now says where IT is.
+    """
+    from ui.models.bounce import BounceAlert
+
+    alerts = BounceAlert.from_callback_many(
+        "REGIME PAUSE WATCH (long): SPY paused (-0.24% window) - "
+        "3 swing longs still holding highs: HTFL (new HOD), MRK (0.7 ATR), "
+        "TEM (0.2 ATR) (3 today). Recorded as swing-scan evidence, not an "
+        "entry signal.",
+        "green",
+    )
+
+    assert [alert.symbol for alert in alerts] == ["HTFL", "MRK", "TEM"]
+    assert alerts[0].trigger == "M5 regime-pause watch · new HOD"
+    assert alerts[1].trigger == "M5 regime-pause watch · 0.7 ATR off HOD"
+    assert alerts[2].trigger == "M5 regime-pause watch · 0.2 ATR off HOD"
+
+
+def test_a_short_regime_pause_row_measures_against_the_low():
+    from ui.models.bounce import BounceAlert
+
+    alerts = BounceAlert.from_callback_many(
+        "REGIME PAUSE WATCH (short): SPY paused (+0.24% window) - "
+        "2 swing shorts still pressing lows: GFS (new LOD), WDC (0.9 ATR) "
+        "(2 today). Recorded as swing-scan evidence, not an entry signal.",
+        "red",
+    )
+
+    assert [alert.symbol for alert in alerts] == ["GFS", "WDC"]
+    assert alerts[0].trigger == "M5 regime-pause watch · new LOD"
+    assert alerts[1].trigger == "M5 regime-pause watch · 0.9 ATR off LOD"
+
+
+def test_a_measureless_row_still_reads_as_the_batch_phrase():
+    """Lines written before per-symbol measures existed, and any symbol whose
+    hold could not be measured, keep the old wording rather than acquiring a
+    claim this parser invented."""
+    from ui.models.bounce import BounceAlert
+
+    alerts = BounceAlert.from_callback_many(
+        "REGIME PAUSE WATCH (long): SPY paused (-0.15% window) - "
+        "2 swing longs still holding highs: AAOI, TSLA (2 today). "
+        "Recorded as swing-scan evidence, not an entry signal.",
+        "green",
+    )
+    assert [alert.trigger for alert in alerts] == [
+        "M5 regime-pause watch · holding highs",
+        "M5 regime-pause watch · holding highs",
+    ]
+
+
+def test_every_regime_pause_row_is_recognised_as_one():
+    """The expiry sweep finds these rows by their trigger prefix, so the two
+    have to stay in step whatever the measure says."""
+    from ui.models.bounce import BounceAlert, is_regime_pause_alert
+
+    alerts = BounceAlert.from_callback_many(
+        "REGIME PAUSE WATCH (long): SPY paused (-0.24% window) - "
+        "2 swing longs still holding highs: HTFL (new HOD), MRK (0.7 ATR) "
+        "(2 today). Recorded as swing-scan evidence, not an entry signal.",
+        "green",
+    )
+    assert alerts and all(is_regime_pause_alert(alert) for alert in alerts)
