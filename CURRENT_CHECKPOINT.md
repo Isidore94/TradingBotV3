@@ -8,6 +8,104 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-21, thirteenth pass - THE PRIOR-DAY BREAK AND SESSION VWAP
+
+**Branch `phase05-integration-blitz`.** Trader: "i think we should also demand
+these picks have broken the previous HOD that day for longs, and previous LOD
+for shorts. also they should be above vwap for longs and below vwap for
+shorts."
+
+### That rule already exists, so it is called rather than rewritten
+
+"Beyond yesterday's extreme AND the right side of session VWAP" is the **M5
+Focus adoption gate**, trader rule 2026-08-14, living in
+`scripts/focus_adoption_gate.py`. The sweep now calls
+`passes_focus_adoption_gate` with numbers read off its own cached M5 series by
+`regime_pause_hold.session_levels`:
+
+- **price** and the **prior session's high/low** come from the series itself.
+  It is RTH, so those are the previous REGULAR session's extremes.
+- **session VWAP** comes from `chart_snapshot.session_vwap_series` and nowhere
+  else. `calculate_dynamic_vwap` / `calculate_eod_vwap` blend prior sessions
+  and answer a different question.
+
+UNKNOWN fails here exactly as it does on the Focus path: a cache holding only
+today has no previous extreme to break, and "cannot measure" is not "passed".
+
+### Fixtures first, again
+
+`regime_pause_sweep_v1` grew to **six cases per side**, each isolating ONE
+reason, and each is now **two sessions** because the new gate cannot be
+measured from one:
+
+| case | defiance | near extreme | levels gate | fate |
+|---|---|---|---|---|
+| HOLDS_AT_HIGH | pass | 0.33 ATR | open | kept |
+| HOLDS_JUST_UNDER | pass | 0.73 ATR | open | kept |
+| FELL_LESS_THAN_SPY | pass | 7.15 ATR | - | dropped, ATR |
+| BOUNCING_OFF_LOW/_HIGH | pass | 6.25 ATR | - | dropped, ATR |
+| INSIDE_PREV_RANGE | pass | 0.04 ATR | closed | dropped, prior extreme |
+| BELOW_VWAP / ABOVE_VWAP | pass | 0.97 ATR | closed | dropped, VWAP |
+
+Frozen against the unchanged sweep (four flagged per side), changed, re-frozen
+(two per side). A test now asserts, per case, WHICH gate rejected it - and a
+separate one asserts every case still clears the defiance test it was built
+for, so no case can quietly stop being evidence while the fixture stays green.
+
+The two VWAP cases needed volume weighting to exist at all: for a long inside
+one ATR of its high to sit BELOW session VWAP, the day has to be thin on the
+way up and heavy near the top. That is a real shape, and it is the only shape
+where this half of the gate binds.
+
+### Three champion tests needed better fixtures, not a change
+
+They went red again, and both reasons were the fixtures being unlike
+production:
+
+1. **no prior session** - a single 12-bar day cannot answer "did it break
+   yesterday's extreme", while `get_cached_5m_bars` asks for `5 D`;
+2. **no volume at all** - `IbBar.volume` defaults to `0.0` and the helpers
+   never set it, so session VWAP was unmeasurable and the gate correctly
+   refused every name.
+
+Both fixed in the fixtures: a quiet prior session, and a realistic default
+volume on the bar constructors. Nothing in the gate was loosened to make them
+pass.
+
+### What it does to the real batch
+
+Replayed against the 67 names actually flagged that morning, each at its own
+flag time:
+
+| | flagged | survive BOTH gates | dropped by ATR | dropped by prior-day/VWAP |
+|---|---|---|---|---|
+| longs | 38 | **18 (47%)** | 13 | 7 |
+| shorts | 29 | **18 (62%)** | 8 | 3 |
+
+Every levels-gate drop that day was "not above yesterday's high" / "not below
+yesterday's low". **The VWAP half bound on nothing** - expected, because a name
+within one ATR of its high is nearly always above its session VWAP. It costs
+nothing and covers the wide-range case the fixture pins.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4032 passed / 19 subtests**, exit **0** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| golden fixture | `regime_pause_sweep_v1` re-frozen; per-case rejection reason asserted |
+| frozen exe | not rebuilt; Smart App Control refuses the build and the desk runs from source |
+
+### Owed
+
+The live gates in `plan.md` item 11, and one of them now matters more: the
+detector passes **fewer than half** the longs it used to, so a normal session
+has to confirm the list is still usable rather than a handful. The running desk
+still predates every commit made today.
+
+---
+
 ## 2026-08-21, twelfth pass - THE REGIME-PAUSE GATE, FIXTURES FIRST
 
 **Branch `phase05-integration-blitz`.** Trader: "yes do it properly." So the

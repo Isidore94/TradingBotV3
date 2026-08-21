@@ -192,8 +192,10 @@ def _install_shadow_mode(monkeypatch, mode, module, attribute, tmp_path=None):
 # ===========================================================================
 # Champion 1 - legacy SPY pause detection.
 # ===========================================================================
-def _bar(dt, open_, high, low, close):
-    return legacy.IbBar(dt=dt, open=open_, high=high, low=low, close=close)
+def _bar(dt, open_, high, low, close, volume=100000.0):
+    """Volume is not decoration here: IbBar defaults it to 0, and a series with
+    no volume has no session VWAP, which the sweep now measures."""
+    return legacy.IbBar(dt=dt, open=open_, high=high, low=low, close=close, volume=volume)
 
 
 SESSION_START = datetime(2026, 7, 2, 9, 30)
@@ -230,6 +232,31 @@ def _spy_pause_session():
     )
 
 
+def _with_prior_session(bars, level, *, candles=20):
+    """Prepend a quiet prior session at ``level``, one calendar day earlier.
+
+    The sweep now measures the break of yesterday's extreme and today's session
+    VWAP, and neither can be answered by a fixture that holds one session -
+    while `get_cached_5m_bars` asks for "5 D" and production always has more.
+    The prior bars share the earlier date, so today's day/window arithmetic,
+    which filters on it, is untouched.
+    """
+    from datetime import timedelta
+
+    first = bars[0].dt - timedelta(days=1)
+    prior = [
+        _bar(
+            first + timedelta(minutes=5 * index),
+            level,
+            level + 0.05,
+            level - 0.05,
+            level,
+        )
+        for index in range(candles)
+    ]
+    return prior + list(bars)
+
+
 def _spy_champion_stub():
     """Real champion methods on a bare stub - no IB, no GUI, no network."""
 
@@ -251,10 +278,13 @@ def _spy_champion_stub():
 
     spy = _spy_pause_session()
     # Sells off ten times harder than SPY and keeps making lows into the pause.
-    weak = _downtrend(140.0, candles=12, step=-1.6, start=SESSION_START)
+    weak = _with_prior_session(
+        _downtrend(140.0, candles=12, step=-1.6, start=SESSION_START), 141.0
+    )
     # Bounces with SPY on the pause candle: must NOT be flagged.
-    bouncer = _downtrend(
-        50.0, candles=12, step=-0.3, start=SESSION_START, green_last=True
+    bouncer = _with_prior_session(
+        _downtrend(50.0, candles=12, step=-0.3, start=SESSION_START, green_last=True),
+        51.0,
     )
 
     stub = Stub()

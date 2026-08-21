@@ -383,3 +383,104 @@ def test_a_short_at_its_low_needs_no_atr_either():
     state = rph.hold_state(bars, "SHORT", now=_now_after(bars))
     assert state.holding is True
     assert state.describe() == "new LOD"
+
+
+# -- the levels the adoption gate needs ----------------------------------
+
+
+def _two_sessions(prior_level: float, today_closes: list[float]) -> list[dict]:
+    """A quiet prior session, then today."""
+    prior_open = OPEN - timedelta(days=1)
+    prior = [
+        {
+            "dt": prior_open + timedelta(minutes=5 * i),
+            "open": prior_level,
+            "high": prior_level + 0.10,
+            "low": prior_level - 0.10,
+            "close": prior_level,
+            "volume": 1000.0,
+        }
+        for i in range(20)
+    ]
+    today = []
+    previous = today_closes[0]
+    for i, close in enumerate(today_closes):
+        today.append(
+            {
+                "dt": OPEN + timedelta(minutes=5 * i),
+                "open": previous,
+                "high": max(previous, close) + 0.10,
+                "low": min(previous, close) - 0.10,
+                "close": close,
+                "volume": 1000.0,
+            }
+        )
+        previous = close
+    return prior + today
+
+
+def test_the_prior_extremes_come_from_the_session_before_this_one():
+    bars = _two_sessions(99.0, [100.0 + i * 0.1 for i in range(20)])
+    levels = rph.session_levels(bars, now=_now_after(bars))
+    assert levels.prev_high == pytest.approx(99.10)
+    assert levels.prev_low == pytest.approx(98.90)
+    assert levels.price == pytest.approx(101.9)
+
+
+def test_todays_own_high_is_never_mistaken_for_yesterdays():
+    """The bug this shape exists to prevent: a two-session series whose extreme
+    is read across both days would hand the gate a level today already beat."""
+    bars = _two_sessions(99.0, [100.0 + i * 0.1 for i in range(20)])
+    levels = rph.session_levels(bars, now=_now_after(bars))
+    assert levels.prev_high < 100.0
+
+
+def test_one_session_yields_no_prior_extremes_rather_than_a_guess():
+    """Which the adoption gate reads as UNKNOWN, and UNKNOWN never passes."""
+    bars = _two_sessions(99.0, [100.0] * 20)[20:]
+    levels = rph.session_levels(bars, now=_now_after(bars))
+    assert levels.prev_high is None and levels.prev_low is None
+    assert levels.price is not None
+
+
+def test_session_vwap_is_todays_only():
+    """Accumulation restarts each session, so yesterday cannot drag it."""
+    bars = _two_sessions(50.0, [100.0] * 20)
+    levels = rph.session_levels(bars, now=_now_after(bars))
+    assert levels.vwap == pytest.approx(100.0, abs=0.5)
+
+
+def test_a_series_with_no_volume_has_no_session_vwap():
+    """VWAP without volume is not VWAP. Unmeasurable, never a price average -
+    the gate then reads UNKNOWN and refuses, which is the point."""
+    bars = _two_sessions(99.0, [100.0 + i * 0.1 for i in range(20)])
+    for bar in bars:
+        bar["volume"] = 0.0
+    assert rph.session_levels(bars, now=_now_after(bars)).vwap is None
+
+
+def test_levels_are_measured_on_completed_bars_only():
+    bars = _two_sessions(99.0, [100.0 + i * 0.1 for i in range(20)])
+    bars.append(
+        {
+            "dt": OPEN + timedelta(minutes=100),
+            "open": 101.9,
+            "high": 130.0,
+            "low": 101.0,
+            "close": 129.0,
+            "volume": 1000.0,
+        }
+    )
+    forming = bars[-1]["dt"] + timedelta(minutes=2)
+    levels = rph.session_levels(bars, now=forming)
+    assert levels.price == pytest.approx(101.9)
+
+
+def test_no_bars_yields_nothing_rather_than_zeros():
+    levels = rph.session_levels([], now=OPEN)
+    assert (levels.price, levels.prev_high, levels.prev_low, levels.vwap) == (
+        None,
+        None,
+        None,
+        None,
+    )

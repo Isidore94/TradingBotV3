@@ -540,10 +540,13 @@ def test_prune_latest_bars_keeps_only_background_on_off_cycles():
     assert stub.latest_bars == {}
 
 
-def _make_bar(dt, open_, high, low, close):
+def _make_bar(dt, open_, high, low, close, volume=100000.0):
+    """IbBar.volume defaults to 0, and a series with no volume at all has no
+    session VWAP - which the regime-pause sweep now measures. Real IB bars
+    always carry volume, so these fixtures do too."""
     from bounce_bot_lib.legacy import IbBar
 
-    return IbBar(dt=dt, open=open_, high=high, low=low, close=close)
+    return IbBar(dt=dt, open=open_, high=high, low=low, close=close, volume=volume)
 
 
 def _regime_stub(spy_bars, sym_bars_map, *, env, longs=(), shorts=()):
@@ -610,6 +613,31 @@ def _downtrend_session(base, *, candles, step, start=None, green_last=False):
     return bars
 
 
+def _with_prior_session(bars, level, *, candles=20):
+    """Prepend a quiet prior session at ``level``, one calendar day earlier.
+
+    The sweep now measures the break of yesterday's extreme and today's session
+    VWAP, and neither can be answered by a fixture that holds one session -
+    while `get_cached_5m_bars` asks for "5 D" and production always has more.
+    The prior bars share the earlier date, so today's day/window arithmetic,
+    which filters on it, is untouched.
+    """
+    from datetime import timedelta
+
+    first = bars[0].dt - timedelta(days=1)
+    prior = [
+        _make_bar(
+            first + timedelta(minutes=5 * index),
+            level,
+            level + 0.05,
+            level - 0.05,
+            level,
+        )
+        for index in range(candles)
+    ]
+    return prior + list(bars)
+
+
 def test_auto_market_regime_tracks_spy_and_respects_override():
     from datetime import datetime, timedelta
 
@@ -639,9 +667,16 @@ def test_regime_pause_flags_nonparticipating_weak_name():
     # SPY: down all day, final candle green (the pause).
     spy = _downtrend_session(100.0, candles=12, step=-0.08, start=start, green_last=True)
     # AAOI-style: down 10x harder all day and STILL makes a new low on the pause.
-    weak = _downtrend_session(140.0, candles=12, step=-1.6, start=start)
+    # Yesterday sat quietly at 141, so today's slide is a genuine break of the
+    # prior low - which the sweep now also requires.
+    weak = _with_prior_session(
+        _downtrend_session(140.0, candles=12, step=-1.6, start=start), 141.0
+    )
     # A name that bounces WITH SPY on the pause candle: not a banger.
-    bouncer = _downtrend_session(50.0, candles=12, step=-0.3, start=start, green_last=True)
+    bouncer = _with_prior_session(
+        _downtrend_session(50.0, candles=12, step=-0.3, start=start, green_last=True),
+        51.0,
+    )
 
     stub = _regime_stub(spy, {"AAOI": weak, "BNCR": bouncer}, env="bearish_strong", shorts=["AAOI", "BNCR"])
     flagged = stub.check_regime_pause_setups()
@@ -700,6 +735,9 @@ def test_regime_pause_inverts_for_bullish_tape():
         _make_bar(b.dt, 280 - (b.open - 140), 280 - (b.low - 140), 280 - (b.high - 140), 280 - (b.close - 140))
         for b in _downtrend_session(140.0, candles=12, step=-1.6, start=start)
     ]
+    # Yesterday sat quietly at 279, so today is a genuine break of the prior
+    # high - which the sweep now also requires.
+    strong = _with_prior_session(strong, 279.0)
     stub = _regime_stub(spy, {"MSTR": strong}, env="bullish_strong", longs=["MSTR"])
     flagged = stub.check_regime_pause_setups()
     assert [hit["symbol"] for hit in flagged] == ["MSTR"]

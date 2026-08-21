@@ -61,6 +61,7 @@ EXPIRED_STALE = "expired_stale"
 _HIGH_KEYS = ("high", "High", "h")
 _LOW_KEYS = ("low", "Low", "l")
 _CLOSE_KEYS = ("close", "Close", "c")
+_OPEN_KEYS = ("open", "Open", "o")
 
 
 def _is_short(side: Any) -> bool:
@@ -191,6 +192,82 @@ def _last_session(bars: Sequence[Any]) -> list[Any]:
         session.append(bar)
     session.reverse()
     return session
+
+
+@dataclass(frozen=True)
+class SessionLevels:
+    """The four numbers the M5 Focus adoption gate needs, read off M5 bars.
+
+    Extraction only. The RULE lives in `focus_adoption_gate` and is not
+    restated here - this exists because the regime-pause sweep's only data
+    source is BounceBot's cached M5 series, while the auto-populate path gets
+    the same numbers from `autopilot_core.fetch_intraday_profiles`.
+    """
+
+    price: float | None = None
+    prev_high: float | None = None
+    prev_low: float | None = None
+    vwap: float | None = None
+
+
+def _previous_session(bars: Sequence[Any]) -> list[Any]:
+    """The session immediately before the last one, or [] if there is none."""
+    rows = list(bars or ())
+    last = _last_session(rows)
+    earlier = rows[: len(rows) - len(last)]
+    return _last_session(earlier) if earlier else []
+
+
+def session_levels(bars: Sequence[Any], *, now: datetime) -> SessionLevels:
+    """Price, the PRIOR session's extremes, and today's session VWAP.
+
+    Completed bars only, so a break the bar then closes back inside is not a
+    break. Every field is independently optional: a series with one session
+    yields no prior extremes, and that is UNKNOWN to the gate rather than a
+    pass - `focus_adoption_gate` already fails UNKNOWN.
+
+    The prior extremes come from the same cached M5 series the sweep is
+    already holding, which is RTH, so they are the previous REGULAR session's
+    high and low. Session VWAP comes from `chart_snapshot.session_vwap_series`
+    and nowhere else: BounceBot's dynamic/EOD VWAP blend prior sessions and
+    answer a different question (CLAUDE.md, packet R2).
+    """
+    completed = completed_m5_bars(bars or (), now=now)
+    if not completed:
+        return SessionLevels()
+    session = _last_session(completed)
+    price = _price(session[-1], _CLOSE_KEYS) if session else None
+
+    prior = _previous_session(completed)
+    highs = [value for value in (_price(bar, _HIGH_KEYS) for bar in prior) if value is not None]
+    lows = [value for value in (_price(bar, _LOW_KEYS) for bar in prior) if value is not None]
+
+    vwap: float | None = None
+    try:
+        from chart_snapshot import session_vwap_series
+
+        rows = [
+            {
+                "dt": bar_time(bar),
+                "open": _price(bar, _OPEN_KEYS),
+                "high": _price(bar, _HIGH_KEYS),
+                "low": _price(bar, _LOW_KEYS),
+                "close": _price(bar, _CLOSE_KEYS),
+                "volume": _price(bar, ("volume", "Volume", "v")) or 0.0,
+            }
+            for bar in session
+        ]
+        values = [value for value in session_vwap_series(rows)["vwap"] if value is not None]
+        vwap = values[-1] if values else None
+    except Exception:
+        vwap = None
+
+    return SessionLevels(
+        price=price,
+        prev_high=max(highs) if highs else None,
+        prev_low=min(lows) if lows else None,
+        vwap=vwap,
+    )
 
 
 def hold_state(

@@ -34,6 +34,7 @@ from m5_signal_engines import (
     latest_orb_events,
 )
 import regime_pause_hold
+from focus_adoption_gate import passes_focus_adoption_gate
 from market_session import (
     get_market_local_now,
     get_market_session_close_naive,
@@ -5489,6 +5490,27 @@ class BounceBot(EWrapper, EClient):
             # is today.
             hold = regime_pause_hold.hold_state(bars, side, now=moment)
             if not hold.holding:
+                continue
+            # And it must have broken YESTERDAY's extreme and be on the right
+            # side of session VWAP (trader, 2026-08-21). That pair is already
+            # written down once, as the M5 Focus adoption gate (trader rule
+            # 2026-08-14), so this calls that rule rather than restating it -
+            # two copies of "beyond yesterday's extreme AND the right side of
+            # VWAP" would be two things to keep in step.
+            #
+            # Session VWAP comes from chart_snapshot.session_vwap_series via
+            # session_levels, never from calculate_dynamic_vwap or
+            # calculate_eod_vwap: those blend prior sessions and answer a
+            # different question.
+            #
+            # UNKNOWN fails, as it does everywhere else that gate is used. A
+            # symbol whose cache holds only today has no previous extreme to
+            # break, and "cannot measure" is not "passed".
+            levels = regime_pause_hold.session_levels(bars, now=moment)
+            gate_ok, _gate_reason = passes_focus_adoption_gate(
+                side, levels.price, levels.prev_high, levels.prev_low, levels.vwap
+            )
+            if not gate_ok:
                 continue
             observed.add(symbol)
             self._record_regime_pause_observation(

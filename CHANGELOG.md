@@ -21,6 +21,33 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-21 (sixth pass) - Prior-day break and session VWAP, on the same picks
+
+`IMPLEMENTED` + `GREEN`; live gates owed (`plan.md` Phase 0.5 item 11).
+
+- A regime-pause pick must now also have broken the PREVIOUS session's high
+  (longs) or low (shorts) and be on the right side of session VWAP. That pair
+  is the M5 Focus adoption gate, so `_sweep_regime_pause_bangers` CALLS
+  `passes_focus_adoption_gate` rather than restating it.
+- `regime_pause_hold.session_levels` reads the four numbers off the cached M5
+  series: price and prior-session extremes from the bars, session VWAP from
+  `chart_snapshot.session_vwap_series`. Completed bars only; every field
+  independently optional, and UNKNOWN fails at the gate.
+- The golden fixture grew to six cases per side, each isolating ONE reason to
+  be kept or dropped, and each case is now two sessions because the new gate
+  cannot be measured from one. Frozen before the change and re-frozen after;
+  a test names which gate rejected which case.
+- Three champion tests needed real fixtures rather than a change: their
+  sessions had no prior day and their bars had **no volume at all**
+  (`IbBar.volume` defaults to 0, so session VWAP was unmeasurable). Both are
+  now what production actually sees.
+- Measured on the day's real batch: longs 38 -> 18 and shorts 29 -> 18 across
+  both gates. The prior-day half dropped 7 longs and 3 shorts; the VWAP half
+  dropped none that day, which is expected - a name near its high is nearly
+  always above its VWAP.
+- Test suite **4032 passed / 19 subtests**, exit 0; smoke 7/7; source selftest
+  56/56.
+
 ### 2026-08-21 (fifth pass) - The regime-pause gate, fixtures first
 
 `IMPLEMENTED` + `GREEN`; live gates owed (`plan.md` Phase 0.5 item 11).

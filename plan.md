@@ -750,12 +750,24 @@ are listed in `CURRENT_CHECKPOINT.md`.
    batch phrase stamped on names that are not alike. Replayed on the day's real
    batch: 34% of longs and 28% of shorts drop, MRK and GFS among them.
 
+   **The prior-day break and session VWAP** (trader, same day) were added on
+   the same discipline: the fixture grew to six cases per side - each isolating
+   one reason to be kept or dropped, each now two sessions because the new gate
+   cannot be measured from one - frozen, changed, re-frozen, with a test naming
+   which gate rejected which case. The pair is the M5 Focus adoption gate and
+   is CALLED (`passes_focus_adoption_gate`), never restated; the numbers come
+   from `regime_pause_hold.session_levels`. Three champion tests needed real
+   fixtures rather than a change: no prior session, and no volume at all, so
+   session VWAP was unmeasurable. Measured on the real batch: longs 38 -> 18,
+   shorts 29 -> 18 across both gates.
+
    **Live gates owed:** a session where a "holding highs" row visibly leaves
    the queue within 15 minutes of the name rolling over; a row that keeps
    making new highs visibly surviving past 15 minutes; a read of `hold_expired`
    rows against forward outcomes to confirm the rule is not discarding winners;
    and a check that the tightened detector still produces a usable number of
-   names on a normal day rather than a handful.
+   names on a normal day rather than a handful - it now passes fewer than half
+   the longs it used to.
 
    **Named and NOT acted on:** `REGIME_BANGER_DAY_EXCESS_PCT` (0.75) and
    `REGIME_BANGER_WINDOW_EXCESS_PCT` (0.20) are still percentages, and the
