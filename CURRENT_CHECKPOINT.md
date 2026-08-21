@@ -8,6 +8,89 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-21, tenth pass — THE DIAGNOSTIC WEEK CAUGHT THE REPAIR ITSELF
+
+**Branch `phase05-integration-blitz`.** R6(c) was activated to watch for
+regressions. On day one it found one, and it was the repair's own.
+
+### Measured, not theorised
+
+| Time | What the desk did |
+|---|---|
+| 07:52 | relaunched from source on `d0aebd5`, 642 MB |
+| 08:00-09:10 | ordinary use; working set climbs 817 MB → 7.0 GB |
+| **09:14:01** | **297,994 ms** stall (8,918 samples), unresponsive |
+| **09:17:22** | **200 s** stall, still climbing - peaks at **8.1 GB** |
+| 09:22 | responsive again at **1.96 GB** |
+
+Roughly six gigabytes released in one pause. That is a garbage collection, and
+its size is the whole story.
+
+### The mechanism
+
+`install_gui_thread_gc` calls `gc.disable()` process-wide - deliberate, and
+older than this repair: automatic collection runs on whichever thread happens
+to allocate, and a collection on a scanner thread that frees a cycle holding a
+PySide6 wrapper runs a QObject destructor off the GUI thread, which corrupted
+the heap in every session on 2026-07-29. So the 2-second GUI timer is **the
+only collector in the process**.
+
+`d0aebd5` then gated that timer on input idleness:
+
+```python
+if idle_ms < self.young_idle_ms:      # 250 ms
+    return
+if self.full_due and idle_ms >= self.full_idle_ms:   # 2 s
+```
+
+With no upper bound. A trader working the desk produces input every few hundred
+milliseconds, so **neither branch is ever reached while the desk is in use** -
+not the full sweep, not even the young one. Cycles accumulate with nothing else
+in the process able to free them, and the first sweep after the trader finally
+pauses has an eight-gigabyte heap to walk.
+
+The intent was right - do not put the largest pause on top of a click. The
+error was making activity able to cancel a sweep rather than only postpone it.
+
+### The fix
+
+Every wait now carries a deadline in ticks. Inside it, idleness decides exactly
+as before; at it, the sweep runs regardless:
+
+- `young_deadline_ticks=5` → at most ~10 s at the production 2 s tick
+- `full_deadline_ticks=90` → at most ~3 min
+
+The pre-repair code swept unconditionally every 2 s and every 60 s, so the
+worst case here is a small multiple of what shipped for months - not a new
+regime. Six tests pin it, including the two that fail on the old code:
+continuous input cannot starve either sweep, and the full deadline is measured
+from when the sweep came due rather than from process start.
+
+**Rule for anything added here later:** a "wait for quiet" in this controller
+must carry a bound. Unbounded, it is indistinguishable from "never collect".
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **3992 passed / 19 subtests**, exit **0** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| frozen exe | not rebuilt; Smart App Control refuses the build and the desk runs from source, so this is live at the next restart |
+
+### Owed
+
+**The running desk is still on the starved build** - it was launched at 07:52,
+before this commit. It needs a restart to pick this up, together with the four
+integrations in the ninth pass. Then: watch working set across a full session,
+and confirm no stall over ~5 s survives at a repaired seam.
+
+Two smaller things the same log named, neither addressed here:
+`chart_data_service.py:221` (1.4 s) and `focus_picks_panel.py:396` (13.9 s at
+08:05, 11.9 s at 08:56) are real blocking work on the GUI thread that the GC
+noise was hiding.
+
+---
+
 ## 2026-08-21, ninth pass — FOUR TRADER ASKS, ONE OF THEM A ROOT CAUSE
 
 **Branch `phase05-integration-blitz`.** Trader handed over four integrations in

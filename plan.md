@@ -495,7 +495,12 @@ are listed in `CURRENT_CHECKPOINT.md`.
    env overrides, a reader CLI and its own tests. Two measured AppHang events
    on 2026-08-20 justified activating it machine-locally and repairing the
    delivery seams it exposed; the watchdog implementation itself was not
-   changed. The bounded diagnostic week remains the live gate, and it **begins at
+   changed. **Its first day already paid for itself**: the watchdog caught the
+   repair's own regression - both sweeps waited on input idleness with no upper
+   bound, which starves the process's only collector while the desk is in use
+   (8 GB in 90 minutes, then a 298 s and a 200 s freeze). Fixed 2026-08-21 by
+   bounding both waits; see `CURRENT_CHECKPOINT.md` (tenth pass).
+   The bounded diagnostic week remains the live gate, and it **begins at
    the 2026-08-21 relaunch** — the desk ran the pre-fix frozen exe until then,
    so every earlier `ui_stalls.jsonl` row is baseline, not evidence. The desk
    now launches from source; see `CURRENT_CHECKPOINT.md` (eighth pass).

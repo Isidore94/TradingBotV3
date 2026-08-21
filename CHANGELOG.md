@@ -21,6 +21,21 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-21 (third pass) — The GUI garbage collector could be starved
+
+`IMPLEMENTED` + `GREEN`; caught by the R6(c) diagnostic week on its first day.
+
+- `d0aebd5` gated both GC sweeps on input idleness with no upper bound. With
+  `gc.disable()` in force, that timer is the process's only collector, so a
+  trader working continuously starved it completely: the desk reached **8 GB
+  in 90 minutes** and froze for **298 s and then 200 s** in the sweeps that
+  finally ran, releasing ~6 GB and returning to 1.9 GB.
+- Both waits now carry a deadline in ticks — a young sweep waits at most ~10 s
+  for quiet, a due full sweep at most ~3 min. Idleness still decides while
+  inside the deadline, so the pause stays off clicks; at the deadline the
+  sweep runs regardless. Activity may delay a sweep, never cancel one.
+- Test suite **3992 passed / 19 subtests**, exit 0; smoke 7/7.
+
 ### 2026-08-21 (second pass) — Four trader-directed integrations
 
 `IMPLEMENTED` + `GREEN`; four live gates owed (see `plan.md` Phase 0.5 item 10).

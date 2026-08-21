@@ -874,7 +874,25 @@ class UiActivityMonitor(QObject):
 
 
 class _GuiGcController(QObject):
-    """Keep Qt-wrapper collection on the GUI thread, but never over a click."""
+    """Keep Qt-wrapper collection on the GUI thread, but never over a click.
+
+    Activity may DELAY a sweep. It may never CANCEL one.
+
+    That distinction is the whole design, and getting it wrong cost a session:
+    the first version of this controller returned early whenever input was
+    more recent than ``young_idle_ms``, with no upper bound on the wait.
+    Automatic collection is DISABLED process-wide (see install_gui_thread_gc),
+    so this timer is the only collector there is - and a trader working the
+    desk continuously produces input every few hundred milliseconds, which
+    meant nothing was collected at all for as long as they kept working. On
+    2026-08-21 the desk reached 8 GB in ninety minutes and then froze for
+    **298 seconds** in the sweep that finally ran.
+
+    So each preference now carries a deadline in ticks. Below it, idleness
+    wins and the pause stays off the trader's clicks; at it, the sweep runs
+    regardless, because a bounded pause now is strictly better than an
+    unbounded heap and a five-minute pause later.
+    """
 
     def __init__(
         self,
@@ -884,6 +902,8 @@ class _GuiGcController(QObject):
         full_every_ticks: int = 30,
         young_idle_ms: float = 250.0,
         full_idle_ms: float = 2_000.0,
+        young_deadline_ticks: int = 5,
+        full_deadline_ticks: int = 90,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -892,20 +912,35 @@ class _GuiGcController(QObject):
         self.full_every_ticks = max(1, int(full_every_ticks))
         self.young_idle_ms = max(0.0, float(young_idle_ms))
         self.full_idle_ms = max(self.young_idle_ms, float(full_idle_ms))
+        # At the production 2s tick: a young sweep waits at most 10 seconds for
+        # quiet, and a due full sweep at most 3 minutes. The pre-repair code
+        # ran them unconditionally every 2s and 60s, so the worst case here is
+        # a small multiple of what shipped for months - not a new regime.
+        self.young_deadline_ticks = max(0, int(young_deadline_ticks))
+        self.full_deadline_ticks = max(0, int(full_deadline_ticks))
         self.tick = 0
         self.full_due = False
+        self.full_due_at_tick = 0
+        self.young_skipped = 0
 
     def sweep(self) -> None:
         self.tick += 1
-        if self.tick % self.full_every_ticks == 0:
+        if self.tick % self.full_every_ticks == 0 and not self.full_due:
             self.full_due = True
+            self.full_due_at_tick = self.tick
         idle_ms = self.activity.idle_ms()
-        if idle_ms < self.young_idle_ms:
-            return
-        if self.full_due and idle_ms >= self.full_idle_ms:
+        if self.full_due and (
+            idle_ms >= self.full_idle_ms
+            or self.tick - self.full_due_at_tick >= self.full_deadline_ticks
+        ):
             self.collector(2)
             self.full_due = False
+            self.young_skipped = 0
             return
+        if idle_ms < self.young_idle_ms and self.young_skipped < self.young_deadline_ticks:
+            self.young_skipped += 1
+            return
+        self.young_skipped = 0
         self.collector(0)
 
 
@@ -915,6 +950,7 @@ def install_gui_thread_gc(
     *,
     activity_monitor: UiActivityMonitor | None = None,
     collector=None,
+    **controller_options,
 ) -> QTimer:
     """Run all cyclic garbage collection on the GUI thread.
 
@@ -928,10 +964,15 @@ def install_gui_thread_gc(
     timer keeps every Qt destructor on the owning thread. Reference
     counting still frees non-cyclic garbage immediately on any thread.
 
-    Young objects are swept only after 250 ms without input. A full heap sweep
-    becomes due every 30th tick but waits for two seconds of user idleness.
+    Young objects are swept after 250 ms without input; a full heap sweep
+    becomes due every 30th tick and waits for two seconds of user idleness.
     This retains GUI-thread ownership of Qt wrapper destruction without
     scheduling the largest pause directly on top of a click or wheel event.
+
+    Both waits are BOUNDED (see _GuiGcController). Automatic collection is
+    disabled here, so this timer is the process's only collector; an unbounded
+    "wait for quiet" is indistinguishable from "never collect" while the desk
+    is being used, which is exactly how it failed on 2026-08-21.
     """
     gc.disable()
     activity = activity_monitor or UiActivityMonitor(app)
@@ -943,6 +984,9 @@ def install_gui_thread_gc(
         activity,
         collector=collector if collector is not None else gc.collect,
         parent=timer,
+        # Cadence/deadline knobs exist so a test can drive them deterministically;
+        # production passes none of them and takes the documented defaults.
+        **controller_options,
     )
     timer._gc_controller = controller  # type: ignore[attr-defined]
     timer.timeout.connect(controller.sweep)
