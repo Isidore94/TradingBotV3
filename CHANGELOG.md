@@ -1,9 +1,10 @@
 # TradingBotV3 implemented history
 
 Last reconciled: **2026-08-20** from the working copy of
-`phase05-integration-blitz` (cut from `testing-week-2026-08-17`, which carries
-testing-week + R1 + R1.1 + R2 + R3 + R4 + R5 + R6 + R7 + R8, with the four later
-`phase05-r2-focus-gating-strength-board` commits merged in on 2026-08-18)
+`testing-week-2026-08-17`, the single release candidate carrying testing-week +
+R1 + R1.1 + R2 + R3 + R4 + R5 + R6 + R7 + R8, the four later
+`phase05-r2-focus-gating-strength-board` commits merged on 2026-08-18, and the
+2026-08-20 GUI-responsiveness repair fast-forwarded through `7616499`.
 
 Authoritative for: **what exists and the historical sequence of revisions**
 

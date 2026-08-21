@@ -10,10 +10,11 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ## 2026-08-20, seventh pass — THE DESK NO LONGER PARSES HISTORY ON A HEALTH TICK
 
-**Branch `phase05-integration-blitz`.** Trader-authorized Phase-0 GUI
+**Branch `testing-week-2026-08-17`.** Trader-authorized Phase-0 GUI
 responsiveness repair and R6(c) diagnostic activation. Code is complete and
-deterministically green; implementation commit **`d0aebd5`** is pushed and the
-bounded live week is now running.
+deterministically green; implementation commit **`d0aebd5`** and its checkpoint
+follow-up **`7616499`** were fast-forwarded into the single release candidate on
+2026-08-20. The bounded live week begins on the next desk restart.
 
 ### Evidence, not a resource guess
 

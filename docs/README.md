@@ -1,6 +1,6 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-08-18**
+Last reconciled: **2026-08-20**
 
 Start here when a supporting detail is not in the four root documents. This index
 classifies every maintained Markdown document so a historical plan cannot be mistaken
