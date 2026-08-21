@@ -12,7 +12,8 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 **Branch `phase05-integration-blitz`.** Trader-authorized Phase-0 GUI
 responsiveness repair and R6(c) diagnostic activation. Code is complete and
-deterministically green; the bounded live week is now running.
+deterministically green; implementation commit **`d0aebd5`** is pushed and the
+bounded live week is now running.
 
 ### Evidence, not a resource guess
 
