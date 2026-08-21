@@ -27,7 +27,9 @@ class _SymbolLabel(QLabel):
 
     def __init__(self, symbol: str, parent=None) -> None:
         super().__init__(symbol, parent)
-        self.setStyleSheet("font-weight: 700; text-decoration: underline;")
+        # Styled from theme.qss by object name: this label is built once per
+        # alert row and the feed rebuilds up to MAX_FEED_ITEMS of them at once.
+        self.setObjectName("AlertSymbolLink")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(f"{symbol}: D1 + M5 snapshot chart")
 
@@ -71,20 +73,10 @@ class AlertFeedItem(QWidget):
             # A user-armed chart watch fired: full red frame - it outranks
             # even the gold focus treatment because the trader set this exact
             # alarm and is waiting on it.
-            red = theme.color("short")
-            self.setStyleSheet(
-                f"QWidget#Panel {{ border: 1px solid {theme.with_alpha(red, 0.9)}; "
-                f"border-left: 4px solid {red}; "
-                f"background: {theme.with_alpha(red, 0.12)}; }}"
-            )
+            self.setProperty("alertKind", "watch")
         elif is_focus:
             # Liked picks: gold frame all the way around, not just a stripe.
-            accent = theme.color("favorite")
-            self.setStyleSheet(
-                f"QWidget#Panel {{ border: 1px solid {theme.with_alpha(accent, 0.85)}; "
-                f"border-left: 4px solid {accent}; "
-                f"background: {theme.with_alpha(accent, 0.14)}; }}"
-            )
+            self.setProperty("alertKind", "focus")
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -96,7 +88,7 @@ class AlertFeedItem(QWidget):
             symbol_label.clicked.connect(self.symbolClicked.emit)
         else:
             symbol_label = QLabel("Alert")
-            symbol_label.setStyleSheet("font-weight: 700;")
+            symbol_label.setObjectName("AlertSymbolPlain")
         top.addWidget(time_label)
         top.addWidget(symbol_label)
         # R4 section 6.3: a repeat updates this row in place and shows how many
@@ -145,10 +137,8 @@ class AlertFeedItem(QWidget):
                     "skip the tier filter, and sound."
                 )
             star.setCursor(Qt.CursorShape.PointingHandCursor)
-            color = theme.color("favorite") if is_focus else theme.with_alpha(theme.color("favorite"), 0.75)
-            star.setStyleSheet(
-                f"QToolButton {{ color: {color}; font-weight: 700; padding: 0 6px; }}"
-            )
+            star.setObjectName("AlertFavoriteButton")
+            star.setProperty("focusOn", "true" if is_focus else "false")
             star.clicked.connect(self.favoriteToggled.emit)
             self.favorite_button = star
             top.addWidget(star)
@@ -161,10 +151,7 @@ class AlertFeedItem(QWidget):
                 "Alert Center review and removed from Focus Picks if starred."
             )
             dislike.setCursor(Qt.CursorShape.PointingHandCursor)
-            dislike.setStyleSheet(
-                f"QToolButton {{ color: {theme.with_alpha(theme.color('short'), 0.65)}; "
-                "font-weight: 700; font-size: 12pt; padding: 0 4px; }"
-            )
+            dislike.setObjectName("AlertDislikeButton")
             dislike.clicked.connect(self.dislikeRequested.emit)
             top.addWidget(dislike)
 
@@ -173,7 +160,7 @@ class AlertFeedItem(QWidget):
         trigger.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         if is_watch_hit:
             # The requested red-font flag for a fired chart watch.
-            trigger.setStyleSheet(f"color: {theme.color('short')}; font-weight: 700;")
+            trigger.setObjectName("AlertTriggerWatch")
         self.trigger_label = trigger
 
         layout = QVBoxLayout(self)

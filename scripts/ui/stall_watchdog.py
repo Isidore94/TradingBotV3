@@ -26,6 +26,7 @@ which prints the top offenders by total blocked time.
 """
 
 import json
+from collections import Counter
 import os
 import sys
 import threading
@@ -51,6 +52,9 @@ DEFAULT_THRESHOLD_MS = 50.0
 HEARTBEAT_MS = 10
 #: A runaway stall loop must not fill the disk during a session.
 MAX_RECORDS_PER_SESSION = 2000
+#: Stacks captured per stall. A five-minute freeze must not spend itself
+#: formatting tracebacks; 240 samples is four minutes of heartbeats.
+MAX_SAMPLES_PER_STALL = 240
 LOG_NAME = "ui_stalls.jsonl"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -188,19 +192,40 @@ class StallWatchdog(QObject):
             # excess over it is time the main thread was actually held.
             if (time.perf_counter() - started) - self._heartbeat_s < self._threshold_s:
                 continue
-            # Still blocked right now: this is the one moment the offending
-            # frame is on the stack to be read.
+            # Still blocked right now. Sample for as long as it lasts, not
+            # once at the start: the first stack says where a stall BEGAN,
+            # which is a different question from where its time went. On
+            # 2026-08-21 that difference left 56% of stalls attributed to
+            # `app.exec()` - true, and useless.
             stack = self._capture_main_stack()
+            culprits: Counter[str] = Counter()
+            # One representative stack per culprit - the first time that frame
+            # was seen. The record then carries the stack that BELONGS to the
+            # frame it names, rather than whichever sample happened to be last.
+            stacks: dict[str, list[str]] = {}
+            first = _culprit(stack)
+            culprits[first] += 1
+            stacks[first] = stack
             samples = 1
             while not self._stop.wait(self._heartbeat_s):
                 if self._beat_seq != seq:
                     break
                 samples += 1
+                # Sampling costs one sys._current_frames() per heartbeat, and
+                # only while the main thread is already stuck - it competes
+                # with nothing. Capped so a five-minute freeze cannot spend
+                # itself formatting tracebacks.
+                if samples <= MAX_SAMPLES_PER_STALL:
+                    later = self._capture_main_stack()
+                    if later:
+                        name = _culprit(later)
+                        culprits[name] += 1
+                        stacks.setdefault(name, later)
             if self._beat_seq != seq:
                 gap_s = self._beat - started  # resumed: measured end to end
             else:
                 gap_s = time.perf_counter() - started  # shutting down mid-stall
-            self._write(gap_s, stack, samples)
+            self._write(gap_s, stack, samples, culprits, stacks)
 
     def _capture_main_stack(self) -> list[str]:
         frame = sys._current_frames().get(self._main_thread_id)
@@ -214,11 +239,25 @@ class StallWatchdog(QObject):
         except Exception:
             return []
 
-    def _write(self, gap_s: float, stack: list[str], samples: int) -> None:
+    def _write(
+        self,
+        gap_s: float,
+        stack: list[str],
+        samples: int,
+        culprits: "Counter[str] | None" = None,
+        stacks: dict[str, list[str]] | None = None,
+    ) -> None:
         if self._records >= MAX_RECORDS_PER_SESSION:
             return
         path = self._log_path if self._log_path is not None else log_path()
         gap_ms = gap_s * 1000.0
+        counted = culprits or Counter([_culprit(stack)])
+        # The frame seen in the MOST samples, not the first one seen. Ties go
+        # to the frame sampled first, which keeps a two-sample stall reading
+        # the way it always did.
+        modal = counted.most_common(1)[0][0] if counted else _culprit(stack)
+        # The stack shown is the one that produced the frame being named.
+        stack = (stacks or {}).get(modal, stack)
         record: dict[str, Any] = {
             "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
             "gap_ms": round(gap_ms, 1),
@@ -226,7 +265,10 @@ class StallWatchdog(QObject):
             "blocked_ms": round(max(0.0, gap_ms - self._heartbeat_s * 1000.0), 1),
             "threshold_ms": round(self._threshold_s * 1000.0, 1),
             "samples": samples,
-            "culprit": _culprit(stack),
+            "culprit": modal,
+            # Where the time actually went, as {frame: samples}. A single-frame
+            # entry reads exactly like the old one-sample record.
+            "culprit_samples": dict(counted.most_common(8)),
             "stack": stack,
         }
         try:

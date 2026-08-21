@@ -21,6 +21,43 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-21 (seventh pass) - GUI fluidity: the hitching, measured and cut
+
+`IMPLEMENTED` + `GREEN`; a live session is owed to confirm the numbers move.
+
+- **The server was ruled out with measurements**, which is what the trader
+  asked: every hot path is local, the GUI never reads the research store, the
+  DAS was not mounted, and a miss on it costs 0.0 ms.
+- **Per-widget stylesheets removed from both busy lists.** `AlertFeedItem` went
+  from seven `setStyleSheet` calls per row to none; its variants are `theme.qss`
+  rules selected by object name and an `alertKind`/`focusOn` property, backed by
+  pre-mixed rgba tokens in `theme._derived_tokens`. Measured: 250 rows built in
+  282 ms before, 167 ms after.
+- **`FocusSideEditor.refresh` diffs instead of rebuilding.** Chips are reused,
+  only arrivals are constructed, only departures are destroyed, and
+  `FocusStatusChip.update_state` re-styles only when the accent actually moves.
+- **`ChartDataService.cached_bar_dicts`** memoizes `as_bar_dicts` against the
+  series object (LRU-bounded), so the Alert Center's D1 polls stop materializing
+  ~490 dicts per symbol per tick on Qt - which that function's own docstring
+  already forbade.
+- **`_load_local_settings` is mtime-cached** (100 read/parse call sites; 100
+  reads went 9.6 ms -> 0.7 ms) and **`load_review_events` is stamp-cached**
+  (5.8 MB, 8809 rows; 80.8 ms -> 7.7 ms). Both hand out copies; both writers
+  invalidate.
+- **The `QFont` console flood is fixed at its cause.** The theme sizes fonts in
+  px, so `pointSizeF()` is -1 and `setup_delegate`'s `+1.0` asked Qt for a
+  zero-point font once per visible row per repaint. `_resized` scales in
+  whichever unit the font carries; the favourite star, which was rendering at
+  **1 point**, is right again.
+- **`install_qt_message_rate_limit`** prints each distinct Qt message once,
+  counts repeats and reports the tally at exit - never silencing a new one.
+- **The stall watchdog now samples throughout a stall** and records the modal
+  frame plus a `culprit_samples` histogram, instead of one stack captured at
+  detection. 56% of stalls that could only be blamed on `app.exec()` should now
+  name themselves.
+- Test suite **4059 passed / 19 subtests**, exit 0; smoke 7/7; source selftest
+  56/56.
+
 ### 2026-08-21 (sixth pass) - Prior-day break and session VWAP, on the same picks
 
 `IMPLEMENTED` + `GREEN`; live gates owed (`plan.md` Phase 0.5 item 11).

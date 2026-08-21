@@ -311,8 +311,11 @@ def test_alert_feed_item_focus_highlight():
     alert = BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", trigger="VWAP reclaim")
     focus_item = AlertFeedItem(alert, focus_category="swing")
     plain_item = AlertFeedItem(alert)
-    assert "border-left" in focus_item.styleSheet()  # gold frame for focus names
-    assert plain_item.styleSheet() == ""
+    # The gold frame is a theme.qss rule selected by this property, rather than
+    # a stylesheet built per row (2026-08-21: 250 rows meant 250 CSS parses).
+    assert focus_item.property("alertKind") == "focus"
+    assert plain_item.property("alertKind") in (None, "")
+    assert focus_item.styleSheet() == "" and plain_item.styleSheet() == ""
 
 
 def test_alert_feed_item_star_reflects_favorite_state():

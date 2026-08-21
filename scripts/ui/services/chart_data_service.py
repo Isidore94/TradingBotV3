@@ -46,6 +46,12 @@ DEFAULT_MAX_THREADS = 2
 #: Built snapshots kept for instant repaint on revisit. Small next to the bar
 #: cache itself - these are only the ~90 shown bars plus overlay series.
 _LAST_SNAPSHOT_CAP = 60
+#: Symbols whose materialized bar dicts stay resident (cached_bar_dicts). The
+#: D1 poll set is the Focus list plus whatever is armed - about 105 names on
+#: the day this was measured - so this holds it comfortably. Each entry is
+#: roughly 490 dicts; the bound is what keeps a long session from accumulating
+#: every symbol the trader ever charted.
+_MAX_MATERIALIZED_SYMBOLS = 160
 
 
 class _SnapshotTask(QRunnable):
@@ -160,6 +166,12 @@ class ChartDataService(QObject):
         self._lock = threading.Lock()
         self._newest: dict[str, int] = {}
         self._last: "OrderedDict[str, tuple[dict, dict]]" = OrderedDict()
+        #: symbol -> (the BarSeries the dicts were built from, the dicts).
+        #: See cached_bar_dicts: the series is held so an identity check stays
+        #: meaningful, and LRU-bounded so the poll set cannot grow without end.
+        self._bar_dicts: "OrderedDict[str, tuple[BarSeries, list[dict[str, Any]]]]" = (
+            OrderedDict()
+        )
         self._earnings_anchors: dict[str, Any] = {}
         #: Set by shutdown(). Queued tasks check it and return without
         #: touching anything - see the note on shutdown() for why.
@@ -353,6 +365,44 @@ class ChartDataService(QObject):
     def cached_series(self, symbol: str) -> BarSeries | None:
         """Memory-only peek, safe on the GUI thread (for skeleton decisions)."""
         return self.store.cached(symbol)
+
+    def cached_bar_dicts(self, symbol: str) -> list[dict[str, Any]]:
+        """``as_bar_dicts`` for a cached symbol, materialized once per series.
+
+        ``BarSeries.as_bar_dicts`` says it plainly: "Materialized on a worker
+        thread, never on the GUI thread. Costs about 2ms for a 490-bar symbol."
+        The Alert Center's D1 polls were calling it from Qt for every armed and
+        every Focus symbol, on a 60-second timer - about 105 symbols on
+        2026-08-21, and the stall log caught the main thread inside it 48 times
+        for 73 seconds.
+
+        The arrays are what the cache holds and they do not change in place: a
+        refreshed symbol arrives as a NEW frozen BarSeries. So the dicts are
+        memoized against the series OBJECT, and an identity check is enough -
+        a strong reference is kept alongside, which is also what makes ``is``
+        safe from a recycled id.
+
+        Bounded to the most recently asked-for symbols; the poll set is the
+        Focus list plus whatever is armed, well inside that.
+        """
+        key = str(symbol or "").strip().upper()
+        if not key:
+            return []
+        series = self.store.cached(key)
+        if series is None:
+            return []
+        with self._lock:
+            cached = self._bar_dicts.get(key)
+            if cached is not None and cached[0] is series:
+                self._bar_dicts.move_to_end(key)
+                return cached[1]
+        bars = series.as_bar_dicts()
+        with self._lock:
+            self._bar_dicts[key] = (series, bars)
+            self._bar_dicts.move_to_end(key)
+            while len(self._bar_dicts) > _MAX_MATERIALIZED_SYMBOLS:
+                self._bar_dicts.popitem(last=False)
+        return bars
 
     def cached_earnings_anchor(self, symbol: str):
         """Memory-only earnings anchor warmed by snapshot/prefetch workers."""

@@ -1255,8 +1255,11 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
     assert not panel.chart_review.watch_buttons["new_hod"].isChecked()
 
     # The requested red-font flag: red trigger text plus a red kind badge.
+    # The colour moved into theme.qss on 2026-08-21 (a per-row setStyleSheet is
+    # a CSS parse per row), so the object name is what carries it - and the
+    # object name is the contract between the widget and the stylesheet.
     item = AlertFeedItem(fired)
-    assert theme.color("short") in item.trigger_label.styleSheet()
+    assert item.trigger_label.objectName() == "AlertTriggerWatch"
     assert "NEW HOD" in [badge.text() for badge in item.findChildren(Badge)]
 
 
@@ -2393,6 +2396,12 @@ def test_d1_watch_read_is_memory_only_and_prefetches_off_thread(monkeypatch):
 
         def cached_series(self, symbol):
             return _Series()
+
+        def cached_bar_dicts(self, symbol):
+            # The service memoizes the materialization now (2026-08-21): the
+            # panel polls this for every armed and every Focus symbol on a
+            # 60-second timer, and as_bar_dicts is documented worker-only.
+            return _Series().as_bar_dicts()
 
         def prefetch(self, symbols):
             self.requests.append(list(symbols))

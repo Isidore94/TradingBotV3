@@ -777,6 +777,26 @@ are listed in `CURRENT_CHECKPOINT.md`.
    BOTH directions, which is a different decision from this one and needs its
    own fixture and its own trader call.
 
+12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).** "I want this
+   program to be very fluid to use." Measured first: 1843 stalls over 50 ms and
+   1008 s blocked in 3h20m, plus the two GC freezes. The trader's own hypothesis
+   - the DAS - was tested and ruled out (every hot path local; the share not
+   mounted; a miss on it 0.0 ms). Fixed, in order of measured cost: per-widget
+   `setStyleSheet` in the two busy lists (now `theme.qss` rules on properties),
+   whole-list widget rebuilds (now diffed), `as_bar_dicts` on Qt (now memoized
+   in `ChartDataService`), uncached settings and review-event parses (now
+   stamp-cached), and the px/pt font arithmetic behind the `QFont` console
+   flood. The stall watchdog now samples throughout a stall so the 56% it could
+   only attribute to `app.exec()` names itself next time.
+
+   **Live gates owed:** a full session compared against the same measurement -
+   stalls per hour, median, p90, total blocked seconds, against 1843 / 238 ms /
+   1.16 s / 1008 s, targeting no stall over 5 s and under ~60 s blocked; the
+   working set after three hours (8.1 GB before the GC fix); and a console with
+   no `QFont::setPointSizeF` lines. That last one **cannot be verified off the
+   desk**: Qt warnings do not reach a piped stderr on Windows, so the fix rests
+   on the arithmetic (unit-pinned) and the trader's next session is the proof.
+
 Exit gate: each packet exits through its own spec; R1 and R2 land first per the
 trader's ranking, then R7 before R8. **R7's code is complete**; what remains for
 it is live evidence, which is why it does not close the phase on its own. A packet's live gates may overlap the next

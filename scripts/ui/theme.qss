@@ -229,3 +229,57 @@ QScrollBar::handle {
 QScrollBar::handle:hover {
     background: @text_muted@;
 }
+
+/* ------------------------------------------------------------------ */
+/* Alert feed rows and Focus chips.                                     */
+/*                                                                      */
+/* These were per-widget setStyleSheet calls in the constructors, which  */
+/* made Qt parse CSS and recompute style once per row - up to 250 rows   */
+/* on a feed rebuild, on the GUI thread. Stated once here, they are      */
+/* parsed once at startup instead. The variants are selected with        */
+/* dynamic properties; a widget that changes state calls                 */
+/* style().unpolish/polish rather than setting a new stylesheet.         */
+/* ------------------------------------------------------------------ */
+
+QWidget#Panel[alertKind="watch"] {
+    border: 1px solid @alert_watch_border@;
+    border-left: 4px solid @short@;
+    background: @alert_watch_bg@;
+}
+
+QWidget#Panel[alertKind="focus"] {
+    border: 1px solid @alert_focus_border@;
+    border-left: 4px solid @favorite@;
+    background: @alert_focus_bg@;
+}
+
+QLabel#AlertSymbolLink {
+    font-weight: 700;
+    text-decoration: underline;
+}
+
+QLabel#AlertSymbolPlain {
+    font-weight: 700;
+}
+
+QLabel#AlertTriggerWatch {
+    color: @short@;
+    font-weight: 700;
+}
+
+QToolButton#AlertFavoriteButton {
+    color: @alert_star_dim@;
+    font-weight: 700;
+    padding: 0 6px;
+}
+
+QToolButton#AlertFavoriteButton[focusOn="true"] {
+    color: @favorite@;
+}
+
+QToolButton#AlertDislikeButton {
+    color: @alert_dislike@;
+    font-weight: 700;
+    font-size: 12pt;
+    padding: 0 4px;
+}

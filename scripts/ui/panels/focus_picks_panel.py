@@ -382,19 +382,48 @@ class FocusSideEditor(QFrame):
         layout.addWidget(self.status_label)
 
     def refresh(self) -> None:
+        """Bring the board in line with the service. Diffed, not rebuilt.
+
+        This used to empty the flow layout and construct a chip per symbol every
+        time - 105 widget trees plus 105 stylesheet parses on the GUI thread,
+        and 105 teardowns for the collector to walk afterwards. Refreshes are
+        frequent (every focus edit, every mover-flag pass, the live-state
+        timer), and the symbol list usually has not changed at all.
+
+        So: keep the chips that are still on the list, drop the ones that left,
+        build only genuine arrivals, and hand everyone their current state.
+        Order still follows the service, because the trader reads the board as a
+        list rather than a set.
+        """
+        symbols = self.service.focus_symbols(self.side, self.category)
+        wanted = list(dict.fromkeys(symbols))
+
+        existing: dict[str, FocusStatusChip] = {}
         while self.chip_flow.count():
             item = self.chip_flow.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, FocusStatusChip):
+                existing[widget.symbol] = widget
+            elif widget is not None:
                 widget.deleteLater()
-        symbols = self.service.focus_symbols(self.side, self.category)
-        for symbol in symbols:
-            chip = FocusStatusChip(
-                symbol, tone=self.tone, state=self.live_state_for(symbol, self.side)
-            )
-            chip.removed.connect(self._remove)
+
+        for symbol in wanted:
+            chip = existing.pop(symbol, None)
+            if chip is None:
+                chip = FocusStatusChip(
+                    symbol, tone=self.tone, state=self.live_state_for(symbol, self.side)
+                )
+                chip.removed.connect(self._remove)
+            else:
+                chip.update_state(self.live_state_for(symbol, self.side))
             self.chip_flow.addWidget(chip)
-        self.count_label.setText(str(len(symbols)))
+
+        # Whatever the service no longer lists is genuinely gone.
+        for chip in existing.values():
+            chip.setParent(None)
+            chip.deleteLater()
+
+        self.count_label.setText(str(len(wanted)))
 
     def add_from_input(self) -> None:
         added = self.service.add_many(self.add_input.text(), self.side, self.category, origin="manual")
@@ -427,22 +456,126 @@ class FocusSideEditor(QFrame):
 
 
 class FocusStatusChip(QFrame):
-    """Ticker chip with optional live BounceBot/RRS status."""
+    """Ticker chip with optional live BounceBot/RRS status.
+
+    Built once, then updated in place by :meth:`update_state`.
+
+    It used to be built once per refresh, and the whole board was destroyed and
+    recreated every time: 105 chips on the D1 Focus tab, each one running
+    ``setStyleSheet`` in its constructor. Qt parses that CSS and recomputes
+    style per widget, inside the GUI thread, and the 2026-08-21 stall log
+    charged 88 seconds to this panel with a worst case of 22.6 s - while the
+    teardown of those same 105 widget trees fed the cyclic garbage that starved
+    the collector.
+
+    So the expensive parts - the widget tree and the stylesheet - happen once,
+    and a refresh only rewrites text. The stylesheet is re-applied ONLY when the
+    look actually changes (a BOUNCE arriving is a different accent), which on a
+    stable board is never.
+    """
 
     removed = Signal(str)
 
     def __init__(self, symbol: str, *, tone: str, state: dict[str, dict[str, str]], parent=None) -> None:
         super().__init__(parent)
         self.symbol = symbol
+        self.tone = tone
         self.setObjectName("FocusStatusChip")
+        self._look: tuple | None = None
 
+        self.title = QLabel(symbol)
+        self.title.setStyleSheet(f"color: {theme.color(tone)}; font-weight: 700;")
+        remove_button = QToolButton()
+        remove_button.setText("x")
+        remove_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        remove_button.setToolTip(f"Remove {symbol}")
+        remove_button.clicked.connect(lambda: self.removed.emit(self.symbol))
+
+        # Trader rule 2026-08-19: the picks beyond their previous-day extreme
+        # are "the ones actually moving". Same idiom as BOUNCE/RRS - one short
+        # uppercase word in the accent colour - and it sits FIRST because it is
+        # the question the trader is scanning the board for.
+        self.moving_flag = QLabel("MOVING")
+        self.moving_flag.setObjectName("FocusMovingFlag")
+        self.moving_flag.setToolTip(
+            "Beyond yesterday's extreme on the last completed 5m bar - "
+            "above yesterday's high for a long, below yesterday's low for "
+            "a short. Same measurement the adoption gate uses."
+        )
+        self.moving_flag.setStyleSheet(
+            f"color: {theme.color('favorite')}; font-weight: 700;"
+        )
+        self.live_flag = QLabel("")
+        self.live_flag.setStyleSheet("font-weight: 700;")
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(4)
+        top.addWidget(self.title)
+        top.addWidget(self.moving_flag)
+        top.addWidget(self.live_flag)
+        top.addWidget(remove_button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(9, 4, 5, 4)
+        layout.setSpacing(2)
+        layout.addLayout(top)
+        # Two status lines, always present and hidden when empty: adding and
+        # removing labels would put layout work back on every refresh, which is
+        # the cost this class exists to avoid.
+        self.status_labels = []
+        for _ in range(2):
+            status = QLabel("")
+            status.setObjectName("MutedLabel")
+            status.setWordWrap(True)
+            layout.addWidget(status)
+            self.status_labels.append(status)
+
+        self.update_state(state)
+
+    def update_state(self, state: dict[str, dict[str, str]]) -> None:
+        """Re-point the chip at fresh live state without rebuilding it."""
+        state = state or {}
         bounce = state.get("bounce") or {}
         rrs = state.get("rrs") or {}
         has_bounce = bool(bounce.get("text"))
         has_rrs = bool(rrs.get("text"))
-        accent_tone = str(bounce.get("tone") or rrs.get("tone") or tone)
+        accent_tone = str(bounce.get("tone") or rrs.get("tone") or self.tone)
+        is_mover = str(state.get("mover") or "") == "open"
+
+        look = (has_bounce, has_rrs, accent_tone)
+        if look != self._look:
+            self._look = look
+            self._apply_look(has_bounce, has_rrs, accent_tone)
+
+        self.moving_flag.setVisible(is_mover)
+        if has_bounce:
+            self.live_flag.setText("BOUNCE")
+            self.live_flag.setStyleSheet(
+                f"color: {theme.color('favorite')}; font-weight: 700;"
+            )
+            self.live_flag.setVisible(True)
+        elif has_rrs:
+            self.live_flag.setText("RRS")
+            self.live_flag.setStyleSheet(
+                f"color: {theme.color(accent_tone)}; font-weight: 700;"
+            )
+            self.live_flag.setVisible(True)
+        else:
+            self.live_flag.setVisible(False)
+
+        texts = [
+            str(item.get("text") or "").strip() for item in (bounce, rrs)
+        ]
+        for label, text in zip(self.status_labels, texts):
+            if label.text() != text:
+                label.setText(text)
+            label.setVisible(bool(text))
+
+    def _apply_look(self, has_bounce: bool, has_rrs: bool, accent_tone: str) -> None:
+        """The one expensive call, made only when the accent actually moves."""
         accent = theme.color("favorite" if has_bounce else accent_tone)
-        side_color = theme.color(tone)
+        side_color = theme.color(self.tone)
         bg_alpha = 0.20 if has_bounce else 0.14 if has_rrs else 0.10
         border_alpha = 0.78 if has_bounce else 0.55
         self.setStyleSheet(
@@ -459,52 +592,3 @@ class FocusStatusChip(QFrame):
             QFrame#FocusStatusChip QToolButton:hover {{ color: {theme.color('text_primary')}; }}
             """
         )
-
-        title = QLabel(symbol)
-        title.setStyleSheet(f"color: {side_color}; font-weight: 700;")
-        remove_button = QToolButton()
-        remove_button.setText("x")
-        remove_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        remove_button.setToolTip(f"Remove {symbol}")
-        remove_button.clicked.connect(lambda: self.removed.emit(self.symbol))
-
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(4)
-        top.addWidget(title)
-        # Trader rule 2026-08-19: the picks beyond their previous-day extreme
-        # are "the ones actually moving". Same idiom as BOUNCE/RRS - one short
-        # uppercase word in the accent colour - and it sits FIRST because it is
-        # the question the trader is scanning the board for.
-        if str(state.get("mover") or "") == "open":
-            moving = QLabel("MOVING")
-            moving.setObjectName("FocusMovingFlag")
-            moving.setToolTip(
-                "Beyond yesterday's extreme on the last completed 5m bar - "
-                "above yesterday's high for a long, below yesterday's low for "
-                "a short. Same measurement the adoption gate uses."
-            )
-            moving.setStyleSheet(f"color: {theme.color('favorite')}; font-weight: 700;")
-            top.addWidget(moving)
-        if has_bounce:
-            flag = QLabel("BOUNCE")
-            flag.setStyleSheet(f"color: {theme.color('favorite')}; font-weight: 700;")
-            top.addWidget(flag)
-        elif has_rrs:
-            flag = QLabel("RRS")
-            flag.setStyleSheet(f"color: {accent}; font-weight: 700;")
-            top.addWidget(flag)
-        top.addWidget(remove_button)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(9, 4, 5, 4)
-        layout.setSpacing(2)
-        layout.addLayout(top)
-        for item in (bounce, rrs):
-            text = str(item.get("text") or "").strip()
-            if not text:
-                continue
-            status = QLabel(text)
-            status.setObjectName("MutedLabel")
-            status.setWordWrap(True)
-            layout.addWidget(status)

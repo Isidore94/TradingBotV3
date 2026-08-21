@@ -4,6 +4,7 @@ import contextlib
 import filecmp
 import logging.handlers
 import os
+import threading
 import re
 import shutil
 import json
@@ -138,14 +139,59 @@ LOCAL_SETTINGS_DIR = _default_local_settings_dir()
 LOCAL_SETTINGS_FILE = LOCAL_SETTINGS_DIR / "local_settings.json"
 
 
+#: (mtime_ns, size, payload) for the settings file as last read. Keyed on the
+#: file's own stamp rather than a timeout, so an edit is picked up on the very
+#: next call and an unchanged file is never parsed twice.
+_local_settings_cache: tuple[int, int, dict] | None = None
+_local_settings_lock = threading.Lock()
+
+
 def _load_local_settings() -> dict:
-    if not LOCAL_SETTINGS_FILE.exists():
+    """The machine-local settings, parsed at most once per change.
+
+    Read on **every** ``get_local_setting`` call - there are around a hundred
+    call sites, including the market-timezone lookup that the completed-bar rule
+    and both gates make per symbol. Uncached, each one cost an ``exists()``, a
+    ``read_text()`` and a ``json.loads()``, and the GUI-thread stall log for
+    2026-08-21 caught the main thread inside this function 97 times.
+
+    A copy is returned, never the cached dict: callers such as
+    ``save_local_setting`` mutate what they get back, and handing out the cache
+    itself would let one caller's edit appear in every later read without ever
+    reaching disk.
+    """
+    global _local_settings_cache
+    try:
+        stat = LOCAL_SETTINGS_FILE.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        with _local_settings_lock:
+            _local_settings_cache = None
         return {}
+    with _local_settings_lock:
+        cached = _local_settings_cache
+        if cached is not None and (cached[0], cached[1]) == stamp:
+            return dict(cached[2])
     try:
         payload = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    with _local_settings_lock:
+        _local_settings_cache = (stamp[0], stamp[1], dict(payload))
+    return payload
+
+
+def invalidate_local_settings_cache() -> None:
+    """Drop the parsed copy. Called after every write in this module.
+
+    A same-millisecond write can land on an unchanged mtime on some filesystems,
+    so writers say so explicitly rather than trusting the stamp to move.
+    """
+    global _local_settings_cache
+    with _local_settings_lock:
+        _local_settings_cache = None
 
 
 def _resolve_persistent_data_dir() -> tuple[Path, str]:
@@ -582,6 +628,7 @@ def save_tracker_storage_dir(path: str) -> Path:
     payload = _load_local_settings()
     payload["shared_data_dir"] = str(target)
     LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    invalidate_local_settings_cache()
     return target
 
 
@@ -592,8 +639,10 @@ def clear_tracker_storage_dir() -> None:
     payload.pop("shared_data_dir", None)
     if payload:
         LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        invalidate_local_settings_cache()
         return
     LOCAL_SETTINGS_FILE.unlink(missing_ok=True)
+    invalidate_local_settings_cache()
 
 
 def get_local_setting(key: str, default=None):
@@ -606,6 +655,7 @@ def save_local_setting(key: str, value) -> None:
     payload = _load_local_settings()
     payload[key] = value
     LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    invalidate_local_settings_cache()
 
 
 def open_path_in_file_manager(path: Path) -> None:

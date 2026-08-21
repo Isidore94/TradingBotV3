@@ -80,7 +80,32 @@ _ACTIVE_THEME = "dark"
 
 
 def tokens(theme_name: str) -> dict[str, str]:
-    return dict(THEMES.get(theme_name, THEMES["dark"]))
+    values = dict(THEMES.get(theme_name, THEMES["dark"]))
+    values.update(_derived_tokens(values))
+    return values
+
+
+def _derived_tokens(values: Mapping[str, str]) -> dict[str, str]:
+    """Pre-mixed rgba tokens the stylesheet needs but qss cannot compute.
+
+    These existed as f-strings inside widget constructors, which meant Qt
+    parsed a fresh stylesheet for every alert row and every focus chip - up to
+    250 rows at a time on a feed rebuild. Mixing them here instead lets the
+    same colours live in theme.qss and be parsed once, at startup.
+
+    Named for the surface rather than the colour, so a theme change moves them
+    together with everything else.
+    """
+    short = values.get("short", "#ff5555")
+    favorite = values.get("favorite", "#ffc857")
+    return {
+        "alert_watch_border": with_alpha(short, 0.90),
+        "alert_watch_bg": with_alpha(short, 0.12),
+        "alert_focus_border": with_alpha(favorite, 0.85),
+        "alert_focus_bg": with_alpha(favorite, 0.14),
+        "alert_star_dim": with_alpha(favorite, 0.75),
+        "alert_dislike": with_alpha(short, 0.65),
+    }
 
 
 def active_theme() -> str:

@@ -39,6 +39,7 @@ every click and the offline analysis job imports it headless.
 from __future__ import annotations
 
 import json
+import threading
 import os
 import re
 import uuid
@@ -391,17 +392,58 @@ def record_review_event(
     return row
 
 
+#: (sources, mtime, size) -> parsed rows for the last store read. The store is
+#: append-only within a session, so a stamp that has not moved cannot describe
+#: different rows.
+_events_cache: tuple[tuple, float | None, int, list[dict[str, Any]]] | None = None
+_events_cache_lock = threading.Lock()
+
+
+def _store_stamp(sources: list[Path]) -> tuple[float | None, int]:
+    """(latest mtime, total bytes) across the sources, cheap enough to poll."""
+    latest: float | None = None
+    total = 0
+    for source in sources:
+        try:
+            stat = source.stat()
+        except OSError:
+            continue
+        total += stat.st_size
+        latest = stat.st_mtime if latest is None else max(latest, stat.st_mtime)
+    return latest, total
+
+
 def load_review_events(
     path: Path = ALERT_REVIEW_EVENTS_FILE,
     *,
     shards_dir: Path | None = None,
     include_shards: bool | None = None,
 ) -> list[dict[str, Any]]:
-    """All legacy + shard rows, oldest first. Bad lines are skipped."""
+    """All legacy + shard rows, oldest first. Bad lines are skipped.
+
+    Parsed at most once per change to the store. On 2026-08-21 this was four
+    files, 5.8 MB and 8808 rows - 74 ms of JSON per call - and the GUI-thread
+    stall log caught the main thread inside the parse loop 27 times, once for
+    20.5 seconds. Nothing about the rows changes between two calls that see the
+    same mtimes and the same byte count, so the second call reads no file.
+
+    Size is part of the key, not just mtime: an append inside the same
+    filesystem timestamp tick still moves the byte count.
+
+    The cached list is copied out, because callers sort and filter what they
+    get back and the rows are handed on to consumers that annotate them.
+    """
+    global _events_cache
 
     sources = review_event_sources(
         path, shards_dir=shards_dir, include_shards=include_shards
     )
+    key = tuple(str(source) for source in sources)
+    mtime, size = _store_stamp(sources)
+    with _events_cache_lock:
+        cached = _events_cache
+        if cached is not None and cached[0] == key and cached[1] == mtime and cached[2] == size:
+            return [dict(row) for row in cached[3]]
     collected: list[tuple[str, int, int, dict[str, Any]]] = []
     seen_record_ids: set[str] = set()
     for source_index, source in enumerate(sources):
@@ -434,4 +476,7 @@ def load_review_events(
             )
     if len(sources) > 1:
         collected.sort(key=lambda item: item[:3])
-    return [item[3] for item in collected]
+    rows = [item[3] for item in collected]
+    with _events_cache_lock:
+        _events_cache = (key, mtime, size, rows)
+    return [dict(row) for row in rows]

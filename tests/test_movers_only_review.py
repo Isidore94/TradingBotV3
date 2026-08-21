@@ -376,8 +376,16 @@ class TestTheFocusFlag:
         QApplication.instance() or QApplication([])
 
         def _rendered(state):
+            # The chip builds its labels once and hides the ones that do not
+            # apply (2026-08-21: it used to be rebuilt per refresh, 105 widget
+            # trees at a time). A hidden label is not rendered, so read what is
+            # actually shown rather than what exists.
             chip = FocusStatusChip("AAA", tone="long", state=state)
-            return " ".join(label.text() for label in chip.findChildren(QLabel))
+            return " ".join(
+                label.text()
+                for label in chip.findChildren(QLabel)
+                if not label.isHidden()
+            )
 
         assert "MOVING" in _rendered({"mover": "open"})
         for state in ({"mover": "closed"}, {"mover": "unknown"}, {}):

@@ -15,6 +15,40 @@ _CHIP_HEIGHT = 22
 _PAD = 10
 
 
+def _resized(font: QFont, delta: float, *, minimum: float = 1.0) -> QFont:
+    """A copy of ``font`` ``delta`` units larger, in whatever unit it uses.
+
+    The theme sizes every styled widget in **pixels** on purpose (`theme.py`
+    emits ``"{size}px"`` so type is device-independent across the desk and the
+    MacBook). For a pixel-sized font ``QFont.pointSizeF()`` returns **-1**, and
+    arithmetic on that is what produced the console flood the trader reported
+    on 2026-08-21::
+
+        font.setPointSizeF(font.pointSizeF() + 1.0)   # -1 + 1 = 0.0
+
+    ``QFont::setPointSizeF: Point size <= 0`` - once per visible row per
+    repaint, from inside ``paint()``. Qt rejected the call, so the mark kept the
+    row size; the neighbouring star, at ``-1 + 2.0``, was accepted and drew at
+    **one point**.
+
+    So: ask the font which unit it is in and stay in that unit.
+    """
+    resized = QFont(font)
+    points = font.pointSizeF()
+    if points > 0:
+        resized.setPointSizeF(max(minimum, points + delta))
+        return resized
+    pixels = font.pixelSize()
+    if pixels > 0:
+        # A point is about 4/3 of a pixel at 96 DPI, which is the ratio the
+        # theme's own px sizes were chosen against.
+        resized.setPixelSize(max(int(minimum), int(round(pixels + delta * 4.0 / 3.0))))
+        return resized
+    # Neither unit is readable - leave the font exactly as it came rather than
+    # inventing a size for it.
+    return resized
+
+
 class SetupTableDelegate(QStyledItemDelegate):
     """Paints the setups table as a scannable surface: side/bucket chips, a
     score bar, a favorite accent stripe, and de-emphasized study rows.
@@ -88,17 +122,13 @@ class SetupTableDelegate(QStyledItemDelegate):
 
     def _favorite_star(self, painter, option, rect, focused: bool) -> None:
         """Clickable favorite column: filled gold ★ for focus picks, hollow ☆ otherwise."""
-        font = QFont(option.font)
-        font.setPointSizeF(font.pointSizeF() + 2.0)
-        painter.setFont(font)
+        painter.setFont(_resized(option.font, 2.0))
         painter.setPen(QColor(theme.color("favorite")) if focused else _alpha("text_secondary", 150))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "★" if focused else "☆")
 
     def _dislike_mark(self, painter, option, rect) -> None:
         """Clickable dislike column: ✕ prompts for a why and logs it for AI review."""
-        font = QFont(option.font)
-        font.setPointSizeF(font.pointSizeF() + 1.0)
-        painter.setFont(font)
+        painter.setFont(_resized(option.font, 1.0))
         painter.setPen(_alpha("short", 140))
         painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "✕")
 
@@ -128,9 +158,8 @@ class SetupTableDelegate(QStyledItemDelegate):
 
     def _chip(self, painter, option, rect, text, token, study=False) -> None:
         color = QColor(theme.color(token))
-        font = QFont(option.font)
+        font = _resized(option.font, -1.0, minimum=7.5)
         font.setBold(True)
-        font.setPointSizeF(max(7.5, font.pointSizeF() - 1.0))
         metrics = QFontMetrics(font)
         chip_h = min(_CHIP_HEIGHT, rect.height() - 8)
         chip_w = min(metrics.horizontalAdvance(text) + 20, rect.width() - _PAD - 4)

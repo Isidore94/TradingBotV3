@@ -8,6 +8,101 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-21, fourteenth pass - THE HITCHING, MEASURED AND CUT
+
+**Branch `phase05-integration-blitz`.** Trader: "do an assessment of what's
+slowing things down... is it having to pull files from the server PC? I want
+this program to be very fluid to use."
+
+### The server was the first thing tested, and it is not the cause
+
+| check | result |
+|---|---|
+| Where every hot path resolves | `C:\TradingBotData` and `%LOCALAPPDATA%` |
+| GUI references to the research store | none outside two worker-thread warehouse tiles |
+| `\\MINI-PC\Trading Bot Data` at the time | **not mounted** (WinError 3) |
+| Cost of a miss on it | **0.0 ms** |
+| Local `listdir` + 20 x `stat` | 0.1 ms + 0.2 ms |
+
+### What it actually was
+
+07:52-11:11 on the live desk: **1843 stalls over 50 ms, median 238 ms, p90
+1.16 s, 1008 s blocked** (~8% of the session), plus the 298 s and 200 s GC
+freezes already fixed in `ab219b5` - about a third of the session with the main
+thread stuck.
+
+**56% of stalls had no Python frame below `app.exec()`** - Qt's own C++. The
+dominant Qt C++ work here turned out to be **stylesheet parsing**: `setStyleSheet`
+appears 49 times across `scripts/ui/`, per widget, inside rebuild loops.
+`FocusSideEditor.refresh` destroyed and rebuilt every chip (105 on D1 Focus),
+each constructor parsing CSS; `AlertFeedItem` did it seven times per row with up
+to 250 rows. That also explains the freezes: 105 widget teardowns per refresh is
+the cyclic garbage the starved collector had to walk.
+
+### Fixed, in order of measured cost
+
+| change | measured |
+|---|---|
+| `AlertFeedItem`: 7 stylesheets -> 0, variants as `theme.qss` rules on `alertKind`/`focusOn` | 250 rows **282 ms -> 167 ms** |
+| `FocusSideEditor.refresh` diffs; `FocusStatusChip.update_state`; re-style only when the accent moves | no rebuild on an unchanged board |
+| `ChartDataService.cached_bar_dicts` memoizes `as_bar_dicts` per series (LRU 160) | ~490 dicts/symbol/poll -> once per series |
+| `_load_local_settings` mtime-cached | 100 reads **9.6 ms -> 0.7 ms** |
+| `load_review_events` stamp-cached | 5.8 MB, 8809 rows, **80.8 ms -> 7.7 ms** |
+| `setup_delegate._resized` scales in the font's own unit | the `QFont` flood, and a 1-point star |
+| `install_qt_message_rate_limit` | a storm costs one line + a tally |
+| stall watchdog samples throughout, records modal frame + `culprit_samples` | the 56% names itself next session |
+
+### The font bug, stated exactly
+
+The theme sizes fonts in **px** on purpose (`theme.py` emits `"{size}px"`, for
+device independence across the desk and the MacBook). `QFont.pointSizeF()`
+returns **-1** for such a font, so `setup_delegate`'s three call sites computed:
+
+| line | expression | result |
+|---|---|---|
+| `_favorite_star` | `-1 + 2.0` | a **1-point star** |
+| `_dislike_mark` | `-1 + 1.0` | `setPointSizeF(0.0)` - **the console flood**, call ignored |
+| `_chip` | `max(7.5, -1 - 1.0)` | pinned to 7.5, never relative |
+
+Inside `QStyledItemDelegate.paint()`, once per visible row per repaint.
+
+**Honest limit on the verification:** Qt warnings do not reach a piped stderr on
+Windows - a canary `qWarning` in the test harness printed nothing - so "no
+warnings in 600 paints" proves nothing and is not claimed. The fix rests on the
+arithmetic, which is unit-pinned in `tests/test_ui_fluidity.py`, and the
+trader's next session is the proof.
+
+### Tests
+
+Three existing tests asserted on inline `styleSheet()` strings - they pinned the
+implementation, not the behaviour. They now assert the object name / property
+that carries the styling, which is the real contract between a widget and
+`theme.qss`. One asserted on label text where the chip now hides rather than
+omits a label; it reads visibility instead.
+
+`tests/test_ui_fluidity.py` and `tests/test_qt_widget_reuse.py` are new: caches
+parse once and never go stale, cached values cannot be mutated by a caller,
+chips are reused across a refresh, and an alert row owns no stylesheet.
+
+### Gate figures
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4059 passed / 19 subtests**, exit **0** (was 4032; +27) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source selftest | **56/56**, exit 0 |
+| frozen exe | not rebuilt; Smart App Control refuses the build and the desk runs from source |
+
+### Owed
+
+A full session measured the same way: stalls per hour, median, p90, total
+blocked seconds against **1843 / 238 ms / 1.16 s / 1008 s**, targeting **no
+stall over 5 s and under ~60 s blocked**. Working set after three hours (8.1 GB
+before the GC fix). A console with no `QFont` lines. And the next
+`culprit_samples` histogram, which is what decides whether anything is left.
+
+---
+
 ## 2026-08-21, thirteenth pass - THE PRIOR-DAY BREAK AND SESSION VWAP
 
 **Branch `phase05-integration-blitz`.** Trader: "i think we should also demand

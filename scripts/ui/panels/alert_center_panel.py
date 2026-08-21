@@ -3645,7 +3645,11 @@ class AlertCenterPanel(QFrame):
             if now - last >= retry_seconds:
                 self._d1_prefetch_last[symbol] = now
                 service.prefetch([symbol])
-            return series.as_bar_dicts() if series is not None else []
+            # cached_bar_dicts, not series.as_bar_dicts(): this runs on the Qt
+            # thread for every armed and every Focus symbol on a 60s timer, and
+            # materializing ~490 dicts per symbol per poll is what the service
+            # now memoizes against the series object.
+            return service.cached_bar_dicts(symbol) if series is not None else []
         except Exception:
             return []
 

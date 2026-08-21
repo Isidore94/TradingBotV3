@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import argparse
 import gc
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -994,6 +995,80 @@ def install_gui_thread_gc(
     return timer
 
 
+#: Every distinct Qt message is printed ONCE and then counted. Keyed on the
+#: message text with digits and hex stripped, so "row 41" and "row 42" of the
+#: same complaint collapse together.
+_qt_message_counts: dict[str, int] = {}
+_qt_message_lock = threading.Lock()
+
+
+def _qt_message_key(text: str) -> str:
+    return re.sub(r"0x[0-9a-fA-F]+|\d+", "#", str(text or ""))[:200]
+
+
+def install_qt_message_rate_limit() -> None:
+    """Print each distinct Qt message once; count the repeats.
+
+    Qt writes warnings straight to stderr from wherever they occur - including
+    inside ``paint()``, on the GUI thread. On 2026-08-21 the desk flooded the
+    console with ``QFont::setPointSizeF: Point size <= 0`` (one per visible row
+    per repaint, see ui/widgets/setup_delegate.py), and every one of those lines
+    was a synchronous console write competing with the frame it was drawing.
+
+    The cause is fixed. This exists so the NEXT storm costs one line instead of
+    thousands, and it deliberately does not silence anything: a message never
+    seen before is always printed. Repeats are tallied and reported by
+    :func:`report_qt_messages` at shutdown, so a flood is still visible - as a
+    number rather than as noise.
+
+    Installed before the QApplication, because Qt can complain during its own
+    construction. Never raises: a diagnostic that can break a launch is worse
+    than no diagnostic.
+    """
+    try:
+        from PySide6.QtCore import qInstallMessageHandler
+    except Exception:  # pragma: no cover - PySide6 is a hard dependency
+        return
+
+    def handler(mode, context, message) -> None:
+        try:
+            key = _qt_message_key(message)
+            with _qt_message_lock:
+                seen = _qt_message_counts.get(key, 0)
+                _qt_message_counts[key] = seen + 1
+            if seen == 0:
+                sys.stderr.write(f"{message}\n")
+        except Exception:
+            return
+
+    try:
+        qInstallMessageHandler(handler)
+    except Exception:
+        logging.debug("Qt message handler not installed.", exc_info=True)
+
+
+def report_qt_messages() -> list[tuple[int, str]]:
+    """(count, message) for everything Qt said, busiest first."""
+    with _qt_message_lock:
+        items = sorted(
+            ((count, text) for text, count in _qt_message_counts.items()), reverse=True
+        )
+    return items
+
+
+def _print_qt_message_tally() -> None:
+    """The one place a suppressed flood becomes visible again."""
+    repeated = [(count, text) for count, text in report_qt_messages() if count > 1]
+    if not repeated:
+        return
+    try:
+        sys.stderr.write("Qt messages this session (first shown above, rest counted):\n")
+        for count, text in repeated[:10]:
+            sys.stderr.write(f"  {count:>8}x  {text}\n")
+    except Exception:
+        return
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Launch the PySide6 TradingBotV3 UI.")
     parser.add_argument(
@@ -1063,6 +1138,7 @@ def main(argv: list[str] | None = None) -> int:
         state.ui_scale = args.ui_scale
         state.save()
 
+    install_qt_message_rate_limit()
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
     app = QApplication(sys.argv[:1])
     app.setApplicationName("TradingBotV3")
@@ -1107,7 +1183,10 @@ def main(argv: list[str] | None = None) -> int:
     from ui.stall_watchdog import install as install_stall_watchdog
 
     window.stall_watchdog = install_stall_watchdog(window)
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        _print_qt_message_tally()
 
 
 def _run_satellite(app: QApplication, target: str, cli_token: str | None) -> int:
@@ -1132,7 +1211,10 @@ def _run_satellite(app: QApplication, target: str, cli_token: str | None) -> int
         token=str(cli_token or "").strip(),
     )
     window.show()
-    return app.exec()
+    try:
+        return app.exec()
+    finally:
+        _print_qt_message_tally()
 
 
 if __name__ == "__main__":
