@@ -27,7 +27,7 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 - **The server was ruled out with measurements**, which is what the trader
   asked: every hot path is local, the GUI never reads the research store, the
-  DAS was not mounted, and a miss on it costs 0.0 ms.
+  DAS was momentarily unreachable (and resolved again the same afternoon), and a miss on it costs 0.0 ms.
 - **Per-widget stylesheets removed from both busy lists.** `AlertFeedItem` went
   from seven `setStyleSheet` calls per row to none; its variants are `theme.qss`
   rules selected by object name and an `alertKind`/`focusOn` property, backed by

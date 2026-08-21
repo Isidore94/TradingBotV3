@@ -83,7 +83,7 @@ measured cost:
 **The server is not a factor and does not need re-testing.** Every hot path
 resolves to `C:\TradingBotData` or `%LOCALAPPDATA%`; the GUI holds no reference
 to the research store outside two worker-thread tiles; `\\MINI-PC\Trading Bot
-Data` was not even mounted, and a miss on it costs **0.0 ms**.
+Data` was momentarily unreachable at the time and a miss on it costs **0.0 ms**. It resolved again the same afternoon: the share drops and re-establishes, which matters for the overnight AI-store and warehouse writes but never for the GUI.
 
 ---
 

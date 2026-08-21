@@ -20,7 +20,7 @@ this program to be very fluid to use."
 |---|---|
 | Where every hot path resolves | `C:\TradingBotData` and `%LOCALAPPDATA%` |
 | GUI references to the research store | none outside two worker-thread warehouse tiles |
-| `\\MINI-PC\Trading Bot Data` at the time | **not mounted** (WinError 3) |
+| `\\MINI-PC\Trading Bot Data` at the time | **momentarily unreachable** (WinError 3); it resolved again by 12:34 the same day, so the share drops and re-establishes rather than being unmounted |
 | Cost of a miss on it | **0.0 ms** |
 | Local `listdir` + 20 x `stat` | 0.1 ms + 0.2 ms |
 
