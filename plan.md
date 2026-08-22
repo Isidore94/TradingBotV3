@@ -909,7 +909,30 @@ detector's or scorer's output; R9.5 is shadow-only by construction.
    grants the rail live reach, so it needs its own golden fixture (the placement
    request path) and its own rung before it is built.
 
-3. **R9.3 Rebuild the setup scoreboard from the right stores (read-only analysis).**
+3. **R9.3 Rebuild the setup scoreboard from the right stores — BUILT 2026-08-22,
+   GREEN; no live gate (read-only analysis).**
+   `scripts/setup_scoreboard.py` + `docs/analysis/SETUP_SCOREBOARD_2026-08-21.md`,
+   classified in `docs/README.md`. Measured: 239,422 rows scanned, 14,452 finals,
+   **6,907 in window over 20 sessions** (not 21 — one weekday has no finals, and
+   the report says so). Exclusions applied *before* any ranking: **1,164 (16.9%)
+   with no EOD close obtained** and **212 below the 0.1%-of-entry risk floor**,
+   leaving **5,608 usable**. Condition (iii) is answered rather than noted: every
+   one of the 1,164 has `eod_close` **exactly** equal to `entry_price` and **none**
+   of the 5,743 settled finals does, so the zero mass is the writer defaulting a
+   close it could not read — not a scratch population — and 563 of them are
+   stopped-out trades scoring 0 instead of about −1R, which biases every mean
+   upward. 251 never advanced a bar at all. Trimmed mean (10%) + median +
+   stop-out rate sit beside every R; cells are ranked only at n ≥ 30; the swing
+   block is measured against the file's own `baseline_every5` control and carries
+   an explicit guard that a positive lift means *lost less than the control*.
+   The regime axis the review called starved at n=130 is **5,608 rows across 5
+   environments**. §5 declares the frozen forward window (40 sessions, must span
+   bullish/bearish/chop, exclusions fixed in advance) — the only route by which
+   anything here becomes §7 gate-2 eligible. It promotes and demotes nothing.
+   19 tests in `tests/test_setup_scoreboard.py`; suite 4104 passed / 19 subtests,
+   exit 0.
+
+   Original statement.**
    Inputs: `data/runtime/intraday_bounce_outcomes.csv` `final` rows (6,907
    in-window, 21/21 sessions; bounce type from `event_id`'s trailing `-`-joined
    key; regime / `session_rvol` / sector / RRS / internals from `context_json`)

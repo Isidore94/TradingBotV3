@@ -8,6 +8,46 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R9.3 LANDED: the scoreboard, rebuilt from the right stores
+
+**Branch `phase05-integration-blitz`.** Third item of the R9 packet. Read-only
+analysis: `scripts/setup_scoreboard.py` +
+`docs/analysis/SETUP_SCOREBOARD_2026-08-21.md`, classified in `docs/README.md`.
+
+**The headline is that the review was wrong about its own starvation.** The
+regime, RVOL and sector axes it reported at n=130 were never starved - they are
+in `intraday_bounce_outcomes.csv`, on 100% of its in-window rows, alongside a
+real stop and therefore a real R. Rebuilt: 239,422 rows scanned → 14,452 finals
+→ 6,907 in window over **20** sessions → **5,608 usable** after the two
+exclusions, split across 5 market environments at n=658-1,643 each.
+
+**The 16.9% zero mass is a defect, and the report says so before it ranks
+anything.** All 1,164 in-window finals with `close_r == 0` have `eod_close`
+exactly equal to `entry_price`; none of the 5,743 settled finals does. 251 never
+advanced a bar; 563 are stopped-out trades scoring 0 instead of ≈ −1R, which
+biases every mean upward. Excluded and counted, never averaged. **This is a
+writer defect worth fixing and it is not in the R9 packet** - see below.
+
+Trimmed mean (10%) + median + stop-out rate beside every R; 0.1%-of-entry risk
+floor (212 rows); cells ranked only at n ≥ 30; swing block measured against
+`baseline_every5` with an explicit guard that a positive lift means *lost less
+than the control*. **§5 declares the frozen forward window** - 40 sessions
+spanning bullish/bearish/chop, exclusions fixed in advance - which is the only
+route to §7 gate-2-eligible evidence. It promotes and demotes nothing.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4104 passed / 19 subtests**, exit **0** (was 4085; +19) |
+
+**Recommended, NOT authorized, not in R9:** fix the `eod_close` default in the
+intraday outcome writer so it records "no close obtained" instead of the entry
+price. Every R in that store is biased upward until it is fixed, and the
+scoreboard can only work around it.
+
+**Immediate next action:** R9.4 (`thetalongs.txt`).
+
+---
+
 ## 2026-08-22 - R9.2 LANDED: the LIKE asks why, and stops parking the symbol
 
 **Branch `phase05-integration-blitz`.** Second item of the R9 packet, tests

@@ -21,6 +21,48 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 - R9.3: the setup scoreboard, rebuilt from the stores that carry outcomes
+
+`IMPLEMENTED` + `GREEN`. Read-only analysis; no live gate, and it promotes and
+demotes nothing.
+
+- **`scripts/setup_scoreboard.py`** reads `intraday_bounce_outcomes.csv` finals
+  and `setup_playbook_episodes.csv` with `chunksize`/`usecols` (the first is
+  ~200 MB and is never loaded whole), lifts `market_environment`, `session_rvol`,
+  sector, industry and the RRS triple out of `context_json`, and takes the bounce
+  type from the tail of `event_id`. Output:
+  `docs/analysis/SETUP_SCOREBOARD_2026-08-21.md`.
+- **The regime axis was never starved - it was in a different file.** The
+  2026-08-21 review reported it at n=130 because it read the review store. The
+  outcome store carries `market_environment` on 100% of its in-window rows:
+  **5,608 usable rows across 5 environments**, plus RVOL and sector splits on the
+  same rows, and a real stop and therefore a real R.
+- **The 16.9% `close_r == 0` mass is a writer defect, not a scratch population.**
+  Every one of the 1,164 in-window finals with `close_r` exactly 0 has
+  `eod_close` **exactly** equal to `entry_price`; **none** of the 5,743 settled
+  finals does. A real close does not land on the entry to the cent 1,164 times
+  and never otherwise - the writer defaults `eod_close` to the entry when it
+  cannot read one. 251 never advanced a bar. 563 are stopped-out trades that
+  should score about −1R and score 0 instead, so treating them as scratches
+  biases every mean **upward**. They are excluded and counted, never averaged.
+- **Three statistics per cell, never one.** Trimmed mean (10%), median and plain
+  mean with the stop-out rate beside them - a plain mean on a ratio with an
+  unbounded numerator is what produced the review's phantom −1.82R. A 0.1%-of-entry
+  risk floor removes 212 penny-stop rows; an unmeasurable risk excludes rather
+  than passes. Cells are ranked only at **n ≥ 30**; thinner ones are printed
+  marked `reportable = False` so the thinness is visible.
+- **The swing block is measured against its own control** (`baseline_every5`)
+  and carries an explicit guard: the control's trimmed R is −0.573, so a positive
+  lift means *lost less than the control*, not *made money*. Most families' median
+  `net_r` is about −1.0 - more than half of every family's episodes are full
+  stop-outs - and the plain mean sits far above the trimmed mean nearly
+  everywhere, so what positive numbers exist are carried by a thin tail.
+- **The report ends by declaring the next window before it is measured** - 40
+  sessions spanning bullish, bearish and chop, with the exclusions fixed in
+  advance. That declaration is the only route by which anything in this file ever
+  becomes plan.md §7 gate-2 eligible; everything above it is post-hoc and cannot
+  move a rung.
+
 ### 2026-08-22 - R9.2: the LIKE asks why, and stops parking the symbol
 
 `IMPLEMENTED` + `GREEN`; one live gate owed (a desk session where a liked
