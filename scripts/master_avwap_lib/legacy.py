@@ -216,6 +216,14 @@ except ImportError:  # pragma: no cover - used when imported through scripts.*
 EVENT_TICKERS_FILE = MASTER_AVWAP_EVENT_TICKERS_FILE
 PRIORITY_SETUPS_FILE = MASTER_AVWAP_PRIORITY_SETUPS_FILE
 THETA_PUTS_FILE = PRIORITY_SETUPS_FILE.with_name("master_avwap_theta_puts.txt")
+# R9.4: an OPTIONAL home-folder list of underlyings to evaluate for sold puts and
+# put credit spreads regardless of which trend watchlist they sit on. The theta
+# evaluation is LONG-only by design and `side` is long-list membership, so a
+# wheeled name on neither list was never evaluated - which is how the
+# 2026-07-24..08-21 window's entire positive P&L (four DRAM short puts) stayed
+# invisible to the engine built to find it. Beside the other watchlists in the
+# shared home; absent is the normal state and means "no extra names".
+THETA_LONGS_FILE = LONGS_FILE.with_name("thetalongs.txt")
 AVWAP_CSV_COLUMNS = [
     "run_date",
     "symbol",
@@ -1736,6 +1744,63 @@ def load_tickers(path: Path):
                 continue
             out.append(v.upper())
     return out
+
+
+def load_theta_long_symbols(path: Path | None = None) -> list[str]:
+    """Names from ``thetalongs.txt``, sorted and deduplicated. Optional (R9.4).
+
+    Absent is the normal state and returns ``[]``. An unreadable file also
+    returns ``[]`` with a warning: the list is an addition to a scan, so failing
+    to read it costs those names and must never cost the whole Master AVWAP run.
+
+    The trader owns this file. Nothing here or anywhere else removes a name from
+    it (plan.md sec 5: user-entered watchlist names are never auto-removed).
+    """
+    target = Path(path) if path is not None else Path(THETA_LONGS_FILE)
+    if not target.exists():
+        return []
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except OSError:
+        logging.warning("thetalongs.txt exists but could not be read; no extra theta names this run.")
+        return []
+    symbols = set()
+    for line in raw.replace(",", "\n").splitlines():
+        token = line.strip().upper()
+        if not token or token.startswith("#") or " " in token:
+            continue
+        symbols.add(token)
+    return sorted(symbols)
+
+
+def resolve_scan_sides(
+    symbol: str,
+    longs: set[str] | list[str],
+    shorts: set[str] | list[str],
+    theta_longs: set[str] | list[str],
+) -> tuple[str, str]:
+    """``(side, theta_side)`` for one symbol in the Master AVWAP scan loop.
+
+    ``side`` is what every detector sees and is unchanged from list membership.
+    ``theta_side`` is what the sold-put/PCS evaluation sees, and it is LONG for
+    anything on ``thetalongs.txt`` **regardless of long/short membership** - a
+    name can be a legitimate short thesis on the daily and still be one the
+    trader will sell puts against.
+
+    A symbol reachable only through ``thetalongs.txt`` resolves to LONG rather
+    than falling through to SHORT: that list is a long-side list, and defaulting
+    it the other way would hand every other detector a bearish thesis on a name
+    the trader is bullish enough on to sell premium against.
+    """
+    sym = str(symbol or "").strip().upper()
+    if sym in set(longs):
+        side = "LONG"
+    elif sym in set(shorts):
+        side = "SHORT"
+    else:
+        side = "LONG"
+    theta_side = "LONG" if sym in set(theta_longs) else side
+    return side, theta_side
 
 
 def load_tickers_from_paths(paths: list[Path] | tuple[Path, ...], optional_paths: set[Path] | None = None) -> list[str]:
@@ -18476,11 +18541,15 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
     status = str(row.get("option_status") or option.get("status") or "support_only")
     credit = option.get("credit") if option else None
     credit_text = f" | credit={_format_option_decimal(credit)}" if credit else ""
+    # R9.4 provenance: this section is LONG-only, so a name that reached it via
+    # thetalongs.txt rather than the long watchlist says so - otherwise a short
+    # thesis appearing in a sold-put list reads as a bug.
+    source_text = " | via thetalongs.txt" if row.get("theta_list_source") == "thetalongs" else ""
     handle.write(
         f"{idx}. {row.get('symbol')} | close={float(row.get('last_close')):.2f} "
         f"| score={int(row.get('score', 0) or 0)} "
         f"| supports={int(row.get('support_count', 0) or 0)} "
-        f"| option_status={status}{credit_text}\n"
+        f"| option_status={status}{credit_text}{source_text}\n"
     )
     if play_type == "pcs":
         handle.write(f"   {_format_pcs_option_line(option)}\n")
@@ -18546,13 +18615,13 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
     handle.write("Master AVWAP theta option candidates\n")
     handle.write(f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     handle.write(
-        "Sold put rules: LONG watchlist only; recommendation-only; >=3 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support "
+        "Sold put rules: LONG watchlist (or thetalongs.txt) only; recommendation-only; >=3 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support "
         "(current AVWAPE, previous AVWAPE, or previous 1st-dev); "
         f"short put expiration <= {THETA_PUT_MAX_EXPIRATION_MARKET_DAYS} market days; "
         f"target >= {_format_option_decimal(THETA_PUT_TARGET_MIN_CREDIT)} credit so <= {THETA_PUT_MAX_CONTRACTS} contracts can reach ~$100.\n"
     )
     handle.write(
-        "PCS rules: LONG watchlist only; recommendation-only; >=2 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support; "
+        "PCS rules: LONG watchlist (or thetalongs.txt) only; recommendation-only; >=2 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support; "
         f"expiration {THETA_PCS_MIN_EXPIRATION_MARKET_DAYS}-{THETA_PCS_MAX_EXPIRATION_MARKET_DAYS} market days; "
         f"IBKR-confirmed target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width; "
         "target-hit rows are trade-ready while cusp/below-target/no-quote rows stay visible as pullback/support watches.\n"

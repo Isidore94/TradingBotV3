@@ -951,7 +951,27 @@ detector's or scorer's output; R9.5 is shadow-only by construction.
    here). Deliverable: a script under `scripts/` plus a report under
    `docs/analysis/`, classified in `docs/README.md`.
 
-4. **R9.4 `thetalongs.txt` — a theta-only long list** (trader 2026-08-22: keep the
+4. **R9.4 `thetalongs.txt` — BUILT 2026-08-22, GREEN; one live gate owed.**
+   *Owed: one Master AVWAP scan on the desk in which DRAM reaches the theta
+   report (or is honestly absent for a stated rule reason — earnings buffer, no
+   weekly chain, support stack), labelled `via thetalongs.txt`.*
+   `THETA_LONGS_FILE = LONGS_FILE.with_name("thetalongs.txt")` and
+   `load_theta_long_symbols()` in `master_avwap_lib/legacy.py`; the file is
+   optional and an absent **or unreadable** one returns `[]` with a warning, so
+   it can cost those names but never the run. `resolve_scan_sides()` is the whole
+   seam: `side` stays list membership for every detector, `theta_side` is LONG
+   for anything on the list **regardless of long/short membership**, and a
+   theta-only name resolves LONG rather than falling through to a phantom SHORT.
+   The names join `symbols` (a name on no list is never scanned, so it could
+   never be evaluated) but deliberately **not** `longs`. The two theta calls take
+   `theta_side`; nothing else does. Rows carry `theta_list_source` and the report
+   prints `| via thetalongs.txt`, since a short thesis appearing in a LONG-only
+   sold-put section otherwise reads as a bug. The home-folder
+   `thetalongs.txt` was created with DRAM in it. 14 tests in `tests/test_theta_longs_list.py`, including the
+   characterization guarantee that an empty list moves no side at all; suite 4118
+   passed / 19 subtests, exit 0. IB pacing budget untouched — one extra symbol.
+
+   Original statement (trader 2026-08-22: keep the
    LONG-only gate; add the list; DRAM on it). `evaluate_theta_put_candidate`
    returns `None` unless `side == LONG`, and `side` is long-list membership
    (`scripts/master_avwap_lib/runner.py:597`), so a wheeled underlying on no list

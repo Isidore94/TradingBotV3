@@ -21,6 +21,39 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 - R9.4: `thetalongs.txt`, so a wheeled name is actually evaluated
+
+`IMPLEMENTED` + `GREEN`; one live gate owed (DRAM reaching the theta report on
+a real scan, or being honestly absent for a stated rule reason).
+
+- **The defect.** `evaluate_theta_put_candidate` returns `None` unless
+  `side == "LONG"`, and `side` was long-watchlist membership. A wheeled
+  underlying on neither trend list was therefore never evaluated at all - which
+  is how the 2026-07-24..08-21 window's entire positive P&L (+$1,087.72, four
+  DRAM short puts) stayed invisible to the engine built to find exactly that
+  trade.
+- **`thetalongs.txt`** is a new **optional** home-folder list beside the other
+  watchlists (`THETA_LONGS_FILE`, `load_theta_long_symbols()`). Absent is the
+  normal state and returns `[]`; **unreadable also returns `[]` with a warning**,
+  so a locked file costs those names and never the whole Master AVWAP run. The
+  trader owns it and nothing auto-removes from it (plan.md sec 5).
+- **`resolve_scan_sides()` is the entire seam.** `side` is unchanged from list
+  membership and is what every detector sees; `theta_side` is LONG for anything
+  on the list **regardless of long/short membership**, and only the two premium
+  evaluations receive it. A name can be a legitimate short thesis on the daily
+  and still be one the trader will sell puts against.
+- A symbol reachable only through `thetalongs.txt` resolves to **LONG**, not to
+  a phantom SHORT - that list is a long-side list, and defaulting it the other
+  way would hand every other detector a bearish thesis on a name the trader is
+  bullish on. Its names join the scanned `symbols` set (a name on no list is
+  never scanned, so it could never be evaluated) but deliberately **not**
+  `longs`.
+- **Provenance.** Rows carry `theta_list_source`, and the report prints
+  `| via thetalongs.txt` on them; the rules header names the list too. A short
+  thesis appearing in a LONG-only sold-put section otherwise reads as a bug.
+- The home-folder `thetalongs.txt` was created with DRAM in it. The locked IB
+  pacing budget is untouched - this is one extra symbol.
+
 ### 2026-08-22 - R9.3: the setup scoreboard, rebuilt from the stores that carry outcomes
 
 `IMPLEMENTED` + `GREEN`. Read-only analysis; no live gate, and it promotes and

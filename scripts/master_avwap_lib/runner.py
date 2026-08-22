@@ -449,7 +449,18 @@ def _run_master_impl(
     longs = load_tickers_from_paths(long_paths, optional_paths=optional_paths)
     shorts = load_tickers_from_paths(short_paths, optional_paths=optional_paths)
     longs, shorts, d1_watchlist_added = append_master_avwap_d1_watchlist_symbols(longs, shorts)
-    symbols = sorted(set(longs + shorts))
+    # R9.4: names the trader wants evaluated for premium regardless of trend
+    # list. They join the scanned set (a name on no list is never scanned, and
+    # therefore never evaluated) but they do NOT join `longs` - membership is
+    # what every other detector reads for side, and this list must not move it.
+    theta_longs = load_theta_long_symbols()
+    symbols = sorted(set(longs + shorts + theta_longs))
+    if theta_longs:
+        logging.info(
+            "Master AVWAP scan: %s theta-only long(s) from thetalongs.txt (%s new to this scan).",
+            len(theta_longs),
+            len([sym for sym in theta_longs if sym not in set(longs) | set(shorts)]),
+        )
     if d1_watchlist_added:
         logging.info("Master AVWAP scan added %s symbol(s) from the D1 development watchlist.", d1_watchlist_added)
 
@@ -593,8 +604,12 @@ def _run_master_impl(
         "symbols": {}
     }
 
+    long_set, short_set, theta_long_set = set(longs), set(shorts), set(theta_longs)
     for sym in symbols:
-        side = "LONG" if sym in longs else "SHORT"
+        # `side` is unchanged from list membership; `theta_side` is the only
+        # thing thetalongs.txt moves, and it moves it for the two premium
+        # evaluations alone (R9.4).
+        side, theta_side = resolve_scan_sides(sym, long_set, short_set, theta_long_set)
         curr_iso = curr_cache.get(sym)
         prev_iso = prev_cache.get(sym)
 
@@ -1383,7 +1398,7 @@ def _run_master_impl(
 
         theta_candidate = evaluate_theta_put_candidate(
             symbol=sym,
-            side=side,
+            side=theta_side,
             df=df,
             last_trade_date=last_trade_date,
             last_close=last_close,
@@ -1396,12 +1411,13 @@ def _run_master_impl(
             upcoming_earnings_dates=upcoming_earnings_map.get(sym, []),
         )
         if theta_candidate:
+            theta_candidate["theta_list_source"] = "thetalongs" if sym in theta_long_set else "watchlist"
             theta_put_rows.append(theta_candidate)
             symbol_entry["theta_put_candidate"] = theta_candidate
 
         theta_pcs_candidate = evaluate_theta_pcs_candidate(
             symbol=sym,
-            side=side,
+            side=theta_side,
             df=df,
             last_trade_date=last_trade_date,
             last_close=last_close,
@@ -1414,6 +1430,7 @@ def _run_master_impl(
             upcoming_earnings_dates=upcoming_earnings_map.get(sym, []),
         )
         if theta_pcs_candidate:
+            theta_pcs_candidate["theta_list_source"] = "thetalongs" if sym in theta_long_set else "watchlist"
             theta_pcs_rows.append(theta_pcs_candidate)
             symbol_entry["theta_pcs_candidate"] = theta_pcs_candidate
 

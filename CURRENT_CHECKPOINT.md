@@ -8,6 +8,35 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R9.4 LANDED: `thetalongs.txt`
+
+**Branch `phase05-integration-blitz`.** Fourth item of the R9 packet, tests
+first (10 red, then the code, then 4 more on the report label).
+
+`evaluate_theta_put_candidate` is LONG-only and `side` was list membership, so a
+wheeled name on neither trend list was never evaluated — the window's whole
+positive P&L (four DRAM short puts) was invisible to the engine built for it.
+`resolve_scan_sides()` is the seam: `side` unchanged for every detector,
+`theta_side` LONG for anything on the list regardless of membership, only the
+two premium calls take it. Theta-only names join `symbols` but **not** `longs`,
+and resolve LONG rather than a phantom SHORT. Rows carry `theta_list_source`;
+the report prints `| via thetalongs.txt`.
+
+`C:\TradingBotData\thetalongs.txt` **created, containing DRAM**. Absent or
+unreadable both return `[]` — the list can cost its own names, never the run.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4118 passed / 19 subtests**, exit **0** (was 4104; +14) |
+
+**Owed for R9.4:** one Master AVWAP scan on the desk where DRAM reaches the
+theta report labelled `via thetalongs.txt`, or is honestly absent for a stated
+rule reason (earnings buffer, no weekly chain, support stack). **Immediate next
+action:** R9.5 (`sector_cohort_divergence` to SHADOW, golden fixture frozen
+first).
+
+---
+
 ## 2026-08-22 - R9.3 LANDED: the scoreboard, rebuilt from the right stores
 
 **Branch `phase05-integration-blitz`.** Third item of the R9 packet. Read-only
