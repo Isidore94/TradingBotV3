@@ -805,6 +805,138 @@ trader's ranking, then R7 before R8. **R7's code is complete**; what remains for
 it is live evidence, which is why it does not close the phase on its own. A packet's live gates may overlap the next
 packet's build only when no shared file is in flight.
 
+### Phase 0.6 — R9: trade-review response packet (authorized 2026-08-22)
+
+Source: `docs/analysis/TRADE_REVIEW_2026-08-21.md` §8–§9, its nine questions
+answered on 2026-08-22 (Opus answer + Fable verification; working copies in the
+session scratchpad). The trader answered the three decisions that needed him on
+2026-08-22 and **authorized this packet in writing the same day** ("I authorize
+you to queue a packet for opus to implement"). That authorization covers the
+file-scoped ask-first rule for the files named below; anything outside them is
+asked about again. Build order is the list order. Nothing here touches a
+detector's or scorer's output; R9.5 is shadow-only by construction.
+
+1. **R9.1 Universe write floor + `universe_rebuild` ledger event (operational P0).**
+   `scripts/universe_builder.py::build_universe` refuses to write only when the
+   screen yields **zero** symbols. On 2026-08-20 13:31–13:35 PT a rebuild that
+   priced ~25% of the listing overwrote a 1,487-name universe with ~370–590 and
+   blinded the D1 scanner for all of 2026-08-21 (six in-session runs at 409–533
+   symbols against a 1,088–1,513 band). Build: (a) refuse the write — keep the
+   existing file — when the new count is below **max(500, 50% of the existing
+   `universe_all.txt` count)**; a manual rebuild keeps a `force=True` carve-out
+   exactly as the quiet-hours gate does; an unreadable prior file fails OPEN
+   (write what we have — never leave no universe). (b) Write a `universe_rebuild`
+   row to `job_ledger.jsonl` on **every** attempt, with pre/post counts per list
+   and a `refused` flag, so the event is visible whether or not it was stopped.
+   (c) Snapshot the consumed watchlists under a run-scoped name before writing.
+   Tests: the 2026-08-20 shape (1,487 → ~400) must refuse; a normal 1,487 → 1,450
+   must write; zero and unreadable-prior paths pinned.
+
+2. **R9.2 The LIKE: always ask why, and stop parking the symbol** (trader decisions
+   2026-08-22: *"if I like a chart I should always be prompted with why"*; parking
+   removal = option (c) from the review's Q1, authorized as part of this packet).
+   Measured first (2026-08-22): 40 of 52 `like_claim` rows retired the chart AND
+   put the symbol on `alert_center_ignored_symbols.txt` for the day (34 symbols
+   on 08-20, 6 on 08-21); a parked symbol also stops emitting `d1EventRecorded`,
+   so on an AWAY day a LIKE silently drops the name from the hourly D1 phone
+   push; and because the like is routed through `remove_today`, which
+   `review_learning.REJECT_ACTIONS` classifies as a rejection, **every LIKE is
+   currently counted as a dismissal by the review-learning loop.** Build, in
+   `scripts/ui/widgets/capture_rail.py`, `scripts/ui/widgets/alert_chart_review.py`,
+   `scripts/ui/panels/alert_center_panel.py` (and the symbol-snapshot host, which
+   shares the rail):
+   (a) **Why is required.** The claim digit / double-click selects the setup and
+   moves focus to the why field; Enter commits; an **empty why does not commit**
+   (same mechanic as the veto vocabulary's `note_required`). The chart stays until
+   the why is given, then the existing advance runs. The why lands in the row's
+   existing `note` field — no schema change. An ignorable prompt would recreate
+   the empty-`dislike_reason` failure, which is why it is required; relaxing it
+   is one constant.
+   (b) **A LIKE advances the queue and nothing else.** It no longer emits
+   `removeTodayRequested`; it takes an advance-only path (new signal or parameter,
+   host's choice), does not touch `_ignored_symbols`, and leaves the symbol's
+   other queued alerts alone. The review store records a new action for it
+   (`like_advance` or similar — additive, free-form string) and
+   `review_learning.build_episodes` must treat it as positive, never as a
+   queue-clear. The veto's retire-and-park path is unchanged.
+   (c) Both hosts. `SymbolSnapshotDialog` already only advances; it inherits (a)
+   through the shared rail.
+   Tests: a like with an empty why writes nothing and stays; a like with a why
+   writes the row, advances, and the symbol is absent from the ignore set and
+   still reaches `add_alert`; a veto still parks; `build_episodes` on a
+   `like_claim`+`like_advance` pair yields a positive episode.
+   **Parked as PLANNED, not authorized:** Q1(b), a one-click hand-off *request*
+   from the rail to the Focus surface in the `vetoDayTradeRequested` shape. It
+   grants the rail live reach, so it needs its own golden fixture (the placement
+   request path) and its own rung before it is built.
+
+3. **R9.3 Rebuild the setup scoreboard from the right stores (read-only analysis).**
+   Inputs: `data/runtime/intraday_bounce_outcomes.csv` `final` rows (6,907
+   in-window, 21/21 sessions; bounce type from `event_id`'s trailing `-`-joined
+   key; regime / `session_rvol` / sector / RRS / internals from `context_json`)
+   and `output/reports/setup_playbook_episodes.csv` (127,926 rows, `stop`/`risk`/
+   `net_r` on every row, its own `baseline_every5` control). Read with
+   `chunksize`/`usecols`; report only cells with **n ≥ 30**. Hard conditions,
+   each from a measured defect: (i) a **risk floor** — drop or cap rows with
+   `risk_per_share` < 0.1% of entry and count them (penny stops produce ±655R:
+   `regime_pause_rw` all-time mean −1.82 vs trimmed −0.28); (ii) **trimmed mean
+   (10%) + median + stop-out rate** beside every R; (iii) explain the **16.9% of
+   in-window finals with `close_r` exactly 0** (1,164 of 6,907; every large
+   family's median is 0.000) before ranking anything; (iv) lift against
+   `baseline_every5`; (v) **end by declaring the frozen evidence window for the
+   next inspection** — this is the only path by which anything ever becomes §7
+   gate-2 eligible. It cannot promote or demote anything (gate 2 is post-hoc
+   here). Deliverable: a script under `scripts/` plus a report under
+   `docs/analysis/`, classified in `docs/README.md`.
+
+4. **R9.4 `thetalongs.txt` — a theta-only long list** (trader 2026-08-22: keep the
+   LONG-only gate; add the list; DRAM on it). `evaluate_theta_put_candidate`
+   returns `None` unless `side == LONG`, and `side` is long-list membership
+   (`scripts/master_avwap_lib/runner.py:597`), so a wheeled underlying on no list
+   is never evaluated — the window's entire positive P&L (+$1,087.72, four DRAM
+   short puts) was invisible to the engine. Build: an optional home-folder
+   `thetalongs.txt` whose names reach the sold-put/PCS evaluation LONG-side
+   regardless of long/short list membership; the theta report labels their
+   provenance; the trader's own-names invariant applies (never auto-removed).
+   Minimal wiring wins — a handful of names against the locked IB quote budget is
+   negligible, and the locked pacing budget itself is untouched. Strategy
+   context, so the engine's assumptions stay right: the trader is a **put
+   seller** (wheel); calls are sold only on assigned shares.
+
+5. **R9.5 `sector_cohort_divergence` to SHADOW** (trader 2026-08-22: yes; **after
+   R9.1**, because on 2026-08-21 AEP was outside the universe and no live layer
+   could have grouped it). Spec is the review's §6e, verbatim: ~20 sector/industry
+   ETFs, every **completed** M5 bar, `spread = ETF move from open − SPY move from
+   open`, fire when `|spread| ≥ 0.75%` persists across **≥3 consecutive completed
+   bars**; session-only, re-derived never carried; UNKNOWN sector excludes; member
+   entry timing reuses the archetype (first completed bar 10:00–11:30 ET below
+   session VWAP via `chart_snapshot.session_vwap_series` and below the prior
+   bar's low, session high set in the first three bars, prior-day low broken;
+   stop = 6-bar swing high). Batched yfinance over the ETF set (the Strength
+   Board template) — **zero IB traffic**, single-flight owner. Output is
+   shadow-only JSONL under `diagnostics/shadow_evidence/sector_cohort/` with
+   versioned config + `config_hash` (gate 1), coverage accounting (gate 3), and
+   a single defaults-dict switch (gate 7). Ladder: PLANNED → IMPLEMENTED →
+   **GREEN with the golden fixture frozen first** → SHADOW, and it stops there.
+   Nothing reaches a detector, score, ranking, routing, alert, watchlist, Focus,
+   the review queue or `review_policy.json`. Evidence before it is discussable:
+   **≥40 sessions across bullish, bearish and chop, window declared before
+   inspection.** Measured load at −0.75%: 16.5 observations/session.
+
+**Deliberately not in this packet.** Re-keying `sma_incoming` off hotkey `0`
+(review P7): measured 2026-08-22, v3 was live on the desk only from 12:19:42 PT
+on 2026-08-21 and has had exactly one veto under it — the hypothesis is untested
+at n=1; **re-check after one full session on v3** and only then decide. The
+dislike-reason parser fix (review P7's other half), `policy_gate_check` honesty
+(P8), dropping `guidance_score`/`take_prob` from display (P9), M5 run manifests
+(P11), `event_id` on D1 alerts (P12), the family-namespace mapping table (P13 —
+note `avwape_to_1stdev` exists **only** in the tracker namespace; the scanner's
+emission store has zero rows of it, ever) and gate-7 for `regime_pause_*` (P4)
+are all recommended and **unauthorized** until the trader says so.
+
+Exit gate: R9.1–R9.4 green and on the desk; R9.3's report filed with its declared
+window; R9.5 at SHADOW with its fixture frozen and its first JSONL day written.
+
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
 1. **P1.1 Make the test suite hermetic.** Stop Qt app tests from starting live

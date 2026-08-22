@@ -80,6 +80,7 @@ superseded by `plan.md`.
 | [`GUI_TRADE_DISCOVERY_LEARNING_PLAN.md`](../GUI_TRADE_DISCOVERY_LEARNING_PLAN.md) | Detailed learning/Command Center design reference; old phase order is superseded |
 | [`GUI_LEARNING_PROGRESS.md`](../GUI_LEARNING_PROGRESS.md) | Superseded July capture-readiness checkpoint |
 | [`ALERT_CENTER_QUALITY_PACKET.md`](ALERT_CENTER_QUALITY_PACKET.md) | Historical P1.6 Alert Center packet recovered from `671ee57`; R2 absorbed its auto-pick provenance/scoped-removal outcome, while its remaining armed-alert, labeled-Focus, and display-only repetition contracts are consolidated into the active R4 spec |
+| [`analysis/TRADE_REVIEW_2026-08-21.md`](analysis/TRADE_REVIEW_2026-08-21.md) | Measurement record for the 2026-07-24…08-21 window: data inventory, the setup scoreboard (zero promotions, zero demotions — plan.md §7 gate 2 is unsatisfiable post-hoc), the AEP 2026-08-21 case study, and the `sector_cohort_divergence` study spec. **Its §8 queue items were proposals; on 2026-08-22 the trader accepted five of them as `plan.md` Phase 0.6 / R9 and the rest stay unauthorized**, and its §2 records why `%MFE>2%` rankings are confounded with volatility |
 
 ## Architecture decision records
 

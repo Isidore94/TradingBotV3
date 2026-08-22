@@ -8,6 +8,36 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R9 QUEUED: the trade review's nine questions, answered and authorized
+
+**Branch `phase05-integration-blitz`, docs only - no runtime file changed.** The
+2026-07-24..08-21 trade review (`docs/analysis/TRADE_REVIEW_2026-08-21.md`) left
+nine questions. Two independent passes answered them on 2026-08-22 (Opus, then
+Fable verifying Opus against the raw stores); the trader answered the three that
+needed him and **authorized the response packet in writing**. It is now
+**Phase 0.6 / R9 in `plan.md` §12**, five items in build order:
+R9.1 universe write floor + ledger event (P0) → R9.2 LIKE always asks why and
+stops parking the symbol → R9.3 scoreboard rebuilt from the outcome stores
+(read-only) → R9.4 `thetalongs.txt` → R9.5 `sector_cohort_divergence` to SHADOW.
+
+Findings that changed a number or a claim, all with raw rows in the scratchpad
+`NINE_QUESTIONS.md` / `FABLE_ASSESSMENT.md`: every capture-rail LIKE is currently
+counted as a **rejection** by `review_learning.REJECT_ACTIONS` because it routes
+through `remove_today`; the review's "three SMA vetoes filed after v3 shipped" is
+false - v3 was live on the desk only from **2026-08-21 12:19:42 PT** (one veto,
+ever); `intraday_bounce_outcomes.csv` `close_r` carries penny-stop artifacts
+(±655R) outside the window and a 16.9% exact-zero mass inside it; `bouncers.txt`
+is never actually rotated (57 accumulated launch-blocks) and is not a subset of
+the outcome store; `avwape_to_1stdev` exists only in the tracker namespace.
+
+**Immediate next action:** Opus implements R9.1 first, on this branch, fixture
+and tests first where the item says so. The 2026-08-21 fluidity live gates below
+remain owed and unchanged. Working tree at this stamp: `plan.md`,
+`CURRENT_CHECKPOINT.md` (this), plus the review session's `docs/README.md`
+classification and `docs/analysis/` - all docs.
+
+---
+
 ## 2026-08-21, fourteenth pass - THE HITCHING, MEASURED AND CUT
 
 **Branch `phase05-integration-blitz`.** Trader: "do an assessment of what's
