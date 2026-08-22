@@ -21,6 +21,46 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 - R9.1: the universe can no longer collapse silently
+
+`IMPLEMENTED` + `GREEN`; one live gate owed (a real rebuild writing its row on
+the desk).
+
+- **`build_universe` now has a write floor**, not just a zero guard. It refuses
+  to overwrite the universe lists when the new `all` count falls below
+  `max(500, 50% of the existing universe_all.txt count)`. The defect it closes:
+  on 2026-08-20 13:31-13:35 PT a rebuild that priced roughly a quarter of the
+  listing replaced a 1,487-name universe with a few hundred, and the D1 scanner
+  ran 409-533 symbols for the whole of 2026-08-21 against its usual 1,088-1,513.
+  AEP, a -4.1% short that session, was outside the universe on every in-session
+  run. The absolute floor matters as much as the fraction: half of a universe
+  that has already collapsed once is still a collapse.
+- **Unreadable fails OPEN.** A missing, empty or unreadable prior universe
+  returns a floor of 0 and the write proceeds. Refusing because the old file
+  could not be *measured* would leave the desk with no universe at all, which is
+  strictly worse than the partial one on offer. `_read_universe_count` raises on
+  an unreadable file rather than reporting zero, so "unmeasurable" and "empty"
+  are never conflated (plan.md sec 5).
+- **`force=True` is the manual carve-out**, exactly as it is on the quiet-hours
+  gate, and it is wired at both manual entry points: the Universe tab's Build
+  button always forces, and `rebuild_universe_if_stale` forwards its existing
+  `force`, so "Rebuild universe now" overrides a floor refusal while the
+  scheduled stale tick cannot. `--force` on the CLI does the same. **It never
+  carves out the zero-symbol refusal** - nothing makes writing an empty universe
+  correct.
+- **Every write attempt is now recorded.** `_record_universe_rebuild` appends a
+  `universe_rebuild` row to `job_ledger.jsonl` with per-list before/after counts,
+  the computed floor, and `refused` / `forced` flags, whether or not the write
+  was allowed. The 2026-08-20 collapse left no trace anywhere on disk and had to
+  be reconstructed afterwards from provider counters. The row is deliberately
+  **keyless**: `JobLedger._replay` only reduces events carrying a `key`, so this
+  is durable evidence in the same stream without inventing a phantom QUEUED job
+  for `operations_audit` to report on. Writing it is best effort and can never be
+  the reason a rebuild fails.
+- **The outgoing lists are snapshotted** under a run-scoped
+  `machine_cache/universe/snapshots/universe-<stamp>/` before each overwrite,
+  bounded to the last 10 runs - recovery, not just detection.
+
 ### 2026-08-21 (seventh pass) - GUI fluidity: the hitching, measured and cut
 
 `IMPLEMENTED` + `GREEN`; a live session is owed to confirm the numbers move.

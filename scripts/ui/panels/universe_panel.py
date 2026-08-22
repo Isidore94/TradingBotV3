@@ -220,7 +220,11 @@ class UniversePanel(QFrame):
 
     def _build_worker(self, options_filter: str) -> None:
         try:
-            result = build_universe(options_filter=options_filter)
+            # The operator is looking at this button, so a shrink they can see is
+            # a shrink they meant: the manual carve-out on R9.1's write floor,
+            # exactly as `force` carves out the quiet-hours gate. The zero-symbol
+            # refusal is not carved out and still applies.
+            result = build_universe(options_filter=options_filter, force=True)
             applied = "applied" if result["options_filter_applied"] else "SKIPPED (source unreachable)"
             message = (
                 f"Universe built: {len(result['all'])} total / {len(result['longs'])} longs / "

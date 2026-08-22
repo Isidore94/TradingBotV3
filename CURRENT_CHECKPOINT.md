@@ -8,6 +8,40 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R9.1 LANDED: the universe can no longer collapse silently
+
+**Branch `phase05-integration-blitz`.** First item of the R9 packet, built with
+its tests first (12 written, all 12 red, then the code).
+
+`scripts/universe_builder.py::build_universe` gained a write floor of
+`max(500, 50% of the prior universe_all.txt count)`; a missing, empty or
+**unreadable** prior fails OPEN; `force=True` carves out the floor and never the
+zero-symbol refusal; every write attempt appends a keyless `universe_rebuild`
+row to `job_ledger.jsonl` with per-list before/after counts, the floor, and
+`refused`/`forced`; the outgoing lists are snapshotted (last 10 runs kept).
+
+**Trader decision this pass:** wire the carve-out at both manual entry points.
+`scripts/ui/panels/universe_panel.py` (Build button) always forces, and
+`scripts/autopilot_core.py::rebuild_universe_if_stale` forwards its existing
+`force` - so "Rebuild universe now" overrides a floor refusal and the scheduled
+stale tick does not. Both are outside R9.1's named files and were asked about
+before editing.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4073 passed / 19 subtests**, exit **0** (was 4059; +14) |
+
+`tests/test_universe_builder.py` carries all 14: 12 floor/ledger cases plus
+2 that pin the manual carve-out wiring at both entry points.
+
+**Owed for R9.1:** one real rebuild on the desk writing a `universe_rebuild` row
+with `refused: false`, confirming the row and the snapshot directory appear on
+the live machine. **Immediate next action:** R9.2 (the LIKE: always ask why,
+stop parking the symbol). The 2026-08-21 fluidity live gates below remain owed
+and unchanged.
+
+---
+
 ## 2026-08-22 - R9 QUEUED: the trade review's nine questions, answered and authorized
 
 **Branch `phase05-integration-blitz`, docs only - no runtime file changed.** The

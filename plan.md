@@ -816,8 +816,26 @@ file-scoped ask-first rule for the files named below; anything outside them is
 asked about again. Build order is the list order. Nothing here touches a
 detector's or scorer's output; R9.5 is shadow-only by construction.
 
-1. **R9.1 Universe write floor + `universe_rebuild` ledger event (operational P0).**
-   `scripts/universe_builder.py::build_universe` refuses to write only when the
+1. **R9.1 Universe write floor + `universe_rebuild` ledger event (operational P0)
+   — BUILT 2026-08-22, GREEN; one live gate owed.**
+   *Owed: one real rebuild on the desk that writes a `universe_rebuild` row with
+   `refused: false` and a plausible before/after, confirming the ledger row and
+   the snapshot directory appear on the live machine.* Built as specified:
+   `universe_write_floor()` = `max(500, 50% of the prior universe_all.txt count)`
+   with a missing, empty or **unreadable** prior failing OPEN (returns 0);
+   `force=True` carves out the floor but never the zero-symbol refusal;
+   `_record_universe_rebuild()` appends a deliberately **keyless**
+   `universe_rebuild` row to `job_ledger.jsonl` on every write attempt (keyless
+   so `JobLedger._replay` cannot turn evidence into a phantom QUEUED job);
+   `_snapshot_universe_lists()` keeps the outgoing lists under a run-scoped name,
+   bounded to the last 10. Manual carve-out wired at both entry points (trader
+   decision 2026-08-22): the Universe tab's Build button forces, and
+   `rebuild_universe_if_stale` forwards its existing `force`, so "Rebuild
+   universe now" overrides while the scheduled stale tick does not. 14 tests in
+   `tests/test_universe_builder.py`; suite 4073 passed / 19 subtests, exit 0.
+
+   Original statement of the defect: `scripts/universe_builder.py::build_universe`
+   refused to write only when the
    screen yields **zero** symbols. On 2026-08-20 13:31–13:35 PT a rebuild that
    priced ~25% of the listing overwrote a 1,487-name universe with ~370–590 and
    blinded the D1 scanner for all of 2026-08-21 (six in-session runs at 409–533

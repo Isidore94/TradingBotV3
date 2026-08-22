@@ -653,7 +653,11 @@ def rebuild_universe_if_stale(
         if builder is None:
             from universe_builder import DEFAULT_OPTIONS_FILTER, build_universe
 
-            result = build_universe(options_filter=DEFAULT_OPTIONS_FILTER)
+            # `force` is already the manual carve-out on staleness; R9.1 gives the
+            # write floor the same carve-out through the same flag, so "Rebuild
+            # universe now" can override a floor refusal while the scheduled
+            # stale-tick path cannot.
+            result = build_universe(options_filter=DEFAULT_OPTIONS_FILTER, force=force)
         else:
             result = builder()
         if log:

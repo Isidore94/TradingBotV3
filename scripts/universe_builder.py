@@ -89,6 +89,23 @@ UNIVERSE_INCLUDE_FILES = {
     "shorts": PERSISTENT_DATA_DIR / "universe_include_shorts.txt",
 }
 
+# Write floor (plan.md R9.1). `build_universe` used to refuse a write only when
+# the screen produced *exactly* zero symbols, so there was no guard at all
+# between "everything" and "nothing". On 2026-08-20 13:31-13:35 PT a rebuild
+# that priced roughly a quarter of the listing replaced a 1,487-name universe
+# with a few hundred; the D1 scanner then ran 409-533 symbols for the whole of
+# 2026-08-21 against its usual 1,088-1,513, and AEP - a -4.1% short that day -
+# was outside the universe for every in-session run.
+#
+# The absolute floor matters as much as the fraction: half of a universe that
+# has already collapsed once is still a collapse.
+UNIVERSE_FLOOR_MIN_SYMBOLS = 500
+UNIVERSE_FLOOR_FRACTION = 0.5
+# Previous universe lists kept before each overwrite, so a bad rebuild is
+# recoverable rather than merely detectable.
+UNIVERSE_SNAPSHOT_DIR = UNIVERSE_CACHE_DIR / "snapshots"
+UNIVERSE_SNAPSHOT_KEEP = 10
+
 SYMBOL_DIRECTORY_MAX_AGE_DAYS = 7
 WEEKLYS_MAX_AGE_DAYS = 7
 OPTIONABLE_MAX_AGE_DAYS = 7
@@ -531,6 +548,130 @@ def _write_watchlist(path: Path, symbols: list[str]) -> None:
     path.write_text("\n".join(symbols) + ("\n" if symbols else ""), encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Write floor + rebuild evidence (plan.md R9.1)
+# ---------------------------------------------------------------------------
+def universe_write_floor(previous_count: int | None) -> int:
+    """Smallest new ``all`` count permitted to overwrite ``previous_count`` names.
+
+    ``None`` or ``0`` means there is nothing to protect - a missing, empty or
+    unmeasurable prior universe returns 0, so the floor **fails open**. Refusing
+    to write because we could not read the old file would leave the desk with no
+    universe at all, which is strictly worse than the partial one on offer.
+    """
+    if not previous_count or previous_count <= 0:
+        return 0
+    return max(UNIVERSE_FLOOR_MIN_SYMBOLS, int(previous_count * UNIVERSE_FLOOR_FRACTION))
+
+
+def _read_universe_count(path: Path) -> int | None:
+    """Symbol count of an existing universe list, or ``None`` when absent.
+
+    Raises ``OSError`` when the file exists but cannot be read. The caller
+    decides what unmeasurable means; it is deliberately not conflated with empty.
+    """
+    if not path.exists():
+        return None
+    raw = path.read_text(encoding="utf-8")
+    return len({token.strip().upper() for token in raw.replace(",", "\n").split() if token.strip()})
+
+
+def _previous_universe_counts() -> dict[str, int | None]:
+    """Per-list counts as they stand on disk, before this rebuild touches them."""
+    counts: dict[str, int | None] = {}
+    for name, path in (
+        ("all", UNIVERSE_ALL_FILE),
+        ("longs", UNIVERSE_LONGS_FILE),
+        ("shorts", UNIVERSE_SHORTS_FILE),
+    ):
+        try:
+            counts[name] = _read_universe_count(path)
+        except OSError:
+            # Unreadable is uncertainty, never confirmation of emptiness
+            # (plan.md sec 5). It fails open through `universe_write_floor`.
+            logging.warning("Universe list %s exists but could not be read; write floor fails open.", path)
+            counts[name] = None
+    return counts
+
+
+def _universe_ledger_path() -> Path:
+    from job_ledger import default_ledger_path
+
+    return default_ledger_path()
+
+
+def _record_universe_rebuild(
+    *,
+    before: dict[str, int | None],
+    after: dict[str, int],
+    floor: int,
+    refused: bool,
+    reason: str = "",
+    forced: bool = False,
+) -> None:
+    """Append a ``universe_rebuild`` audit row to the job ledger, always.
+
+    The 2026-08-20 collapse left no trace anywhere on disk, so the size of the
+    universe the scanner was actually running against could only be inferred
+    afterwards from provider counters. This row makes every attempt visible
+    whether or not it was allowed through.
+
+    Deliberately **keyless**: ``JobLedger._replay`` only reduces events carrying
+    a ``key``, so this is durable evidence in the same stream without inventing a
+    phantom QUEUED job that ``operations_audit`` would then report on.
+
+    Best effort throughout. Failing to write the evidence must never be the
+    reason the desk ends up with no universe.
+    """
+    try:
+        from job_ledger import LEDGER_SCHEMA
+
+        path = _universe_ledger_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        row: dict = {
+            "schema": LEDGER_SCHEMA,
+            "event": "universe_rebuild",
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "refused": bool(refused),
+            "forced": bool(forced),
+            "floor": int(floor),
+            "before": before,
+            "after": after,
+        }
+        if reason:
+            row["reason"] = reason
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")
+    except Exception:
+        logging.exception("universe_rebuild ledger row not written (the rebuild itself is unaffected).")
+
+
+def _snapshot_universe_lists() -> None:
+    """Copy the outgoing universe lists aside before they are overwritten.
+
+    Recovery, not just detection: after 2026-08-20 the good 1,487-name list was
+    gone and had to be reconstructed from provider counters. Bounded to the last
+    ``UNIVERSE_SNAPSHOT_KEEP`` runs so the cache cannot grow without limit.
+    """
+    try:
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        target = UNIVERSE_SNAPSHOT_DIR / f"universe-{stamp}"
+        target.mkdir(parents=True, exist_ok=True)
+        for path in (UNIVERSE_ALL_FILE, UNIVERSE_LONGS_FILE, UNIVERSE_SHORTS_FILE):
+            if path.exists():
+                (target / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        existing = sorted(
+            (p for p in UNIVERSE_SNAPSHOT_DIR.iterdir() if p.is_dir()),
+            key=lambda p: p.name,
+        )
+        for stale in existing[:-UNIVERSE_SNAPSHOT_KEEP]:
+            for child in stale.iterdir():
+                child.unlink(missing_ok=True)
+            stale.rmdir()
+    except Exception:
+        logging.exception("Universe snapshot not taken (the rebuild itself is unaffected).")
+
+
 def _read_watchlist(path: Path) -> list[str]:
     if not path.exists():
         return []
@@ -582,11 +723,17 @@ def build_universe(
     options_filter: str = DEFAULT_OPTIONS_FILTER,
     refresh: bool = False,
     write_outputs: bool = True,
+    force: bool = False,
 ) -> dict:
     """Longs mirror the TC2000 long screen (quality + above SMA100 and SMA200);
     shorts mirror the TC2000 short screen (quality + below SMA50, SMA100 AND
     SMA200). ``options_filter``: "optionable" (any listed options, the TC2000
-    'Optionable Stocks Is True' box), "weeklies" (weekly options only) or "none"."""
+    'Optionable Stocks Is True' box), "weeklies" (weekly options only) or "none".
+
+    ``force`` is the manual carve-out on the write floor, exactly as it is on the
+    quiet-hours gate: an operator who can see that a shrink is real overrides it.
+    It does **not** carve out the zero-symbol refusal - nothing makes writing an
+    empty universe correct (plan.md sec 5)."""
     listed = fetch_all_listed_symbols(refresh=refresh)
     logging.info("Listing directory: %s symbols.", len(listed))
 
@@ -641,15 +788,40 @@ def build_universe(
     )
 
     if write_outputs:
+        # plan.md sec 5: a failed publish never destroys the last verified
+        # report. Both refusals below leave the previous lists authoritative and
+        # let the caller retry on its normal cadence; both are recorded either
+        # way, because the 2026-08-20 collapse left no trace of itself anywhere.
+        before = _previous_universe_counts()
+        floor = universe_write_floor(before.get("all"))
+        after = {"all": len(all_symbols), "longs": len(longs), "shorts": len(shorts)}
         if screened.empty:
-            # plan.md sec 5: a failed publish never destroys the last verified
-            # report. An outage that prices nothing used to overwrite a good
-            # universe with an empty file; the caller retries in ~60m and the
-            # previous lists stay authoritative until one succeeds.
-            raise RuntimeError(
+            # An outage that prices nothing used to overwrite a good universe
+            # with an empty file.
+            reason = (
                 f"Universe screen produced 0 symbols (priced {len(metrics)}); "
                 "refusing to overwrite the existing universe files."
             )
+        elif not force and floor and len(all_symbols) < floor:
+            reason = (
+                f"Universe rebuild produced {len(all_symbols)} symbols, below the write "
+                f"floor of {floor} (previous universe {before.get('all')}); refusing to "
+                "overwrite the existing universe files. If the shrink is real, rebuild "
+                "manually to override it."
+            )
+        else:
+            reason = ""
+        _record_universe_rebuild(
+            before=before,
+            after=after,
+            floor=floor,
+            refused=bool(reason),
+            reason=reason,
+            forced=bool(force),
+        )
+        if reason:
+            raise RuntimeError(reason)
+        _snapshot_universe_lists()
         _write_watchlist(UNIVERSE_ALL_FILE, all_symbols)
         _write_watchlist(UNIVERSE_LONGS_FILE, longs)
         _write_watchlist(UNIVERSE_SHORTS_FILE, shorts)
@@ -685,6 +857,11 @@ def main() -> int:
         help="optionable = any listed options (TC2000 'Optionable Stocks'); weeklies = weekly options only",
     )
     parser.add_argument("--refresh", action="store_true", help="ignore local caches")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="override the write floor when a shrink is real (never overrides the zero-symbol refusal)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     result = build_universe(
@@ -694,6 +871,7 @@ def main() -> int:
         min_market_cap_m=args.min_market_cap_m,
         options_filter=args.options_filter,
         refresh=args.refresh,
+        force=args.force,
     )
     applied = "applied" if result["options_filter_applied"] else "SKIPPED (source unreachable)"
     print(

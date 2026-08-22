@@ -1,5 +1,6 @@
 """Tests for the self-sufficient universe builder (pure parsing/screening only)."""
 
+import json
 import sys
 import tempfile
 import unittest
@@ -169,8 +170,6 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("UNKNOWN", symbols)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PriceHistoryShapeTests(unittest.TestCase):
@@ -271,3 +270,238 @@ class UniverseWriteGuardTests(unittest.TestCase):
                 patch.object(ub, "fetch_price_history", return_value=empty):
             result = ub.build_universe(write_outputs=False)
         self.assertEqual(result["all"], [])
+
+
+class UniverseWriteFloorTests(unittest.TestCase):
+    """A partial rebuild must not overwrite a good universe (plan.md R9.1).
+
+    On 2026-08-20 13:31-13:35 PT a rebuild that priced ~25% of the listing
+    replaced a 1,487-name universe with a few hundred, and the D1 scanner ran
+    409-533 symbols for the whole of 2026-08-21 instead of its usual 1,088-1,513.
+    ``build_universe`` refused to write only at *exactly* zero symbols, so there
+    was no floor between "everything" and "nothing".
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.all_file = root / "universe_all.txt"
+        self.longs_file = root / "universe_longs.txt"
+        self.shorts_file = root / "universe_shorts.txt"
+        self.metadata_file = root / "universe_metadata.csv"
+        self.ledger_file = root / "job_ledger.jsonl"
+        for attr, value in (
+            ("UNIVERSE_ALL_FILE", self.all_file),
+            ("UNIVERSE_LONGS_FILE", self.longs_file),
+            ("UNIVERSE_SHORTS_FILE", self.shorts_file),
+            ("UNIVERSE_METADATA_FILE", self.metadata_file),
+        ):
+            patcher = patch.object(ub, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        # Manual include files live in the same throwaway root so a developer's
+        # real include lists can never leak into the counts under test.
+        patcher = patch.object(
+            ub,
+            "UNIVERSE_INCLUDE_FILES",
+            {name: root / f"universe_include_{name}.txt" for name in ("all", "longs", "shorts")},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch.object(ub, "_universe_ledger_path", lambda: self.ledger_file)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    # -- helpers ---------------------------------------------------------
+    @staticmethod
+    def _metrics(count: int) -> pd.DataFrame:
+        """A screened-shaped frame of ``count`` names that all pass and all rank long."""
+        symbols = [f"S{i:05d}" for i in range(count)]
+        return pd.DataFrame(
+            {
+                "symbol": symbols,
+                "last_price": [50.0] * count,
+                "avg_volume_20d": [5_000_000.0] * count,
+                "dollar_volume_20d": [250_000_000.0] * count,
+                "sma_50": [40.0] * count,
+                "sma_100": [40.0] * count,
+                "sma_200": [40.0] * count,
+                "above_sma_50": [True] * count,
+                "above_sma_100": [True] * count,
+                "above_sma_200": [True] * count,
+                "below_sma_50": [False] * count,
+                "below_sma_100": [False] * count,
+                "below_sma_200": [False] * count,
+            }
+        )
+
+    def _seed_previous(self, count: int) -> None:
+        self.all_file.write_text("\n".join(f"P{i:05d}" for i in range(count)) + "\n", encoding="utf-8")
+
+    def _build(self, produced: int, **kwargs):
+        history = pd.DataFrame(columns=["symbol", "datetime", "close", "volume"])
+        with patch.object(ub, "fetch_all_listed_symbols", return_value=["AAPL"]), \
+                patch.object(ub, "fetch_optionable_symbols", return_value=["AAPL"]), \
+                patch.object(ub, "fetch_price_history", return_value=history), \
+                patch.object(ub, "compute_universe_metrics", return_value=self._metrics(produced)), \
+                patch.object(ub, "fetch_market_caps", return_value={}):
+            return ub.build_universe(write_outputs=True, **kwargs)
+
+    def _ledger_rows(self) -> list[dict]:
+        if not self.ledger_file.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.ledger_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    # -- the four pinned cases -------------------------------------------
+    def test_the_2026_08_20_collapse_refuses_to_write(self):
+        """1,487 -> ~400 is the shape that actually happened. It must be stopped."""
+        self._seed_previous(1487)
+        with self.assertRaises(RuntimeError) as caught:
+            self._build(400)
+        self.assertIn("floor", str(caught.exception).lower())
+        # The good universe is still on disk, untouched.
+        self.assertEqual(len(self.all_file.read_text(encoding="utf-8").split()), 1487)
+        self.assertFalse(self.longs_file.exists())
+
+    def test_a_normal_shrink_still_writes(self):
+        """1,487 -> 1,450 is ordinary churn and must not be blocked."""
+        self._seed_previous(1487)
+        result = self._build(1450)
+        self.assertEqual(len(result["all"]), 1450)
+        self.assertEqual(len(self.all_file.read_text(encoding="utf-8").split()), 1450)
+
+    def test_zero_symbols_still_refuses(self):
+        """The pre-existing zero guard is unchanged and is not a floor case."""
+        self._seed_previous(1487)
+        with self.assertRaises(RuntimeError) as caught:
+            self._build(0)
+        self.assertIn("0 symbols", str(caught.exception))
+        self.assertEqual(len(self.all_file.read_text(encoding="utf-8").split()), 1487)
+
+    def test_unreadable_prior_universe_fails_open(self):
+        """Never leave the desk with no universe because we could not measure the old one."""
+        self._seed_previous(1487)
+        with patch.object(ub, "_read_universe_count", side_effect=OSError("locked")):
+            result = self._build(400)
+        self.assertEqual(len(result["all"]), 400)
+        self.assertEqual(len(self.all_file.read_text(encoding="utf-8").split()), 400)
+
+    # -- the carve-out and the floor arithmetic --------------------------
+    def test_force_bypasses_the_floor(self):
+        """A manual rebuild carves out exactly as the quiet-hours gate does."""
+        self._seed_previous(1487)
+        result = self._build(400, force=True)
+        self.assertEqual(len(result["all"]), 400)
+        self.assertEqual(len(self.all_file.read_text(encoding="utf-8").split()), 400)
+
+    def test_force_does_not_bypass_the_zero_guard(self):
+        """plan.md sec 5: a failed publish never destroys the last verified report."""
+        self._seed_previous(1487)
+        with self.assertRaises(RuntimeError):
+            self._build(0, force=True)
+        self.assertEqual(len(self.all_file.read_text(encoding="utf-8").split()), 1487)
+
+    def test_floor_is_the_larger_of_500_and_half(self):
+        self.assertEqual(ub.universe_write_floor(1487), 743)
+        self.assertEqual(ub.universe_write_floor(1200), 600)
+        # Below 1,000 the absolute floor binds instead of the fraction.
+        self.assertEqual(ub.universe_write_floor(900), 500)
+        # Nothing to protect: a missing or empty prior universe fails open.
+        self.assertEqual(ub.universe_write_floor(None), 0)
+        self.assertEqual(ub.universe_write_floor(0), 0)
+
+    def test_first_ever_build_writes(self):
+        """No prior file at all is the first build, not a collapse."""
+        result = self._build(600)
+        self.assertEqual(len(result["all"]), 600)
+
+    # -- the ledger row --------------------------------------------------
+    def test_a_refused_rebuild_is_still_recorded(self):
+        self._seed_previous(1487)
+        with self.assertRaises(RuntimeError):
+            self._build(400)
+        rows = [r for r in self._ledger_rows() if r.get("event") == "universe_rebuild"]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertTrue(row["refused"])
+        self.assertEqual(row["before"]["all"], 1487)
+        self.assertEqual(row["after"]["all"], 400)
+        self.assertEqual(row["floor"], 743)
+        self.assertFalse(row["forced"])
+
+    def test_a_successful_rebuild_is_recorded_too(self):
+        self._seed_previous(1487)
+        self._build(1450)
+        rows = [r for r in self._ledger_rows() if r.get("event") == "universe_rebuild"]
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["refused"])
+        self.assertEqual(rows[0]["before"]["all"], 1487)
+        self.assertEqual(rows[0]["after"]["all"], 1450)
+
+    def test_the_ledger_row_never_becomes_a_phantom_job(self):
+        """It is an audit row in the job ledger, not a job.
+
+        ``JobLedger._replay`` only reduces events carrying a ``key``; ours has
+        none, so a rebuild can never invent a QUEUED job that
+        ``operations_audit`` would then report on.
+        """
+        self._seed_previous(1487)
+        self._build(1450)
+        rows = [r for r in self._ledger_rows() if r.get("event") == "universe_rebuild"]
+        self.assertTrue(rows)
+        self.assertNotIn("key", rows[0])
+        from job_ledger import JobLedger
+
+        self.assertEqual(JobLedger(self.ledger_file).jobs_for_date(""), [])
+
+    def test_a_ledger_outage_never_blocks_the_rebuild(self):
+        """The audit row is best effort; it can never cost the desk its universe."""
+        self._seed_previous(1487)
+        with patch.object(ub, "_universe_ledger_path", lambda: Path("Q:/nope/job_ledger.jsonl")):
+            result = self._build(1450)
+        self.assertEqual(len(result["all"]), 1450)
+
+
+class UniverseForceCarveOutWiringTests(unittest.TestCase):
+    """The floor's carve-out is only real if a manual rebuild actually reaches it.
+
+    plan.md R9.1: "a manual rebuild keeps a ``force=True`` carve-out exactly as
+    the quiet-hours gate does". Both manual entry points are pinned here so the
+    wiring cannot be dropped while the flag quietly survives.
+    """
+
+    def test_the_autopilot_manual_rebuild_forwards_force(self):
+        import autopilot_core as core
+
+        seen: list[bool] = []
+
+        def fake_build(**kwargs):
+            seen.append(bool(kwargs.get("force")))
+            return {"all": ["AAPL"], "longs": ["AAPL"], "shorts": []}
+
+        with patch.dict(
+            sys.modules,
+            {"universe_builder": type(sys)("universe_builder")},
+        ):
+            sys.modules["universe_builder"].build_universe = fake_build
+            sys.modules["universe_builder"].DEFAULT_OPTIONS_FILTER = "optionable"
+            # The manual button: force=True all the way down to the write floor.
+            self.assertEqual(core.rebuild_universe_if_stale(force=True, built_at=None), "rebuilt")
+            # The scheduled stale tick: never carves out.
+            self.assertEqual(core.rebuild_universe_if_stale(force=False, built_at=None), "rebuilt")
+        self.assertEqual(seen, [True, False])
+
+    def test_the_universe_tab_button_forces(self):
+        """The Build button is an operator looking straight at the result."""
+        source = (ROOT_DIR / "scripts" / "ui" / "panels" / "universe_panel.py").read_text(encoding="utf-8")
+        self.assertIn("force=True", source)
+        self.assertIn("build_universe(options_filter=options_filter, force=True)", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
