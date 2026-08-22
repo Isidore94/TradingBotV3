@@ -8,6 +8,102 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R10.0 COMPLETE: the evidence audit, and the program stops here
+
+**Branch `phase05-integration-blitz`.** Read-only sweep plus one authorized
+observability fix. Deliverable:
+[`docs/analysis/EVIDENCE_AUDIT_2026-08-22.md`](docs/analysis/EVIDENCE_AUDIT_2026-08-22.md),
+classified in `docs/README.md`.
+
+**R10.A does not start until the trader accepts the register.**
+
+### Verdicts: 12 PROVEN, 6 PROVEN\* (number differs), 3 REFUTED, 4 UNKNOWN
+
+Three findings change R10.A's design:
+
+1. **Concurrency is PROVEN, so §2.5's guard is authorized — but it is not the
+   duplicate fix.** On 2026-08-20 pid 31848 lived 07:46:01→12:45:09 PT and
+   overlapped three other pids, the worst for **3.8 hours**. Every other
+   in-window session is sequential restarts. A guard already exists but only in
+   `launch_gui_auto.ps1` (the scheduled-task path); `launch_gui.py` and
+   `trading_desk.cmd` have none, so any other launch route bypasses it.
+   **However**, the concurrent session supplies only 184 of 742 duplicate
+   `registered` rows (25%), and **0 of 609 duplicated ids were written within
+   5 s of each other** (median gap 1,581 s). The guard is warranted; what
+   removes duplicates is the ledger's keyed idempotent write.
+2. **D4 is a finalization gap, not an outage.** 2026-08-21 produced 409
+   registrations and **394 `12_bar` milestones** and **zero** finals. Tracking
+   ran all day; only EOD finalization did not. Same mechanism as D3's 576-event
+   backlog, so R10.A's idempotent finalization fixes both and neither needs an
+   IB-outage story.
+3. **Tier cannot be conditioned on.** `tier` is absent from the outcome store's
+   `context_json` on **0 of 7,863** rows, so D8c's tier×outcome inversion is not
+   reproducible and must not be quoted until R10.A puts a tier in the ledger.
+
+### Refuted as described
+
+- **D5b ORB**: the ORB re-break **does** register outcomes (28/25 breakout,
+  20/18 breakdown). The code already separates candidate → re-break →
+  recross and only the break claims an entry. D5 is **LRSI-only** (0 rows).
+- **D6c** the "median 90 min" lag: `logged_at` is the write time, so that
+  statistic measures the wrong thing (H1 502 min, non-H1 425 min). The
+  bar-start defect is proven a better way: **6,439 of 6,439** H1 rows have
+  `entry_time` minute == 30, and no non-H1 population does. That became
+  evidence rule `h1_bar_start_v1`.
+- **D1b** concurrency as the duplicate cause, above.
+
+### Worse than stated
+
+- **S3**: horizon 5 has a **median 65 business-day** span; horizon 10, **73**.
+  SPY-relative columns are **0.0% non-null on all 9,967 rows**.
+- **F5**: not four names — **244 of 499 (symbol,side) pairs (49%)** appear on the
+  true M5 list across ≥2 sessions. *Caveat that travels with it:* the picks store
+  is a snapshot and cannot distinguish "survived the roll" from "re-added", which
+  is exactly why R10.E needs membership episodes.
+- **F3 is PROVEN by code and invisible in data by construction**:
+  `_pick_key` (`human_focus_tracking.py:171`) has no category and lines 290/468
+  build dict comprehensions, so the collision is destroyed before the CSV is
+  written. Its absence in the output is the signature, not a refutation.
+
+### A trap that bit this audit
+
+`human_focus_daily_picks.csv` `source` conflates **list and origin**:
+`focus_swing_m5` is a **swing** row. A substring match on `m5` pulls 649 swing
+rows into an M5 count and inflated F2/F5 until caught. The list must come from
+the `focus_(swing|m5|pick)` **prefix**. R10.E should store the two separately.
+
+### The one authorized code change
+
+`ai_jobs/runner.py` recorded failed jobs with a blank `reason` because the
+non-exception path passed only `reason=` while `run_nightly_journal_import`
+returns its explanation in `messages`. `_failure_reason()` prefers `reason`,
+falls back to `messages`, and when a job fails with nothing to say records that
+fact naming the job. Successful rows untouched. **Two tests proved red first**
+(`test_a_failing_job_records_the_messages_it_returned`,
+`test_a_failing_job_with_nothing_to_say_still_says_so`); a third was green
+throughout and guards against over-reach.
+
+The cause it was hiding, now readable and **reported, not fixed**: *"journal
+database requires trader-present preparation in the GUI; nightly import refused
+without migrating it."* That is a trader action — question 1 below.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4148 passed / 19 subtests**, exit **0** (was 4145; +3) |
+
+### Open questions blocking R10.A (audit §8)
+
+1. Run the journal migration at the desk? It has blocked the nightly import
+   since 08-19 and gates R10.F.
+2. Is `master_avwap_setup_tracker.json.bak` (939 MB) a deliberate rollback point
+   or an accident?
+3. Confirm the existing duplicate rows stay as history with a reader-side rule
+   rather than a deduplicated copy.
+4. Confirm the `launch_gui.py` guard, noting it will not remove duplicates.
+5. Retention: 13 months hot then cold-push — longer?
+
+---
+
 ## 2026-08-22 - R10 REGISTERED: Phase 0.7, the Evidence Plane program
 
 **Branch `phase05-integration-blitz`.** Docs only. The trader authorized a

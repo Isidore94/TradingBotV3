@@ -21,7 +21,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from ai_jobs import ledger, store, window
 
@@ -312,7 +312,7 @@ def run_slots(
                 session_date=session_date,
                 started_at=started,
                 model=str(outcome.get("model") or ""),
-                reason=str(outcome.get("reason") or ""),
+                reason=_failure_reason(slot.name, status, outcome),
                 outputs=outcome.get("outputs") or (),
                 tokens=outcome.get("tokens") or {},
                 path=ledger_path,
@@ -345,6 +345,43 @@ def run_slots(
             break
 
     return report
+
+
+def _failure_reason(job: str, status: str, outcome: Mapping[str, Any]) -> str:
+    """The reason recorded on a ledger row, with a floor under failures (R10.0).
+
+    A failing job that records `reason=""` is indistinguishable after the fact
+    from one that never ran: `journal_import` failed on 20 nightly runs with a
+    blank `error` AND a blank `reason`, and all that survived was "something
+    went wrong".
+
+    The explanation was never actually missing. `run_nightly_journal_import`
+    returns it in ``messages`` - "journal database requires trader-present
+    preparation in the GUI", every night - and this seam read only ``reason``,
+    so the diagnostic was produced and then dropped. So: prefer ``reason``, fall
+    back to ``messages``, and if a job fails with nothing to say at all, say
+    THAT rather than leaving the field empty. Silence and "it declined to
+    explain itself" look identical in a file and are completely different to
+    debug.
+
+    Successful rows are untouched - this is a floor under failures, not a
+    manufactured narrative for every row.
+    """
+    reason = str(outcome.get("reason") or "").strip()
+    if reason:
+        return reason
+    if status not in {ledger.STATUS_FAILED, ledger.STATUS_DEGRADED}:
+        return ""
+    messages = outcome.get("messages") or ()
+    if isinstance(messages, str):
+        messages = [messages]
+    text = "; ".join(str(m).strip() for m in messages if str(m).strip())
+    if text:
+        return text[:500]
+    return (
+        f"{job} reported {status!r} with no reason and no messages; "
+        "the job itself is the only place that knows why"
+    )
 
 
 def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobSlot]:

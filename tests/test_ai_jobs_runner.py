@@ -749,3 +749,68 @@ def test_a_correction_retracts_a_coverage_claim_without_rewriting_it(tmp_path):
     # A genuine run afterwards re-establishes the claim.
     ledger.record(job="ai_summary", status=ledger.STATUS_OK, session_date="2026-08-08", path=led)
     assert ledger.completed_jobs("2026-08-08", path=led) == {"ai_summary"}
+
+
+# ---------------------------------------------------------------------------
+# R10.0: a failure with no explanation is not an observable failure.
+#
+# `journal_import` failed on 20 nightly runs with `error=""` AND `reason=""` in
+# the ai_store ledger, so all that survived was "something went wrong". The
+# explanation was never missing: `run_nightly_journal_import` returns it in
+# `messages`, and the runner's normal (non-exception) path reads only `reason`,
+# so the diagnostic was produced and then dropped at the seam.
+# ---------------------------------------------------------------------------
+def test_a_failing_job_records_the_messages_it_returned(tmp_path):
+    """The job's own explanation must survive into the ledger row."""
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    job = lambda **k: {
+        "status": "FAILED",
+        "ok": False,
+        "messages": [
+            "journal database requires trader-present preparation in the GUI; "
+            "nightly import refused without migrating it"
+        ],
+    }
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        report = runner.run_slots([_slot("journal_import", job)], now=OVERNIGHT, ledger_path=led)
+    row = _rows(led)[-1]
+    assert row["status"] == "failed"
+    assert row["reason"], "a failure with a blank reason is not observable"
+    assert "trader-present preparation" in row["reason"]
+
+
+def test_a_failing_job_with_nothing_to_say_still_says_so(tmp_path):
+    """Silence is filled with a named placeholder, never left blank.
+
+    A blank reason and "the job declined to explain itself" look identical in a
+    file and are completely different to debug.
+    """
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        runner.run_slots(
+            [_slot("journal_import", lambda **k: {"status": "FAILED"})],
+            now=OVERNIGHT,
+            ledger_path=led,
+        )
+    row = _rows(led)[-1]
+    assert row["status"] == "failed"
+    assert row["reason"], "a failure must never record an empty reason"
+    assert "journal_import" in row["reason"]
+
+
+def test_a_successful_job_is_not_given_a_manufactured_reason(tmp_path):
+    """The floor applies to failures only; an ok row stays quiet."""
+    from ai_jobs import runner
+
+    led = tmp_path / "ledger.jsonl"
+    with _store_ok(tmp_path), _window_open(), _no_session_block():
+        runner.run_slots(
+            [_slot("ai_summary", lambda **k: {"status": "ok"})],
+            now=OVERNIGHT,
+            ledger_path=led,
+        )
+    assert _rows(led)[-1]["reason"] == ""

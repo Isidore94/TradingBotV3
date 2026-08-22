@@ -21,6 +21,34 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 - R10.0: the evidence audit, and one failure made observable
+
+`IMPLEMENTED` + `GREEN`. Read-only sweep; the only runtime change is the
+observability fix below.
+
+- **`docs/analysis/EVIDENCE_AUDIT_2026-08-22.md`** is the R10.0 decision
+  register: every alleged evidence defect reproduced and classified with its
+  command and numbers (12 PROVEN, 6 reproduced-but-a-number-differs, 3 REFUTED,
+  4 UNKNOWN), the store inventory, the six-namespace family map, and the
+  decisions R10.A-R10.I rest on - ledger-over-`bouncers.txt` authority, the
+  session calendar, stop-first intrabar collision, frozen slippage, the
+  evidence-based H1 bar-start rule, and one reconciled risk-floor definition
+  (raw stored, 0.1%-of-entry analytic floor, existing 4R ranking clip, all three
+  reported side by side and never substituted for one another).
+- **Concurrent desks are proven** and the guard is authorized: on 2026-08-20 one
+  pid overlapped three others, the worst for 3.8 hours, and the existing guard
+  lives only in the scheduled-task PowerShell path. **It is not the duplicate
+  fix** - the concurrent session supplies 25% of duplicate rows and no
+  duplicated id was written twice within 5 seconds.
+- **`ai_jobs/runner.py` no longer records a failure with a blank reason.**
+  `run_nightly_journal_import` returns its explanation in `messages`; the
+  runner's non-exception path passed only `reason=`, so the diagnostic was
+  produced and dropped at the seam, and 20 nightly failures said nothing at all.
+  `_failure_reason()` prefers `reason`, falls back to `messages`, and when a job
+  fails with nothing to say records that fact naming the job. Successful rows
+  are untouched. The cause it was hiding is now readable and is a trader action:
+  the journal database wants trader-present preparation in the GUI.
+
 ### 2026-08-22 - R10 registered as plan.md Phase 0.7 (Evidence Plane program)
 
 Roadmap only; no runtime file changed. Ten packets R10.0-R10.I with their ground
