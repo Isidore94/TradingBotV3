@@ -21,6 +21,51 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 - R9.5: `sector_cohort_divergence`, at SHADOW and stopping there
+
+`IMPLEMENTED` + `GREEN` + `SHADOW`. It has no production authority and is not
+proposed for any.
+
+- **Why it exists.** On 2026-08-21, 25 of 26 electric utilities closed below
+  their open (mean −2.78%, XLU −2.57%) while SPY closed −0.05%. AEP at −4.13%
+  was the second-worst member of that cohort, and no surface on the desk ever
+  named the sector. The archetype scan that found AEP is worthless without this:
+  strip the utilities out of that session and it lost money.
+- **The golden fixture was frozen FIRST** (plan.md sec 5), by
+  `scripts/build_sector_cohort_fixture.py`, which refuses to overwrite without
+  `--force` - a golden file that regenerates on a whim is not golden. Five
+  hand-constructed cases, one rule each: fires short, fires long, a
+  two-qualifying-bars near miss, never reaches the threshold, and one violent
+  bar that reverses. It satisfies the repo-wide Milestone 3 fixture contract.
+  **The fixture caught a defect in itself before the detector existed:** the
+  first draft let `path_pct[0]` be non-zero while claiming each entry was a move
+  from the session open, which silently re-based every series and turned the
+  gap-down case into a gap-up one. The generator now asserts `path_pct[0] == 0.0`.
+- **The rule, verbatim from the review's §6e.** `spread = ETF move from session
+  open − SPY move from session open` on every **completed** M5 bar; fire when
+  `|spread| >= 0.75%` has persisted across **>= 3 consecutive** completed bars.
+  Session only, re-derived and never carried. An unknown sector excludes. No
+  benchmark means no observation - a bare ETF move is not a divergence.
+  `member_entry()` reuses the archetype through
+  `chart_snapshot.session_vwap_series` rather than restating it, and reads only
+  the session so far.
+- **Gates.** 1: `CONFIG_VERSION` + a stable `config_hash()` that excludes
+  `enabled`, so turning the watch off is an operational act and not a different
+  engine. 3: a coverage row on **every** run, including quiet ones - without it
+  a calm market and a dead collector look identical in the log. 7:
+  `SECTOR_COHORT_DEFAULTS["enabled"]` ships **False**. Gates 2, 4, 5, 6 and 8
+  are unmet and are not addressable by building it.
+- **Zero IB traffic.** Batched yfinance over the ETF set, the M5 Strength Board's
+  template, behind a single-flight lock with an injected fetcher so the vendor
+  stays one seam wide.
+- **First real day written 2026-08-22** over the 2026-08-21 session:
+  `diagnostics/shadow_evidence/sector_cohort/sector_cohort_shadow.jsonl`,
+  20 ETFs measured, 78 benchmark bars, 1,560 bars consumed, 11 cohort
+  observations, XLU short from 10:35 ET.
+- **It reaches no live surface**, pinned by an AST test rather than a substring
+  scan - the module's own docstring names those surfaces in order to promise it
+  avoids them, and a grep cannot tell a promise from a call.
+
 ### 2026-08-22 - R9.4: `thetalongs.txt`, so a wheeled name is actually evaluated
 
 `IMPLEMENTED` + `GREEN`; one live gate owed (DRAM reaching the theta report on

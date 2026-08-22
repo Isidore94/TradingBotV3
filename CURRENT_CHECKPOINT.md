@@ -8,6 +8,59 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R9.5 LANDED: the R9 packet is code-complete
+
+**Branch `phase05-integration-blitz`.** Fifth and last item. `sector_cohort_divergence`
+is at **SHADOW and stops there**.
+
+Golden fixture frozen **first** (`tests/fixtures/sector_cohort_v1.json`, five
+cases isolating one rule each, satisfying the repo-wide Milestone 3 contract).
+It caught a defect in itself before the detector existed: `path_pct[0]` was
+allowed to be non-zero while claiming to be a move from the session open, which
+re-based every series and inverted the gap case. Gate 1 `config_hash` (excludes
+`enabled`), gate 3 coverage on every run including quiet ones, gate 7 shipped
+**off**. Batched yfinance, single-flight, **zero IB traffic**.
+
+**First real shadow day written:** 2026-08-21 session — 20 ETFs, 78 benchmark
+bars, 1,560 consumed, **11 cohort observations, XLU short from 10:35 ET**.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4145 passed / 19 subtests**, exit **0** (was 4118; +27) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **56/56**, exit 0 |
+| frozen exe | not rebuilt; Smart App Control refuses it and the desk runs from source |
+
+---
+
+## R9 exit gate — deterministic half MET, four live proofs owed
+
+All five items are BUILT and GREEN. R9.3's report is filed with its declared
+window; R9.5's fixture is frozen and its first JSONL day is written. **What is
+owed is the "on the desk" half, one proof per item:**
+
+1. **R9.1** — a real rebuild writing a `universe_rebuild` row with
+   `refused: false` and a plausible before/after, plus the snapshot directory
+   appearing on the live machine.
+2. **R9.2** — a session where a LIKE is filed and the symbol is still seen to
+   alert afterwards; on an AWAY day, still reaching the hourly D1 phone push.
+3. **R9.4** — a Master AVWAP scan where DRAM reaches the theta report labelled
+   `via thetalongs.txt`, or is honestly absent for a stated rule reason
+   (earnings buffer, no weekly chain, support stack).
+4. **R9.5** — the shadow log growing over real sessions toward its declared 40,
+   spanning bullish, bearish and chop. Nothing may move it off SHADOW before that.
+
+**Also still owed, unchanged: the 2026-08-21 fluidity live gates** below — a
+full session measured against `ui_stalls_prefluidity_2026-08-21.jsonl` via
+`docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md`, and the `focus_picks_panel.py:419`
+`live_state_for` hot spot that the first post-fix run named.
+
+**Recommended, NOT authorized, not in R9:** fix the `eod_close` default in the
+intraday outcome writer (R9.3 found it defaults to `entry_price`, biasing every
+R in that store upward on 16.9% of finals).
+
+---
+
 ## 2026-08-22 - R9.4 LANDED: `thetalongs.txt`
 
 **Branch `phase05-integration-blitz`.** Fourth item of the R9 packet, tests

@@ -985,7 +985,40 @@ detector's or scorer's output; R9.5 is shadow-only by construction.
    context, so the engine's assumptions stay right: the trader is a **put
    seller** (wheel); calls are sold only on assigned shares.
 
-5. **R9.5 `sector_cohort_divergence` to SHADOW** (trader 2026-08-22: yes; **after
+5. **R9.5 `sector_cohort_divergence` — BUILT 2026-08-22, GREEN, AT SHADOW.**
+   Golden fixture **frozen first**, per plan.md sec 5:
+   `tests/fixtures/sector_cohort_v1.json` (via
+   `scripts/build_sector_cohort_fixture.py`, which refuses to overwrite without
+   `--force`), five hand-constructed cases isolating one rule each — fires short,
+   fires long, two-qualifying-bars near miss, never-reaches-threshold, and one
+   violent bar that reverses. It satisfies the repo-wide Milestone 3 fixture
+   contract. *A defect the fixture caught in itself:* the first draft expressed
+   each path as a cumulative move but let `path_pct[0]` be non-zero, which
+   re-based every series and turned the gap-down case into a gap-up one; the
+   generator now asserts `path_pct[0] == 0.0`.
+   `scripts/sector_cohort_divergence.py` implements the rule verbatim
+   (|spread| >= 0.75% persisting >= 3 consecutive **completed** bars, session
+   only, unknown sector excluded, no benchmark = no observation), plus
+   `member_entry()` reusing the archetype through
+   `chart_snapshot.session_vwap_series`. Gate 1: `CONFIG_VERSION` +
+   `config_hash()` (which excludes `enabled`, so switching it off is not a
+   different engine). Gate 3: a coverage row on **every** run including quiet
+   ones — otherwise a calm market and a dead collector look identical. Gate 7:
+   `SECTOR_COHORT_DEFAULTS["enabled"]` ships **False**. Single-flight
+   `run_shadow_pass` with an injected fetcher; the default is batched yfinance,
+   **zero IB traffic**. Output is append-only JSONL at
+   `diagnostics/shadow_evidence/sector_cohort/`. **First real day written
+   2026-08-22 over the 2026-08-21 session: 20 ETFs measured, 78 benchmark bars,
+   1,560 bars consumed, 11 cohort observations, XLU short from 10:35 ET.**
+   27 tests; suite 4145 passed / 19 subtests, exit 0; selftest 56/56.
+   **It stops at SHADOW.** Nothing reaches a detector, score, ranking, routing,
+   alert, watchlist, Focus, the review queue or `review_policy.json` — pinned by
+   an AST test, not a substring scan, because the module's own docstring names
+   those surfaces in order to promise it avoids them. Evidence before it is
+   discussable is unchanged: **>= 40 sessions across bullish, bearish and chop,
+   window declared before inspection.**
+
+   Original statement (trader 2026-08-22: yes; **after
    R9.1**, because on 2026-08-21 AEP was outside the universe and no live layer
    could have grouped it). Spec is the review's §6e, verbatim: ~20 sector/industry
    ETFs, every **completed** M5 bar, `spread = ETF move from open − SPY move from
@@ -1018,6 +1051,15 @@ are all recommended and **unauthorized** until the trader says so.
 
 Exit gate: R9.1–R9.4 green and on the desk; R9.3's report filed with its declared
 window; R9.5 at SHADOW with its fixture frozen and its first JSONL day written.
+
+**Status 2026-08-22: all five items BUILT and GREEN; the deterministic half of the
+exit gate is met.** R9.3's report is filed with its declared window and R9.5's
+fixture is frozen with its first JSONL day written. What remains is the "on the
+desk" half — four live proofs, one per item, listed in `CURRENT_CHECKPOINT.md`:
+a real rebuild writing a `universe_rebuild` row; a LIKE whose symbol is seen to
+keep alerting; DRAM reaching (or being honestly absent from) the theta report
+labelled `via thetalongs.txt`; and R9.5's shadow log growing over real sessions
+toward its declared 40.
 
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
