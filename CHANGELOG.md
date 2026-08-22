@@ -21,6 +21,44 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 - R9.2: the LIKE asks why, and stops parking the symbol
+
+`IMPLEMENTED` + `GREEN`; one live gate owed (a desk session where a liked
+symbol is seen to keep alerting).
+
+- **The why is required.** The claim key or a double-click now selects the setup
+  and moves focus to the why field; Enter commits; an empty or whitespace-only
+  why does not commit and the chart stays. Trader, 2026-08-22: "if I like a
+  chart I should always be prompted with why". It is required rather than
+  offered because the `dislike` rows are the counter-example - 31 of the most
+  information-dense strings in the store, captured under a field nothing
+  insisted on. The why lands in the row's existing `note`; no schema change.
+- **A LIKE advances the queue and does nothing else.** It used to route through
+  the Alert Center's "Not today" verb, which retires the chart *and parks the
+  symbol for the day*. Measured over 2026-07-24..08-21: 40 of 52 `like_claim`
+  rows put their symbol on `alert_center_ignored_symbols.txt`; a parked symbol
+  also stops emitting `d1EventRecorded`, so on an AWAY day a LIKE silently
+  dropped that name from the hourly D1 phone push. On 2026-08-21 the trader
+  liked AEP short at 10:37:15 ET - the best day trade of that week - and the
+  system's response to recognising it was to file a research row and take the
+  chart away.
+- **New signal, new action, one owner each.**
+  `AlertChartReview.likeAdvanceRequested` is separate from
+  `removeTodayRequested`; `AlertCenterPanel._advance_after_like` records
+  `like_advance` and advances the queue, touching neither `_ignored_symbols`,
+  the symbol's other queued alerts, nor any auto-adopted Focus pick. **The
+  veto's retire-and-park path is unchanged.** The rail still places nothing -
+  the explicit Focus verb remains the one thing that does.
+- **`review_learning.TAKE_ACTIONS` gained `like_advance`.** Because the old
+  route wrote `remove_today`, `REJECT_ACTIONS` had been scoring every like the
+  trader ever filed as a dismissal - the strongest positive signal in the store,
+  read as its opposite, on 40 of the window's 52 rows.
+- `SymbolSnapshotDialog` already only advanced and needed no change; it inherits
+  the required why through the shared rail.
+- Four existing tests pinned the superseded one-click/retire rule and were
+  rewritten against the new one; `test_a_like_also_retires_the_chart` was
+  deleted, since the behavior it protected is the behavior the trader reversed.
+
 ### 2026-08-22 - R9.1: the universe can no longer collapse silently
 
 `IMPLEMENTED` + `GREEN`; one live gate owed (a real rebuild writing its row on

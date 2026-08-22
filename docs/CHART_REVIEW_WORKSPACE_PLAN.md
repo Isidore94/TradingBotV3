@@ -324,6 +324,30 @@ when to run it is a separate change.
 A like writes **one annotation row** carrying the claimed setup id, and that
 is all. There is deliberately no second likes store.
 
+**The why is required (R9.2, trader 2026-08-22: "if I like a chart I should
+always be prompted with why").** The claim key or a double-click selects the
+setup and moves focus to the why field; Enter commits; an empty why does not
+commit and the chart stays. This is the veto vocabulary's `note_required`
+mechanic applied to every claim. The why lands in the row's existing `note`
+field — no schema change. It is required rather than offered because the
+`dislike` rows are the counter-example: 31 of the most information-dense
+strings the trader ever wrote, captured under a field nothing insisted on, and
+then dropped entirely by a parser mismatch. Relaxing this is one constant.
+
+**A like advances the queue and does nothing else (R9.2).** It previously
+routed through the Alert Center's "Not today" verb, which retires the chart
+*and parks the symbol for the day*. Measured over 2026-07-24…08-21: 40 of 52
+`like_claim` rows put their symbol on `alert_center_ignored_symbols.txt`; a
+parked symbol also stops emitting `d1EventRecorded`, so on an AWAY day a LIKE
+silently dropped that name from the hourly D1 phone push; and because the
+route wrote `remove_today`, `review_learning.REJECT_ACTIONS` scored every like
+the trader ever filed as a dismissal. A like now emits
+`AlertChartReview.likeAdvanceRequested`, the panel records `like_advance`
+(which `TAKE_ACTIONS` reads as positive engagement) and advances — the ignore
+set, the symbol's other queued alerts, and any auto-adopted Focus pick are all
+untouched. **The veto's retire-and-park path is unchanged.** Liking a setup is
+the opposite of being finished with the symbol.
+
 An earlier draft of this section routed likes through `FocusService.add()` to
 reuse the existing `pick_feedback` machinery. That was wrong by this
 document's own rules: `FocusPickStore.add` writes Focus state AND injects the

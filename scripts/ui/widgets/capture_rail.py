@@ -330,13 +330,15 @@ class CaptureRail(QFrame):
             self.setup_list.addItem(item)
             if hotkey:
                 self._claim_hotkeys[hotkey] = claim.setup_id
-        self.setup_list.itemActivated.connect(lambda _item: self.commit_like())
+        # Double-click and the digit do the same thing: pick the claim and ask
+        # for the why. Neither commits on its own (R9.2).
+        self.setup_list.itemActivated.connect(lambda item: self._claim_picked(item))
         rows = max(1, min(self.setup_list.count(), 14))
         self.setup_list.setMaximumHeight(rows * theme.px(21) + theme.px(10))
         inner.addWidget(self.setup_list)
 
         self.like_note_input = QLineEdit()
-        self.like_note_input.setPlaceholderText("note (optional)")
+        self.like_note_input.setPlaceholderText("why (required)")
         self.like_note_input.returnPressed.connect(self.commit_like)
         inner.addWidget(self.like_note_input)
         self.like_button = QPushButton("Like + claim setup")
@@ -589,26 +591,49 @@ class CaptureRail(QFrame):
         return str(item.data(_CLAIM_ROLE) or "") if item is not None else ""
 
     def select_setup(self, setup_id: str) -> None:
-        """Select a claim by id and commit it - the digit IS the decision,
-        exactly as it is on the veto list."""
+        """Select a claim by id, then ask for the why.
+
+        The digit picks the claim; it no longer commits on its own. Trader,
+        2026-08-22: "if I like a chart I should always be prompted with why".
+        This is the veto vocabulary's ``note_required`` mechanic, applied to
+        every claim rather than to particular reasons - pick, type, Enter.
+        """
         for row in range(self.setup_list.count()):
             if self.setup_list.item(row).data(_CLAIM_ROLE) == setup_id:
                 self.setup_list.setCurrentRow(row)
                 break
         else:
             return
-        self.commit_like()
+        self._prompt_for_why()
+
+    def _claim_picked(self, item) -> None:
+        """Double-click lands here so it behaves exactly like the digit."""
+        if item is not None:
+            self.setup_list.setCurrentItem(item)
+        self._prompt_for_why()
+
+    def _prompt_for_why(self) -> None:
+        self.like_note_input.setFocus()
+        self._set_status("This like needs a why - type it, then Enter.")
 
     def commit_like(self) -> dict | None:
         setup_id = self.selected_setup_id()
         if not setup_id:
             self._set_status("Pick a setup to claim (1-9).", ok=False)
             return None
+        why = self.like_note_input.text().strip()
+        if not why:
+            # Required, not merely offered. The `dislike` rows are the warning:
+            # 31 of the most information-dense strings the trader ever wrote,
+            # captured under a field nothing insisted on, and discarded.
+            # A like without a why is not a like - the chart stays.
+            self._prompt_for_why()
+            return None
         row = self._record(
             EVENT_LIKE_CLAIM,
             claimed_setup_id=str(setup_id),
             side=self._side,
-            note=self.like_note_input.text(),
+            note=why,
         )
         if row is None:
             return None

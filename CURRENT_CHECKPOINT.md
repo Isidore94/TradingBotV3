@@ -8,6 +8,36 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R9.2 LANDED: the LIKE asks why, and stops parking the symbol
+
+**Branch `phase05-integration-blitz`.** Second item of the R9 packet, tests
+first (13 written, 11 red, then the code).
+
+The why is required — the claim key and double-click select and move focus to
+the why field, Enter commits, an empty why does not and the chart stays. And a
+LIKE now takes an advance-only route (`likeAdvanceRequested` →
+`_advance_after_like`, recording `like_advance`) instead of the "Not today"
+verb, so it never reaches `_ignored_symbols`, never sweeps the symbol's other
+queued alerts, and never drops an auto-adopted Focus pick. The veto's
+retire-and-park path is unchanged. `review_learning.TAKE_ACTIONS` gained
+`like_advance`, which stops 40 of the window's 52 likes being scored as
+dismissals.
+
+**Four existing tests pinned the rule the trader reversed** and were rewritten
+against the new one; `test_a_like_also_retires_the_chart` was deleted rather
+than adjusted, because its subject is the behavior that changed.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4085 passed / 19 subtests**, exit **0** (was 4073; +12 net) |
+
+**Owed for R9.2:** one desk session in which a LIKE is filed and the symbol is
+still seen to alert afterwards — and, on an AWAY day, still reaches the hourly
+D1 phone push. **Immediate next action:** R9.3 (rebuild the setup scoreboard
+from the outcome stores, read-only).
+
+---
+
 ## 2026-08-22 - R9.1 LANDED: the universe can no longer collapse silently
 
 **Branch `phase05-integration-blitz`.** First item of the R9 packet, built with

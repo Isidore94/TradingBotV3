@@ -57,6 +57,10 @@ class AlertChartReview(QWidget):
     """
 
     removeTodayRequested = Signal(object)
+    # A LIKE is finished with the chart but NOT finished with the symbol
+    # (R9.2). Separate from `removeTodayRequested` because that verb parks the
+    # name for the rest of the day, which a like must never do.
+    likeAdvanceRequested = Signal(object)
     focusRequested = Signal(object)
     skipRequested = Signal(object)
     crossFocusToggled = Signal(object)
@@ -361,13 +365,18 @@ class AlertChartReview(QWidget):
     def _on_captured(self, event_type: str, _row: dict) -> None:
         """Capture is a decision, so the badge updates without a re-chart.
 
-        A VETO and a LIKE both RETIRE the chart, by trader rule (2026-08-20):
-        "when I click veto it should just disappear as 'not for today'" and
-        "when I pick a like and claim setup reason, we should just move onto
-        the next chart". Neither is an annotation about a chart still being
-        read - each is the decision that this name is settled, which is
-        exactly what the "Not today" verb already means, so both take that
-        verb's path.
+        A VETO and a LIKE both MOVE ON, by trader rule (2026-08-20): "when I
+        click veto it should just disappear as 'not for today'" and "when I
+        pick a like and claim setup reason, we should just move onto the next
+        chart". Neither is an annotation about a chart still being read.
+
+        They move on by DIFFERENT routes (R9.2, 2026-08-22). A veto keeps the
+        "Not today" verb, which retires the chart and parks the symbol. A like
+        takes an advance-only route, because parking it was measurably wrong:
+        over 2026-07-24..08-21, 40 of 52 likes put the symbol on the day's
+        ignore list, which also silenced its `d1EventRecorded` - so on an AWAY
+        day, liking a chart quietly dropped that name from the hourly D1 phone
+        push. Liking a setup is the opposite of being done with the symbol.
 
         A NOTE deliberately does not. It is written ABOUT the chart in front
         of the trader, and a rail that skipped to the next one would make
@@ -382,12 +391,12 @@ class AlertChartReview(QWidget):
         route (`_on_veto_day_trade`) and this deliberately ignores it.
         """
         self._refresh_reviewed_badge()
-        if (
-            event_type in (EVENT_VETO, EVENT_LIKE_CLAIM)
-            and self.alert is not None
-            and not self.capture_rail.veto_keeps_chart()
-        ):
+        if self.alert is None:
+            return
+        if event_type == EVENT_VETO and not self.capture_rail.veto_keeps_chart():
             self.removeTodayRequested.emit(self.alert)
+        elif event_type == EVENT_LIKE_CLAIM:
+            self.likeAdvanceRequested.emit(self.alert)
 
     def _on_veto_day_trade(self, _row: dict) -> None:
         """Vetoed the D1, keeping the name for an M5 trade.

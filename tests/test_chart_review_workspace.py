@@ -392,6 +392,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
         panel.open_symbol("NVDA")
         panel._on_d1_level_selected("NVDA", "hv:NVDA:42", "hv_horizontal", 101.5)
         panel.capture_rail.setup_list.setCurrentRow(0)
+        panel.capture_rail.like_note_input.setText("level held")  # R9.2: why required
         row = panel.capture_rail.commit_like()
         self.assertIsNotNone(row)
         self.assertEqual(row["ref_level_id"], "hv:NVDA:42")
@@ -508,6 +509,7 @@ class CaptureRailTests(unittest.TestCase):
         """
         self.rail.setup_list.setCurrentRow(0)
         claimed = self.rail.selected_setup_id()
+        self.rail.like_note_input.setText("level held")  # R9.2: why required
         self.rail.commit_like()
         rows = self._rows()
         self.assertEqual(len(rows), 1)

@@ -254,7 +254,7 @@ written. All three are now decisions, not open questions:
 | Gate | Trader's answer |
 |---|---|
 | Open-burst digest window default | **30 minutes**, the historical proposal unchanged. Settings-tunable via `alert_open_digest_minutes`; **0 disables** the digest entirely |
-| Optional Enter-to-skip reason on a Focus like | **No prompt.** Liking stays one click. The structured vocabulary earns its keep on the dislike side, which R3 just wired; a prompt on every like would tax the cheap action to collect data nothing yet asks a question of |
+| Optional Enter-to-skip reason on a **Focus** like | **No prompt.** Liking stays one click. The structured vocabulary earns its keep on the dislike side, which R3 just wired; a prompt on every like would tax the cheap action to collect data nothing yet asks a question of. **Still true for the Focus like (the ★ verb).** It does NOT extend to the **CaptureRail** LIKE, which §2's line above keeps distinct: the trader reversed that one on 2026-08-22 ("if I like a chart I should always be prompted with why") and its why is now required — R9.2, `docs/CHART_REVIEW_WORKSPACE_PLAN.md` §7 |
 | Is the escalation list exhaustive? | **Yes — those three**: a strictly higher best tier, the first BANGER, the first PROVEN. Conservative by design, and safe because Focus-privileged and trader-armed hits bypass folding entirely under §6.3.2, so nothing the trader armed can be quieted by this |
 
 These answers bind the build. Changing any of them later is a fresh trader

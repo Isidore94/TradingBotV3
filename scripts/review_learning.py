@@ -83,7 +83,13 @@ FORWARD_HORIZONS = (3, 5)
 
 # Episode resolution, strongest first: any positive engagement outranks an
 # explicit rejection, which outranks a soft skip, which outranks silence.
-TAKE_ACTIONS = {"add_focus", "arm_watch", "arm_level"}
+#
+# `like_advance` is the capture rail's LIKE (R9.2, 2026-08-22). Until then a
+# like was routed through the "Not today" verb, so `remove_today` was written
+# and the line below scored it as a rejection: across 2026-07-24..08-21 that is
+# 40 of 52 likes read as their own opposite - the strongest positive signal in
+# the store, counted as a dismissal.
+TAKE_ACTIONS = {"add_focus", "arm_watch", "arm_level", "like_advance"}
 TOGGLE_TAKE_ACTIONS = {"favorite", "toggle_d1_focus", "toggle_m5_focus"}
 REJECT_ACTIONS = {"dislike", "remove_today"}
 

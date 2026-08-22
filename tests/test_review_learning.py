@@ -419,3 +419,27 @@ def test_refresh_reads_partitioned_shards_when_legacy_file_does_not_exist(
     )
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["event_rows"] == 1
+
+
+def test_a_like_advance_is_a_positive_episode_not_a_rejection():
+    """R9.2 (2026-08-22). The capture rail's LIKE used to route through the
+    "Not today" verb, so `remove_today` was written and `REJECT_ACTIONS`
+    counted every like the trader ever filed as a dismissal. Across the
+    2026-07-24..08-21 window that is 40 of 52 like_claim rows scored backwards:
+    the strongest positive signal in the store, read as its opposite.
+    """
+    assert "like_advance" in review_learning.TAKE_ACTIONS
+    assert "like_advance" not in review_learning.REJECT_ACTIONS
+
+    episodes = build_episodes([_row("shown"), _row("like_advance")])
+    assert [e.resolution for e in episodes] == ["take"]
+
+
+def test_a_like_advance_outranks_a_later_queue_clear():
+    """Resolution priority is "any positive engagement outranks an explicit
+    rejection", and a like is positive engagement. A remove_today arriving on
+    the same symbol later in the day must not overturn it."""
+    episodes = build_episodes(
+        [_row("shown"), _row("like_advance"), _row("remove_today")]
+    )
+    assert [e.resolution for e in episodes] == ["take"]

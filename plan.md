@@ -850,7 +850,28 @@ detector's or scorer's output; R9.5 is shadow-only by construction.
    Tests: the 2026-08-20 shape (1,487 → ~400) must refuse; a normal 1,487 → 1,450
    must write; zero and unreadable-prior paths pinned.
 
-2. **R9.2 The LIKE: always ask why, and stop parking the symbol** (trader decisions
+2. **R9.2 The LIKE: always ask why, and stop parking the symbol — BUILT
+   2026-08-22, GREEN; one live gate owed.**
+   *Owed: one desk session in which a LIKE is filed and the symbol is still seen
+   to alert afterwards (and, on an AWAY day, still reaches the hourly D1 push).*
+   Built as specified. (a) `commit_like` refuses an empty or whitespace-only
+   why; the claim key and double-click both route through `_prompt_for_why`,
+   which selects and moves focus rather than committing; placeholder reads
+   "why (required)"; the why is the row's existing `note` — no schema change.
+   (b) `AlertChartReview.likeAdvanceRequested` is a new signal separate from
+   `removeTodayRequested`; `AlertCenterPanel._advance_after_like` records
+   `like_advance` and advances, touching neither `_ignored_symbols`, the
+   symbol's other queued alerts, nor any auto-adopted Focus pick. The veto's
+   retire-and-park path is unchanged. `review_learning.TAKE_ACTIONS` now
+   contains `like_advance`. (c) `SymbolSnapshotDialog` already only advanced and
+   needed no change; it inherits (a) through the shared rail. 13 new tests;
+   four that pinned the superseded one-click/retire rule were rewritten to pin
+   the new one, and `test_a_like_also_retires_the_chart` was deleted outright.
+   Governing spec updated: `docs/CHART_REVIEW_WORKSPACE_PLAN.md` §7, plus the
+   R4 gate row that now names which of the two "likes" it answers for.
+   Suite 4085 passed / 19 subtests, exit 0.
+
+   Original statement (trader decisions
    2026-08-22: *"if I like a chart I should always be prompted with why"*; parking
    removal = option (c) from the review's Q1, authorized as part of this packet).
    Measured first (2026-08-22): 40 of 52 `like_claim` rows retired the chart AND

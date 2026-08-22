@@ -710,6 +710,7 @@ class AlertCenterPanel(QFrame):
         self.chart_review.removeTodayRequested.connect(
             self._remove_review_alert_for_today
         )
+        self.chart_review.likeAdvanceRequested.connect(self._advance_after_like)
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
@@ -2144,6 +2145,36 @@ class AlertCenterPanel(QFrame):
             self.statusChanged.emit(
                 f"Skipped {alert.symbol} for now; its feed item remains available."
             )
+        self._advance_review_queue()
+
+    def _advance_after_like(self, alert: BounceAlert) -> None:
+        """A LIKE moves to the next chart and does nothing else (R9.2).
+
+        Everything this function deliberately does NOT do was previously done
+        to every liked symbol, because a like was routed through
+        ``_remove_review_alert_for_today``: it does not touch
+        ``_ignored_symbols``, so the name keeps alerting and keeps reaching the
+        hourly D1 phone push; it does not drop an auto-adopted Focus pick; it
+        does not sweep the symbol's other queued alerts. It also does not
+        place anything - the capture rail is analysis-only and the explicit
+        Focus verb remains the one thing that places.
+
+        What it does record is ``like_advance``, which
+        ``review_learning.TAKE_ACTIONS`` reads as positive engagement. The old
+        route wrote ``remove_today``, and ``REJECT_ACTIONS`` scored 40 of the
+        window's 52 likes as dismissals.
+        """
+        if alert is None or not alert.symbol:
+            return
+        self._record_review_event(
+            "like_advance",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+        )
+        self.statusChanged.emit(
+            f"♥ {alert.symbol}: liked and claimed; it keeps alerting as normal."
+        )
         self._advance_review_queue()
 
     def _add_review_alert_to_focus(self, alert: BounceAlert) -> None:
