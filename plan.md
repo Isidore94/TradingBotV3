@@ -1061,6 +1061,197 @@ keep alerting; DRAM reaching (or being honestly absent from) the theta report
 labelled `via thetalongs.txt`; and R9.5's shadow log growing over real sessions
 toward its declared 40.
 
+### Phase 0.7 — R10: Evidence Plane program (authorized 2026-08-22)
+
+Source: the trader's 2026-08-22 evidence-quality brief (Fable synthesis v2 after
+Sol's review). A **packetized** program, not blanket permission to modify the
+named subsystems. The architectural objective is an immutable, point-in-time
+**evidence plane**: capture facts once; record provenance, completeness and
+uncertainty; derive replaceable views and reports; never let evidence collection
+influence a live decision path.
+
+**Ground rules (they bind every packet).**
+
+1. No behavior change to any detector, scorer, gate, alert, watchlist, Focus
+   store or `review_policy.json`. Golden fixtures run before and after each
+   packet and must be byte-identical. A packet that cannot be built without
+   touching such logic **stops and says so in the checkpoint**.
+2. Ask-first: authorization covers evidence / provenance / presentation edits to
+   the files each packet names — including `bounce_bot_lib/legacy.py` and
+   `master_avwap_lib/legacy.py`. Any other file, or any non-evidence edit, is
+   asked about first.
+3. Every alleged defect is classified **PROVEN / REFUTED / UNKNOWN by
+   reproduction** before its fix is designed.
+4. Every new or changed store needs a writer/reader inventory (repo **and**
+   warehouse ingestion), backward-compat plan, migration/canary, rollback,
+   growth estimate, retention/segmentation, cold-push scope, health surface.
+5. **Never rewrite history.** Append-only authorities with a schema NAME
+   (`intraday_outcome_event_v1`, never "v2"); corrections are superseding
+   events; known-bad legacy rows are tagged by a versioned reader-side rule
+   registry (`evidence_rules.py`), never edited.
+6. Missing data is uncertainty: `unresolved` with a reason, counted in every
+   rollup beside n. **No path may write a number it did not measure.**
+7. Completed bars only; `astimezone`, never `replace(tzinfo=None)`. New
+   timestamps are tz-aware **UTC plus an explicit market-session identity**
+   (`session_date`, exchange calendar including holidays and early closes).
+8. One owner per timer/thread/store. Evidence maintenance is **not** gated on
+   `auto_scanning_due` — that gate stops market activity and this is after-close
+   recovery. It IS gated on zero IB traffic, cached/yfinance only, worker
+   thread, idle cost.
+9. Nothing expensive on the Qt thread.
+10. Statistics on every evidence-facing summary: event / symbol / session
+    counts; unresolved and excluded by reason; raw mean, median, trimmed mean
+    (10%), p10/p90; PF with its all-win/all-loss convention stated; stop rate;
+    concentration by symbol and session; raw and robust side by side; a
+    session-block bootstrap interval; and a `discovery` vs `confirmation`
+    label. **n ≥ 30 events is necessary, not sufficient.** The R clip is the
+    existing **4R** where a view feeds ranking; the evidence report shows
+    uncapped, 4R-clipped and trimmed together.
+11. "No bare means" scopes to **evidence-facing** surfaces only (Daytrade
+    Tracker, Setup Tracker and Focus Picks summaries, cohort performance CSVs,
+    `setup_scoreboard.py`, the `review_learning` report). Existing scoring and
+    promotion math is untouched.
+12. **"Realizable R" is not a term this repo uses.** MFE/MAE are opportunity;
+    each frozen exit policy is reported on its own; the best-of-policies number
+    is labelled `oracle_best_ex_post_r` and is an upper bound, never a result.
+
+**Trader decisions carried into the packets** (defaults; overridable in writing):
+M5 Focus expiry stays as built (all M5 picks expire on the day roll, swing never
+auto-removed — a survivor is a defect to diagnose, not a policy to design);
+RVOL ≥ 1.2 lines are a Market-Journal-page overlay only, from the six symbols'
+own daily bars, with the canonical D1 level store untouched; free-text journal
+entries reach an AI scope **opt-in only**; a `launch_gui.py` single-instance
+guard is authorized **only if** R10.0 proves concurrent instances; nightly and
+derived reports live in a runtime report store with atomic last-good, while
+`docs/analysis/` receives only deliberately frozen hand-committed audits.
+
+**Commitments this program must not disturb.** R9.3's `setup_scoreboard.py` §5
+declares a frozen forward window of 40 sessions. R10 must not alter it,
+re-declare it, or measure it early; R10.C **extends that script** and prints the
+declared window unchanged, stating that it did not measure it. R10 creates no
+second scoreboard.
+
+1. **R10.0 Read-only evidence audit — no code changes bar one.** Deliverable is
+   a decision register: `docs/analysis/EVIDENCE_AUDIT_2026-08-22.md`, classified
+   in `docs/README.md`, plus a checkpoint entry. Reproduce and classify every
+   alleged defect (D1–D8 intraday outcomes, S1–S5 D1 tracker, F1–F6 Focus,
+   C1–C4 capture/context) with the reproduction command and its numbers; for D1
+   specifically establish **process lifetimes**, not start marks, and say
+   whether two desks were alive at the same instant. Inventory every store the
+   program will touch (writers, readers, timers, threads, schema + version,
+   size, growth, downstream consumers including warehouse ingestion and cold
+   push). Produce the **canonical data dictionary and family-namespace map**
+   (the review's P13, now a prerequisite). Decide and write down: the authority
+   between `bouncers.txt` and the outcome ledger; the exchange-session calendar
+   source; the intrabar stop/target collision rule (predeclared conservative:
+   stop first, ambiguous count reported); cost and slippage assumptions for
+   simulated exits; the H1 legacy timestamp classification **by evidence**; and
+   one written risk-floor definition reconciling R9.3's 0.1%-of-entry floor with
+   the two existing 4R clips. Growth/retention contract per new store.
+   **One code change is authorized here:** make `journal_import`'s nightly
+   failure observable (non-empty `error`, traceback in the ledger row); its
+   cause is reported, not fixed. **Stop after this packet and hand off** — the
+   trader accepts the register before R10.A.
+2. **R10.A P0 runtime and outcome integrity** (D1 if proven, D2, D3, D4, D7, D8).
+   New append-only authority `intraday_outcome_events.jsonl`
+   (`intraday_outcome_event_v1`, month-segmented); the pending dict becomes a
+   reconstructable checkpoint, never the authority. One owner, one transaction:
+   the BounceBot outcome worker owns every state transition and the Qt service
+   may only *request* work. Bounded dual-write canary against the legacy CSV
+   (no header widening — new fields go in `context_json`). **No fabricated
+   values**: no session rows → `unresolved / no_bars_after_entry` with blank
+   numerics; a stop-hit trade finalizes at its stop, never at the entry.
+   Idempotent finalization shared by the after-close pass and the launch
+   catch-up, expiring after 3 sessions without data, writing a coverage manifest
+   to the ledger and the System Health tile. Registration events carry tier,
+   family, engine version, day-part, RVOL, env_key, risk as % of price and ATR
+   multiple, and the regime-pause/adoption-gate verdicts where computed.
+   Single-instance guard only per the R10.0 verdict.
+3. **R10.B Outcome semantics** (D5, D6, and the EAT/CAKE ask). Typed registry
+   keyed by family with a `claim_kind` — `entry_claim`, `annotation`,
+   `information`, `unconfigured`. **Unknown families are `unconfigured`:
+   counted loudly in the coverage manifest and the health tile, never given a
+   manufactured trade.** Real signal bars for LRSI and ORB entry claims (the
+   synthetic flat bar never reaches the ledger). H1 forward `entry_time` = bar
+   close; legacy rows classified per R10.0's evidence rule. Path capture on
+   every entry claim (MFE/MAE at 1/3/6/12/24/36/EOD bars, first-touch stamps,
+   giveback, compact excursion path) so future exit models simulate offline
+   with no refetch. Frozen exit policies reported each on its own —
+   `eod_hold`, `trail_2bar_after_1r`, `vwap_close_after_1r`, `atr_1p5_trail` —
+   plus `oracle_best_ex_post_r` as a labelled upper bound. Fixture: frozen EAT
+   and CAKE M5 bars; the test asserts the honest calculation, not a desired sign.
+4. **R10.C Robust deterministic evidence report** (extends R9.3; C4). New
+   `scripts/evidence_stats.py` implementing ground rule 10 exactly, used by
+   every surface in ground rule 11. `setup_scoreboard.py` gains the ledger as
+   input, the new axes, the frozen exit policies side by side, and a
+   machine-readable bundle beside the Markdown. Its first section re-measures
+   the four trader-named findings under the new discipline and says plainly
+   whether each survives. Output to the runtime report store with atomic
+   last-good; `--freeze` copies a dated audit into `docs/analysis/`.
+5. **R10.D D1 setup tracker: point-in-time transition ledger** (S1–S4).
+   `setup_tracker_events.jsonl` (`setup_tracker_event_v1`, month-segmented)
+   appended after every tracker run — `initial`, `transition`, `reopened`,
+   `tombstone` — diffed via a small per-setup digest sidecar and **never by
+   deep-copying the 960 MB payload**. Completed sessions only: no mark dated
+   later than the run's `data_session`. `tier_outcomes` horizons in exchange
+   sessions with `sessions_spanned` and a `stale_horizon` flag, and SPY-relative
+   columns populated from cached daily bars (no IB).
+6. **R10.E Focus provenance** (F1–F6). `focus_membership_events.jsonl`
+   (`focus_membership_event_v1`) emitted by the one Focus writer, with a
+   `membership_episode_id` and an owner of `trader` | `machine` |
+   `unknown_legacy`; `expire_m5_if_new_day` emits `expired` per name it clears,
+   so a survivor is a test failure **and** a visible gap. Enrichment is an
+   asynchronous `enriched` revision from the worker and never blocks the Focus
+   write or the Qt thread. Pick key includes category. Snapshots stamp the
+   session observed and grade from the next completed session; a missed
+   snapshot writes an explicit `observation_gap` row — membership is never
+   reconstructed from current state. Outcome rows carry `days_on_list` and an
+   age bucket; the rollup adds origin and age via `evidence_stats`.
+7. **R10.F LIKE cohort grading** (C1, C3). `like_cohort_{picks,outcomes,performance}.csv`
+   mirroring the veto trio; a deterministic `like_cohort_grading` slot
+   **appended** after `veto_cohort_grading` (later phases append, never
+   reorder). Stamps carry UTC + `session_date`, which makes the ET/PT mismatch
+   moot.
+8. **R10.G Market context ledger, auto-shift rows, calendar** (C2, season).
+   Every auto-regime shift becomes a row. `daily_market_context.jsonl`
+   (`daily_market_context_v1`), one row per session at close+grace, completed at
+   next launch if missed with a `completed_late` flag and **never fabricated**.
+   `config/market_calendar.json` multi-year capable, with a visible **degraded**
+   state when the active year is not covered.
+9. **R10.H Market Journal: store and two surfaces.** `market_journal.jsonl`
+   (`market_journal_entry_v1`) behind one writer/service used by both surfaces:
+   a "Journal" tab on the Trading Desk after "Capture" (M5 default in-session,
+   Ctrl+Enter commits) and a left-nav "Market Journal" page (six D1 charts
+   through the existing `ChartDataService` worker, the journal-only RVOL ≥ 1.2
+   overlay, entries, an environment timeline with the auto-vs-manual agreement
+   rate, the calendar strip, and the day-context table). The existing "Journal"
+   page remains the trade/tax journal; the label difference is deliberate.
+10. **R10.I Scheduled report slot and opt-in AI scope**, after two weeks of
+    R10.A collection. An `evidence_report` slot appended to the runner
+    (deterministic, no model) and an opt-in `market_journal` scope absent from
+    `DEFAULT_SCOPES`. Nothing in this chain may reach a detector, score, alert,
+    watchlist, Focus, the review queue or `review_policy.json`.
+
+**Order (trader, 2026-08-22).** R9.4 first, then R10.0 in parallel; **R10.A
+starts only after the trader accepts R10.0's decision register**; R9.5 after
+R10.A. *Deviation on record:* R9.4 and R9.5 both landed on 2026-08-22 before
+this program was registered (`36abb14`, `ba931a5`), so R9.5 did **not** adopt
+conventions set by R10.A. Its store
+(`diagnostics/shadow_evidence/sector_cohort/sector_cohort_shadow.jsonl`,
+`sector_cohort_shadow_v1`) is append-only with a schema name, a `config_hash`
+and a per-run coverage row, which is consistent with this program's rules but
+was not derived from them. R10.0 inventories it with the other stores and names
+any reconciliation R10.A should make.
+
+Gates: a **mechanics canary** — one live session per packet that touches a live
+writer (R10.A, R10.B, R10.E, R10.G, R10.H), with that packet's manifest or rows
+visible on the desk. An **evidence-quality gate** — two weeks of R10.A/B
+collection before any evidence-quality claim. Promotion and demotion remain with
+Section 7 and R9.3's declared window; nothing in R10 promotes anything. Frozen
+exe triggers (new runtime asset, new page, new top-level module) require a
+rebuild plus `dist\TradingBotV3\TradingBotV3.exe --selftest`, with commit time
+and exe mtime recorded side by side in the checkpoint.
+
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
 1. **P1.1 Make the test suite hermetic.** Stop Qt app tests from starting live

@@ -8,6 +8,32 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R10 REGISTERED: Phase 0.7, the Evidence Plane program
+
+**Branch `phase05-integration-blitz`.** Docs only. The trader authorized a
+packetized evidence-quality program (Fable synthesis v2 after Sol's review); it
+is now `plan.md` §12 **Phase 0.7 — R10**, ten packets R10.0…R10.I with their
+ground rules, trader decisions and gates.
+
+**Correction to the brief's stated state.** It was written against HEAD
+`22154dd` and says R9.4 and R9.5 "remain queued and authorized". Both had
+already landed — `36abb14` (R9.4) and `ba931a5` (R9.5), both pushed. The
+consequence for R10's ordering is on record in the phase text: the brief
+sequences R9.5 *after* R10.A "using the evidence-plane conventions R10.A sets",
+and R9.5 in fact shipped before this program was registered. Its store
+(`diagnostics/shadow_evidence/sector_cohort/sector_cohort_shadow.jsonl`,
+`sector_cohort_shadow_v1`) is append-only with a schema name, a `config_hash`
+and a per-run coverage row — consistent with the program's rules but not derived
+from them. R10.0 inventories it with the other stores and names any
+reconciliation R10.A should make.
+
+**Immediate next action:** R10.0, the read-only evidence audit. It is the one
+packet that changes no behavior (bar the single authorized `journal_import`
+observability fix), and the program **stops after it** for the trader to accept
+its decision register before R10.A begins.
+
+---
+
 ## 2026-08-22 - R9.5 LANDED: the R9 packet is code-complete
 
 **Branch `phase05-integration-blitz`.** Fifth and last item. `sector_cohort_divergence`

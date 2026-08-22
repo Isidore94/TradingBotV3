@@ -21,6 +21,18 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 - R10 registered as plan.md Phase 0.7 (Evidence Plane program)
+
+Roadmap only; no runtime file changed. Ten packets R10.0-R10.I with their ground
+rules (append-only authorities with schema NAMES, never rewritten history;
+unresolved-with-a-reason instead of fabricated numbers; UTC plus an explicit
+session identity; one owner per store; evidence-facing statistics that report
+counts, robust and raw side by side, concentration and a discovery/confirmation
+label), the trader decisions that scope them, and their canary and
+evidence-quality gates. Nothing in R10 promotes anything, and R9.3'''s declared
+40-session window is a commitment R10 must not alter, re-declare or measure
+early.
+
 ### 2026-08-22 - R9.5: `sector_cohort_divergence`, at SHADOW and stopping there
 
 `IMPLEMENTED` + `GREEN` + `SHADOW`. It has no production authority and is not
