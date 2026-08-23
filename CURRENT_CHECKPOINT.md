@@ -8,6 +8,34 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - what flipping the sweep switch would actually do (measured, read-only)
+
+**Branch `phase05-integration-blitz`, HEAD `7b2ed18`.** Taken against the live
+checkpoint and the live outcome CSV without writing anything, so the trader can
+decide on numbers rather than on a description.
+
+| | |
+|---|---|
+| pending entries in the checkpoint | **576** |
+| ...carrying `last_measured` | **0** - every one predates the field, exactly as the review said |
+| recoverable from their own CSV milestone rows | **560** (550 from `12_bar`, 6 from `6_bar`, 3 from `3_bar`, 1 from `1_bar`) |
+| ...of those, **stop-outs** | **271** |
+| not recoverable -> `no_measurement_in_checkpoint` | **16** |
+| backlog by trade month | 2026-06: **17**, 2026-07: **27**, 2026-08: **532** |
+
+**Without MAJOR-2's recovery all 576 would have finalized as having seen no
+bars**, including those 271 stop-outs. With it, 560 finalize on their own
+measured rows and 16 say plainly that the checkpoint has nothing to measure.
+
+The 17 June entries are the ones the audit found (oldest 2026-06-22), still
+sitting there - the sweep is what removes them, and it is off until the trader
+flips it.
+
+**Nothing was written by this measurement**: `finalized` memory is still empty
+and all 576 are still pending.
+
+---
+
 ## 2026-08-23 - review round 1, part 2: the R10.A blockers are fixed
 
 **Branch `phase05-integration-blitz`.** BLOCKER-1, MAJOR-2 through MAJOR-7 and
