@@ -43,7 +43,7 @@ Neighbouring schedule, for the record: snapshot 20:30 → cold push 21:05 (hourl
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
 
 **Owed:** confirm the first *scheduled* run (2026-08-23 20:30) writes to
-`\MINI-PC\Trading Bot Dataackups6-08-23\` with a byte count — today's
+`\\MINI-PC\Trading Bot Data\backups\2026-08-23\` with a byte count — today's
 canary was hand-run.
 
 ---
