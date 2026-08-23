@@ -1,6 +1,6 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-21** from the working copy of
+Last reconciled: **2026-08-22** from the working copy of
 `phase05-integration-blitz` (cut from `testing-week-2026-08-17`, which carries
 testing-week + R1 + R1.1 + R2 + R3 + R4 + R5 + R6 + R7 + R8, with the four later
 `phase05-r2-focus-gating-strength-board` commits merged in on 2026-08-18)
@@ -20,6 +20,61 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-22 (night) - the daily-bar unit problem gets a pin and a name
+
+- **`daily_bars_source` pins the durable daily-bar store to one source.**
+  `"yahoo"` pins; an absent key or anything else - including a typo - resolves to
+  `"auto"`, which is exactly the previous behaviour. Read at
+  `_fetch_live_daily_bars` (`master_avwap_lib/legacy.py`), the same seam as the
+  IB failure circuit and **independent of it**: `_IBKR_HISTORICAL_YAHOO_ONLY` is
+  a state repeated failures flip and each scan clears, this is a preference, and
+  either alone routes daily bars to Yahoo. Announced once per scan, not once per
+  symbol. **Intraday is deliberately not pinned.** Set on the desk. The 482
+  fixture/AVWAP/tracker tests were run to show the golden fixtures do not move.
+- **Why a pin and not a rescale.** IB returns regular-session volume in round
+  lots (`whatToShow="TRADES"`, `useRTH=1`); Yahoo returns the consolidated
+  session in shares. The measured ratio is symbol-dependent - SPY 1.0x, TSLA
+  56x, AAPL 81x, A 162x, NVDA 188x - so a constant would make the store
+  consistently wrong instead of visibly wrong. The trader chose **C-prime**:
+  provenance first, a Yahoo-only durable store for volume second, refetch third.
+- **`scripts/evidence_rules.py` is the reader-side rule registry** (R10 ground
+  rule 5): history is never rewritten, so known-bad rows are TAGGED by a
+  versioned rule name that is never edited in place. It reads and never writes,
+  and it reaches no detector, score, gate, alert or Focus decision.
+- **`daily_volume_mixed_v1` is its first rule.** A session is `mixed` if any run
+  manifest that day reported a non-`yahoo` `provider.daily_bars.success.*`
+  count, `shares` if all of them reported Yahoo, and `unknown` otherwise -
+  derived from evidence the scans already wrote about themselves rather than a
+  hard-coded date list. **`mixed` dominates** (one IB run contaminates the
+  session, including 2026-08-20 where two desks ran concurrently and only one
+  used IB) and **`unknown` beats `shares`** (a manifest we cannot read may have
+  been the IB one). Measured on the live tree: **13 of 15 manifest-covered
+  sessions are mixed**, back to 2026-07-31; only 08-03 and 08-17 are clean. That
+  is wider than the two runs the trader named, which is the point of deriving it.
+- **The rule states its own limit.** Manifests are pruned to 90 runs, so
+  everything older reads `unknown` and reads `unknown` increasingly as time
+  passes; `freeze_verdicts()` is how a rollup that must stay reproducible files
+  what its numbers relied on. No rollup is wired to the tag yet, on purpose: the
+  defect is confined to the **volume** column, so it moves volume-weighted AVWAP
+  levels and not price-only readers, and the one existing rollup reads a store
+  it has not been shown to touch. R10.A and R10.V build the consumers.
+- **System Health names it.** The `daily_bar_source` tile reports the pin -
+  healthy when pinned, **unknown** (not degraded) under the shipped `auto`
+  default, because with `auto` the setting genuinely cannot say what a given
+  scan wrote - and appends the manifest-derived history. History never sets the
+  status: the pin governs what happens next, and a past that cannot be changed
+  must not raise a permanent alarm.
+- **The two 2026-08-22 evening reports are amended**, superseding their own
+  numbers where Fable's field-level re-run beat them: the marks are stable
+  (26,087 float32-to-float64 round-trips; 95% of the rest at or under 1.1 cents;
+  genuine restatement 361 field-diffs on 136 symbol-dates), what moved is the
+  **levels**, and the mechanism is a **splice** at 2026-07-29 (median x0.0088
+  across 1,179 of 1,236 rewritten files). Stops did not move at all - 0 of 9,331
+  stored anchor entries and stop references - because they are written at scan
+  time and never replayed. A uniform rescale could not have done this: AVWAP is
+  a volume-weighted ratio and scaling every weight cancels. Only a splice moves
+  it, which is why the fix refuses IB volume rather than converting it.
 
 ### 2026-08-22 (evening) - the evidence snapshot is scheduled and stops duplicating itself
 

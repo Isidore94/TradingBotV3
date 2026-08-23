@@ -8,6 +8,66 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 night - R10.0b small items 2 and 3: the amendments, and the rule registry
+
+**Branch `phase05-integration-blitz`.** §3 of the decision release, items 2 and 3.
+
+**The two reports now supersede their own numbers.** My Amendment 2e said "1,309
+differ, only 5 materially" - measured on same-dated historical closes only, which
+undercounted. Fable's field-level re-run over 60,519 mark-days replaces it: 26,087
+float32-to-float64 round-trips, 7,104 of the remaining 7,465 at or under 1.1 cents
+(sub-penny prints and one-cent vendor disagreement about an extreme), genuine
+restatement **361 field-diffs = 136 symbol-dates on 113 symbols, max 1.9%**, and
+the ten largest close moves are SCCO at exactly x0.98814 - a dividend.
+
+**S1 now names its mechanism.** "History rewritten" reads **targets rewritten by
+re-weighted levels; stops and closes stable**. The 08-21 07:0x run spliced IB
+round-lot volume onto Yahoo share history at 2026-07-29 (median x0.0088 in 1,179
+of 1,236 rewritten files), so every AVWAP anchored before the splice froze near
+its 07-28 value; 30,003 of 60,519 mark-days carry different levels, and **0 of
+9,331** stored anchor entries and stop references moved, because those are written
+at scan time and never replayed. The stop stayed put while the replayed target
+moved beneath it. A uniform rescale could not do this - AVWAP is a volume-weighted
+ratio, so scaling every weight cancels - which is the argument for R10.V refusing
+IB volume rather than converting it. Both reports also now carry the trader's
+answers beside the questions that asked for them.
+
+**`scripts/evidence_rules.py` exists** (R10 ground rule 5): a reader-side registry
+that tags known-bad rows by a versioned name instead of editing them. It reads and
+never writes, and reaches no detector, score, gate, alert or Focus decision.
+
+**`daily_volume_mixed_v1` is derived, not declared.** A session is `mixed` if any
+run manifest that day reported a non-`yahoo` `provider.daily_bars.success.*`,
+`shares` if all reported Yahoo, `unknown` otherwise. `mixed` dominates - one IB
+run contaminates the session, which is exactly 2026-08-20, where two desks ran
+concurrently and only one used IB - and `unknown` beats `shares`, because a
+manifest we cannot read may have been the IB one.
+
+**The result is wider than the two runs the trader named, and that is the point of
+deriving it: 13 of 15 manifest-covered sessions are mixed**, back to 2026-07-31
+(the edge of the 90-run retention); only 08-03 and 08-17 are clean, and everything
+older reads `unknown` - and will read `unknown` increasingly as manifests prune.
+`freeze_verdicts()` is how a rollup that must stay reproducible files what its
+numbers relied on.
+
+**No rollup is wired to the tag yet, deliberately.** The defect is confined to the
+**volume** column, so it moves volume-weighted AVWAP levels and leaves price-only
+readers alone - the veto-cohort grader reads the same parquet store and is not
+affected. The one existing evidence rollup (`setup_scoreboard.py`) reads BounceBot
+intraday outcomes, a store this has not been shown to touch, so tagging it would
+assert an influence I have not proven. R10.A and R10.V build the real consumers.
+
+**System Health** appends the manifest-derived history to the `daily_bar_source`
+tile. History never sets the status: the pin governs what happens next, and a past
+that cannot be changed must not raise a permanent alarm.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4205 passed / 19 subtests**, exit **0** (was 4182; +23) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+---
+
 ## 2026-08-22 night - R10.0b §1.3: daily bars pinned to Yahoo (interim)
 
 **Branch `phase05-integration-blitz`.** The one live-path line the trader

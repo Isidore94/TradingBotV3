@@ -2146,7 +2146,42 @@ def _required_inventory_view(checks: list[dict[str, Any]]) -> list[dict[str, Any
     return rows
 
 
-def _daily_bar_source_check(now: datetime, local_tz) -> dict[str, Any]:
+def _daily_bar_history_note(manifest_dir: Path | None) -> tuple[str, dict[str, Any]]:
+    """What the run manifests say the store already contains (R10.0b).
+
+    Read-only context, never a status: the pin governs what happens NEXT, and a
+    history that cannot be changed must not raise a permanent alarm. The verdict
+    per session comes from `evidence_rules.daily_volume_mixed_v1`, which reads
+    the manifests' own provider counters; sessions outside the 90-run manifest
+    window read `unknown`, not clean.
+    """
+    if manifest_dir is None:
+        return "", {}
+    try:
+        import evidence_rules
+
+        verdicts = evidence_rules.daily_volume_session_verdicts(manifest_dir)
+    except Exception:  # pragma: no cover - health must never take the audit down
+        logging.exception("daily-bar unit history unavailable")
+        return "", {}
+    if not verdicts:
+        return "", {"history": "no readable run manifests"}
+    mixed = sum(1 for verdict in verdicts.values() if verdict == evidence_rules.VERDICT_MIXED)
+    note = (
+        f" History: {mixed} of {len(verdicts)} manifest-covered sessions carry IB "
+        f"round-lot volume (`{evidence_rules.RULE_DAILY_VOLUME_MIXED}`); earlier "
+        "sessions are unmeasured, not clean. R10.V repairs the store."
+    )
+    return note, {
+        "sessions_covered": len(verdicts),
+        "sessions_mixed": mixed,
+        "rule": evidence_rules.RULE_DAILY_VOLUME_MIXED,
+    }
+
+
+def _daily_bar_source_check(
+    now: datetime, local_tz, manifest_dir: Path | None = None
+) -> dict[str, Any]:
     """Which source the durable daily-bar store is taking volume from (R10.0b).
 
     The store is mixed: IB returns regular-session volume in round lots while
@@ -2168,14 +2203,16 @@ def _daily_bar_source_check(now: datetime, local_tz) -> dict[str, Any]:
             "daily_bar_source", "Daily bar source", STATUS_UNKNOWN,
             "The daily-bar source pin could not be read.", source=Path(__file__),
         )
+    history_note, history_details = _daily_bar_history_note(manifest_dir)
+    details = {"pin": pin, "setting": DAILY_BARS_SOURCE_SETTING,
+               "settings_file": str(LOCAL_SETTINGS_FILE), **history_details}
     if pin == "yahoo":
         return _check(
             "daily_bar_source", "Daily bar source", STATUS_HEALTHY,
             "Pinned to yahoo: the durable store takes share-denominated volume from one "
-            "source and spends no IB budget on daily bars.",
+            "source and spends no IB budget on daily bars." + history_note,
             source=Path(__file__),
-            details={"pin": pin, "setting": DAILY_BARS_SOURCE_SETTING,
-                     "settings_file": str(LOCAL_SETTINGS_FILE)},
+            details=details,
         )
     return _check(
         "daily_bar_source", "Daily bar source", STATUS_UNKNOWN,
@@ -2183,10 +2220,9 @@ def _daily_bar_source_check(now: datetime, local_tz) -> dict[str, Any]:
         "share volume into the durable store depends on IB availability that run, so "
         "this cannot be answered from the setting alone - the run manifests carry it. "
         f'Set {DAILY_BARS_SOURCE_SETTING}="yahoo" to make it answerable until the '
-        "cliff packet lands.",
+        "cliff packet lands." + history_note,
         source=Path(__file__),
-        details={"pin": pin, "setting": DAILY_BARS_SOURCE_SETTING,
-                 "settings_file": str(LOCAL_SETTINGS_FILE)},
+        details=details,
     )
 
 
@@ -2377,7 +2413,7 @@ def build_operations_audit(
         _process_check(moment, market_phase, process_snapshot),
         _universe_check(universe_files, market_probe, market_date, moment, local_tz),
         _disk_check(diagnostics, moment),
-        _daily_bar_source_check(moment, local_tz),
+        _daily_bar_source_check(moment, local_tz, diagnostics / "run_manifests"),
         _evidence_snapshot_check(
             moment, local_tz, staging=diagnostics.parent / "machine_cache" / "evidence_snapshots"
         ),
