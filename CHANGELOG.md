@@ -25,7 +25,7 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 - **`scripts/evidence_ledger.py`** - `EvidenceLedger`, month-segmented JSONL,
   with `intraday_outcome_ledger()` writing `intraday_outcome_event_v1` into
-  `datauntime\evidence_ledgers` (the directory the cold push already covers;
+  `data\runtime\evidence_ledgers` (the directory the cold push already covers;
   a test asserts the two agree).
 - **A caller cannot overwrite the ledger's own fields.** Schema name,
   `event_at`, `session_date` and writer identity are applied last: a row that

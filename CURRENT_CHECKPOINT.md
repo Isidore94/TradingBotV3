@@ -14,7 +14,7 @@ This file is the frequently refreshed active-work, branch, and verification stam
 can be tested on its own, and the wiring is the part that touches a live writer.
 
 `scripts/evidence_ledger.py` writes `intraday_outcome_event_v1` into
-`datauntime\evidence_ledgers`, month-segmented. The properties that make it an
+`data\runtime\evidence_ledgers`, month-segmented. The properties that make it an
 authority rather than a log:
 
 - **A caller cannot overwrite the ledger's own fields** - schema, `event_at`,
