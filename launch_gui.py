@@ -92,11 +92,30 @@ def main() -> int:
         return run_scan_worker(payload)
 
     _enable_crash_log()
+    # R10.A / Sol blocker 3: one desk per machine. `launch_gui_auto.ps1` already
+    # refuses a second one, but only on that path - a double-click, a shortcut,
+    # a terminal, a second scheduled task and the frozen exe all arrive here
+    # instead. R10.0 measured concurrent desks: pid 31848 overlapped three
+    # others on 2026-08-20, the worst by 3.8 hours.
+    #
+    # Defence in depth, not the transaction: the outcome finalizer fences itself
+    # and stays correct with two desks running, because this guard can be
+    # overridden and a second process can always be started another way.
+    from single_instance import OVERRIDE_FLAG, AnotherDeskIsRunning, desk_slot
+
     # This is the Qt desk's real entrypoint, not a hop through scripts/gui.py.
     # The latter remains only for legacy ``--ui tk`` compatibility.
     from ui import app
 
-    return int(app.main(argv) or 0)
+    try:
+        with desk_slot(allow_second=OVERRIDE_FLAG in argv) as protection:
+            print(f"TradingBotV3 desk: {protection}")
+            return int(app.main([arg for arg in argv if arg != OVERRIDE_FLAG]) or 0)
+    except AnotherDeskIsRunning as exc:
+        # Exit 0, like the PowerShell launcher: "already running" is a normal
+        # outcome of double-clicking twice, not a failure to report.
+        print(str(exc))
+        return 0
 
 
 if __name__ == "__main__":

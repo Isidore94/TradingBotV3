@@ -37,12 +37,43 @@ AFTER_CLOSE = datetime(2026, 8, 21, 14, 30)
 MUCH_LATER = datetime(2026, 8, 27, 14, 30)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_stores():
+    """Never leave the module pointed at another test's files - or the desk's."""
+    import bounce_bot_lib.legacy as legacy
+
+    checkpoint = legacy.INTRADAY_BOUNCE_OUTCOME_STATE_JSON
+    csv_path = legacy.INTRADAY_BOUNCE_OUTCOMES_CSV
+    try:
+        yield
+    finally:
+        legacy.INTRADAY_BOUNCE_OUTCOME_STATE_JSON = checkpoint
+        legacy.INTRADAY_BOUNCE_OUTCOMES_CSV = csv_path
+
+
 class _Sweeper:
     """A minimal host for the sweep and the one row writer it calls."""
 
 
+def _seed(host, pending: dict) -> None:
+    """Put the trades in memory AND on disk.
+
+    The finalization transaction re-reads the checkpoint from disk inside its
+    lock - in-memory state is not authoritative, which is the whole point of
+    Sol's two-process finding - so a test that only sets the dict is testing a
+    machine whose disk says the trade was never registered.
+    """
+    host.pending_bounce_outcomes = dict(pending)
+    host._save_pending_bounce_outcomes()
+
+
 def _host(tmp_path):
+    import bounce_bot_lib.legacy as legacy
     from bounce_bot_lib.legacy import BounceBot
+
+    # Each test gets its own stores. Never the desk's.
+    legacy.INTRADAY_BOUNCE_OUTCOME_STATE_JSON = tmp_path / "state.json"
+    legacy.INTRADAY_BOUNCE_OUTCOMES_CSV = tmp_path / "outcomes.csv"
 
     host = _Sweeper.__new__(_Sweeper)
     host.rows = []
@@ -50,11 +81,25 @@ def _host(tmp_path):
     host.saves = 0
     host.pending_bounce_outcomes = {}
     host._finalized_outcome_memory = {}
+    host._finalizing_outcome_marks = {}
+    host.OUTCOME_LOCK_TIMEOUT_SECONDS = BounceBot.OUTCOME_LOCK_TIMEOUT_SECONDS
     host.PENDING_EXPIRY_SESSIONS = BounceBot.PENDING_EXPIRY_SESSIONS
     host.FINALIZED_MEMORY = BounceBot.FINALIZED_MEMORY
     host._append_learning_row = lambda path, fieldnames, row: host.rows.append(dict(row))
     host._mirror_outcome_row_to_ledger = lambda row, state: None
-    host._save_pending_bounce_outcomes = lambda: setattr(host, "saves", host.saves + 1)
+    real_save = BounceBot._save_pending_bounce_outcomes.__get__(host, _Sweeper)
+
+    def counted_save():
+        host.saves += 1
+        return real_save()
+
+    host._save_pending_bounce_outcomes = counted_save
+    host._save_pending_bounce_outcomes_locked = (
+        BounceBot._save_pending_bounce_outcomes_locked.__get__(host, _Sweeper)
+    )
+    host._load_pending_bounce_outcomes = (
+        BounceBot._load_pending_bounce_outcomes.__get__(host, _Sweeper)
+    )
     host._write_outcome_coverage = lambda counts: host.coverage.append(counts)
     host.SWEEP_AFTER_SCAN_WINDOW_MINUTES = BounceBot.SWEEP_AFTER_SCAN_WINDOW_MINUTES
     host.OUTCOME_BAR_MINUTES = BounceBot.OUTCOME_BAR_MINUTES
@@ -70,6 +115,9 @@ def _host(tmp_path):
         "_finalized_outcome_ids", "_remember_finalized_outcome",
         "_sweep_window_is_open", "_recover_measurements_from_csv", "_exit_facts",
         "_completed_session_rows", "_rows_after_bounce_entry_for_session",
+        "actual_session_close", "_final_event_ids_in_csv", "_read_checkpoint_from_disk",
+        "_commit_checkpoint", "_outcome_transaction", "finalize_outcome_once",
+        "_finalizing_outcome_ids", "resolve_unfinished_finalizations",
         "sweep_pending_bounce_outcomes",
     ):
         setattr(host, name, getattr(BounceBot, name).__get__(host, _Sweeper))
@@ -105,7 +153,7 @@ def _context(row) -> dict:
 # ---------------------------------------------------------------------------
 def test_a_pending_trade_whose_session_is_over_is_finalized(tmp_path):
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     assert counts["finalized"] == 1
     assert counts["pending_after"] == 0
@@ -114,7 +162,7 @@ def test_a_pending_trade_whose_session_is_over_is_finalized(tmp_path):
 
 def test_a_trade_whose_session_is_still_running_is_left_alone(tmp_path):
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(
         now=datetime(2026, 8, 21, 8, 0), wait_for_scan_window=False
     )
@@ -132,7 +180,7 @@ def test_it_finalizes_from_what_the_trade_already_measured(tmp_path):
         "stop_hit": False, "target_1r_hit": False, "target_2r_hit": False,
         "minutes_elapsed": 30, "at": "2026-08-21T08:00:00",
     }
-    host.pending_bounce_outcomes = {"a": state}
+    _seed(host, {"a": state})
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     row = host.rows[-1]
     # MAJOR-3: `close_r` is the eod_hold number and there are no bars through
@@ -151,7 +199,7 @@ def test_a_measured_stop_out_finalizes_at_its_stop(tmp_path):
     state["last_measured"] = {"bars": 3, "stop_hit": True, "best_price": 100.4,
                               "worst_price": 98.5, "mfe_r": 0.4, "mae_r": -1.5,
                               "last_close": 98.8}
-    host.pending_bounce_outcomes = {"a": state}
+    _seed(host, {"a": state})
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     row = host.rows[-1]
     assert row["status"] == "unresolved", "no bars through the close"
@@ -162,7 +210,7 @@ def test_a_measured_stop_out_finalizes_at_its_stop(tmp_path):
 
 def test_a_trade_that_measured_nothing_finalizes_unresolved(tmp_path):
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     row = host.rows[-1]
     assert row["status"] == "unresolved"
@@ -177,7 +225,7 @@ def test_a_trade_that_measured_nothing_finalizes_unresolved(tmp_path):
 # ---------------------------------------------------------------------------
 def test_a_trade_with_no_data_expires_after_three_sessions(tmp_path):
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=MUCH_LATER)
     assert counts["expired"] == 1
     assert _context(host.rows[-1])["finalization"]["reason"] == "expired_no_data"
@@ -186,7 +234,7 @@ def test_a_trade_with_no_data_expires_after_three_sessions(tmp_path):
 def test_expiry_counts_sessions_not_days(tmp_path):
     """A long weekend must not expire a trade that is two sessions old."""
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     # Monday 2026-08-24: one completed session after Friday's entry.
     counts = host.sweep_pending_bounce_outcomes(now=datetime(2026, 8, 24, 14, 30))
     assert counts["expired"] == 0
@@ -199,7 +247,7 @@ def test_a_trade_that_measured_something_is_never_expired(tmp_path):
     state = _state(event_id="a")
     state["last_measured"] = {"bars": 3, "stop_hit": False, "last_close": 100.5,
                               "close_r": 0.5, "mfe_r": 0.8, "mae_r": -0.2}
-    host.pending_bounce_outcomes = {"a": state}
+    _seed(host, {"a": state})
     counts = host.sweep_pending_bounce_outcomes(now=MUCH_LATER)
     assert counts["expired"] == 0 and counts["finalized"] == 1
 
@@ -215,7 +263,7 @@ def test_the_expiry_window_is_three_sessions():
 # ---------------------------------------------------------------------------
 def test_a_second_sweep_writes_no_second_final(tmp_path):
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     written = len(host.rows)
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
@@ -225,9 +273,9 @@ def test_a_second_sweep_writes_no_second_final(tmp_path):
 def test_a_reappearing_id_is_recognised_and_not_re_finalized(tmp_path):
     """A restart that reloads a stale checkpoint must not double-write."""
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     assert counts["already_finalized"] == 1
     assert counts["finalized"] == 0
@@ -259,7 +307,7 @@ def test_the_memory_rides_in_the_same_checkpoint_as_the_pending_dict():
 # ---------------------------------------------------------------------------
 def test_an_unparseable_entry_is_counted_not_silently_dropped(tmp_path):
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a", entry_time="not a time")}
+    _seed(host, {"a": _state(event_id="a", entry_time="not a time")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     assert counts["unparseable"] == 1
     assert not host.pending_bounce_outcomes
@@ -267,7 +315,7 @@ def test_an_unparseable_entry_is_counted_not_silently_dropped(tmp_path):
 
 def test_the_sweep_files_its_own_coverage(tmp_path):
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a"), "b": _state(event_id="b")}
+    _seed(host, {"a": _state(event_id="a"), "b": _state(event_id="b")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     assert host.coverage and host.coverage[-1] is counts
     assert counts["pending_before"] == 2
@@ -282,7 +330,7 @@ def test_a_writer_failure_leaves_the_trade_pending_rather_than_losing_it(tmp_pat
         raise RuntimeError("disk full")
 
     host._append_bounce_outcome_row = angry
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     assert counts["finalized"] == 0
     assert "a" in host.pending_bounce_outcomes, "an unwritten final must stay pending"
@@ -330,7 +378,7 @@ def test_the_sweep_defers_while_the_scan_window_is_still_open(tmp_path):
     trade. The lock makes an overlap correct; deferring makes it rare.
     """
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=datetime(2026, 8, 21, 13, 15))
     assert counts["deferred"] == "scan_window_open"
     assert counts["finalized"] == 0
@@ -339,7 +387,7 @@ def test_the_sweep_defers_while_the_scan_window_is_still_open(tmp_path):
 
 def test_the_sweep_runs_once_the_scan_window_has_closed(tmp_path):
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=datetime(2026, 8, 21, 13, 40))
     assert "deferred" not in counts
     assert counts["finalized"] == 1
@@ -348,7 +396,7 @@ def test_the_sweep_runs_once_the_scan_window_has_closed(tmp_path):
 def test_two_threads_finalizing_the_same_trade_write_exactly_one_final(tmp_path):
     """BLOCKER-1, reproduced: the scan thread and the sweep at the same instant."""
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     start = threading.Barrier(2)
 
     def per_symbol():
@@ -398,7 +446,7 @@ def test_the_sweep_re_reads_each_entry_under_the_lock():
 def _csv(tmp_path: Path, rows) -> Path:
     import csv as _csv
 
-    path = tmp_path / "intraday_bounce_outcomes.csv"
+    path = tmp_path / "outcomes.csv"          # where `_host` points the module
     fields = ["event_id", "event_type", "close_r", "mfe_r", "mae_r", "best_price",
               "worst_price", "stop_hit", "target_1r_hit", "target_2r_hit",
               "bars_elapsed", "minutes_elapsed", "logged_at"]
@@ -417,8 +465,6 @@ def test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows(tmp_path, monkeyp
     carries it, so without this the whole backlog finalizes as having seen no
     bars - including trades whose milestone rows are sitting in the CSV.
     """
-    import bounce_bot_lib.legacy as legacy
-
     path = _csv(tmp_path, [
         {"event_id": "a", "event_type": "3_bar", "close_r": "-0.8", "mfe_r": "0.4",
          "mae_r": "-1.5", "best_price": "100.4", "worst_price": "98.5",
@@ -427,10 +473,9 @@ def test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows(tmp_path, monkeyp
          "mae_r": "-1.8", "best_price": "100.4", "worst_price": "98.2",
          "stop_hit": "True", "bars_elapsed": "12", "logged_at": "2026-08-21T09:00:00"},
     ])
-    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOMES_CSV", path)
 
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
 
     assert counts["recovered_from_csv"] == 1
@@ -449,16 +494,13 @@ def test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows(tmp_path, monkeyp
 
 def test_a_recovered_measurement_reconstructs_the_close_from_stored_numbers(tmp_path, monkeypatch):
     """`last_close` is arithmetic on the row's own close_r, entry and risk."""
-    import bounce_bot_lib.legacy as legacy
-
     path = _csv(tmp_path, [
         {"event_id": "a", "event_type": "12_bar", "close_r": "0.5", "mfe_r": "0.8",
          "mae_r": "-0.2", "best_price": "100.8", "worst_price": "99.8",
          "stop_hit": "False", "bars_elapsed": "12", "logged_at": "2026-08-21T09:00:00"},
     ])
-    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOMES_CSV", path)
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     # entry 100.0 + 0.5R * risk 1.0 - kept as the measured close, not as an
     # EOD close it never was.
@@ -466,42 +508,33 @@ def test_a_recovered_measurement_reconstructs_the_close_from_stored_numbers(tmp_
 
 
 def test_a_short_recovers_its_close_on_the_other_side(tmp_path, monkeypatch):
-    import bounce_bot_lib.legacy as legacy
-
     path = _csv(tmp_path, [
         {"event_id": "a", "event_type": "12_bar", "close_r": "0.5", "stop_hit": "False",
          "bars_elapsed": "12", "logged_at": "2026-08-21T09:00:00"},
     ])
-    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOMES_CSV", path)
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a", direction="short",
-                                                stop_price=101.0, target_1r=99.0)}
+    _seed(host, {"a": _state(event_id="a", direction="short",
+                             stop_price=101.0, target_1r=99.0)})
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     assert _context(host.rows[-1])["exit"]["last_measured_close"] == pytest.approx(99.5)
 
 
 def test_an_empty_csv_row_is_not_recovered_as_a_measurement(tmp_path, monkeypatch):
     """Recovering nothing would only relabel an absence as a measurement."""
-    import bounce_bot_lib.legacy as legacy
-
     path = _csv(tmp_path, [
         {"event_id": "a", "event_type": "1_bar", "close_r": "", "stop_hit": "False",
          "bars_elapsed": "1", "logged_at": "2026-08-21T08:00:00"},
     ])
-    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOMES_CSV", path)
     host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     assert counts["recovered_from_csv"] == 0
     assert _context(host.rows[-1])["finalization"]["reason"] == "no_measurement_in_checkpoint"
 
 
-def test_a_missing_csv_does_not_stop_the_sweep(tmp_path, monkeypatch):
-    import bounce_bot_lib.legacy as legacy
-
-    monkeypatch.setattr(legacy, "INTRADAY_BOUNCE_OUTCOMES_CSV", tmp_path / "nope.csv")
-    host = _host(tmp_path)
-    host.pending_bounce_outcomes = {"a": _state(event_id="a")}
+def test_a_missing_csv_does_not_stop_the_sweep(tmp_path):
+    host = _host(tmp_path)          # `_host` points at a CSV that does not exist yet
+    _seed(host, {"a": _state(event_id="a")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     assert counts["finalized"] == 1 and counts["recovered_from_csv"] == 0
 
@@ -533,13 +566,15 @@ def test_the_switch_turns_it_on():
             assert BounceBot._sweep_autorun_enabled(host) is True
 
 
-def test_the_after_close_worker_asks_the_switch_first():
+def test_the_after_close_scheduler_asks_the_switch_first():
+    """The switch is consulted where the decision is made, not in the worker."""
     import inspect
 
     from bounce_bot_lib.legacy import BounceBot
 
-    source = inspect.getsource(BounceBot._maybe_refresh_learning_after_close)
-    assert "_sweep_autorun_enabled()" in source
+    assert "_sweep_autorun_enabled()" in inspect.getsource(BounceBot._after_close_jobs_due)
+    worker = inspect.getsource(BounceBot._maybe_refresh_learning_after_close)
+    assert "_after_close_jobs_due(now)" in worker
 
 
 # ---------------------------------------------------------------------------

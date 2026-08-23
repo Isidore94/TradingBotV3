@@ -21,6 +21,47 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - Sol's three blockers: the sweep becomes safe to enable
+
+- **The autorun could never actually sweep.** The worker fired at close+10, the
+  sweep correctly deferred to close+35, and the day was stamped done anyway
+  because the refresh had succeeded. **Two jobs now have two clocks and two
+  completion stamps**: the sweep is due at the real close + 35 minutes and
+  stamps only when it swept; the refresh is due at close + grace and **waits for
+  the sweep whose rows it reads**; a deferral or failure leaves the day open;
+  a running worker does not start a second.
+- **Early closes get a dedicated seam** (`scripts/market_early_close.py`): day
+  after Thanksgiving, 24 December when it is a session, 3 July when the 4th is a
+  weekday. `market_calendar` and `market_session` are **untouched** - they model
+  every close as 16:00 ET on purpose and feed detectors, scanners and the
+  overnight window. An unscheduled early close answers "regular", which makes
+  the sweep wait longer rather than run early.
+- **Finalization is one transaction per trade with a write-ahead intent**:
+  machine-wide lock, disk re-read, intent committed **before** the append, the
+  append skipped when the CSV already holds that final, then the finalization
+  committed with `fsync` on file and directory. **A failed commit is not a
+  finalization** - it is returned, counted and reported as such - and
+  `resolve_unfinished_finalizations()` settles anything left mid-transaction
+  against the CSV at load. Crash points covered: before the append, after it,
+  during the temp write, during `os.replace`, after the commit, mid-batch.
+- **The transaction is fenced across processes** with `local_writer_lock` (named
+  mutex AND byte-range file lock, failing closed) and re-reads the authoritative
+  disk state inside it. A test runs two real Python processes that both load the
+  checkpoint before either commits: one finalizes, one skips, one row lands.
+- **`launch_gui.py` gained the single-instance guard** (`scripts/single_instance.py`),
+  so every launcher path is covered rather than only `launch_gui_auto.ps1`. It
+  fails **open** when the machine has no exclusion primitive and **closed** when
+  a desk holds the slot, exiting 0. `--selftest` and `--run-scan` are outside it;
+  `--allow-second-instance` overrides. It is defence in depth: the outcome path
+  stays correct with two desks running.
+- **`_save_pending_bounce_outcomes` reports whether it landed** instead of
+  swallowing silently; the finalization path uses a strict commit that raises.
+- Recorded, not fixed: `market_session` resolves the desk's local zone to a
+  **fixed offset** on Windows (no IANA key), so a session window for a date in
+  another DST regime is an hour out. It cannot reach this scheduler, which only
+  compares now against today's close; fixing it moves labels and slot times
+  across the desk.
+
 ### 2026-08-23 - review round 1 part 2: the R10.A blockers
 
 - **`outcome_sweep_autorun` defaults OFF** (trader decision). The sweep does not

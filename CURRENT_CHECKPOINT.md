@@ -8,6 +8,143 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - Sol's three blockers are fixed. Autorun is safe to enable.
+
+**Branch `phase05-integration-blitz`.** plan.md Phase 0.7 / R10.A. Sol reproduced
+three ways the sweep was unsafe; all three are closed, with the reproductions
+themselves turned into tests.
+
+### Blocker 1 - autorun could never actually sweep
+
+At close+10 the worker fired, the sweep correctly deferred to close+35, and the
+worker stamped `_learning_refresh_date` anyway because the refresh had
+succeeded. At close+35 nothing ran: the day was already marked done.
+
+**Two jobs now have two clocks and two completion stamps.** The sweep is due at
+the real close + 35 minutes, once, only when the switch is on, and its stamp
+goes down **only when it actually swept** - a deferral or a failure leaves the
+day open for the next tick. The refresh is due at close + grace, once, and
+**waits for the sweep whose rows it reads** when the sweep is enabled and has
+not run. A successful refresh can no longer mark the sweep complete; the two
+are separate variables and a test pins that. A worker already running does not
+start a second.
+
+**Early closes.** NYSE closes 13:00 ET on 2026-11-27, and `market_calendar`
+models every close as 16:00 ET on purpose. Rather than change that - it feeds
+detectors, scanners and the overnight window - the scheduler asks a **dedicated
+seam**, `scripts/market_early_close.py`: day after Thanksgiving, 24 December
+when it is a session, and 3 July when the 4th is a weekday. Unscheduled early
+closes are not modelled and answer "regular", which fails in the safe direction
+(the sweep waits longer, never runs early). `market_calendar` and
+`market_session` are untouched, and a test asserts it.
+
+| day | close | sweep opens |
+|---|---|---|
+| normal Monday 2026-08-24 | 16:00 ET | 13:35 local |
+| half day 2026-11-27 | **13:00 ET** | 11:35 local |
+| Christmas Eve 2026-12-24 | **13:00 ET** | 11:35 local |
+| post-DST Monday 2026-11-30 | 16:00 ET | close+35 |
+| weekend | - | never |
+| autorun OFF | - | never |
+
+### Blocker 2 - a crash between the append and the commit duplicated finals
+
+The sweep appended every row and committed one checkpoint at the end of the
+batch. Sol injected a failure in `os.replace`: the sweep reported `finalized=1`
+while the disk still held the trade as pending with no finalized memory, and the
+restart wrote a second final. On the 576-row backlog a crash near the end would
+have duplicated most of it.
+
+**Finalization is now one transaction per trade, with a write-ahead intent:**
+
+1. take the machine-wide lock;
+2. re-read the checkpoint from **disk**;
+3. record the intent (`finalizing`) and **commit it before appending**;
+4. append - unless the CSV already has that final, which is what an interrupted
+   attempt leaves behind;
+5. record the finalization and commit, with `fsync` on the file and the
+   directory.
+
+**A failed commit is not a finalization.** `finalize_outcome_once` returns
+`commit_failed`, the sweep counts it separately, and the coverage report never
+claims it. `_save_pending_bounce_outcomes` still swallows its failures - that is
+right for milestone bookkeeping - but it **returns whether it landed**, and the
+finalization path uses `_commit_checkpoint`, which raises.
+
+`resolve_unfinished_finalizations()` settles anything left mid-transaction
+against the CSV at load: row present means finalized (do not append again), row
+absent means nothing happened (stay pending). Neither branch invents an outcome
+and neither loses one. **Crash points covered by tests: before the append,
+after the append, during the temp write, during `os.replace`, after the commit,
+and mid-batch.** Every one converges to exactly one durable final.
+
+### Blocker 3 - two processes could both finalize
+
+`_pending_lock` is an in-process `RLock`. Sol started two real Python processes;
+both loaded the same pending entry and both wrote a final.
+
+**The transaction now takes `local_writer_lock`** - the repo's existing
+machine-local primitive: a named mutex **and** a byte-range file lock, both
+taken, failing closed when neither is in force - and **re-reads the disk inside
+it**. A test starts two real processes that deliberately both load the
+checkpoint before either commits: one returns `finalized`, one `skipped`, and
+the CSV holds one row.
+
+**`launch_gui.py` gained the authorized single-instance guard**
+(`scripts/single_instance.py`). `launch_gui_auto.ps1` already refused a second
+desk but only on that path; R10.0 measured pid 31848 overlapping three others,
+the worst by 3.8 hours. It fails **open** when the machine has no primitive -
+refusing to start the trader's desk over that is the worse failure - and
+**closed** when somebody holds the slot, exiting 0 like the PowerShell launcher.
+`--selftest` and `--run-scan` are deliberately outside it. `--allow-second-instance`
+is the escape hatch. **The guard is defence in depth, not the transaction**: the
+outcome path stays correct with two desks running, which is what the two-process
+test proves.
+
+### A finding I did not fix, with its blast radius
+
+`market_session.get_market_local_timezone` falls back to
+`datetime.now().astimezone().tzinfo`, which on Windows is a **fixed offset** with
+no IANA key - today's offset applied to every date. A session window for a
+November date therefore reads -07:00 on a desk currently on PDT. It does not
+reach this scheduler, which only ever compares *now* against *today's* close
+where today's offset is by definition right. It would reach anything reasoning
+about a session months away, and fixing it moves displayed labels and slot times
+across the desk. Recorded in `test_after_close_schedule.py` with a test that
+documents it; **not** changed here.
+
+### Verification (wall clock PT, pytest's own exit codes)
+
+| run | start | end | result |
+|---|---|---|---|
+| new adversarial tests (durability, schedule, guard) | 09:05 | 09:12 | **49 passed**, exit 0 |
+| existing focused packet (5 files) | 09:12:48 | 09:12:50 | **81 passed**, exit 0 |
+| `pytest tests/ -q` | 09:18:29 | 09:22:22 | **4518 passed / 19 subtests**, exit **0** |
+| `scripts/smoke_check.py` | 09:22:36 | 09:22:38 | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | 09:23 | 09:23 | **58/58**, exit 0 |
+| Sol repro 1 (two real processes) | 09:22:56 | 09:23:00 | exactly one final, exit 0 |
+| Sol repro 2 (commit failure, six crash points) | 09:23:00 | 09:23:03 | exactly one final each, exit 0 |
+
+**The live stores were never written.** Checkpoint mtime is still
+2026-08-21 12:18:55 with 576 pending / 0 finalized / 0 finalizing; the outcome
+CSV is unchanged at 202.7 MB. Every test drives temp copies.
+
+**No frozen rebuild.** No new dependency, no new runtime asset, no new package,
+no `__file__`/`ROOT_DIR`/`sys.path` change. `launch_gui.py` gained one lazy
+import, so `single_instance` and `market_early_close` were added to
+`selftest.LAZY_ENGINE_MODULES` - the frozen run now proves them rather than
+inferring them - and the spec-drift guard is green.
+
+### The gate that remains
+
+**One live weekday session.** The switch stays OFF until the trader flips it:
+`outcome_sweep_autorun="on"` in `local_settings.json`. What Monday should show
+if it is flipped, measured read-only against the live stores: 576 pending, 560
+finalizing on their own recovered milestone rows (271 of them stop-outs), 16
+reading `no_measurement_in_checkpoint`.
+
+---
+
 ## 2026-08-23 - what flipping the sweep switch would actually do (measured, read-only)
 
 **Branch `phase05-integration-blitz`, HEAD `7b2ed18`.** Taken against the live

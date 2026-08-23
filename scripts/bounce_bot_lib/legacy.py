@@ -14,6 +14,7 @@ import time
 import threading
 import logging
 from logging.handlers import RotatingFileHandler
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, date
 import zoneinfo
@@ -2646,6 +2647,10 @@ class BounceBot(EWrapper, EClient):
         # After-close learning refresh: once per session, so tiers/mutes work
         # from today's outcomes even when the bot never restarts.
         self._learning_refresh_date = None
+        # R10.A: the sweep has its OWN completion stamp. Sharing one with the
+        # refresh is what let a successful refresh mark a deferred sweep done.
+        self._outcome_sweep_date = None
+        self._after_close_worker_running = False
 
         self.longs = read_tickers(LONGS_FILENAME)
         self.shorts = read_tickers(SHORTS_FILENAME)
@@ -2904,6 +2909,42 @@ class BounceBot(EWrapper, EClient):
     #: lock makes an overlap safe; this makes an overlap rare.
     SWEEP_AFTER_SCAN_WINDOW_MINUTES = 35
 
+    def actual_session_close(self, now=None):
+        """When this session really closed, in market-local time - early closes included.
+
+        `get_market_session_window` models every close as the regular one, which
+        is right for every existing caller and wrong for this one: on a half day
+        it would park the sweep three hours after the desk stopped. The
+        early-close seam is consulted for the TIME only; the window's own
+        timezone and date are what the rest of the desk already agrees on, so
+        nothing about scanner or detector hours moves.
+
+        Returns None when the session cannot be read at all.
+        """
+        moment = now or get_market_local_now()
+        try:
+            session = get_market_session_window(reference=moment)
+        except Exception:
+            logging.debug("Session window unreadable for the after-close schedule.", exc_info=True)
+            return None
+        close_local = session.close_local
+        try:
+            from market_early_close import early_close_reason, session_close_time
+
+            market_day = getattr(session, "market_date", None) or close_local.date()
+            reason = early_close_reason(market_day)
+            if reason:
+                close_time = session_close_time(market_day)
+                # The window's close is expressed in the DESK's local zone; the
+                # early-close time is Eastern. Convert through, never replace.
+                from market_calendar import MARKET_TZ
+
+                eastern_close = datetime.combine(market_day, close_time, tzinfo=MARKET_TZ)
+                close_local = eastern_close.astimezone(close_local.tzinfo)
+        except Exception:
+            logging.debug("Early-close lookup failed; using the regular close.", exc_info=True)
+        return close_local
+
     def _sweep_window_is_open(self, now=None) -> bool:
         """Has the scan window closed, so the sweep is not racing the scan thread?
 
@@ -2912,17 +2953,285 @@ class BounceBot(EWrapper, EClient):
         to drain, and the lock already makes the overlap correct.
         """
         moment = now or get_market_local_now()
-        try:
-            session = get_market_session_window(reference=moment)
-            close_local = session.close_local
-            if moment.tzinfo is None:
-                moment = moment.replace(tzinfo=close_local.tzinfo)
-            else:
-                moment = moment.astimezone(close_local.tzinfo)
-            return moment >= close_local + timedelta(minutes=self.SWEEP_AFTER_SCAN_WINDOW_MINUTES)
-        except Exception:
-            logging.debug("Sweep window check could not read the session; proceeding.")
+        close_local = self.actual_session_close(moment)
+        if close_local is None:
             return True
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=close_local.tzinfo)
+        else:
+            moment = moment.astimezone(close_local.tzinfo)
+        return moment >= close_local + timedelta(minutes=self.SWEEP_AFTER_SCAN_WINDOW_MINUTES)
+
+    # ------------------------------------------------------------------
+    # R10.A: the finalization transaction (Sol blockers 2 and 3)
+    # ------------------------------------------------------------------
+    #: Taken around every finalization, in this order: the in-process RLock
+    #: first (a Win32 mutex is owned by a thread and would not arbitrate two
+    #: threads of one process usefully), then the machine-local cross-process
+    #: lock. `local_writer_lock` is the primitive this repo already uses for the
+    #: writer lease: a named mutex AND a byte-range file lock, both taken, and
+    #: it fails CLOSED when neither is really in force.
+    #:
+    #: Sol launched two real processes, both loaded the same pending entry
+    #: before either committed, and both wrote a final. An in-process RLock
+    #: cannot see another process; this can.
+    OUTCOME_LOCK_TIMEOUT_SECONDS = 30.0
+
+    @contextmanager
+    def _outcome_transaction(self):
+        """Exclusive, machine-wide, for the length of one finalization.
+
+        Raises `LocalLockUnavailable` rather than proceeding unprotected: a
+        finalization that cannot be fenced is one that can duplicate, and a
+        duplicate final is exactly what this exists to stop.
+        """
+        from local_writer_lock import local_writer_lock, lock_key_for_path
+
+        key = lock_key_for_path(INTRADAY_BOUNCE_OUTCOME_STATE_JSON)
+        with self._pending_lock:
+            with local_writer_lock(key, timeout_seconds=self.OUTCOME_LOCK_TIMEOUT_SECONDS):
+                yield
+
+    def _read_checkpoint_from_disk(self) -> dict:
+        """The authoritative state, re-read inside the lock.
+
+        In-memory state is not authoritative: another process commits to the
+        same file, and this process's copy was loaded before that happened. Sol
+        proved that with two real processes. Every finalization decision is made
+        against what is on disk right now.
+
+        A missing file is an empty checkpoint. An UNREADABLE one raises, because
+        deciding to append a final on the strength of a file we could not read
+        is how a duplicate gets written.
+        """
+        if not INTRADAY_BOUNCE_OUTCOME_STATE_JSON.exists():
+            return {"pending": {}, "finalized": {}, "finalizing": {}}
+        payload = json.loads(INTRADAY_BOUNCE_OUTCOME_STATE_JSON.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("pending outcome checkpoint is not an object")
+        return {
+            "pending": payload.get("pending") if isinstance(payload.get("pending"), dict) else {},
+            "finalized": payload.get("finalized") if isinstance(payload.get("finalized"), dict) else {},
+            "finalizing": payload.get("finalizing") if isinstance(payload.get("finalizing"), dict) else {},
+        }
+
+    def _commit_checkpoint(self, *, finalizing=None) -> None:
+        """Write the checkpoint durably, or RAISE.
+
+        `_save_pending_bounce_outcomes` swallows its failures, which is right
+        for a milestone bookkeeping save - losing one is a re-derivable
+        inconvenience. It is wrong for a finalization: Sol injected a failure in
+        `os.replace` and the sweep reported `finalized=1` while the disk still
+        held the trade as pending and no finalized memory, so a restart wrote a
+        second final. A commit that fails must be visible to the caller, and the
+        caller must not count that trade as finalized.
+
+        `fsync` on the temp file AND on the directory: `os.replace` is atomic
+        with respect to readers, but without the flushes the rename can reach
+        the disk before the bytes do.
+        """
+        INTRADAY_BOUNCE_OUTCOME_STATE_JSON.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
+            "updated_at": get_market_local_now().isoformat(timespec="seconds"),
+            "pending": self.pending_bounce_outcomes,
+            "finalized": self._finalized_outcome_ids(),
+            # Write-ahead intent: ids this process is about to append a final
+            # row for. Everything still in here after a crash is AMBIGUOUS - the
+            # row may or may not have reached the CSV - and is resolved against
+            # the CSV at load rather than guessed at.
+            "finalizing": dict(finalizing or self._finalizing_outcome_ids()),
+        }
+        temp = INTRADAY_BOUNCE_OUTCOME_STATE_JSON.with_name(
+            INTRADAY_BOUNCE_OUTCOME_STATE_JSON.name + ".tmp"
+        )
+        with temp.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, default=str)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, INTRADAY_BOUNCE_OUTCOME_STATE_JSON)
+        try:
+            directory = os.open(str(INTRADAY_BOUNCE_OUTCOME_STATE_JSON.parent), os.O_RDONLY)
+        except OSError:
+            return          # Windows cannot fsync a directory handle; the
+            #                 replace is still atomic for a reader.
+        try:
+            os.fsync(directory)
+        except OSError:
+            pass
+        finally:
+            os.close(directory)
+
+    def _finalizing_outcome_ids(self) -> dict:
+        marks = getattr(self, "_finalizing_outcome_marks", None)
+        if marks is None:
+            marks = {}
+            self._finalizing_outcome_marks = marks
+        return marks
+
+    def _final_event_ids_in_csv(self, event_ids=None) -> set:
+        """Ids that already have a `final` row on disk. One pass, ~1.8 s.
+
+        This is the reconciliation that makes finalization exactly-once across a
+        crash: a row appended before the commit that never landed is INVISIBLE
+        to the checkpoint and VISIBLE here, so the restart skips the append
+        instead of writing a second one.
+        """
+        wanted = {str(item) for item in event_ids} if event_ids is not None else None
+        found: set = set()
+        try:
+            if not INTRADAY_BOUNCE_OUTCOMES_CSV.exists():
+                return found
+            with INTRADAY_BOUNCE_OUTCOMES_CSV.open("r", newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    if str(row.get("event_type") or "") != "final":
+                        continue
+                    event_id = str(row.get("event_id") or "")
+                    if not event_id:
+                        continue
+                    if wanted is None or event_id in wanted:
+                        found.add(event_id)
+        except Exception:
+            # Unreadable: return nothing rather than a partial answer. A caller
+            # that thinks an id has no final row when it has writes a duplicate,
+            # so the transaction treats an empty answer as "unknown" and its
+            # write-ahead mark keeps the id resolvable next time.
+            logging.exception("Could not read the outcome CSV to reconcile finalizations.")
+            return set()
+        return found
+
+    def resolve_unfinished_finalizations(self) -> dict:
+        """Settle every id left mid-transaction by a crash. Runs at load.
+
+        An id in `finalizing` means: this process was about to append a final
+        row for it and did not get to record that it had. The CSV is the
+        authority for whether the row landed.
+
+        * row present -> the trade IS finalized; record that and drop it from
+          pending. Appending again would duplicate it.
+        * row absent -> nothing happened; it stays pending and finalizes
+          normally later.
+
+        Neither branch invents an outcome, and neither loses one.
+        """
+        counts = {"resolved_finalized": 0, "resolved_still_pending": 0, "unresolved": 0}
+        marks = dict(self._finalizing_outcome_ids())
+        if not marks:
+            return counts
+        with self._outcome_transaction():
+            present = self._final_event_ids_in_csv(marks)
+            for event_id in marks:
+                if event_id in present:
+                    self._remember_finalized_outcome(
+                        event_id,
+                        (self.pending_bounce_outcomes.get(event_id) or {}).get("trade_date"),
+                    )
+                    self.pending_bounce_outcomes.pop(event_id, None)
+                    counts["resolved_finalized"] += 1
+                else:
+                    counts["resolved_still_pending"] += 1
+                self._finalizing_outcome_ids().pop(event_id, None)
+            try:
+                self._commit_checkpoint()
+            except Exception:
+                logging.exception("Could not commit the resolved finalizations.")
+                counts["unresolved"] = len(marks)
+        logging.info(
+            "Resolved %d interrupted finalization(s): %d already in the CSV, %d still pending.",
+            len(marks), counts["resolved_finalized"], counts["resolved_still_pending"],
+        )
+        return counts
+
+    def finalize_outcome_once(
+        self, event_id, *, rows_after_entry=None, bars_elapsed=0, already_final=None
+    ) -> str:
+        """Finalize one trade, exactly once, across threads, processes and crashes.
+
+        Returns what happened: `"finalized"`, `"skipped"` (somebody else did it,
+        or it is no longer pending), `"recorded_existing"` (the row was already
+        in the CSV from an interrupted attempt) or `"commit_failed"`.
+
+        The order is the whole point:
+
+        1. take the machine-wide lock;
+        2. re-read the checkpoint from **disk** - in-memory state predates
+           whatever another process just committed;
+        3. write the intent (`finalizing`) and commit it BEFORE appending, so a
+           crash between the append and the commit is resolvable rather than
+           ambiguous;
+        4. append the row - unless the CSV already has one, in which case an
+           earlier attempt got that far;
+        5. record the finalization and commit. **If that commit fails the trade
+           is NOT counted as finalized**, and the intent stays on disk so the
+           next start resolves it.
+        """
+        with self._outcome_transaction():
+            try:
+                disk = self._read_checkpoint_from_disk()
+            except Exception:
+                logging.exception("Checkpoint unreadable inside the finalization lock; skipping %s.", event_id)
+                return "skipped"
+
+            if str(event_id) in (disk.get("finalized") or {}):
+                self.pending_bounce_outcomes.pop(event_id, None)
+                self._finalized_outcome_memory = dict(disk.get("finalized") or {})
+                return "skipped"
+            if str(event_id) not in (disk.get("pending") or {}):
+                # Another process finalized and committed it while we waited.
+                self.pending_bounce_outcomes.pop(event_id, None)
+                return "skipped"
+
+            # Adopt the authoritative row: ours may be a stale copy.
+            state = dict((disk.get("pending") or {})[str(event_id)])
+            local = self.pending_bounce_outcomes.get(event_id)
+            if isinstance(local, dict) and local.get("last_measured") and not state.get("last_measured"):
+                state["last_measured"] = local["last_measured"]
+            if isinstance(local, dict) and local.get("unresolved_reason"):
+                state["unresolved_reason"] = local["unresolved_reason"]
+            self.pending_bounce_outcomes[event_id] = state
+            self._finalized_outcome_memory = dict(disk.get("finalized") or {})
+            self._finalizing_outcome_marks = dict(disk.get("finalizing") or {})
+
+            marks = self._finalizing_outcome_ids()
+            marks[str(event_id)] = get_market_local_now().isoformat(timespec="seconds")
+            try:
+                self._commit_checkpoint()
+            except Exception:
+                marks.pop(str(event_id), None)
+                logging.exception("Could not record the intent to finalize %s; leaving it pending.", event_id)
+                return "commit_failed"
+
+            present = already_final if already_final is not None else self._final_event_ids_in_csv([event_id])
+            outcome = "finalized"
+            if str(event_id) in present:
+                # An interrupted attempt already appended it. Appending again is
+                # the duplicate this transaction exists to prevent.
+                outcome = "recorded_existing"
+            else:
+                self._append_bounce_outcome_row(
+                    state, "final",
+                    bars_elapsed=int(bars_elapsed or 0),
+                    milestone_bar=None,
+                    rows_after_entry=rows_after_entry if rows_after_entry is not None else pd.DataFrame(),
+                    finalize_eod=True,
+                )
+
+            self._remember_finalized_outcome(event_id, state.get("trade_date"))
+            self.pending_bounce_outcomes.pop(event_id, None)
+            marks.pop(str(event_id), None)
+            try:
+                self._commit_checkpoint()
+            except Exception:
+                # The row is in the CSV and the checkpoint still says pending.
+                # That is recoverable - the intent mark is still on disk from
+                # step 3 and the next start resolves it against the CSV - but it
+                # is NOT a durable finalization and must not be reported as one.
+                logging.exception(
+                    "Finalization of %s reached the CSV but the checkpoint commit failed; "
+                    "it will be resolved on the next start.", event_id,
+                )
+                return "commit_failed"
+            return outcome
 
     def _load_pending_bounce_outcomes(self):
         if not INTRADAY_BOUNCE_OUTCOME_STATE_JSON.exists():
@@ -2951,15 +3260,28 @@ class BounceBot(EWrapper, EClient):
             return {}
         pending = payload.get("pending", {}) if isinstance(payload, dict) else {}
         finalized = payload.get("finalized", {}) if isinstance(payload, dict) else {}
+        finalizing = payload.get("finalizing", {}) if isinstance(payload, dict) else {}
         if isinstance(finalized, dict):
             self._finalized_outcome_memory = dict(finalized)
+        if isinstance(finalizing, dict):
+            # Ids a previous run was mid-finalizing. `resolve_unfinished_finalizations`
+            # settles them against the CSV; until it does they stay pending, which
+            # is the safe direction (a duplicate is prevented by the CSV check).
+            self._finalizing_outcome_marks = dict(finalizing)
         return pending if isinstance(pending, dict) else {}
 
-    def _save_pending_bounce_outcomes(self):
-        with self._pending_lock:
-            self._save_pending_bounce_outcomes_locked()
+    def _save_pending_bounce_outcomes(self) -> bool:
+        """Best-effort bookkeeping save. Returns whether it landed.
 
-    def _save_pending_bounce_outcomes_locked(self):
+        Deliberately NOT the finalization commit. Losing a milestone save costs
+        a re-derivable inconvenience; losing a finalization commit costs a
+        duplicate final, so `_commit_checkpoint` raises instead and
+        `finalize_outcome_once` acts on the failure.
+        """
+        with self._pending_lock:
+            return self._save_pending_bounce_outcomes_locked()
+
+    def _save_pending_bounce_outcomes_locked(self) -> bool:
         try:
             INTRADAY_BOUNCE_OUTCOME_STATE_JSON.parent.mkdir(parents=True, exist_ok=True)
             payload = {
@@ -2969,6 +3291,9 @@ class BounceBot(EWrapper, EClient):
                 # R10.A / D3: what the sweep has already finalized, so a restart
                 # or a second pass cannot write a second final for one trade.
                 "finalized": self._finalized_outcome_ids(),
+                # Carried through so a bookkeeping save cannot erase a
+                # finalization intent written by the transaction.
+                "finalizing": dict(self._finalizing_outcome_ids()),
             }
             # Temp + replace: a bare write_text leaves a torn file if the
             # process dies mid-write, and the reader used to answer a torn file
@@ -2978,8 +3303,10 @@ class BounceBot(EWrapper, EClient):
             )
             temp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
             os.replace(temp, INTRADAY_BOUNCE_OUTCOME_STATE_JSON)
+            return True
         except Exception as exc:
-            logging.debug(f"Failed saving pending bounce outcome state: {exc}")
+            logging.warning("Failed saving pending bounce outcome state: %s", exc)
+            return False
 
     def _learning_csv_header(self, path, fieldnames):
         if not path.exists() or path.stat().st_size == 0:
@@ -4107,8 +4434,17 @@ class BounceBot(EWrapper, EClient):
             "still_open": 0,
         }
         by_reason: dict[str, int] = {}
+        counts["failed"] = 0
+        counts["commit_failed"] = 0
+        counts["recorded_existing"] = 0
         recovered = self._recover_measurements_from_csv(list(self.pending_bounce_outcomes))
         counts["recovered_from_csv"] = len(recovered)
+        # One pass, reused for every trade in the batch: which ids ALREADY have
+        # a final row. An interrupted earlier attempt appears here and nowhere
+        # else, and appending a second row for it is the duplicate this exists
+        # to prevent.
+        already_final = self._final_event_ids_in_csv(list(self.pending_bounce_outcomes))
+        counts["already_final_in_csv"] = len(already_final)
         for event_id in list(self.pending_bounce_outcomes):
             # The whole decision runs under the lock, and the first thing it
             # does is re-read the entry. The list above is stale by
@@ -4152,33 +4488,49 @@ class BounceBot(EWrapper, EClient):
                     # trade predates the measurement field and the CSV had
                     # nothing to recover either.
                     state["unresolved_reason"] = "no_measurement_in_checkpoint"
-                try:
-                    self._append_bounce_outcome_row(
-                        state, "final", bars_elapsed=int(measured.get("bars") or 0),
-                        milestone_bar=None,
-                        rows_after_entry=pd.DataFrame(), finalize_eod=True,
-                    )
-                except Exception:
-                    logging.exception("Sweep could not finalize %s; it stays pending.", event_id)
-                    continue
-                self._remember_finalized_outcome(event_id, state.get("trade_date"))
-                self.pending_bounce_outcomes.pop(event_id, None)
-                counts["finalized"] += 1
-                if expired:
-                    counts["expired"] += 1
-                if measured:
-                    reason = "stop_hit" if measured.get("stop_hit") else "last_measured_bar"
-                    if measured.get("source"):
-                        reason = f"{reason}:{measured['source']}"
-                else:
-                    reason = "expired_no_data" if expired else "no_measurement_in_checkpoint"
-                by_reason[reason] = by_reason.get(reason, 0) + 1
+
+            # The transaction takes the in-process lock again, re-entrantly, and
+            # adds the machine-wide one. It is held for exactly one trade -
+            # never across the whole batch - and it commits that trade's own
+            # checkpoint before moving on.
+            try:
+                result = self.finalize_outcome_once(
+                    event_id,
+                    bars_elapsed=int(measured.get("bars") or 0),
+                    already_final=already_final,
+                )
+            except Exception:
+                logging.exception("Sweep could not finalize %s; it stays pending.", event_id)
+                counts["failed"] += 1
+                continue
+            if result == "skipped":
+                counts["already_finalized"] += 1
+                continue
+            if result == "commit_failed":
+                # The row may be in the CSV, but nothing durable says so. It is
+                # NOT reported as finalized; the next start resolves it.
+                counts["commit_failed"] += 1
+                continue
+            if result == "recorded_existing":
+                counts["recorded_existing"] += 1
+            counts["finalized"] += 1
+            if expired:
+                counts["expired"] += 1
+            if measured:
+                reason = "stop_hit" if measured.get("stop_hit") else "last_measured_bar"
+                if measured.get("source"):
+                    reason = f"{reason}:{measured['source']}"
+            else:
+                reason = "expired_no_data" if expired else "no_measurement_in_checkpoint"
+            by_reason[reason] = by_reason.get(reason, 0) + 1
 
         counts["pending_after"] = len(self.pending_bounce_outcomes)
         counts["by_reason"] = by_reason
         counts["expire_after_sessions"] = expiry
         counts["swept_at"] = moment.isoformat(timespec="seconds")
-        if counts["finalized"] or counts["unparseable"] or counts["already_finalized"]:
+        # Each finalization committed its own checkpoint inside its own
+        # transaction, so this is only bookkeeping for the unparseable drops.
+        if counts["unparseable"] or counts["already_finalized"]:
             self._save_pending_bounce_outcomes()
         self._write_outcome_coverage(counts)
         return counts
@@ -4631,6 +4983,7 @@ class BounceBot(EWrapper, EClient):
         symbol_key = str(symbol or "").strip().upper()
         changed = False
         for event_id in list(self.pending_bounce_outcomes):
+            finalize_now = None
             # BLOCKER-1: the sweep runs on another thread and can finalize and
             # pop a trade between this list being built and this row being
             # reached, so the entry is re-read and the finalized set consulted
@@ -4679,18 +5032,22 @@ class BounceBot(EWrapper, EClient):
                         rows_after_entry=rows_after_entry,
                     )
                 if eod_due:
-                    self._append_bounce_outcome_row(
-                        state,
-                        "final",
-                        bars_elapsed=bars_elapsed,
-                        milestone_bar=None,
-                        rows_after_entry=rows_after_entry,
-                        finalize_eod=True,
+                    finalize_now = (event_id, rows_after_entry, bars_elapsed)
+            if finalize_now is not None:
+                # Through the same transaction the sweep uses: machine-wide
+                # lock, disk re-read, write-ahead intent, append, commit. The
+                # in-process lock above is released first so the two finalizers
+                # queue on the same machine-wide lock rather than nesting a
+                # process-wide wait inside a per-object one.
+                identifier, rows, bars = finalize_now
+                try:
+                    result = self.finalize_outcome_once(
+                        identifier, rows_after_entry=rows, bars_elapsed=bars
                     )
-                    # Recorded in the SAME set the sweep checks, so neither can
-                    # write a second final for this trade.
-                    self._remember_finalized_outcome(event_id, state.get("trade_date"))
-                    self.pending_bounce_outcomes.pop(event_id, None)
+                except Exception:
+                    logging.exception("Could not finalize %s on the scan path.", identifier)
+                    result = "failed"
+                if result in {"finalized", "recorded_existing", "skipped"}:
                     changed = True
         if changed:
             self._save_pending_bounce_outcomes()
@@ -4893,8 +5250,61 @@ class BounceBot(EWrapper, EClient):
             "changes": changes,
         }
 
+    def _after_close_jobs_due(self, now=None) -> dict:
+        """Which after-close jobs are due right now, and why not if they are not.
+
+        Two jobs with two clocks and **two completion stamps**, which is the
+        whole fix for Sol's blocker 1. They used to share one: the worker fired
+        at close+10, the sweep correctly deferred to close+35, and then the
+        stamp went down anyway because the refresh had succeeded - so the sweep
+        was marked done for the day at 13:10 having swept nothing, and 13:40
+        never came.
+
+        * **sweep** - only when the switch is on, only at or after the real
+          close + 35 minutes (early closes included), only once a day.
+        * **refresh** - at close + grace, once a day, but **not before the
+          sweep it is supposed to read**. When the sweep is enabled and has not
+          run yet, the refresh waits with it rather than reading yesterday's
+          rows and calling that today's answer.
+        """
+        moment = now or get_market_local_now()
+        today = moment.date()
+        state = {"sweep": False, "refresh": False, "reason": "", "today": today}
+        if moment.weekday() >= 5:
+            state["reason"] = "weekend"
+            return state
+
+        close_local = self.actual_session_close(moment)
+        if close_local is None:
+            # The calendar cannot answer. Neither job is due; both are retried
+            # on the next tick rather than fired on a guess.
+            state["reason"] = "session_unreadable"
+            return state
+        local = moment if moment.tzinfo else moment.replace(tzinfo=close_local.tzinfo)
+        local = local.astimezone(close_local.tzinfo)
+
+        sweep_enabled = self._sweep_autorun_enabled()
+        sweep_done = getattr(self, "_outcome_sweep_date", None) == today
+        refresh_done = getattr(self, "_learning_refresh_date", None) == today
+
+        sweep_at = close_local + timedelta(minutes=self.SWEEP_AFTER_SCAN_WINDOW_MINUTES)
+        refresh_at = close_local + timedelta(minutes=BOUNCE_EOD_FINALIZE_GRACE_MINUTES)
+
+        if sweep_enabled and not sweep_done and local >= sweep_at:
+            state["sweep"] = True
+        if not refresh_done and local >= refresh_at:
+            if sweep_enabled and not sweep_done and not state["sweep"]:
+                # The refresh reads the rows the sweep writes. Running first
+                # would answer today's question with yesterday's finals.
+                state["reason"] = "waiting_for_sweep"
+            else:
+                state["refresh"] = True
+        if not state["sweep"] and not state["refresh"] and not state["reason"]:
+            state["reason"] = "not_due"
+        return state
+
     def _maybe_refresh_learning_after_close(self):
-        """Rebuild the day-trade learning chain once per day after the close.
+        """Run the after-close jobs that are due, each once, each on its own clock.
 
         Runs in a worker thread (no IB needed) so the scan loop never waits;
         keeps alert tiers/mutes current without a bot restart or Auto Pilot.
@@ -4902,35 +5312,49 @@ class BounceBot(EWrapper, EClient):
         if time.time() - getattr(self, "_learning_refresh_last_check", 0.0) < 60:
             return
         self._learning_refresh_last_check = time.time()
+        if getattr(self, "_after_close_worker_running", False):
+            # A worker from an earlier tick is still going. Starting a second
+            # would put two sweeps on the same machine-wide lock for no reason.
+            return
         now = get_market_local_now()
-        if now.weekday() >= 5:
+        due = self._after_close_jobs_due(now)
+        if not due["sweep"] and not due["refresh"]:
             return
-        today = now.date()
-        if self._learning_refresh_date == today:
-            return
-        session = get_market_session_window(now)
-        if now < session.close_local + timedelta(minutes=BOUNCE_EOD_FINALIZE_GRACE_MINUTES):
-            return
+        today = due["today"]
+        self._after_close_worker_running = True
+
         def worker():
             try:
-                # R10.A / D3: finalize what the scan loop can no longer reach,
-                # BEFORE the learning refresh reads the rows. It needs no bars
-                # and no IB, and a failure here must not cost the refresh.
-                try:
-                    swept = (
-                        self.sweep_pending_bounce_outcomes()
-                        if self._sweep_autorun_enabled()
-                        else {}
-                    )
-                    if swept.get("finalized"):
-                        logging.info(
-                            "Outcome sweep finalized %d pending trade(s) (%d expired); %d still open.",
-                            swept["finalized"], swept.get("expired", 0), swept.get("pending_after", 0),
-                        )
-                except Exception:
-                    logging.exception("Outcome sweep failed; the learning refresh continues.")
+                if due["sweep"]:
+                    # R10.A / D3: finalize what the scan loop can no longer
+                    # reach. It needs no bars and no IB. **The stamp goes down
+                    # only when it actually swept** - a deferral or a failure
+                    # leaves the day open and the next tick tries again.
+                    try:
+                        swept = self.sweep_pending_bounce_outcomes()
+                        if swept.get("deferred"):
+                            logging.info(
+                                "Outcome sweep still deferred (%s); it will be retried.",
+                                swept["deferred"],
+                            )
+                        else:
+                            self._outcome_sweep_date = today
+                            logging.info(
+                                "Outcome sweep finalized %d pending trade(s) (%d expired, "
+                                "%d already final in the CSV, %d commit failures); %d still open.",
+                                swept.get("finalized", 0), swept.get("expired", 0),
+                                swept.get("recorded_existing", 0), swept.get("commit_failed", 0),
+                                swept.get("pending_after", 0),
+                            )
+                    except Exception:
+                        logging.exception("Outcome sweep failed; it will be retried.")
 
+                if not due["refresh"]:
+                    return
                 summary = self.refresh_learning_state_with_shadow()
+                # Only the refresh's own stamp, and only after it ran. A
+                # successful refresh must never mark a deferred sweep complete.
+                self._learning_refresh_date = today
                 segments = summary.get("segments", 0)
                 if summary.get("mode") == "shadow":
                     logging.info(
@@ -4952,12 +5376,10 @@ class BounceBot(EWrapper, EClient):
                         self.gui_callback(
                             f"Learning refreshed after the close ({segments} measured segments).", "blue"
                         )
-                # Stamped only once the work has actually happened. Stamping
-                # before it ran meant a raising sweep or refresh was not retried
-                # until the next weekday.
-                self._learning_refresh_date = today
             except Exception:
                 logging.exception("After-close learning refresh failed")
+            finally:
+                self._after_close_worker_running = False
 
         threading.Thread(target=worker, name="learning-refresh", daemon=True).start()
 

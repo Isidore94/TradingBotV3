@@ -1203,11 +1203,25 @@ second scoreboard.
    as its own `tier_assigned` ledger event** because every call site evaluates
    it *after* registration - which is why it was on 0 of 7,863 rows.
 
-   *Still owed:* the single-instance guard (only what the R10.0 verdict
-   supports - concurrency was REFUTED as the duplicate cause); R9.5's shadow
-   store aligned to month segments and `session_date`; a restore test of the
-   ledger directory; and the decision to make the ledger the authority, which
-   needs the canary's own comparison first. Original text below.
+   *Sol's three reproduction blockers CLOSED 2026-08-23* (`137a4bf` lineage):
+   the after-close scheduler gained two clocks and **two completion stamps** so
+   a deferred sweep is retried rather than marked done, with a dedicated
+   early-close seam (`scripts/market_early_close.py`) that leaves
+   `market_calendar`/`market_session` untouched; finalization became **one
+   transaction per trade** with a write-ahead intent, a disk re-read, a strict
+   commit that raises, and `resolve_unfinished_finalizations()` settling
+   interrupted attempts against the CSV; and the transaction is fenced across
+   processes with `local_writer_lock`, with the authorized single-instance guard
+   added to `launch_gui.py` as defence in depth. A failed commit is never
+   reported as a finalization.
+
+   *Still owed:* **one live weekday session with `outcome_sweep_autorun="on"`**
+   (the mechanics canary - the switch stays OFF until the trader flips it);
+   R9.5's shadow store aligned to month segments and `session_date`; a restore
+   test of the ledger directory; the launch catch-up for the sweep (it runs only
+   while the strategy thread is alive, so never in OFF); and the decision to make
+   the ledger the authority, which needs the canary's own comparison first.
+   Original text below.
    New append-only authority `intraday_outcome_events.jsonl`
    (`intraday_outcome_event_v1`, month-segmented); the pending dict becomes a
    reconstructable checkpoint, never the authority. One owner, one transaction:

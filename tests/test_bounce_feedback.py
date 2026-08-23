@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pandas as pd
+import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
@@ -28,10 +29,34 @@ def _fake_session_window(reference=None, local_timezone_name=None):
     return _FakeSessionWindow(reference)
 
 
-def _test_bounce_bot_with_state(state):
+@pytest.fixture(autouse=True)
+def _restore_outcome_checkpoint_path():
+    """Never leave the module pointed at a temp checkpoint - or the desk's."""
+    original = bounce_bot.INTRADAY_BOUNCE_OUTCOME_STATE_JSON
+    try:
+        yield
+    finally:
+        bounce_bot.INTRADAY_BOUNCE_OUTCOME_STATE_JSON = original
+
+
+def _test_bounce_bot_with_state(state, checkpoint=None):
+    """A bot with one pending trade, in memory AND on disk.
+
+    R10.A: finalization re-reads the checkpoint from disk inside its lock -
+    in-memory state is not authoritative, because another process commits to
+    the same file. A bot whose disk says the trade was never registered is a
+    machine that correctly refuses to finalize it, so the state has to be
+    seeded for real.
+    """
     bot = object.__new__(bounce_bot.BounceBot)
     bot.pending_bounce_outcomes = {state["event_id"]: dict(state)}
-    bot._save_pending_bounce_outcomes = lambda: None
+    if checkpoint is None:
+        bot._save_pending_bounce_outcomes = lambda: None
+        return bot
+    bounce_bot.INTRADAY_BOUNCE_OUTCOME_STATE_JSON = Path(checkpoint)
+    bot._finalized_outcome_memory = {}
+    bot._finalizing_outcome_marks = {}
+    bot._save_pending_bounce_outcomes()
     return bot
 
 
@@ -893,7 +918,9 @@ class BounceFeedbackTests(unittest.TestCase):
             outcomes_path = Path(temp_dir) / "intraday_bounce_outcomes.csv"
             after_close = datetime(2026, 6, 1, 13, 15, tzinfo=timezone(timedelta(hours=-7)))
 
-            long_bot = _test_bounce_bot_with_state(_pending_state("AAPL_long_1", risk=2.0))
+            long_bot = _test_bounce_bot_with_state(
+                _pending_state("AAPL_long_1", risk=2.0), Path(temp_dir) / "long_state.json"
+            )
             long_df = _intraday_rows(
                 (datetime(2026, 6, 1, 10, 5), 101.0, 99.0, 100.5),
                 (datetime(2026, 6, 1, 12, 55), 107.0, 97.0, 106.0),
@@ -901,7 +928,8 @@ class BounceFeedbackTests(unittest.TestCase):
             )
 
             short_bot = _test_bounce_bot_with_state(
-                _pending_state("MSFT_short_1", symbol="MSFT", direction="short", risk=2.0)
+                _pending_state("MSFT_short_1", symbol="MSFT", direction="short", risk=2.0),
+                Path(temp_dir) / "short_state.json",
             )
             short_df = _intraday_rows(
                 (datetime(2026, 6, 1, 10, 5), 101.0, 99.0, 99.5),
@@ -914,7 +942,9 @@ class BounceFeedbackTests(unittest.TestCase):
                 patch.object(bounce_bot, "get_market_local_now", return_value=after_close),
                 patch.object(bounce_bot, "get_market_session_window", side_effect=_fake_session_window),
             ):
+                bounce_bot.INTRADAY_BOUNCE_OUTCOME_STATE_JSON = Path(temp_dir) / "long_state.json"
                 long_bot._update_pending_bounce_outcomes("AAPL", long_df)
+                bounce_bot.INTRADAY_BOUNCE_OUTCOME_STATE_JSON = Path(temp_dir) / "short_state.json"
                 short_bot._update_pending_bounce_outcomes("MSFT", short_df)
 
             rows = pd.read_csv(outcomes_path)

@@ -110,6 +110,13 @@ control set is `CLAUDE.md`/`AGENTS.md`, `CHANGELOG.md`, `plan.md`,
 - Test (before every commit): `.venv\Scripts\python.exe -m pytest tests/ -q` — must be fully green; current baseline lives in `CURRENT_CHECKPOINT.md`. Check pytest's own exit code, not a piped tail's. macOS/Linux: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ -q` (Qt tests need the offscreen platform when headless).
 - Smoke (offline, deterministic): `.venv\Scripts\python.exe scripts/smoke_check.py` — 7/7.
 - Run: `.venv\Scripts\python.exe launch_gui.py` (Windows; also the `trading_desk.cmd` launcher — **this is the production launch**, see Frozen exe rebuild policy) or `.venv/bin/python launch_gui.py` (macOS/Linux; `./setup_macos.command` once first). Keep the Settings ▸ Desk Link role on Main (satellite retired). IB TWS/Gateway runs on the main desk.
+- **One desk per machine** (R10.A, 2026-08-23): `launch_gui.py` takes a
+  machine-local slot (`scripts/single_instance.py`) and a second launch prints
+  "another TradingBotV3 desk is already running" and exits 0. `--selftest` and
+  `--run-scan` are outside the guard; `--allow-second-instance` overrides it. It
+  fails OPEN if the machine has no exclusion primitive - the outcome
+  finalization transaction fences itself independently, so the guard is defence
+  in depth rather than the thing correctness rests on.
 - Audits: `scripts/operations_audit.py` (runtime), `scripts/review_capture_audit.py` (capture readiness) — both also render in System Health.
 - No deploy pipeline: the user runs the app from this repo on `main`. Never leave the working tree broken.
 

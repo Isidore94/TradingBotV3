@@ -98,6 +98,14 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # package sweeps it in, but the selftest asserts what is REACHABLE.
     "completed_bars",
     "alert_repetition",
+    # `single_instance` (R10.A, 2026-08-23): imported inside `launch_gui.main`,
+    # so on a frozen desk nothing proves it is bundled until the trader
+    # double-clicks the exe - and if it is missing the desk does not start at
+    # all. `market_early_close` is reached only through a function-level import
+    # in the after-close scheduler, which is the shape a refactor can quietly
+    # break; without it the sweep would silently fall back to the regular close.
+    "single_instance",
+    "market_early_close",
     # `external_chart_links` (wishlist deep link, 2026-08-18): the Alert
     # Center imports it inside the click handler, so nothing proves it is
     # bundled until a trader presses the button on a frozen desk. One line
