@@ -8,6 +8,52 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.V step 7: the S2 defect is closed. **The packet is code-complete.**
+
+**Branch `phase05-integration-blitz`.** All seven steps built and green.
+
+**A recompute may not see a bar that came after its session.** The catch-up held
+today's daily frames while replaying a past session, which is how a payload whose
+`data_session` said 2026-08-20 carried **2,739 setups with a snapshot dated
+08-21** and 452 scenario exits on a bar that session had never seen. The frames
+are now trimmed to `<= target_scan_date` before the indicator frame **and** the
+record - both, because an indicator frame built from untrimmed bars would carry
+the future into a record built from trimmed ones. The indicator cache is keyed by
+`(symbol, session)` for the same reason.
+
+**`<=`, not `<`**: the session being recomputed is the session we have. **An
+unparseable session does not trim** - this is a point-in-time guard, not a filter,
+and emptying every frame over a malformed stamp is a worse failure than the one it
+prevents. A session before every bar leaves nothing, and the caller skips the
+setup rather than marking it from nothing.
+
+**Residual, stated rather than buried:** on a live same-day scan `target_scan_date`
+IS today, so today's forming bar is still admitted - unchanged behaviour, and a
+separate question from S2. plan.md sec 5's "completed bars only for state
+transitions" would narrow that further; it is not this packet's authorization.
+
+### R10.V exit gate - where it stands
+
+| gate item | state |
+|---|---|
+| fixtures re-frozen with rationale | **met** - nothing moved, recorded with its prediction |
+| backfill manifest filed | **met** - manifest + reconciliation under `evidence_frozen\` |
+| 0 rows with `volume_unit != shares` that Yahoo can supply | **met** - 1,116,982 of 1,117,170; the 188 remainder have no Yahoo data |
+| one live scan day on the repaired store | **OWED** - first weekday scan after 2026-08-23 |
+| no scoring, sigma, ranking or threshold change | **met** - no golden fixture moved |
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4319 passed / 19 subtests**, exit **0** (was 4304; +15) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**What to watch on the first live scan day:** the `daily_bar_units` tile must stay
+healthy (a `lots_rth` row means something got past the write seam), the run
+manifest's `provider.daily_bars.success.*` must be yahoo-only, and the tracker
+payload's `data_session` must match the newest `latest_snapshot` date.
+
+---
+
 ## 2026-08-23 - R10.V steps 5 and 6: a recorded no-op, and the nightly unit check
 
 **Branch `phase05-integration-blitz`.**

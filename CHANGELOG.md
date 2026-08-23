@@ -21,6 +21,25 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.V step 7: a recompute cannot see a bar that came after its session
+
+- **The tracker catch-up trims its daily frames to the session it is
+  recomputing.** It held today's frames while replaying a past one, which is how
+  a payload whose `data_session` said 2026-08-20 came to carry **2,739 setups
+  with a snapshot dated 08-21** and 452 scenario exits on a bar that session had
+  never seen (the S2 defect).
+- **`<=`, not `<`**: the session being recomputed is the session we have.
+- **An unparseable session does not trim.** This is a point-in-time guard, not a
+  filter, and silently emptying every frame because a stamp was malformed would
+  be a far worse failure than the one it prevents. A session before every bar
+  leaves nothing to recompute, and the caller skips the setup rather than marking
+  it from nothing.
+- **The indicator cache is now keyed by (symbol, session)**, because the frame it
+  is built from is session-dependent - caching by symbol alone would hand a later
+  session's indicators to an earlier one, which is the same defect wearing a hat.
+- Evidence-only by construction: the recompute writes the tracker payload, which
+  nothing in the live decision path reads back as a signal.
+
 ### 2026-08-23 - R10.V steps 5 and 6: nothing to re-freeze, and a nightly unit check
 
 - **Step 5 is a recorded no-op.** No AVWAP-derived golden fixture moved across

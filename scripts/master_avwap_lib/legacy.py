@@ -5929,6 +5929,37 @@ def _evaluate_tracker_scenario_bar(
     return events
 
 
+def _trim_daily_frame_to_session(df: "pd.DataFrame | None", session: str) -> "pd.DataFrame | None":
+    """Bars up to and including `session`. Nothing after it exists yet (R10.V step 7).
+
+    The tracker catch-up replays a past session with today's frames in hand, so
+    a recompute for 2026-08-20 could see 08-21's bar and mark against it. That is
+    the S2 defect: the payload's `data_session` said 08-20 while 2,739 setups
+    carried a snapshot dated 08-21, and 452 scenario exits were recorded on a bar
+    the session had never seen.
+
+    An unparseable session **does not trim**: this is a point-in-time guard, not
+    a filter, and silently emptying every frame because a stamp was malformed
+    would be a far worse failure than the one it prevents.
+    """
+    if df is None or getattr(df, "empty", True):
+        return df
+    if "datetime" not in getattr(df, "columns", []):
+        return df
+    try:
+        cutoff = pd.Timestamp(str(session).strip()[:10])
+    except Exception:
+        return df
+    if pd.isna(cutoff):
+        return df
+    stamps = pd.to_datetime(df["datetime"], errors="coerce")
+    keep = stamps.notna() & (stamps.dt.normalize() <= cutoff)
+    if bool(keep.all()):
+        return df
+    trimmed = df[keep].reset_index(drop=True)
+    return _set_daily_bar_source(trimmed, _get_daily_bar_source(df))
+
+
 def recompute_tracker_setup_record(
     setup: dict,
     df: pd.DataFrame,
@@ -10970,7 +11001,7 @@ def update_setup_tracker_from_scan(
     # setups for the same symbol builds each only once instead of once per record.
     # Symbols routinely carry a dozen-plus tracked setups, so this removes the bulk
     # of the recompute cost with no change to the resulting records.
-    indicator_frame_cache: dict[str, pd.DataFrame] = {}
+    indicator_frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
     band_history_caches: dict[str, dict] = {}
     replay_context_caches: dict[str, dict] = {}
 
@@ -11022,12 +11053,21 @@ def update_setup_tracker_from_scan(
                         else:
                             df = fetch_daily_bars(ib, symbol, days_needed)
                 recompute_cache[symbol] = df
+            # Point-in-time: a recompute FOR `target_scan_date` may not see a bar
+            # that came after it. The catch-up holds today's frames while
+            # replaying a past session, which is how the payload came to carry
+            # snapshots dated a day past its own `data_session` (S2).
+            df = _trim_daily_frame_to_session(df, target_scan_date)
             if df is None or df.empty:
                 continue
-            indicator_frame = indicator_frame_cache.get(symbol)
+            # Keyed by (symbol, session) because the frame it is built from is
+            # now session-dependent; caching by symbol alone would hand a
+            # later session's indicators to an earlier one.
+            indicator_key = (symbol, target_scan_date)
+            indicator_frame = indicator_frame_cache.get(indicator_key)
             if indicator_frame is None:
                 indicator_frame = compute_indicator_frame(df)
-                indicator_frame_cache[symbol] = indicator_frame
+                indicator_frame_cache[indicator_key] = indicator_frame
             band_history_cache = band_history_caches.setdefault(symbol, {})
             namespace[setup_id] = recompute_tracker_setup_record(
                 setup,
