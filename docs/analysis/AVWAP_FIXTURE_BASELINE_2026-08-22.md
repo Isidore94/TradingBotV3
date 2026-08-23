@@ -126,3 +126,36 @@ without `--force`); the consuming test is `tests/test_mixed_unit_avwap_golden.py
 0.0001 drift in one expectation fails the comparison, and editing an input bar
 without re-freezing the hash fails the Milestone 3 contract loader with a
 `raw input hash mismatch`.
+
+---
+
+## 5. Step 5's result: nothing moved, and that is a measurement
+
+*Recorded 2026-08-23, after steps 2, 3 and 4.*
+
+Step 5 asks for every AVWAP-derived golden fixture that changed to be re-frozen
+alongside the evidence for why it moved. **None changed.** Across the whole
+packet - provenance columns, the volume policy and the collision rule, and a
+backfill that rewrote 1,116,982 rows in 1,920 files of the live store - the only
+addition under `tests/fixtures/` is `mixed_unit_avwap_v1.json`, the control this
+step created:
+
+```
+git diff --stat <before-the-packet> -- tests/fixtures/
+ tests/fixtures/mixed_unit_avwap_v1.json | 561 ++++++++++++++++++++++++++++++++
+ 1 file changed, 561 insertions(+)
+```
+
+That is exactly what §3 predicted, and the prediction is why it counts as
+evidence rather than as luck: **fixtures feed fixed bars, so rewriting the store
+changes what the desk computes and not what the suite computes.** Had a fixture
+moved at step 4, the correct conclusion would have been that a test reads the
+live store and §1's proof had expired - not that the fixture needed re-freezing.
+
+The suite was green at every step (4215 → 4247 → 4265 → 4290), and the σ formula
+is untouched: `mixed_unit_avwap_v1`'s guard still requires the running-deviation
+variant to agree and the distribution variant to disagree.
+
+**A no-op recorded is not a step skipped.** The store's repair is visible in the
+desk's numbers and invisible in the fixtures, which is the separation this
+baseline existed to establish.
