@@ -21,6 +21,32 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.A: the append-only ledger exists
+
+- **`scripts/evidence_ledger.py`** - `EvidenceLedger`, month-segmented JSONL,
+  with `intraday_outcome_ledger()` writing `intraday_outcome_event_v1` into
+  `datauntime\evidence_ledgers` (the directory the cold push already covers;
+  a test asserts the two agree).
+- **A caller cannot overwrite the ledger's own fields.** Schema name,
+  `event_at`, `session_date` and writer identity are applied last: a row that
+  can lie about who wrote it is not evidence. The caller's mapping is copied,
+  never mutated.
+- **Every row carries UTC and the market session.** A 20:30-local write on the
+  21st is 03:30 UTC on the 22nd; only `astimezone` gets the session right, and
+  the segment follows the session rather than the UTC month.
+- **Every row says who wrote it** - host, pid, and a run id when the caller has
+  one. When two desks ran concurrently on 2026-08-20 the outcome store could not
+  say so and the duplicates had to be attributed by inference.
+- **A torn line is counted, never skipped.** `ReadResult.coverage_note` reports
+  `n=` with the unreadable count beside it, because a silently dropped row makes
+  a gap look like an absence of events. A row that cannot say its session is
+  excluded from a *window* and counted, but kept in an unwindowed read - it is a
+  real row, just an unplaceable one.
+- **Append-only in fact, not by convention**: a correction is a new row with
+  `supersedes`, and a test asserts the file only ever grows by suffix.
+- **13 months hot.** `cold_segments()` NAMES what is cold and never deletes it -
+  moving it is the cold push's job and deleting it is nobody's.
+
 ### 2026-08-23 - R10.A: the rule registry reaches v1 (four more rules, all reproduced)
 
 - **`h1_bar_start_v1`**, **`fabricated_zero_v1`**, **`duplicate_row_v1`** and

@@ -8,6 +8,44 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.A: the ledger the outcome store will be believed from
+
+**Branch `phase05-integration-blitz`.** The store itself, before any wiring: it
+can be tested on its own, and the wiring is the part that touches a live writer.
+
+`scripts/evidence_ledger.py` writes `intraday_outcome_event_v1` into
+`datauntime\evidence_ledgers`, month-segmented. The properties that make it an
+authority rather than a log:
+
+- **A caller cannot overwrite the ledger's own fields** - schema, `event_at`,
+  `session_date`, writer identity are applied last. A row that can lie about who
+  wrote it is not evidence.
+- **Two clocks on every row.** UTC for machine order, market session for trading
+  order; the segment follows the session, so a 20:30-local write on 31 August
+  lands in August.
+- **A torn line is counted.** Power loss mid-append leaves a partial line, and
+  `coverage_note` reports it beside n - a silently dropped row makes a gap look
+  like an absence. A row with no session is excluded from a *window* and counted,
+  but kept in an unwindowed read.
+- **Append-only in fact**: a test asserts the segment only ever grows by suffix,
+  and a correction is a superseding row with both versions surviving.
+- **13 months hot**; `cold_segments()` names what is cold and deletes nothing.
+
+Concurrency is stated rather than implied: thread-safe in-process by a lock,
+and across processes an append is one line opened in append mode - rows
+interleave whole, ordering is not guaranteed, and `event_at` is what orders them.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4361 passed / 19 subtests**, exit **0** (was 4337; +24) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Next:** wire the BounceBot outcome worker to it as a bounded dual-write canary
+against the legacy CSV - the pending dict becomes a reconstructable checkpoint,
+never the authority.
+
+---
+
 ## 2026-08-23 - R10.A begins: the rule registry reaches v1
 
 **Branch `phase05-integration-blitz`.** With R10.V code-complete, the R10.A ledger
