@@ -8,6 +8,38 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.A / D8: the tier lands on its own row
+
+**Branch `phase05-integration-blitz`.** The audit found `tier` on **0 of 7,863**
+registered rows. Reading the call sites settled why: every one of them registers
+the outcome and evaluates the alert's tier **afterwards**. The tier does not
+exist at registration, so the field could never have been filled.
+
+**So it is recorded when it exists**, as a `tier_assigned` ledger event carrying
+the id, tier, muted/proven/banger and the reason. That is what an append-only
+store is for: a fact learned later goes on a later row rather than being
+retro-fitted onto one that predates it. Wired at all **8** sites where a quality
+verdict follows a registration, and a test walks the module source to prove none
+was missed. **Reordering the alert path is a different kind of change** - it
+would move a live alert flow - and is not this packet's to make.
+
+**What a registration can honestly say, it now says**: family, engine version,
+day-part (from the session window, not the wall clock), session RVOL, `env_key`
+(environment + day-part, the pair the learning segments are keyed by), risk as a
+percent of price, and risk as an ATR multiple. Measured or blank - never
+estimated.
+
+**A test earned its keep.** Making every accessor in that function misbehave
+found `get_market_environment()` unguarded, which would have let a mid-update
+read raise **into the alert path**. Guarded.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4419 passed / 19 subtests**, exit **0** (was 4405; +14) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+---
+
 ## 2026-08-23 - R10.A / D3+D4: the pending backlog has a way out
 
 **Branch `phase05-integration-blitz`.** 576 pending outcomes, 94 of them older

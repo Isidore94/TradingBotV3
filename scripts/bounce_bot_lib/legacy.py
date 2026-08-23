@@ -3902,6 +3902,13 @@ class BounceBot(EWrapper, EClient):
             "outcome_mode": "eod_hold",
             "context": context,
         }
+        # R10.A / D8: the registration row records what it can MEASURE at
+        # registration. `tier` deliberately is not among them - see
+        # `_registration_context_fields`.
+        self.pending_bounce_outcomes[event_id]["context"] = {
+            **context,
+            **self._registration_context_fields(symbol, event_id, plan, entry_dt),
+        }
         self._save_pending_bounce_outcomes()
         self._append_bounce_outcome_row(self.pending_bounce_outcomes[event_id], "registered", 0, None, pd.DataFrame())
 
@@ -3926,6 +3933,97 @@ class BounceBot(EWrapper, EClient):
                 str(state.get("unresolved_reason") or "").strip() or "no_bars_after_entry"
             )
         return context
+
+    def _registration_context_fields(self, symbol, event_id, plan, entry_dt) -> dict:
+        """What a registration can honestly say about itself (R10.A / D8).
+
+        The audit found `tier` on **0 of 7,863** registered rows, and the reason
+        turned out to be ordering rather than oversight: every call site
+        registers the outcome and evaluates the alert's tier *afterwards*, so at
+        registration the tier does not exist yet. It is emitted as its own
+        `tier_assigned` ledger event instead of being back-filled onto a row
+        that could not have known it - reordering the alert path is a change to
+        a live alert flow and is not this packet's to make.
+
+        Everything here is measured at registration or left blank. Nothing is
+        estimated.
+        """
+        fields: dict = {}
+        try:
+            from evidence_rules import family_from_event_id
+
+            fields["family"] = family_from_event_id(event_id)
+        except Exception:
+            fields["family"] = ""
+        fields["engine_version"] = BOUNCE_LEARNING_SCHEMA_VERSION
+        try:
+            from bounce_bot_lib.learning import time_bucket_for
+
+            fields["day_part"] = time_bucket_for(entry_dt)
+        except Exception:
+            fields["day_part"] = ""
+        try:
+            entry_price = float(plan.get("entry_price"))
+            risk = float(plan.get("risk_per_share"))
+            fields["risk_pct_of_price"] = (
+                round(abs(risk) / entry_price * 100.0, 4) if entry_price > 0 else ""
+            )
+        except (TypeError, ValueError):
+            fields["risk_pct_of_price"] = ""
+        atr = None
+        try:
+            atr = self.atr_cache.get(str(symbol or "").strip().upper())
+        except Exception:
+            atr = None
+        try:
+            atr_value = float(atr) if atr not in (None, "") else 0.0
+            risk = float(plan.get("risk_per_share"))
+            fields["atr"] = round(atr_value, 4) if atr_value > 0 else ""
+            fields["risk_atr_multiple"] = round(abs(risk) / atr_value, 4) if atr_value > 0 else ""
+        except (TypeError, ValueError):
+            fields["atr"] = ""
+            fields["risk_atr_multiple"] = ""
+        # `env_key` is the environment and the day-part together, which is the
+        # pair every segment in the learning state is keyed by.
+        try:
+            environment = str(self.get_market_environment() or "")
+        except Exception:
+            # Every field here is evidence. None of them may cost an alert, and
+            # this one reads live state that can be mid-update.
+            environment = ""
+        fields["env_key"] = f"{environment or 'unknown'}|{fields.get('day_part') or 'unknown'}"
+        return fields
+
+    def record_alert_tier(self, event_id, quality) -> None:
+        """Emit the tier as its own ledger event once the alert has one.
+
+        Append-only stores exist precisely so a fact learned later can be
+        recorded later instead of being retro-fitted onto a row that predates
+        it. The registration row stays exactly as it was written.
+        """
+        if not event_id:
+            return
+        verdict = quality if isinstance(quality, dict) else {}
+        tier = str(verdict.get("tier") or "").strip()
+        if not tier:
+            return
+        try:
+            ledger = self._outcome_ledger()
+            if ledger is None:
+                return
+            ledger.append(
+                {
+                    "event_type": "tier_assigned",
+                    "event_id": event_id,
+                    "tier": tier,
+                    "muted": bool(verdict.get("muted")),
+                    "proven": bool(verdict.get("proven")),
+                    "banger": bool(verdict.get("banger")),
+                    "reason": str(verdict.get("reason") or ""),
+                }
+            )
+        except Exception:
+            logging.exception("Tier event could not be recorded for %s.", event_id)
 
     def _append_bounce_outcome_row(self, state, event_type, bars_elapsed, milestone_bar, rows_after_entry, *, finalize_eod=False):
         direction = state.get("direction")
@@ -5924,6 +6022,7 @@ class BounceBot(EWrapper, EClient):
         )
         self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        self.record_alert_tier(event_row.get("event_id", ""), quality)
         message = (
             f"REGIME PAUSE {symbol} ({side}): SPY paused ({hit['spy_window']:+.2f}% window) "
             f"but {symbol} isn't participating - day {hit['sym_day']:+.2f}% vs SPY {hit['spy_day']:+.2f}% "
@@ -6794,6 +6893,7 @@ class BounceBot(EWrapper, EClient):
             symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""), stop_override=orb_stop
         )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        self.record_alert_tier(event_row.get("event_id", ""), quality)
         label = "ORB BREAKOUT" if side == "long" else "ORB BREAKDOWN"
         message = (
             f"[{quality.get('tier', 'B')}-TIER] {label} {symbol} ({side}): first 5m close "
@@ -6935,6 +7035,7 @@ class BounceBot(EWrapper, EClient):
         )
         self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        self.record_alert_tier(event_row.get("event_id", ""), quality)
         message = (
             f"[{quality.get('tier', 'B')}-TIER] 8-EMA GRIND {symbol} ({side}): held the 5m 8-EMA "
             f"{hit['grind_bars']} bars, squeezed to {hit['squeeze_gap_atr']:.2f} ATR, now pushing "
@@ -7056,6 +7157,7 @@ class BounceBot(EWrapper, EClient):
             symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
         )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        self.record_alert_tier(event_row.get("event_id", ""), quality)
         message = (
             f"[{quality.get('tier', 'B')}-TIER] LRSI CROSS {event.level:.0f} {symbol} "
             f"({side}): efficiency {event.previous:.1f} -> {event.value:.1f} on the "
@@ -7189,6 +7291,7 @@ class BounceBot(EWrapper, EClient):
             symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
         )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        self.record_alert_tier(event_row.get("event_id", ""), quality)
         message = (
             f"[{quality.get('tier', 'B')}-TIER] M5 CONFLUENCE {symbol} ({side}): "
             f"HA reversal + SMI turn + LRSI {event.lrsi_level:.0f} within "
@@ -7298,6 +7401,7 @@ class BounceBot(EWrapper, EClient):
                 symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
             )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        self.record_alert_tier(event_row.get("event_id", ""), quality)
         message = (
             f"[{quality.get('tier', 'B')}-TIER] {headline} ({side}): {reason}, "
             f"at {event.close:.2f}."
@@ -7393,6 +7497,7 @@ class BounceBot(EWrapper, EClient):
         )
         self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
+        self.record_alert_tier(event_row.get("event_id", ""), quality)
         label = BOUNCE_TYPE_LABELS.get(bounce_type, bounce_type).upper()
         message = (
             f"[{quality.get('tier', 'B')}-TIER] {label} {symbol} ({side}): {hit['detail']} "
@@ -11283,6 +11388,7 @@ class BounceBot(EWrapper, EClient):
             # Proven-negative segments remain visible with a caution so feedback
             # cannot hide every confirmed, Settings-enabled M5 bounce.
             quality = self._evaluate_bounce_alert_quality(direction, levels, event_row)
+            self.record_alert_tier(event_row.get("event_id", ""), quality)
             human_pick = bool(event_row.get("human_focus_pick"))
             bounce_msg = _format_bounce_alert_message(
                 symbol, direction, levels_list, event_row, quality,

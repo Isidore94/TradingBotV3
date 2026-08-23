@@ -2194,6 +2194,12 @@ def test_h1_color_alerts_are_retired_to_learning_only():
     )
     stub._register_bounce_outcome = lambda *args, **kwargs: stub.recorded["outcomes"].append(args)
     stub._evaluate_bounce_alert_quality = lambda *args, **kwargs: {"tier": "B"}
+    # R10.A / D8: the tier is a fact learned AFTER registration, so it lands on
+    # its own ledger event. A retired-to-learning path still produces evidence.
+    stub.recorded["tiers"] = []
+    stub.record_alert_tier = lambda event_id, quality: stub.recorded["tiers"].append(
+        (event_id, quality)
+    )
     stub.log_symbol = lambda symbol, message: stub.recorded["logs"].append(message)
     stub.gui_callback = lambda *args, **kwargs: stub.recorded["gui"].append(args)
     stub.log_bounce_to_file = lambda **kwargs: stub.recorded["files"].append(kwargs)

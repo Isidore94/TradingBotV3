@@ -21,6 +21,25 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.A / D8: registrations record what they can measure, tiers arrive on their own row
+
+- **The tier was absent from 0 of 7,863 registered rows because of ordering,
+  not oversight.** Every call site registers the outcome and evaluates the
+  alert's tier *afterwards*, so at registration the tier does not exist yet.
+- **It is emitted as its own `tier_assigned` ledger event** rather than
+  back-filled onto a row that could not have known it - which is what an
+  append-only store is for. Wired at all **8** sites where a quality verdict
+  follows a registration, and a test walks the source to prove none was missed.
+  Reordering a live alert path is a different kind of change and is not this
+  packet's.
+- **Everything D8 asks for that IS measurable at registration now is**: family,
+  engine version, day-part (from the session, not the wall clock), session RVOL,
+  `env_key` (environment + day-part, the pair the learning segments are keyed
+  by), risk as a **percent of price** and as an **ATR multiple**. Each is
+  measured or blank; none is estimated.
+- **None of it can cost an alert.** A test that makes every accessor misbehave
+  found one unguarded call - `get_market_environment()` - and it is guarded now.
+
 ### 2026-08-23 - R10.A / D3+D4: finalization no longer depends on being scanned again
 
 - **`sweep_pending_bounce_outcomes()`** finalizes every pending outcome whose
