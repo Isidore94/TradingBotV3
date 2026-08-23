@@ -7,6 +7,22 @@ map and the predeclared decisions R10.A–R10.I depend on.
 **Status: the program stops here.** Nothing in R10.A onward may start until the
 trader accepts this register.
 
+> ### Amendment 1 — 2026-08-22 afternoon: C3's stated root cause was wrong
+>
+> The trader measured the desk at 16:50 PT and this audit's C3 and §6 named the
+> wrong cause. `existing_journal_requires_migration(JOURNAL_DB_FILE)` returns
+> **False** and the Journal page takes the `store_needs_preparation() == False`
+> branch (`ui/panels/journal_panel.py:87`), so the refusal at
+> `journal_runner.py:494-497` is a **code path that never executes here**. It was
+> the most legible string near the failure and I attributed to it without
+> checking whether that branch was live — the audit's own rule, applied to
+> everything else and not to this.
+>
+> **§8 Q1 is struck: there is nothing for the trader to click.** C3's row and §6
+> are corrected below and the real mechanism is in **§6a**. The seam fix in
+> `bf0b460` stands and is what made the real cause readable.
+
+
 **Produced** 2026-08-22 on branch `phase05-integration-blitz`.
 **Baseline** at the time of the sweep: HEAD `b6e1521`, suite 4145 passed / 19
 subtests, exit 0.
@@ -80,7 +96,7 @@ available evidence.
 | **F5** | M5 names survive the day roll | **PROVEN, far worse than stated** | The four named symbols do appear on the true M5 list across sessions (WDAY 4, NDAQ 3, DECK 3, VXX 2) — but **244 of 499 (symbol,side) pairs = 49%** appear on ≥2 distinct sessions; DOCN SHORT on 7. **Caveat that must travel with this number:** the picks store is a snapshot, so it cannot distinguish "survived the roll" from "the trader re-added it". That ambiguity *is* F4, and it is why R10.E needs membership episodes rather than snapshots |
 | **C1** | `like_claim` rows are never forward-graded | **PROVEN** | 52 `like_claim` rows over 2 sessions; `like_cohort_*` files: **none**; the veto trio exists |
 | **C2** | Auto-regime shifts are never written as rows | **PROVEN** | `market_environment_annotations.jsonl` **does not exist** |
-| **C3** | `journal_import` fails nightly with a blank error | **PROVEN, root cause found** | 20 `failed` rows in the DAS ledger with `error=''` **and** `reason=''`. Cause: `run_nightly_journal_import` returns its explanation in **`messages`** (`journal_runner.py:499-506`), and `ai_jobs/runner.py`'s normal path passed only `reason=` — the diagnostic was produced and dropped at the seam. **Fixed in this packet** (see §6). The underlying cause it was hiding: *"journal database requires trader-present preparation in the GUI; nightly import refused without migrating it"* |
+| **C3** | `journal_import` fails nightly with a blank error | **PROVEN**; *(cause corrected — see Amendment 1 and §6a)* | 20 `failed` rows in the DAS ledger with `error=''` **and** `reason=''`. Seam: `run_nightly_journal_import` returns its explanation in **`messages`** (`journal_runner.py:499-506`) and `ai_jobs/runner.py`'s normal path passed only `reason=`, so the diagnostic was produced and dropped. **Fixed in this packet** (§6). ~~The underlying cause: a required journal migration~~ — **struck; that branch never runs on this desk** |
 
 **Counts:** 12 PROVEN · 6 PROVEN\* (reproduced, a number differs) · 3 REFUTED ·
 4 UNKNOWN.
@@ -233,11 +249,44 @@ Three tests; two proved red first (`test_a_failing_job_records_the_messages_it_r
 (`test_a_successful_job_is_not_given_a_manufactured_reason`) was green throughout
 and guards against over-reach.
 
-**The cause is reported, not fixed**, per the packet: *"journal database requires
-trader-present preparation in the GUI; nightly import refused without migrating
-it."* The nightly import has been refusing to run since 08-19 because the journal
-database wants a trader-present migration in the GUI. **That is a trader action,
-not a code change**, and it is the first item in §8.
+**The cause is reported, not fixed**, per the packet — but the cause this audit
+first named was wrong. See §6a.
+
+## 6a. What `journal_import` is actually doing (Amendment 1)
+
+Measured on the desk 2026-08-22: `existing_journal_requires_migration(JOURNAL_DB_FILE)`
+→ **False**, and `ui/panels/journal_panel.py:87` takes the
+`store_needs_preparation() == False` branch with no preparation banner. The
+refusal at `journal_runner.py:494-497` is a code path that **never executes on
+this desk**, so there is no migration to run and §8 Q1 is struck.
+
+**The job is not failing to import. It imports and is then marked failed.**
+From `import_runs` (122 rows; OK 92, PARTIAL 12, FAILED 11, MISMATCH 7), the
+2026-08-21 23:30 run **imported 21 Questrade executions** (18 on account
+29347316, 3 on 51830546) and still returned `FAILED`, because any of three
+`had_errors` paths fires every night:
+
+| source | status | message |
+|---|---|---|
+| `IBKR_FLEX` (`journal_runner.py:355-361`) | FAILED | 08-21 `HTTPSConnectionPool(gdcdyn.interactivebrokers.com) Max retries exceeded`; 08-22 `Statement could not be generated at this time` |
+| `QUESTRADE_BACKFILL` (`:336-338`) | PARTIAL | `activities cross-check unavailable … 400 Bad Request /v1/accounts/<id>/activities` on **both** accounts — executions still imported |
+| `RECONCILE` | MISMATCH | `29 position(s), 19 mismatch(es), 19 trade(s) flagged` |
+
+Because the returned status is `FAILED`, the runner retries **3× per session**,
+re-requesting a Flex statement each time. The seam fix above puts these messages
+into tonight's ledger rows; nothing else changes.
+
+**Recommended, NOT authorized — the journal is R7 territory and has its own
+ask-first:**
+
+1. A cross-check-unavailable PARTIAL and a transient Flex failure should classify
+   as `degraded`, not `failed`, so the per-session cap stops burning Flex
+   requests on a condition that is not a data loss.
+2. The Questrade `/activities` 400 on **both** accounts is a broker-API question
+   (request window or token scope), to be diagnosed read-only and reported.
+3. The **19 reconcile mismatches** should surface in Journal ▸ Health with their
+   trade ids — that is the thing actually worth the trader's attention, and it is
+   currently buried behind a status that says only "failed".
 
 ---
 
@@ -260,11 +309,12 @@ not a code change**, and it is the first item in §8.
 
 ## 8. Questions for the trader
 
-1. **The journal migration.** `journal_import` has failed every night since 08-19
-   for one reason: the journal database wants trader-present preparation in the
-   GUI. Running that migration is a few minutes at the desk and it unblocks the
-   nightly import, `journal_import_health` in the briefs, and R10.F's cohort
-   grading. Do you want to do it before R10.A?
+1. ~~**The journal migration.**~~ **STRUCK by Amendment 1** — there is no
+   migration pending; the refusal branch never runs here. What replaces it is
+   *recommended, not authorized* and sits in R7's territory, not R10's: see §6a's
+   three items (reclassify a transient Flex failure as `degraded`; diagnose the
+   Questrade `/activities` 400; surface the 19 reconcile mismatches with their
+   trade ids in Journal ▸ Health).
 2. **The `.bak` tracker payload.** `master_avwap_setup_tracker.json.bak` is
    939 MB and is the only other copy of tracker state. Is it a deliberate
    rollback point (keep, and R10.D diffs against it) or an accident (delete, and

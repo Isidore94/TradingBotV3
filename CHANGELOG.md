@@ -46,8 +46,11 @@ observability fix below.
   produced and dropped at the seam, and 20 nightly failures said nothing at all.
   `_failure_reason()` prefers `reason`, falls back to `messages`, and when a job
   fails with nothing to say records that fact naming the job. Successful rows
-  are untouched. The cause it was hiding is now readable and is a trader action:
-  the journal database wants trader-present preparation in the GUI.
+  are untouched. **The cause it was hiding, corrected the same day:** not a
+  pending migration (that branch never runs here) but three nightly `had_errors`
+  paths - a transient IBKR Flex failure, a Questrade `/activities` 400 on both
+  accounts, and 19 reconcile mismatches - which mark a run FAILED *after* it has
+  successfully imported, so the runner then retries it 3x per session.
 
 ### 2026-08-22 - R10 registered as plan.md Phase 0.7 (Evidence Plane program)
 

@@ -83,9 +83,20 @@ fact naming the job. Successful rows untouched. **Two tests proved red first**
 `test_a_failing_job_with_nothing_to_say_still_says_so`); a third was green
 throughout and guards against over-reach.
 
-The cause it was hiding, now readable and **reported, not fixed**: *"journal
-database requires trader-present preparation in the GUI; nightly import refused
-without migrating it."* That is a trader action — question 1 below.
+**AMENDED same day:** the cause I named was wrong.
+`existing_journal_requires_migration()` is **False** on this desk and the Journal
+page shows no preparation banner, so that refusal branch never runs. I attributed
+the failure to the most legible string near it without checking whether the
+branch was live — the audit's own rule, applied everywhere else and not here.
+
+What is actually happening: the job **imports and is then marked failed**. The
+2026-08-21 23:30 run imported **21 Questrade executions** and still returned
+FAILED, because three `had_errors` paths fire nightly — `IBKR_FLEX` FAILED
+(transient: connection refused 08-21, "statement could not be generated" 08-22),
+`QUESTRADE_BACKFILL` PARTIAL (400 on `/v1/accounts/<id>/activities`, **both**
+accounts, executions still imported), and `RECONCILE` MISMATCH (19 mismatches).
+Because the status is FAILED the runner retries 3× per session, re-requesting a
+Flex statement each time. Audit §6a carries it; §8 Q1 is struck.
 
 | Check | Result |
 |---|---|
@@ -93,8 +104,11 @@ without migrating it."* That is a trader action — question 1 below.
 
 ### Open questions blocking R10.A (audit §8)
 
-1. Run the journal migration at the desk? It has blocked the nightly import
-   since 08-19 and gates R10.F.
+1. ~~Run the journal migration~~ **STRUCK** — none is pending. Its replacement is
+   *recommended, not authorized* and belongs to R7: reclassify a transient Flex
+   failure and a cross-check-unavailable PARTIAL as `degraded` rather than
+   `failed`; diagnose the Questrade `/activities` 400; surface the 19 reconcile
+   mismatches with trade ids in Journal ▸ Health.
 2. Is `master_avwap_setup_tracker.json.bak` (939 MB) a deliberate rollback point
    or an accident?
 3. Confirm the existing duplicate rows stay as history with a reader-side rule
