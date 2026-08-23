@@ -8,6 +8,49 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.A / D3+D4: the pending backlog has a way out
+
+**Branch `phase05-integration-blitz`.** 576 pending outcomes, 94 of them older
+than 2026-08-18 and 17 from June, existed because finalization only ever happened
+inside the per-symbol update - which runs for a symbol the scan is looking at
+*right now*. A name that stopped being scanned was never finalized at all.
+
+**D4 is the same gap.** 2026-08-21: 409 `registered`, 399/398/397/394 milestones,
+**0 finals**. The milestones ran all day; only the EOD pass was missing. Not an
+IB outage, and the audit's PROVEN* is now settled as D3's consequence.
+
+**The sweep needs no bars and no IB.** It finalizes from what each trade already
+measured (the D2 rules), runs in the existing after-close worker **before** the
+learning refresh that reads the rows, and a failure in it is logged without
+costing the refresh.
+
+**Idempotent by construction**: finalized ids ride in the same checkpoint as the
+pending dict, bounded at 5,000, so a restart or a second pass cannot write a
+second final. **Expiry is three completed sessions** - counted in sessions, not
+days, so a long weekend cannot expire a two-session-old trade - and only for a
+trade that measured nothing. One with evidence finalizes on that evidence however
+old it is.
+
+**It reports itself** to the ledger and to `diagnostics/outcome_sweep_coverage.json`.
+A sweep that reports nothing is indistinguishable from a sweep that never ran,
+which is exactly how this backlog stayed invisible for two months.
+
+**One thing the tests forced.** `_is_eod_finalization_due` read the live clock,
+so with the sweep pretending it was 08:00 on 08-21 the real clock still said the
+session was over and the "still open" branch could not be tested at all. It takes
+an optional `now` now; every existing caller is unchanged.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4405 passed / 19 subtests**, exit **0** (was 4387; +18) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**What to watch on the first live weekday after close+30:** the sweep line in the
+log, `outcome_sweep_coverage.json` appearing, and the pending count falling from
+its current backlog rather than growing.
+
+---
+
 ## 2026-08-23 - R10.A / D2: no path writes a number it did not measure
 
 **Branch `phase05-integration-blitz`.** The most consequential change in R10.A,

@@ -21,6 +21,34 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.A / D3+D4: finalization no longer depends on being scanned again
+
+- **`sweep_pending_bounce_outcomes()`** finalizes every pending outcome whose
+  session is over, needing **no bars and no IB**. The backlog it exists for:
+  **576 pending, 94 older than 2026-08-18, 17 from June, the oldest
+  2026-06-22**. Finalization only ever happened inside
+  `_update_pending_bounce_outcomes`, which runs for a symbol the scan is looking
+  at right now, so a name that stopped being scanned was never finalized at all.
+- **D4 is that same gap, confirmed.** 2026-08-21 has 409 `registered` through
+  394 `12_bar` and **0 `final`**: the milestones ran all day and only the EOD
+  pass was missing. Not an IB outage.
+- **It runs in the existing after-close worker**, before the learning refresh
+  that reads the rows, and a sweep failure is logged without costing the refresh.
+- **Idempotent by construction.** Finalized ids live in the same checkpoint as
+  the pending dict, so a restart or a second pass cannot write a second final.
+  The memory is bounded at 5,000 - it is de-duplication, not a record.
+- **Expiry is three completed sessions**, counted in sessions rather than days
+  so a long weekend cannot expire a two-session-old trade, and **only for a
+  trade that measured nothing**: one with evidence finalizes on that evidence
+  however old it is.
+- **It reports itself.** A coverage row goes to the ledger and to
+  `diagnostics/outcome_sweep_coverage.json` - counts by reason, still-open,
+  unparseable, expired. A sweep that reports nothing is indistinguishable from a
+  sweep that never ran, which is how the backlog stayed invisible for two months.
+- **A writer failure leaves the trade pending** rather than losing it, and
+  `_is_eod_finalization_due` gained an injectable clock so the sweep and its
+  tests share one - without it the "still open" branch could not be tested at all.
+
 ### 2026-08-23 - R10.A / D2: a finalization stops writing numbers it did not measure
 
 - **The fabricated zero is gone.** The EOD writer defaulted `eod_close` to the

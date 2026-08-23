@@ -2885,6 +2885,9 @@ class BounceBot(EWrapper, EClient):
         except Exception:
             return {}
         pending = payload.get("pending", {}) if isinstance(payload, dict) else {}
+        finalized = payload.get("finalized", {}) if isinstance(payload, dict) else {}
+        if isinstance(finalized, dict):
+            self._finalized_outcome_memory = dict(finalized)
         return pending if isinstance(pending, dict) else {}
 
     def _save_pending_bounce_outcomes(self):
@@ -2894,6 +2897,9 @@ class BounceBot(EWrapper, EClient):
                 "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
                 "updated_at": get_market_local_now().isoformat(timespec="seconds"),
                 "pending": self.pending_bounce_outcomes,
+                # R10.A / D3: what the sweep has already finalized, so a restart
+                # or a second pass cannot write a second final for one trade.
+                "finalized": self._finalized_outcome_ids(),
             }
             INTRADAY_BOUNCE_OUTCOME_STATE_JSON.write_text(
                 json.dumps(payload, indent=2, default=str),
@@ -3699,10 +3705,163 @@ class BounceBot(EWrapper, EClient):
         ].copy()
         return session_rows.sort_values("datetime").reset_index(drop=True)
 
-    def _is_eod_finalization_due(self, entry_dt):
+    # ------------------------------------------------------------------
+    # R10.A / D3: finalization that does not depend on being scanned again
+    # ------------------------------------------------------------------
+    #: A pending outcome older than this many completed sessions is finalized as
+    #: unresolved and stops being carried. Three sessions is long enough to
+    #: survive a long weekend and short enough that the backlog cannot reach the
+    #: 576 rows - 94 older than three days, 17 from June - that D3 measured.
+    PENDING_EXPIRY_SESSIONS = 3
+    #: How many finalized ids the checkpoint remembers, so a second sweep cannot
+    #: write a second final for the same trade. Bounded: this is a de-duplication
+    #: memory, not a record - the ledger and the CSV are the record.
+    FINALIZED_MEMORY = 5_000
+
+    def _finalized_outcome_ids(self) -> dict:
+        memory = getattr(self, "_finalized_outcome_memory", None)
+        if memory is None:
+            memory = {}
+            self._finalized_outcome_memory = memory
+        return memory
+
+    def _remember_finalized_outcome(self, event_id: str, session_date: str) -> None:
+        memory = self._finalized_outcome_ids()
+        memory[str(event_id)] = str(session_date or "")
+        if len(memory) > self.FINALIZED_MEMORY:
+            for stale in list(memory)[: len(memory) - self.FINALIZED_MEMORY]:
+                memory.pop(stale, None)
+
+    def _sessions_since(self, entry_dt, now) -> int:
+        """Completed market sessions between an entry and `now`. Weekends do not count."""
+        try:
+            from market_calendar import is_session
+        except Exception:
+            is_session = None
+        day = entry_dt.date()
+        end = now.date()
+        sessions = 0
+        while day < end:
+            day += timedelta(days=1)
+            if is_session is None:
+                if day.weekday() < 5:
+                    sessions += 1
+            else:
+                try:
+                    if is_session(day):
+                        sessions += 1
+                except Exception:
+                    if day.weekday() < 5:
+                        sessions += 1
+        return sessions
+
+    def sweep_pending_bounce_outcomes(self, *, now=None, expire_after_sessions=None) -> dict:
+        """Finalize every pending outcome whose session is over. Idempotent.
+
+        The backlog D3 measured - **576 pending, 94 older than 2026-08-18, 17
+        from June, the oldest 2026-06-22** - exists because finalization only
+        ever happened inside `_update_pending_bounce_outcomes`, which runs for a
+        symbol the scan is looking at *right now*. A name that stopped being
+        scanned was never finalized at all. D4's "408 events, 0 finals on
+        2026-08-21" is that same gap and not an IB outage: the milestones ran all
+        day, only the EOD pass is missing.
+
+        This sweep needs no bars and no IB. It finalizes from what each trade
+        already measured (R10.A / D2), and a trade that never measured anything
+        finalizes **unresolved** rather than at a made-up zero.
+
+        Idempotent by construction: an id already finalized is skipped, and the
+        memory of what was finalized lives in the same checkpoint as the pending
+        dict, so a restart does not re-finalize what a previous run did.
+        """
+        moment = now or get_market_local_now()
+        expiry = int(self.PENDING_EXPIRY_SESSIONS if expire_after_sessions is None else expire_after_sessions)
+        counts = {
+            "pending_before": len(self.pending_bounce_outcomes),
+            "finalized": 0,
+            "expired": 0,
+            "unparseable": 0,
+            "already_finalized": 0,
+            "still_open": 0,
+        }
+        by_reason: dict[str, int] = {}
+        for event_id, state in list(self.pending_bounce_outcomes.items()):
+            if event_id in self._finalized_outcome_ids():
+                self.pending_bounce_outcomes.pop(event_id, None)
+                counts["already_finalized"] += 1
+                continue
+            entry_dt = self._parse_bar_time(state.get("entry_time"))
+            if entry_dt is None:
+                # It cannot say when it started, so it cannot be graded. Dropped
+                # from the checkpoint and COUNTED - never silently discarded.
+                self.pending_bounce_outcomes.pop(event_id, None)
+                counts["unparseable"] += 1
+                continue
+            if not self._is_eod_finalization_due(entry_dt, moment):
+                counts["still_open"] += 1
+                continue
+            sessions = self._sessions_since(entry_dt, moment)
+            expired = sessions >= expiry and not (state.get("last_measured") or {})
+            if expired:
+                state["unresolved_reason"] = "expired_no_data"
+            try:
+                self._append_bounce_outcome_row(
+                    state, "final", bars_elapsed=0, milestone_bar=None,
+                    rows_after_entry=pd.DataFrame(), finalize_eod=True,
+                )
+            except Exception:
+                logging.exception("Sweep could not finalize %s; it stays pending.", event_id)
+                continue
+            self._remember_finalized_outcome(event_id, state.get("trade_date"))
+            self.pending_bounce_outcomes.pop(event_id, None)
+            counts["finalized"] += 1
+            if expired:
+                counts["expired"] += 1
+            reason = "expired_no_data" if expired else (
+                "measured" if (state.get("last_measured") or {}) else "no_bars_after_entry"
+            )
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+
+        counts["pending_after"] = len(self.pending_bounce_outcomes)
+        counts["by_reason"] = by_reason
+        counts["expire_after_sessions"] = expiry
+        counts["swept_at"] = moment.isoformat(timespec="seconds")
+        if counts["finalized"] or counts["unparseable"] or counts["already_finalized"]:
+            self._save_pending_bounce_outcomes()
+        self._write_outcome_coverage(counts)
+        return counts
+
+    def _write_outcome_coverage(self, counts: dict) -> None:
+        """File the sweep's own coverage, to the ledger and to disk.
+
+        A sweep that reports nothing is indistinguishable from a sweep that never
+        ran, which is exactly how the pending backlog stayed invisible for two
+        months. Fail-open: a coverage write must never cost a finalization.
+        """
+        try:
+            ledger = self._outcome_ledger()
+            if ledger is not None:
+                ledger.append({"event_type": "coverage", "coverage": counts})
+        except Exception:
+            logging.exception("Outcome coverage could not be written to the ledger.")
+        try:
+            from project_paths import get_diagnostics_dir
+
+            path = Path(get_diagnostics_dir()) / "outcome_sweep_coverage.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(counts, indent=2, default=str), encoding="utf-8")
+        except Exception:
+            logging.exception("Outcome coverage could not be written to disk.")
+
+    def _is_eod_finalization_due(self, entry_dt, now=None):
+        """Is `entry_dt`'s session over, plus the grace period?
+
+        `now` is injectable so the sweep and its tests share one clock. Left
+        alone it reads the live one, which is what every existing caller does.
+        """
         session = get_market_session_window(reference=entry_dt)
         close_with_grace = session.close_local + timedelta(minutes=BOUNCE_EOD_FINALIZE_GRACE_MINUTES)
-        now_local = get_market_local_now()
+        now_local = now or get_market_local_now()
         if now_local.tzinfo is None:
             now_local = now_local.replace(tzinfo=session.close_local.tzinfo)
         else:
@@ -3761,7 +3920,11 @@ class BounceBot(EWrapper, EClient):
             "measured_bars": int((state.get("last_measured") or {}).get("bars") or 0),
         }
         if basis == "unresolved":
-            context["finalization"]["reason"] = "no_bars_after_entry"
+            # The sweep names a more specific reason when it has one; the
+            # default says what was actually observed, which is nothing.
+            context["finalization"]["reason"] = (
+                str(state.get("unresolved_reason") or "").strip() or "no_bars_after_entry"
+            )
         return context
 
     def _append_bounce_outcome_row(self, state, event_type, bars_elapsed, milestone_bar, rows_after_entry, *, finalize_eod=False):
@@ -4099,6 +4262,19 @@ class BounceBot(EWrapper, EClient):
 
         def worker():
             try:
+                # R10.A / D3: finalize what the scan loop can no longer reach,
+                # BEFORE the learning refresh reads the rows. It needs no bars
+                # and no IB, and a failure here must not cost the refresh.
+                try:
+                    swept = self.sweep_pending_bounce_outcomes()
+                    if swept.get("finalized"):
+                        logging.info(
+                            "Outcome sweep finalized %d pending trade(s) (%d expired); %d still open.",
+                            swept["finalized"], swept.get("expired", 0), swept.get("pending_after", 0),
+                        )
+                except Exception:
+                    logging.exception("Outcome sweep failed; the learning refresh continues.")
+
                 from bounce_bot_lib.learning import refresh_bounce_learning_state
 
                 state = refresh_bounce_learning_state()
