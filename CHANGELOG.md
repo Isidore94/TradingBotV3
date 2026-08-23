@@ -21,6 +21,28 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.A / D2: a finalization stops writing numbers it did not measure
+
+- **The fabricated zero is gone.** The EOD writer defaulted `eod_close` to the
+  entry price whenever it had no bars in hand, producing **1,164 of 6,907
+  in-window finals with `close_r` exactly 0** - every one of them with
+  `eod_close == entry_price`, and none of the 5,743 non-zero finals like that.
+- **Three honest outcomes replace it.** Bars measured earlier with a **stop hit**
+  among them finalize **at the stop** (`close_r = -1`) - that is the 563 stop-outs
+  that were scoring 0R. Bars measured earlier with no stop finalize at the **last
+  measured close**. Nothing ever seen after entry finalizes **`unresolved`** with
+  blank numerics and the reason `no_bars_after_entry`.
+- **The state now remembers what each bar measured** (`last_measured`), which is
+  what makes an honest finalization possible without refetching anything: a
+  trade whose own earlier rows recorded a stop cannot be finalized as a scratch.
+- **How a row's numbers were arrived at rides in `context_json`**
+  (`finalization.basis`, `.measured_bars`, `.reason`), never in a new column -
+  the CSV header stays exactly as it was.
+- **Legacy rows are untouched.** `unsettled_close_mask` and the registry's
+  `fabricated_zero_v1` describe the same old signature and a test asserts they
+  agree row for row; new `unresolved` rows deliberately do not match it, because
+  they are blank rather than zero.
+
 ### 2026-08-23 - R10.A: the outcome ledger runs as a dual-write canary
 
 - **Every row the BounceBot writes to `intraday_bounce_outcomes.csv` is mirrored**

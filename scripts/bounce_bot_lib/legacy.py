@@ -3746,6 +3746,24 @@ class BounceBot(EWrapper, EClient):
         self._save_pending_bounce_outcomes()
         self._append_bounce_outcome_row(self.pending_bounce_outcomes[event_id], "registered", 0, None, pd.DataFrame())
 
+    def _context_with_finalization(self, state, basis):
+        """The row's context plus how its numbers were arrived at (R10.A).
+
+        Carried in `context_json` rather than a new column: the CSV header is
+        never widened during the canary, and a reader that does not know about
+        `finalization` simply does not see it.
+        """
+        context = dict(state.get("context") or {})
+        if not basis:
+            return context
+        context["finalization"] = {
+            "basis": basis,
+            "measured_bars": int((state.get("last_measured") or {}).get("bars") or 0),
+        }
+        if basis == "unresolved":
+            context["finalization"]["reason"] = "no_bars_after_entry"
+        return context
+
     def _append_bounce_outcome_row(self, state, event_type, bars_elapsed, milestone_bar, rows_after_entry, *, finalize_eod=False):
         direction = state.get("direction")
         entry_price = float(state.get("entry_price"))
@@ -3765,6 +3783,9 @@ class BounceBot(EWrapper, EClient):
         mfe_pct = ""
         mae_pct = ""
         entry_dt = self._parse_bar_time(state.get("entry_time"))
+        # R10.A: how this row's numbers were arrived at. It rides in
+        # `context_json` because the CSV header is never widened.
+        finalization_basis = "measured" if finalize_eod else ""
         if rows_after_entry is not None and not rows_after_entry.empty and risk > 0:
             high_max = float(rows_after_entry["high"].max())
             low_min = float(rows_after_entry["low"].min())
@@ -3800,18 +3821,73 @@ class BounceBot(EWrapper, EClient):
                 target_2r_hit = state.get("target_2r") is not None and low_min <= float(state["target_2r"])
                 stop_hit = high_max >= float(state.get("stop_price"))
             eod_close = last_close if finalize_eod else ""
+            # R10.A: remember what this bar measured, so a later finalization
+            # with no bars in hand can report what WAS seen instead of assuming
+            # nothing happened.
+            state["last_measured"] = {
+                "bars": int(bars_elapsed or 0),
+                "close_r": close_r,
+                "mfe_r": mfe_r,
+                "mae_r": mae_r,
+                "best_price": best_price,
+                "worst_price": worst_price,
+                "last_close": last_close,
+                "stop_hit": bool(stop_hit),
+                "target_1r_hit": bool(target_1r_hit),
+                "target_2r_hit": bool(target_2r_hit),
+                "minutes_elapsed": minutes_elapsed,
+                "at": get_market_local_now().isoformat(timespec="seconds"),
+            }
         elif finalize_eod and risk > 0:
-            best_price = entry_price
-            worst_price = entry_price
-            close_r = 0.0
-            mfe_r = 0.0
-            mae_r = 0.0
-            eod_close = entry_price
-            eod_move_pct = 0.0
-            mfe_pct = 0.0
-            mae_pct = 0.0
+            # R10.A / D2. This branch used to write close_r = 0 with
+            # eod_close = entry_price: 1,164 of 6,907 in-window finals, every one
+            # of them an assumption rather than a measurement, and 563 of them
+            # trades whose own earlier rows had already recorded a stop hit.
+            # **No path may write a number it did not measure.**
+            measured = state.get("last_measured") or {}
+            if measured.get("stop_hit"):
+                # It was stopped out. The stop is where it ended - never the entry.
+                stop_price = float(state.get("stop_price"))
+                best_price = measured.get("best_price", "")
+                worst_price = measured.get("worst_price", "")
+                mfe_r = measured.get("mfe_r", "")
+                mae_r = measured.get("mae_r", "")
+                close_r = -1.0
+                eod_close = stop_price
+                target_1r_hit = bool(measured.get("target_1r_hit"))
+                target_2r_hit = bool(measured.get("target_2r_hit"))
+                stop_hit = True
+                if entry_price > 0:
+                    eod_move_pct = ((stop_price - entry_price) / entry_price) * 100.0
+                    if direction != "long":
+                        eod_move_pct = ((entry_price - stop_price) / entry_price) * 100.0
+                mfe_pct = measured.get("mfe_pct", "")
+                mae_pct = measured.get("mae_pct", "")
+                finalization_basis = "stop_hit_from_prior_measurement"
+            elif measured:
+                # Bars were seen earlier in the session, just not now. The last
+                # thing actually measured is the honest close.
+                best_price = measured.get("best_price", "")
+                worst_price = measured.get("worst_price", "")
+                close_r = measured.get("close_r", "")
+                mfe_r = measured.get("mfe_r", "")
+                mae_r = measured.get("mae_r", "")
+                eod_close = measured.get("last_close", "")
+                target_1r_hit = bool(measured.get("target_1r_hit"))
+                target_2r_hit = bool(measured.get("target_2r_hit"))
+                if entry_price > 0 and eod_close != "":
+                    move = (float(eod_close) - entry_price) if direction == "long" else (entry_price - float(eod_close))
+                    eod_move_pct = (move / entry_price) * 100.0
+                finalization_basis = "last_measured_bar"
+            else:
+                # Nothing was ever seen after entry. That is UNRESOLVED, and it
+                # is written as unresolved with blank numerics - a 0R here is a
+                # trade the mean will happily average in.
+                finalization_basis = "unresolved"
         if finalize_eod:
             status = "eod_complete"
+            if finalization_basis == "unresolved":
+                status = "unresolved"
             if minutes_elapsed == "" and entry_dt is not None:
                 session = get_market_session_window(reference=entry_dt)
                 close_naive = session.close_local.replace(tzinfo=None)
@@ -3840,7 +3916,7 @@ class BounceBot(EWrapper, EClient):
             "stop_hit": bool(stop_hit),
             "status": status,
             "milestone_bar": "" if milestone_bar is None else int(milestone_bar),
-            "context_json": self._json_for_learning(state.get("context", {})),
+            "context_json": self._json_for_learning(self._context_with_finalization(state, finalization_basis)),
             "outcome_mode": state.get("outcome_mode") or "eod_hold",
             "eod_close": round(eod_close, 4) if eod_close != "" else "",
             "eod_move_pct": round(eod_move_pct, 4) if eod_move_pct != "" else "",

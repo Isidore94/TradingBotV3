@@ -8,6 +8,52 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.A / D2: no path writes a number it did not measure
+
+**Branch `phase05-integration-blitz`.** The most consequential change in R10.A,
+and the one that changes what future rows say.
+
+**What was there:** with no bars in hand at EOD the writer set
+`close_r = 0`, `mfe = mae = 0` and `eod_close = entry_price`. That is 1,164 of
+6,907 in-window finals (16.9%), every one with `eod_close` exactly its entry and
+none of the 5,743 non-zero finals like it. **251 never advanced a bar. 563 were
+trades whose own earlier rows had already recorded a stop hit** - stop-outs
+scoring 0R, which drags every mean over them upward.
+
+**What replaces it - three outcomes, each measured:**
+
+| situation | finalization |
+|---|---|
+| earlier bars, one of them a **stop hit** | at the **stop**, `close_r = -1` |
+| earlier bars, no stop | at the **last measured close** |
+| nothing ever seen after entry | **`unresolved`**, blank numerics, reason `no_bars_after_entry` |
+
+The state carries `last_measured` now, which is what makes this possible without
+refetching anything. A 0R is a number a mean will average in; `unresolved` is not.
+
+**No header widening.** `finalization.basis`, `.measured_bars` and `.reason` ride
+in `context_json`, so a reader that does not know about them does not see them.
+
+**The legacy rows keep their meaning.** `unsettled_close_mask` (the scoreboard's
+detector) and `fabricated_zero_v1` (the registry's rule) are asserted to agree
+row for row on the old signature; new `unresolved` rows deliberately do not match
+it, because blank is not zero.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4387 passed / 19 subtests**, exit **0** (was 4375; +12) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**What to watch on the first live session after close+grace:** finals carrying
+`status=unresolved` instead of a 0R, and any stop-out finalizing at its stop.
+
+**Next in R10.A:** idempotent finalization shared by the after-close pass and the
+launch catch-up, expiring after 3 sessions without data, with a coverage manifest
+and a health tile (D3 - 576 pending, 94 older than 08-18, 17 from June; D4 is
+that same gap, not an IB outage).
+
+---
+
 ## 2026-08-23 - R10.A: the ledger is live beside the CSV
 
 **Branch `phase05-integration-blitz`.** The dual-write canary is wired and green.
