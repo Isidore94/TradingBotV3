@@ -21,6 +21,34 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 (night) - R10.V registered; the AVWAP fixtures are proven not to read the live store
+
+- **The cliff packet is plan.md Phase 0.7 item 11 (R10.V)**, seven steps, and it
+  runs **before R10.D**: a point-in-time transition ledger built over a
+  unit-mixed store would record the splice as history.
+- **Step 1's stop condition was measured, not inspected.** A pytest plugin
+  wrapped `builtins.open`, `Path.open`, `Path.read_bytes` and
+  `pandas.read_parquet` to record any access inside the live daily/intraday
+  parquet roots, and the whole suite ran under it: **4,205 tests, zero
+  accesses**. Every fixture carries its own bars, so the packet proceeds.
+- **`mixed_unit_avwap_v1` is frozen, and it pins the WRONG answer on purpose.**
+  Twenty hand-constructed daily bars, three series with identical prices
+  differing only in volume. The splice (bars 12+ in IB round lots) costs
+  **-2.28% on VWAP, -2.27 points on UPPER_2, and halves sigma to 0.482x**. The
+  uniform rescale control costs **nothing** - `lots` reproduces `shares` to 0.0
+  on vwap and 1.3e-15 on sigma, because a volume-weighted ratio cancels a
+  constant factor. That row is the argument for C-prime: a x100 conversion on
+  the IB path would have replaced a visible error with an invisible one.
+- **The sigma formula gained a direct guard** (plan.md sec 5, never swap it): an
+  independent reimplementation of the running-deviation variant must agree, and
+  the distribution-stdev variant must *disagree* on this fixture - if the two
+  ever agree, the fixture cannot discriminate and is rebuilt with more trend.
+- **Step 5's blast radius is predicted before it runs**
+  (`docs/analysis/AVWAP_FIXTURE_BASELINE_2026-08-22.md`): only two fixtures put
+  bars through `calc_anchored_vwap_bands`, three carry already-computed levels as
+  inputs, and the backfill cannot move any of them. If one moves at step 4, a
+  test reads the live store and the proof has expired.
+
 ### 2026-08-22 (night) - the daily-bar unit problem gets a pin and a name
 
 - **`daily_bars_source` pins the durable daily-bar store to one source.**

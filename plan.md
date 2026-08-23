@@ -1168,7 +1168,7 @@ second scoreboard.
    machine-local diagnostics tree at **529 MB**. Decision 0015 stands, so the
    answer is a dated snapshot, never a move: `scripts/ops/evidence_snapshot.py`
    (tested) stages locally first and `scripts/ops/snapshot_to_das.ps1` robocopies
-   to `\MINI-PC\Trading Bot Dataackups\<YYYY-MM-DD>\`; an unreachable share
+   to `\\MINI-PC\Trading Bot Data\backups\<YYYY-MM-DD>\`; an unreachable share
    exits 0 and leaves the staged copy, exactly like the cold push. Copy-while-hot:
    SQLite through the backup API, any file ≥ 256 MB must hold one size and mtime
    across a 60 s window or it is **skipped with a reason and counted** (never
@@ -1266,9 +1266,81 @@ second scoreboard.
     `DEFAULT_SCOPES`. Nothing in this chain may reach a detector, score, alert,
     watchlist, Focus, the review queue or `review_policy.json`.
 
+11. **R10.V Daily-bar unit repair** (S1's mechanism; authorized by the trader's
+    2026-08-22 R10.0b decision as **option C-prime**). Runs **before** R10.D,
+    because a point-in-time transition ledger built over a unit-mixed store
+    would record the splice as history.
+
+    *The defect.* IB returns regular-session daily volume in **round lots**
+    (`whatToShow="TRADES"`, `useRTH=1`); Yahoo returns the consolidated session
+    in **shares**. The store holds both, spliced. Measured: **1,227 of 1,737**
+    comparable parquet files carry a >20× step (median 158×), and the ratio is
+    symbol-dependent — SPY 1.0×, TSLA 56×, AAPL 81×, A 162×, NVDA 188× — so
+    **no constant converts one unit into the other**. AVWAP bands are
+    volume-weighted, so post-splice bars weigh ~1/100 and every AVWAP anchored
+    before the splice freezes near its last pre-splice value: 30,003 of 60,519
+    mark-days carry different levels. Stops did not move (0 of 9,331 — stored at
+    scan time, never replayed), so the stop stayed fixed while the replayed
+    target moved beneath it. Evidence:
+    `docs/analysis/DAILY_BAR_VOLUME_CLIFF_2026-08-22.md`,
+    `docs/analysis/EVIDENCE_AUDIT_2026-08-22.md` §S1b.
+
+    *Interim measure, already landed* (`d031e89`): `daily_bars_source="yahoo"`
+    pins the fetch so the store stops getting more mixed;
+    `daily_volume_mixed_v1` in `scripts/evidence_rules.py` tags what is already
+    written (13 of 15 manifest-covered sessions mixed, back to 2026-07-31; older
+    sessions unmeasured, not clean).
+
+    *Steps, each a commit.* **This is a detector-input change, so plan.md §5
+    binds: fixtures first.**
+
+    1. **Freeze the AVWAP golden fixtures** as they are, and prove none reads
+       the live parquet. Add a **mixed-unit fixture** that feeds one Yahoo-unit
+       and one IB-lot segment through `calc_anchored_vwap_bands` and pins the
+       *current* (wrong) output, so the repair is a visible fixture change
+       rather than a silent one. **Never swap the σ formula.**
+    2. **Provenance on the store.** Parquet gains `source` (`yahoo` | `ibkr` |
+       `cache`) and `volume_unit` (`shares` | `lots_rth` | `unknown`), written
+       from the in-memory source the fetch already carries and today drops
+       before the write. Existing rows read `unknown`. Arrow metadata carries
+       `daily_bars_schema=v2`; every consumer reads v1 and v2, one test each.
+    3. **Volume policy at the write seam.** Only `shares` volume is written; an
+       IB-sourced frame contributes price columns and `volume=NaN` with
+       `volume_unit=lots_rth`, never a rescaled number.
+       `_normalize_daily_bar_frame`'s `keep="last"` becomes **prefer `shares`
+       over `unknown` over NaN**, so a Yahoo row is never overwritten by an IB
+       row again.
+    4. **Backfill.** One batched yfinance sweep (`auto_adjust=False`, as today)
+       over every parquet, rewriting rows whose `volume_unit != shares`, with a
+       dated pre-backfill copy of the whole directory in
+       `evidence_frozen/daily_bars_pre_backfill_<date>` and a manifest (files
+       touched, rows rewritten, rows left `unknown`, per-file first-cliff date
+       before and after). **Zero IB traffic.** The 221 unmeasurable files are
+       refetched too and reported separately.
+    5. **Re-freeze** every AVWAP-derived golden fixture that changed, in the
+       same commit as the evidence showing *why* each moved; the step-1
+       mixed-unit fixture is the control.
+    6. **Health.** A tile reporting rows by `volume_unit`, files with any
+       `unknown`, and a cliff detector (early/late median ratio > 20×) re-run
+       nightly from the snapshot job, so a recurrence is loud the next morning.
+    7. **Forming bar (S2).** The tracker catch-up trims
+       `daily_frames_by_symbol[symbol]` to `<= data_session` before
+       `recompute_tracker_setup_record` — evidence-only by construction (the
+       docstring already claims it), fixtured by an 08-21-shaped run that must
+       mark nothing for today. Ask-first is satisfied by this packet for that
+       function only.
+
+    *Exit gate.* Fixtures re-frozen with rationale; backfill manifest filed;
+    the cliff detector reads **0 files > 20×** on the live store; one live scan
+    day on the repaired store. **No scoring, σ, ranking or threshold change
+    anywhere.**
+
 **Order (trader, 2026-08-22).** R9.4 first, then R10.0 in parallel; **R10.A
 starts only after the trader accepts R10.0's decision register**; R9.5 after
-R10.A. *Deviation on record:* R9.4 and R9.5 both landed on 2026-08-22 before
+R10.A. **R10.V (item 11) was authorized 2026-08-22 night and runs before
+R10.D**, because a transition ledger built over a unit-mixed store would record
+the splice as history. *Deviation on record:* R9.4 and R9.5 both landed on
+2026-08-22 before
 this program was registered (`36abb14`, `ba931a5`), so R9.5 did **not** adopt
 conventions set by R10.A. Its store
 (`diagnostics/shadow_evidence/sector_cohort/sector_cohort_shadow.jsonl`,

@@ -8,6 +8,69 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 night - R10.V registered, step 1 done: the fixtures are proven clean
+
+**Branch `phase05-integration-blitz`.** The cliff packet is now plan.md Phase 0.7
+item 11 (**R10.V**), and it runs **before R10.D** - a point-in-time transition
+ledger built over a unit-mixed store would record the splice as history.
+
+**The stop condition did not fire, and it was measured rather than inspected.**
+The step said: stop and hand off if any golden fixture reads the live parquet. A
+pytest plugin wrapped `builtins.open`, `Path.open`, `Path.read_bytes` and
+`pandas.read_parquet` to record any access resolving inside
+`C:\TradingBotData\data\daily_bars` (1,958 files) or `data\intraday_bars`, and
+the **whole suite** ran under it: **4205 passed, 0 accesses**. Every fixture
+carries its own bars. The claim's limit is stated in the record: it proves those
+two roots were not read in that configuration, not that no path could ever
+resolve elsewhere.
+
+**`mixed_unit_avwap_v1` pins the wrong answer on purpose.** Twenty
+hand-constructed daily bars, three series with **identical prices** differing
+only in volume:
+
+| series | vwap | sigma | UPPER_2 |
+|---|---|---|---|
+| `shares` (Yahoo throughout) | 42.263138 | 1.259667 | 44.782472 |
+| `mixed` (bars 12+ in IB lots) | **41.301207** | **0.607158** | **42.515523** |
+| `lots` (every bar /100 - control) | 42.263138 | 1.259667 | 44.782472 |
+
+The splice costs **-2.28% on VWAP, -2.27 points on UPPER_2, and halves sigma
+(0.482x)**. The uniform rescale costs **nothing** - `lots` reproduces `shares` to
+0.0 on vwap and 1.3e-15 on sigma. That single row is the whole argument for
+C-prime: a volume-weighted ratio cancels a constant factor, so if the store were
+uniformly mis-scaled there would be nothing to repair, and the x100 conversion
+option C originally proposed would have replaced a visible error with an
+invisible one.
+
+**Both guards were proven to discriminate before commit**: a 0.0001 drift in one
+expectation fails the comparison, and editing an input bar without re-freezing
+the hash fails the Milestone 3 contract loader with `raw input hash mismatch`.
+The sigma formula now has a direct guard too - an independent reimplementation of
+the running-deviation variant must agree, and the distribution-stdev variant must
+*disagree* on this fixture, or the guard cannot discriminate.
+
+**Step 5's blast radius is predicted in advance** (`docs/analysis/AVWAP_FIXTURE_BASELINE_2026-08-22.md`
+§3), so a surprise will be visible as one: only two fixtures put bars through
+`calc_anchored_vwap_bands`; three more carry already-computed levels as inputs;
+the backfill **cannot** move any fixture, and if one moves at step 4 then
+something reads the live store and the §1 proof has expired.
+
+**Also repaired:** plan.md line 1171 contained a literal backspace character -
+`Data\backups` written through one of my earlier heredocs became `Data\x08ackups`
+and rendered as `Dataackups`. Fixed, and the whole repo swept for control
+characters: **0 remaining**.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4215 passed / 19 subtests**, exit **0** (was 4205; +10) |
+| `pytest tests/ -q -p liveguard` | 4205 passed, **0 live-store accesses** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Next:** R10.V step 2 - provenance columns (`source`, `volume_unit`) on the
+parquet with `daily_bars_schema=v2`, every consumer reading v1 and v2.
+
+---
+
 ## 2026-08-22 night - R10.0b small items 2 and 3: the amendments, and the rule registry
 
 **Branch `phase05-integration-blitz`.** §3 of the decision release, items 2 and 3.
