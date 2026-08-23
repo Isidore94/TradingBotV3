@@ -1266,8 +1266,9 @@ second scoreboard.
     `DEFAULT_SCOPES`. Nothing in this chain may reach a detector, score, alert,
     watchlist, Focus, the review queue or `review_policy.json`.
 
-11. **R10.V Daily-bar unit repair** (S1's mechanism; authorized by the trader's
-    2026-08-22 R10.0b decision as **option C-prime**). Runs **before** R10.D,
+11. **R10.V Daily-bar unit repair** — **BUILT 2026-08-23, GREEN; one live scan
+    day owed** (S1's mechanism; authorized by the trader's 2026-08-22 R10.0b
+    decision as **option C-prime**). Runs **before** R10.D,
     because a point-in-time transition ledger built over a unit-mixed store
     would record the splice as history.
 
@@ -1291,8 +1292,9 @@ second scoreboard.
     written (13 of 15 manifest-covered sessions mixed, back to 2026-07-31; older
     sessions unmeasured, not clean).
 
-    *Steps, each a commit.* **This is a detector-input change, so plan.md §5
-    binds: fixtures first.**
+    *Steps, each a commit — all seven landed 2026-08-22/23* (`7e0f217`,
+    `e7b0fdf`, `b4497f2`, `069401c`, `5720c5b`, `d8d7a2a`, `740b591`).
+    **This is a detector-input change, so plan.md §5 binds: fixtures first.**
 
     1. **Freeze the AVWAP golden fixtures** as they are, and prove none reads
        the live parquet. Add a **mixed-unit fixture** that feeds one Yahoo-unit
