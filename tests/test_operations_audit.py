@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 import os
 import hashlib
 import sys
@@ -148,6 +150,28 @@ _IDLE_PROCESS_SNAPSHOT = {
     "non_daemon_thread_count": 1,
     "thread_names": ["MainThread"],
 }
+
+
+@pytest.fixture(autouse=True)
+def _pin_daily_bar_source():
+    """Measure the R10.0b pin here, and put the setting back afterwards."""
+    import project_paths
+
+    previous = project_paths.get_local_setting("daily_bars_source", None)
+    project_paths.save_local_setting("daily_bars_source", "yahoo")
+    project_paths.invalidate_local_settings_cache()
+    try:
+        yield
+    finally:
+        if previous is None:
+            payload = project_paths._load_local_settings()
+            payload.pop("daily_bars_source", None)
+            project_paths.LOCAL_SETTINGS_FILE.write_text(
+                json.dumps(payload, indent=2), encoding="utf-8"
+            )
+        else:
+            project_paths.save_local_setting("daily_bars_source", previous)
+        project_paths.invalidate_local_settings_cache()
 
 
 def _measured_fixture(tmp_path: Path) -> tuple[Path, Path, datetime]:
@@ -362,6 +386,8 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         # "deliberately off", not an unmeasured unknown, which is why the
         # unknown_operational assertion below still holds at exactly one entry.
         "ai_jobs",
+        # R10.0b: which source the durable daily-bar store takes volume from.
+        "daily_bar_source",
         # R10.A: the nightly dated backup of the hot evidence the cold push
         # excludes on purpose (data/runtime, the home-root files, diagnostics).
         "evidence_snapshot",

@@ -8,6 +8,43 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 night - R10.0b §1.3: daily bars pinned to Yahoo (interim)
+
+**Branch `phase05-integration-blitz`.** The one live-path line the trader
+authorized, and only that line.
+
+`daily_bars_source` in `local_settings.json`: `"yahoo"` pins; absent or anything
+else - including a typo - resolves to `"auto"`, which is exactly today's
+behaviour. Read at `_fetch_live_daily_bars` (`master_avwap_lib/legacy.py`), the
+same seam as the existing circuit breaker and **independent of it**:
+`_IBKR_HISTORICAL_YAHOO_ONLY` is a *state* flipped by repeated IB failures,
+this is a *setting*, and either alone routes daily bars to Yahoo. Announced
+**once per scan** (latched on `reset_ibkr_historical_failure_circuit`), not once
+per symbol - 1,500 identical lines would bury the fact rather than report it.
+**Intraday is deliberately untouched.**
+
+System Health gains a `daily_bar_source` tile. `auto` reports **unknown**, not
+degraded: it is the shipped default, and with it we genuinely cannot say from
+the setting alone which source a given scan wrote - the run manifests carry
+that. `yahoo` reports healthy. **Set on the desk**; the tile reads healthy.
+
+**Golden fixtures do not move** - 482 fixture/AVWAP/tracker tests pass unchanged,
+as the release predicted, because they feed fixed bars.
+
+**A bug I introduced and contained.** The first version wrote
+`daily_bars_source` from inside `_measured_fixture`. `local_settings.json` is
+redirected per *session*, not per test, so the write outlived the module and
+made `_fetch_live_daily_bars` return Yahoo before `test_provider_counters` could
+count an IB attempt - two unrelated tests went red. Now a module-scoped autouse
+fixture that saves and restores.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4182 passed / 19 subtests**, exit **0** (was 4172; +10) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+---
+
 ## 2026-08-22 evening - R10.0b COMPLETE: the daily-bar volume cliff. STOP.
 
 **Branch `phase05-integration-blitz`.** Read-only. **Nothing was changed** - no

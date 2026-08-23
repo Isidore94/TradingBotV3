@@ -2146,6 +2146,50 @@ def _required_inventory_view(checks: list[dict[str, Any]]) -> list[dict[str, Any
     return rows
 
 
+def _daily_bar_source_check(now: datetime, local_tz) -> dict[str, Any]:
+    """Which source the durable daily-bar store is taking volume from (R10.0b).
+
+    The store is mixed: IB returns regular-session volume in round lots while
+    Yahoo returns the consolidated session in shares, and the observed ratio is
+    symbol-dependent (SPY 1.0x, TSLA 56x, AAPL 81x, A 162x, NVDA 188x), so no
+    constant converts one into the other. Until the cliff packet lands, a pin to
+    Yahoo is the only thing keeping the store from getting more mixed - which
+    makes "am I pinned?" a question System Health should answer without anyone
+    opening a settings file.
+    """
+    from master_avwap_lib.legacy import DAILY_BARS_SOURCE_SETTING, daily_bars_source_pin
+    from project_paths import LOCAL_SETTINGS_FILE
+
+    try:
+        pin = daily_bars_source_pin()
+    except Exception:  # pragma: no cover - health must never take the audit down
+        logging.exception("daily-bar source pin unavailable")
+        return _check(
+            "daily_bar_source", "Daily bar source", STATUS_UNKNOWN,
+            "The daily-bar source pin could not be read.", source=Path(__file__),
+        )
+    if pin == "yahoo":
+        return _check(
+            "daily_bar_source", "Daily bar source", STATUS_HEALTHY,
+            "Pinned to yahoo: the durable store takes share-denominated volume from one "
+            "source and spends no IB budget on daily bars.",
+            source=Path(__file__),
+            details={"pin": pin, "setting": DAILY_BARS_SOURCE_SETTING,
+                     "settings_file": str(LOCAL_SETTINGS_FILE)},
+        )
+    return _check(
+        "daily_bar_source", "Daily bar source", STATUS_UNKNOWN,
+        "Not pinned (auto). Whether a given scan wrote IB round-lot volume or Yahoo "
+        "share volume into the durable store depends on IB availability that run, so "
+        "this cannot be answered from the setting alone - the run manifests carry it. "
+        f'Set {DAILY_BARS_SOURCE_SETTING}="yahoo" to make it answerable until the '
+        "cliff packet lands.",
+        source=Path(__file__),
+        details={"pin": pin, "setting": DAILY_BARS_SOURCE_SETTING,
+                 "settings_file": str(LOCAL_SETTINGS_FILE)},
+    )
+
+
 def _evidence_snapshot_check(now: datetime, local_tz, staging: Path | None = None) -> dict[str, Any]:
     r"""Is the evidence the cold push excludes actually being backed up? (R10.A)
 
@@ -2333,6 +2377,7 @@ def build_operations_audit(
         _process_check(moment, market_phase, process_snapshot),
         _universe_check(universe_files, market_probe, market_date, moment, local_tz),
         _disk_check(diagnostics, moment),
+        _daily_bar_source_check(moment, local_tz),
         _evidence_snapshot_check(
             moment, local_tz, staging=diagnostics.parent / "machine_cache" / "evidence_snapshots"
         ),

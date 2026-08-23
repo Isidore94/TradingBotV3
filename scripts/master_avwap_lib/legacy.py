@@ -1677,6 +1677,10 @@ IBKR_HISTORICAL_FAILURE_TEXT_MARKERS = (
 )
 _IBKR_HISTORICAL_FAILURE_COUNT = 0
 _IBKR_HISTORICAL_YAHOO_ONLY = False
+# `local_settings.json` key: "yahoo" pins the durable daily-bar store to Yahoo;
+# absent or anything else keeps today's behaviour (R10.0b §1.3).
+DAILY_BARS_SOURCE_SETTING = "daily_bars_source"
+_DAILY_BAR_PIN_ANNOUNCED = False
 APP_LOG_FORMAT = "%(asctime)s %(levelname)s [%(filename)s]: %(message)s"
 
 # ============================================================================
@@ -2525,12 +2529,39 @@ def _empty_daily_bar_frame(source: str | None = None) -> pd.DataFrame:
 
 def reset_ibkr_historical_failure_circuit() -> None:
     global _IBKR_HISTORICAL_FAILURE_COUNT, _IBKR_HISTORICAL_YAHOO_ONLY
+    global _DAILY_BAR_PIN_ANNOUNCED
     _IBKR_HISTORICAL_FAILURE_COUNT = 0
     _IBKR_HISTORICAL_YAHOO_ONLY = False
+    # Same lifetime as the circuit: this runs once at the head of each scan, so
+    # the pin announces itself once per scan rather than once per symbol.
+    _DAILY_BAR_PIN_ANNOUNCED = False
 
 
 def _ibkr_historical_yahoo_only() -> bool:
     return bool(_IBKR_HISTORICAL_YAHOO_ONLY)
+
+
+def daily_bars_source_pin() -> str:
+    """Which source the DURABLE daily-bar store is pinned to (R10.0b §1.3).
+
+    ``"yahoo"`` pins; anything else - including an absent key or a typo -
+    returns ``"auto"``, which is exactly today's behaviour. A misspelled value
+    must not silently pin, and must not silently un-pin either.
+
+    Interim measure while the cliff packet is built. The store is mixed because
+    IB returns regular-session volume in round lots (``useRTH=1``,
+    ``whatToShow="TRADES"``) while Yahoo returns the full consolidated session in
+    shares; the observed ratio is symbol-dependent (SPY 1.0x, TSLA 56x, AAPL
+    81x, A 162x, NVDA 188x), so **no constant converts one into the other**.
+    That is why this is a pin and not a rescale: a rescale would make the store
+    consistently wrong instead of visibly wrong.
+
+    Independent of ``_IBKR_HISTORICAL_YAHOO_ONLY``, which is a circuit-breaker
+    *state* flipped by repeated IB failures and cleared each scan. Either one
+    alone routes daily bars to Yahoo; neither implies the other.
+    """
+    raw = str(get_local_setting(DAILY_BARS_SOURCE_SETTING, "") or "").strip().lower()
+    return "yahoo" if raw == "yahoo" else "auto"
 
 
 def _ibkr_historical_errors_are_circuit_worthy(errors: list[dict] | None) -> bool:
@@ -15222,7 +15253,18 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
 
 
 def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataFrame:
+    global _DAILY_BAR_PIN_ANNOUNCED
     if ib is None:
+        return fetch_daily_bars_from_yahoo(symbol, days)
+    if daily_bars_source_pin() == "yahoo":
+        # Announced once per scan, not once per symbol: 1,500 identical lines
+        # would bury the fact rather than report it.
+        if not _DAILY_BAR_PIN_ANNOUNCED:
+            _DAILY_BAR_PIN_ANNOUNCED = True
+            logging.info(
+                "daily_bars_source is pinned to yahoo for this scan; IB daily bars are "
+                "not requested (R10.0b: the durable store must be single-source for volume)."
+            )
         return fetch_daily_bars_from_yahoo(symbol, days)
     if _ibkr_historical_yahoo_only():
         logging.info("%s: using Yahoo for daily bars because IBKR historical data is disabled for this scan.", symbol)
