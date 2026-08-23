@@ -21,6 +21,56 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - review round 1 part 2: the R10.A blockers
+
+- **`outcome_sweep_autorun` defaults OFF** (trader decision). The sweep does not
+  fire itself until its first live session is signed off; calling it by hand
+  always sweeps, and it announces the reason once per process. Dual-write,
+  registration context, tier capture and `unresolved`-instead-of-zero stay on.
+- **BLOCKER-1: two finalizers, one lock.** The sweep (close+10, worker thread)
+  and the per-symbol path (through close+30, scan thread) both mutated the
+  pending dict with no lock over a non-atomic checkpoint whose loader answered a
+  torn file with `{}`. Now: one re-entrant lock over every read-check-write, the
+  sweep re-reads each entry under it, the per-symbol path consults the same
+  finalized-id set, the sweep defers until close+35, the checkpoint is temp +
+  `os.replace`, and an unreadable one is **quarantined and logged** rather than
+  read as an empty backlog. Test: two threads, one final.
+- **MAJOR-2: the backlog's own measurements are recovered.** `last_measured`
+  landed on 08-23 and **0 of 576** checkpoint entries carry it, so the sweep
+  would have called every backlog trade "no bars after entry" - including 563
+  stop-outs whose milestone rows are in the CSV. Those rows are now recovered
+  (read-only, furthest milestone wins, `last_close` reconstructed from the row's
+  own numbers), and a trade with nothing to recover reads
+  **`no_measurement_in_checkpoint`**, which is a different fact.
+- **MAJOR-3: `close_r` means one thing everywhere** - R at the EOD close under
+  `eod_hold`. Without bars through the close it is blank and the row is
+  `unresolved`, never -1.0. The stop exit lives in `context.exit` as
+  **`stop_exit_r` under a named fill assumption**, with `gap_through_stop` and
+  `ambiguous_interval_bars` (R10.0's stop-first rule, counted not absorbed).
+- **MAJOR-4: the measurement no longer comes from the forming bar.** The session
+  frame is cut to completed bars through the one shared rule, and
+  `replace(tzinfo=None)` is gone from the path. Authorization was conditional on
+  proving the helper feeds no detector - it has one caller, asserted in a test.
+  *Found on the way:* `completed_bars._TIME_KEYS` has no `datetime` key, so the
+  obvious call drops every bar silently; the adapter is at the call site and the
+  shared rule is untouched.
+- **MAJOR-7: the learning refresh runs in SHADOW first.** Corrected finals move
+  segment averages, which decide `muted`/`proven`, which decide suppression.
+  `bounce_learning_refresh_mode` defaults to `shadow`: a state file beside the
+  live one plus a diff of every segment whose verdict would move, live state
+  frozen until the trader flips it.
+- **MAJOR-5**: the canary cap is per **session-day** (a process-lifetime cap
+  silenced the mirror after 8-14 days) and writes a `canary_capped` event.
+  **MAJOR-6**: `pending_after` is answered from the row, since the mirror runs
+  before the caller pops.
+- Minors: sweep finals carry the measurement's bar count; `mfe_pct`/`mae_pct`
+  stored where the stop branch reads them; the refresh date is stamped inside the
+  worker so a raising sweep is retried; coverage rows carry an id and the file is
+  written atomically; the ledger documents `session_date` (write session) versus
+  `trade_date` (trading session).
+- **Red runs recorded**: 64 failed / 17 passed against the pre-fix writer,
+  81 passed against the fixed tree.
+
 ### 2026-08-23 - review round 1: a clock-dependent suite, and four R10.V corrections
 
 - **Two tests failed only between 06:30 and 07:00 PT.** Inside the open-digest

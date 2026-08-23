@@ -242,3 +242,22 @@ def test_the_default_directory_is_what_the_cold_push_covers():
     """`push_cold_to_das.ps1` must carry the directory this writes to."""
     script = (ROOT_DIR / "scripts" / "ops" / "push_cold_to_das.ps1").read_text(encoding="utf-8")
     assert "evidence_ledgers" in script
+
+
+def test_the_session_date_is_the_write_session_and_says_so(tmp_path):
+    """A Monday sweep of a Friday trade: session_date Monday, trade_date Friday.
+
+    Both are needed and they answer different questions, so the module states
+    which is which rather than leaving a reader to assume.
+    """
+    ledger = _ledger(tmp_path)
+    row = ledger.append(
+        {"event_id": "a", "event_type": "final", "trade_date": "2026-08-21"},
+        now=datetime(2026, 8, 24, 21, 0, tzinfo=timezone.utc),
+    )
+    assert row["session_date"] == "2026-08-24"
+    assert row["trade_date"] == "2026-08-21"
+
+    import evidence_ledger
+
+    assert "not the session the" in evidence_ledger.__doc__

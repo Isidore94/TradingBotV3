@@ -168,9 +168,30 @@ def test_the_cap_stops_the_mirror_and_says_so_once(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         for _ in range(5):
             host._mirror_outcome_row_to_ledger(_row(), None)
-    assert len(list(host._outcome_ledger_obj.read())) == 2
+    rows = list(host._outcome_ledger_obj.read())
+    mirrored = [row for row in rows if row.get("canary") == "dual_write"]
+    assert len(mirrored) == 2
     capped = [r for r in caplog.records if "row cap" in r.getMessage()]
     assert len(capped) == 1, "the cap announces itself once, not once per row"
+    # ...and it says so IN the store, so a reader sees where it stops rather
+    # than inferring it from a gap.
+    events = [row for row in rows if row.get("event_type") == "canary_capped"]
+    assert len(events) == 1 and events[0]["cap"] == 2
+
+
+def test_the_cap_resets_with_the_session_day(tmp_path):
+    """A process-lifetime cap is a silent switch-off on an always-on desk.
+
+    3.6k-6.1k outcome rows a day against a 50,000 cap means the mirror stopped
+    after 8-14 days, with one log line and nothing in the ledger.
+    """
+    host = _host(tmp_path, cap=2)
+    for _ in range(4):
+        host._mirror_outcome_row_to_ledger(_row(), None)
+    assert host._outcome_ledger_rows == 2
+    host._outcome_ledger_day = "1999-01-01"      # the clock rolls over
+    host._mirror_outcome_row_to_ledger(_row(), None)
+    assert host._outcome_ledger_rows == 1, "a new session day starts a new count"
 
 
 def test_the_real_cap_is_a_session_sized_number():

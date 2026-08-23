@@ -8,6 +8,139 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - review round 1, part 2: the R10.A blockers are fixed
+
+**Branch `phase05-integration-blitz`.** BLOCKER-1, MAJOR-2 through MAJOR-7 and
+the minors, plus the Monday posture the trader asked for.
+
+### The Monday switch, first
+
+**`outcome_sweep_autorun` defaults OFF.** The sweep does not fire itself until
+its first live session is signed off; calling
+`sweep_pending_bounce_outcomes()` by hand always sweeps. It announces itself
+once per process with the reason, so a desk that is not sweeping says so rather
+than looking like a desk whose sweep found nothing. Everything else stays on -
+dual-write, registration context, tier capture, `unresolved` instead of a
+fabricated zero.
+
+### BLOCKER-1 - two finalizers, twenty minutes, no lock
+
+The sweep fired at close+10 on the after-close worker while the scan thread kept
+finalizing through close+30, both mutating the pending dict and both saving a
+checkpoint written with a bare `write_text` - and the loader answered a torn
+checkpoint with `{}`, silently discarding the whole backlog.
+
+- **One re-entrant lock** over every read-check-write of the pending dict and
+  the save. Re-entrant because a finalize inside it calls the row writer, which
+  saves.
+- **The sweep re-reads each entry under the lock** - the id list is stale by
+  construction - and **the per-symbol path now consults the same finalized-id
+  set**, so neither can write a second final.
+- **The sweep defers until close+35**, past the scan window. The lock makes an
+  overlap correct; deferring makes it rare.
+- **The checkpoint is temp + `os.replace`**, and an unreadable one is
+  **quarantined and logged at ERROR** instead of read as an empty backlog.
+- Test: two threads finalizing the same trade produce **exactly one** final.
+
+### MAJOR-2 - Monday's sweep would have libelled the whole backlog
+
+`last_measured` landed on 2026-08-23 and **0 of the 576 checkpoint entries carry
+it**, so every backlog trade - including the 563 stop-outs whose milestone rows
+sit in the CSV - would have finalized "no bars after entry". Bars were seen; the
+state never recorded them.
+
+- A trade with no measurement now reads **`no_measurement_in_checkpoint`**,
+  which is a different fact from "the session produced no bars".
+- **Each backlog trade's own CSV milestone rows are recovered** (one read-only
+  pass, furthest milestone wins) as the measurement basis, tagged
+  `measurement_source=legacy_csv_milestones` with `recovered_from`. `last_close`
+  is reconstructed from that row's own `close_r`, entry and risk - arithmetic on
+  stored numbers, not an estimate. A row with nothing usable is **not**
+  recovered, because that would only relabel an absence as a measurement.
+
+### MAJOR-3 - `close_r` means one thing everywhere
+
+It was `(last_close - entry)/risk` with bars in hand and `-1.0` without: the
+same trade reporting a different number depending only on what the finalizer
+had. **`close_r` is now always the `eod_hold` number.** Without bars through the
+close it is **blank** and the row is `unresolved` - never -1.0, and never the
+last mid-session close either.
+
+What was measured is still written (mfe/mae, best/worst, the stop and target
+flags). The exit-policy question lives in `context.exit`:
+
+- **`stop_exit_r`** = -1.0 **under a named assumption** - only the touch is
+  measured, and the assumption travels in the row rather than hiding inside a
+  number someone will later read as observed;
+- **`gap_through_stop`** (`mae_r < -1`), where that assumption is optimistic;
+- **`ambiguous_interval_bars`** - bars whose own range holds both the stop and
+  the 1R target, where R10.0's predeclared **stop-first** rule applies and the
+  count is reported rather than absorbed.
+
+### MAJOR-4 - the measurement was taken from the forming bar
+
+The frame comes from a request with an empty `endDateTime`, so its last row is
+still forming, and `_rows_after_bounce_entry_for_session` had no completed-bar
+cut. It does now, through the one shared rule (`completed_bars`), inclusive at
+the boundary. **Authorization was conditional on proving the helper feeds no
+detector**: it has exactly one caller, `_update_pending_bounce_outcomes`, which
+writes outcome rows and nothing else - asserted in a test, not just grepped.
+`replace(tzinfo=None)` is gone from this path; `_naive_market_local` converts
+first and says so.
+
+*Found on the way:* `completed_bars._TIME_KEYS` does not include `datetime`,
+which is what this frame calls its column - handing it `{"datetime": ...}`
+returns None for every bar and silently drops the whole frame. The shared rule
+is untouched; the adapter is at the call site.
+
+### MAJOR-7 - the refresh runs in SHADOW first
+
+Corrected finals move segment averages, and segment averages decide `muted` and
+`proven`, which decide whether an alert is suppressed. **`bounce_learning_refresh_mode`
+defaults to `shadow`**: the refresh writes a state file beside the live one and
+a diff of every segment whose mute or proven verdict **would** move, with n and
+before/after R, to `diagnostics/bounce_learning_shadow_diff.json`. The live
+state is frozen until the trader sets `live`. A segment whose average moves
+without changing either verdict is deliberately not listed - it would bury the
+ones that reach an alert.
+
+### The rest
+
+- **MAJOR-5**: the canary cap is **per session-day**, not per process (3.6k-6.1k
+  rows/day against 50,000 silenced the mirror after 8-14 days), and binding it
+  writes a **`canary_capped` event into the ledger** rather than only a log line.
+- **MAJOR-6**: `pending_after` is answered from the row - a `final` ends the
+  trade by definition - because the mirror runs inside the row writer, before
+  the caller pops, so a membership test said `true` on every final ever written.
+- Minors: sweep finals carry the measurement's bar count; `mfe_pct`/`mae_pct`
+  are stored where the stop branch reads them; `_learning_refresh_date` is
+  stamped **inside** the worker so a raising sweep is retried; coverage rows
+  carry an `event_id` and the coverage file is written atomically; the ledger
+  now documents that `session_date` is the **write** session and `trade_date`
+  the trading one.
+
+### UNCLEAR-8 - the red runs, recorded
+
+Against the pre-fix writer (`2e87f4c`) with today's tests:
+**64 failed, 17 passed**. Against the fixed tree: **81 passed**. The red run
+covers every new behaviour above - the lock, the deferral, the CSV recovery,
+`close_r` semantics, the completed-bar cut, the shadow refresh and the cap.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` (own exit code) | **4469 passed / 19 subtests**, exit **0** |
+| red run on `2e87f4c` | **64 failed / 17 passed** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+### Owed, and named
+
+The launch catch-up for the sweep is not built, and the sweep only runs while the
+strategy thread is alive (so never in OFF). With autorun off by default that
+changes nothing on Monday; it is R10.A's remaining piece along with the
+single-instance guard, R9.5's shadow-store alignment and the ledger restore test.
+
+---
+
 ## 2026-08-23 - review round 1: the suite's clock, and four R10.V corrections
 
 **Branch `phase05-integration-blitz`.** Fable's 06:46 PT run found **2 failed,

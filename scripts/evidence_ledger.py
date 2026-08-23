@@ -15,6 +15,13 @@ What that costs, and why each cost is paid here:
   without the other cannot answer "which session was this?" across a
   20:30-local write, and `astimezone` is used rather than `replace(tzinfo=None)`,
   which discards an offset instead of converting through it.
+
+  **`session_date` is the session the row was WRITTEN in, not the session the
+  trade belongs to.** A final swept on Monday for a trade entered on Friday
+  carries `session_date` 2026-08-24 and `trade_date` 2026-08-21. Ask a trading
+  question with `trade_date`; ask an operational one ("what did the desk do that
+  evening?") with `session_date`. They are different questions and this store
+  deliberately answers both rather than collapsing them.
 * **Every row says who wrote it** - host, pid, and the run id when the caller
   has one. When two desks ran concurrently on 2026-08-20 nothing in the outcome
   store could say so, and the duplicate rows had to be attributed by inference.

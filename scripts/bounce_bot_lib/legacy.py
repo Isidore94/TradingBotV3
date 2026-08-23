@@ -2877,12 +2877,77 @@ class BounceBot(EWrapper, EClient):
             # write or malformed row must never interrupt the champion path.
             logging.warning("Technical Integrity observation failed for %s: %s", symbol, exc)
 
+    # ------------------------------------------------------------------
+    # R10.A / BLOCKER-1: one lock over the pending checkpoint
+    # ------------------------------------------------------------------
+    #: Two finalizers exist. The per-symbol path runs on the scan thread and
+    #: finalizes a trade the moment its session is over; the sweep runs on the
+    #: after-close worker. Both mutate `pending_bounce_outcomes` and both save
+    #: the checkpoint, and for the twenty minutes between close+10 and close+30
+    #: they can run at the same instant. Every read-check-write of either goes
+    #: through this lock, and the sweep re-checks membership under it before each
+    #: finalize, so the same trade cannot be finalized twice.
+    #:
+    #: Re-entrant because a finalize inside the lock calls the row writer, which
+    #: saves the checkpoint - which takes the lock again.
+    @property
+    def _pending_lock(self):
+        lock = getattr(self, "_pending_outcome_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._pending_outcome_lock = lock
+        return lock
+
+    #: How long after the scan window closes the sweep waits before it starts.
+    #: The scan thread finalizes through close+30 (`BOUNCEBOT_SCAN_POSTCLOSE_MINUTES`);
+    #: the sweep is the *catch-up*, so it runs after that, not beside it. The
+    #: lock makes an overlap safe; this makes an overlap rare.
+    SWEEP_AFTER_SCAN_WINDOW_MINUTES = 35
+
+    def _sweep_window_is_open(self, now=None) -> bool:
+        """Has the scan window closed, so the sweep is not racing the scan thread?
+
+        Fail OPEN on a session lookup it cannot answer: refusing to sweep
+        because the calendar is unreadable would rebuild the backlog this exists
+        to drain, and the lock already makes the overlap correct.
+        """
+        moment = now or get_market_local_now()
+        try:
+            session = get_market_session_window(reference=moment)
+            close_local = session.close_local
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=close_local.tzinfo)
+            else:
+                moment = moment.astimezone(close_local.tzinfo)
+            return moment >= close_local + timedelta(minutes=self.SWEEP_AFTER_SCAN_WINDOW_MINUTES)
+        except Exception:
+            logging.debug("Sweep window check could not read the session; proceeding.")
+            return True
+
     def _load_pending_bounce_outcomes(self):
         if not INTRADAY_BOUNCE_OUTCOME_STATE_JSON.exists():
             return {}
         try:
             payload = json.loads(INTRADAY_BOUNCE_OUTCOME_STATE_JSON.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            # A torn checkpoint used to return {} - silently discarding every
+            # pending trade in it, which for a 576-row backlog is 576 outcomes
+            # that simply cease to exist. The file is QUARANTINED beside itself
+            # so the rows are recoverable, and the failure is loud.
+            logging.error(
+                "Pending outcome checkpoint is unreadable (%s). Quarantining it; the "
+                "pending backlog in it is NOT lost, but it is not loaded either.",
+                exc,
+            )
+            try:
+                stamp = get_market_local_now().strftime("%Y%m%dT%H%M%S")
+                INTRADAY_BOUNCE_OUTCOME_STATE_JSON.replace(
+                    INTRADAY_BOUNCE_OUTCOME_STATE_JSON.with_name(
+                        f"{INTRADAY_BOUNCE_OUTCOME_STATE_JSON.stem}.corrupt-{stamp}.json"
+                    )
+                )
+            except OSError:
+                logging.exception("Could not quarantine the unreadable checkpoint.")
             return {}
         pending = payload.get("pending", {}) if isinstance(payload, dict) else {}
         finalized = payload.get("finalized", {}) if isinstance(payload, dict) else {}
@@ -2891,6 +2956,10 @@ class BounceBot(EWrapper, EClient):
         return pending if isinstance(pending, dict) else {}
 
     def _save_pending_bounce_outcomes(self):
+        with self._pending_lock:
+            self._save_pending_bounce_outcomes_locked()
+
+    def _save_pending_bounce_outcomes_locked(self):
         try:
             INTRADAY_BOUNCE_OUTCOME_STATE_JSON.parent.mkdir(parents=True, exist_ok=True)
             payload = {
@@ -2901,10 +2970,14 @@ class BounceBot(EWrapper, EClient):
                 # or a second pass cannot write a second final for one trade.
                 "finalized": self._finalized_outcome_ids(),
             }
-            INTRADAY_BOUNCE_OUTCOME_STATE_JSON.write_text(
-                json.dumps(payload, indent=2, default=str),
-                encoding="utf-8",
+            # Temp + replace: a bare write_text leaves a torn file if the
+            # process dies mid-write, and the reader used to answer a torn file
+            # with an empty backlog.
+            temp = INTRADAY_BOUNCE_OUTCOME_STATE_JSON.with_name(
+                INTRADAY_BOUNCE_OUTCOME_STATE_JSON.name + ".tmp"
             )
+            temp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+            os.replace(temp, INTRADAY_BOUNCE_OUTCOME_STATE_JSON)
         except Exception as exc:
             logging.debug(f"Failed saving pending bounce outcome state: {exc}")
 
@@ -2947,6 +3020,9 @@ class BounceBot(EWrapper, EClient):
     #: compared against, and a defect in it must cost disk space once, not
     #: indefinitely. Reached-cap is logged ONCE and the CSV is untouched either
     #: way, because the CSV is still the authority during the canary.
+    #: **Per session-day**, not per process. An always-on desk writes 3.6k-6.1k
+    #: outcome rows a day, so a process-lifetime cap silenced the mirror after
+    #: 8-14 days with one log line and nothing in the ledger to say so.
     LEDGER_CANARY_ROW_CAP = 50_000
     #: `local_settings.json` key. Anything but "off" leaves the canary running;
     #: an unreadable setting also leaves it running, because a canary that
@@ -3001,15 +3077,33 @@ class BounceBot(EWrapper, EClient):
         ledger = self._outcome_ledger()
         if ledger is None:
             return
+        # The count resets with the session day. A cap that never resets is a
+        # silent switch-off on an always-on desk.
+        today = get_market_local_now().date().isoformat()
+        if getattr(self, "_outcome_ledger_day", None) != today:
+            self._outcome_ledger_day = today
+            self._outcome_ledger_rows = 0
+            self._outcome_ledger_capped = False
         written = getattr(self, "_outcome_ledger_rows", 0)
         if written >= self.LEDGER_CANARY_ROW_CAP:
             if not getattr(self, "_outcome_ledger_capped", False):
                 self._outcome_ledger_capped = True
                 logging.warning(
-                    "Outcome ledger canary reached its %d-row cap for this process; "
-                    "further rows are CSV-only until restart.",
-                    self.LEDGER_CANARY_ROW_CAP,
+                    "Outcome ledger canary reached its %d-row cap for %s; further rows "
+                    "are CSV-only until the next session day.",
+                    self.LEDGER_CANARY_ROW_CAP, today,
                 )
+                # ...and it says so IN the ledger, so a reader of the store can
+                # see where it stops rather than inferring it from a gap.
+                try:
+                    ledger.append({
+                        "event_type": "canary_capped",
+                        "cap": self.LEDGER_CANARY_ROW_CAP,
+                        "session_day": today,
+                        "note": "further rows this session day are CSV-only",
+                    })
+                except Exception:
+                    logging.exception("Could not record the canary cap in the ledger.")
             return
         try:
             event = dict(row)
@@ -3023,7 +3117,14 @@ class BounceBot(EWrapper, EClient):
                 event["family"] = family_from_event_id(row.get("event_id"))
             except Exception:
                 event["family"] = ""
-            event["pending_after"] = bool(state and state.get("event_id") in self.pending_bounce_outcomes)
+            # MAJOR-6. The mirror runs inside the row writer, which is BEFORE
+            # the caller pops, so a membership test here said `true` on every
+            # final ever written. A `final` ends the trade by definition, so it
+            # is answered from the row rather than from a dict that has not
+            # caught up yet.
+            still_open = bool(state and state.get("event_id") in self.pending_bounce_outcomes)
+            event["pending_after"] = still_open and str(row.get("event_type")) != "final"
+            event["pending_count"] = len(self.pending_bounce_outcomes)
             ledger.append(event)
             self._outcome_ledger_rows = written + 1
         except Exception:
@@ -3684,13 +3785,38 @@ class BounceBot(EWrapper, EClient):
                 symbols.add(symbol)
         return symbols
 
-    def _rows_after_bounce_entry_for_session(self, state, df, entry_dt):
+    @staticmethod
+    def _naive_market_local(moment):
+        """A market-local wall clock, CONVERTED and then made naive.
+
+        The bars in this path carry naive market-local stamps, so the session
+        bounds have to match them. `.replace(tzinfo=None)` on its own is the
+        spelling plan.md sec 5 forbids - it discards an offset instead of
+        converting through one - and it was load-bearing here. The conversion is
+        explicit now, so the naive value is the right wall clock by construction
+        rather than by the accident of the session already being local.
+        """
+        if moment.tzinfo is None:
+            return moment
+        return moment.astimezone(moment.tzinfo).replace(tzinfo=None)
+
+    def _rows_after_bounce_entry_for_session(self, state, df, entry_dt, *, now=None):
+        """Completed session bars strictly after the entry.
+
+        **Completed only** (MAJOR-4, plan.md sec 5). The frame arrives from a
+        request with an empty `endDateTime`, so its last row is the bar still
+        forming; measuring it wrote a forming bar into `last_measured` and, when
+        the session ended without another update, straight into a final.
+
+        Exactly one caller - `_update_pending_bounce_outcomes` - and it writes
+        outcome rows only. No detector reads this.
+        """
         if df is None or df.empty or "datetime" not in df.columns:
             return pd.DataFrame()
         trade_date = _parse_iso_date_safe(state.get("trade_date")) or entry_dt.date()
         session = get_market_session_window(reference=entry_dt)
-        open_naive = session.open_local.replace(tzinfo=None)
-        close_naive = session.close_local.replace(tzinfo=None)
+        open_naive = self._naive_market_local(session.open_local)
+        close_naive = self._naive_market_local(session.close_local)
 
         frame = df.copy()
         frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
@@ -3703,7 +3829,51 @@ class BounceBot(EWrapper, EClient):
             & (frame["datetime"] >= pd.Timestamp(open_naive))
             & (frame["datetime"] <= pd.Timestamp(close_naive))
         ].copy()
-        return session_rows.sort_values("datetime").reset_index(drop=True)
+        session_rows = session_rows.sort_values("datetime").reset_index(drop=True)
+        return self._completed_session_rows(session_rows, now=now)
+
+    #: The bar size this path measures. The scan feeds it M5 frames.
+    OUTCOME_BAR_MINUTES = 5
+
+    def _completed_session_rows(self, session_rows, *, now=None):
+        """Drop the bar that has not finished yet.
+
+        Uses the one completed-bar rule (`scripts/completed_bars.py`): the
+        boundary is INCLUSIVE, so a bar that just closed counts, and an
+        **undateable bar is dropped** - it is not known to be complete, and
+        missing data is uncertainty rather than confirmation. (In the live path
+        an undateable row cannot reach here anyway: the caller already coerced
+        and dropped them.)
+
+        If the CUT ITSELF fails - an unreadable clock, an import that will not
+        resolve - the frame is returned whole. Refusing to measure at all
+        because the machine cannot tell the time would be a worse failure than
+        measuring one bar too many, and it is loud in the log either way.
+        """
+        if session_rows is None or getattr(session_rows, "empty", True):
+            return session_rows
+        try:
+            from completed_bars import is_completed_bar
+
+            moment = now or get_market_local_now()
+            if moment.tzinfo is not None:
+                moment = self._naive_market_local(moment)
+            # `completed_bars._TIME_KEYS` is ("dt", "timestamp", "time", "date")
+            # - it does not read a key called `datetime`, which is what this
+            # frame calls it. Handing it `{"datetime": ...}` returns None for
+            # every bar and quietly drops the whole frame. The shared rule is
+            # left alone; the adapter is here.
+            keep = session_rows["datetime"].map(
+                lambda stamp: is_completed_bar(
+                    {"dt": stamp.to_pydatetime() if hasattr(stamp, "to_pydatetime") else stamp},
+                    self.OUTCOME_BAR_MINUTES,
+                    now=moment,
+                )
+            )
+            return session_rows[keep].reset_index(drop=True)
+        except Exception:
+            logging.debug("Completed-bar cut skipped for an outcome frame.", exc_info=True)
+            return session_rows
 
     # ------------------------------------------------------------------
     # R10.A / D3: finalization that does not depend on being scanned again
@@ -3717,6 +3887,46 @@ class BounceBot(EWrapper, EClient):
     #: write a second final for the same trade. Bounded: this is a de-duplication
     #: memory, not a record - the ledger and the CSV are the record.
     FINALIZED_MEMORY = 5_000
+    #: `local_settings.json` key. **Default OFF** (trader decision, 2026-08-23
+    #: review): the sweep does not fire automatically until its first live
+    #: session has been signed off. Every other R10.A change - dual-write,
+    #: registration context, tier capture, `unresolved` instead of a fabricated
+    #: zero - stays on, because none of them can write a second final for a
+    #: trade the per-symbol path is finalizing at the same moment.
+    #:
+    #: `sweep_pending_bounce_outcomes()` itself is unaffected: calling it by
+    #: hand always sweeps. Only the automatic firing is gated.
+    SWEEP_AUTORUN_SETTING = "outcome_sweep_autorun"
+
+    def _sweep_autorun_enabled(self) -> bool:
+        """Is the after-close sweep allowed to fire itself? Default NO.
+
+        Announced once per process with the reason, so a desk that is not
+        sweeping says so rather than looking like a desk whose sweep found
+        nothing.
+        """
+        try:
+            from project_paths import get_local_setting
+
+            raw = str(get_local_setting(self.SWEEP_AUTORUN_SETTING, "") or "").strip().lower()
+        except Exception:
+            raw = ""
+        enabled = raw in {"on", "1", "true", "yes"}
+        if not getattr(self, "_sweep_autorun_announced", False):
+            self._sweep_autorun_announced = True
+            if enabled:
+                logging.info(
+                    "Outcome sweep autorun is ON (%s); pending trades finalize after the close.",
+                    self.SWEEP_AUTORUN_SETTING,
+                )
+            else:
+                logging.info(
+                    "Outcome sweep autorun is OFF (default). Pending outcomes are finalized "
+                    'only by the per-symbol path; set %s="on" once its first live session is '
+                    "signed off, or call sweep_pending_bounce_outcomes() by hand.",
+                    self.SWEEP_AUTORUN_SETTING,
+                )
+        return enabled
 
     def _finalized_outcome_ids(self) -> dict:
         memory = getattr(self, "_finalized_outcome_memory", None)
@@ -3755,7 +3965,102 @@ class BounceBot(EWrapper, EClient):
                         sessions += 1
         return sessions
 
-    def sweep_pending_bounce_outcomes(self, *, now=None, expire_after_sessions=None) -> dict:
+    #: Milestone rows the recovery reads, best first. `update` is last because
+    #: it is the most recent but the least specific.
+    RECOVERABLE_EVENT_TYPES = ("12_bar", "6_bar", "3_bar", "1_bar", "update")
+
+    def _recover_measurements_from_csv(self, event_ids) -> dict:
+        """Rebuild `last_measured` for backlog trades from their own CSV rows.
+
+        `last_measured` was introduced on 2026-08-23. Every trade already in the
+        checkpoint - 576 of them - predates it, so the sweep would finalize all
+        of them as "no bars after entry" **including the 563 stop-outs whose
+        milestone rows are sitting in the outcome CSV**. Bars were seen; the
+        state simply never recorded them, and calling that "no bars" would be a
+        second fabrication in place of the one this packet removed.
+
+        Read-only, one pass, and it recovers only what the row already says.
+        `last_close` is reconstructed from `close_r` and the trade's own entry
+        and risk, which is arithmetic on stored numbers rather than an estimate.
+        Anything unreadable is simply not recovered.
+        """
+        wanted = {str(item) for item in (event_ids or []) if str(item or "").strip()}
+        if not wanted:
+            return {}
+        best: dict[str, dict] = {}
+        rank = {name: index for index, name in enumerate(self.RECOVERABLE_EVENT_TYPES)}
+        try:
+            if not INTRADAY_BOUNCE_OUTCOMES_CSV.exists():
+                return {}
+            with INTRADAY_BOUNCE_OUTCOMES_CSV.open("r", newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    event_id = str(row.get("event_id") or "")
+                    if event_id not in wanted:
+                        continue
+                    event_type = str(row.get("event_type") or "")
+                    if event_type not in rank:
+                        continue
+                    previous = best.get(event_id)
+                    if previous is not None and rank[event_type] >= previous["_rank"]:
+                        continue
+                    best[event_id] = {"_rank": rank[event_type], "row": row, "type": event_type}
+        except Exception:
+            logging.exception("Could not recover measurements from the outcome CSV.")
+            return {}
+
+        def _number(value):
+            try:
+                if value in (None, ""):
+                    return None
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if number == number else None
+
+        recovered: dict[str, dict] = {}
+        for event_id, found in best.items():
+            row = found["row"]
+            state = self.pending_bounce_outcomes.get(event_id) or {}
+            entry = _number(state.get("entry_price"))
+            risk = _number(state.get("risk_per_share"))
+            close_r = _number(row.get("close_r"))
+            last_close = None
+            if entry is not None and risk not in (None, 0) and close_r is not None:
+                direction = str(state.get("direction") or "long").strip().lower()
+                last_close = entry + close_r * risk if direction == "long" else entry - close_r * risk
+            measurement = {
+                "bars": int(_number(row.get("bars_elapsed")) or 0),
+                "close_r": close_r if close_r is not None else "",
+                "mfe_r": _number(row.get("mfe_r")) if _number(row.get("mfe_r")) is not None else "",
+                "mae_r": _number(row.get("mae_r")) if _number(row.get("mae_r")) is not None else "",
+                "best_price": _number(row.get("best_price")) if _number(row.get("best_price")) is not None else "",
+                "worst_price": _number(row.get("worst_price")) if _number(row.get("worst_price")) is not None else "",
+                "last_close": last_close if last_close is not None else "",
+                "stop_hit": str(row.get("stop_hit") or "").strip().lower() in {"true", "1", "yes"},
+                "target_1r_hit": str(row.get("target_1r_hit") or "").strip().lower() in {"true", "1", "yes"},
+                "target_2r_hit": str(row.get("target_2r_hit") or "").strip().lower() in {"true", "1", "yes"},
+                "minutes_elapsed": _number(row.get("minutes_elapsed")) or "",
+                "at": str(row.get("logged_at") or ""),
+                # The basis travels WITH the measurement, so a row finalized this
+                # way says so rather than looking like a live one.
+                "source": "legacy_csv_milestones",
+                "recovered_from": found["type"],
+            }
+            if measurement["close_r"] == "" and not measurement["stop_hit"]:
+                # Nothing usable in it. Recovering an empty measurement would
+                # only relabel "no data" as "measured".
+                continue
+            recovered[event_id] = measurement
+        if recovered:
+            logging.info(
+                "Recovered %d pending trade(s) own milestone rows from the outcome CSV "
+                "(they predate the in-state measurement).", len(recovered),
+            )
+        return recovered
+
+    def sweep_pending_bounce_outcomes(
+        self, *, now=None, expire_after_sessions=None, wait_for_scan_window=True
+    ) -> dict:
         """Finalize every pending outcome whose session is over. Idempotent.
 
         The backlog D3 measured - **576 pending, 94 older than 2026-08-18, 17
@@ -3776,6 +4081,23 @@ class BounceBot(EWrapper, EClient):
         """
         moment = now or get_market_local_now()
         expiry = int(self.PENDING_EXPIRY_SESSIONS if expire_after_sessions is None else expire_after_sessions)
+        if wait_for_scan_window and not self._sweep_window_is_open(moment):
+            # The scan thread finalizes through close+30; this is the catch-up,
+            # not a second finalizer racing it. The lock below makes an overlap
+            # correct - this makes it rare.
+            logging.info(
+                "Outcome sweep deferred: the scan window has not closed yet "
+                "(close+%d).", self.SWEEP_AFTER_SCAN_WINDOW_MINUTES,
+            )
+            return {
+                "pending_before": len(self.pending_bounce_outcomes),
+                "pending_after": len(self.pending_bounce_outcomes),
+                "finalized": 0, "expired": 0, "unparseable": 0,
+                "already_finalized": 0, "still_open": 0,
+                "deferred": "scan_window_open",
+                "by_reason": {}, "expire_after_sessions": expiry,
+                "swept_at": moment.isoformat(timespec="seconds"),
+            }
         counts = {
             "pending_before": len(self.pending_bounce_outcomes),
             "finalized": 0,
@@ -3785,42 +4107,72 @@ class BounceBot(EWrapper, EClient):
             "still_open": 0,
         }
         by_reason: dict[str, int] = {}
-        for event_id, state in list(self.pending_bounce_outcomes.items()):
-            if event_id in self._finalized_outcome_ids():
+        recovered = self._recover_measurements_from_csv(list(self.pending_bounce_outcomes))
+        counts["recovered_from_csv"] = len(recovered)
+        for event_id in list(self.pending_bounce_outcomes):
+            # The whole decision runs under the lock, and the first thing it
+            # does is re-read the entry. The list above is stale by
+            # construction: the scan thread can finalize and pop a trade between
+            # building it and reaching this row (BLOCKER-1).
+            with self._pending_lock:
+                state = self.pending_bounce_outcomes.get(event_id)
+                if state is None or event_id in self._finalized_outcome_ids():
+                    self.pending_bounce_outcomes.pop(event_id, None)
+                    counts["already_finalized"] += 1
+                    continue
+                entry_dt = self._parse_bar_time(state.get("entry_time"))
+                if entry_dt is None:
+                    # It cannot say when it started, so it cannot be graded.
+                    # Dropped from the checkpoint and COUNTED - never silently.
+                    self.pending_bounce_outcomes.pop(event_id, None)
+                    counts["unparseable"] += 1
+                    continue
+                if not self._is_eod_finalization_due(entry_dt, moment):
+                    counts["still_open"] += 1
+                    continue
+
+                # MAJOR-2. `last_measured` was introduced on 2026-08-23 and no
+                # trade already in the checkpoint carries it, so the whole
+                # backlog would finalize "no bars after entry" - including the
+                # 563 stop-outs whose milestone rows are sitting in the CSV.
+                # Bars WERE seen; the state never recorded them. Recovering
+                # them is read-only and is the only way those trades get an
+                # honest number.
+                measured = state.get("last_measured") or {}
+                if not measured and event_id in recovered:
+                    measured = recovered[event_id]
+                    state["last_measured"] = measured
+
+                sessions = self._sessions_since(entry_dt, moment)
+                expired = sessions >= expiry and not measured
+                if expired:
+                    state["unresolved_reason"] = "expired_no_data"
+                elif not measured:
+                    # Distinguishable from "the session produced no bars": this
+                    # trade predates the measurement field and the CSV had
+                    # nothing to recover either.
+                    state["unresolved_reason"] = "no_measurement_in_checkpoint"
+                try:
+                    self._append_bounce_outcome_row(
+                        state, "final", bars_elapsed=int(measured.get("bars") or 0),
+                        milestone_bar=None,
+                        rows_after_entry=pd.DataFrame(), finalize_eod=True,
+                    )
+                except Exception:
+                    logging.exception("Sweep could not finalize %s; it stays pending.", event_id)
+                    continue
+                self._remember_finalized_outcome(event_id, state.get("trade_date"))
                 self.pending_bounce_outcomes.pop(event_id, None)
-                counts["already_finalized"] += 1
-                continue
-            entry_dt = self._parse_bar_time(state.get("entry_time"))
-            if entry_dt is None:
-                # It cannot say when it started, so it cannot be graded. Dropped
-                # from the checkpoint and COUNTED - never silently discarded.
-                self.pending_bounce_outcomes.pop(event_id, None)
-                counts["unparseable"] += 1
-                continue
-            if not self._is_eod_finalization_due(entry_dt, moment):
-                counts["still_open"] += 1
-                continue
-            sessions = self._sessions_since(entry_dt, moment)
-            expired = sessions >= expiry and not (state.get("last_measured") or {})
-            if expired:
-                state["unresolved_reason"] = "expired_no_data"
-            try:
-                self._append_bounce_outcome_row(
-                    state, "final", bars_elapsed=0, milestone_bar=None,
-                    rows_after_entry=pd.DataFrame(), finalize_eod=True,
-                )
-            except Exception:
-                logging.exception("Sweep could not finalize %s; it stays pending.", event_id)
-                continue
-            self._remember_finalized_outcome(event_id, state.get("trade_date"))
-            self.pending_bounce_outcomes.pop(event_id, None)
-            counts["finalized"] += 1
-            if expired:
-                counts["expired"] += 1
-            reason = "expired_no_data" if expired else (
-                "measured" if (state.get("last_measured") or {}) else "no_bars_after_entry"
-            )
-            by_reason[reason] = by_reason.get(reason, 0) + 1
+                counts["finalized"] += 1
+                if expired:
+                    counts["expired"] += 1
+                if measured:
+                    reason = "stop_hit" if measured.get("stop_hit") else "last_measured_bar"
+                    if measured.get("source"):
+                        reason = f"{reason}:{measured['source']}"
+                else:
+                    reason = "expired_no_data" if expired else "no_measurement_in_checkpoint"
+                by_reason[reason] = by_reason.get(reason, 0) + 1
 
         counts["pending_after"] = len(self.pending_bounce_outcomes)
         counts["by_reason"] = by_reason
@@ -3841,7 +4193,13 @@ class BounceBot(EWrapper, EClient):
         try:
             ledger = self._outcome_ledger()
             if ledger is not None:
-                ledger.append({"event_type": "coverage", "coverage": counts})
+                # An id, so a coverage row can be referred to rather than only
+                # found by its position in the file.
+                ledger.append({
+                    "event_type": "coverage",
+                    "event_id": f"outcome_sweep@{counts.get('swept_at') or ''}",
+                    "coverage": counts,
+                })
         except Exception:
             logging.exception("Outcome coverage could not be written to the ledger.")
         try:
@@ -3849,7 +4207,9 @@ class BounceBot(EWrapper, EClient):
 
             path = Path(get_diagnostics_dir()) / "outcome_sweep_coverage.json"
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(counts, indent=2, default=str), encoding="utf-8")
+            temp = path.with_name(path.name + ".tmp")
+            temp.write_text(json.dumps(counts, indent=2, default=str), encoding="utf-8")
+            os.replace(temp, path)
         except Exception:
             logging.exception("Outcome coverage could not be written to disk.")
 
@@ -3912,7 +4272,7 @@ class BounceBot(EWrapper, EClient):
         self._save_pending_bounce_outcomes()
         self._append_bounce_outcome_row(self.pending_bounce_outcomes[event_id], "registered", 0, None, pd.DataFrame())
 
-    def _context_with_finalization(self, state, basis):
+    def _context_with_finalization(self, state, basis, exit_facts=None):
         """The row's context plus how its numbers were arrived at (R10.A).
 
         Carried in `context_json` rather than a new column: the CSV header is
@@ -3922,16 +4282,30 @@ class BounceBot(EWrapper, EClient):
         context = dict(state.get("context") or {})
         if not basis:
             return context
+        measured = state.get("last_measured") or {}
+        # `basis` is the MECHANISM (how the numbers were arrived at);
+        # `measurement_source` is where the measurement itself came from. A
+        # recovered stop-out is both a stop-hit finalization and a CSV-recovered
+        # measurement, and collapsing the two loses one of them.
         context["finalization"] = {
             "basis": basis,
-            "measured_bars": int((state.get("last_measured") or {}).get("bars") or 0),
+            "measured_bars": int(measured.get("bars") or 0),
         }
+        if measured.get("source"):
+            context["finalization"]["measurement_source"] = str(measured["source"])
+        if measured.get("recovered_from"):
+            context["finalization"]["recovered_from"] = str(measured["recovered_from"])
+        if exit_facts:
+            # The exit-policy question `close_r` deliberately does not answer.
+            context["exit"] = dict(exit_facts)
+        # The reason travels with ANY unresolved row, not only a basis-less one:
+        # a stop-out with no bars through the close is unresolved AND has a
+        # basis, and dropping the reason there would lose why it is unresolved.
+        reason = str(state.get("unresolved_reason") or "").strip()
         if basis == "unresolved":
-            # The sweep names a more specific reason when it has one; the
-            # default says what was actually observed, which is nothing.
-            context["finalization"]["reason"] = (
-                str(state.get("unresolved_reason") or "").strip() or "no_bars_after_entry"
-            )
+            context["finalization"]["reason"] = reason or "no_bars_after_entry"
+        elif reason:
+            context["finalization"]["reason"] = reason
         return context
 
     def _registration_context_fields(self, symbol, event_id, plan, entry_dt) -> dict:
@@ -4025,6 +4399,59 @@ class BounceBot(EWrapper, EClient):
         except Exception:
             logging.exception("Tier event could not be recorded for %s.", event_id)
 
+    def _exit_facts(self, state, rows_after_entry, *, stop_hit, mae_r, direction) -> dict:
+        """The exit-policy facts `close_r` deliberately does not carry (MAJOR-3).
+
+        `close_r` is R at the EOD close under `eod_hold`, everywhere, always. A
+        stop exit is a different number and lives here:
+
+        * **`stop_exit_r`** is -1.0 **under a stated assumption** - that the fill
+          happened at the stop. The measured fact is only that the low reached
+          it (`low_min <= stop`), which is why the assumption is named in the
+          row rather than buried in a -1.0 someone will later read as observed.
+        * **`gap_through_stop`** is `mae_r < -1`: price did not touch the stop,
+          it went through it, and the -1.0 fill assumption is optimistic there.
+        * **`ambiguous_interval`** counts bars whose own range contains BOTH the
+          stop and the 1R target. Within one bar there is no way to know which
+          came first; R10.0's predeclared rule is stop-first, applied here to
+          `stop_exit_r`, and the count is reported so the reader can see how
+          much of the sample rests on it.
+        """
+        facts: dict = {
+            "policy": str(state.get("outcome_mode") or "eod_hold"),
+            "stop_hit": bool(stop_hit),
+            "stop_price": state.get("stop_price"),
+        }
+        if stop_hit:
+            facts["stop_exit_r"] = -1.0
+            facts["stop_exit_assumption"] = "filled at the stop; only the touch is measured"
+        try:
+            facts["gap_through_stop"] = bool(float(mae_r) < -1.0) if mae_r != "" else False
+        except (TypeError, ValueError):
+            facts["gap_through_stop"] = False
+
+        ambiguous = 0
+        try:
+            stop_price = float(state.get("stop_price"))
+            target_1r = state.get("target_1r")
+            if rows_after_entry is not None and not getattr(rows_after_entry, "empty", True) \
+                    and target_1r not in (None, ""):
+                target = float(target_1r)
+                for row in rows_after_entry.itertuples(index=False):
+                    low = float(row.low)
+                    high = float(row.high)
+                    if str(direction or "long").strip().lower() == "long":
+                        if low <= stop_price and high >= target:
+                            ambiguous += 1
+                    elif high >= stop_price and low <= target:
+                        ambiguous += 1
+        except (TypeError, ValueError, AttributeError):
+            ambiguous = 0
+        facts["ambiguous_interval_bars"] = ambiguous
+        if ambiguous:
+            facts["ambiguity_rule"] = "stop first (R10.0 predeclared)"
+        return facts
+
     def _append_bounce_outcome_row(self, state, event_type, bars_elapsed, milestone_bar, rows_after_entry, *, finalize_eod=False):
         direction = state.get("direction")
         entry_price = float(state.get("entry_price"))
@@ -4047,6 +4474,12 @@ class BounceBot(EWrapper, EClient):
         # R10.A: how this row's numbers were arrived at. It rides in
         # `context_json` because the CSV header is never widened.
         finalization_basis = "measured" if finalize_eod else ""
+        # MAJOR-3. `close_r` means one thing everywhere: R at the EOD close
+        # under `eod_hold`. A stop exit is a DIFFERENT number and gets its own
+        # field rather than being written into `close_r` whenever bars happened
+        # to be missing - the same trade must not report a different number
+        # because of what the finalizer had in hand.
+        exit_facts: dict = {}
         if rows_after_entry is not None and not rows_after_entry.empty and risk > 0:
             high_max = float(rows_after_entry["high"].max())
             low_min = float(rows_after_entry["low"].min())
@@ -4082,6 +4515,9 @@ class BounceBot(EWrapper, EClient):
                 target_2r_hit = state.get("target_2r") is not None and low_min <= float(state["target_2r"])
                 stop_hit = high_max >= float(state.get("stop_price"))
             eod_close = last_close if finalize_eod else ""
+            exit_facts = self._exit_facts(
+                state, rows_after_entry, stop_hit=stop_hit, mae_r=mae_r, direction=direction
+            )
             # R10.A: remember what this bar measured, so a later finalization
             # with no bars in hand can report what WAS seen instead of assuming
             # nothing happened.
@@ -4097,61 +4533,55 @@ class BounceBot(EWrapper, EClient):
                 "target_1r_hit": bool(target_1r_hit),
                 "target_2r_hit": bool(target_2r_hit),
                 "minutes_elapsed": minutes_elapsed,
+                "mfe_pct": mfe_pct,
+                "mae_pct": mae_pct,
                 "at": get_market_local_now().isoformat(timespec="seconds"),
             }
         elif finalize_eod and risk > 0:
-            # R10.A / D2. This branch used to write close_r = 0 with
+            # R10.A / D2 + MAJOR-3. This branch used to write close_r = 0 with
             # eod_close = entry_price: 1,164 of 6,907 in-window finals, every one
-            # of them an assumption rather than a measurement, and 563 of them
-            # trades whose own earlier rows had already recorded a stop hit.
-            # **No path may write a number it did not measure.**
+            # an assumption rather than a measurement, 563 of them trades whose
+            # own earlier rows had already recorded a stop hit.
+            #
+            # **`close_r` means one thing everywhere**: R at the EOD close under
+            # `eod_hold`. Without bars through the close there is no such number,
+            # so `close_r` and `eod_close` stay BLANK and the row is
+            # `unresolved` - it does not become -1.0 because a stop was hit, and
+            # it does not become the last mid-session close either. Both of
+            # those would make the same trade report a different number
+            # depending only on what the finalizer happened to have in hand.
+            #
+            # What WAS measured is written: mfe/mae, best/worst, the target and
+            # stop flags, and `stop_exit_r` in the context for the exit-policy
+            # question `close_r` cannot answer.
             measured = state.get("last_measured") or {}
-            if measured.get("stop_hit"):
-                # It was stopped out. The stop is where it ended - never the entry.
-                stop_price = float(state.get("stop_price"))
+            if measured:
                 best_price = measured.get("best_price", "")
                 worst_price = measured.get("worst_price", "")
                 mfe_r = measured.get("mfe_r", "")
                 mae_r = measured.get("mae_r", "")
-                close_r = -1.0
-                eod_close = stop_price
                 target_1r_hit = bool(measured.get("target_1r_hit"))
                 target_2r_hit = bool(measured.get("target_2r_hit"))
-                stop_hit = True
-                if entry_price > 0:
-                    eod_move_pct = ((stop_price - entry_price) / entry_price) * 100.0
-                    if direction != "long":
-                        eod_move_pct = ((entry_price - stop_price) / entry_price) * 100.0
-                mfe_pct = measured.get("mfe_pct", "")
-                mae_pct = measured.get("mae_pct", "")
-                finalization_basis = "stop_hit_from_prior_measurement"
-            elif measured:
-                # Bars were seen earlier in the session, just not now. The last
-                # thing actually measured is the honest close.
-                best_price = measured.get("best_price", "")
-                worst_price = measured.get("worst_price", "")
-                close_r = measured.get("close_r", "")
-                mfe_r = measured.get("mfe_r", "")
-                mae_r = measured.get("mae_r", "")
-                eod_close = measured.get("last_close", "")
-                target_1r_hit = bool(measured.get("target_1r_hit"))
-                target_2r_hit = bool(measured.get("target_2r_hit"))
-                if entry_price > 0 and eod_close != "":
-                    move = (float(eod_close) - entry_price) if direction == "long" else (entry_price - float(eod_close))
-                    eod_move_pct = (move / entry_price) * 100.0
-                finalization_basis = "last_measured_bar"
+                stop_hit = bool(measured.get("stop_hit"))
+                exit_facts = self._exit_facts(
+                    state, None, stop_hit=stop_hit, mae_r=mae_r, direction=direction
+                )
+                exit_facts["last_measured_close"] = measured.get("last_close", "")
+                finalization_basis = (
+                    "stop_hit_from_prior_measurement" if stop_hit else "last_measured_bar"
+                )
+                state["unresolved_reason"] = "no_eod_close"
             else:
-                # Nothing was ever seen after entry. That is UNRESOLVED, and it
-                # is written as unresolved with blank numerics - a 0R here is a
-                # trade the mean will happily average in.
+                # Nothing was ever seen after entry.
                 finalization_basis = "unresolved"
         if finalize_eod:
-            status = "eod_complete"
-            if finalization_basis == "unresolved":
-                status = "unresolved"
+            # `eod_complete` means exactly one thing: bars through the close were
+            # in hand and `close_r` is the eod_hold number. Anything else is
+            # `unresolved` - with everything that WAS measured beside it.
+            status = "eod_complete" if finalization_basis == "measured" else "unresolved"
             if minutes_elapsed == "" and entry_dt is not None:
                 session = get_market_session_window(reference=entry_dt)
-                close_naive = session.close_local.replace(tzinfo=None)
+                close_naive = self._naive_market_local(session.close_local)
                 minutes_elapsed = int((close_naive - entry_dt).total_seconds() // 60)
         row = {
             "schema_version": BOUNCE_LEARNING_SCHEMA_VERSION,
@@ -4177,7 +4607,9 @@ class BounceBot(EWrapper, EClient):
             "stop_hit": bool(stop_hit),
             "status": status,
             "milestone_bar": "" if milestone_bar is None else int(milestone_bar),
-            "context_json": self._json_for_learning(self._context_with_finalization(state, finalization_basis)),
+            "context_json": self._json_for_learning(
+                self._context_with_finalization(state, finalization_basis, exit_facts)
+            ),
             "outcome_mode": state.get("outcome_mode") or "eod_hold",
             "eod_close": round(eod_close, 4) if eod_close != "" else "",
             "eod_move_pct": round(eod_move_pct, 4) if eod_move_pct != "" else "",
@@ -4198,53 +4630,68 @@ class BounceBot(EWrapper, EClient):
             return
         symbol_key = str(symbol or "").strip().upper()
         changed = False
-        for event_id, state in list(self.pending_bounce_outcomes.items()):
-            if str(state.get("symbol") or "").strip().upper() != symbol_key:
-                continue
-            entry_dt = self._parse_bar_time(state.get("entry_time"))
-            if entry_dt is None:
-                self.pending_bounce_outcomes.pop(event_id, None)
-                changed = True
-                continue
-            rows_after_entry = self._rows_after_bounce_entry_for_session(state, df, entry_dt)
-            bars_elapsed = len(rows_after_entry)
-            eod_due = self._is_eod_finalization_due(entry_dt)
-            if rows_after_entry.empty and not eod_due:
-                continue
-            logged = set(int(item) for item in state.get("milestones_logged", []) if str(item).isdigit())
-            for milestone in BOUNCE_OUTCOME_MILESTONE_BARS:
-                if bars_elapsed < milestone or milestone in logged:
+        for event_id in list(self.pending_bounce_outcomes):
+            # BLOCKER-1: the sweep runs on another thread and can finalize and
+            # pop a trade between this list being built and this row being
+            # reached, so the entry is re-read and the finalized set consulted
+            # under the same lock the sweep uses, and the whole decision for one
+            # trade happens inside it.
+            with self._pending_lock:
+                state = self.pending_bounce_outcomes.get(event_id)
+                if state is None or event_id in self._finalized_outcome_ids():
+                    self.pending_bounce_outcomes.pop(event_id, None)
                     continue
-                milestone_rows = rows_after_entry.head(milestone)
-                status = self._append_bounce_outcome_row(
-                    state,
-                    f"{milestone}_bar",
-                    bars_elapsed=milestone,
-                    milestone_bar=milestone,
-                    rows_after_entry=milestone_rows,
+                if str(state.get("symbol") or "").strip().upper() != symbol_key:
+                    continue
+                entry_dt = self._parse_bar_time(state.get("entry_time"))
+                if entry_dt is None:
+                    self.pending_bounce_outcomes.pop(event_id, None)
+                    changed = True
+                    continue
+                rows_after_entry = self._rows_after_bounce_entry_for_session(state, df, entry_dt)
+                bars_elapsed = len(rows_after_entry)
+                eod_due = self._is_eod_finalization_due(entry_dt)
+                if rows_after_entry.empty and not eod_due:
+                    continue
+                logged = set(
+                    int(item) for item in state.get("milestones_logged", []) if str(item).isdigit()
                 )
-                logged.add(milestone)
-                changed = True
-            state["milestones_logged"] = sorted(logged)
-            if not rows_after_entry.empty:
-                self._append_bounce_outcome_row(
-                    state,
-                    "update",
-                    bars_elapsed=bars_elapsed,
-                    milestone_bar=None,
-                    rows_after_entry=rows_after_entry,
-                )
-            if eod_due:
-                self._append_bounce_outcome_row(
-                    state,
-                    "final",
-                    bars_elapsed=bars_elapsed,
-                    milestone_bar=None,
-                    rows_after_entry=rows_after_entry,
-                    finalize_eod=True,
-                )
-                self.pending_bounce_outcomes.pop(event_id, None)
-                changed = True
+                for milestone in BOUNCE_OUTCOME_MILESTONE_BARS:
+                    if bars_elapsed < milestone or milestone in logged:
+                        continue
+                    milestone_rows = rows_after_entry.head(milestone)
+                    self._append_bounce_outcome_row(
+                        state,
+                        f"{milestone}_bar",
+                        bars_elapsed=milestone,
+                        milestone_bar=milestone,
+                        rows_after_entry=milestone_rows,
+                    )
+                    logged.add(milestone)
+                    changed = True
+                state["milestones_logged"] = sorted(logged)
+                if not rows_after_entry.empty:
+                    self._append_bounce_outcome_row(
+                        state,
+                        "update",
+                        bars_elapsed=bars_elapsed,
+                        milestone_bar=None,
+                        rows_after_entry=rows_after_entry,
+                    )
+                if eod_due:
+                    self._append_bounce_outcome_row(
+                        state,
+                        "final",
+                        bars_elapsed=bars_elapsed,
+                        milestone_bar=None,
+                        rows_after_entry=rows_after_entry,
+                        finalize_eod=True,
+                    )
+                    # Recorded in the SAME set the sweep checks, so neither can
+                    # write a second final for this trade.
+                    self._remember_finalized_outcome(event_id, state.get("trade_date"))
+                    self.pending_bounce_outcomes.pop(event_id, None)
+                    changed = True
         if changed:
             self._save_pending_bounce_outcomes()
 
@@ -4338,6 +4785,114 @@ class BounceBot(EWrapper, EClient):
             logging.error("Failed to reconnect to IB within timeout.")
             return False
 
+    # ------------------------------------------------------------------
+    # R10.A / MAJOR-7: the learning refresh runs in SHADOW first
+    # ------------------------------------------------------------------
+    #: `local_settings.json`. **Default shadow** (trader decision, 2026-08-23
+    #: review). Corrected finals - stop-outs that used to score 0R, sessions
+    #: that used to score a fabricated 0 and are now `unresolved` - move segment
+    #: averages, and segment averages decide `muted` and `proven`, which decide
+    #: whether an alert is suppressed. That is live alert behaviour changing
+    #: from a DATA correction: legitimate, but plan.md sec 5 says the change is
+    #: measured before it is taken, and this is how it is measured.
+    #:
+    #: In shadow the refresh writes a state file BESIDE the live one and a diff
+    #: of every segment whose tier or mute would move. The live state is
+    #: untouched, so tiers and mutes on the desk are exactly what they were.
+    LEARNING_REFRESH_MODE_SETTING = "bounce_learning_refresh_mode"
+
+    def _learning_refresh_is_live(self) -> bool:
+        """Does the after-close refresh write the LIVE learning state? Default no."""
+        try:
+            from project_paths import get_local_setting
+
+            raw = str(get_local_setting(self.LEARNING_REFRESH_MODE_SETTING, "") or "").strip().lower()
+        except Exception:
+            raw = ""
+        return raw == "live"
+
+    def refresh_learning_state_with_shadow(self) -> dict:
+        """Refresh into the live state, or into a shadow beside it with a diff.
+
+        Returns the summary the caller logs. Never raises into the worker.
+        """
+        from bounce_bot_lib.learning import (
+            BOUNCE_LEARNING_STATE_FILE,
+            load_bounce_learning_state,
+            refresh_bounce_learning_state,
+        )
+
+        if self._learning_refresh_is_live():
+            state = refresh_bounce_learning_state()
+            return {"mode": "live", "segments": sum(len(v) for v in (state or {}).get("segments", {}).values())}
+
+        live = load_bounce_learning_state() or {}
+        shadow_path = BOUNCE_LEARNING_STATE_FILE.with_name(
+            BOUNCE_LEARNING_STATE_FILE.stem + ".shadow.json"
+        )
+        shadow = refresh_bounce_learning_state(path=shadow_path)
+        diff = self._learning_state_diff(live, shadow)
+        diff["mode"] = "shadow"
+        diff["live_state"] = str(BOUNCE_LEARNING_STATE_FILE)
+        diff["shadow_state"] = str(shadow_path)
+        diff["setting"] = self.LEARNING_REFRESH_MODE_SETTING
+        diff["segments"] = sum(len(v) for v in (shadow or {}).get("segments", {}).values())
+        try:
+            from project_paths import get_diagnostics_dir
+
+            report = Path(get_diagnostics_dir()) / "bounce_learning_shadow_diff.json"
+            report.parent.mkdir(parents=True, exist_ok=True)
+            temp = report.with_name(report.name + ".tmp")
+            temp.write_text(json.dumps(diff, indent=2, default=str), encoding="utf-8")
+            os.replace(temp, report)
+            diff["report"] = str(report)
+        except Exception:
+            logging.exception("Could not write the learning shadow diff.")
+        return diff
+
+    @staticmethod
+    def _learning_state_diff(live: dict, shadow: dict) -> dict:
+        """Segments whose mute or proven verdict would move, with n and R.
+
+        Only the two verdicts that reach an alert are compared. An average that
+        moves without changing either changes nothing the trader would see, and
+        listing it would bury the ones that do.
+        """
+        live_segments = (live or {}).get("segments") or {}
+        shadow_segments = (shadow or {}).get("segments") or {}
+        changes: list[dict] = []
+        for dimension in sorted(set(live_segments) | set(shadow_segments)):
+            before_dim = live_segments.get(dimension) or {}
+            after_dim = shadow_segments.get(dimension) or {}
+            for key in sorted(set(before_dim) | set(after_dim)):
+                before = before_dim.get(key) or {}
+                after = after_dim.get(key) or {}
+                moved = (
+                    bool(before.get("muted")) != bool(after.get("muted"))
+                    or bool(before.get("proven")) != bool(after.get("proven"))
+                    or (key in before_dim) != (key in after_dim)
+                )
+                if not moved:
+                    continue
+                changes.append({
+                    "dimension": dimension,
+                    "segment": key,
+                    "muted": [bool(before.get("muted")), bool(after.get("muted"))],
+                    "proven": [bool(before.get("proven")), bool(after.get("proven"))],
+                    "sample_count": [before.get("sample_count"), after.get("sample_count")],
+                    "avg_close_r": [before.get("avg_close_r"), after.get("avg_close_r")],
+                    "appeared": key not in before_dim,
+                    "disappeared": key not in after_dim,
+                })
+        return {
+            "changed_segments": len(changes),
+            "would_mute": sum(1 for item in changes if item["muted"] == [False, True]),
+            "would_unmute": sum(1 for item in changes if item["muted"] == [True, False]),
+            "would_prove": sum(1 for item in changes if item["proven"] == [False, True]),
+            "would_unprove": sum(1 for item in changes if item["proven"] == [True, False]),
+            "changes": changes,
+        }
+
     def _maybe_refresh_learning_after_close(self):
         """Rebuild the day-trade learning chain once per day after the close.
 
@@ -4356,15 +4911,17 @@ class BounceBot(EWrapper, EClient):
         session = get_market_session_window(now)
         if now < session.close_local + timedelta(minutes=BOUNCE_EOD_FINALIZE_GRACE_MINUTES):
             return
-        self._learning_refresh_date = today
-
         def worker():
             try:
                 # R10.A / D3: finalize what the scan loop can no longer reach,
                 # BEFORE the learning refresh reads the rows. It needs no bars
                 # and no IB, and a failure here must not cost the refresh.
                 try:
-                    swept = self.sweep_pending_bounce_outcomes()
+                    swept = (
+                        self.sweep_pending_bounce_outcomes()
+                        if self._sweep_autorun_enabled()
+                        else {}
+                    )
                     if swept.get("finalized"):
                         logging.info(
                             "Outcome sweep finalized %d pending trade(s) (%d expired); %d still open.",
@@ -4373,15 +4930,32 @@ class BounceBot(EWrapper, EClient):
                 except Exception:
                     logging.exception("Outcome sweep failed; the learning refresh continues.")
 
-                from bounce_bot_lib.learning import refresh_bounce_learning_state
-
-                state = refresh_bounce_learning_state()
-                segments = sum(len(value) for value in (state or {}).get("segments", {}).values())
-                logging.info("After-close learning refresh complete (%s measured segments).", segments)
-                if self.gui_callback:
-                    self.gui_callback(
-                        f"Learning refreshed after the close ({segments} measured segments).", "blue"
+                summary = self.refresh_learning_state_with_shadow()
+                segments = summary.get("segments", 0)
+                if summary.get("mode") == "shadow":
+                    logging.info(
+                        "After-close learning refresh ran in SHADOW (%s segments); %s segment(s) "
+                        "would change mute/proven (%s mute, %s unmute, %s prove). Live tiers are "
+                        'unchanged. Set %s="live" to adopt.',
+                        segments, summary.get("changed_segments", 0),
+                        summary.get("would_mute", 0), summary.get("would_unmute", 0),
+                        summary.get("would_prove", 0), self.LEARNING_REFRESH_MODE_SETTING,
                     )
+                    if self.gui_callback:
+                        self.gui_callback(
+                            f"Learning refreshed in shadow ({segments} segments; "
+                            f"{summary.get('changed_segments', 0)} would change).", "blue"
+                        )
+                else:
+                    logging.info("After-close learning refresh complete (%s measured segments).", segments)
+                    if self.gui_callback:
+                        self.gui_callback(
+                            f"Learning refreshed after the close ({segments} measured segments).", "blue"
+                        )
+                # Stamped only once the work has actually happened. Stamping
+                # before it ran meant a raising sweep or refresh was not retried
+                # until the next weekday.
+                self._learning_refresh_date = today
             except Exception:
                 logging.exception("After-close learning refresh failed")
 
