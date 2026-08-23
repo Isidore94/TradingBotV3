@@ -123,6 +123,48 @@ TMO target move looks like from the inside.
 > rewrite it does not, which is why the packet's exit gate moved to
 > **`volume_unit != shares` = 0** with the cliff detector as a secondary signal.
 
+
+> ### Amendment 4 — 2026-08-23, after review: the backfill verified, and four corrections
+>
+> **Verified independently against the frozen pre-backfill copy** (all 1,958
+> files): **every price cell identical** — max |Δ| 0 on open/high/low/close, 0
+> rows added, 0 dropped — volume on 2026-08-20 matching
+> `yfinance(auto_adjust=False)` at 1.000 for SPY/TSLA/AAPL/A/NVDA/VIRT/LRN, 0
+> rows dated after 08-21, and `files_changed` 1,920 agreeing with both the mtime
+> count and the changed-volume count. The frozen copy is now on the DAS as well:
+> 1,958 files, 47.4 MB, manifest SHA-256 `8b2f2009e742d32a…` **identical on both
+> sides** (receipt: `daily_bars_pre_backfill_das_receipt_2026-08-23.json`).
+>
+> **(a) The share percentage was flattered by its own denominator.**
+> `measure_store_health` dropped files with no `volume_unit` column, so the
+> store read *1,117,170 rows, 99.98% shares*. It holds **1,136,420 rows —
+> 1,116,982 shares, 188 unknown and 19,250 in 38 pre-column files — which is
+> 98.29%.** Those rows exist and still feed an AVWAP. They are counted as
+> `no_column` now and named in the health tile, and the reconciliation JSON
+> (which also listed a **file** count of 38 inside a **row** map) is corrected
+> with what it supersedes recorded in it.
+>
+> **(b) Three files were unlabelled non-changes.** AVNS, SATS and SKYT got a
+> Yahoo history back whose dates overlap none of the dates they hold, so they
+> fell through with `status=ok` and nothing rewritten — still v1, still cliffed,
+> in no refusal bucket. They now report **`no_overlap`**, and their cliffs count.
+>
+> **(c) The nine "no Yahoo data" symbols are UNSETTLED, not unfixable.** A
+> Sunday re-probe reproduces it — BK and VSCO answer HTTP 404 *"Quote not found"*,
+> which is not plausible for Bank of New York Mellon — so this reads as a
+> Yahoo-side condition rather than a delisting. Same for the thin ones
+> (CPRX 5 rows, CWAN 1, NUVL 5, PRA 1, EA 6, SATS 1, SKYT 6, AVNS 3). **A weekday
+> probe settles it**, and the backfill now takes `--only-unfinished` so that
+> re-run reaches exactly the **63** files still holding a non-shares row instead
+> of all 1,958.
+>
+> **(d) Two facts out of this packet's scope, recorded so they are not
+> rediscovered as defects.** **605 of 1,958 files end before 2026-08-21** —
+> pre-existing staleness, and the backfill added no dates to any file. And
+> **EQR's 2026-08-18…20 rows are zero-volume placeholders on Yahoo itself**,
+> carrying an unchanged 63.66 close; that is vendor data, not something this
+> repair introduced.
+
 ---
 
 ## 1. The cliff, measured (a)

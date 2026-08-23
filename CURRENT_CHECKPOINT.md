@@ -8,6 +8,67 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - review round 1: the suite's clock, and four R10.V corrections
+
+**Branch `phase05-integration-blitz`.** Fable's 06:46 PT run found **2 failed,
+4422 passed** where mine said 4424 passed at 07:26. Both were right.
+
+**The suite was clock-dependent between 06:30 and 07:00 PT.**
+`RepetitionLedger.consider(now=None)` reads the live clock, and inside the open
+digest window an ordinary alert is legitimately folded into the digest row - no
+feed row, no beep. `test_desk_still_beeps` and
+`test_focus_privilege_waits_for_the_previous_day_extreme` both assert an
+ordinary alert surfaces, so inside that half hour they read correct behaviour as
+a failure. **The same class as the forming-candle chart bug**, and the second
+one this week. Both now pin the clock to a moment outside any session's first
+half hour; **the digest stays enabled**, because disabling it would hide a real
+regression here. Two new tests cover the mechanism directly - an ordinary alert
+inside the window IS digested, a privileged one never is.
+
+**Also corrected: `PYTEST_EXIT=$?` after a pipe reports the tail's exit code.**
+CLAUDE.md warns about exactly this. Every run below writes to a file and checks
+pytest's own code.
+
+### R10.V - independently verified, four corrections
+
+Fable re-derived the backfill against the frozen copy: **every price cell
+identical** (max |delta| 0, 0 rows added or dropped), 08-20 volume matching
+`yfinance(auto_adjust=False)` at 1.000 on seven names, 0 rows dated after 08-21,
+`files_changed` agreeing with the mtime count.
+
+1. **The share percentage was flattered by its own denominator.** The health
+   measurement dropped files with no `volume_unit` column: **1,136,420 rows,
+   98.29% shares**, not 1,117,170 and 99.98%. The 19,250 rows in 38 pre-column
+   files exist and still feed an AVWAP; they are `no_column` now, named in the
+   tile, and the reconciliation JSON is corrected (it also had a **file** count
+   sitting inside a **row** map) with what it supersedes recorded in it.
+2. **Three unlabelled non-changes.** AVNS, SATS, SKYT got a history back whose
+   dates overlap none of theirs and fell through as `status=ok` - still v1,
+   still cliffed, in no bucket. They report **`no_overlap`** now and their
+   cliffs count.
+3. **The nine "no Yahoo data" symbols are UNSETTLED, not unfixable.** A Sunday
+   re-probe reproduces it - BK and VSCO answer 404 "Quote not found", which is
+   not plausible for Bank of New York Mellon. `--only-unfinished` now scopes a
+   re-run to the **63** files still holding a non-shares row.
+4. **The frozen pre-backfill copy is on the DAS**: 1,958 files, 47.4 MB,
+   manifest SHA-256 identical on both sides, receipt filed beside it.
+
+Out of scope but recorded so they are not rediscovered as defects: **605 of
+1,958 files end before 2026-08-21** (pre-existing staleness - the backfill added
+no dates), and **EQR's 08-18..20 rows are zero-volume placeholders on Yahoo
+itself**.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` (own exit code) | **4431 passed / 19 subtests**, exit **0** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Next: the R10.A blockers.** Until BLOCKER-1, MAJOR-2, MAJOR-3 and MAJOR-7 are
+fixed and green, the sweep's automatic firing is to be **switched off by
+default** (trader decision).
+
+---
+
 ## 2026-08-23 - R10.A: what Monday should show
 
 **Branch `phase05-integration-blitz`.** An `outcome_sweep` tile now reads the

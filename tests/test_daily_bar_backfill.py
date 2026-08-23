@@ -446,3 +446,75 @@ def test_the_manifest_after_count_reconciles_with_an_independent_scan(tmp_path):
     live = cliff.scan_store(store)
     assert report.cliffed_after == live.cliffed == 1
     assert report.unmeasurable_after == live.unmeasurable == 0
+
+
+def test_a_download_that_overlaps_no_stored_date_is_a_named_non_change(tmp_path):
+    """AVNS, SATS and SKYT: a history came back, none of its dates are in the file.
+
+    Without its own bucket this fell through as `status=ok` with zero rows
+    rewritten - three files sitting in the manifest looking finished while still
+    v1 and still cliffed. A non-change has to be a named non-change.
+    """
+    store = tmp_path / "store"
+    _store(store, "AVNS", _frame(40, splice_at=20))
+    elsewhere = _frame(40)
+    elsewhere["datetime"] = pd.bdate_range("2024-01-02", periods=40)
+    report = backfill.run_backfill(
+        store_dir=store,
+        frozen_dir=tmp_path / "frozen",
+        downloader=_downloader_for({"AVNS": elsewhere}),
+        apply=True,
+        now=NOW,
+    )
+    outcome = report.outcomes[0]
+    assert outcome.status == "no_overlap"
+    assert report.files_no_overlap == 1
+    assert report.files_changed == 0
+    assert outcome.rows_left_unknown == outcome.rows
+    assert "none of them in this file" in outcome.note
+    assert report.cliffed_after == 1, "an untouched file keeps its cliff in the count"
+
+
+def test_the_unfinished_set_is_exactly_the_files_still_holding_a_non_shares_row(tmp_path):
+    """The Monday job: re-run reaches the 38 left behind, not all 1,958."""
+    store = tmp_path / "store"
+    done = master_avwap._normalize_daily_bar_frame(
+        master_avwap._set_daily_bar_source(_frame(40), master_avwap.DAILY_BAR_SOURCE_YAHOO)
+    )
+    master_avwap._write_daily_bar_parquet(store / "DONE.parquet", done)
+    _store(store, "OLD", _frame(40))                  # v1, no unit column
+    mixed = done.copy()
+    mixed.loc[0, "volume_unit"] = "unknown"
+    master_avwap._write_daily_bar_parquet(store / "MIXED.parquet", mixed)
+
+    left = {path.stem for path in backfill.unfinished_files(store)}
+    assert left == {"OLD", "MIXED"}
+
+
+def test_a_re_run_can_be_scoped_to_named_symbols(tmp_path):
+    store = tmp_path / "store"
+    _store(store, "AAA", _frame(40, splice_at=20))
+    _store(store, "BBB", _frame(40, splice_at=20))
+    asked: list[list[str]] = []
+
+    def download(symbols, *, period):
+        asked.append(list(symbols))
+        return _downloader_for({"AAA": _frame(40), "BBB": _frame(40)})(symbols, period=period)
+
+    report = backfill.run_backfill(
+        store_dir=store, frozen_dir=tmp_path / "frozen", downloader=download,
+        apply=False, now=NOW, symbols=["BBB"],
+    )
+    assert report.files_seen == 1
+    assert asked[0] == ["BBB"]
+
+
+def test_a_windows_reserved_stem_can_be_named_by_its_real_symbol(tmp_path):
+    store = tmp_path / "store"
+    _store(store, "CON_", _frame(40, splice_at=20))
+    report = backfill.run_backfill(
+        store_dir=store, frozen_dir=tmp_path / "frozen",
+        downloader=_downloader_for({"CON": _frame(40)}), apply=False, now=NOW,
+        symbols=["CON"],
+    )
+    assert report.files_seen == 1

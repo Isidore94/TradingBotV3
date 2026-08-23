@@ -212,6 +212,12 @@ def measure_store_health(directory: Path | str) -> dict:
     Measured at 7.4 s over 1,958 files, which is far too slow for a health tile
     that a human is waiting on, so this runs on the nightly snapshot job and the
     tile reads what it wrote. A tile that has to wait 7 s is a tile nobody opens.
+
+    **A v1 file's rows are counted as `no_column`, not dropped.** The first
+    version skipped them, so the store read "1,117,170 rows, 99.98% shares" when
+    it actually holds 1,136,420 rows of which 19,250 sit in 38 files that predate
+    the unit column - 98.29%. A denominator that quietly excludes the rows you
+    are least sure about flatters exactly the wrong number.
     """
     import pandas as pd
 
@@ -219,6 +225,7 @@ def measure_store_health(directory: Path | str) -> dict:
     units: dict[str, int] = {}
     schemas: dict[str, int] = {}
     files_with_unknown = 0
+    files_without_column = 0
     rows_total = 0
     try:
         paths = sorted(root.glob("*.parquet"))
@@ -235,10 +242,17 @@ def measure_store_health(directory: Path | str) -> dict:
         try:
             frame = pd.read_parquet(path, columns=["volume_unit"])
         except Exception:
-            # A file with no unit column is every row unknown, and saying so is
-            # the point - "no column" must not read as "nothing to report".
-            units["unknown"] = units.get("unknown", 0)
+            # No unit column (or unreadable). Its rows still exist and still
+            # feed an AVWAP, so they are counted under `no_column` - saying
+            # nothing about them is not the same as there being nothing.
+            files_without_column += 1
             files_with_unknown += 1
+            try:
+                rows = len(pd.read_parquet(path, columns=["datetime"]))
+            except Exception:
+                rows = 0
+            rows_total += rows
+            units["no_column"] = units.get("no_column", 0) + rows
             continue
         rows_total += len(frame)
         counts = frame["volume_unit"].value_counts()
@@ -247,13 +261,16 @@ def measure_store_health(directory: Path | str) -> dict:
         if int(counts.get("shares", 0)) != len(frame):
             files_with_unknown += 1
     cliff = scan_store(root)
+    shares = int(units.get("shares", 0))
     return {
         "store_dir": str(root),
         "files": len(paths),
         "rows": rows_total,
         "rows_by_volume_unit": units,
+        "rows_shares_pct": round(shares / rows_total * 100.0, 4) if rows_total else None,
         "files_by_schema": schemas,
         "files_not_all_shares": files_with_unknown,
+        "files_without_unit_column": files_without_column,
         "cliff": cliff.as_dict(),
     }
 

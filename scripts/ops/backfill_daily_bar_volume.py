@@ -91,6 +91,7 @@ class BackfillReport:
     files_failed: int = 0
     files_skipped_low_coverage: int = 0
     files_skipped_would_worsen: int = 0
+    files_no_overlap: int = 0
     rows_rewritten: int = 0
     rows_left_unknown: int = 0
     unmeasurable_before: int = 0
@@ -256,6 +257,32 @@ def freeze_pre_backfill_copy(store_dir: Path, frozen_dir: Path, *, stamp: str) -
     return target
 
 
+def unfinished_files(store_dir: Path | str) -> list[Path]:
+    """Files still holding a row that is not share-denominated.
+
+    The Monday job. After the 2026-08-23 run, 38 files were left: 9 Yahoo
+    returned nothing for, 13 it covered too thinly, 13 the rewrite would have
+    made worse, and 3 whose returned history overlapped none of their dates. A
+    weekend probe cannot tell a delisting from a Yahoo outage - BK and VSCO both
+    answered 404 "Quote not found", which is not plausible for Bank of New York
+    Mellon - so those files are **unsettled**, not unfixable, and this is how a
+    weekday re-run reaches exactly them.
+    """
+    import pandas as pd
+
+    out: list[Path] = []
+    for path in sorted(Path(store_dir).glob("*.parquet")):
+        try:
+            frame = pd.read_parquet(path, columns=["volume_unit"])
+        except Exception:
+            out.append(path)          # no unit column at all
+            continue
+        units = set(str(value) for value in frame["volume_unit"].unique())
+        if units - {"shares"}:
+            out.append(path)
+    return out
+
+
 def run_backfill(
     *,
     store_dir: Path | None = None,
@@ -265,6 +292,8 @@ def run_backfill(
     batch_size: int = DEFAULT_BATCH,
     period: str = DEFAULT_PERIOD,
     limit: int | None = None,
+    symbols: list[str] | None = None,
+    only_unfinished: bool = False,
     now: datetime | None = None,
 ) -> BackfillReport:
     import pandas as pd
@@ -279,6 +308,11 @@ def run_backfill(
         store_dir=str(store),
     )
     paths = sorted(store.glob("*.parquet"))
+    if only_unfinished:
+        paths = unfinished_files(store)
+    if symbols:
+        wanted = {str(name).strip().upper() for name in symbols if str(name).strip()}
+        paths = [path for path in paths if symbol_for_stem(path.stem) in wanted or path.stem.upper() in wanted]
     if limit is not None:
         paths = paths[:limit]
     report.files_seen = len(paths)
@@ -386,6 +420,28 @@ def run_backfill(
         # Worsening: whatever the reason, a file this run would leave with a
         # cliff it did not have (or a bigger one) is left alone. A repair that
         # can make a file worse is not a repair.
+        if not rewritten:
+            # Yahoo returned a history for this symbol, and not one of its dates
+            # is a date this file holds. That is neither "no data" nor a
+            # coverage refusal, and without its own bucket it fell through as
+            # `status=ok` with nothing rewritten - three files (AVNS, SATS,
+            # SKYT) sat in the manifest looking finished while still v1 and
+            # still cliffed. A non-change has to be a named non-change.
+            outcome.status = "no_overlap"
+            outcome.note = f"yahoo returned {len(by_date)} session(s), none of them in this file"
+            outcome.rows_left_unknown = outcome.rows
+            report.files_no_overlap += 1
+            report.rows_left_unknown += outcome.rows
+            outcome.cliff_after = before.date
+            outcome.cliff_ratio_after = before.ratio
+            outcome.measurable_after = before.measurable
+            if not before.measurable:
+                report.unmeasurable_after += 1
+            elif before.is_cliff:
+                report.cliffed_after += 1
+            report.outcomes.append(outcome)
+            continue
+
         coverage = (rewritten / outcome.rows) if outcome.rows else 0.0
         worsens = bool(
             after.is_cliff
@@ -461,6 +517,9 @@ def _main(argv: list[str]) -> int:  # pragma: no cover - operator entry point
     parser.add_argument("--dir", type=Path, default=None)
     parser.add_argument("--frozen-dir", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--symbols", default="", help="comma-separated symbols to re-run")
+    parser.add_argument("--only-unfinished", action="store_true",
+                        help="only files still holding a non-shares row (the Monday job)")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH)
     parser.add_argument("--period", default=DEFAULT_PERIOD)
     parser.add_argument("--manifest", type=Path, default=None)
@@ -475,6 +534,8 @@ def _main(argv: list[str]) -> int:  # pragma: no cover - operator entry point
         batch_size=args.batch_size,
         period=args.period,
         limit=args.limit,
+        symbols=[part for part in str(args.symbols or "").split(",") if part.strip()] or None,
+        only_unfinished=args.only_unfinished,
     )
     # The same stamp the frozen copy uses (UTC). The first live run named the
     # copy 2026-08-23 and the manifest 2026-08-22, from the same run.
@@ -492,6 +553,7 @@ def _main(argv: list[str]) -> int:  # pragma: no cover - operator entry point
     print(f"  files changed       {report.files_changed}")
     print(f"  rows rewritten      {report.rows_rewritten:,}")
     print(f"  rows left unknown   {report.rows_left_unknown:,}")
+    print(f"  no date overlap     {report.files_no_overlap}")
     print(f"  skipped (coverage)  {report.files_skipped_low_coverage}")
     print(f"  skipped (worsens)   {report.files_skipped_would_worsen}")
     print(f"  cliffed before      {report.cliffed_before}")

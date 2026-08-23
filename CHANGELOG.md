@@ -21,6 +21,27 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - review round 1: a clock-dependent suite, and four R10.V corrections
+
+- **Two tests failed only between 06:30 and 07:00 PT.** Inside the open-digest
+  window an ordinary alert is legitimately folded into the digest row - no feed
+  row, no beep - so two tests asserting an ordinary alert surfaces read correct
+  behaviour as a failure. Both pin the clock now; the digest stays enabled, and
+  two new tests cover the mechanism directly.
+- **The share percentage was flattered by its own denominator**: the store is
+  **1,136,420 rows and 98.29% shares**, not 1,117,170 and 99.98% - the
+  measurement dropped files with no `volume_unit` column. Those 19,250 rows are
+  counted as `no_column`, named in the health tile, and the reconciliation JSON
+  is corrected with what it supersedes recorded in it.
+- **`no_overlap`**: a file whose Yahoo history overlaps none of its dates is a
+  named non-change now (AVNS, SATS, SKYT) instead of falling through as `ok`.
+- **`--only-unfinished`** scopes a backfill re-run to the 63 files still holding
+  a non-shares row. The nine "no Yahoo data" symbols are recorded as
+  **unsettled** - a Sunday probe reproduces 404s for names like BK that cannot
+  plausibly be delisted - and a weekday probe settles it.
+- **The frozen pre-backfill copy is on the DAS**, 1,958 files, manifest SHA-256
+  identical on both sides.
+
 ### 2026-08-23 - R10.A: the sweep is visible on the desk
 
 - **An `outcome_sweep` System Health tile** reads the coverage the sweep files

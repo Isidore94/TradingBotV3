@@ -433,6 +433,26 @@ def test_liked_focus_picks_skip_tier_gate_and_always_sound():
     assert alert_should_sound(quiet_b, is_focus=True)
 
 
+def _pin_repetition_clock(monkeypatch):
+    """Pin the repetition ledger's clock outside the open-digest window.
+
+    Between the open and open+30 an ordinary alert is folded into the open
+    digest - no feed row - so a test asserting that an S-tier alert reaches the
+    feed on its own merit fails inside that half hour on correct behaviour.
+    Found 2026-08-23 at 06:46 PT. The digest stays enabled; only the clock is
+    fixed, to a moment outside any session's first half hour.
+    """
+    import alert_repetition
+    from datetime import datetime as _datetime
+
+    class _PinnedClock(_datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D401 - matches datetime.now
+            return cls(2026, 8, 21, 12, 0, 0)
+
+    monkeypatch.setattr(alert_repetition, "datetime", _PinnedClock)
+
+
 def test_focus_privilege_waits_for_the_previous_day_extreme(tmp_path, monkeypatch):
     """Trader rule 2026-08-05: a Focus long inside yesterday's range is noise.
 
@@ -454,6 +474,8 @@ def test_focus_privilege_waits_for_the_previous_day_extreme(tmp_path, monkeypatc
         if exc.name == "PySide6":
             return
         raise
+
+    _pin_repetition_clock(monkeypatch)
 
     class _FocusService:
         def is_focus(self, symbol, side=None, category=None):

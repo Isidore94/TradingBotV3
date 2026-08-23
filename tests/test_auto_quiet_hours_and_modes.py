@@ -700,6 +700,31 @@ def test_the_alarm_stamp_day_rolls(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _pin_repetition_clock(monkeypatch):
+    """Pin the repetition ledger's clock outside the open-digest window.
+
+    `RepetitionLedger.consider(now=None)` reads the live clock, and between the
+    open and open+30 minutes an ordinary alert is legitimately folded into the
+    open digest - no feed row, no beep. Run a test that asserts an ordinary
+    alert surfaces inside that half hour and correct behaviour reads as a
+    failure. Found 2026-08-23 at 06:46 PT, the same class of clock bug as the
+    forming-candle chart test.
+
+    The digest is left ENABLED on purpose: disabling it would hide a genuine
+    regression in this path. Only the clock is fixed, to a moment that is not
+    in any session's first half hour.
+    """
+    import alert_repetition
+    from datetime import datetime as _datetime
+
+    class _PinnedClock(_datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D401 - matches datetime.now
+            return cls(2026, 8, 21, 12, 0, 0)
+
+    monkeypatch.setattr(alert_repetition, "datetime", _PinnedClock)
+
+
 def _panel(monkeypatch, mode):
     try:
         from PySide6.QtWidgets import QApplication
@@ -710,6 +735,7 @@ def _panel(monkeypatch, mode):
         if exc.name == "PySide6":
             pytest.skip("PySide6 is not installed")
         raise
+    _pin_repetition_clock(monkeypatch)
     panel = AlertCenterPanel()
     monkeypatch.setattr("autopilot_core.read_auto_pilot_mode", lambda *_a, **_k: mode)
     panel._auto_mode_cached = None
@@ -1512,3 +1538,44 @@ def test_both_gates_answer_the_14_00_boundary_the_same_way(monkeypatch):
     assert core.within_auto_scanning_window(boundary, start, end)
     assert core.within_auto_scanning_window(start, start, end), "inclusive at the open too"
     assert not core.within_auto_scanning_window(just_after, start, end)
+
+
+def test_an_ordinary_alert_inside_the_open_digest_is_folded_and_that_is_correct():
+    """The behaviour the two panel tests above pin their clock to avoid.
+
+    Between the open and open+`alert_open_digest_minutes` an ordinary alert
+    legitimately joins the digest row: no feed row of its own, and therefore no
+    beep. A test that asserts an ordinary alert surfaces will fail inside that
+    window on entirely correct behaviour - which is what happened on
+    2026-08-23 at 06:46 PT. Pinning the clock is the fix; disabling the digest
+    would have hidden this.
+    """
+    from datetime import datetime, timedelta
+
+    from alert_repetition import ACTION_DIGEST, ACTION_NEW, RepetitionLedger
+
+    session_open = datetime(2026, 8, 21, 6, 30)
+    ledger = RepetitionLedger(digest_minutes=30)
+    ledger.set_market_date("2026-08-21", session_open=session_open)
+
+    inside = ledger.consider(symbol="AAPL", side="LONG", tier="S",
+                             now=session_open + timedelta(minutes=16))
+    assert inside.action == ACTION_DIGEST
+
+    outside = ledger.consider(symbol="MSFT", side="LONG", tier="S",
+                              now=session_open + timedelta(minutes=31))
+    assert outside.action == ACTION_NEW
+
+
+def test_a_privileged_alert_is_never_folded_into_the_open_digest():
+    """The carve-out that makes the digest safe: armed and Focus always surface."""
+    from datetime import datetime, timedelta
+
+    from alert_repetition import ACTION_NEW, RepetitionLedger
+
+    session_open = datetime(2026, 8, 21, 6, 30)
+    ledger = RepetitionLedger(digest_minutes=30)
+    ledger.set_market_date("2026-08-21", session_open=session_open)
+    decision = ledger.consider(symbol="NVDA", side="LONG", tier="C", privileged=True,
+                               now=session_open + timedelta(minutes=5))
+    assert decision.action == ACTION_NEW

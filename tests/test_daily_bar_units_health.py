@@ -92,12 +92,28 @@ def test_the_measurement_counts_rows_by_unit_and_files_by_schema(tmp_path):
     assert payload["files_not_all_shares"] == 1, "the v1 file has no unit column at all"
 
 
-def test_a_file_with_no_unit_column_counts_as_not_all_shares(tmp_path):
+def test_a_file_with_no_unit_column_has_its_rows_counted_as_no_column(tmp_path):
+    """A denominator that excludes the rows you are least sure about flatters
+    exactly the wrong number: the first version read 99.98% shares where the
+    store was 98.29%, by dropping 19,250 rows in 38 pre-column files."""
     store = tmp_path / "store"
     _write(store, "OLD", _frame(30), v2=False)
     payload = cliff.measure_store_health(store)
     assert payload["files_not_all_shares"] == 1
+    assert payload["files_without_unit_column"] == 1
+    assert payload["rows"] == 30, "the rows exist and still feed an AVWAP"
+    assert payload["rows_by_volume_unit"]["no_column"] == 30
     assert payload["rows_by_volume_unit"].get("shares", 0) == 0
+    assert payload["rows_shares_pct"] == 0.0
+
+
+def test_the_share_percentage_uses_every_row_in_the_store(tmp_path):
+    store = tmp_path / "store"
+    _write(store, "NEW", _frame(30))
+    _write(store, "OLD", _frame(10), v2=False)
+    payload = cliff.measure_store_health(store)
+    assert payload["rows"] == 40
+    assert payload["rows_shares_pct"] == pytest.approx(75.0)
 
 
 def test_the_measurement_carries_the_cliff_scan(tmp_path):

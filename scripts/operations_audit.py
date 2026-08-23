@@ -2265,6 +2265,8 @@ def _daily_bar_units_check(now: datetime, local_tz, diagnostics: Path | None = N
         "rows": rows,
         "rows_shares": shares,
         "rows_other": other,
+        "rows_shares_pct": payload.get("rows_shares_pct"),
+        "files_without_unit_column": payload.get("files_without_unit_column"),
         "rows_by_volume_unit": units,
         "files_by_schema": payload.get("files_by_schema") or {},
         "files_not_all_shares": payload.get("files_not_all_shares"),
@@ -2300,12 +2302,21 @@ def _daily_bar_units_check(now: datetime, local_tz, diagnostics: Path | None = N
     # reported in full and it does not set the status.
     lots = int(units.get("lots_rth") or 0)
     unknown = int(units.get("unknown") or 0)
-    residue = (
-        f" {unknown:,} row(s) remain unmeasured - Yahoo has no data for them and the "
-        "backfill manifest names the files."
-        if unknown
-        else ""
-    )
+    no_column = int(units.get("no_column") or 0)
+    files_without_column = int(payload.get("files_without_unit_column") or 0)
+    parts = []
+    if unknown:
+        parts.append(
+            f"{unknown:,} row(s) remain unmeasured - Yahoo has no data for them and the "
+            "backfill manifest names the files"
+        )
+    if no_column:
+        parts.append(
+            f"{no_column:,} row(s) in {files_without_column} file(s) predate the unit "
+            "column and were not rewritten (Yahoo covered too little of them, or would "
+            "have made them worse)"
+        )
+    residue = (" " + "; ".join(parts) + ".") if parts else ""
     if lots:
         return _check(
             "daily_bar_units", "Daily bar units", STATUS_DEGRADED,
