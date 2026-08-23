@@ -21,6 +21,27 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.A: the outcome ledger runs as a dual-write canary
+
+- **Every row the BounceBot writes to `intraday_bounce_outcomes.csv` is mirrored**
+  to the append-only ledger in `data\runtime\evidence_ledgers`. **The CSV stays the
+  authority during the canary**: the mirror runs after the CSV write, cannot
+  change it, and cannot fail it. The point of a canary is that the two can be
+  compared before anything is asked to believe the new one.
+- **One writer, one call site.** `_append_bounce_outcome_row` is the only place
+  outcome rows are written, so it is the only place that mirrors - a test
+  asserts there is exactly one call, because a second would be a second writer.
+- **Fail-open everywhere.** A ledger that raises, a directory that cannot be
+  made, a module that will not import: logged, and the CSV row still stands.
+- **Bounded**: 50,000 rows per process, announced **once** on reaching the cap
+  rather than once per row. A defect in the mirror costs disk space once.
+- **No header widening.** `family` (derived from the id, which is where it has
+  always been hiding), the canary marker, the source store and `pending_after`
+  exist in the ledger row only; `BOUNCE_OUTCOME_COLUMNS` is untouched.
+- **Kill switch** `evidence_ledger_dual_write="off"` in `local_settings.json`.
+  Only `off` stops it - an unreadable setting leaves it running, because a
+  canary that switches itself off on an unrelated failure proves nothing.
+
 ### 2026-08-23 - R10.A: the append-only ledger exists
 
 - **`scripts/evidence_ledger.py`** - `EvidenceLedger`, month-segmented JSONL,

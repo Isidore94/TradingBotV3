@@ -8,6 +8,42 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.A: the ledger is live beside the CSV
+
+**Branch `phase05-integration-blitz`.** The dual-write canary is wired and green.
+Nothing reads the ledger yet - that is the point.
+
+**One writer, one call site.** `_append_bounce_outcome_row` is the only function
+that writes an outcome row, so it is the only one that mirrors, and a test
+asserts exactly one call exists. The mirror runs **after** the CSV write: during
+the canary the CSV is still the authority, and the new store cannot change or
+fail what the old one recorded.
+
+**Fail-open, bounded, and switchable.** A raising ledger is logged and swallowed;
+the cap is 50,000 rows per process and announces itself once rather than once per
+row; `evidence_ledger_dual_write="off"` stops it, and **only** that value does -
+an unreadable setting leaves it running, because a canary that switches itself
+off on an unrelated failure proves nothing.
+
+**`family` is recorded once.** The CSV has never had the column - it lives inside
+the event id, and every rollup has re-derived it, which is the same trap that
+made my first `h1_bar_start_v1` validation tag 0 of 9,914 rows. The ledger row
+carries it.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4375 passed / 19 subtests**, exit **0** (was 4361; +14) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**What to watch on the first live session:** `data\runtime\evidence_ledgers\intraday_outcome_events-202608.jsonl`
+appears and grows with the CSV; the two agree row for row; no "row cap" warning.
+
+**Next in R10.A:** no-fabrication finalization (D2 - a session with no rows is
+`unresolved`, and a stop-hit finalizes at its stop, never at its entry), then
+idempotent finalization with a coverage manifest (D3/D4).
+
+---
+
 ## 2026-08-23 - R10.A: the ledger the outcome store will be believed from
 
 **Branch `phase05-integration-blitz`.** The store itself, before any wiring: it

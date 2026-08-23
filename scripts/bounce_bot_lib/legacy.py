@@ -2933,6 +2933,96 @@ class BounceBot(EWrapper, EClient):
             return existing_header
         return widened_header
 
+    # ------------------------------------------------------------------
+    # R10.A: the dual-write canary
+    # ------------------------------------------------------------------
+    #: Rows this process will mirror to the ledger before it stops and says so.
+    #: A canary is bounded by definition - it runs beside the store it is being
+    #: compared against, and a defect in it must cost disk space once, not
+    #: indefinitely. Reached-cap is logged ONCE and the CSV is untouched either
+    #: way, because the CSV is still the authority during the canary.
+    LEDGER_CANARY_ROW_CAP = 50_000
+    #: `local_settings.json` key. Anything but "off" leaves the canary running;
+    #: an unreadable setting also leaves it running, because a canary that
+    #: switches itself off on an unrelated failure proves nothing.
+    LEDGER_CANARY_SETTING = "evidence_ledger_dual_write"
+
+    def _ledger_canary_enabled(self) -> bool:
+        try:
+            from project_paths import get_local_setting
+
+            raw = str(get_local_setting(self.LEDGER_CANARY_SETTING, "") or "").strip().lower()
+        except Exception:
+            return True
+        return raw != "off"
+
+    def _outcome_ledger(self):
+        """The append-only outcome authority, built once per process.
+
+        Returns None when the canary is off or the ledger cannot be built. Every
+        failure here is fail-open: the CSV write has already happened, and an
+        evidence mirror must never be able to interrupt the champion path.
+        """
+        if getattr(self, "_outcome_ledger_obj", None) is not None:
+            return self._outcome_ledger_obj
+        if getattr(self, "_outcome_ledger_failed", False):
+            return None
+        if not self._ledger_canary_enabled():
+            self._outcome_ledger_failed = True
+            logging.info(
+                "Outcome ledger dual-write is off (%s); the CSV remains the only store.",
+                self.LEDGER_CANARY_SETTING,
+            )
+            return None
+        try:
+            from evidence_ledger import intraday_outcome_ledger
+
+            self._outcome_ledger_obj = intraday_outcome_ledger()
+        except Exception:
+            self._outcome_ledger_failed = True
+            logging.exception("Outcome ledger unavailable; continuing on the CSV alone.")
+            return None
+        return self._outcome_ledger_obj
+
+    def _mirror_outcome_row_to_ledger(self, row, state) -> None:
+        """Write the same event to the ledger the CSV row just went to.
+
+        **The CSV is unchanged and stays the authority for now** - this is a
+        canary, and its whole purpose is that the two can be compared before
+        anything is asked to believe the new one. New fields go in the ledger
+        row only; the CSV header is never widened (R10.A).
+        """
+        ledger = self._outcome_ledger()
+        if ledger is None:
+            return
+        written = getattr(self, "_outcome_ledger_rows", 0)
+        if written >= self.LEDGER_CANARY_ROW_CAP:
+            if not getattr(self, "_outcome_ledger_capped", False):
+                self._outcome_ledger_capped = True
+                logging.warning(
+                    "Outcome ledger canary reached its %d-row cap for this process; "
+                    "further rows are CSV-only until restart.",
+                    self.LEDGER_CANARY_ROW_CAP,
+                )
+            return
+        try:
+            event = dict(row)
+            event["canary"] = "dual_write"
+            event["source_store"] = "intraday_bounce_outcomes.csv"
+            # The store has no family column - it lives in the id - and every
+            # rollup has had to re-derive it. It is recorded once, here.
+            try:
+                from evidence_rules import family_from_event_id
+
+                event["family"] = family_from_event_id(row.get("event_id"))
+            except Exception:
+                event["family"] = ""
+            event["pending_after"] = bool(state and state.get("event_id") in self.pending_bounce_outcomes)
+            ledger.append(event)
+            self._outcome_ledger_rows = written + 1
+        except Exception:
+            logging.exception("Outcome ledger mirror failed; the CSV row still stands.")
+
     def _append_learning_row(self, path, fieldnames, row):
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -3758,6 +3848,10 @@ class BounceBot(EWrapper, EClient):
             "mae_pct": round(mae_pct, 4) if mae_pct != "" else "",
         }
         self._append_learning_row(INTRADAY_BOUNCE_OUTCOMES_CSV, BOUNCE_OUTCOME_COLUMNS, row)
+        # R10.A: the same event, mirrored to the append-only ledger. The CSV
+        # write above has already happened and stays the authority during the
+        # canary, so nothing here can change what was recorded.
+        self._mirror_outcome_row_to_ledger(row, state)
         return status
 
     def _update_pending_bounce_outcomes(self, symbol, df):
