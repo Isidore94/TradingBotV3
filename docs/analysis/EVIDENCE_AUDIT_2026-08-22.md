@@ -28,6 +28,11 @@ trader accepts this register.
 > All measured against the frozen pre/post tracker pair (§0 below) and the
 > outcome CSV. **This amendment supersedes the §1 rows it names.**
 >
+> **Revised 2026-08-22 night** after Fable's field-level re-run: **(d) S1b** now
+> carries the mechanism (a volume splice re-weighting AVWAP levels, with the
+> stops proven stable) and **(e)** carries superseding numbers in place of my
+> "1,309 differ, 5 materially". The verdicts below are unchanged.
+>
 > **(a) Every outcome-CSV number needs its window stated.** My D1d and D2b said
 > "PROVEN\* — number differs". That was a **window mismatch, not a brief error**.
 > On my window (2026-07-24…08-21, 21 sessions, 7,863 registered rows) the figures
@@ -65,7 +70,10 @@ trader accepts this register.
 >
 > * **S1a — 218 status transitions**, matching the release note exactly:
 >   OPEN→CLOSED 168, **CLOSED→OPEN 35**, **OPEN→UNTRADEABLE 14**, UNTRADEABLE→OPEN 1.
-> * **S1b — settled outcomes are rewritten, not merely shifted.** Among 6,736
+> * **S1b — settled outcomes are rewritten, and the mechanism is now known:
+>   targets rewritten by re-weighted levels; stops and closes stable.**
+>   *(Mechanism established 2026-08-22 night by Fable's field-level re-run and by
+>   R10.0b; the counts below are unchanged, their cause is not.)* Among 6,736
 >   setups CLOSED in both runs, at scenario level: **2,737 changed status or
 >   reason**, **1,306 changed exit date**, and **2,618 had their `events` list
 >   dropped entirely while status and `total_r` stayed identical** (history lost,
@@ -77,21 +85,62 @@ trader accepts this register.
 >   *(Denominator note: I counted every scenario. The release note's 410 / 6.1%
 >   counts representative scenarios only, which the payload does not flag, so the
 >   two are not comparable — mine is the looser, larger count.)*
+>
+>   **What moved is the LEVELS, via a volume splice.** The 2026-08-21 07:0x run
+>   rewrote **1,236 daily parquet files**, and in **1,179** of them volume steps
+>   down at **2026-07-29** by a median **×0.0088** (p10 0.0049, p90 0.0187) — IB
+>   round-lot, regular-session volume spliced onto Yahoo share-scale history
+>   (AAL: 07-24 74,218,900 → 07-27 836,047; see
+>   `DAILY_BAR_VOLUME_CLIFF_2026-08-22.md`). AVWAP is volume-weighted, so
+>   post-splice bars weigh about 1/100 and **every AVWAP anchored before 07-29
+>   effectively freezes at its 07-28 value**. On 60,519 mark-days, **30,003
+>   (49.6%) carry materially different levels** — vwap 29,698, UPPER_2 29,753,
+>   stdev 29,985 — across **4,034 setups and 980 symbols**, vwap move median
+>   1.03%, p90 5.99%, max 138.8%; **4,025 of those 4,034 setups sit in the 08-21
+>   IB-refetch bucket**.
+>
+>   **The stops did not move at all.** `current_anchor_entry` levels and
+>   `stop_reference_level`: **0 of 9,331 changed** — they are stored at scan time
+>   and never replayed. So the stop stayed fixed while the replayed per-mark
+>   target moved beneath it: of the 410 closed setups whose representative exit
+>   changed, mark levels moved in **394**, and the remaining 16 all exited on
+>   08-20, the forming bar during the 08-20 run (which is S2, not this).
+>   `JPM LONG` (anchor 04-14): 07-01 vwap 320.96 → 312.53, UPPER_2 349.04 →
+>   335.47, exit `TIME_STOP` 07-28 @ 357.31 → `FINAL_TARGET` 07-02 @ 336.31.
+>   A **uniform** rescale would not move an AVWAP at all — it is a
+>   volume-weighted ratio — which is why R10.V forbids writing IB volume into the
+>   store rather than converting it.
+>   *Open caveat:* 772 level-moved setups anchor on or after 07-29, inside the IB
+>   window, which suggests the 08-20 series was itself mixed (a Yahoo window over
+>   IB history). It does not change the verdict.
+>
 > * **S2 — reproduced to the unit.** The POST payload's `data_session` is
 >   **2026-08-20** and **2,739 setups carry a `latest_snapshot` dated 2026-08-21**,
 >   with **452 scenario exit events on that same forming bar**. It is systematic,
 >   not a one-off: PRE (`data_session` 2026-08-19) has **2,834** snapshots dated
 >   08-20 and 793 exit events on it.
 >
-> **(e) A correction to the release note's own mark-level claim.** Of same-dated
-> historical `latest_snapshot` closes (≤ 2026-08-19) that differ between the two
-> runs, **1,309 differ at all but only 5 differ materially** — the other **1,304
-> are float32→float64 precision** (`31.350000381469727` → `31.35`) from the
-> Yahoo→IB source switch. So the "7,674 historical mark-days differ" headline is
-> mostly a precision artifact. **This does not weaken S1** — the scenario outcome
-> rewrites above are real and are measured on status, reason and R, not on float
-> tails — but the mark-level evidence is far smaller than stated, and the
-> precision half belongs with §3's bar-source problem rather than with S1.
+> **(e) A correction to the release note's own mark-level claim — and, since
+> 2026-08-22 night, a correction to mine.** *(Superseding numbers from Fable's
+> field-level re-run over 60,519 mark-days. My "1,309 differ, 5 materially" was
+> measured on same-dated historical closes only and understated the material
+> count; the shape of the finding survives, the numbers do not.)*
+>
+> Of **all** field differences between the two runs, **26,087 are
+> float32→float64 round-trips** (`31.350000381469727` → `31.35`) from the
+> Yahoo→IB source switch. Of the **7,465** differences that survive that filter,
+> **7,104 (95%) are ≤ 1.1 ¢** — 2,923 half-cent sub-penny prints (2,196 carried
+> by the `.bak`, 488 by main) and 4,181 at exactly one cent, i.e. vendor
+> disagreement about an extreme rather than a restatement. **Genuine restatement
+> is 361 field-diffs = 136 symbol-dates across 113 symbols, max 1.9%.** Closes
+> move by more than 1.1 ¢ on only **16 symbol-dates**, about 10 of them SCCO at
+> exactly ×0.98814 — a dividend adjustment, not an error.
+>
+> So the release note's "7,674 historical mark-days differ" **reproduces exactly**
+> at \|Δ\|>1e-4 and is **withdrawn as a restatement claim**: the marks are stable.
+> **This does not weaken S1**, because what S1 is about turned out not to be the
+> marks at all — see the splice in S1b above. The precision half belongs with
+> §3's bar-source problem.
 >
 > **(f) Minor.** pid 32620 appears on both 2026-08-11 and 2026-08-21 — Windows
 > reuses pids, so every pid join must be qualified by session; my §1 D1a lifetime

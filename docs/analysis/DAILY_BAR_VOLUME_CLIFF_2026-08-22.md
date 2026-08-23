@@ -17,6 +17,84 @@ TMO target move looks like from the inside.
 
 ---
 
+> ### Amendment 1 — 2026-08-22 night: the second factor is in the request, and C-prime is the chosen option
+>
+> **The unexplained factor from §6 is `useRTH`.**
+> `master_avwap_lib/legacy.py:15245-15256` requests daily bars with
+> `whatToShow="TRADES"`, **`useRTH=1`**, `formatDate=1` — confirmed in the source.
+> IB therefore returns **regular-session-only volume in round lots** while Yahoo
+> returns the **full consolidated session in shares**, so the expected ratio is
+> `100 × (consolidated / RTH-only)`: ≥ 100 and symbol-dependent. NVDA at 188× and
+> A at 162× fit that; SPY and ACHC at 1.0× are rows Yahoo wrote last.
+>
+> **TSLA at 56× and AAPL at 81× still do not fit**, because they would require IB
+> to report *more* than Yahoo ÷ 100. A third effect is present — a stale Yahoo
+> row, a partial IB bar, or a symbol-specific unit — and it is not identified
+> here. The conclusion is unchanged and strengthened: **no constant repairs IB
+> daily volume into Yahoo's unit.**
+>
+> **The chosen option is C-prime, not C as this report wrote it.** C's step two
+> said "add the missing lot rescale to the `master_avwap_lib` IB path". That
+> would bake in the very factor §2 proved is not 100 and make the store
+> *consistently* wrong instead of *visibly* wrong. C-prime instead:
+> **provenance first → a Yahoo-only durable store for volume → refetch third.**
+> IB daily stays as a **price-only** fallback whose rows are tagged by provenance
+> and **whose volume is never written into the store**. Yahoo is already the
+> post-close source (the 2026-08-21 20:01 run: 1,190 Yahoo / 0 IB), it is
+> share-denominated, and it costs zero IB budget.
+>
+> `bounce_bot_lib`'s ×100 (`legacy.py:630`, `:11376`) is a **different seam** —
+> live IB *intraday* volume against a yfinance baseline, measured at ~100× by the
+> 2026-07-20 fix. It stays as it is; its factor deserves the same per-symbol check
+> once the daily store is clean.
+
+> ### Amendment 2 — 2026-08-22 night: what moved was the LEVELS, and the mechanism is a splice
+>
+> Fable re-ran the `.bak` vs main comparison at field level over 60,519
+> mark-days. This supersedes this report's framing of the damage and the audit's
+> S1 entry.
+>
+> **The marks barely moved.** Of all field differences, 26,087 are
+> float32→float64 round-trips. Of the 7,465 "material" diffs, **7,104 (95%) are
+> ≤ 1.1 ¢** — 2,923 half-cent sub-penny prints (2,196 in the `.bak`, 488 in main)
+> and 4,181 at exactly one cent, i.e. vendor disagreement on extremes. Genuine
+> restatement is **361 field-diffs = 136 symbol-dates across 113 symbols, max
+> 1.9%**; closes move more than 1.1 ¢ on only **16 symbol-dates**, about 10 of
+> them SCCO at exactly ×0.98814 — a dividend adjustment.
+>
+> **The levels moved, and a splice is why.** The 2026-08-21 07:0x run rewrote
+> **1,236 parquet files**, and in **1,179** of them volume steps down at
+> **2026-07-29** by a median **×0.0088** (p10 0.0049, p90 0.0187) — IB
+> hundreds-of-shares spliced onto Yahoo share-scale history (AAL: 07-24
+> 74,218,900 → 07-27 836,047). Post-splice bars therefore weigh about 1/100, so
+> **every AVWAP anchored before 07-29 effectively freezes at its 07-28 value.**
+>
+> On the same 60,519 mark-days, **30,003 (49.6%) carry materially different
+> levels** — vwap 29,698, UPPER_2 29,753, stdev 29,985 — across **4,034 setups
+> and 980 symbols**, vwap move median 1.03%, p90 5.99%, max 138.8%. **4,025 of
+> those 4,034 setups are in the 08-21 IB-refetch bucket.**
+>
+> **Stops did not move at all.** `current_anchor_entry` levels and
+> `stop_reference_level`: **0 of 9,331 changed** — they are stored at scan time
+> and never replayed. So the stop stayed fixed while the replayed per-mark target
+> moved: of the 410 closed setups whose representative exit changed, mark levels
+> moved in **394**, and the remaining 16 all exited on 08-20, which was the
+> forming bar during the 08-20 run. JPM LONG (anchor 04-14): 07-01 vwap
+> 320.96 → 312.53, UPPER_2 349.04 → 335.47, exit `TIME_STOP` 07-28 @ 357.31 →
+> `FINAL_TARGET` 07-02 @ 336.31.
+>
+> **This is why a uniform rescale is the wrong shape of fix**: a constant factor
+> would not move an AVWAP at all — VWAP is a volume-weighted *ratio*, so scaling
+> every weight equally leaves it unchanged. A **splice** moves it, because only
+> part of the series is rescaled. That is the argument for §4 step 3 forbidding
+> IB volume in the store outright rather than converting it.
+>
+> **Open caveat:** 772 level-moved setups anchor on or after 07-29, inside the IB
+> window, which suggests the 08-20 series was itself mixed — a Yahoo window over
+> IB history. It does not change the verdict.
+
+---
+
 ## 1. The cliff, measured (a)
 
 1,958 parquet files under `C:\TradingBotData\data\daily_bars`; **1,737
@@ -136,7 +214,9 @@ fixture must be re-frozen**, and per plan.md §5 that is a detector change needi
 its fixture frozen first, so it is a packet of its own. *Risk:* it also silently
 repairs the 1,304 float32→float64 differences from R10.0 §1 Amendment 2e.
 
-**C. Provenance first, repair second.** Add a `source` column (and unit) to the
+**C. Provenance first, repair second.** *(Superseded by **C-prime** — see
+Amendment 1. The trader chose C-prime: the lot rescale below is NOT part of it,
+because the factor is not 100.)* Add a `source` column (and unit) to the
 parquet write so every future row says where it came from and in what unit; add
 the missing lot rescale to the `master_avwap_lib` IB path so new rows are
 share-denominated; **then** refetch history under option B with the fixtures
@@ -168,10 +248,22 @@ complexity, and it puts a heuristic on the read path of a live detector forever.
 
 1. **Which option — A, B, C or D?** My recommendation is **C**, and it needs its
    own packet with the AVWAP fixtures re-frozen first.
+   **ANSWERED 2026-08-22:** **C-prime** — provenance first, a Yahoo-only durable
+   store for volume second, refetch third; no rescale anywhere. Built as R10.V.
 2. **Is the 08-21 scan output to be treated as suspect?** Every in-session run
    that day used IB volume. That includes whatever the D1 scanner surfaced and
    what the tracker recorded.
+   **ANSWERED 2026-08-22:** **Suspect, tagged, never deleted.** Every in-session
+   08-21 run and the 08-20 16:00 run are tagged `daily_volume_mixed_v1` in
+   `evidence_rules.py`, keyed from the run manifests' `provider.daily_bars.success.*`
+   counts; every rollup reports the tagged count beside n.
 3. **Should the daily-bar fetch prefer one source until this is settled?** Pinning
    to Yahoo would stop the store getting more mixed while the decision is made;
    it is a one-line change to a live path and therefore an ask, not something I
    would do unprompted.
+   **ANSWERED 2026-08-22 — authorized and DONE** (`d031e89`): `local_settings.json`
+   key `daily_bars_source`; `"yahoo"` pins, absent or anything else resolves to
+   `"auto"` = today's behaviour. Read at `_fetch_live_daily_bars`, independent of
+   the failure circuit, announced once per scan, surfaced in System Health, and
+   set on the desk. The 482 fixture/AVWAP/tracker tests were run to prove the
+   golden fixtures do not move. Intraday is deliberately not pinned.
