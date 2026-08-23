@@ -69,6 +69,14 @@ KEEP_WEEKLY = 4
 KEEP_MONTHLY = 12
 FROZEN_DIR_NAME = "evidence_frozen"
 
+# Files excluded by an explicit rule rather than a silent skip (trader,
+# 2026-08-22). The setup tracker rotates its `.bak` on every save, so once this
+# runs nightly, day N's main IS day N+1's `.bak` - 133 MB a night of the same
+# bytes under a different name. The on-disk `.bak` is NEVER deleted: the tracker
+# reads it back when the main payload is corrupt.
+ROTATED_DUPLICATE_SUFFIXES = (".bak",)
+EXCLUDED_ROTATED_REASON = "excluded_rotated_duplicate"
+
 
 # ---------------------------------------------------------------------------
 # scope
@@ -103,7 +111,13 @@ class FileRecord:
     relative: str
     source_bytes: int
     stored_bytes: int = 0
+    #: SHA-256 of the STORED bytes - proves the archive is intact. `verify()`
+    #: checks this one, because it is cheap: no decompression.
     sha256: str = ""
+    #: SHA-256 of the SOURCE bytes - the only thing that proves the CONTENT
+    #: survived compression, and the only hash a restored file can be compared
+    #: against. Both are recorded; neither substitutes for the other.
+    source_sha256: str = ""
     compressed: bool = False
     method: str = "copy"
     skipped: str = ""
@@ -115,6 +129,7 @@ class FileRecord:
             "source_bytes": self.source_bytes,
             "stored_bytes": self.stored_bytes,
             "sha256": self.sha256,
+            "source_sha256": self.source_sha256,
             "compressed": self.compressed,
             "method": self.method,
         }
@@ -215,14 +230,15 @@ def _copy_sqlite(source: Path, target: Path) -> None:
         src.close()
 
 
-def _copy_one(source: Path, target: Path, *, compress: bool) -> tuple[int, str]:
+def _copy_one(source: Path, target: Path, *, compress: bool) -> tuple[int, str, str]:
+    """Copy (optionally gzipped) and return (stored_bytes, stored_sha, source_sha)."""
     target.parent.mkdir(parents=True, exist_ok=True)
     if compress:
         with source.open("rb") as raw, gzip.open(target, "wb", compresslevel=6) as out:
             shutil.copyfileobj(raw, out, length=1 << 20)
     else:
         shutil.copyfile(source, target)
-    return target.stat().st_size, _sha256_of(target)
+    return target.stat().st_size, _sha256_of(target), _sha256_of(source)
 
 
 def _iter_sources(item: ScopeItem):
@@ -245,6 +261,7 @@ def build_snapshot(
     snapshot_date: str | None = None,
     compress_min_bytes: int = COMPRESS_MIN_BYTES,
     stability_min_bytes: int = STABILITY_MIN_BYTES,
+    exclude_rotated: bool = True,
     sleep=time.sleep,
 ) -> SnapshotResult:
     """Stage one dated snapshot locally. Never raises on a single bad file."""
@@ -264,6 +281,12 @@ def build_snapshot(
                 )
                 continue
             record = FileRecord(item.label, relative, size)
+            if exclude_rotated and source.suffix.lower() in ROTATED_DUPLICATE_SUFFIXES:
+                # Counted with a reason, never a silent omission. §0's frozen
+                # pair is the one-time exception and passes exclude_rotated=False.
+                record.skipped = EXCLUDED_ROTATED_REASON
+                result.records.append(record)
+                continue
             if size >= stability_min_bytes and not is_stable(source, sleep=sleep):
                 # Not an error - it is being written right now. Recorded so the
                 # gap is visible tonight rather than discovered during a restore.
@@ -277,13 +300,17 @@ def build_snapshot(
                     record.method = "sqlite_backup_api"
                     record.stored_bytes = target.stat().st_size
                     record.sha256 = _sha256_of(target)
+                    # The backup API rewrites page layout, so the source hash is
+                    # NOT the copy's hash and comparing them would be wrong.
+                    record.source_sha256 = _sha256_of(source)
                 else:
                     compress = size >= compress_min_bytes
                     if compress:
                         target = target.with_name(target.name + ".gz")
                         record.compressed = True
                         record.method = "gzip"
-                    record.stored_bytes, record.sha256 = _copy_one(source, target, compress=compress)
+                    (record.stored_bytes, record.sha256,
+                     record.source_sha256) = _copy_one(source, target, compress=compress)
             except OSError as exc:
                 record.skipped = f"copy_failed: {type(exc).__name__}"
             result.records.append(record)

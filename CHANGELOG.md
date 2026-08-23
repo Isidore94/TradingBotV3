@@ -21,6 +21,26 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 (evening) - the evidence snapshot is scheduled and stops duplicating itself
+
+- **The rotated tracker `.bak` is excluded** by an explicit rule
+  (`excluded_rotated_duplicate`), counted in the manifest like any other skip.
+  Once the snapshot runs nightly, day N's main is day N+1's `.bak`; measured on
+  the live scope that is one file, 939 MB source and ~133 MB compressed, saved
+  every night. The on-disk `.bak` is never deleted - the tracker reads it back
+  when the main payload is corrupt - and `exclude_rotated=False` is the switch a
+  deliberate freeze uses.
+- **`source_sha256` joins the manifest** beside the stored hash. The stored hash
+  proves the archive is intact; only the source hash proves the content survived
+  compression, and it is the only hash a restored file can be compared against.
+  `verify()` stays on stored bytes so it remains cheap. For a SQLite copy the two
+  differ by construction, because the backup API rewrites page layout.
+- **`TradingBotV3 - Evidence snapshot` is registered**, daily at 20:30 PT - after
+  the close, before the AI runner's 22:00 window, outside the 06:00-14:00 band
+  where the launch task fires every 15 minutes. The task XML is exported into
+  `scripts/ops/` so it is versioned like the scripts it launches, and a test
+  parses its trigger and fails if the hour ever drifts into market hours.
+
 ### 2026-08-22 (evening) - the tracker rewrites settled outcomes: S1/S2 PROVEN
 
 Evidence and documentation only; no runtime code changed.

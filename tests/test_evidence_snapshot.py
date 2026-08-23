@@ -332,3 +332,103 @@ def test_a_real_restore_records_itself_and_a_dry_run_does_not(tmp_path):
     assert recorded["files_restored"] == 2 and recorded["snapshot_date"] == "2026-08-22"
     assert snap.health(staging)["last_restore_test"].startswith("20")
     assert snap.restore(result.staging, tmp_path / "scratch", dry_run=True)["dry_run"] is True
+
+
+# ---------------------------------------------------------------------------
+# R10.A §2: the .bak exclusion and source_sha256
+# ---------------------------------------------------------------------------
+def test_the_rotated_tracker_bak_is_excluded_with_a_reason(tmp_path):
+    """Trader, 2026-08-22: exclude it.
+
+    The tracker rotates its .bak on every save, so once the snapshot runs
+    nightly, day N's main IS day N+1's .bak - 133 MB a night of the same bytes
+    under a different name. Excluded by an explicit rule carrying a reason, never
+    by a silent skip, and the on-disk .bak is never deleted: the tracker reads it
+    when the main is corrupt.
+    """
+    src = tmp_path / "home"
+    src.mkdir()
+    (src / "master_avwap_setup_tracker.json").write_text("{}", encoding="utf-8")
+    (src / "master_avwap_setup_tracker.json.bak").write_text("{}", encoding="utf-8")
+    (src / "keep_me.json").write_text("{}", encoding="utf-8")
+    scope = [snap.ScopeItem("data-runtime", src, "files")]
+    result = snap.build_snapshot(tmp_path / "stage", scope=scope, snapshot_date="2026-08-22")
+
+    copied = {r.relative for r in result.copied}
+    assert "master_avwap_setup_tracker.json" in copied
+    assert "keep_me.json" in copied
+    assert "master_avwap_setup_tracker.json.bak" not in copied
+
+    excluded = [r for r in result.skipped if r.relative.endswith(".bak")]
+    assert len(excluded) == 1
+    assert excluded[0].skipped == "excluded_rotated_duplicate"
+    m = json.loads((result.staging / "manifest.json").read_text(encoding="utf-8"))
+    assert m["skipped_by_reason"] == {"excluded_rotated_duplicate": 1}
+    # And the source file is untouched - the tracker still needs it on disk.
+    assert (src / "master_avwap_setup_tracker.json.bak").exists()
+
+
+def test_the_exclusion_can_be_overridden_for_a_deliberate_freeze(tmp_path):
+    """§0's frozen pair is the one-time exception, so the rule takes a switch."""
+    src = tmp_path / "home"
+    src.mkdir()
+    (src / "master_avwap_setup_tracker.json.bak").write_text("{}", encoding="utf-8")
+    scope = [snap.ScopeItem("data-runtime", src, "files")]
+    result = snap.build_snapshot(
+        tmp_path / "stage", scope=scope, snapshot_date="2026-08-22", exclude_rotated=False
+    )
+    assert [r.relative for r in result.copied] == ["master_avwap_setup_tracker.json.bak"]
+
+
+def test_the_manifest_carries_the_source_hash_beside_the_stored_hash(tmp_path):
+    """The stored hash proves the archive; only the source hash proves the
+    CONTENT survived compression. `verify()` stays on stored bytes so it is cheap."""
+    src = tmp_path / "home"
+    src.mkdir()
+    (src / "big.json").write_text("{}" + " " * 5000, encoding="utf-8")
+    scope = [snap.ScopeItem("home-root", src, "files")]
+    result = snap.build_snapshot(
+        tmp_path / "stage", scope=scope, snapshot_date="2026-08-22", compress_min_bytes=1000
+    )
+    record = result.copied[0]
+    assert record.compressed
+    assert record.source_sha256 and record.sha256
+    assert record.source_sha256 != record.sha256, "compressed bytes differ from source bytes"
+
+    import hashlib
+    expected = hashlib.sha256((src / "big.json").read_bytes()).hexdigest()
+    assert record.source_sha256 == expected
+
+    entry = json.loads((result.staging / "manifest.json").read_text(encoding="utf-8"))["entries"][0]
+    assert entry["source_sha256"] == expected
+    # Round-tripping the archive reproduces the source hash.
+    stored = result.staging / "home-root" / "big.json.gz"
+    with gzip.open(stored, "rb") as handle:
+        assert hashlib.sha256(handle.read()).hexdigest() == expected
+
+
+def test_the_scheduled_task_is_versioned_and_runs_outside_market_hours():
+    """The task XML lives in the repo like the scripts it launches.
+
+    Timing is a real constraint, not a preference: the snapshot must land after
+    the close and before the AI runner's 22:00 window, and never inside the
+    06:00-14:00 band where the launch task fires every 15 minutes and the desk
+    is scanning.
+    """
+    import re
+    import xml.etree.ElementTree as ET
+
+    task = SCRIPTS_DIR / "ops" / "TradingBotV3 - Evidence snapshot.xml"
+    assert task.exists(), "the task definition must be versioned beside the scripts"
+    text = task.read_text(encoding="utf-8-sig")
+    assert "snapshot_to_das.ps1" in text
+
+    root = ET.fromstring(text)
+    ns = {"t": root.tag.split("}")[0].strip("{")}
+    starts = [e.text for e in root.findall(".//t:CalendarTrigger/t:StartBoundary", ns)]
+    assert starts, "the task must carry a daily trigger"
+    hour, minute = (int(x) for x in re.search(r"T(\d{2}):(\d{2})", starts[0]).groups())
+    minutes = hour * 60 + minute
+    assert minutes > 13 * 60, "must run after the 13:00 PT close"
+    assert minutes < 22 * 60, "must run before the AI runner's 22:00 window opens"
+    assert not (6 * 60 <= minutes < 14 * 60), "must never run inside market hours"

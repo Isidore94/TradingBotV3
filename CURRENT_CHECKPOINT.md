@@ -8,6 +8,46 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 evening - §2 LANDED: snapshot scheduled, `.bak` excluded, source hash added
+
+**Branch `phase05-integration-blitz`.** Trader answers to the audit's §8, applied.
+
+- **Q2 — `.bak` excluded.** Once the snapshot runs nightly, day N's main IS day
+  N+1's `.bak`. Excluded by an explicit rule carrying the reason
+  `excluded_rotated_duplicate`, counted in the manifest like every other skip,
+  never a silent omission. Measured on the live scope: exactly one file,
+  **939 MB source / ~133 MB compressed saved per night**. `exclude_rotated=False`
+  is the switch §0's frozen pair used. **The on-disk `.bak` is never deleted** —
+  the tracker reads it back when the main payload is corrupt.
+- **Q5 — 13 months hot accepted** (unchanged from the audit's proposal).
+- **§2.8 — `source_sha256` added** beside the stored hash. The stored hash proves
+  the archive; only the source hash proves the CONTENT survived compression, and
+  it is the only hash a restored file can be compared against. `verify()`
+  deliberately stays on stored bytes so it remains cheap — no decompression. For
+  a SQLite copy the two are necessarily different: the backup API rewrites page
+  layout, so comparing them would be wrong, and the code says so.
+- **Scheduling authorized and done.** `TradingBotV3 - Evidence snapshot` runs
+  `snapshot_to_das.ps1` daily at **20:30 PT** — after the 13:00 close, before the
+  AI runner's 22:00 window, and far outside the 06:00–14:00 band where
+  `TradingBotV3 0700 Launch` fires every 15 minutes. `StartWhenAvailable`,
+  `IgnoreNew` on overlap, 3 h limit. Next run 2026-08-23 20:30. The task XML is
+  **exported to `scripts/ops/`** so it is versioned like the scripts, and a test
+  parses its trigger and fails if the hour ever drifts into market hours.
+
+Neighbouring schedule, for the record: snapshot 20:30 → cold push 21:05 (hourly)
+→ AI jobs 22:00 → launch 06:00.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4172 passed / 19 subtests**, exit **0** (was 4168; +4) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Owed:** confirm the first *scheduled* run (2026-08-23 20:30) writes to
+`\MINI-PC\Trading Bot Dataackups6-08-23\` with a byte count — today's
+canary was hand-run.
+
+---
+
 ## 2026-08-22 evening - §0 EVIDENCE FROZEN, §1 AUDIT AMENDED (S1/S2 now PROVEN)
 
 **Branch `phase05-integration-blitz`.** Consolidated R10.A release, steps §0 and
