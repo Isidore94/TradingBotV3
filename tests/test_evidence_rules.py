@@ -229,3 +229,128 @@ def test_scanning_reports_each_run_with_its_counts(tmp_path):
     assert run.non_yahoo == {"ibkr": 1222}
     assert run.session_date == date(2026, 8, 21)
     assert run.started_at == datetime(2026, 8, 21, 14, 0, 30, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# R10.A: the other three rules the audit proved
+# ---------------------------------------------------------------------------
+def test_every_rule_states_its_measured_precision_not_a_round_number():
+    """`h1_bar_start_v1` is 9,623/9,914, and the registry has to say so."""
+    spec = evidence_rules.RULES[evidence_rules.RULE_H1_BAR_START]
+    assert "9,623" in spec.precision and "9,914" in spec.precision
+    assert "100%" not in spec.precision
+
+
+def test_an_h1_row_stamped_on_the_half_hour_is_a_bar_start():
+    tag = evidence_rules.h1_bar_start_v1("h1_ema10_bounce", "2026-08-19 09:30:00")
+    assert tag.tagged and tag.rule == "h1_bar_start_v1"
+    assert "bar start" in tag.reason
+
+
+def test_the_h1_rule_is_conjunctive_family_and_minute():
+    """291 of 6,054 non-H1 rows also land on minute 30; family alone is not it."""
+    assert not evidence_rules.h1_bar_start_v1("regime_pause_rw", "2026-08-19 09:30:00").tagged
+    assert not evidence_rules.h1_bar_start_v1("h1_ema10_bounce", "2026-08-19 09:55:00").tagged
+
+
+@pytest.mark.parametrize("stamp", ["", None, "not-a-time", "2026-08-19"])
+def test_an_unreadable_stamp_is_unknown_rather_than_untagged(stamp):
+    tag = evidence_rules.h1_bar_start_v1("h1_ema10_bounce", stamp)
+    assert tag.verdict == evidence_rules.VERDICT_UNKNOWN
+    assert tag.tagged is False
+
+
+def test_a_zero_close_that_equals_its_entry_is_a_fabricated_final():
+    """1,164 of 1,164 zero finals have `eod_close == entry_price`; 0 of 5,743 others."""
+    tag = evidence_rules.fabricated_zero_v1(close_r=0.0, eod_close=12.34, entry_price=12.34)
+    assert tag.tagged
+    assert "never measured" in tag.reason or "fabricat" in tag.reason
+
+
+def test_a_real_scratch_is_not_tagged():
+    """A genuine 0R exit closes somewhere other than exactly its entry."""
+    assert not evidence_rules.fabricated_zero_v1(
+        close_r=0.0, eod_close=12.35, entry_price=12.34
+    ).tagged
+    assert not evidence_rules.fabricated_zero_v1(
+        close_r=1.5, eod_close=12.34, entry_price=12.34
+    ).tagged
+
+
+def test_a_missing_number_in_the_zero_rule_is_unknown():
+    tag = evidence_rules.fabricated_zero_v1(close_r=0.0, eod_close=None, entry_price=12.34)
+    assert tag.verdict == evidence_rules.VERDICT_UNKNOWN
+
+
+def test_a_stop_closer_than_a_tenth_of_a_percent_is_below_the_floor():
+    """R9.3's floor. 1,127 all-time finals qualify; max |close_r| all-time is 799."""
+    tag = evidence_rules.risk_below_floor_v1(risk_per_share=0.004, entry_price=10.0)
+    assert tag.tagged
+    tag = evidence_rules.risk_below_floor_v1(risk_per_share=0.05, entry_price=10.0)
+    assert not tag.tagged
+
+
+def test_the_floor_rule_is_unknown_when_it_cannot_measure():
+    for risk, entry in ((None, 10.0), (0.5, None), (0.5, 0.0)):
+        assert evidence_rules.risk_below_floor_v1(
+            risk_per_share=risk, entry_price=entry
+        ).verdict == evidence_rules.VERDICT_UNKNOWN
+
+
+def test_duplicates_are_counted_over_a_stated_window():
+    """Every number from this store carries its window (Amendment 2a)."""
+    rows = [
+        {"event_id": "a", "event_type": "registered"},
+        {"event_id": "a", "event_type": "registered"},
+        {"event_id": "b", "event_type": "registered"},
+        {"event_id": "c", "event_type": "final"},
+        {"event_id": "c", "event_type": "final"},
+        {"event_id": "c", "event_type": "final"},
+    ]
+    result = evidence_rules.duplicate_row_v1(rows, window="2026-08-07..2026-08-21")
+    assert result["window"] == "2026-08-07..2026-08-21"
+    assert result["by_event_type"]["registered"] == {"extra_rows": 1, "ids": 1}
+    assert result["by_event_type"]["final"] == {"extra_rows": 2, "ids": 1}
+    assert result["duplicate_ids"] == 2
+    assert result["rows"] == 6
+
+
+def test_a_row_with_no_id_is_counted_as_unidentifiable_not_as_unique():
+    rows = [{"event_id": "", "event_type": "registered"},
+            {"event_type": "registered"}]
+    result = evidence_rules.duplicate_row_v1(rows, window="w")
+    assert result["rows_without_id"] == 2
+    assert result["duplicate_ids"] == 0
+
+
+def test_the_window_is_required_so_a_number_cannot_travel_without_it():
+    with pytest.raises(ValueError):
+        evidence_rules.duplicate_row_v1([], window="")
+
+
+def test_the_family_can_be_derived_from_the_event_id():
+    """The outcome CSV carries no `family` column - it is in the id.
+
+    Validating this rule against the live store the first time, I passed a
+    `family` that did not exist and it tagged 0 of 9,914 minute-30 rows. With
+    the family derived it tags 9,623, which is the audit's number exactly.
+    """
+    event_id = "AAPL_long_20260724_06_30_00_h1_blue_after_red"
+    assert evidence_rules.family_from_event_id(event_id) == "h1_blue_after_red"
+    tag = evidence_rules.h1_bar_start_v1(None, "2026-07-24 06:30:00", event_id=event_id)
+    assert tag.tagged
+
+
+def test_an_id_that_does_not_carry_a_family_yields_nothing():
+    assert evidence_rules.family_from_event_id("short_id") == ""
+    assert evidence_rules.family_from_event_id(None) == ""
+    assert not evidence_rules.h1_bar_start_v1(None, "2026-07-24 06:30:00",
+                                              event_id="short_id").tagged
+
+
+def test_an_explicit_family_wins_over_the_id():
+    tag = evidence_rules.h1_bar_start_v1(
+        "regime_pause_rw", "2026-07-24 06:30:00",
+        event_id="AAPL_long_20260724_06_30_00_h1_blue_after_red",
+    )
+    assert not tag.tagged

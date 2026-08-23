@@ -21,6 +21,37 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.A: the rule registry reaches v1 (four more rules, all reproduced)
+
+- **`h1_bar_start_v1`**, **`fabricated_zero_v1`**, **`duplicate_row_v1`** and
+  **`risk_below_floor_v1`** join `daily_volume_mixed_v1` in
+  `scripts/evidence_rules.py`. Every one was **re-measured against the live
+  store** rather than trusted from the audit, and every one reproduces:
+  duplicates **742 / 609 / 430** on 2026-07-24..08-21 and **394 / 345 / 300** on
+  2026-08-07..08-21 (both exact), risk-below-floor **1,127** all-time,
+  `h1_bar_start` **9,623 of 9,914** minute-30 rows.
+- **The registry states its measured precision, not a round number.**
+  `h1_bar_start_v1` is 9,623/9,914 - the family half of the rule is
+  load-bearing, because 291 of 6,054 non-H1 rows also land on minute 30.
+- **`duplicate_row_v1` requires its window and echoes it back.** The same
+  allegation reproduced at 742 on one window and 394 on another, so a count from
+  this store that travels without its window is not evidence.
+- **`family_from_event_id` exists because the store has no `family` column.**
+  Validating `h1_bar_start_v1` the first time I passed a family that did not
+  exist and it tagged **0 of 9,914** rows - silently, because "no match" and "no
+  data" looked identical. The rule now derives the family from the id when it is
+  not supplied, and a test pins the derivation.
+- Missing inputs are **unknown**, never a pass: an unreadable stamp, a missing
+  `eod_close`, an entry price of 0. A date with no time carries no minute and is
+  unknown rather than minute 0.
+- **A time-of-day fragility in the chart suite, fixed.**
+  `test_unscanned_symbol_fetches_todays_candle_without_persisting_it` forces
+  `session_has_opened` True, so any run before 06:30 local - or on a weekend -
+  lands inside the Yahoo early-print suppression window, the preview is
+  correctly withheld and the test reads that as a failure. Found at 00:10 on a
+  Saturday. The suppression window is `test_forming_bar_honesty.py`'s subject
+  and is now pinned there rather than left to the clock. No product change.
+
 ### 2026-08-23 - R10.V step 7: a recompute cannot see a bar that came after its session
 
 - **The tracker catch-up trims its daily frames to the session it is

@@ -68,6 +68,10 @@ from typing import Iterable, Mapping
 # rule names — versioned, never edited in place
 # ---------------------------------------------------------------------------
 RULE_DAILY_VOLUME_MIXED = "daily_volume_mixed_v1"
+RULE_H1_BAR_START = "h1_bar_start_v1"
+RULE_FABRICATED_ZERO = "fabricated_zero_v1"
+RULE_DUPLICATE_ROW = "duplicate_row_v1"
+RULE_RISK_BELOW_FLOOR = "risk_below_floor_v1"
 
 # verdicts
 VERDICT_MIXED = "mixed"
@@ -107,7 +111,68 @@ RULES: Mapping[str, RuleSpec] = {
             "that window are unknown, not clean"
         ),
     ),
+    RULE_H1_BAR_START: RuleSpec(
+        name=RULE_H1_BAR_START,
+        summary=(
+            "An `h1_`-family row whose `entry_time` minute is exactly 30 carries the "
+            "BAR START, not the signal time. An H1 bar in PT starts at :30."
+        ),
+        applies_to="any entry-timing statistic over the intraday outcome store",
+        introduced="2026-08-22 (R10.0 decision 5)",
+        precision=(
+            "conjunctive - family AND minute. 9,623 of 9,914 minute-30 rows are H1; "
+            "291 of 6,054 non-H1 rows also land on minute 30, so the family half is "
+            "load-bearing and the minute alone does not discriminate"
+        ),
+    ),
+    RULE_FABRICATED_ZERO: RuleSpec(
+        name=RULE_FABRICATED_ZERO,
+        summary=(
+            "A final whose `close_r` is exactly 0 and whose `eod_close` equals its "
+            "entry price was never measured - the close was assigned from the entry "
+            "rather than observed."
+        ),
+        applies_to="any R statistic over the intraday outcome store",
+        introduced="2026-08-22 (R10.0 D2)",
+        precision=(
+            "1,164 of 1,164 zero finals match on 2026-07-24..08-21 and 0 of 5,743 "
+            "non-zero finals do; 251 never advanced a bar and 563 are stop-hits "
+            "recorded as 0R"
+        ),
+    ),
+    RULE_DUPLICATE_ROW: RuleSpec(
+        name=RULE_DUPLICATE_ROW,
+        summary=(
+            "The same `event_id` appears more than once for one `event_type`. The "
+            "extra rows are counted, never deleted, and every count carries its window."
+        ),
+        applies_to="any count over the intraday outcome store",
+        introduced="2026-08-22 (R10.0 D1d)",
+        precision=(
+            "window-dependent and therefore always stated: 742 extra `registered` over "
+            "609 ids and 430 extra `final` on 2026-07-24..08-21; 394 / 345 / 300 on "
+            "2026-08-07..08-21. Concurrency is NOT the main cause - 0 of 609 duplicated "
+            "ids were written within 5 s of each other"
+        ),
+    ),
+    RULE_RISK_BELOW_FLOOR: RuleSpec(
+        name=RULE_RISK_BELOW_FLOOR,
+        summary=(
+            "Risk per share below 0.1% of entry. R is a ratio, so a penny stop turns "
+            "an ordinary move into a three-figure R."
+        ),
+        applies_to="R statistics; the raw `risk_per_share` and `stop_price` are never edited",
+        introduced="2026-08-22 (R10.0 decision 6, R9.3's floor)",
+        precision="1,127 all-time finals qualify; all-time max |close_r| is 799.0",
+    ),
 }
+
+# R9.3's floor, reconciled as the ONE analytic definition (R10.0 decision 6).
+RISK_FLOOR_PCT_OF_ENTRY = 0.1
+# An H1 bar in PT starts at :30, which is what makes the minute half of the rule
+# work at all.
+H1_BAR_START_MINUTE = 30
+H1_FAMILY_PREFIX = "h1_"
 
 
 @dataclass(frozen=True)
@@ -376,6 +441,190 @@ def thaw_verdicts(frozen: Mapping[str, str]) -> dict[date, str]:
         if value in (VERDICT_MIXED, VERDICT_SHARES, VERDICT_UNKNOWN):
             out[session] = value
     return dict(sorted(out.items()))
+
+
+# ---------------------------------------------------------------------------
+# R10.A rules over the intraday outcome store
+# ---------------------------------------------------------------------------
+def _as_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None
+
+
+def family_from_event_id(event_id: str | None) -> str:
+    """`AAPL_long_20260724_06_30_00_h1_blue_after_red` -> `h1_blue_after_red`.
+
+    The outcome CSV does **not** carry a `family` column - it is derived from the
+    id, which is `SYMBOL_side_YYYYMMDD_HH_MM_SS_<type>`. A caller that forgets
+    this measures every H1 row as non-H1 and the rule silently tags nothing,
+    which is exactly what happened the first time I validated it against the
+    live store. Splitting on `_` is safe because symbols use `-` for class
+    shares (`BRK-B`), never `_`.
+    """
+    parts = str(event_id or "").split("_")
+    return "_".join(parts[6:]) if len(parts) > 6 else ""
+
+
+def h1_bar_start_v1(
+    family: str | None, entry_time: str | None, *, event_id: str | None = None
+) -> EvidenceTag:
+    """Does this row's `entry_time` carry a bar START rather than a signal time?
+
+    Conjunctive on purpose. The family alone is not enough - 291 of 6,054 non-H1
+    rows also land on minute 30 - and the minute alone is not enough either. A
+    stamp we cannot read is UNKNOWN, never "fine".
+
+    Pass `event_id` when the row has no `family` column; the store's rows do not.
+    """
+    name = str(family or "").strip().lower()
+    if not name and event_id:
+        name = family_from_event_id(event_id).strip().lower()
+    minute = _entry_minute(entry_time)
+    if minute is None:
+        return EvidenceTag(
+            rule=RULE_H1_BAR_START,
+            verdict=VERDICT_UNKNOWN,
+            reason="the entry stamp could not be read, so its minute is unmeasured",
+        )
+    if name.startswith(H1_FAMILY_PREFIX) and minute == H1_BAR_START_MINUTE:
+        return EvidenceTag(
+            rule=RULE_H1_BAR_START,
+            verdict=VERDICT_MIXED,
+            reason=(
+                "an H1-family row stamped on the half hour: this is the bar start, not "
+                "the signal time, so it must not enter an entry-timing statistic"
+            ),
+        )
+    return EvidenceTag(
+        rule=RULE_H1_BAR_START,
+        verdict=VERDICT_SHARES,
+        reason="not an H1-family row stamped on the half hour",
+    )
+
+
+def _entry_minute(entry_time: str | None) -> int | None:
+    raw = str(entry_time or "").strip()
+    if not raw or ":" not in raw:
+        # A date with no time carries no minute. Reading it as minute 0 would
+        # turn an unmeasured stamp into a measured one.
+        return None
+    for parser in (datetime.fromisoformat,):
+        try:
+            return parser(raw).minute
+        except ValueError:
+            pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(raw, fmt).minute
+        except ValueError:
+            continue
+    return None
+
+
+def fabricated_zero_v1(
+    *, close_r, eod_close, entry_price, tolerance: float = 1e-9
+) -> EvidenceTag:
+    """A 0R final whose close was assigned from its entry rather than observed.
+
+    The signature is exact on the measured window - 1,164 of 1,164 zero finals
+    match and 0 of 5,743 non-zero finals do - so a genuine scratch, which closes
+    somewhere other than exactly its entry, is not caught by it.
+    """
+    close = _as_float(close_r)
+    eod = _as_float(eod_close)
+    entry = _as_float(entry_price)
+    if close is None or eod is None or entry is None:
+        return EvidenceTag(
+            rule=RULE_FABRICATED_ZERO,
+            verdict=VERDICT_UNKNOWN,
+            reason="close_r, eod_close or entry_price is missing, so this cannot be judged",
+        )
+    if abs(close) <= tolerance and abs(eod - entry) <= tolerance:
+        return EvidenceTag(
+            rule=RULE_FABRICATED_ZERO,
+            verdict=VERDICT_MIXED,
+            reason=(
+                "a 0R final whose close equals its entry exactly - the close was never "
+                "measured, it was assigned, so this row is not a scratch"
+            ),
+        )
+    return EvidenceTag(
+        rule=RULE_FABRICATED_ZERO,
+        verdict=VERDICT_SHARES,
+        reason="the close differs from the entry, so it was observed",
+    )
+
+
+def risk_below_floor_v1(*, risk_per_share, entry_price) -> EvidenceTag:
+    """Risk under 0.1% of entry - R9.3's floor, and the only analytic one."""
+    risk = _as_float(risk_per_share)
+    entry = _as_float(entry_price)
+    if risk is None or entry is None or entry <= 0:
+        return EvidenceTag(
+            rule=RULE_RISK_BELOW_FLOOR,
+            verdict=VERDICT_UNKNOWN,
+            reason="risk or entry is missing, so the floor cannot be applied",
+        )
+    floor = entry * RISK_FLOOR_PCT_OF_ENTRY / 100.0
+    if abs(risk) < floor:
+        return EvidenceTag(
+            rule=RULE_RISK_BELOW_FLOOR,
+            verdict=VERDICT_MIXED,
+            reason=(
+                f"risk {abs(risk):.4f} is under {RISK_FLOOR_PCT_OF_ENTRY}% of entry "
+                f"({floor:.4f}); R is a ratio, so this row's R is an artifact of its stop"
+            ),
+        )
+    return EvidenceTag(
+        rule=RULE_RISK_BELOW_FLOOR,
+        verdict=VERDICT_SHARES,
+        reason="risk is at or above the floor",
+    )
+
+
+def duplicate_row_v1(rows: Iterable[Mapping], *, window: str) -> dict:
+    """Count repeated `(event_id, event_type)` pairs. Nothing is deleted.
+
+    `window` is REQUIRED and is echoed back, because every count from this store
+    is window-dependent and the same allegation reproduced at 742 on one window
+    and 394 on another. A number that travels without its window is not evidence.
+    """
+    if not str(window or "").strip():
+        raise ValueError("duplicate_row_v1 needs the window its counts were taken over")
+    seen: dict[tuple[str, str], int] = {}
+    total = 0
+    without_id = 0
+    for row in rows:
+        total += 1
+        event_id = str((row or {}).get("event_id") or "").strip()
+        event_type = str((row or {}).get("event_type") or "").strip()
+        if not event_id:
+            without_id += 1
+            continue
+        key = (event_id, event_type)
+        seen[key] = seen.get(key, 0) + 1
+    by_type: dict[str, dict[str, int]] = {}
+    duplicate_ids: set[str] = set()
+    for (event_id, event_type), count in seen.items():
+        if count <= 1:
+            continue
+        bucket = by_type.setdefault(event_type, {"extra_rows": 0, "ids": 0})
+        bucket["extra_rows"] += count - 1
+        bucket["ids"] += 1
+        duplicate_ids.add(event_id)
+    return {
+        "rule": RULE_DUPLICATE_ROW,
+        "window": window,
+        "rows": total,
+        "rows_without_id": without_id,
+        "duplicate_ids": len(duplicate_ids),
+        "by_event_type": by_type,
+    }
 
 
 def describe(rule: str) -> str:

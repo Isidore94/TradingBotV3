@@ -1281,6 +1281,14 @@ def test_unscanned_symbol_fetches_todays_candle_without_persisting_it(monkeypatc
         legacy, "fetch_daily_bars", lambda *a, **k: persisted.append(a) or pd.DataFrame()
     )
     monkeypatch.setattr(chart_snapshot, "session_has_opened", lambda now=None: True)
+    # The early-print suppression window is `test_forming_bar_honesty.py`'s
+    # subject, not this test's, and it is pinned here because leaving it live
+    # made this test fail by the CLOCK rather than by the code: with
+    # `session_has_opened` forced True, any run before 06:30 local (or on a
+    # weekend, when the real answer is False) lands inside the suppression
+    # window, the preview is correctly withheld, and the assertion below reads
+    # that correct behaviour as a failure. Found at 00:10 on a Saturday.
+    monkeypatch.setattr(snap_mod, "yahoo_forming_bar_is_trustworthy", lambda now=None: True)
     monkeypatch.setattr(snap_mod, "_FORMING_BARS", {})
     monkeypatch.setattr(snap_mod, "_FORMING_ATTEMPTS", {})
 

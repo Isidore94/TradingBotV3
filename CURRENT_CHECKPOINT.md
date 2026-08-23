@@ -8,6 +8,54 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.A begins: the rule registry reaches v1
+
+**Branch `phase05-integration-blitz`.** With R10.V code-complete, the R10.A ledger
+half starts with the piece every later part reads: the reader-side rules.
+
+**Four rules joined `daily_volume_mixed_v1`**, and each was **re-measured against
+the live 239,422-row outcome store** rather than trusted from the audit:
+
+| rule | reproduced |
+|---|---|
+| `duplicate_row_v1` | **742 / 609 / 430** on 07-24..08-21 and **394 / 345 / 300** on 08-07..08-21 - both windows exact |
+| `risk_below_floor_v1` | **1,127** all-time finals under 0.1% of entry |
+| `h1_bar_start_v1` | **9,623 of 9,914** minute-30 registered rows |
+| `fabricated_zero_v1` | 2,964 all-time finals (the audit measured 1,164 in-window) |
+
+**The registry states its measured precision, not a round number** - 9,623/9,914,
+because 291 of 6,054 non-H1 rows also land on minute 30 and the family half of
+the rule is therefore load-bearing.
+
+**`duplicate_row_v1` will not run without its window** and echoes it back. The
+same allegation reproduced at 742 on one window and 394 on another; a count from
+this store that travels without its window is not evidence.
+
+**One trap found by measuring rather than asserting.** The outcome CSV has **no
+`family` column** - it lives in the event id. My first validation passed a family
+that did not exist, and the rule tagged **0 of 9,914** rows without complaining,
+because "no match" and "no data" looked identical from the outside.
+`family_from_event_id` now derives it, a test pins the derivation, and the second
+run reproduced 9,623 exactly.
+
+**A suite failure that was the clock, not the code.** Running just after local
+midnight on a Saturday, `test_unscanned_symbol_fetches_todays_candle_without_persisting_it`
+went red. It forces `session_has_opened` True while the real time is before the
+06:30 open, which lands inside the Yahoo early-print suppression window - so the
+preview was **correctly** withheld and the test read that as a failure. The
+suppression window is `test_forming_bar_honesty.py`'s subject; it is now pinned
+in this test, with the reason written down. Nothing in the product changed.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4337 passed / 19 subtests**, exit **0** (was 4319; +18) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Next:** the ledger itself - `intraday_outcome_events.jsonl`
+(`intraday_outcome_event_v1`, month-segmented), one owner, one transaction.
+
+---
+
 ## 2026-08-23 - R10.V step 7: the S2 defect is closed. **The packet is code-complete.**
 
 **Branch `phase05-integration-blitz`.** All seven steps built and green.
