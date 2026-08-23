@@ -1186,7 +1186,28 @@ second scoreboard.
    itself unversioned; the repo copy is now the source of truth and a test
    compares the two byte for byte.
 
-   *Ledger half still owed:* everything below.
+   *Ledger half: LARGELY BUILT 2026-08-23, GREEN.* Landed: the rule registry at
+   v1 (`evidence_rules.py`, five rules, each re-measured against the live store -
+   duplicates 742/609/430 and 394/345/300 exact, risk-floor 1,127,
+   `h1_bar_start_v1` 9,623/9,914); the append-only ledger
+   (`evidence_ledger.py`, `intraday_outcome_event_v1`, month-segmented, torn
+   lines counted, writer identity on every row); the **dual-write canary** at
+   the one CSV writer (fail-open, 50k/process, `evidence_ledger_dual_write=off`
+   kills it); **no-fabrication finalization** (D2 - a stop-out finalizes at its
+   stop, a measured trade at its last measured close, and a trade that saw
+   nothing finalizes `unresolved` with a reason instead of a 0R); the
+   **idempotent after-close sweep** (D3/D4 - needs no bars or IB, expires after
+   3 completed sessions, files its own coverage) with a System Health tile; and
+   **registration context** (D8 - family, engine version, day-part, RVOL,
+   env_key, risk as % of price and as an ATR multiple), with the **tier emitted
+   as its own `tier_assigned` ledger event** because every call site evaluates
+   it *after* registration - which is why it was on 0 of 7,863 rows.
+
+   *Still owed:* the single-instance guard (only what the R10.0 verdict
+   supports - concurrency was REFUTED as the duplicate cause); R9.5's shadow
+   store aligned to month segments and `session_date`; a restore test of the
+   ledger directory; and the decision to make the ledger the authority, which
+   needs the canary's own comparison first. Original text below.
    New append-only authority `intraday_outcome_events.jsonl`
    (`intraday_outcome_event_v1`, month-segmented); the pending dict becomes a
    reconstructable checkpoint, never the authority. One owner, one transaction:
