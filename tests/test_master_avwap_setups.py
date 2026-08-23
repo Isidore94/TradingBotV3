@@ -7276,8 +7276,13 @@ class MasterAvwapSetupTests(unittest.TestCase):
         with patch.object(master_avwap.yf, "download", return_value=raw):
             result = master_avwap.fetch_daily_bars_from_yahoo("AL", 30)
 
-        self.assertEqual(list(result.columns), master_avwap.DAILY_BAR_COLUMNS)
+        # R10.V step 2: the store schema is the six bar columns plus per-row
+        # provenance. The frame-level attr stays as well - it is what a fetch
+        # path in flight carries before the rows are stamped.
+        self.assertEqual(list(result.columns), master_avwap.DAILY_BAR_STORE_COLUMNS)
         self.assertEqual(master_avwap._get_daily_bar_source(result), master_avwap.DAILY_BAR_SOURCE_YAHOO)
+        self.assertEqual(set(result["source"]), {master_avwap.DAILY_BAR_SOURCE_YAHOO})
+        self.assertEqual(set(result["volume_unit"]), {master_avwap.DAILY_BAR_UNIT_SHARES})
         self.assertEqual(float(result.iloc[-1]["close"]), 11.0)
 
     def test_ib_weekly_expiration_detection_uses_close_expiry_spacing(self):

@@ -8,6 +8,67 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 night - R10.V step 2: the store records where each row came from
+
+**Branch `phase05-integration-blitz`.** Provenance travels **with the row**, not
+with the frame: `source` (`yahoo` | `ibkr` | `unknown`) and `volume_unit`
+(`shares` | `lots_rth` | `unknown`) are columns, because the store IS a merge of
+two sources and a frame-level attribute cannot survive one. The file additionally
+carries `daily_bars_schema=v2` in its Arrow metadata, which is what separates
+"this file predates provenance" from "this file has provenance and every row of
+it is unknown".
+
+**`cache` is deliberately not a source value.** Reading a row off disk tells you
+it came off disk, not what wrote it, so a v1 row reads `unknown`/`unknown`.
+Recording `cache` would look like provenance while carrying none - and the point
+of the column is that `unknown` shows up in a rollup.
+
+**A bug I wrote and caught with the test I wrote for it.** The first version set
+the source *after* normalization at both fetch seams
+(`_set_daily_bar_source(_normalize_daily_bar_frame(df), YAHOO)`), so every row
+was stamped `unknown` while the frame said `yahoo` - two new columns of nothing
+on every fresh fetch. The source is now declared **before** normalization at both
+seams, and `test_the_yahoo_fetch_stamps_every_row_it_returns` exists so it stays
+that way. `_set_daily_bar_source` remains a pure attribute setter: making it
+backfill unknown cells looked tempting and would have relabelled old IB rows as
+Yahoo at the merge seam (`legacy.py` ~15395), which is fabrication.
+
+**Rows that already know what they are are never relabelled.** That is the whole
+reason the mix was invisible; `_normalize_daily_bar_frame` fills blanks only, and
+stamps before the de-duplication so step 3's collision rule has two rows that
+both know what they are.
+
+**An untouched file stays v1 on purpose.** `_persist_durable_daily_bars` still
+skips a write when the bars did not change, so a v1 file is not quietly upgraded
+to a v2 full of `unknown`. Step 4's backfill converts them, with a manifest
+saying which.
+
+**Every consumer reads both schemas, proven one test per consumer** - the D1
+scanner's durable loader, `chart_snapshot.load_d1_bars`,
+`human_focus_tracking` (which is also how `ai_jobs/cohorts.py` grades vetoes),
+`setup_playbook_study`, and **two the cliff report's consumer table had missed**:
+`ui/services/bar_cache.py` and `research_warehouse/ingest_existing.py`. Both read
+by column name and are unaffected. The warehouse's `provider="UNKNOWN"` docstring
+is now understated - v2 rows carry a real source - but wiring that through is a
+warehouse change this packet does not authorize: **owed, not done**.
+
+**No golden fixture moved**, which is what `AVWAP_FIXTURE_BASELINE_2026-08-22.md`
+§3 predicted: `git diff tests/fixtures/` is empty. One test asserted the old
+six-column contract and was updated to the new one - a contract change this
+packet authorizes, made visible rather than worked around.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4247 passed / 19 subtests**, exit **0** (was 4215; +32) |
+| `git diff tests/fixtures/` | empty - ground rule 1 holds |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Next:** R10.V step 3 - the write seam accepts only `shares`; an IB frame
+contributes price columns and `volume=NaN`, never a rescaled number, and the
+date-collision rule becomes prefer `shares` > `unknown` > NaN.
+
+---
+
 ## 2026-08-22 night - R10.V registered, step 1 done: the fixtures are proven clean
 
 **Branch `phase05-integration-blitz`.** The cliff packet is now plan.md Phase 0.7

@@ -21,6 +21,38 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 (night) - R10.V step 2: the daily store records where each row came from
+
+- **Provenance is per ROW, not per frame.** `source` (`yahoo` | `ibkr` |
+  `unknown`) and `volume_unit` (`shares` | `lots_rth` | `unknown`) are columns
+  on the durable daily parquet, because the store IS a merge of two sources and
+  a frame-level attribute cannot survive one. The file carries
+  `daily_bars_schema=v2` in its Arrow metadata, separating "predates provenance"
+  from "has provenance and every row is unknown".
+- **`cache` is not a source value.** A row read off disk is `unknown`, never
+  `cache`: recording the reading path as the author would look like provenance
+  while carrying none.
+- **Rows that already know what they are are never relabelled**, and provenance
+  is stamped before de-duplication, so step 3's collision rule decides between
+  two rows that both know their unit.
+- **An untouched file stays v1 on purpose** - the write is still skipped when
+  the bars did not change, so nothing is quietly upgraded to a v2 full of
+  `unknown`. Step 4's backfill converts them with a manifest.
+- **Both fetch seams declare their source before normalizing.** Setting it after
+  (as the first version did) stamped every row `unknown` while the frame said
+  `yahoo`; `_set_daily_bar_source` stays a pure attribute setter, because making
+  it backfill unknown cells would have relabelled old IB rows as Yahoo at the
+  merge seam.
+- **Every consumer reads v1 and v2, one test each** - the D1 scanner's durable
+  loader, `chart_snapshot.load_d1_bars`, `human_focus_tracking` (the path
+  `ai_jobs/cohorts.py` grades vetoes through), `setup_playbook_study`, plus two
+  the cliff report's consumer table had missed: `ui/services/bar_cache.py` and
+  `research_warehouse/ingest_existing.py`. The warehouse's `provider="UNKNOWN"`
+  docstring is now understated; wiring it through is **owed, not done** - it is
+  a warehouse change this packet does not authorize.
+- **No golden fixture moved**, as the step-1 baseline predicted. One test
+  asserted the old six-column contract and was updated to the new one.
+
 ### 2026-08-22 (night) - R10.V registered; the AVWAP fixtures are proven not to read the live store
 
 - **The cliff packet is plan.md Phase 0.7 item 11 (R10.V)**, seven steps, and it

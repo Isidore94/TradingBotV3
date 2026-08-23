@@ -1666,6 +1666,37 @@ DAILY_BAR_SOURCE_ATTR = "daily_bar_source"
 DAILY_BAR_SOURCE_IBKR = "ibkr"
 DAILY_BAR_SOURCE_YAHOO = "yahoo"
 DAILY_BAR_SOURCE_CACHE = "cache"
+
+# R10.V step 2 - provenance travels WITH the row.
+#
+# The store held two volume units and no record of which was which: IB returns
+# regular-session volume in round lots (`whatToShow="TRADES"`, `useRTH=1`) and
+# Yahoo returns the consolidated session in shares. Finding that took a
+# field-level diff of 60,519 mark-days. It is now written down per row, because
+# a frame-level attribute cannot survive a merge of two sources - and a merge of
+# two sources is exactly what the store is.
+DAILY_BAR_SOURCE_COLUMN = "source"
+DAILY_BAR_UNIT_COLUMN = "volume_unit"
+DAILY_BAR_PROVENANCE_COLUMNS = [DAILY_BAR_SOURCE_COLUMN, DAILY_BAR_UNIT_COLUMN]
+DAILY_BAR_STORE_COLUMNS = DAILY_BAR_COLUMNS + DAILY_BAR_PROVENANCE_COLUMNS
+
+DAILY_BAR_SOURCE_UNKNOWN = "unknown"
+DAILY_BAR_UNIT_SHARES = "shares"
+DAILY_BAR_UNIT_LOTS_RTH = "lots_rth"
+DAILY_BAR_UNIT_UNKNOWN = "unknown"
+
+# Only a source we actually observed maps to a unit. `cache` is deliberately
+# absent: reading a row off disk tells you it came off disk, not what wrote it,
+# and R10 ground rule 6 forbids writing a value nobody measured.
+DAILY_BAR_UNIT_BY_SOURCE = {
+    DAILY_BAR_SOURCE_YAHOO: DAILY_BAR_UNIT_SHARES,
+    DAILY_BAR_SOURCE_IBKR: DAILY_BAR_UNIT_LOTS_RTH,
+}
+
+DAILY_BARS_SCHEMA_METADATA_KEY = "daily_bars_schema"
+DAILY_BARS_SCHEMA_CURRENT = "v2"
+DAILY_BARS_SCHEMA_LEGACY = "v1"
+DAILY_BARS_SCHEMA_UNKNOWN = "unknown"
 IBKR_HISTORICAL_FAILURE_THRESHOLD = 5
 IBKR_HISTORICAL_FAILURE_CODES = {162, 366}
 IBKR_HISTORICAL_FAILURE_TEXT_MARKERS = (
@@ -2523,8 +2554,49 @@ def _set_daily_bar_source(df: pd.DataFrame | None, source: str | None) -> pd.Dat
     return frame
 
 
+def daily_bar_provenance_for_source(source: str | None) -> tuple[str, str]:
+    """`(source, volume_unit)` for a frame that came from `source`.
+
+    Anything we did not observe - a cache read, a blank, a value we do not
+    recognise - is `("unknown", "unknown")`. Labelling a cache read `cache` would
+    read as provenance while carrying none, which is worse than admitting the
+    gap: the whole point of this column is that `unknown` is visible in a rollup.
+    """
+    value = str(source or "").strip().lower()
+    unit = DAILY_BAR_UNIT_BY_SOURCE.get(value)
+    if unit is None:
+        return DAILY_BAR_SOURCE_UNKNOWN, DAILY_BAR_UNIT_UNKNOWN
+    return value, unit
+
+
+def _apply_daily_bar_provenance(frame: pd.DataFrame, source: str | None) -> pd.DataFrame:
+    """Ensure both provenance columns exist and hold a real value on every row.
+
+    Rows that ALREADY carry provenance keep it - a merged frame legitimately
+    holds rows from two sources, and flattening it to the reading path's source
+    is how the unit mix became invisible in the first place. Only blank cells are
+    filled, and they are filled from the frame's own declared source.
+    """
+    default_source, default_unit = daily_bar_provenance_for_source(source)
+    for column, default in (
+        (DAILY_BAR_SOURCE_COLUMN, default_source),
+        (DAILY_BAR_UNIT_COLUMN, default_unit),
+    ):
+        if column in frame.columns:
+            values = frame[column].astype("object")
+            cleaned = values.map(
+                lambda value: str(value).strip().lower()
+                if value is not None and value == value and str(value).strip()
+                else ""
+            )
+            frame[column] = cleaned.replace("", default)
+        else:
+            frame[column] = default
+    return frame
+
+
 def _empty_daily_bar_frame(source: str | None = None) -> pd.DataFrame:
-    return _set_daily_bar_source(pd.DataFrame(columns=DAILY_BAR_COLUMNS), source)
+    return _set_daily_bar_source(pd.DataFrame(columns=DAILY_BAR_STORE_COLUMNS), source)
 
 
 def reset_ibkr_historical_failure_circuit() -> None:
@@ -2658,8 +2730,12 @@ def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
     if normalized.empty:
         return _empty_daily_bar_frame(source=source)
 
+    # Provenance is stamped BEFORE the de-duplication, so a collision is decided
+    # between two rows that both know what they are (R10.V step 3 makes that
+    # decision prefer shares; today it is still keep="last").
+    normalized = _apply_daily_bar_provenance(normalized, source)
     normalized = (
-        normalized[DAILY_BAR_COLUMNS]
+        normalized[DAILY_BAR_STORE_COLUMNS]
         .drop_duplicates(subset=["datetime"], keep="last")
         .sort_values("datetime")
         .reset_index(drop=True)
@@ -2800,17 +2876,66 @@ def _load_durable_daily_bar_frame(symbol: str) -> pd.DataFrame:
     return _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_CACHE)
 
 
+def _write_daily_bar_parquet(path: Path, frame: pd.DataFrame) -> None:
+    """Write the store file and stamp its schema name into the Arrow metadata.
+
+    The columns say what each ROW is; this says what the FILE is, which is what
+    lets a reader distinguish "this file predates provenance" from "this file
+    has provenance and every row of it is unknown". Falls back to a plain write
+    if pyarrow is unavailable - a file without the stamp reads as v1, which is
+    conservative and true.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except Exception:  # pragma: no cover - pyarrow is a hard dependency in practice
+        frame.to_parquet(path, index=False)
+        return
+    table = pa.Table.from_pandas(frame, preserve_index=False)
+    metadata = dict(table.schema.metadata or {})
+    metadata[DAILY_BARS_SCHEMA_METADATA_KEY.encode("utf-8")] = DAILY_BARS_SCHEMA_CURRENT.encode(
+        "utf-8"
+    )
+    pq.write_table(table.replace_schema_metadata(metadata), path)
+
+
+def daily_bars_schema_version(path: Path | str) -> str:
+    """`"v2"`, `"v1"` (no stamp - it predates provenance), or `"unknown"`.
+
+    A file we cannot open is UNKNOWN rather than assumed current: a backfill that
+    treats an unreadable file as already-repaired would skip it silently.
+    """
+    try:
+        import pyarrow.parquet as pq
+
+        metadata = pq.read_schema(Path(path)).metadata or {}
+    except Exception:
+        return DAILY_BARS_SCHEMA_UNKNOWN
+    stamped = metadata.get(DAILY_BARS_SCHEMA_METADATA_KEY.encode("utf-8"))
+    if stamped is None:
+        return DAILY_BARS_SCHEMA_LEGACY
+    try:
+        return stamped.decode("utf-8").strip().lower() or DAILY_BARS_SCHEMA_UNKNOWN
+    except Exception:
+        return DAILY_BARS_SCHEMA_UNKNOWN
+
+
 def _persist_durable_daily_bars(symbol: str, normalized: pd.DataFrame, previous: pd.DataFrame | None = None) -> None:
     """Mirror the merged history to the durable Parquet store, but only when it
-    actually changed (bounds write churn to genuine updates)."""
+    actually changed (bounds write churn to genuine updates).
+
+    A file whose BARS did not change is not rewritten, so an untouched v1 file
+    stays v1 rather than being quietly upgraded to a v2 full of `unknown`. R10.V
+    step 4's backfill is what converts those, with a manifest saying which.
+    """
     if normalized is None or getattr(normalized, "empty", True):
         return
     try:
         path = _durable_daily_bar_file(symbol)
         if previous is not None and path.exists() and not _daily_bar_frame_changed(previous, normalized):
             return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        normalized.to_parquet(path, index=False)
+        _write_daily_bar_parquet(path, normalized)
     except Exception as exc:  # pragma: no cover - pyarrow/file issues degrade to L1 only
         logging.debug("%s: durable daily-bar persist skipped (%s).", symbol, exc)
 
@@ -15246,9 +15371,14 @@ def fetch_daily_bars_from_yahoo(symbol: str, days: int) -> pd.DataFrame:
     df["datetime"] = pd.to_datetime(df["datetime"]).dt.tz_localize(None)
     df = df.dropna(subset=list(required))
     df = df.sort_values("datetime")
-    return _set_daily_bar_source(
-        _normalize_daily_bar_frame(df[["datetime", "open", "high", "low", "close", "volume"]]),
-        DAILY_BAR_SOURCE_YAHOO,
+    # R10.V step 2: the source is declared BEFORE normalization, so the rows are
+    # stamped with it. Setting it afterwards leaves every row saying "unknown"
+    # while the frame says "yahoo" - provenance the store cannot keep.
+    return _normalize_daily_bar_frame(
+        _set_daily_bar_source(
+            df[["datetime", "open", "high", "low", "close", "volume"]],
+            DAILY_BAR_SOURCE_YAHOO,
+        )
     )
 
 
@@ -15321,7 +15451,8 @@ def _fetch_live_daily_bars(ib: IBApi | None, symbol: str, days: int) -> pd.DataF
             df = df.sort_values("datetime").reset_index(drop=True)
             _provider_count("daily_bars", "success", "ibkr")
             _record_ibkr_historical_result(symbol, succeeded=True)
-            return _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_IBKR)
+            # Declared before normalization so each row carries `ibkr`/`lots_rth`.
+            return _normalize_daily_bar_frame(_set_daily_bar_source(df, DAILY_BAR_SOURCE_IBKR))
         _provider_count("daily_bars", "failure", "ibkr")
         _record_ibkr_historical_result(
             symbol,

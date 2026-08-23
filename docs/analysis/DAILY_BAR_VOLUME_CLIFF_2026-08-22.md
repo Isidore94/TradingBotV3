@@ -195,6 +195,17 @@ inherit whatever unit a row carries:
 Only the price columns matter to some of these; the volume-weighted ones — AVWAP
 bands and anything derived from them — are where the damage lands.
 
+> **Amendment 3 — 2026-08-22 night: the consumer table was two short.** R10.V
+> step 2 tested every consumer against both schemas and found two this table
+> missed: `ui/services/bar_cache.py` (the desk's chart series builder, via
+> `chart_snapshot._daily_store_candidates`) and
+> `research_warehouse/ingest_existing.py` (`read_durable_daily_bars` →
+> `bar_d1`). Both read the store by column NAME and are unaffected by the two
+> new columns; both now have a v1/v2 test. The warehouse's
+> `provider="UNKNOWN"` docstring is now understated — v2 rows carry a real
+> source — but wiring that through is a warehouse change R10.V does not
+> authorize, so it is **owed, not done**.
+
 ## 5. Fix and backfill options (d) — for the trader to choose
 
 Each names its golden-fixture impact. **No option is recommended over the
