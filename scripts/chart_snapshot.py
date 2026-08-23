@@ -298,6 +298,15 @@ def _daily_store_candidates(symbol: str) -> list[tuple[str, Path]]:
     return candidates
 
 
+def _volume_or_zero(value: Any) -> float:
+    """A missing volume draws nothing; it never draws a NaN-shaped hole."""
+    try:
+        volume = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return volume if volume == volume and volume > 0 else 0.0
+
+
 def load_d1_bars(symbol: str) -> list[dict[str, Any]]:
     """Full daily history from the durable parquet store as chart bars.
 
@@ -338,7 +347,13 @@ def load_d1_bars(symbol: str) -> list[dict[str, Any]]:
                 "high": float(row.high),
                 "low": float(row.low),
                 "close": float(row.close),
-                "volume": float(getattr(row, "volume", 0.0) or 0.0) if has_volume else 0.0,
+                # R10.V step 3: the store may hold a bar with NO volume (an
+                # IB-sourced row keeps its prices and drops its round-lot
+                # number rather than being rescaled). NaN must not reach the
+                # paint path, and 0.0 is what this loader already emits for a
+                # file with no volume column at all - one "no data" value, not
+                # two.
+                "volume": _volume_or_zero(getattr(row, "volume", 0.0)) if has_volume else 0.0,
             }
         )
     _daily_bars_cache[symbol] = (cache_key, bars)

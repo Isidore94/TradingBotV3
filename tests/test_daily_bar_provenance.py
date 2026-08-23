@@ -166,14 +166,18 @@ def test_an_unreadable_file_is_unknown_rather_than_assumed_current(tmp_path):
 
 
 def test_the_written_file_round_trips_its_columns_and_values(tmp_path, monkeypatch):
+    """Fidelity is asserted on a Yahoo frame; an IB frame's volume is
+    deliberately blanked on the way out (R10.V step 3,
+    `test_daily_bar_volume_policy.py`), so it is the wrong subject for a
+    round-trip test."""
     monkeypatch.setattr(master_avwap, "MASTER_AVWAP_DAILY_BARS_DIR", tmp_path)
     frame = master_avwap._normalize_daily_bar_frame(
-        master_avwap._set_daily_bar_source(_bars(), master_avwap.DAILY_BAR_SOURCE_IBKR)
+        master_avwap._set_daily_bar_source(_bars(), master_avwap.DAILY_BAR_SOURCE_YAHOO)
     )
     master_avwap._persist_durable_daily_bars("RT", frame)
     read_back = pd.read_parquet(tmp_path / "RT.parquet")
     assert list(read_back.columns) == master_avwap.DAILY_BAR_STORE_COLUMNS
-    assert set(read_back["volume_unit"]) == {"lots_rth"}
+    assert set(read_back["volume_unit"]) == {"shares"}
     pd.testing.assert_series_equal(
         read_back["volume"].reset_index(drop=True),
         frame["volume"].reset_index(drop=True),

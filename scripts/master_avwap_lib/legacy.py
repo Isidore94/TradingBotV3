@@ -2726,21 +2726,59 @@ def _normalize_daily_bar_frame(df: pd.DataFrame | None) -> pd.DataFrame:
             return _empty_daily_bar_frame(source=source)
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
 
-    normalized = normalized.dropna(subset=DAILY_BAR_COLUMNS)
+    # R10.V step 3: a row may legitimately have NO volume - an IB-sourced row is
+    # stored with its prices and a blank volume rather than a rescaled number.
+    # Dropping it here would delete the price bar as well, so only a missing
+    # PRICE disqualifies a row.
+    normalized = normalized.dropna(subset=[column for column in DAILY_BAR_COLUMNS if column != "volume"])
     if normalized.empty:
         return _empty_daily_bar_frame(source=source)
 
-    # Provenance is stamped BEFORE the de-duplication, so a collision is decided
-    # between two rows that both know what they are (R10.V step 3 makes that
-    # decision prefer shares; today it is still keep="last").
+    # Provenance is stamped BEFORE the de-duplication, so the collision below is
+    # decided between two rows that both know what they are.
     normalized = _apply_daily_bar_provenance(normalized, source)
-    normalized = (
-        normalized[DAILY_BAR_STORE_COLUMNS]
+    normalized = _resolve_daily_bar_date_collisions(normalized[DAILY_BAR_STORE_COLUMNS])
+    return _set_daily_bar_source(normalized, source)
+
+
+# A collision is a session two frames both claim. Higher wins; equals fall back
+# to "the later row", which is the behaviour that existed before this rule.
+DAILY_BAR_UNIT_PRIORITY = {
+    DAILY_BAR_UNIT_SHARES: 2,
+    DAILY_BAR_UNIT_UNKNOWN: 1,
+    DAILY_BAR_UNIT_LOTS_RTH: 0,
+}
+
+
+def _resolve_daily_bar_date_collisions(frame: pd.DataFrame) -> pd.DataFrame:
+    """One row per session: prefer `shares`, then `unknown`, then a blanked row.
+
+    `keep="last"` alone handed the session to whichever scan ran last, which is
+    how a Yahoo row measured in shares was replaced by an IB row measured in
+    round lots - the splice this packet exists to repair. A row that still
+    carries a share-denominated number now outranks one that does not, in either
+    arrival order, and an already-backfilled row cannot be undone by a later
+    unknown one.
+    """
+    if frame is None or frame.empty:
+        return frame.reset_index(drop=True) if frame is not None else frame
+    work = frame.copy()
+    work["__seq"] = range(len(work))
+    work["__rank"] = (
+        work[DAILY_BAR_UNIT_COLUMN]
+        .map(DAILY_BAR_UNIT_PRIORITY)
+        .fillna(DAILY_BAR_UNIT_PRIORITY[DAILY_BAR_UNIT_LOTS_RTH])
+    )
+    # A row whose unit says shares but whose number is missing cannot outrank a
+    # row that has one: the rank follows the DATA, not only the label.
+    work.loc[work["volume"].isna(), "__rank"] = DAILY_BAR_UNIT_PRIORITY[DAILY_BAR_UNIT_LOTS_RTH]
+    work = (
+        work.sort_values(["datetime", "__rank", "__seq"], kind="mergesort")
         .drop_duplicates(subset=["datetime"], keep="last")
-        .sort_values("datetime")
+        .sort_values("datetime", kind="mergesort")
         .reset_index(drop=True)
     )
-    return _set_daily_bar_source(normalized, source)
+    return work[DAILY_BAR_STORE_COLUMNS]
 
 
 # A local cache read must never be allowed to block the scan indefinitely. On
@@ -2876,6 +2914,31 @@ def _load_durable_daily_bar_frame(symbol: str) -> pd.DataFrame:
     return _set_daily_bar_source(_normalize_daily_bar_frame(df), DAILY_BAR_SOURCE_CACHE)
 
 
+def _apply_daily_bar_volume_policy(frame: pd.DataFrame) -> pd.DataFrame:
+    """Only share-denominated volume is written; an IB row keeps its prices.
+
+    Never a rescale. The measured IB/Yahoo ratio is symbol-dependent - SPY 1.0x,
+    TSLA 56x, AAPL 81x, A 162x, NVDA 188x - so a x100 conversion would replace a
+    visible error with an invisible one.
+
+    **`unknown` legacy rows keep their volume**, deliberately. Blanking them
+    would empty the volume column of the entire existing store between this step
+    and the step-4 backfill, and an AVWAP with no weights is not a safer answer
+    than one with an old weight - it is no answer at all, for every symbol,
+    live. That grandfathering ends when the backfill's exit gate reads zero rows
+    with `volume_unit != shares`.
+    """
+    if frame is None or frame.empty or DAILY_BAR_UNIT_COLUMN not in frame.columns:
+        return frame
+    blanked = frame[DAILY_BAR_UNIT_COLUMN].astype("string").str.strip().str.lower()
+    mask = blanked == DAILY_BAR_UNIT_LOTS_RTH
+    if not bool(mask.any()):
+        return frame
+    out = frame.copy()
+    out.loc[mask.to_numpy(), "volume"] = float("nan")
+    return out
+
+
 def _write_daily_bar_parquet(path: Path, frame: pd.DataFrame) -> None:
     """Write the store file and stamp its schema name into the Arrow metadata.
 
@@ -2890,9 +2953,9 @@ def _write_daily_bar_parquet(path: Path, frame: pd.DataFrame) -> None:
         import pyarrow as pa
         import pyarrow.parquet as pq
     except Exception:  # pragma: no cover - pyarrow is a hard dependency in practice
-        frame.to_parquet(path, index=False)
+        _apply_daily_bar_volume_policy(frame).to_parquet(path, index=False)
         return
-    table = pa.Table.from_pandas(frame, preserve_index=False)
+    table = pa.Table.from_pandas(_apply_daily_bar_volume_policy(frame), preserve_index=False)
     metadata = dict(table.schema.metadata or {})
     metadata[DAILY_BARS_SCHEMA_METADATA_KEY.encode("utf-8")] = DAILY_BARS_SCHEMA_CURRENT.encode(
         "utf-8"
@@ -4306,7 +4369,11 @@ def calc_anchored_vwap_band_history(df: pd.DataFrame, anchor_date_iso: str) -> d
     for i in range(anchor_idx, len(df)):
         row = df.iloc[i]
         volume = float(row["volume"])
-        if volume <= 0:
+        # R10.V step 3: a blank volume is a bar we cannot weigh (an IB-sourced
+        # row is stored with its prices and no volume rather than a rescaled
+        # number). NaN is not <= 0, so without this one blank bar would poison
+        # the whole accumulation. The sigma formula itself is untouched.
+        if not (volume > 0):
             continue
         tp = (float(row["open"]) + float(row["high"]) + float(row["low"]) + float(row["close"])) / 4.0
         cum_vol += volume
@@ -12468,7 +12535,10 @@ def build_earnings_anchor_candidate(
     gap_size = abs(gap_open - prev_close)
     gap_atr_multiple = gap_size / atr20
 
-    avg_vol_20 = int(pre_gap["volume"].tail(20).mean()) if len(pre_gap) >= 20 else 0
+    # R10.V step 3: a stored bar may carry no volume at all. `mean()` already
+    # skips blanks; twenty blanks in a row give NaN, and `int(nan)` raises - so
+    # the unmeasurable case reads 0 here exactly as a short history does.
+    avg_vol_20 = (_coerce_int(pre_gap["volume"].tail(20).mean()) or 0) if len(pre_gap) >= 20 else 0
     last_price = float(gap_row["close"])
     market_cap = 0
 
@@ -16087,7 +16157,9 @@ def calc_anchored_vwap_bands(df: pd.DataFrame, anchor_idx: int):
     for i in range(anchor_idx, len(df)):
         row = df.iloc[i]
         v = float(row["volume"])
-        if v <= 0:
+        # A blank volume is unmeasurable weight, skipped exactly like a zero
+        # (R10.V step 3). NaN fails `<= 0`, which would otherwise poison cumVol.
+        if not (v > 0):
             continue
         tp = (row["open"] + row["high"] + row["low"] + row["close"]) / 4.0
         cumVol += v
@@ -22801,7 +22873,9 @@ def _evaluate_priority_snapshot_for_date(
 
     last_row = get_last_daily_row_for_date(daily_ohlc, last_trade_date)
     last_close = float(last_row["close"]) if last_row else None
-    last_volume = float(last_row["volume"]) if last_row else None
+    # A blank volume is None (unmeasured), never 0 - `last_volume` is a bucketed
+    # liquidity factor, and 0 would read as "illiquid" rather than "unknown".
+    last_volume = _to_float(last_row["volume"]) if last_row else None
     atr20 = compute_atr_from_ohlc(daily_ohlc, last_trade_date)
     trend_label = compute_trend_label_20d(daily_ohlc, last_trade_date)
     previous_day_range_summary = assess_previous_day_range_break(

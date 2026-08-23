@@ -8,6 +8,62 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 night - R10.V step 3: the store takes shares, and a collision prefers them
+
+**Branch `phase05-integration-blitz`.** The behaviour-changing step, and the one
+that makes the splice structurally impossible rather than merely unlikely.
+
+**An IB row is written with its prices and NO volume.** Not a rescaled number:
+the measured ratio is symbol-dependent (SPY 1.0x, TSLA 56x, AAPL 81x, A 162x,
+NVDA 188x), so a x100 conversion would replace a visible error with an invisible
+one. The row says `volume_unit=lots_rth`, so the absence is explained rather than
+merely present.
+
+**A date collision now prefers `shares` > `unknown` > blanked**, in either
+arrival order. `keep="last"` handed the session to whichever scan ran last, which
+is exactly how a share-denominated Yahoo row was replaced by an IB row measured
+in round lots. Among rows of equal standing the later one still wins - the
+previous behaviour, preserved. **The rank follows the DATA, not the label**: a
+row whose unit says `shares` but whose number is missing cannot outrank one that
+has a number.
+
+**The deliberate exception, stated rather than buried: `unknown` legacy rows keep
+their volume.** Blanking them would empty the volume column of the entire
+existing store between this step and the step-4 backfill, and an AVWAP with no
+weights is not a safer answer than one with an old weight - it is no answer at
+all, for every symbol, live. The grandfathering ends at step 4's exit gate: zero
+rows with `volume_unit != shares`.
+
+**A blanked row stays readable.** `dropna` now disqualifies a row only for a
+missing PRICE - dropping it for a missing volume would delete the price bar too -
+and both weighting loops skip a blank exactly as they already skipped a zero.
+That guard matters: **NaN is not `<= 0`**, so without it a single blank bar would
+poison `cumVol` and take the whole level with it. **The sigma formula is
+untouched** (plan.md sec 5); what changed is which bars enter it, on the rule the
+function already applied to a zero.
+
+**Three more readers were made blank-safe**, found by looking rather than by
+waiting for a crash: `chart_snapshot.load_d1_bars` emits `0.0` (what it already
+emits for a file with no volume column - one "no data" value, not two, and NaN
+must never reach the paint path); `avg_vol_20` reads 0 when twenty bars are all
+blank, which correctly **rejects** the candidate at the liquidity gate rather
+than raising on `int(nan)`; `last_volume` becomes `None`, never 0, because it is
+a bucketed liquidity factor and 0 reads as "illiquid" rather than "unknown".
+
+**No golden fixture moved.** `git diff tests/fixtures/` is empty, as the step-1
+baseline predicted for every step that does not touch the band formula.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4265 passed / 19 subtests**, exit **0** (was 4247; +18) |
+| `git diff tests/fixtures/` | empty - ground rule 1 holds |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Next:** R10.V step 4 - the batched yfinance backfill, with a dated
+pre-backfill copy in `evidence_frozen/` and a manifest. Zero IB traffic.
+
+---
+
 ## 2026-08-22 night - R10.V step 2: the store records where each row came from
 
 **Branch `phase05-integration-blitz`.** Provenance travels **with the row**, not

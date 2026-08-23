@@ -21,6 +21,33 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 (night) - R10.V step 3: the store takes shares, and a collision prefers them
+
+- **An IB row is written with its prices and NO volume**, never a rescaled
+  number - the ratio is symbol-dependent, so a x100 conversion would replace a
+  visible error with an invisible one. The row carries `volume_unit=lots_rth`,
+  so the absence is explained rather than merely present.
+- **A date collision prefers `shares` > `unknown` > blanked**, in either arrival
+  order; among equals the later row still wins, which is the previous behaviour.
+  `keep="last"` alone is how a share-denominated row was replaced by a
+  round-lot one. **The rank follows the data, not the label**: a row labelled
+  `shares` with no number cannot outrank one that has a number.
+- **Deliberate exception: `unknown` legacy rows keep their volume** until step
+  4's backfill. Blanking them would empty the volume column of the whole store,
+  and an AVWAP with no weights is not a safer answer than one with an old weight
+  - it is no answer at all, live, for every symbol.
+- **A blanked row stays readable.** `dropna` disqualifies a row only for a
+  missing price, and both weighting loops skip a blank exactly as they already
+  skipped a zero - **NaN is not `<= 0`**, so one blank bar would otherwise poison
+  the accumulation. **The sigma formula is untouched**; what changed is which
+  bars enter it.
+- **Three more readers made blank-safe**: `chart_snapshot.load_d1_bars` emits
+  `0.0` (never NaN on the paint path), `avg_vol_20` reads 0 and therefore
+  **rejects** an unmeasurable candidate at the liquidity gate instead of raising
+  on `int(nan)`, and `last_volume` becomes `None` rather than 0 because it is a
+  bucketed liquidity factor where 0 reads as "illiquid", not "unknown".
+- **No golden fixture moved**, as predicted.
+
 ### 2026-08-22 (night) - R10.V step 2: the daily store records where each row came from
 
 - **Provenance is per ROW, not per frame.** `source` (`yahoo` | `ibkr` |
