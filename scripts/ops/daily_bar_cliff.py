@@ -200,6 +200,76 @@ def scan_store(directory: Path | str, *, limit: int | None = None) -> StoreCliff
     return report
 
 
+# ---------------------------------------------------------------------------
+# the nightly health measurement (R10.V step 6)
+# ---------------------------------------------------------------------------
+HEALTH_FILENAME = "daily_bar_units.json"
+
+
+def measure_store_health(directory: Path | str) -> dict:
+    """Rows by unit, files by schema, and the cliff scan - one pass, read-only.
+
+    Measured at 7.4 s over 1,958 files, which is far too slow for a health tile
+    that a human is waiting on, so this runs on the nightly snapshot job and the
+    tile reads what it wrote. A tile that has to wait 7 s is a tile nobody opens.
+    """
+    import pandas as pd
+
+    root = Path(directory)
+    units: dict[str, int] = {}
+    schemas: dict[str, int] = {}
+    files_with_unknown = 0
+    rows_total = 0
+    try:
+        paths = sorted(root.glob("*.parquet"))
+    except OSError:
+        paths = []
+    for path in paths:
+        try:
+            from master_avwap_lib.legacy import daily_bars_schema_version
+
+            schema = daily_bars_schema_version(path)
+        except Exception:
+            schema = "unknown"
+        schemas[schema] = schemas.get(schema, 0) + 1
+        try:
+            frame = pd.read_parquet(path, columns=["volume_unit"])
+        except Exception:
+            # A file with no unit column is every row unknown, and saying so is
+            # the point - "no column" must not read as "nothing to report".
+            units["unknown"] = units.get("unknown", 0)
+            files_with_unknown += 1
+            continue
+        rows_total += len(frame)
+        counts = frame["volume_unit"].value_counts()
+        for unit, count in counts.items():
+            units[str(unit)] = units.get(str(unit), 0) + int(count)
+        if int(counts.get("shares", 0)) != len(frame):
+            files_with_unknown += 1
+    cliff = scan_store(root)
+    return {
+        "store_dir": str(root),
+        "files": len(paths),
+        "rows": rows_total,
+        "rows_by_volume_unit": units,
+        "files_by_schema": schemas,
+        "files_not_all_shares": files_with_unknown,
+        "cliff": cliff.as_dict(),
+    }
+
+
+def write_store_health(directory: Path | str, out_path: Path | str, *, measured_at: str) -> dict:
+    """Measure and file it. `measured_at` is passed in so the caller owns the clock."""
+    payload = measure_store_health(directory)
+    payload["measured_at"] = measured_at
+    target = Path(out_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+
+    target.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
 def _main(argv: list[str]) -> int:  # pragma: no cover - operator convenience
     import argparse
     import json
@@ -212,7 +282,20 @@ def _main(argv: list[str]) -> int:  # pragma: no cover - operator convenience
     parser.add_argument("--dir", type=Path, default=Path(MASTER_AVWAP_DAILY_BARS_DIR))
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--health-out", type=Path, default=None,
+                        help="write the nightly unit/cliff health file and exit")
     args = parser.parse_args(argv)
+
+    if args.health_out:
+        from datetime import datetime, timezone
+
+        payload = write_store_health(
+            args.dir, args.health_out,
+            measured_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        print(json.dumps({k: v for k, v in payload.items() if k != "cliff"}, indent=1))
+        print(f"cliffed {payload['cliff']['cliffed']} of {payload['cliff']['measurable']}")
+        return 0
 
     report = scan_store(args.dir, limit=args.limit)
     if args.json:

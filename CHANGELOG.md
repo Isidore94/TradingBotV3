@@ -21,6 +21,31 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.V steps 5 and 6: nothing to re-freeze, and a nightly unit check
+
+- **Step 5 is a recorded no-op.** No AVWAP-derived golden fixture moved across
+  the whole packet - the only addition under `tests/fixtures/` is the control
+  step 1 created. That was predicted in advance and for a stated reason
+  (fixtures feed fixed bars, so repairing the store changes what the desk
+  computes and not what the suite computes), which is what makes it evidence.
+- **A `daily_bar_units` System Health tile** reports rows by `volume_unit`,
+  files by schema, files not all-shares, and the cliff count. It **reads and
+  never measures**: the measurement takes ~7 s over 1,958 files and rides the
+  nightly evidence-snapshot job instead, because a tile a human waits on is a
+  tile nobody opens. A failure there is logged and never fails the backup.
+- **`lots_rth` degrades; `unknown` does not.** A round-lot row means something
+  got past a write seam that refuses IB volume - the splice starting again. The
+  188 `unknown` rows are the known residue Yahoo cannot supply, named in the
+  backfill manifest and unclearable by anyone; they are reported in full and set
+  no status. An alarm nobody can clear is an alarm people learn to ignore.
+- **The cliff count is reported and never sets the status**, because after the
+  backfill 19 all-`yahoo` files still step >20x - a real market event, not a
+  unit mix. A measurement older than two nights degrades, since it cannot answer
+  today's question. No measurement at all is **unknown**, not clean.
+- One cliff definition (`scripts/ops/daily_bar_cliff.py`) serves both the
+  backfill manifest and the nightly check, so "over 20x" means the same thing in
+  both places.
+
 ### 2026-08-23 - R10.V step 4: the daily store is repaired
 
 - **99.98% of rows are now share-denominated** - 1,116,982 of 1,117,170 - and

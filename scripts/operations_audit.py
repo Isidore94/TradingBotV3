@@ -56,7 +56,7 @@ import tempfile
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -2146,6 +2146,111 @@ def _required_inventory_view(checks: list[dict[str, Any]]) -> list[dict[str, Any
     return rows
 
 
+def _daily_bar_units_check(now: datetime, local_tz, diagnostics: Path | None = None) -> dict[str, Any]:
+    """Is the durable daily store still single-unit? (R10.V step 6)
+
+    Read from the file the nightly snapshot job writes, never measured here: the
+    measurement takes ~7 s over 1,958 files, and a tile a human waits on is a
+    tile nobody opens.
+
+    The gate is the **unit**, not the cliff. A >20x volume step is a real thing
+    that happens to real stocks - after the 2026-08-23 backfill, 19 all-`yahoo`
+    files still show one (DJT at its listing, OKLO's de-SPAC) - so a cliff in a
+    single-source file means market event, not defect. It is reported and it
+    never sets the status.
+    """
+    from ops.daily_bar_cliff import HEALTH_FILENAME
+
+    root = Path(diagnostics) if diagnostics is not None else Path(get_diagnostics_dir())
+    path = root / HEALTH_FILENAME
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _check(
+            "daily_bar_units", "Daily bar units", STATUS_UNKNOWN,
+            "No daily-bar unit measurement has been filed yet. The nightly evidence "
+            "snapshot writes it; until it runs, the store's unit mix is unmeasured - "
+            "which is not the same as clean.",
+            source=path,
+        )
+
+    units = payload.get("rows_by_volume_unit") or {}
+    rows = int(payload.get("rows") or 0)
+    shares = int(units.get("shares") or 0)
+    other = max(0, rows - shares)
+    cliffed = int((payload.get("cliff") or {}).get("cliffed") or 0)
+    measured_at = str(payload.get("measured_at") or "")
+    age_hours = None
+    try:
+        stamp = datetime.fromisoformat(measured_at)
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        age_hours = (now.astimezone(timezone.utc) - stamp).total_seconds() / 3600.0
+    except ValueError:
+        pass
+
+    details = {
+        "rows": rows,
+        "rows_shares": shares,
+        "rows_other": other,
+        "rows_by_volume_unit": units,
+        "files_by_schema": payload.get("files_by_schema") or {},
+        "files_not_all_shares": payload.get("files_not_all_shares"),
+        "cliffed_files": cliffed,
+        "measured_at": measured_at,
+    }
+    share_pct = (shares / rows * 100.0) if rows else 0.0
+    cliff_note = (
+        f" {cliffed} file(s) still step >20x; in an all-shares file that is a market "
+        "event, not a unit mix."
+        if cliffed
+        else " No file steps >20x."
+    )
+
+    # A measurement older than two nights cannot answer today's question.
+    if age_hours is not None and age_hours > 48:
+        return _check(
+            "daily_bar_units", "Daily bar units", STATUS_DEGRADED,
+            f"The unit measurement is {age_hours / 24:.1f} days old ({measured_at}), so it "
+            "cannot say what the store holds now. Check that the evidence snapshot task "
+            "is running.",
+            source=path, details=details,
+        )
+    # Two different states, and only one of them is actionable.
+    #
+    # `lots_rth` is a REGRESSION: the write seam refuses IB volume, so a single
+    # such row means something got past it, and that is the splice starting
+    # again. Degraded.
+    #
+    # `unknown` is the known residue - 188 rows Yahoo has no data for, in files
+    # named in the backfill manifest. Nobody can clear it without a different
+    # vendor, and a permanent alarm is an alarm people learn to ignore. It is
+    # reported in full and it does not set the status.
+    lots = int(units.get("lots_rth") or 0)
+    unknown = int(units.get("unknown") or 0)
+    residue = (
+        f" {unknown:,} row(s) remain unmeasured - Yahoo has no data for them and the "
+        "backfill manifest names the files."
+        if unknown
+        else ""
+    )
+    if lots:
+        return _check(
+            "daily_bar_units", "Daily bar units", STATUS_DEGRADED,
+            f"{lots:,} of {rows:,} rows carry IB round-lot volume. The write seam refuses "
+            "it, so this means something got past it - a volume-weighted AVWAP computed "
+            "across those rows is the R10.V splice starting again."
+            + residue + cliff_note,
+            source=path, details=details,
+        )
+    return _check(
+        "daily_bar_units", "Daily bar units", STATUS_HEALTHY,
+        f"{shares:,} of {rows:,} rows are share-denominated ({share_pct:.2f}%); no row "
+        "carries IB round-lot volume." + residue + cliff_note,
+        source=path, details=details,
+    )
+
+
 def _daily_bar_history_note(manifest_dir: Path | None) -> tuple[str, dict[str, Any]]:
     """What the run manifests say the store already contains (R10.0b).
 
@@ -2414,6 +2519,7 @@ def build_operations_audit(
         _universe_check(universe_files, market_probe, market_date, moment, local_tz),
         _disk_check(diagnostics, moment),
         _daily_bar_source_check(moment, local_tz, diagnostics / "run_manifests"),
+        _daily_bar_units_check(moment, local_tz, diagnostics),
         _evidence_snapshot_check(
             moment, local_tz, staging=diagnostics.parent / "machine_cache" / "evidence_snapshots"
         ),

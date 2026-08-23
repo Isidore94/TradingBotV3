@@ -8,6 +8,46 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.V steps 5 and 6: a recorded no-op, and the nightly unit check
+
+**Branch `phase05-integration-blitz`.**
+
+**Step 5 found nothing to re-freeze, and that is the result rather than a skip.**
+No AVWAP-derived golden fixture moved across provenance columns, the volume
+policy, the collision rule and a backfill that rewrote 1,116,982 rows; the only
+addition under `tests/fixtures/` is step 1's control. It was predicted before any
+of it ran, for a stated reason - fixtures feed fixed bars - and had one moved at
+step 4 the conclusion would have been that a test reads the live store and step
+1's proof had expired.
+
+**Step 6's tile reads; it never measures.** The measurement is ~7 s over 1,958
+files, so it rides the nightly evidence-snapshot job and the tile reads the file
+it writes. A failure in the measurement is logged and never fails the backup it
+rides on.
+
+**Two states, one of them actionable.** A `lots_rth` row means something got past
+a write seam that refuses IB volume - degraded. The **188 `unknown` rows** are the
+residue Yahoo has no data for, named in the backfill manifest; nobody can clear
+them, so they are reported in full and set no status. The **53 cliffed files** are
+reported the same way: 19 of them are all-`yahoo` and still step >20x because a
+20x volume step is a real market event. A measurement older than two nights
+degrades; no measurement at all is **unknown**, not clean.
+
+Live tile right now: `healthy | 1,116,982 of 1,117,170 rows are share-denominated
+(99.98%); no row carries IB round-lot volume. 188 row(s) remain unmeasured...
+53 file(s) still step >20x; in an all-shares file that is a market event, not a
+unit mix.`
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4304 passed / 19 subtests**, exit **0** (was 4290; +14) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Next:** R10.V step 7 - the tracker catch-up trims its frames to the session it
+is recomputing (the S2 defect).
+
+---
+
 ## 2026-08-23 - R10.V step 4: the store is repaired. 99.98% of rows are shares.
 
 **Branch `phase05-integration-blitz`.** The backfill ran against the live store

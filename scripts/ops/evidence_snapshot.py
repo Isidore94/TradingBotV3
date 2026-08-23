@@ -556,6 +556,29 @@ def main() -> int:
     if args.prune:
         removed = prune(args.staging)
         print(f"pruned {len(removed)} snapshot(s): {', '.join(removed) or 'none'}")
+
+    # R10.V step 6: the daily-bar unit measurement rides the nightly job rather
+    # than the health tile, because it takes ~7 s over 1,958 files and a tile a
+    # human waits on is a tile nobody opens. A failure here must not fail the
+    # snapshot - the backup is the job, this is a reading taken beside it.
+    try:
+        from datetime import datetime, timezone
+
+        from ops.daily_bar_cliff import HEALTH_FILENAME, write_store_health
+        from project_paths import MASTER_AVWAP_DAILY_BARS_DIR, get_diagnostics_dir
+
+        health = write_store_health(
+            MASTER_AVWAP_DAILY_BARS_DIR,
+            Path(get_diagnostics_dir()) / HEALTH_FILENAME,
+            measured_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        print(
+            f"daily-bar units: {health['rows_by_volume_unit'].get('shares', 0):,} shares of "
+            f"{health['rows']:,} rows, {health['cliff']['cliffed']} file(s) over "
+            f"{health['cliff']['threshold']:g}x"
+        )
+    except Exception:
+        logging.exception("daily-bar unit health measurement skipped")
     return 0
 
 

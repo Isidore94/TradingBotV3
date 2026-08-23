@@ -201,6 +201,24 @@ def _measured_fixture(tmp_path: Path) -> tuple[Path, Path, datetime]:
             "entries": [],
         },
     )
+    # R10.V step 6: last night's daily-bar unit measurement, so the store-quality
+    # dimension is MEASURED here like every other one rather than adding a second
+    # unknown. The check reads only this file - it never opens the store.
+    _write(
+        diagnostics / "daily_bar_units.json",
+        {
+            "store_dir": "C:/TradingBotData/data/daily_bars",
+            "files": 1958,
+            "rows": 1_117_170,
+            "rows_by_volume_unit": {"shares": 1_117_170},
+            "files_by_schema": {"v2": 1958},
+            "files_not_all_shares": 0,
+            "cliff": {"files": 1958, "measurable": 1958, "unmeasurable": 0,
+                      "cliffed": 0, "median_cliff_ratio": None, "threshold": 20.0,
+                      "window": 10, "worst": []},
+            "measured_at": "2026-07-13T09:05:00+00:00",
+        },
+    )
     _write(
         diagnostics / "writer_health.json",
         {
@@ -388,6 +406,9 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         "ai_jobs",
         # R10.0b: which source the durable daily-bar store takes volume from.
         "daily_bar_source",
+        # R10.V: whether the durable daily store is still single-unit. Read from
+        # the file the nightly snapshot job writes; the tile never measures.
+        "daily_bar_units",
         # R10.A: the nightly dated backup of the hot evidence the cold push
         # excludes on purpose (data/runtime, the home-root files, diagnostics).
         "evidence_snapshot",
