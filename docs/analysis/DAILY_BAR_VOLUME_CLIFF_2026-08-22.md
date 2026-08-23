@@ -93,6 +93,36 @@ TMO target move looks like from the inside.
 > window, which suggests the 08-20 series was itself mixed — a Yahoo window over
 > IB history. It does not change the verdict.
 
+
+> ### Outcome — 2026-08-23: the store is repaired
+>
+> R10.V step 4's backfill ran against the live store after a full dry run. One
+> batched yfinance sweep, `auto_adjust=False`, **zero IB traffic**, prices never
+> touched, a verified frozen copy of the whole directory taken first.
+>
+> | | before | after |
+> |---|---|---|
+> | rows in `shares` | — | **1,116,982 of 1,117,170 (99.98%)** |
+> | files with a >20× step | **1,795** | **53** |
+> | median step ratio | 158× | **29×** |
+> | files on `daily_bars_schema=v2` | 0 | **1,920 of 1,958** |
+>
+> AAL, the case this report was written around: 2026-07-24 74,218,900 → 07-27
+> **93,953,900**, where it read 836,047 before.
+>
+> **38 files were deliberately left alone and named**: 9 Yahoo has no data for
+> (BK, CPRX, CWAN, EXPI, IAC, LC, NUVL, PRA, VSCO — each confirmed individually),
+> 13 where Yahoo's history covered under 90% of the stored rows (a rewrite would
+> have changed 2 of EA's 787 rows and *manufactured* a boundary), and 13 the
+> rewrite would have made worse.
+>
+> **The 53 residual cliffs are not unit artifacts.** 19 of them are fully
+> rewritten, all-`yahoo` files whose volume genuinely steps: DJT at its
+> 2024-01-16 listing, OKLO's 2023-09-14 de-SPAC, POET, FFAI, QXO, SOXS. §5's
+> option-B/C framing assumed a cliff implied a unit mix; after a single-source
+> rewrite it does not, which is why the packet's exit gate moved to
+> **`volume_unit != shares` = 0** with the cliff detector as a secondary signal.
+
 ---
 
 ## 1. The cliff, measured (a)

@@ -1331,9 +1331,21 @@ second scoreboard.
        function only.
 
     *Exit gate.* Fixtures re-frozen with rationale; backfill manifest filed;
-    the cliff detector reads **0 files > 20×** on the live store; one live scan
+    **0 rows with `volume_unit != shares` that Yahoo can supply**; one live scan
     day on the repaired store. **No scoring, σ, ranking or threshold change
     anywhere.**
+
+    *Gate correction (2026-08-23, measured).* The gate was written as "the cliff
+    detector reads **0 files > 20×**". That is not achievable by any correct
+    implementation, because **a 20× volume step is a real thing that happens to
+    real stocks**: after a full single-source rewrite, 19 files still show one —
+    DJT at its 2024-01-16 listing, OKLO's 2023-09-14 de-SPAC, POET, FFAI, QXO,
+    SOXS — every row of them `source=yahoo`, so the step cannot be a unit
+    artifact. The **unit** gate above is the falsifiable one; the cliff detector
+    stays as a secondary signal, and a cliff in an all-`shares` file means
+    "market event", not "defect". Measured after the applied backfill:
+    **1,116,982 of 1,117,170 rows (99.98%) are `shares`**, cliffed files
+    1,795 → 53, median residual ratio 158× → 29×, unmeasurable 0.
 
 **Order (trader, 2026-08-22).** R9.4 first, then R10.0 in parallel; **R10.A
 starts only after the trader accepts R10.0's decision register**; R9.5 after

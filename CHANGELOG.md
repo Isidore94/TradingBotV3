@@ -21,6 +21,41 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.V step 4: the daily store is repaired
+
+- **99.98% of rows are now share-denominated** - 1,116,982 of 1,117,170 - and
+  files carrying a >20x volume step fell from **1,795 to 53**, median residual
+  ratio 158x to 29x, with 1,920 of 1,958 files on `daily_bars_schema=v2`. AAL:
+  2026-07-24 74,218,900 -> 07-27 **93,953,900**, where it read 836,047 before.
+- **Prices were not touched**; only volume and the two provenance columns moved.
+  A verified frozen copy of the whole directory was taken first
+  (`evidence_frozen\daily_bars_pre_backfill_2026-08-23`), and the run refuses to
+  start if that freeze is incomplete. Zero IB traffic.
+- **Two refusals, both learned from the dry run rather than guessed.** A file
+  whose rows Yahoo covers under 90% is left alone - a rewrite would have changed
+  **2 of EA's 787 rows**, which manufactures a boundary rather than removing one
+  (13 files). A file the run would leave with a cliff it did not have, or a
+  bigger one, is left alone (13 files). Both named in the manifest.
+- **`CON_.parquet` holds `CON`**, and a batched download silently drops the odd
+  ticker (BK returned empty in a batch and full alone), so every missing symbol
+  gets one individual retry. After that, **9 symbols genuinely have no Yahoo
+  data** and their files are untouched and named.
+- **The exit gate was corrected against measurement.** "0 files > 20x" is not
+  achievable by any correct implementation: 19 fully-rewritten, all-`yahoo` files
+  still step >20x - DJT at its listing, OKLO's de-SPAC, POET, FFAI, QXO, SOXS -
+  because a 20x volume step is a real market event. The gate is now **0 rows with
+  `volume_unit != shares` that Yahoo can supply**, with the cliff detector as a
+  secondary signal.
+- **A reporting bug found by checking**: the applied manifest said 44
+  cliffed-after where an independent scan said 53 - the nine no-data files kept
+  their cliffs and were never counted. Fixed with a test that asserts the
+  manifest reconciles with `scan_store()`, and a reconciliation note filed beside
+  the manifest rather than the manifest being rewritten.
+- New: `scripts/ops/daily_bar_cliff.py` (one cliff definition, shared by the
+  backfill and step 6's health check; the boundary date is refined to the bar the
+  step happened on, because a rolling median crosses about half a window early)
+  and `scripts/ops/backfill_daily_bar_volume.py` (dry run by default).
+
 ### 2026-08-22 (night) - R10.V step 3: the store takes shares, and a collision prefers them
 
 - **An IB row is written with its prices and NO volume**, never a rescaled

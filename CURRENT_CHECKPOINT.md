@@ -8,6 +8,86 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.V step 4: the store is repaired. 99.98% of rows are shares.
+
+**Branch `phase05-integration-blitz`.** The backfill ran against the live store
+on the Saturday with no desk process running and no scan due (quiet hours are
+weekdays), after a dry run over all 1,958 files.
+
+| | before | after |
+|---|---|---|
+| rows in `shares` | — | **1,116,982 of 1,117,170 (99.98%)** |
+| files carrying a >20x volume step | **1,795** | **53** |
+| median step ratio | 158x | **29x** |
+| files on `daily_bars_schema=v2` | 0 | **1,920 of 1,958** |
+| unmeasurable | 0 | 0 |
+
+AAL is the case the reports were written around: 2026-07-24 74,218,900 →
+2026-07-27 **93,953,900**, where it read 836,047 this morning. Every sampled
+file (AAL, NVDA, TSLA, AAPL, SPY) is v2, all-`shares`, all-`yahoo`.
+
+**Prices were not touched.** Only `volume`, `source` and `volume_unit` were
+written; open/high/low/close and the set of dates came out exactly as they went
+in, because prices in this store are fine and a second unmeasured change inside
+this one would be untraceable.
+
+**A verified frozen copy came first**, `evidence_frozen\daily_bars_pre_backfill_2026-08-23`,
+file-count and byte-total checked, and the run refuses to start if the freeze is
+incomplete. Zero IB traffic: yfinance only, batched, `auto_adjust=False`.
+
+**Two refusals came out of the dry run, not out of a guess.** Both are now
+tested.
+
+* **Coverage.** Yahoo returned a near-empty history for EA, TMHC, JHG, SATS and
+  AVNS - a rewrite would have changed **2 of EA's 787 rows**. That does not
+  repair a file; it manufactures a second unit boundary inside one. 13 files
+  skipped, named, left exactly as they were.
+* **Worsening.** Any file this run would leave with a cliff it did not have (or
+  a bigger one) is left alone: a repair that can make a file worse is not a
+  repair. 13 files skipped.
+
+Also learned live: a batched download silently drops the odd ticker (**BK came
+back empty in a batch and I retried it individually**), and `CON_.parquet` holds
+`CON` - Windows cannot name a file after a device, and Yahoo has never heard of
+`CON_`. Both fixed. After the retry pass, **9 symbols genuinely have no Yahoo
+data** (BK, CPRX, CWAN, EXPI, IAC, LC, NUVL, PRA, VSCO - confirmed one at a time)
+and their files are untouched and named.
+
+**The exit gate as written could not be met, and the reason is not a defect.**
+"0 files > 20x" is unachievable, because a 20x volume step is a real thing that
+happens to real stocks: after a full single-source rewrite, 19 files still show
+one - DJT at its 2024-01-16 listing, OKLO's 2023-09-14 de-SPAC, POET, FFAI, QXO,
+SOXS - with **every row `source=yahoo`**, so the step cannot be a unit artifact.
+plan.md's gate is corrected to the falsifiable one: **0 rows with
+`volume_unit != shares` that Yahoo can supply**. The cliff detector stays as a
+secondary signal, where a cliff in an all-`shares` file reads "market event".
+
+**A reporting bug of mine, found by checking rather than by trusting.** The
+applied run's manifest said 44 cliffed-after; an independent scan of the same
+store said **53**. The store was right and the summary was nine short - the nine
+files Yahoo had no data for kept their cliffs and were never added to the
+after-count. Fixed, with a test that asserts the manifest reconciles against
+`scan_store()`, and a reconciliation note filed beside the manifest rather than
+the manifest being quietly rewritten. The manifest also carried the frozen
+copy's UTC date while naming itself with the local date; both now use the run's
+stamp.
+
+**Artifacts** (machine-local, under `evidence_frozen\`): the pre-backfill copy,
+`daily_bars_pre_backfill_manifest_2026-08-22.json` (per-file rows rewritten, rows
+left unknown, first-cliff date and ratio before and after), and
+`daily_bars_pre_backfill_reconciliation_2026-08-23.json`.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4290 passed / 19 subtests**, exit **0** (was 4265; +25) |
+| live store scan | 53 cliffed / 1,958 measurable / 0 unmeasurable |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+**Next:** R10.V step 5 - re-freeze any AVWAP-derived golden fixture that moved
+(predicted: none), then step 6's health tile and step 7's forming-bar trim.
+
+---
+
 ## 2026-08-22 night - R10.V step 3: the store takes shares, and a collision prefers them
 
 **Branch `phase05-integration-blitz`.** The behaviour-changing step, and the one
