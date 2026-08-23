@@ -8,6 +8,32 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 week - branch `testing-week-2026-08-24`
+
+Cut from `phase05-integration-blitz` at **`1a2fbde`**, which carries the whole
+2026-08-17 week: R9 (five items), R10.0/R10.0b, the R10.V daily-bar unit repair
+(all seven steps, backfill applied to the live store), the R10.A ledger half
+(rule registry, ledger, dual-write canary, no-fabrication finalization, the
+after-close sweep, registration context, health tiles) and both review rounds -
+Fable's and Sol's three reproduction blockers.
+
+**The tree is identical to `phase05-integration-blitz`**; only the branch name
+changed, so the desk's source launch is unaffected. The week's work continues
+here, and `phase05-integration-blitz` stays where it is as the packet branch.
+
+**Nothing merges to `main` until a live-session validation day passes**
+(plan.md sec 6). Owed on this branch: R10.V's live scan day, the R10.A
+mechanics canary (one live weekday with `outcome_sweep_autorun="on"`), R9's four
+live proofs, and the 2026-08-21 fluidity gates.
+
+| Check at the cut | Result |
+|---|---|
+| `pytest tests/ -q` | **4518 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **58/58**, exit 0 |
+
+---
+
 ## 2026-08-23 - Sol's three blockers are fixed. Autorun is safe to enable.
 
 **Branch `phase05-integration-blitz`.** plan.md Phase 0.7 / R10.A. Sol reproduced
