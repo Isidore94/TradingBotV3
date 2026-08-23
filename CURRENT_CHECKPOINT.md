@@ -8,6 +8,66 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 evening - R10.0b COMPLETE: the daily-bar volume cliff. STOP.
+
+**Branch `phase05-integration-blitz`.** Read-only. **Nothing was changed** - no
+fetch, normalize, scanner or level code touched, no parquet written. Report:
+[`docs/analysis/DAILY_BAR_VOLUME_CLIFF_2026-08-22.md`](docs/analysis/DAILY_BAR_VOLUME_CLIFF_2026-08-22.md),
+classified in `docs/README.md`. **The program stops here for the trader's
+decision**, per the release's §3.
+
+**Measured.** 1,958 parquet files, 1,737 measurable. **1,227 (71%) carry an
+early/late volume ratio > 20x**, median **158x** - matching the release note's
+1,227 exactly. First-drop dates scatter across months (07-27: 473, 06-04: 302,
+05-26: 175, ...), so it is per-symbol and not one event.
+
+**The finding that constrains every fix: the factor is NOT 100.** Parquet vs
+Yahoo for 2026-08-20 - SPY 1.0x and ACHC 1.0x (shares, agree), but TSLA **56.5x**,
+AAPL **81.3x**, A **161.9x**, NVDA **188.0x**. A blanket x100 backfill would
+replace a wrong number with a differently wrong one and destroy the ability to
+tell afterwards.
+
+**Root cause located.** `bounce_bot_lib/legacy.py:630` has
+`IB_HISTORICAL_VOLUME_LOT_SIZE = 100`, applied at `:11376`, with a comment
+recording that this exact bug was already found and fixed once *in that engine*
+("without this the ratio deflates ~100x and gates out every bounce alert").
+**`master_avwap_lib` - which owns the daily-bar parquet - has no lot handling at
+all.** And the parquet keeps **no provenance**: six columns, pandas-typing
+metadata only. `fetch_daily_bars` carries a source on the in-memory frame and it
+is dropped before the write, so no existing row can be asked which source made it.
+
+**Blast radius.** Every in-session run on 2026-08-21 used IB
+(1,222/422/468/460/459/450 vs 9-22 Yahoo), so **the 08-21 scan ran on cliffed
+volume**; the post-close run reverted to Yahoo. AVWAP bands are volume-weighted,
+so the D1 scanner, the setup tracker, `chart_snapshot`'s D1 payloads,
+`human_focus_tracking._load_durable_daily_frame` and `ai_jobs/cohorts` all
+inherit it. **The M5 Strength Board is NOT affected** - it does its own batched
+yfinance 5m download and never reads this store.
+
+**Four options in the report** with their golden-fixture impact. My
+recommendation is **C: provenance first (source + unit column, plus the missing
+rescale on the master_avwap IB path), then refetch history with the AVWAP
+fixtures re-frozen in the same packet** - the only order in which the repair is
+verifiable afterwards.
+
+**Deliberately not established:** why the factor is 56x-188x rather than 100x. I
+did not open the IB adapter's bar-request parameters, because that is live fetch
+code and §3 says change nothing and hand off. The explanation is owed.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4172 passed / 19 subtests**, exit **0** |
+
+**Three questions for the trader** (report §7): which option; whether the 08-21
+scan output is to be treated as suspect; and whether the daily-bar fetch should
+pin to one source until this is settled (a one-line change to a live path, so an
+ask rather than something I would do unprompted).
+
+**R10.A's ledger half remains not started**, gated on this decision per the
+release's ordering.
+
+---
+
 ## 2026-08-22 evening - §2 LANDED: snapshot scheduled, `.bak` excluded, source hash added
 
 **Branch `phase05-integration-blitz`.** Trader answers to the audit's §8, applied.
