@@ -23,6 +23,86 @@ trader accepts this register.
 > `bf0b460` stands and is what made the real cause readable.
 
 
+> ### Amendment 2 — 2026-08-22 evening: six corrections, and S1/S2 are PROVEN
+>
+> All measured against the frozen pre/post tracker pair (§0 below) and the
+> outcome CSV. **This amendment supersedes the §1 rows it names.**
+>
+> **(a) Every outcome-CSV number needs its window stated.** My D1d and D2b said
+> "PROVEN\* — number differs". That was a **window mismatch, not a brief error**.
+> On my window (2026-07-24…08-21, 21 sessions, 7,863 registered rows) the figures
+> are 742 duplicate `registered` / 609 ids, 430 duplicate `final`, 1,164 zeros.
+> On the brief's window (2026-08-07…08-21, 11 sessions, 3,855 registered rows)
+> they are **394 / 345, 300, 524** — the brief's numbers **exactly**. Both are
+> PROVEN; neither was wrong. Every figure from this store now carries its window.
+> *(One that still does not reconcile: zeros carrying a prior `12_bar` row is 202
+> on my window and 73 on the brief's; the brief's 28 reproduces on neither, and I
+> am not able to say what window would give it.)*
+>
+> **(b) D5b becomes UNTESTED, not "working as designed" — I tested the wrong
+> family.** `orb_first_candle`, `orb_first_candle_break` and
+> `orb_first_candle_recross` (`bounce_bot_lib/legacy.py:564-566`) have **zero
+> rows** in the outcome store, `intraday_bounces.csv` and `bouncers.txt` — the
+> first-candle flow has **never fired**. The 5,053 rows I found and called
+> "working" belong to `orb_breakout` / `orb_breakdown`, a different family. The
+> claim-kind separation in the code is real and still worth keeping; it has
+> simply never been exercised, which is a different verdict from "correct".
+>
+> **(c) `h1_bar_start_v1` keys on `^h1_`, not the three named engines.** Every
+> `h1_`-prefixed family is 100% minute-30, including the combos:
+> whole file **9,623 / 9,623**; window **6,439 / 6,439**. Per family (whole file):
+> `h1_ema10_bounce` 5,922, `h1_blue_after_red` 1,869, `h1_green_to_yellow` 900,
+> `h1_ema_15` 647, `h1_sma_20` 213, plus 72 across four combo families.
+> *Correction to my own §5.5:* I implied no non-H1 population lands on minute 30.
+> **291 of 6,054 non-H1 rows (4.8%) do.** The rule is still sound because it is
+> conjunctive — family **and** minute — but its precision is 9,623/9,914, not 100%.
+>
+> **(d) S1 and S2 are PROVEN, and S1 is worse than "exits move".** `.bak` is
+> rotated on every save (`os.replace`, `master_avwap_lib/legacy.py:4907`) and read
+> back only when the main is corrupt (`:4713`), so `.bak` vs main is exactly one
+> run apart. PRE `data_session` 2026-08-19, 9,331 setups; POST 2026-08-20, 9,499;
+> 9,331 common, 168 new.
+>
+> * **S1a — 218 status transitions**, matching the release note exactly:
+>   OPEN→CLOSED 168, **CLOSED→OPEN 35**, **OPEN→UNTRADEABLE 14**, UNTRADEABLE→OPEN 1.
+> * **S1b — settled outcomes are rewritten, not merely shifted.** Among 6,736
+>   setups CLOSED in both runs, at scenario level: **2,737 changed status or
+>   reason**, **1,306 changed exit date**, and **2,618 had their `events` list
+>   dropped entirely while status and `total_r` stayed identical** (history lost,
+>   outcome kept). The worst shape is a same-date rewrite:
+>   `AMCR LONG` `lower_1__full_band3` on **2026-07-28** goes
+>   `TIME_STOP @ 46.69, R 0.577` → `TARGET_HIT @ 45.55, R 0.360`. A trade that
+>   timed out is now recorded as having hit its target, on the same historical
+>   date, at a different price and R.
+>   *(Denominator note: I counted every scenario. The release note's 410 / 6.1%
+>   counts representative scenarios only, which the payload does not flag, so the
+>   two are not comparable — mine is the looser, larger count.)*
+> * **S2 — reproduced to the unit.** The POST payload's `data_session` is
+>   **2026-08-20** and **2,739 setups carry a `latest_snapshot` dated 2026-08-21**,
+>   with **452 scenario exit events on that same forming bar**. It is systematic,
+>   not a one-off: PRE (`data_session` 2026-08-19) has **2,834** snapshots dated
+>   08-20 and 793 exit events on it.
+>
+> **(e) A correction to the release note's own mark-level claim.** Of same-dated
+> historical `latest_snapshot` closes (≤ 2026-08-19) that differ between the two
+> runs, **1,309 differ at all but only 5 differ materially** — the other **1,304
+> are float32→float64 precision** (`31.350000381469727` → `31.35`) from the
+> Yahoo→IB source switch. So the "7,674 historical mark-days differ" headline is
+> mostly a precision artifact. **This does not weaken S1** — the scenario outcome
+> rewrites above are real and are measured on status, reason and R, not on float
+> tails — but the mark-level evidence is far smaller than stated, and the
+> precision half belongs with §3's bar-source problem rather than with S1.
+>
+> **(f) Minor.** pid 32620 appears on both 2026-08-11 and 2026-08-21 — Windows
+> reuses pids, so every pid join must be qualified by session; my §1 D1a lifetime
+> table is per-session and is unaffected.
+>
+> **Net effect on the verdict counts: 14 PROVEN · 4 PROVEN\* · 2 REFUTED · 2
+> UNKNOWN.** S1 and S2 leave UNKNOWN for PROVEN; D1d and D2b leave PROVEN\* for
+> PROVEN-on-their-window; D5b leaves REFUTED for UNTESTED.
+
+
+
 **Produced** 2026-08-22 on branch `phase05-integration-blitz`.
 **Baseline** at the time of the sweep: HEAD `b6e1521`, suite 4145 passed / 19
 subtests, exit 0.
@@ -69,13 +149,13 @@ available evidence.
 | **D1a** | Concurrent GUI instances on 2026-08-20 | **PROVEN** | pid 31848 lived 07:46:01→12:45:09 PT and overlapped **three** other pids: 14688 (1,571 s), 19368 (1,020 s), 31932 (**13,677 s = 3.8 h**). Every other in-window session is sequential restarts only |
 | **D1b** | Concurrency explains the duplicate rows | **REFUTED as the main cause** | The concurrent session has the highest duplicate rate (34.8% vs a 5.5% mean elsewhere, 6.3×) but supplies only **184 of 742** duplicate `registered` rows (25%). 0 of 609 duplicated ids were written within 5 s of each other (median gap **1,581 s**, p90 54,006 s) |
 | **D1c** | 90 events registered 08-20 with no `final` and not pending | **PROVEN** | 90 exactly; **41** are `regime_pause` |
-| **D1d** | 394 duplicate `registered` (345 ids), 300 duplicate `final` | **PROVEN\*** | Window-wide: **742** duplicate `registered` over 609 ids; **430** duplicate `final` over 303 ids. On 08-20 alone: 184 duplicate `registered`, **0** duplicate `final` |
+| **D1d** | 394 duplicate `registered` (345 ids), 300 duplicate `final` | **PROVEN** *(was PROVEN\* — window mismatch, Amendment 2a)* | On the brief's window 2026-08-07…08-21: **394 duplicate `registered` over 345 ids, 300 duplicate `final`** — exact. On mine (07-24…08-21): 742 / 609 / 430 |
 | **D2** | `eod_close = entry_price` fabricates a zero final | **PROVEN** | `bounce_bot_lib/legacy.py:3719`. 1,164 of 6,907 in-window finals (16.9%) have `close_r == 0`; **1,164/1,164** have `eod_close == entry_price`; **0 of 5,743** non-zero finals do. 251 never advanced a bar; **563 are stop-hits recorded as 0R** |
-| **D2b** | 28 overwrite a real `12_bar` row | **PROVEN\*** | **202** zero finals had a `12_bar` row already, not 28 |
+| **D2b** | 28 zero finals overwrite a real `12_bar` row | **PROVEN\*** *(window stated, Amendment 2a)* | 202 on 07-24…08-21, **73** on the brief's 08-07…08-21. The stated 28 reproduces on neither window |
 | **D3** | Pending backlog never finalizes | **PROVEN** | 576 pending; **94** older than 08-18; **17** from June (oldest 2026-06-22) |
 | **D4** | 2026-08-21: 408 events, 0 finals | **PROVEN\*, and materially different** | 409 `registered`, 399 `1_bar`, 398 `3_bar`, 397 `6_bar`, **394 `12_bar`**, **0 `final`**. Milestones ran all day; only EOD finalization is missing. This is D3's gap, **not** an IB outage that stopped tracking |
 | **D5a** | LRSI synthetic flat bar ⇒ no outcome rows | **PROVEN** | `legacy.py:6689-6692` sets `open=high=low=close=event.close`; `_register_bounce_outcome` returns at `:3634` when `risk_per_share == ""`. **0** outcome rows for `lrsi_cross_20` and `lrsi_cross_50` in-window |
-| **D5b** | ORB first-candle has the same defect | **REFUTED** | ORB re-break **does** register: `orb_breakout` 28 registered / 25 final; `orb_breakdown` 20 / 18. The code at `:6869-6935` already distinguishes candidate (annotation) from re-break (entry claim) from recross (information) and only the break registers — working as designed |
+| **D5b** | ORB first-candle has the same defect as LRSI | **UNTESTED** *(was REFUTED — see Amendment 2b)* | `orb_first_candle*` (`bounce_bot_lib/legacy.py:564-566`) has **zero rows** in the outcome store, `intraday_bounces.csv` and `bouncers.txt` — the flow has never fired. The 5,053 rows I called "working as designed" are `orb_breakout`/`orb_breakdown`, a different family |
 | **D6a** | H1 `entry_time` is the bar START | **PROVEN, decisively** | **6,439 of 6,439** H1 registered rows have `entry_time` minute == 30 (100%). Non-H1 rows spread across minutes (55, 40, 35, 0). An H1 bar in PT starts at :30 |
 | **D6b** | 81% of tracked rows are the three retired H1 engines | **PROVEN** | 6,439 of 7,863 registered rows = **82%** |
 | **D6c** | Median logged−entry lag 90 min | **REFUTED as a measurement** | H1 median lag is **502 min**, non-H1 **425 min** — `logged_at` is the write time (finalization), not the signal time, so this statistic measures the wrong thing on both. The bar-start defect is proven by the minute distribution instead |
@@ -83,8 +163,8 @@ available evidence.
 | **D8a** | Tier barely reaches the evidence stores | **PROVEN, worse than stated** | In the **outcome** store `tier` is absent from `context_json` on **0 of 7,863** registered rows. In the review store **314 of 8,818 = 3.6%** carry a tier (A 10, B 175, C 47, D 82) |
 | **D8b** | `banger=True` on 0 rows | **PROVEN** | 0 of 8,818. `proven=True` on 4 |
 | **D8c** | Tier × outcome is inverse (A −0.12R, D +0.23R) | **UNKNOWN — not reproducible from these stores** | Tier does not exist in the outcome store at all, so no tier×R join is possible there. Whatever produced that pair came from a different join and must be re-derived before it is quoted |
-| **S1** | Tracker replays all scenarios against current histories | **UNKNOWN** | No historical tracker payload survives — only the current 960 MB file and one `.bak`. The 35 CLOSED→OPEN / 14 OPEN→UNTRADEABLE claim cannot be reproduced without the 08-20 payload, and **that is itself the finding**: there is no point-in-time record to check against, which is exactly what R10.D exists to create |
-| **S2** | 2,739 setups carry a mark dated later than the run's `data_session` | **UNKNOWN** | Same cause — not decidable from the current payload alone |
+| **S1** | Tracker replays all scenarios against current histories | **PROVEN** *(was UNKNOWN — see Amendment 2d)* | From the frozen pre/post pair: 218 status transitions on 9,331 common setups (OPEN→CLOSED 168, **CLOSED→OPEN 35**, **OPEN→UNTRADEABLE 14**, UNTRADEABLE→OPEN 1). Among 6,736 CLOSED in both, **2,737 scenarios changed status or reason**, 1,306 changed exit date, and 2,618 had their `events` dropped while status and R stayed identical. Same-date rewrite example: AMCR LONG on 2026-07-28 goes `TIME_STOP @ 46.69, R 0.577` → `TARGET_HIT @ 45.55, R 0.360` |
+| **S2** | Setups carry a mark dated later than the run's `data_session` | **PROVEN** *(was UNKNOWN — see Amendment 2d)* | POST `data_session` **2026-08-20** carries **2,739** setups whose `latest_snapshot` is dated **2026-08-21**, with **452 scenario exit events on that forming bar**. Systematic, not a one-off: PRE (`data_session` 2026-08-19) has 2,834 snapshots dated 08-20 |
 | **S3a** | `horizon_sessions` is not sessions | **PROVEN, worse than stated** | 4,474 of 9,967 rows (45%) span >2× their declared horizon. Median business-day span: horizon 1 → 1; horizon 3 → 5; horizon 5 → **65**; horizon 10 → **73** |
 | **S3b** | SPY-relative columns null on all rows | **PROVEN** | `spy_forward_return_pct` and `spy_relative_side_return_pct` are **0.0% non-null on all 9,967 rows** |
 | **S4a** | 1,274 rep-scenario rows with \|R\|>5, median risk 0.62% of price | **UNKNOWN / partly REFUTED** | **6,201 of 225,522** scenario rows have \|R\|>5. The scenarios CSV has **no risk column**, so "median initial risk 0.62% of price" is not reproducible from this store, and there is no representative-row flag to isolate the 1,274 |

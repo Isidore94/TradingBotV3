@@ -21,6 +21,36 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 (evening) - the tracker rewrites settled outcomes: S1/S2 PROVEN
+
+Evidence and documentation only; no runtime code changed.
+
+- **The pre/post tracker pair is frozen.** `master_avwap_setup_tracker.json.bak`
+  is rotated on every save, so the 2026-08-22 canary snapshot held the only pair
+  that could ever prove S1/S2 and the next run would have destroyed it. Both
+  payloads are now in `evidence_frozen/` locally and on the DAS, with stored and
+  decompressed SHA-256 recorded; the `.bak` hash independently reproduces the one
+  Fable measured.
+- **S1 PROVEN, and worse than "historical exits move".** Across one run:
+  218 setup-status transitions on 9,331 common setups, including 35 CLOSED→OPEN
+  and 14 OPEN→UNTRADEABLE. Among 6,736 setups CLOSED in both runs, **2,737
+  scenarios changed status or reason**, 1,306 changed exit date, and **2,618 had
+  their event history dropped while status and R stayed identical**. A settled
+  trade can be rewritten on its own historical date: AMCR LONG on 2026-07-28
+  moves from `TIME_STOP @ 46.69, R 0.577` to `TARGET_HIT @ 45.55, R 0.360`.
+- **S2 PROVEN to the unit.** A payload whose `data_session` is 2026-08-20 carries
+  **2,739 setups marked 2026-08-21** and 452 scenario exit events on that forming
+  bar. The prior run shows the same shape a day earlier, so it is systematic.
+- **A correction to the claim that prompted the check:** of 1,309 same-dated
+  historical closes that differ between runs, only **5 differ materially**; 1,304
+  are float32-to-float64 precision from the Yahoo-to-IB source switch. S1 stands
+  on status, reason and R; the precision half is a bar-source problem.
+- Two verdicts of my own were wrong. **D5b becomes UNTESTED** - `orb_first_candle*`
+  has never fired anywhere, and the rows I called "working as designed" belong to
+  a different family. **D1d/D2b were a window mismatch, not a brief error**; on
+  2026-08-07..08-21 the brief's figures are exact, and every number from that
+  store now states its window.
+
 ### 2026-08-22 - R10.A (first half): the evidence that was on one disk now has a dated backup
 
 `IMPLEMENTED` + `GREEN`; live gate is the nightly schedule plus one proven restore.

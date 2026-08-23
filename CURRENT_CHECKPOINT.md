@@ -8,6 +8,74 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 evening - §0 EVIDENCE FROZEN, §1 AUDIT AMENDED (S1/S2 now PROVEN)
+
+**Branch `phase05-integration-blitz`.** Consolidated R10.A release, steps §0 and
+§1. Docs plus one irreplaceable copy operation; no runtime code changed.
+
+### §0 — the pre/post tracker pair is frozen, on both disks
+
+`master_avwap_setup_tracker.json.bak` is rotated on **every** tracker save
+(`os.replace`, `master_avwap_lib/legacy.py:4907`), so the 2026-08-22 canary
+snapshot held the only pre/post pair that can ever prove S1/S2 — and Monday's
+07:00 run would have destroyed it. Frozen into
+`evidence_snapshots\evidence_frozen\tracker_2026-08-20_vs_08-21\`, which pruning
+never touches, and copied to `\\MINI-PC\Trading Bot Data\backups\evidence_frozen\`.
+
+| file | run state | stored | stored SHA-256 | decompressed | decompressed SHA-256 |
+|---|---|---|---|---|---|
+| `…tracker.json.bak.gz` | 2026-08-20 | 133,162,736 B | `f6f9eef32faf5b32…` | 938,541,721 B | **`7777fd68f58732f0…`** |
+| `…tracker.json.gz` | 2026-08-21 | 135,738,242 B | `802cc9ed8f3a9f3d…` | 960,488,317 B | `29a534b058c1d39d…` |
+
+The `.bak` decompressed hash **independently reproduces Fable's `7777fd68…`**.
+Both DAS copies were re-hashed after the copy and match their stored hashes.
+
+**Robocopy leg run by hand:** `backups\2026-08-22\` now exists on the DAS —
+667 files, 682 MB (650.6 MiB), rc=1 (0–7 is success), 132 s. The manifest reads
+back on the DAS as 666 files / 0 skipped.
+
+### §1 — six audit amendments; the verdict counts move to 14/4/2/2
+
+Amendment 2 in the audit carries the detail. The three that matter:
+
+**S1 and S2 leave UNKNOWN for PROVEN, and S1 is worse than "exits move".**
+218 status transitions on 9,331 common setups (OPEN→CLOSED 168, CLOSED→OPEN 35,
+OPEN→UNTRADEABLE 14, UNTRADEABLE→OPEN 1 — the release note's breakdown exactly).
+Among 6,736 setups CLOSED in both runs, **2,737 scenarios changed status or
+reason**, 1,306 changed exit date, and **2,618 had their `events` dropped while
+status and `total_r` stayed identical**. The worst shape is a same-date rewrite:
+AMCR LONG on 2026-07-28 goes `TIME_STOP @ 46.69, R 0.577` → `TARGET_HIT @ 45.55,
+R 0.360`. A trade that timed out is now on record as having hit its target.
+S2 reproduces to the unit: **2,739** setups carry an 08-21 `latest_snapshot` in a
+payload whose `data_session` is 08-20, with 452 exit events on that forming bar;
+PRE shows the same shape one day earlier (2,834), so it is systematic.
+
+**A correction to the release note's own mark claim.** Of 1,309 same-dated
+historical closes that differ between the runs, **only 5 differ materially** —
+**1,304 are float32→float64 precision** (`31.350000381469727` → `31.35`) from the
+Yahoo→IB switch. S1 stands (it is measured on status, reason and R, not float
+tails), but the mark-level evidence is far smaller than "7,674 mark-days differ",
+and the precision half belongs with §3's bar-source problem.
+
+**Two of my own verdicts were wrong.** D5b becomes **UNTESTED**: `orb_first_candle*`
+has zero rows anywhere — the flow has never fired — and the 5,053 rows I called
+"working as designed" belong to `orb_breakout`/`orb_breakdown`, a different
+family. D1d/D2b were a **window mismatch, not a brief error**: on 2026-08-07…08-21
+the brief's 394/345 and 300 are exact. Every outcome-CSV figure now states its
+window.
+
+Also: `h1_bar_start_v1` keys on `^h1_` (9,623/9,623 whole file, 6,439/6,439 in
+window) — and I had implied no non-H1 row lands on minute 30, when **291 of 6,054
+(4.8%) do**; the rule is conjunctive so it holds, but its precision is not 100%.
+Duplicate-pair gaps bottom out at **76 s** with a 76–78 s cluster, which is a
+sweep cadence and reinforces that concurrency is not the duplicate mechanism.
+pid 32620 recurs across 08-11 and 08-21 — pid joins must be session-qualified.
+
+**Next:** §2 (schedule the snapshot task, add `source_sha256`), then §3 (the
+daily-bar volume cliff, read-only, then STOP).
+
+---
+
 ## 2026-08-22 - R10.A (first half) LANDED: the evidence now has a dated backup
 
 **Branch `phase05-integration-blitz`.** Trader instruction the same afternoon:
