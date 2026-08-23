@@ -204,6 +204,23 @@ def _measured_fixture(tmp_path: Path) -> tuple[Path, Path, datetime]:
     # R10.V step 6: last night's daily-bar unit measurement, so the store-quality
     # dimension is MEASURED here like every other one rather than adding a second
     # unknown. The check reads only this file - it never opens the store.
+    # R10.A / D3: last night's sweep, so the finalization dimension is MEASURED
+    # here like every other one. The check reads only this file.
+    _write(
+        diagnostics / "outcome_sweep_coverage.json",
+        {
+            "pending_before": 12,
+            "pending_after": 3,
+            "finalized": 9,
+            "expired": 1,
+            "unparseable": 0,
+            "already_finalized": 0,
+            "still_open": 3,
+            "by_reason": {"measured": 8, "expired_no_data": 1},
+            "expire_after_sessions": 3,
+            "swept_at": "2026-07-13T13:10:00",
+        },
+    )
     _write(
         diagnostics / "daily_bar_units.json",
         {
@@ -409,6 +426,9 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         # R10.V: whether the durable daily store is still single-unit. Read from
         # the file the nightly snapshot job writes; the tile never measures.
         "daily_bar_units",
+        # R10.A: whether the after-close finalization sweep ran and the pending
+        # backlog is draining.
+        "outcome_sweep",
         # R10.A: the nightly dated backup of the hot evidence the cold push
         # excludes on purpose (data/runtime, the home-root files, diagnostics).
         "evidence_snapshot",

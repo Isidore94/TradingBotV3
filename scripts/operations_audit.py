@@ -2146,6 +2146,78 @@ def _required_inventory_view(checks: list[dict[str, Any]]) -> list[dict[str, Any
     return rows
 
 
+def _outcome_sweep_check(now: datetime, local_tz, diagnostics: Path | None = None) -> dict[str, Any]:
+    """Did the after-close sweep run, and is the pending backlog draining? (R10.A / D3)
+
+    Reads the coverage file the sweep writes; it never sweeps anything itself.
+    **No file is `unknown`, not healthy** - a sweep that has never reported is
+    indistinguishable from a sweep that never ran, and that indistinguishability
+    is exactly how 576 pending outcomes accumulated unnoticed over two months.
+    """
+    root = Path(diagnostics) if diagnostics is not None else Path(get_diagnostics_dir())
+    path = root / "outcome_sweep_coverage.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _check(
+            "outcome_sweep", "Outcome finalization sweep", STATUS_UNKNOWN,
+            "The after-close outcome sweep has not reported yet. It runs once per "
+            "weekday after close+grace; until it does, whether pending trades are "
+            "finalizing is unmeasured - which is not the same as fine.",
+            source=path,
+        )
+
+    pending_after = int(payload.get("pending_after") or 0)
+    finalized = int(payload.get("finalized") or 0)
+    expired = int(payload.get("expired") or 0)
+    unparseable = int(payload.get("unparseable") or 0)
+    swept_at = str(payload.get("swept_at") or "")
+    details = {
+        "pending_before": payload.get("pending_before"),
+        "pending_after": pending_after,
+        "finalized": finalized,
+        "expired": expired,
+        "unparseable": unparseable,
+        "by_reason": payload.get("by_reason") or {},
+        "swept_at": swept_at,
+    }
+    age_days = None
+    try:
+        stamp = datetime.fromisoformat(swept_at)
+        reference = now.replace(tzinfo=None) if stamp.tzinfo is None else now
+        age_days = (reference - stamp).total_seconds() / 86400.0
+    except ValueError:
+        pass
+
+    tail = (
+        f" Last sweep {swept_at}: {finalized} finalized"
+        + (f", {expired} expired" if expired else "")
+        + (f", {unparseable} unparseable" if unparseable else "")
+        + "."
+    )
+    # Four calendar days covers a long weekend without letting a silent week pass.
+    if age_days is not None and age_days > 4:
+        return _check(
+            "outcome_sweep", "Outcome finalization sweep", STATUS_DEGRADED,
+            f"The last sweep was {age_days:.1f} days ago, so pending trades may be "
+            "accumulating again." + tail,
+            source=path, details=details,
+        )
+    if pending_after > 200:
+        return _check(
+            "outcome_sweep", "Outcome finalization sweep", STATUS_DEGRADED,
+            f"{pending_after} outcomes are still pending after the last sweep. The "
+            "backlog D3 measured was 576; a number in that range means trades are "
+            "being registered faster than they are finalized." + tail,
+            source=path, details=details,
+        )
+    return _check(
+        "outcome_sweep", "Outcome finalization sweep", STATUS_HEALTHY,
+        f"{pending_after} outcome(s) pending after the last sweep." + tail,
+        source=path, details=details,
+    )
+
+
 def _daily_bar_units_check(now: datetime, local_tz, diagnostics: Path | None = None) -> dict[str, Any]:
     """Is the durable daily store still single-unit? (R10.V step 6)
 
@@ -2520,6 +2592,7 @@ def build_operations_audit(
         _disk_check(diagnostics, moment),
         _daily_bar_source_check(moment, local_tz, diagnostics / "run_manifests"),
         _daily_bar_units_check(moment, local_tz, diagnostics),
+        _outcome_sweep_check(moment, local_tz, diagnostics),
         _evidence_snapshot_check(
             moment, local_tz, staging=diagnostics.parent / "machine_cache" / "evidence_snapshots"
         ),

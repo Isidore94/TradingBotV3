@@ -219,3 +219,58 @@ def test_the_check_is_in_the_operational_set():
     payload = audit.build_operations_audit()
     ids = {item["id"] for item in payload["checks"]}
     assert "daily_bar_units" in ids
+
+
+# ---------------------------------------------------------------------------
+# R10.A / D3: the sweep tile
+# ---------------------------------------------------------------------------
+def _sweep_file(tmp_path: Path, payload: dict) -> Path:
+    diagnostics = tmp_path / "diagnostics"
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    (diagnostics / "outcome_sweep_coverage.json").write_text(json.dumps(payload), encoding="utf-8")
+    return diagnostics
+
+
+def test_a_sweep_that_never_reported_is_unknown_not_fine(tmp_path):
+    """Exactly how 576 pending outcomes accumulated unnoticed."""
+    check = audit._outcome_sweep_check(NOW, None, tmp_path / "empty")
+    assert check["status"] == "unknown"
+    assert "not the same as fine" in check["summary"]
+
+
+def test_a_drained_backlog_is_healthy(tmp_path):
+    diagnostics = _sweep_file(tmp_path, {
+        "pending_after": 4, "finalized": 30, "expired": 2, "unparseable": 0,
+        "swept_at": (NOW - timedelta(hours=18)).replace(tzinfo=None).isoformat(),
+    })
+    check = audit._outcome_sweep_check(NOW, None, diagnostics)
+    assert check["status"] == "healthy"
+    assert "30 finalized" in check["summary"] and "2 expired" in check["summary"]
+
+
+def test_a_backlog_in_the_range_d3_measured_degrades(tmp_path):
+    diagnostics = _sweep_file(tmp_path, {
+        "pending_after": 480, "finalized": 3,
+        "swept_at": (NOW - timedelta(hours=18)).replace(tzinfo=None).isoformat(),
+    })
+    check = audit._outcome_sweep_check(NOW, None, diagnostics)
+    assert check["status"] == "degraded"
+    assert "576" in check["summary"]
+
+
+def test_a_stale_sweep_degrades_but_a_long_weekend_does_not(tmp_path):
+    stale = _sweep_file(tmp_path / "a", {
+        "pending_after": 1, "swept_at": (NOW - timedelta(days=6)).replace(tzinfo=None).isoformat(),
+    })
+    assert audit._outcome_sweep_check(NOW, None, stale)["status"] == "degraded"
+    weekend = _sweep_file(tmp_path / "b", {
+        "pending_after": 1, "swept_at": (NOW - timedelta(days=3)).replace(tzinfo=None).isoformat(),
+    })
+    assert audit._outcome_sweep_check(NOW, None, weekend)["status"] == "healthy"
+
+
+def test_the_sweep_tile_reads_and_never_sweeps():
+    import inspect
+
+    source = inspect.getsource(audit._outcome_sweep_check)
+    assert "sweep_pending_bounce_outcomes" not in source

@@ -8,6 +8,35 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-23 - R10.A: what Monday should show
+
+**Branch `phase05-integration-blitz`.** An `outcome_sweep` tile now reads the
+coverage the sweep files, so D3's fix is verifiable on the desk rather than by
+digging through a diagnostics directory. It reads and never sweeps. **No report
+is `unknown`, not healthy** - that distinction is the whole lesson of the
+backlog. It degrades above 200 pending (D3 measured 576) or on a sweep older
+than four days.
+
+### The three things to look at on the first live weekday
+
+| where | what should be true |
+|---|---|
+| System Health -> **Daily bar units** | healthy, ~99.98% shares, no `lots_rth` row |
+| System Health -> **Outcome finalization sweep** | reported after close+grace, pending falling |
+| `data\runtime\evidence_ledgers\` | `intraday_outcome_events-202608.jsonl` growing with the CSV |
+
+Two of those depend on a job that has not run yet: the **nightly evidence
+snapshot at 20:30 PT** writes the daily-bar unit measurement, and the **sweep**
+runs in the after-close worker on a weekday. Until each runs once, its tile
+reads `unknown` - correctly.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4424 passed / 19 subtests**, exit **0** (was 4419; +5) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+---
+
 ## 2026-08-23 - R10.A / D8: the tier lands on its own row
 
 **Branch `phase05-integration-blitz`.** The audit found `tier` on **0 of 7,863**

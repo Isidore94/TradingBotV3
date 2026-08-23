@@ -21,6 +21,17 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-23 - R10.A: the sweep is visible on the desk
+
+- **An `outcome_sweep` System Health tile** reads the coverage the sweep files
+  and never sweeps anything itself. **No file is `unknown`, not healthy** - a
+  sweep that has never reported is indistinguishable from a sweep that never
+  ran, and that indistinguishability is how 576 pending outcomes accumulated
+  over two months.
+- **Degrades on a backlog above 200** (D3 measured 576) or on a sweep older than
+  four days - long enough to cover a long weekend, short enough that a silent
+  week cannot pass.
+
 ### 2026-08-23 - R10.A / D8: registrations record what they can measure, tiers arrive on their own row
 
 - **The tier was absent from 0 of 7,863 registered rows because of ordering,
