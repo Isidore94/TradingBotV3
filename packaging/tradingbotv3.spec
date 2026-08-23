@@ -57,6 +57,14 @@ FIRST_PARTY_PACKAGES = (
     # cross engine wired in - bounce_bot_lib.legacy -> m5_signal_engines ->
     # indicators.efficiency_lrsi. It was allowlisted as unreachable until then.
     "indicators",
+    # R10.A (2026-08-22): `ops` must be IN the bundle, not allowlisted out.
+    # `operations_audit._evidence_snapshot_check` does `from ops import
+    # evidence_snapshot` lazily, and operations_audit renders the frozen exe's
+    # System Health page - so a bundle without it dies at exactly the lazy
+    # import this guard exists to catch. Its three .ps1 files ride along as
+    # assets; they are Task Scheduler entry points rather than anything the exe
+    # executes, and shipping them costs ~12 KB and keeps the tree mirrored.
+    "ops",
 )
 
 

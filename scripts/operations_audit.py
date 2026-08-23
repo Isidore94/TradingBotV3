@@ -2146,6 +2146,79 @@ def _required_inventory_view(checks: list[dict[str, Any]]) -> list[dict[str, Any
     return rows
 
 
+def _evidence_snapshot_check(now: datetime, local_tz, staging: Path | None = None) -> dict[str, Any]:
+    r"""Is the evidence the cold push excludes actually being backed up? (R10.A)
+
+    ``data\runtime`` is 3.5 GB of hot state - the setup tracker, the outcome
+    CSV, the journal SQLite, every cohort and Focus store - and the cold push
+    excludes all of it by design because it is rewritten constantly. The nightly
+    dated snapshot is the only thing standing between that and a single disk.
+
+    A backup nobody has restored is a hypothesis, so the restore-test date is
+    reported beside the snapshot date rather than assumed.
+    """
+    from datetime import date as _date
+
+    from ops import evidence_snapshot
+
+    RESEARCH_DAS_ROOT = "\\\\MINI-PC\\Trading Bot Data"
+    staging = Path(staging) if staging is not None else Path(CACHE_DIR) / "evidence_snapshots"
+    try:
+        info = evidence_snapshot.health(staging, das_root=Path(RESEARCH_DAS_ROOT))
+    except Exception:  # pragma: no cover - health must never take the audit down
+        logging.exception("evidence snapshot health unavailable")
+        return _check(
+            "evidence_snapshot", "Evidence snapshot", STATUS_UNKNOWN,
+            "Snapshot health could not be read.", source=staging,
+        )
+
+    stamp = str(info.get("last_snapshot_date") or "")
+    if not stamp:
+        # Absent evidence is UNKNOWN, never unhealthy - the repo's own rule, and
+        # a machine that has not been scheduled yet is not a machine in trouble.
+        # The summary still says plainly what is unprotected.
+        return _check(
+            "evidence_snapshot", "Evidence snapshot", STATUS_UNKNOWN,
+            r"No evidence snapshot on record; data\runtime, the home-root evidence "
+            "files and the diagnostics tree exist on one disk only until "
+            "snapshot_to_das.ps1 is scheduled.",
+            source=staging,
+        )
+    age_days = None
+    try:
+        age_days = (now.date() - _date.fromisoformat(stamp)).days
+    except (TypeError, ValueError):
+        pass
+    if age_days is None:
+        status = STATUS_UNKNOWN
+    elif age_days <= 1:
+        status = STATUS_HEALTHY
+    elif age_days <= 3:
+        status = STATUS_DEGRADED
+    else:
+        status = STATUS_UNHEALTHY
+    skipped = int(info.get("skipped") or 0)
+    if skipped and status == STATUS_HEALTHY:
+        # Counted, never hidden: a snapshot that quietly omitted the 960 MB
+        # tracker looks identical to one that captured it.
+        status = STATUS_DEGRADED
+    summary = (
+        f"Last snapshot {stamp}"
+        + (f" ({age_days}d ago)" if age_days is not None else "")
+        + f": {info.get('files', 0)} files, "
+        f"{int(info.get('stored_bytes') or 0) / 1e6:.0f} MB stored"
+        + (f", {skipped} skipped" if skipped else "")
+        + (". DAS reachable." if info.get("das_reachable") else ". DAS unreachable - staged locally.")
+        + (f" Last restore test {info['last_restore_test'][:10]}."
+           if info.get("last_restore_test") else " No restore test on record.")
+    )
+    return _check(
+        "evidence_snapshot", "Evidence snapshot", status, summary,
+        source=staging, updated_at=str(info.get("last_snapshot_at") or ""),
+        details=dict(info),
+    )
+
+
 def build_operations_audit(
     *,
     now: datetime | None = None,
@@ -2260,6 +2333,9 @@ def build_operations_audit(
         _process_check(moment, market_phase, process_snapshot),
         _universe_check(universe_files, market_probe, market_date, moment, local_tz),
         _disk_check(diagnostics, moment),
+        _evidence_snapshot_check(
+            moment, local_tz, staging=diagnostics.parent / "machine_cache" / "evidence_snapshots"
+        ),
         _provider_check(latest_manifest, diagnostics / "run_manifests"),
     ]
     # Every sec 6.3 dimension nothing measures is emitted as UNKNOWN, so the

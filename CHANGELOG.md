@@ -21,6 +21,58 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-22 - R10.A (first half): the evidence that was on one disk now has a dated backup
+
+`IMPLEMENTED` + `GREEN`; live gate is the nightly schedule plus one proven restore.
+
+- **The measured gap.** `push_cold_to_das.ps1` mirrors ~270 MB of cold subtrees
+  hourly and deliberately excludes hot state. What it excludes is the evidence
+  this whole program exists to protect: `data\runtime` at **3.5 GB** (the 960 MB
+  setup tracker plus its 939 MB `.bak`, the 203 MB outcome CSV, the journal
+  SQLite, every outcome / cohort / Focus store), the **36 home-root evidence
+  files**, `_tools`, and the machine-local diagnostics tree at **529 MB**. All of
+  it existed on exactly one disk.
+- **A snapshot, not a move.** Decision 0015 stands - hot files stay on the local
+  SSD and are written local first - so `scripts/ops/evidence_snapshot.py` stages
+  a dated copy locally and `snapshot_to_das.ps1` robocopies it to
+  `\\MINI-PC\Trading Bot Data\backups\<YYYY-MM-DD>\`. An unreachable share exits
+  0 and leaves the staged snapshot, exactly as the cold push does.
+- **Copy-while-hot rules, because a backup taken mid-write is worse than none.**
+  SQLite is copied through the backup API, not byte-for-byte, since the AI runner
+  writes to the journal nightly. Any file at or above 256 MB must hold one size
+  and mtime across a 60-second window or it is **skipped with a reason and
+  counted in the manifest** - a snapshot that quietly omitted the 960 MB tracker
+  would look identical to one that captured it. Any file at or above 64 MB is
+  gzipped; ~2.4 GB of tracker and integrity JSON raw would be 60 GB a month for
+  files whose daily diff R10.D will carry anyway.
+- **`manifest.json`** records size and SHA-256 per stored file plus the skipped
+  count by reason. `--verify` re-hashes every file against it.
+- **Restore refuses the live store.** `restore()` raises rather than write into
+  the home folder or the diagnostics tree; a drill that overwrites live state is
+  how a drill becomes an incident. `restore_from_das.ps1 -DryRun` plans without
+  writing, and prefers the local staging copy over the DAS since it is the same
+  bytes on a faster disk and present even when the share is not.
+- **Retention** 7 daily / 4 weekly / 12 monthly, computed as a pure function of
+  the date list so pruning never depends on when it runs. `evidence_frozen/` is
+  never pruned.
+- **System Health** gains an `evidence_snapshot` tile: last snapshot date and
+  age, files, bytes, skipped count, DAS reachability, last restore test. Absence
+  reports **unknown**, not unhealthy - a machine that has not been scheduled yet
+  is not a machine in trouble, and that is the repo's existing rule.
+- **`push_cold_to_das.ps1` gains `data\runtime\evidence_ledgers`** (append-only
+  and unboundedly growing, which is its shape) and both scripts' headers now
+  state **two jobs, two scopes** with a test pinning it, so the next reader does
+  not merge them.
+- **A finding on the way:** `push_cold_to_das.ps1` existed **only** in
+  `C:\TradingBotData\_tools` - the script protecting the evidence was itself
+  unversioned, untested and unreviewable. The repo copy is now the source of
+  truth, `_tools` holds an installed copy, and a test compares them byte for byte
+  so an unreviewed edit to the running script cannot go unnoticed.
+- `ops` joins `FIRST_PARTY_PACKAGES` in the spec: `operations_audit` imports
+  `ops.evidence_snapshot` lazily and renders the frozen exe's System Health page,
+  so a bundle without it would die at exactly the lazy import the spec-drift
+  guard exists to catch.
+
 ### 2026-08-22 - R10.0: the evidence audit, and one failure made observable
 
 `IMPLEMENTED` + `GREEN`. Read-only sweep; the only runtime change is the

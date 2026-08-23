@@ -160,6 +160,23 @@ def _measured_fixture(tmp_path: Path) -> tuple[Path, Path, datetime]:
     diagnostics = tmp_path / "diagnostics"
     registry = tmp_path / "candidate_registry.json"
     now = datetime.fromisoformat("2026-07-13T12:30:00-07:00")
+    # R10.A: yesterday's evidence snapshot, so the backup dimension is MEASURED
+    # like every other one here rather than adding a second unknown. The check
+    # reads only this manifest.
+    _write(
+        tmp_path / "machine_cache" / "evidence_snapshots" / "2026-07-13" / "manifest.json",
+        {
+            "schema": "evidence_snapshot_manifest_v1",
+            "snapshot_date": "2026-07-13",
+            "finished_at": "2026-07-13T02:14:00-07:00",
+            "files": 41,
+            "source_bytes": 3_500_000_000,
+            "stored_bytes": 900_000_000,
+            "skipped": 0,
+            "skipped_by_reason": {},
+            "entries": [],
+        },
+    )
     _write(
         diagnostics / "writer_health.json",
         {
@@ -345,6 +362,9 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         # "deliberately off", not an unmeasured unknown, which is why the
         # unknown_operational assertion below still holds at exactly one entry.
         "ai_jobs",
+        # R10.A: the nightly dated backup of the hot evidence the cold push
+        # excludes on purpose (data/runtime, the home-root files, diagnostics).
+        "evidence_snapshot",
     }
     # Every dimension H2 implemented reports a measured status, and the ONLY
     # remaining UNKNOWN is the one nothing captures.

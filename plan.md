@@ -1152,7 +1152,41 @@ second scoreboard.
    failure observable (non-empty `error`, traceback in the ledger row); its
    cause is reported, not fixed. **Stop after this packet and hand off** — the
    trader accepts the register before R10.A.
-2. **R10.A P0 runtime and outcome integrity** (D1 if proven, D2, D3, D4, D7, D8).
+2. **R10.A P0 runtime and outcome integrity** (D1 if proven, D2, D3, D4, D7, D8),
+   **plus the dated evidence snapshot** (trader instruction 2026-08-22: *"Any and
+   all very important files that we use occasionally should go to the server with
+   the massive HDD."*). The snapshot lands here because it is ground rule 4's
+   backup-and-restore contract for every store R10 creates, so it must exist
+   before the first ledger does.
+
+   *Snapshot half BUILT 2026-08-22, GREEN.* Measured scope gap: the hourly cold
+   push covers `data\daily_bars`, `data\intraday_bars`, `output`, `logs` and
+   `away_report_archive` (~270 MB), and deliberately excludes the hot state that
+   IS the evidence — `data\runtime` at **3.5 GB** (the 960 MB setup tracker plus
+   its 939 MB `.bak`, the 203 MB outcome CSV, the journal SQLite, every outcome /
+   cohort / Focus store), the **36 home-root evidence files**, `_tools`, and the
+   machine-local diagnostics tree at **529 MB**. Decision 0015 stands, so the
+   answer is a dated snapshot, never a move: `scripts/ops/evidence_snapshot.py`
+   (tested) stages locally first and `scripts/ops/snapshot_to_das.ps1` robocopies
+   to `\MINI-PC\Trading Bot Dataackups\<YYYY-MM-DD>\`; an unreachable share
+   exits 0 and leaves the staged copy, exactly like the cold push. Copy-while-hot:
+   SQLite through the backup API, any file ≥ 256 MB must hold one size and mtime
+   across a 60 s window or it is **skipped with a reason and counted** (never
+   silently), and any file ≥ 64 MB is gzipped. `manifest.json` records size and
+   SHA-256 per file. Retention 7 daily / 4 weekly / 12 monthly, `evidence_frozen/`
+   permanent. `restore_from_das.ps1` restores **only into a scratch directory** —
+   `restore()` refuses the home folder and the diagnostics tree outright, because
+   a drill that overwrites live state is how a drill becomes an incident — and
+   `--verify` re-hashes against the manifest. System Health gains an
+   `evidence_snapshot` tile (absence is `unknown`, staleness degrades, a skipped
+   file degrades). `push_cold_to_das.ps1` gains `data\runtime\evidence_ledgers`
+   and both scripts' headers now say **two jobs, two scopes** so the next reader
+   does not merge them. *Finding on the way:* `push_cold_to_das.ps1` existed
+   **only** in `C:\TradingBotData\_tools` — the script protecting the evidence was
+   itself unversioned; the repo copy is now the source of truth and a test
+   compares the two byte for byte.
+
+   *Ledger half still owed:* everything below.
    New append-only authority `intraday_outcome_events.jsonl`
    (`intraday_outcome_event_v1`, month-segmented); the pending dict becomes a
    reconstructable checkpoint, never the authority. One owner, one transaction:

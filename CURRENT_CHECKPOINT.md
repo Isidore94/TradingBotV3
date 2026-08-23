@@ -8,6 +8,78 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-22 - R10.A (first half) LANDED: the evidence now has a dated backup
+
+**Branch `phase05-integration-blitz`.** Trader instruction the same afternoon:
+*"Any and all very important files that we use occasionally should go to the
+server with the massive HDD."*
+
+**Measured gap.** The hourly cold push covers ~270 MB and excludes hot state by
+design. What it excludes is the evidence itself: `data\runtime` **3.5 GB**
+(960 MB tracker + 939 MB `.bak`, 203 MB outcome CSV, journal SQLite, every
+cohort / Focus store), **36 home-root evidence files**, `_tools`, and the
+diagnostics tree at **529 MB** - all on one disk.
+
+Decision 0015 stands, so this is a dated **snapshot**, never a move.
+`scripts/ops/evidence_snapshot.py` (19 tests) stages locally then
+`snapshot_to_das.ps1` robocopies to `backups\<YYYY-MM-DD>\`; unreachable share
+exits 0 leaving the staged copy. SQLite via the backup API; anything ≥256 MB
+must hold size+mtime for 60 s or is **skipped with a reason and counted**;
+anything ≥64 MB is gzipped; `manifest.json` carries size + SHA-256 per file.
+Retention 7/4/12, `evidence_frozen/` permanent. `restore_from_das.ps1` restores
+only into a scratch dir - `restore()` **refuses** the home folder and diagnostics
+outright. System Health gains an `evidence_snapshot` tile (absence = `unknown`).
+
+**Finding:** `push_cold_to_das.ps1` existed **only** in `_tools` - the script
+protecting the evidence was itself unversioned. The repo copy is now the source
+of truth and a test compares the two byte for byte. It also gained
+`data\runtime\evidence_ledgers`, and both headers say **two jobs, two scopes**.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4168 passed / 19 subtests**, exit **0** (was 4148; +20) |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| source `--selftest` | **56/56**, exit 0 |
+
+### Mechanics canary — run for real, and the restore drill is done
+
+First snapshot, 2026-08-22: **666 files, 4,033 MB source → 682 MB stored (83%
+compression), 0 skipped**, `--verify` re-hashed all 666 with 0 missing and 0
+mismatched. Largest: the 960 MB tracker → 136 MB, its 939 MB `.bak` → 133 MB,
+`master_avwap_setup_attributes.csv` 484 MB → 44 MB, `technical_integrity_events.jsonl`
+466 MB → 25 MB, the 203 MB outcome CSV → 20 MB. One SQLite through the backup API.
+
+**Restore drill passed:** 666 files restored into a scratch folder and byte-compared
+against the live originals — `intraday_bounce_outcomes.csv` (203 MB), the
+`master_avwap_setup_tracker.json` (960 MB) and `trader_annotations.jsonl` all
+**SHA-256 match**. Restoring into `C:\TradingBotData` was attempted deliberately
+and **refused**, as designed. The drill is recorded, so the tile now reads
+*healthy: last snapshot 2026-08-22 (0d ago), 666 files, 682 MB stored, DAS
+reachable, last restore test 2026-08-22*. Scratch copy deleted afterwards.
+
+**Frozen-exe trigger FIRED** (new top-level package `ops`, new non-`.py` runtime
+assets). The automated half is green - the spec-drift guard caught both and
+`ops` is now in `FIRST_PARTY_PACKAGES` because `operations_audit` imports it
+lazily and renders System Health in the frozen build. **The frozen selftest was
+not run: Smart App Control refuses the unsigned exe on this desk, so
+`dist\TradingBotV3\TradingBotV3.exe --selftest` cannot execute.** Source launch
+remains production.
+
+**Owed for the snapshot half:** the only thing left is **scheduling** —
+`snapshot_to_das.ps1` nightly after the AI runner, and confirming the first
+scheduled run copies to the DAS (today's canary was run by hand and stopped at
+staging, since the robocopy leg lives in the `.ps1`). The trader also has an
+open decision on the 939 MB `master_avwap_setup_tracker.json.bak`: it is being
+snapshotted every night at 133 MB compressed, and audit §8 Q2 asks whether it is
+a deliberate rollback point or an accident. If it is an accident, excluding it
+halves the nightly cost.
+
+**R10.A's ledger half is NOT started** - the outcome ledger, one-owner
+transaction, dual-write canary, no-fabrication finalization, registration
+context and `evidence_rules.py` all remain.
+
+---
+
 ## 2026-08-22 - R10.0 COMPLETE: the evidence audit, and the program stops here
 
 **Branch `phase05-integration-blitz`.** Read-only sweep plus one authorized
