@@ -73,6 +73,33 @@ def normalize_symbol(symbol: object) -> str:
     return symbols[0] if symbols else ""
 
 
+# R10.E: thin module-level shims. Imported lazily inside each one so
+# `focus_picks` stays importable on a machine where the evidence modules are
+# absent - the Focus store is the product and must not need them to run.
+def _joined_event(**kwargs):
+    from focus_membership_events import joined_event
+
+    return joined_event(**kwargs)
+
+
+def _left_event(**kwargs):
+    from focus_membership_events import left_event
+
+    return left_event(**kwargs)
+
+
+def _expired_event(**kwargs):
+    from focus_membership_events import expired_event
+
+    return expired_event(**kwargs)
+
+
+def _sessions_between(joined_at, left_at):
+    from focus_membership_events import sessions_between
+
+    return sessions_between(joined_at, left_at)
+
+
 def _membership_key(symbol: str, side: str, category: str) -> str:
     # m5 keeps the pre-category "SYM|side" format so existing membership
     # files remain valid; swing entries carry an explicit category suffix.
@@ -211,9 +238,27 @@ class FocusPickStore:
             _write_m5_market_date(self._m5_state_path, today_text)
             return 0
         removed = 0
+        # R10.E / F5: ONE ROW PER NAME, never a single "cleared N". A survivor
+        # is 49% of (symbol, side) pairs in the snapshot store and nobody can
+        # tell a survivor from a re-add - which is exactly what a per-name
+        # expiry row makes answerable, and what a count would keep invisible.
+        expired_at = datetime.now().astimezone().isoformat(timespec="seconds")
         for side in ("long", "short"):
             for sym in list(self._lists["m5"][side]):
+                owner = self._membership_owner(sym, side, "m5")
+                joined_at = self._episode_started_at(sym, side, "m5")
                 self._uninject_from_shared(sym, side, "m5", defer_membership_save=True)
+                self._emit_membership(
+                    _expired_event(
+                        symbol=sym,
+                        side=side,
+                        category="m5",
+                        owner=owner,
+                        episode="",
+                        joined_at=joined_at,
+                        at=expired_at,
+                    )
+                )
                 removed += 1
             self._lists["m5"][side] = []
             self._write_focus(side, "m5")
@@ -303,6 +348,16 @@ class FocusPickStore:
         self._lists[category][side].append(sym)
         self._write_focus(side, category)
         self._inject_into_shared(sym, side, category)
+        self._emit_membership(
+            _joined_event(
+                symbol=sym,
+                side=side,
+                category=category,
+                owner=self._membership_owner(sym, side, category),
+                joined_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                origin="focus_store.add",
+            )
+        )
         if category == "m5":
             # The pick belongs to today; keeps the day stamp honest even in a
             # session that crossed midnight since the last reload.
@@ -326,6 +381,18 @@ class FocusPickStore:
         if added:
             self._write_focus(side, category)
             self._save_membership()
+            stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+            for sym in added:
+                self._emit_membership(
+                    _joined_event(
+                        symbol=sym,
+                        side=side,
+                        category=category,
+                        owner=self._membership_owner(sym, side, category),
+                        joined_at=stamp,
+                        origin="focus_store.add_many",
+                    )
+                )
             if category == "m5":
                 _write_m5_market_date(self._m5_state_path, date.today().isoformat())
             self._notify()
@@ -339,10 +406,26 @@ class FocusPickStore:
         sym = normalize_symbol(symbol)
         if sym not in self._lists[category][side]:
             return False
+        owner = self._membership_owner(sym, side, category)
+        joined_at = self._episode_started_at(sym, side, category)
         self._lists[category][side] = [item for item in self._lists[category][side] if item != sym]
         self._write_focus(side, category)
         self._uninject_from_shared(sym, side, category)
         self._forget_auto_marker(sym, side, category)
+        left_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        self._emit_membership(
+            _left_event(
+                symbol=sym,
+                side=side,
+                category=category,
+                owner=owner,
+                episode="",
+                joined_at=joined_at,
+                left_at=left_at,
+                reason="focus_store.remove",
+                sessions_on_list=_sessions_between(joined_at, left_at),
+            )
+        )
         self._notify()
         return True
 
@@ -461,6 +544,51 @@ class FocusPickStore:
     def add_listener(self, callback: Callable[[], None]) -> None:
         if callback not in self._listeners:
             self._listeners.append(callback)
+
+    # ------------------------------------------------- membership provenance
+    def _emit_membership(self, event: dict) -> None:
+        """Append one membership event. R10.E.
+
+        **Never blocks and never raises into the Focus write.** The trader's
+        list is the product; this is evidence about it, and a store that could
+        cost a pick would be worse than no store. A failed append loses the
+        event and says so in the log.
+        """
+        try:
+            from evidence_ledger import EvidenceLedger
+            from focus_membership_events import (
+                SCHEMA_FOCUS_MEMBERSHIP_EVENT,
+                STREAM,
+            )
+
+            EvidenceLedger(
+                stream=STREAM, schema=SCHEMA_FOCUS_MEMBERSHIP_EVENT
+            ).append(event)
+        except Exception:
+            logging.debug("Focus membership event not recorded.", exc_info=True)
+
+    def _membership_owner(self, symbol: str, side: str, category: str) -> str:
+        """Who owns this pick, from the auto-pick markers (R10.E / F4).
+
+        Absence of a marker in a store that HAS markers means the trader owns
+        it. Absence in a store with NO markers at all is `unknown_legacy`,
+        because F4 measured that `focus_auto_picks.json` exists for no
+        historical date - calling those picks the trader's would invent
+        provenance the system never recorded.
+        """
+        from focus_membership_events import owner_for
+
+        marker = (self._auto_picks or {}).get(_membership_key(symbol, side, category))
+        return owner_for(marker, markers_present=bool(self._auto_picks))
+
+    def _episode_started_at(self, symbol: str, side: str, category: str) -> str:
+        """When this episode began, from the membership record if it has one."""
+        record = (self._membership or {}).get(_membership_key(symbol, side, category))
+        if isinstance(record, dict):
+            stamp = str(record.get("joined_at") or record.get("added_at") or "")
+            if stamp:
+                return stamp
+        return date.today().isoformat()
 
     def _notify(self) -> None:
         for callback in list(self._listeners):
