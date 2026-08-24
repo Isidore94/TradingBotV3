@@ -35,6 +35,7 @@ desk-local PT - market time is PT + 3h (America/New_York).
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 from dataclasses import dataclass, field
@@ -122,6 +123,23 @@ def bounce_type_from_event_id(event_id: str) -> str:
     return "_".join(parts[6:]) if len(parts) > 6 else ""
 
 
+_CLAIM_ENTRY = "entry_claim"
+
+
+def _claim_kind(family: object) -> str:
+    """What this family claims, via the one registry (R10.B).
+
+    Read through `outcome_semantics` rather than restated, so the scoreboard
+    and the health tile can never disagree about which rows are trades.
+    """
+    try:
+        import outcome_semantics
+
+        return outcome_semantics.claim_kind(str(family or ""))
+    except Exception:  # pragma: no cover - the module ships beside this one
+        return "unconfigured"
+
+
 def trimmed_mean(values: pd.Series, fraction: float = TRIM_FRACTION) -> float | None:
     """Symmetric trimmed mean. ``None`` when the trim would leave nothing.
 
@@ -191,7 +209,14 @@ class Coverage:
     unsettled: int = 0
     never_measured: int = 0
     below_risk_floor: int = 0
+    #: R10.C / R10.B. Rows whose family does not CLAIM an entry - an H1 colour
+    #: mark on a closed bar, a regime-pause observation. They were being
+    #: averaged as trades; they are excluded here and counted by kind, never
+    #: silently dropped.
+    not_entry_claim: int = 0
+    by_claim_kind: dict = field(default_factory=dict)
     usable: int = 0
+    usable_before_claim_split: int = 0
     notes: list[str] = field(default_factory=list)
 
 
@@ -232,7 +257,23 @@ def load_intraday_finals(
     coverage.below_risk_floor = int(floor.sum())
     frame["below_risk_floor"] = floor
 
-    frame["usable"] = ~(unsettled | floor)
+    # R10.C: what a row's family actually CLAIMS decides whether it may be
+    # averaged as a trade at all (R10.B). This is applied AFTER the other two
+    # exclusions so the before/after in section 1b is measured on the same
+    # population the previous report ranked.
+    frame["claim_kind"] = frame["bounce_type"].map(_claim_kind)
+    entry_claim = frame["claim_kind"] == _CLAIM_ENTRY
+    frame["not_entry_claim"] = ~entry_claim
+
+    prior_usable = ~(unsettled | floor)
+    coverage.usable_before_claim_split = int(prior_usable.sum())
+    coverage.not_entry_claim = int((prior_usable & ~entry_claim).sum())
+    coverage.by_claim_kind = {
+        str(kind): int(count)
+        for kind, count in frame.loc[prior_usable, "claim_kind"].value_counts().items()
+    }
+
+    frame["usable"] = prior_usable & entry_claim
     coverage.usable = int(frame["usable"].sum())
     return frame, coverage
 
@@ -293,6 +334,27 @@ def _cell_name(key: object) -> str:
     return " / ".join(rendered)
 
 
+def _summary_for(cell: "pd.DataFrame", values: "pd.Series") -> dict:
+    """One cell through `evidence_stats`, carrying symbol and session identity.
+
+    A mean over 200 rows that are one name on two sessions has a sample size of
+    roughly one; only concentration and the session-block interval can say so,
+    and both need the labels to travel with the values.
+    """
+    import evidence_stats
+
+    index = values.index
+    symbols = (
+        cell.loc[index, "symbol"].astype(str).tolist() if "symbol" in cell.columns else []
+    )
+    sessions = (
+        cell.loc[index, "trade_date"].astype(str).tolist()
+        if "trade_date" in cell.columns
+        else []
+    )
+    return evidence_stats.summarize(values.tolist(), symbols=symbols, sessions=sessions)
+
+
 def summarise(
     frame: pd.DataFrame,
     by: str | list[str],
@@ -311,6 +373,7 @@ def summarise(
     grouped = frame.groupby(by, dropna=False)
     rows = []
     for key, cell in grouped:
+        _cell_frame = cell
         values = pd.to_numeric(cell[r_column], errors="coerce").dropna()
         if values.empty:
             continue
@@ -326,27 +389,48 @@ def summarise(
             stops = pd.to_numeric(stops, errors="coerce").dropna()
             if len(stops):
                 stop_rate = round(float(stops.mean()) * 100, 1)
+        # R10.C: ground rule 10 lives in `evidence_stats`, once, and every
+        # ground-rule-11 surface reads it from there - so the scoreboard, the
+        # cohort CSVs and the review report cannot drift into three different
+        # definitions of the same word.
+        summary = _summary_for(cell, values)
+        raw = summary["raw"]
+        clipped = summary.get("clipped") or {}
+        boot = summary.get("bootstrap") or {}
+        by_symbol = (summary.get("concentration") or {}).get("by_symbol") or {}
+        by_session = (summary.get("concentration") or {}).get("by_session") or {}
         rows.append(
             {
                 # " / ", never "|": these names are printed straight into a markdown
                 # table, and a pipe inside a cell silently splits the column.
                 "cell": _cell_name(key),
                 "n": int(len(values)),
-                "mean_r": round(float(values.mean()), 3),
-                "trimmed_mean_r": (
-                    round(trimmed_mean(values), 3) if trimmed_mean(values) is not None else None
-                ),
-                "median_r": round(float(values.median()), 3),
+                "symbols": summary["counts"]["symbols"],
+                "sessions": summary["counts"]["sessions"],
+                "mean_r": raw["mean"],
+                "trimmed_mean_r": raw["trimmed_mean"],
+                "median_r": raw["median"],
+                "clipped_mean_r": clipped.get("mean"),
                 "stop_out_rate": stop_rate,
-                "p10_r": round(float(values.quantile(0.10)), 3),
-                "p90_r": round(float(values.quantile(0.90)), 3),
+                "p10_r": raw["p10"],
+                "p90_r": raw["p90"],
+                "ci_low": boot.get("low") if boot.get("measured") else None,
+                "ci_high": boot.get("high") if boot.get("measured") else None,
+                "top_symbol_share": by_symbol.get("top_share"),
+                "top_session_share": by_session.get("top_share"),
+                "evidence_label": summary["evidence_label"],
+                "meets_n_floor": summary["meets_n_floor"],
             }
         )
     if not rows:
         return pd.DataFrame()
     out = pd.DataFrame(rows)
-    out["reportable"] = out["n"] >= int(min_n)
-    return out.sort_values(["reportable", "trimmed_mean_r"], ascending=[False, False])
+    # `meets_n_floor` comes from `evidence_stats` and means exactly what it
+    # says. The old `reportable` column meant the same arithmetic under a name
+    # that claimed more than it measured - n >= 30 is NECESSARY, never
+    # sufficient (ground rule 10), and a column called "reportable" invites a
+    # reader to treat a cleared floor as permission.
+    return out.sort_values(["meets_n_floor", "trimmed_mean_r"], ascending=[False, False])
 
 
 def baseline_lift(playbook: pd.DataFrame, *, min_n: int = MIN_CELL_N) -> pd.DataFrame:
@@ -422,6 +506,223 @@ def _table(frame: pd.DataFrame, columns: list[str], *, limit: int | None = None)
     return "\n".join(lines) + "\n"
 
 
+def _claim_split_section(coverage: Coverage, before, after) -> str:
+    """Section 1b: what the R10.B claim-kind split MOVED, side by side.
+
+    The split removes rows the previous reports averaged - 147,713 annotation
+    rows across the whole store - so figures the trader has already read will
+    change. An unannounced move reads as a regression; an announced one reads
+    as the fix working. So every family whose number moved is printed with its
+    before, its after, the rows removed and the claim kind that removed them,
+    rather than a list of names and an assurance.
+    """
+    import pandas as pd
+
+    lines = ["\n### 1b. What the claim-kind split moved (R10.B), before and after\n"]
+    lines.append(
+        "Rows whose family does not CLAIM an entry - an H1 colour mark on a bar that "
+        "had already closed, a regime-pause observation - were previously averaged as "
+        "trades. They are excluded now. **Figures below that you have seen before will "
+        "have moved, and this table is where they move in the open.**\n\n"
+        "`was_n` and `rows_removed` both count rows carrying a MEASURABLE R, so the "
+        "two columns subtract.\n\n"
+    )
+    if coverage.by_claim_kind:
+        kinds = ", ".join(
+            f"`{kind}` {count:,}" for kind, count in sorted(coverage.by_claim_kind.items())
+        )
+        lines.append(f"Settled, above-the-floor rows by claim kind: {kinds}.\n\n")
+    if coverage.not_entry_claim == 0:
+        lines.append(
+            "No settled row in this window was excluded by the split, so nothing in "
+            "this report moved because of it.\n"
+        )
+        return "".join(lines)
+
+    if before is None or getattr(before, "empty", True):
+        return "".join(lines)
+
+    rows = []
+    for family, cell in before.groupby("bounce_type", dropna=False):
+        kept = cell[cell["usable"]] if "usable" in cell.columns else cell.iloc[0:0]
+        was = pd.to_numeric(cell["close_r"], errors="coerce").dropna()
+        now = pd.to_numeric(kept["close_r"], errors="coerce").dropna()
+        if was.empty:
+            continue
+        # Counted on the SAME basis as `was_n` - rows carrying a measurable R.
+        # Counting raw rows here instead produced `rows_removed` LARGER than
+        # `was_n` on three families, which is arithmetic nobody can follow.
+        removed = len(was) - len(now)
+        if not removed:
+            continue
+        kinds = sorted({str(value) for value in cell["claim_kind"].tolist()})
+        rows.append(
+            {
+                "family": str(family),
+                "was_n": len(was),
+                "was_mean_r": round(float(was.mean()), 3),
+                "now_n": len(now),
+                # A family removed ENTIRELY has no "after". That is the honest
+                # answer and it is printed as one, never as a zero.
+                "now_mean_r": round(float(now.mean()), 3) if len(now) else None,
+                "rows_removed": removed,
+                "claim_kind": " / ".join(kinds),
+            }
+        )
+    if not rows:
+        return "".join(lines)
+    frame = pd.DataFrame(rows).sort_values("rows_removed", ascending=False)
+    lines.append(
+        _table(
+            frame,
+            ["family", "claim_kind", "was_n", "was_mean_r", "now_n", "now_mean_r", "rows_removed"],
+            limit=25,
+        )
+    )
+    lines.append(
+        "\nA blank `now_mean_r` is a family that left this report entirely: every one "
+        "of its rows was an annotation or an observation, so it never had a trade "
+        "average to keep. That is not a family whose edge vanished - it is a family "
+        "that never claimed one.\n"
+    )
+    return "".join(lines)
+
+
+#: Where derived reports live (R10 trader decision: a runtime report store with
+#: atomic last-good; `docs/analysis/` receives only deliberately frozen,
+#: hand-committed audits).
+REPORT_STORE_SUBDIR = "evidence_reports"
+BUNDLE_SCHEMA = "setup_scoreboard_bundle_v1"
+
+
+def report_store_dir():
+    from project_paths import REPORTS_DIR
+
+    return Path(REPORTS_DIR) / REPORT_STORE_SUBDIR
+
+
+def publish_atomically(path: Path, content: str) -> Path:
+    """Write `path` so a reader never sees a half-written report.
+
+    Temp file beside the target, then replace. The previous report stays
+    readable for the whole write and is only swapped at the end, so a failed
+    publish costs the NEW report and never the last good one - the same rule
+    the away report already keeps.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, target)
+    return target
+
+
+def build_bundle(
+    *,
+    intraday,
+    coverage: Coverage,
+    playbook,
+    window_start: str,
+    window_end: str,
+    generated_at: str,
+    ledger_rows: int | None = None,
+) -> dict:
+    """The machine-readable half of the report (R10.C).
+
+    The Markdown is for a person; this is for the `evidence_report` slot, the
+    opt-in `setup_performance` scope, and anything else that needs the numbers
+    without re-parsing prose. Both come from the SAME computation, so they
+    cannot disagree.
+    """
+    usable = intraday[intraday["usable"]] if not intraday.empty else intraday
+    families = summarise(usable, "bounce_type") if not usable.empty else pd.DataFrame()
+    sides = summarise(usable, ["bounce_type", "direction"]) if not usable.empty else pd.DataFrame()
+    return {
+        "schema": BUNDLE_SCHEMA,
+        "generated_at": generated_at,
+        "window": {"start": window_start, "end": window_end},
+        "coverage": {
+            "rows_scanned": coverage.rows_scanned,
+            "finals": coverage.finals,
+            "in_window": coverage.in_window,
+            "sessions": coverage.sessions,
+            "unsettled": coverage.unsettled,
+            "never_measured": coverage.never_measured,
+            "below_risk_floor": coverage.below_risk_floor,
+            "usable_before_claim_split": coverage.usable_before_claim_split,
+            "not_entry_claim": coverage.not_entry_claim,
+            "by_claim_kind": dict(coverage.by_claim_kind or {}),
+            "usable": coverage.usable,
+            "notes": list(coverage.notes),
+        },
+        "ledger_rows_read": ledger_rows,
+        "families": families.to_dict("records") if not families.empty else [],
+        "family_by_side": sides.to_dict("records") if not sides.empty else [],
+        "exit_policies": _exit_policy_rows(usable),
+        "declared_window": declared_window(generated_at[:10]),
+        "declared_window_note": (
+            "reprinted from R9.3 §5 unchanged; NOT measured here and not "
+            "re-declared - the sessions it names have not elapsed"
+        ),
+        "statistics_contract": {
+            "module": "evidence_stats",
+            "schema": evidence_stats_schema(),
+            "n_floor": 30,
+            "n_floor_note": "necessary, never sufficient",
+            "clip": 4.0,
+        },
+    }
+
+
+def evidence_stats_schema() -> str:
+    import evidence_stats
+
+    return evidence_stats.SUMMARY_SCHEMA
+
+
+def _exit_policy_rows(usable) -> list[dict]:
+    """Each frozen exit policy on its own, per family (R10.B path payloads).
+
+    Reported side by side and never blended. A row whose path was not captured
+    contributes to `paths_missing` rather than to a policy - a policy average
+    over the trades that happened to carry a path is a different statistic
+    wearing the same name.
+    """
+    if usable is None or getattr(usable, "empty", True):
+        return []
+    if "context_json" not in usable.columns:
+        return []
+    import evidence_stats
+
+    per_family: dict = {}
+    missing: dict = {}
+    for _index, row in usable.iterrows():
+        family = str(row.get("bounce_type") or "")
+        context = _safe_json(row.get("context_json"))
+        path = (context or {}).get("path") or {}
+        policies = path.get("exit_policies") or {}
+        if not policies:
+            missing[family] = missing.get(family, 0) + 1
+            continue
+        for name, value in policies.items():
+            if value.get("r") is None:
+                continue
+            per_family.setdefault(family, {}).setdefault(name, []).append(float(value["r"]))
+    rows = []
+    for family in sorted(set(per_family) | set(missing)):
+        entry = {"family": family, "paths_missing": missing.get(family, 0)}
+        for name, values in sorted(per_family.get(family, {}).items()):
+            summary = evidence_stats.summarize(values, clip=None)
+            entry[name] = {
+                "n": summary["n"],
+                "mean_r": summary["raw"]["mean"],
+                "trimmed_mean_r": summary["raw"]["trimmed_mean"],
+                "median_r": summary["raw"]["median"],
+            }
+        rows.append(entry)
+    return rows
+
+
 def render_report(
     *,
     intraday: pd.DataFrame,
@@ -432,6 +733,13 @@ def render_report(
     generated_at: str,
 ) -> str:
     usable = intraday[intraday["usable"]] if not intraday.empty else intraday
+    # The population earlier reports ranked, kept so section 1b can show what
+    # moved rather than merely asserting that something did.
+    before = (
+        intraday[~(intraday["unsettled_close"] | intraday["below_risk_floor"])]
+        if not intraday.empty
+        else intraday
+    )
     parts: list[str] = []
     add = parts.append
 
@@ -459,6 +767,10 @@ def render_report(
         f"| …of those, never advanced a bar | {coverage.never_measured:,} |\n"
         f"| excluded — stop under {RISK_FLOOR_PCT_OF_ENTRY}% of entry | "
         f"{coverage.below_risk_floor:,} |\n"
+        f"| settled, above the floor (what earlier reports ranked) | "
+        f"{coverage.usable_before_claim_split:,} |\n"
+        f"| excluded — family does not CLAIM an entry (R10.B) | "
+        f"{coverage.not_entry_claim:,} |\n"
         f"| **usable** | **{coverage.usable:,}** |\n"
     )
 
@@ -486,14 +798,20 @@ def render_report(
         "argument for fixing the writer, not for reading around it.\n"
     )
 
+    add(_claim_split_section(coverage, before, usable))
+
     add("\n## 2. Intraday families (`intraday_bounce_outcomes.csv` finals)\n")
     add(
-        f"Cells with n < {MIN_CELL_N} are listed but marked `reportable = False` and are "
+        f"Cells with n < {MIN_CELL_N} are listed but marked `meets_n_floor = False` and are "
         "not ranked. Every R appears as mean, 10% trimmed mean and median, with the "
         "stop-out rate beside it — a plain mean on a ratio with an unbounded numerator "
         "is exactly the statistic that produced the review's phantom −1.82R.\n\n"
     )
-    cols = ["cell", "n", "mean_r", "trimmed_mean_r", "median_r", "stop_out_rate", "p10_r", "p90_r", "reportable"]
+    cols = [
+        "cell", "n", "symbols", "sessions", "mean_r", "trimmed_mean_r", "median_r",
+        "clipped_mean_r", "stop_out_rate", "p10_r", "p90_r", "ci_low", "ci_high",
+        "top_symbol_share", "evidence_label", "meets_n_floor",
+    ]
     add(_table(summarise(usable, "bounce_type"), cols))
 
     add("\n### 2a. By market environment — the axis the review called starved\n")
@@ -532,7 +850,7 @@ def render_report(
         add(
             _table(
                 lift,
-                ["cell", "n", "mean_r", "trimmed_mean_r", "median_r", "baseline_trimmed_r", "lift_vs_baseline", "reportable"],
+                ["cell", "n", "mean_r", "trimmed_mean_r", "median_r", "baseline_trimmed_r", "lift_vs_baseline", "meets_n_floor"],
             )
         )
         add(
@@ -560,6 +878,13 @@ def render_report(
     )
 
     add("\n## 5. The declared window for the next inspection\n")
+    add(
+        "**R10.C did not alter, re-declare, or measure this window early.** It is\n"
+        "reprinted below exactly as R9.3 §5 declared it, and nothing in this report\n"
+        "measures it: the 40 sessions it names have not elapsed, and a number taken\n"
+        "from a window before it closes is not the evidence the window exists to\n"
+        "produce.\n\n"
+    )
     add(
         "Everything above is post-hoc. This is the part that is not: the window below "
         "is frozen **now**, before it is measured, which is the only route by which any "
@@ -589,6 +914,17 @@ def main() -> int:
         default=Path(OUTPUT_DIR) / "reports" / "setup_playbook_episodes.csv",
     )
     parser.add_argument("--out", type=Path, default=None, help="write the report here")
+    parser.add_argument(
+        "--ledger",
+        type=Path,
+        default=None,
+        help="R10.A evidence ledger directory to count alongside the CSV",
+    )
+    parser.add_argument(
+        "--freeze",
+        action="store_true",
+        help="also copy a dated audit into docs/analysis/ (a deliberate, hand-committed freeze)",
+    )
     args = parser.parse_args()
 
     intraday, coverage = load_intraday_finals(
@@ -604,20 +940,66 @@ def main() -> int:
     if not args.playbook.exists():
         coverage.notes.append(f"playbook episodes not found at {args.playbook}")
 
+    generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    # R10.C: the append-only ledger beside the CSV. Counted, not merged - the
+    # CSV remains the authority during R10.A's canary, and a report that
+    # silently preferred one source over the other would make the canary
+    # unreadable.
+    ledger_rows = None
+    if args.ledger is not None:
+        try:
+            from evidence_ledger import intraday_outcome_ledger
+
+            result = intraday_outcome_ledger(args.ledger).read()
+            ledger_rows = len(result.rows)
+            coverage.notes.append(
+                f"evidence ledger: {result.coverage_note} (counted beside the CSV, "
+                "not merged into it)"
+            )
+        except Exception as exc:  # noqa: BLE001
+            coverage.notes.append(f"evidence ledger unreadable: {exc}")
+
     report = render_report(
         intraday=intraday,
         coverage=coverage,
         playbook=playbook,
         window_start=args.window_start,
         window_end=args.window_end,
-        generated_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        generated_at=generated_at,
     )
+    bundle = build_bundle(
+        intraday=intraday,
+        coverage=coverage,
+        playbook=playbook,
+        window_start=args.window_start,
+        window_end=args.window_end,
+        generated_at=generated_at,
+        ledger_rows=ledger_rows,
+    )
+
     if args.out:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(report, encoding="utf-8")
+        publish_atomically(args.out, report)
         print(f"wrote {args.out}")
     else:
-        sys.stdout.write(report)
+        # The runtime report store, with atomic last-good: a failed publish
+        # costs the new report, never the previous one.
+        store = report_store_dir()
+        published = publish_atomically(store / "setup_scoreboard.md", report)
+        publish_atomically(
+            store / "setup_scoreboard.json",
+            json.dumps(bundle, indent=1, sort_keys=True, default=str) + "\n",
+        )
+        print(f"wrote {published} and its bundle")
+    if args.freeze:
+        # `docs/analysis/` receives only deliberately frozen, hand-committed
+        # audits (R10 trader decision), so this is opt-in and dated.
+        from project_paths import ROOT_DIR
+
+        stamp = generated_at[:10]
+        frozen = Path(ROOT_DIR) / "docs" / "analysis" / f"SETUP_SCOREBOARD_{stamp}.md"
+        publish_atomically(frozen, report)
+        print(f"froze {frozen}")
     return 0
 
 

@@ -323,18 +323,69 @@ class CohortIsolationTests(unittest.TestCase):
     ]
 
     def test_focus_only_outcomes_aggregate_exactly_as_before(self) -> None:
-        """Every row, every field, in order, against the pre-change golden.
+        """Every row, every ORIGINAL field, in order, against the pre-change golden.
 
         An earlier version of this fence compared only the distinct cohort
         names, so any change to counts, returns, win rates, profit factors,
         side filters, horizons, or ordering that preserved the names would
         have passed. This is the real fence for the
-        COHORT_BASE_BY_SOURCE_PREFIX rewrite.
+        COHORT_BASE_BY_SOURCE_PREFIX rewrite, and all of that is still fenced.
+
+        **Narrowed to the original column set on 2026-08-24 (R10.C.)** The
+        rollup now also carries ground rule 10's robust half - median, trimmed
+        mean, p10/p90, symbol and session counts, concentration, a
+        session-block interval and the evidence label - APPENDED so every
+        existing reader keeps working. Those columns are new information about
+        the same rows; comparing whole dicts would make the fence fail on any
+        addition, which would teach the next person to delete the fence rather
+        than think about it. The additions are checked by
+        `test_the_robust_columns_are_additive_and_never_replace_the_originals`
+        below, so nothing is unguarded.
         """
         rows = build_human_focus_performance_rows(
             CHARACTERIZATION_OUTCOMES, updated_at=_TS
         )
-        self.assertEqual(rows, CHARACTERIZATION_GOLDEN)
+        original_fields = list(CHARACTERIZATION_GOLDEN[0])
+        projected = [
+            {field: row[field] for field in original_fields} for row in rows
+        ]
+        self.assertEqual(projected, CHARACTERIZATION_GOLDEN)
+
+    def test_the_robust_columns_are_additive_and_never_replace_the_originals(self) -> None:
+        """R10.C. A bare mean is what produced `regime_pause_rw`'s -1.82R, so
+        it is no longer published alone - but it IS still published, because
+        hiding it would be its own dishonesty."""
+        rows = build_human_focus_performance_rows(
+            CHARACTERIZATION_OUTCOMES, updated_at=_TS
+        )
+        row = rows[0]
+
+        # The original seven survive untouched.
+        for field in ("cohort", "side", "horizon_sessions", "sample_count",
+                      "win_rate", "avg_side_return", "profit_factor"):
+            self.assertIn(field, row)
+        # And the robust half rides beside them.
+        for field in ("median_return", "trimmed_mean_return", "p10_return",
+                      "p90_return", "symbols", "sessions", "top_symbol_share",
+                      "ci_low", "ci_high", "ci_basis", "evidence_label",
+                      "meets_n_floor"):
+            self.assertIn(field, row)
+        # Post-hoc rollups are discovery. Nothing here can make one a
+        # confirmation, whatever its n.
+        self.assertEqual(row["evidence_label"], "discovery")
+
+    def test_a_cell_that_cannot_carry_an_interval_says_why_rather_than_printing_zero(self) -> None:
+        """A blank interval with no explanation reads as an oversight. These
+        characterization rows span too few sessions to bootstrap, and the row
+        has to say that rather than imply a precision it does not have."""
+        rows = build_human_focus_performance_rows(
+            CHARACTERIZATION_OUTCOMES, updated_at=_TS
+        )
+        unmeasured = [row for row in rows if not row["ci_low"]]
+        self.assertTrue(unmeasured, "these fixtures span too few sessions to bootstrap")
+        for row in unmeasured:
+            self.assertEqual(row["ci_high"], "")
+            self.assertTrue(row["ci_basis"].startswith("unmeasured: "))
 
     def test_the_characterization_can_tell_cohorts_apart(self) -> None:
         """Sensitivity control: a new sub-cohort is visible to the fence."""

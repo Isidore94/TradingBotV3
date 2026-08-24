@@ -88,6 +88,23 @@ HUMAN_FOCUS_PERFORMANCE_COLUMNS = [
     "avg_side_return",
     "profit_factor",
     "updated_at",
+    # R10.C: ground rule 10's robust half, APPENDED so every existing reader
+    # keeps working unchanged. `avg_side_return` above is a bare mean on a
+    # ratio, and a bare mean is what produced `regime_pause_rw`'s -1.82R. It is
+    # still published - hiding it would be its own dishonesty - but it is no
+    # longer published alone.
+    "median_return",
+    "trimmed_mean_return",
+    "p10_return",
+    "p90_return",
+    "symbols",
+    "sessions",
+    "top_symbol_share",
+    "ci_low",
+    "ci_high",
+    "ci_basis",
+    "evidence_label",
+    "meets_n_floor",
 ]
 
 
@@ -521,6 +538,52 @@ def _coerce_return(value: Any) -> float | None:
         return None
 
 
+def _robust_columns(
+    values: list[float], *, symbols: list[str], sessions: list[str]
+) -> dict[str, str]:
+    """Ground rule 10's robust half for one cohort cell, via `evidence_stats`.
+
+    Routed through the shared module rather than computed here, so the cohort
+    CSVs, the setup scoreboard and the review report cannot drift into three
+    different definitions of the same word (R10.C / ground rule 11).
+
+    Every value is rendered as text, blank when unmeasurable - a blank interval
+    is an interval nobody could compute, and writing 0 there would invent a
+    precision the sample does not have.
+    """
+    try:
+        import evidence_stats
+    except Exception:  # pragma: no cover - the module ships beside this one
+        return {}
+    summary = evidence_stats.summarize(values, symbols=symbols, sessions=sessions)
+    raw = summary.get("raw") or {}
+    boot = summary.get("bootstrap") or {}
+    by_symbol = (summary.get("concentration") or {}).get("by_symbol") or {}
+
+    def _text(value: Any) -> str:
+        return "" if value is None else str(value)
+
+    return {
+        "median_return": _text(raw.get("median")),
+        "trimmed_mean_return": _text(raw.get("trimmed_mean")),
+        "p10_return": _text(raw.get("p10")),
+        "p90_return": _text(raw.get("p90")),
+        "symbols": str((summary.get("counts") or {}).get("symbols", 0)),
+        "sessions": str((summary.get("counts") or {}).get("sessions", 0)),
+        "top_symbol_share": _text(by_symbol.get("top_share")),
+        "ci_low": _text(boot.get("low")) if boot.get("measured") else "",
+        "ci_high": _text(boot.get("high")) if boot.get("measured") else "",
+        # The reason travels when the interval does not: a blank with no
+        # explanation reads as an oversight rather than a refusal.
+        "ci_basis": (
+            str(boot.get("interval")) if boot.get("measured")
+            else f"unmeasured: {boot.get('reason', '')}"
+        ),
+        "evidence_label": str(summary.get("evidence_label") or ""),
+        "meets_n_floor": "1" if summary.get("meets_n_floor") else "0",
+    }
+
+
 def _profit_factor(values: list[float]) -> str:
     gains = sum(value for value in values if value > 0)
     losses = abs(sum(value for value in values if value < 0))
@@ -582,13 +645,25 @@ def build_human_focus_performance_rows(
                 if side_filter == "ALL" or _side_label(row.get("side")) == side_filter
             ]
             for horizon in HORIZONS:
-                values = [
-                    value
-                    for value in (_coerce_return(row.get(f"h{horizon}_return")) for row in filtered)
-                    if value is not None
-                ]
-                if not values:
+                # Symbol and session travel WITH each value, because a mean over
+                # 200 rows that are one name on one day has a sample size of
+                # roughly one, and only concentration and the session-block
+                # interval can say so (R10.C / ground rule 10).
+                measured: list[tuple[float, str, str]] = []
+                for row in filtered:
+                    value = _coerce_return(row.get(f"h{horizon}_return"))
+                    if value is None:
+                        continue
+                    measured.append(
+                        (
+                            value,
+                            str(row.get("symbol") or "").strip().upper(),
+                            str(row.get("trade_date") or "").strip(),
+                        )
+                    )
+                if not measured:
                     continue
+                values = [item[0] for item in measured]
                 sample_count = len(values)
                 wins = len([value for value in values if value > 0])
                 rows.append(
@@ -601,6 +676,11 @@ def build_human_focus_performance_rows(
                         "avg_side_return": f"{sum(values) / sample_count:.6f}",
                         "profit_factor": _profit_factor(values),
                         "updated_at": timestamp,
+                        **_robust_columns(
+                            values,
+                            symbols=[item[1] for item in measured],
+                            sessions=[item[2] for item in measured],
+                        ),
                     }
                 )
     return rows

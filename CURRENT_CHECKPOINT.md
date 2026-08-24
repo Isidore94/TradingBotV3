@@ -83,7 +83,7 @@ also starts the two-week collection clock that gates R10.I.
 
 ---
 
-## 2026-08-24 evening - R10 build slate (packet 1 of 10 done)
+## 2026-08-24 evening - R10 build slate (packets 1-2 of 10 done)
 
 **Branch `testing-week-2026-08-24`.** Building the slate authorized in
 `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §4: R10.B-R10.H, the AWAY
@@ -93,7 +93,7 @@ sequencing override.
 | Packet | State |
 |---|---|
 | **R10.B** outcome semantics + path capture | **BUILT** - canary owed |
-| R10.C evidence_stats + scoreboard | not started |
+| **R10.C** evidence_stats + scoreboard | **BUILT** |
 | R10.D tracker transition ledger | not started |
 | R10.E Focus membership events | not started |
 | R10.F like_cohort_grading | not started |
@@ -103,9 +103,9 @@ sequencing override.
 | Two opt-in scopes | not started |
 | R10.I machinery | not started |
 
-| Check after R10.B | Result |
+| Check after R10.C | Result |
 |---|---|
-| `pytest tests/ -q` | **4587 passed / 19 subtests**, exit 0 |
+| `pytest tests/ -q` | **4617 passed / 19 subtests**, exit 0 |
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
 | `launch_gui.py --selftest` | **58/58**, exit 0 |
 | Golden fixtures | **byte-identical**, SHA-256 verified on all five |
@@ -115,6 +115,14 @@ packet never marks its live gate met. One live session is needed to confirm
 that LRSI crossings now register gradeable outcome rows (the engine has been
 firing ungradeable alerts since it shipped) and that H1 stamps land on the bar
 close.
+
+**R10.C makes the claim-kind split visible in the numbers the trader reads.**
+On the 07-24..08-21 scoreboard window, of 5,970 settled above-the-floor rows
+**4,442 were annotations and 526 observations - only 1,002 were entry claims**.
+83% of what earlier reports ranked was not a trade. Section 1b prints every
+moved family before and after with the rows removed and the claim kind that
+removed them, so nothing moves silently. R9.3's 40-session window is reprinted
+unchanged and the report states it did not measure it.
 
 **What R10.B measured that changes how the store should be read:** the live
 outcome store is **entry_claim 68,237 / annotation 147,713 / information

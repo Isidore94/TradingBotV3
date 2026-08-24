@@ -1252,7 +1252,11 @@ second scoreboard.
    `eod_hold`, `trail_2bar_after_1r`, `vwap_close_after_1r`, `atr_1p5_trail` —
    plus `oracle_best_ex_post_r` as a labelled upper bound. Fixture: frozen EAT
    and CAKE M5 bars; the test asserts the honest calculation, not a desired sign.
-4. **R10.C Robust deterministic evidence report** (extends R9.3; C4). New
+4. **R10.C Robust deterministic evidence report** (extends R9.3; C4) - **BUILT 2026-08-24, GREEN.** `scripts/evidence_stats.py` is ground rule 10
+   implemented once; the cohort CSVs and `setup_scoreboard.py` both read it.
+   Bundle `setup_scoreboard_bundle_v1`, runtime report store with atomic
+   last-good, `--freeze`, `--ledger`. R9.3's window reprinted unchanged and
+   explicitly not measured. New
    `scripts/evidence_stats.py` implementing ground rule 10 exactly, used by
    every surface in ground rule 11. `setup_scoreboard.py` gains the ledger as
    input, the new axes, the frozen exit policies side by side, and a

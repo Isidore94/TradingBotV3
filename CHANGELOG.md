@@ -21,6 +21,73 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - R10.C: one statistics discipline, and the numbers it moves
+
+- **`scripts/evidence_stats.py` implements ground rule 10 exactly once**, and
+  every ground-rule-11 surface routes through it. Until now the cohort rollup
+  published a bare mean, a win rate and a profit factor; the scoreboard
+  published quantiles but no concentration and no interval; nothing published
+  an interval at all. A reader comparing two of them was comparing two
+  disciplines.
+- **What every summary now carries**: event / symbol / session counts;
+  excluded and unresolved by reason beside n; raw mean, median, trimmed mean,
+  p10/p90; uncapped and 4R-clipped side by side; profit factor with its
+  convention; stop rate; concentration by symbol and session; a session-block
+  bootstrap interval; and a `discovery` / `confirmation` label.
+- **The refusals are the point.** A cohort with no losers reports **no** profit
+  factor, not a large finite number - a PF with a zero denominator is a claim
+  about a division nobody performed. A sample spanning one session gets **no**
+  interval, because an interval over one block describes one day as though it
+  were a range. A policy or a cell missing its input reports unmeasured, never
+  zero.
+- **The interval resamples whole SESSIONS**, not individual trades: trades
+  inside one session share the tape, and resampling them individually would
+  report a precision the data does not have. It seeds from the data itself, so
+  two runs over identical inputs agree - a report that changes between runs
+  cannot be checked by anyone.
+- **`confirmation` can never be inferred from n.** A large post-hoc sample is a
+  large discovery. Only a caller naming a window declared in advance gets the
+  confirmation label. **n >= 30 is necessary, never sufficient**, and the old
+  `reportable` column - which meant exactly the n floor under a name that
+  claimed more than it measured - is now `meets_n_floor`.
+- **The cohort performance CSVs gain ground rule 10's robust half**, appended
+  so every existing reader keeps working: median, trimmed mean, p10/p90,
+  symbol and session counts, top-symbol share, the interval and its basis, the
+  evidence label. A cell that cannot carry an interval **prints why** rather
+  than a blank a reader would take for an oversight.
+- **The setup scoreboard applies R10.B's claim-kind split, and shows what it
+  moved.** Measured on the 07-24..08-21 window: of 5,970 settled,
+  above-the-floor rows, **4,442 were annotations and 526 were observations -
+  only 1,002 were entry claims.** 83% of what earlier reports ranked was not a
+  trade. New section 1b prints every affected family with its **before mean,
+  its after mean, the rows removed and the claim kind that removed them**,
+  because an unannounced move reads as a regression and an announced one reads
+  as the fix working. `h1_ema10_bounce` (2,887 rows, -0.092R),
+  `h1_blue_after_red` (1,197, -0.126R) and `h1_green_to_yellow` (354, -0.004R)
+  leave entirely; so do `regime_pause_rs` (304) and `regime_pause_rw` (208).
+  A family with no "after" prints a blank and the report says what that blank
+  means - a family that never claimed an edge, not one whose edge vanished.
+- **R9.3's frozen 40-session window is reprinted unchanged and the report says
+  in words that it did not measure it.** The sessions it names have not
+  elapsed, and a number taken from a window before it closes is not the
+  evidence the window exists to produce.
+- **A machine-readable bundle beside the Markdown**
+  (`setup_scoreboard_bundle_v1`), from the SAME computation so the two cannot
+  disagree; the **runtime report store** at `output/reports/evidence_reports/`
+  with atomic last-good (a failed publish costs the new report, never the
+  previous one); `--freeze` for a dated, hand-committed audit into
+  `docs/analysis/`; and `--ledger` to count the R10.A evidence ledger
+  **beside** the CSV rather than merging it - the CSV stays the authority
+  during the canary, and a report that silently preferred one source would make
+  the canary unreadable. First live run read 12,707 ledger rows.
+- **The four frozen exit policies are reported per family, side by side and
+  never blended.** Rows without a captured path are COUNTED (`paths_missing`)
+  rather than quietly excluded: averaging only the trades that happen to carry
+  a path is a different statistic wearing the same name. Every family currently
+  shows `paths_missing` equal to its whole n, because path capture began with
+  R10.B and no historical row has one.
+- Golden fixtures byte-identical before and after (ground rule 1).
+
 ### 2026-08-24 - R10.B: the outcome store learns what its rows CLAIM
 
 - **Every registered row was measured as a trade, and most of them are not
