@@ -50,6 +50,10 @@ COHORT_BASE_BY_SOURCE_PREFIX = (
     ("human_focus_swing", "focus_swing"),
     ("human_focus_m5", "focus_m5"),
     ("human_focus_veto", VETO_SOURCE_PREFIX),
+    # R10.F: the LIKE cohort, APPENDED. Later phases append, never reorder -
+    # the order decides which base prefix claims a source, so inserting one
+    # above would silently re-home existing rows.
+    ("human_focus_like", "like"),
     ("human_focus_pick", "focus_pick"),
 )
 HUMAN_FOCUS_DAILY_PICK_COLUMNS = [

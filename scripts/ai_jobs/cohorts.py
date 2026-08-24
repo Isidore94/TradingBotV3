@@ -164,6 +164,119 @@ def run_veto_cohort_grading(
     }
 
 
+def run_like_cohort_grading(
+    *,
+    session_date: str = "",
+    now: datetime | None = None,
+    picks_path: Path | None = None,
+    outcomes_path: Path | None = None,
+    performance_path: Path | None = None,
+    daily_bars_dir: Path | None = None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Grade every gradeable LIKE claim. R10.F (C1, C3).
+
+    The mirror of :func:`run_veto_cohort_grading`, and deliberately the same
+    shape: audit C1 found 52 `like_claim` rows over 2 sessions and **no**
+    `like_cohort_*` file, so the trader's rejections had a forward record and
+    their endorsements did not.
+
+    It merges the picks from the annotation log first, because unlike the veto
+    cohort - which writes a pick row at capture time - nothing has ever written
+    a like pick. The first run therefore grades the whole history retroactively.
+
+    Deterministic and idempotent: no model is called, and running twice in one
+    night produces identical files.
+    """
+    from ui.annotations.like_cohort import (
+        LIKE_COHORT_OUTCOMES_FILE,
+        LIKE_COHORT_PERFORMANCE_FILE,
+        LIKE_COHORT_PICKS_FILE,
+        merge_like_cohort_picks,
+        update_like_cohort_outcomes,
+    )
+    from project_paths import MASTER_AVWAP_DAILY_BARS_DIR
+
+    picks = Path(picks_path or LIKE_COHORT_PICKS_FILE)
+    outcomes = Path(outcomes_path or LIKE_COHORT_OUTCOMES_FILE)
+    performance = Path(performance_path or LIKE_COHORT_PERFORMANCE_FILE)
+    bars_dir = Path(daily_bars_dir or MASTER_AVWAP_DAILY_BARS_DIR)
+
+    merged = merge_like_cohort_picks(picks_path=picks, now=now)
+    rows = _read_pick_rows(picks)
+    if not rows:
+        return {
+            "status": "skipped",
+            "reason": (
+                f"no like cohort picks yet at {picks.name}"
+                + (
+                    f"; {merged['skipped_no_side']} claim(s) carry no side"
+                    if merged.get("skipped_no_side")
+                    else ""
+                )
+            ),
+            "picks": 0,
+            "skipped_no_side": merged.get("skipped_no_side", 0),
+        }
+
+    gradeable, ungradeable = partition_by_gradeable_side(rows)
+    if not gradeable:
+        return {
+            "status": "skipped",
+            "reason": (
+                f"{len(ungradeable)} like pick(s) carry no side and none can be "
+                "graded; a side is never assumed"
+            ),
+            "picks": len(rows),
+            "skipped_no_side": len(ungradeable),
+        }
+
+    staged: Path | None = None
+    try:
+        source = picks
+        if ungradeable:
+            staged = picks.with_name(picks.name + ".gradeable.tmp")
+            _write_pick_subset(staged, rows[0].keys(), gradeable)
+            source = staged
+        result = update_like_cohort_outcomes(
+            reference_date=None,
+            picks_path=source,
+            outcomes_path=outcomes,
+            performance_path=performance,
+            daily_bars_dir=bars_dir,
+            now=now,
+        )
+    finally:
+        if staged is not None:
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                _log.debug("Could not remove %s.", staged, exc_info=True)
+
+    reason = (
+        f"merged {merged.get('added', 0)} new claim(s); graded {len(gradeable)} pick(s); "
+        f"{result.get('updated_outcomes', 0)} outcome row(s) updated, "
+        f"{result.get('performance_rows', 0)} cohort(s)"
+    )
+    if ungradeable or merged.get("skipped_no_side"):
+        # Counted and named, never graded and never silently dropped.
+        reason += (
+            f"; {len(ungradeable) + merged.get('skipped_no_side', 0)} skipped for no side"
+        )
+    return {
+        "status": "ok",
+        "reason": reason,
+        "picks": len(rows),
+        "graded": len(gradeable),
+        "merged": merged.get("added", 0),
+        "skipped_no_side": len(ungradeable) + merged.get("skipped_no_side", 0),
+        "outcome_rows": result.get("outcome_rows", 0),
+        "updated_outcomes": result.get("updated_outcomes", 0),
+        "performance_rows": result.get("performance_rows", 0),
+        "outputs": [str(outcomes), str(performance)],
+    }
+
+
 def _write_pick_subset(path: Path, columns: Any, rows: list[dict[str, Any]]) -> None:
     fieldnames = list(columns)
     path.parent.mkdir(parents=True, exist_ok=True)

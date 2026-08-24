@@ -450,4 +450,15 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Forward-grade the trader's veto cohort (deterministic, no model)",
             max_attempts=3,
         ),
+        # R10.F, APPENDED after the veto slot. Later phases append; they never
+        # reorder these. The two cohorts are the two halves of one decision -
+        # what the trader rejected and what they endorsed - and audit C1 found
+        # only the first half had ever been graded.
+        JobSlot(
+            name="like_cohort_grading",
+            run=cohorts.run_like_cohort_grading,
+            reserve_minutes=5.0,
+            description="Forward-grade the trader's LIKE cohort (deterministic, no model)",
+            max_attempts=3,
+        ),
     ]

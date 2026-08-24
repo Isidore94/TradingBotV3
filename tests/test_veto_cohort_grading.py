@@ -272,9 +272,13 @@ def test_the_grading_slot_is_registered_last_and_is_cheap():
 
     slots = default_slots()
     names = [slot.name for slot in slots]
-    assert names[-1] == "veto_cohort_grading", "appended; the runner never reorders"
+    # R10.F appended `like_cohort_grading` AFTER this one, so the veto slot is
+    # no longer last - but it is still after the three that were there first,
+    # which is the property this test exists to hold. Later phases append; they
+    # never reorder.
     assert names[:3] == ["journal_import", "ai_summary", "ticker_briefs"]
-    slot = slots[-1]
+    assert names.index("veto_cohort_grading") == 3
+    slot = slots[names.index("veto_cohort_grading")]
     assert slot.reserve_minutes == 5.0
     assert slot.max_attempts == 3
     assert slot.enabled
@@ -508,6 +512,9 @@ def test_the_scope_can_be_selected_on_demand():
         "ai_summary",
         "ticker_briefs",
         "veto_cohort_grading",
+        # R10.F appended the LIKE mirror after the veto slot. Later phases
+        # append; they never reorder the ones above.
+        "like_cohort_grading",
     ]
     # And the override is per-call: building again without it is untouched.
     assert default_slots()[1].run.__name__ == "run_daily_summary"
