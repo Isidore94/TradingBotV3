@@ -69,6 +69,14 @@ from typing import Iterable, Mapping
 # ---------------------------------------------------------------------------
 RULE_DAILY_VOLUME_MIXED = "daily_volume_mixed_v1"
 RULE_H1_BAR_START = "h1_bar_start_v1"
+#: R10.B's successor. v1 stays exactly as it is - rules are never edited in
+#: place (ground rule 5) - and keeps tagging the 6,439 legacy rows correctly.
+#: v2 exists because the FIX is invisible to v1: an H1 bar in PT starts at :30
+#: and therefore also CLOSES at :30, so the minute heuristic cannot tell a
+#: repaired stamp from a broken one and would report a false positive on every
+#: forward row. v2 reads the explicit basis the writer now records, and falls
+#: back to v1's heuristic only when a row carries none.
+RULE_H1_BAR_START_V2 = "h1_bar_start_v2"
 RULE_FABRICATED_ZERO = "fabricated_zero_v1"
 RULE_DUPLICATE_ROW = "duplicate_row_v1"
 RULE_RISK_BELOW_FLOOR = "risk_below_floor_v1"
@@ -123,6 +131,22 @@ RULES: Mapping[str, RuleSpec] = {
             "conjunctive - family AND minute. 9,623 of 9,914 minute-30 rows are H1; "
             "291 of 6,054 non-H1 rows also land on minute 30, so the family half is "
             "load-bearing and the minute alone does not discriminate"
+        ),
+    ),
+    RULE_H1_BAR_START_V2: RuleSpec(
+        name=RULE_H1_BAR_START_V2,
+        summary=(
+            "Same question as v1, decided by the row's recorded `entry_time_basis` "
+            "when it has one. `bar_close` is clean; `bar_start` is the defect; a row "
+            "with no basis falls back to v1's family-AND-minute heuristic."
+        ),
+        applies_to="any entry-timing statistic over the intraday outcome store",
+        introduced="2026-08-24 (R10.B)",
+        precision=(
+            "exact where a basis is recorded. An H1 bar in PT starts at :30 and "
+            "closes at :30, so the minute alone cannot separate a repaired stamp "
+            "from a broken one - which is why v1 could not be edited to cover this "
+            "and a new name was required"
         ),
     ),
     RULE_FABRICATED_ZERO: RuleSpec(
@@ -524,6 +548,53 @@ def _entry_minute(entry_time: str | None) -> int | None:
         except ValueError:
             continue
     return None
+
+
+#: What a writer records about where an `entry_time` came from.
+BASIS_BAR_CLOSE = "bar_close"
+BASIS_BAR_START = "bar_start"
+
+
+def h1_bar_start_v2(
+    family: str | None,
+    entry_time: str | None,
+    *,
+    event_id: str | None = None,
+    entry_time_basis: str | None = None,
+) -> EvidenceTag:
+    """Does this row's `entry_time` carry a bar START? Basis first, heuristic second.
+
+    v1 answers by family and minute, which was the only evidence the store
+    carried. It stays. But an H1 bar in PT starts at :30 **and closes at :30**,
+    so once R10.B stamps the close, v1 reports `mixed` on a correct row - a
+    false positive on every forward row, which is worse than the defect it was
+    written to describe.
+
+    So a row that says where its stamp came from is believed, and only a row
+    that says nothing is guessed at.
+    """
+    basis = str(entry_time_basis or "").strip().lower()
+    if basis == BASIS_BAR_CLOSE:
+        return EvidenceTag(
+            rule=RULE_H1_BAR_START_V2,
+            verdict=VERDICT_SHARES,
+            reason="the row records its entry stamp as the bar close",
+        )
+    if basis == BASIS_BAR_START:
+        return EvidenceTag(
+            rule=RULE_H1_BAR_START_V2,
+            verdict=VERDICT_MIXED,
+            reason=(
+                "the row records its entry stamp as the bar start, which is not "
+                "when the signal was knowable"
+            ),
+        )
+    legacy = h1_bar_start_v1(family, entry_time, event_id=event_id)
+    return EvidenceTag(
+        rule=RULE_H1_BAR_START_V2,
+        verdict=legacy.verdict,
+        reason=f"no recorded basis; fell back to {RULE_H1_BAR_START}: {legacy.reason}",
+    )
 
 
 def fabricated_zero_v1(

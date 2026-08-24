@@ -200,3 +200,95 @@ class TestTheLane:
         assert alert.is_d1 is False
         assert is_chart_watch_alert(alert) is False
         assert is_entry_assist_text(alert.raw_text) is False
+
+
+# ==========================================================================
+# R10.B / audit D5a - the synthetic flat bar produced ZERO outcome rows
+#
+# `_emit_lrsi_cross_alert` built one bar dict with open=high=low=close and
+# passed it everywhere. `_build_bounce_trade_plan` takes a long's stop from the
+# bounce bar's LOW, so stop == entry, risk == 0, and `_register_bounce_outcome`
+# returned at its `risk_per_share == ""` guard. Measured over the audit window:
+# 0 outcome rows for `lrsi_cross_20` and `lrsi_cross_50`.
+#
+# The fix hands the REAL signal bar to the outcome registration ONLY. The alert
+# row, the tier evaluation and the message keep the flat bar they always had -
+# those feed `_evaluate_bounce_alert_quality`, and moving them would be a
+# scoring change smuggled in as an evidence fix.
+# ==========================================================================
+def _ranged_bars(closes, *, start=OPEN, spread=0.4):
+    """Bars with a real range, so a stop taken from the low is not the close."""
+    return [
+        StubBar(
+            start + timedelta(minutes=5 * index),
+            close - spread / 2,
+            close + spread,
+            close - spread,
+            close,
+        )
+        for index, close in enumerate(closes)
+    ]
+
+
+def _recording_bot(symbol_bars, **kwargs):
+    bot = stub_bot(symbol_bars, **kwargs)
+    bot.registered = []
+    bot._register_bounce_outcome = lambda *a, **k: bot.registered.append((a, k))
+    return bot
+
+
+def test_the_outcome_registration_gets_the_real_signal_bar(at_the_crossing):
+    """Fail-before-fix (D5a). The bar handed to outcome registration must have
+    the signal bar's own high and low, or no stop can be derived from it."""
+    bars = _ranged_bars(CHURN_THEN_RUN)
+    bot = _recording_bot({"AAA": bars}, longs=["AAA"])
+
+    bot.check_lrsi_cross_setups()
+
+    assert bot.registered, "the crossing must still register an outcome"
+    args, _kwargs = bot.registered[0]
+    bounce_candle = args[3]
+    assert bounce_candle["high"] != bounce_candle["low"], (
+        "a flat bar makes stop == entry, risk == 0, and registration returns early"
+    )
+    signal_bar = bars[9]
+    assert bounce_candle["high"] == pytest.approx(signal_bar.high)
+    assert bounce_candle["low"] == pytest.approx(signal_bar.low)
+    assert bounce_candle["close"] == pytest.approx(signal_bar.close)
+
+
+def test_a_registerable_risk_now_exists_for_an_lrsi_cross(at_the_crossing):
+    """The consequence that matters: the plan the registration builds carries a
+    positive risk, so the row is no longer discarded at the guard."""
+    bars = _ranged_bars(CHURN_THEN_RUN)
+    bot = _recording_bot({"AAA": bars}, longs=["AAA"])
+    bot.atr_cache = {}
+    bot._to_float_or_blank = legacy.BounceBot._to_float_or_blank.__get__(bot)
+
+    bot.check_lrsi_cross_setups()
+    args, _kwargs = bot.registered[0]
+    _symbol, side, levels, bounce_candle, current_candle = args[0], args[1], args[2], args[3], args[4]
+
+    plan = legacy.BounceBot._build_bounce_trade_plan(
+        bot, side, levels, bounce_candle, current_candle, symbol="AAA"
+    )
+    assert plan["risk_per_share"] != ""
+    assert float(plan["risk_per_share"]) > 0
+
+
+def test_the_alert_row_and_the_tier_still_see_the_flat_bar(at_the_crossing):
+    """The scoring boundary. `_evaluate_bounce_alert_quality` reads the row
+    built from the flat bar; widening that bar would move tiers, which is a
+    scoring change and needs fixtures, not an evidence packet."""
+    seen = []
+    bars = _ranged_bars(CHURN_THEN_RUN)
+    bot = _recording_bot({"AAA": bars}, longs=["AAA"])
+    bot._log_bounce_candidate_event = lambda *a, **k: (
+        seen.append(a[5]) or {"event_id": "evt-1", "symbol": a[1], "direction": a[2]}
+    )
+
+    bot.check_lrsi_cross_setups()
+
+    assert seen, "the alert row is still logged"
+    flat = seen[0]
+    assert flat["open"] == flat["high"] == flat["low"] == flat["close"]

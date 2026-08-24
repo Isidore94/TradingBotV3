@@ -1236,7 +1236,10 @@ second scoreboard.
    family, engine version, day-part, RVOL, env_key, risk as % of price and ATR
    multiple, and the regime-pause/adoption-gate verdicts where computed.
    Single-instance guard only per the R10.0 verdict.
-3. **R10.B Outcome semantics** (D5, D6, and the EAT/CAKE ask). Typed registry
+3. **R10.B Outcome semantics** (D5, D6, and the EAT/CAKE ask) - **BUILT 2026-08-24, GREEN; mechanics canary OWED** (one live session: LRSI registering gradeable rows, H1 stamping the bar close). Registry
+   `outcome_semantics.py`, path capture `outcome_path.py`, fixture
+   `outcome_path_eat_cake_v1`, health row `outcome_claim_kinds`,
+   `evidence_rules.h1_bar_start_v2`. Typed registry
    keyed by family with a `claim_kind` — `entry_claim`, `annotation`,
    `information`, `unconfigured`. **Unknown families are `unconfigured`:
    counted loudly in the coverage manifest and the health tile, never given a

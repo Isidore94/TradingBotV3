@@ -83,6 +83,62 @@ also starts the two-week collection clock that gates R10.I.
 
 ---
 
+## 2026-08-24 evening - R10 build slate (packet 1 of 10 done)
+
+**Branch `testing-week-2026-08-24`.** Building the slate authorized in
+`docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §4: R10.B-R10.H, the AWAY
+day recap (§5), two opt-in scopes (§3) and R10.I's machinery under the recorded
+sequencing override.
+
+| Packet | State |
+|---|---|
+| **R10.B** outcome semantics + path capture | **BUILT** - canary owed |
+| R10.C evidence_stats + scoreboard | not started |
+| R10.D tracker transition ledger | not started |
+| R10.E Focus membership events | not started |
+| R10.F like_cohort_grading | not started |
+| R10.G market context ledger | not started |
+| R10.H Market Journal + two surfaces | not started |
+| AWAY day recap | not started |
+| Two opt-in scopes | not started |
+| R10.I machinery | not started |
+
+| Check after R10.B | Result |
+|---|---|
+| `pytest tests/ -q` | **4587 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **58/58**, exit 0 |
+| Golden fixtures | **byte-identical**, SHA-256 verified on all five |
+
+**R10.B touches a live writer, so its mechanics canary is OWED.** Building a
+packet never marks its live gate met. One live session is needed to confirm
+that LRSI crossings now register gradeable outcome rows (the engine has been
+firing ungradeable alerts since it shipped) and that H1 stamps land on the bar
+close.
+
+**What R10.B measured that changes how the store should be read:** the live
+outcome store is **entry_claim 68,237 / annotation 147,713 / information
+35,407**. Nearly 60% of it is H1 colour marks on already-closed bars. Any
+existing statistic over "the outcome store" that did not filter by claim kind
+was averaging those in.
+
+**Two corrections found by reproduction rather than reading** (ground rule 3):
+the registry's first draft invented two H1 family names and missed the largest
+family in the store; and compound families (`10_candle_high-vwap_lower_band`)
+made 158,053 rows read as unconfigured until parts-based classification landed.
+
+**Frozen exe: no rebuild trigger from R10.B.** `outcome_semantics.py` and
+`outcome_path.py` are modules under `scripts/`, not new top-level packages, and
+are imported by name from already-collected code. The new fixture is under
+`tests/`, which the bundle does not ship.
+
+**Still owed on this branch** (unchanged): R10.V's live scan day, the R10.A
+mechanics canary, R9's four live proofs, the 2026-08-21 fluidity gates, R7
+gates 1/3/6, R8 §10's one real weekend, and the Questrade token paste. Nothing
+merges to `main` until a live-session validation day passes.
+
+---
+
 ## 2026-08-24 - AI-layer packets: AI-P5, P3, P4, P1, P2 all done
 
 **Branch `testing-week-2026-08-24`.** Building the packets in

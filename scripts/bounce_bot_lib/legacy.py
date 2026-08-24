@@ -2285,6 +2285,76 @@ def _closed_h1_bars(bars_5m):
     return h1
 
 
+def _context_with_path(context, state, rows_after_entry, *, finalize_eod=False):
+    """Attach the R10.B path to a FINAL row for an entry claim only.
+
+    Why only the final row: the path is the whole session's excursion, and
+    writing it on every milestone would store the same growing array four
+    times per trade for no added answer.
+
+    Why only entry claims: `outcome_semantics` says which families claim a
+    trade at all. An annotation (an H1 colour mark) and an observation (a
+    regime pause) have no entry, so an MFE "in R" over them is a number
+    about a denominator that does not exist. That is not a smaller version
+    of the same statistic - it is the category error that gave
+    `regime_pause_rw` an all-time mean of -1.82R.
+
+    Best-effort, like every other evidence field on this path: nothing here
+    may cost a row. A failure leaves the context exactly as it arrived.
+    """
+    if not finalize_eod:
+        return context
+    try:
+        from outcome_semantics import claim_kind, is_trade_bearing
+        import outcome_path
+
+        family = str((state.get("context") or {}).get("family") or "")
+        if not is_trade_bearing(family):
+            # Recorded, not silently omitted: a reader must be able to tell
+            # "no path because this is not a trade" from "no path because
+            # something failed".
+            context["path_absent"] = {
+                "reason": "family does not claim an entry",
+                "claim_kind": claim_kind(family),
+            }
+            return context
+        if rows_after_entry is None or rows_after_entry.empty:
+            context["path_absent"] = {"reason": "no bars after entry were measured"}
+            return context
+        bars = [
+            {"high": row.high, "low": row.low, "close": row.close, "open": row.open}
+            for row in rows_after_entry.itertuples()
+        ]
+        atr = (state.get("context") or {}).get("atr")
+        payload = outcome_path.capture_path(
+            entry_price=state.get("entry_price"),
+            stop_price=state.get("stop_price"),
+            side=state.get("direction"),
+            bars=bars,
+            atr=atr if atr not in ("", None) else None,
+        )
+        context["path"] = payload
+    except Exception:
+        logging.debug("Path capture unavailable for this row.", exc_info=True)
+    return context
+
+
+def _forward_entry_time_basis() -> str:
+    """Every forward registration stamps the bar CLOSE, and records that it did.
+
+    R10.B. A row with NO basis is what a legacy row looks like, so writing the
+    field on every forward row is precisely what lets a reader tell the two
+    apart without a heuristic - and the heuristic is what could not work here,
+    because an H1 bar in PT starts at :30 and closes at :30.
+    """
+    try:
+        from evidence_rules import BASIS_BAR_CLOSE
+
+        return BASIS_BAR_CLOSE
+    except Exception:
+        return "bar_close"
+
+
 def detect_h1_color_signals(h1_bars, side):
     """Signal hits on the LAST closed H1 candle for the color strategies.
 
@@ -4718,6 +4788,26 @@ class BounceBot(EWrapper, EClient):
             # this one reads live state that can be mid-update.
             environment = ""
         fields["env_key"] = f"{environment or 'unknown'}|{fields.get('day_part') or 'unknown'}"
+        # R10.B: what KIND of claim is this family making, and where did its
+        # entry stamp come from? Both are recorded rather than inferred later.
+        #
+        # `claim_kind` is the answer to "may this row be averaged as a trade?".
+        # An unregistered family records `unconfigured` - loudly - and is never
+        # given a manufactured trade, which is how `regime_pause_rw` acquired an
+        # all-time mean of -1.82R across n=934 while never claiming an entry.
+        #
+        # `entry_time_basis` exists because an H1 bar in PT starts at :30 and
+        # closes at :30, so no minute heuristic can tell a repaired stamp from a
+        # broken one. `evidence_rules.h1_bar_start_v2` reads this field.
+        try:
+            from outcome_semantics import claim_kind
+
+            fields["claim_kind"] = claim_kind(fields.get("family"))
+        except Exception:
+            fields["claim_kind"] = ""
+        fields["entry_time_basis"] = (
+            str((plan or {}).get("entry_time_basis") or "") or _forward_entry_time_basis()
+        )
         return fields
 
     def record_alert_tier(self, event_id, quality) -> None:
@@ -4960,7 +5050,12 @@ class BounceBot(EWrapper, EClient):
             "status": status,
             "milestone_bar": "" if milestone_bar is None else int(milestone_bar),
             "context_json": self._json_for_learning(
-                self._context_with_finalization(state, finalization_basis, exit_facts)
+                _context_with_path(
+                    self._context_with_finalization(state, finalization_basis, exit_facts),
+                    state,
+                    rows_after_entry,
+                    finalize_eod=finalize_eod,
+                )
             ),
             "outcome_mode": state.get("outcome_mode") or "eod_hold",
             "eod_close": round(eod_close, 4) if eod_close != "" else "",
@@ -8124,6 +8219,51 @@ class BounceBot(EWrapper, EClient):
         if signal_type in self.m5_signal_toggles:
             self.m5_signal_toggles[signal_type] = bool(enabled)
 
+    def _signal_bar_dict(self, symbol, bar_index, fallback):
+        """The REAL bar an M5 signal fired on, or the caller's fallback.
+
+        R10.B / audit D5a. `_emit_lrsi_cross_alert` built one synthetic bar with
+        open=high=low=close and passed it to outcome registration as well as to
+        the alert row. `_build_bounce_trade_plan` takes a long's stop from the
+        bounce bar's LOW, so stop == entry, risk == 0, and
+        `_register_bounce_outcome` returned at its `risk_per_share == ""` guard:
+        **zero outcome rows for either LRSI level across the whole audit
+        window.** The engine has been firing alerts nobody could ever grade.
+
+        The event carries the index of the bar it fired on, into the same
+        cached series `_evaluate_lrsi_cross` read, so the bar is recovered
+        rather than reconstructed. A cache that has moved under us (a shorter
+        series, a different session) yields the fallback instead of a
+        mis-indexed bar - a wrong bar would be worse than no bar, because it
+        would produce a plausible stop from the wrong price.
+        """
+        try:
+            bars = self.get_cached_5m_bars(symbol) or []
+            index = int(bar_index)
+        except (TypeError, ValueError):
+            return fallback
+        if index < 0 or index >= len(bars):
+            return fallback
+        bar = bars[index]
+        try:
+            stamp = bar.dt.strftime("%Y%m%d  %H:%M:%S") if getattr(bar, "dt", None) else ""
+            recovered = {
+                "time": stamp,
+                "open": float(bar.open),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "close": float(bar.close),
+            }
+        except (AttributeError, TypeError, ValueError):
+            return fallback
+        # The recovered bar has to BE the signal bar. If its close disagrees
+        # with the event's, the series is not the one the event was measured
+        # against and the index means nothing.
+        event_close = fallback.get("close")
+        if event_close is not None and abs(recovered["close"] - float(event_close)) > 1e-6:
+            return fallback
+        return recovered
+
     def _emit_lrsi_cross_alert(self, event, bounce_type):
         symbol = event.symbol
         side = event.side
@@ -8134,6 +8274,12 @@ class BounceBot(EWrapper, EClient):
             "low": event.close,
             "close": event.close,
         }
+        # The flat bar above still feeds the alert row, the tier evaluation and
+        # the message. Widening THOSE would move `_evaluate_bounce_alert_quality`
+        # and therefore alert tiers - a scoring change, which plan.md sec 5
+        # forbids without golden fixtures first. Only the outcome registration,
+        # which is evidence, gets the real bar.
+        signal_bar = self._signal_bar_dict(symbol, getattr(event, "bar_index", None), bar_dict)
         levels = {bounce_type: event.close}
         strength = "strongest" if event.is_strongest else "ordinary"
         event_row = self._log_bounce_candidate_event(
@@ -8150,7 +8296,7 @@ class BounceBot(EWrapper, EClient):
             ),
         )
         self._register_bounce_outcome(
-            symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
+            symbol, side, levels, signal_bar, signal_bar, event_row.get("event_id", "")
         )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
         self.record_alert_tier(event_row.get("event_id", ""), quality)
@@ -8269,6 +8415,9 @@ class BounceBot(EWrapper, EClient):
             "low": event.close,
             "close": event.close,
         }
+        # Same D5a defect, same fix, same boundary: the real bar reaches the
+        # outcome ledger, the flat bar keeps feeding the alert row and the tier.
+        signal_bar = self._signal_bar_dict(symbol, getattr(event, "bar_index", None), bar_dict)
         levels = {M5_CONFLUENCE_TYPE: event.close}
         event_row = self._log_bounce_candidate_event(
             "confirmed",
@@ -8284,7 +8433,7 @@ class BounceBot(EWrapper, EClient):
             ),
         )
         self._register_bounce_outcome(
-            symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
+            symbol, side, levels, signal_bar, signal_bar, event_row.get("event_id", "")
         )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
         self.record_alert_tier(event_row.get("event_id", ""), quality)
@@ -8366,6 +8515,11 @@ class BounceBot(EWrapper, EClient):
             "low": event.close,
             "close": event.close,
         }
+        # D5b was UNTESTED, not refuted: `orb_first_candle*` has never fired, so
+        # there is no row anywhere to check this against. The same flat bar is
+        # here, so the same fix is applied - and the first time this flow does
+        # fire it will register a gradeable row instead of silently dropping it.
+        signal_bar = self._signal_bar_dict(symbol, getattr(event, "bar_index", None), bar_dict)
         levels = {bounce_type: event.close}
         extreme_word = "high" if side == "long" else "low"
         if event.kind == ORB_CANDIDATE:
@@ -8394,7 +8548,7 @@ class BounceBot(EWrapper, EClient):
         # this engine against events it never claimed were entries.
         if event.kind == ORB_NEW_EXTREME:
             self._register_bounce_outcome(
-                symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", "")
+                symbol, side, levels, signal_bar, signal_bar, event_row.get("event_id", "")
             )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
         self.record_alert_tier(event_row.get("event_id", ""), quality)
@@ -8481,6 +8635,17 @@ class BounceBot(EWrapper, EClient):
             "low": signal_bar.low,
             "close": signal_bar.close,
         }
+        # R10.B / audit D6a: the outcome row's entry instant is the bar CLOSE.
+        # `signal_bar.dt` is the hour bar's OPENING stamp, so every one of the
+        # 6,439 H1 rows in the store claims the desk could have acted an hour
+        # before the signal existed. The bar's own OHLC is unchanged - only the
+        # instant moves - and the alert text keeps naming the candle that fired,
+        # because "on the 06:30 H1 candle" is a correct description of which one.
+        #
+        # The existing rows are NOT rewritten (ground rule 5); they stay tagged
+        # by `evidence_rules.h1_bar_start_v1`.
+        outcome_bar = dict(bar_dict)
+        outcome_bar["time"] = (signal_bar.dt + timedelta(hours=1)).strftime("%Y%m%d  %H:%M:%S")
         levels = {bounce_type: hit["level"]}
         event_row = self._log_bounce_candidate_event(
             "confirmed",
@@ -8491,7 +8656,9 @@ class BounceBot(EWrapper, EClient):
             bar_dict,
             reason=f"H1 color signal: {hit['detail']} (H1 candle {signal_bar.dt:%H:%M})",
         )
-        self._register_bounce_outcome(symbol, side, levels, bar_dict, bar_dict, event_row.get("event_id", ""))
+        self._register_bounce_outcome(
+            symbol, side, levels, outcome_bar, outcome_bar, event_row.get("event_id", "")
+        )
         quality = self._evaluate_bounce_alert_quality(side, levels, event_row)
         self.record_alert_tier(event_row.get("event_id", ""), quality)
         label = BOUNCE_TYPE_LABELS.get(bounce_type, bounce_type).upper()

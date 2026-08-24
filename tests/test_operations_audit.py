@@ -201,6 +201,22 @@ def _measured_fixture(tmp_path: Path) -> tuple[Path, Path, datetime]:
             "entries": [],
         },
     )
+    # R10.B: a small outcome store, so the claim-semantics dimension is
+    # MEASURED here like every other one rather than adding a second unknown.
+    # Two declared families and no undeclared one, which is what HEALTHY means
+    # for that row - an undeclared family would make it DEGRADED, correctly.
+    (diagnostics).mkdir(parents=True, exist_ok=True)
+    (diagnostics / "intraday_bounce_outcomes.csv").write_text(
+        "\n".join(
+            [
+                "event_id,event_type",
+                "AAPL_long_20260713_06_35_00_vwap,registered",
+                "MSFT_short_20260713_07_05_00_regime_pause_rw,registered",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     # R10.V step 6: last night's daily-bar unit measurement, so the store-quality
     # dimension is MEASURED here like every other one rather than adding a second
     # unknown. The check reads only this file - it never opens the store.
@@ -432,6 +448,10 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         # R10.A: the nightly dated backup of the hot evidence the cold push
         # excludes on purpose (data/runtime, the home-root files, diagnostics).
         "evidence_snapshot",
+        # R10.B: what fraction of the outcome store is measured as a trade
+        # WITHOUT claiming to be one. HEALTHY here because the fixture's store
+        # declares every family it contains; an undeclared one is DEGRADED.
+        "outcome_claim_kinds",
         # AI-P4: the Questrade credential chain. Questrade issues single-use
         # refresh tokens, so a broken chain never heals itself and nothing
         # retries it back to life - it needs a human. It reports HEALTHY here

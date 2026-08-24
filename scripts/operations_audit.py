@@ -71,6 +71,7 @@ from project_paths import (
     AUTOPILOT_STATE_FILE,
     CACHE_DIR,
     INDUSTRY_BOARD_STATE_FILE,
+    INTRADAY_BOUNCE_OUTCOMES_FILE,
     JOURNAL_DB_FILE,
     MASTER_AVWAP_DAILY_BARS_DIR,
     UNIVERSE_ALL_FILE,
@@ -409,6 +410,61 @@ def _ai_store_dir() -> Path | None:
         return Path(raw).expanduser()
     except (OSError, ValueError):
         return None
+
+
+def _outcome_claim_coverage_check(outcomes_path: Path) -> dict[str, Any]:
+    """How much of the outcome store is measured as a trade WITHOUT claiming to be?
+
+    R10.B. Every registered row used to be treated as a trade. `regime_pause_rw`
+    never claimed an entry and carries an all-time mean of -1.82R across n=934;
+    the three retired H1 engines mark a bar that already closed and are 82% of
+    every registered row. `outcome_semantics` gives each family a declared claim
+    kind, and this row is where an UNDECLARED one becomes visible instead of
+    quietly being averaged into somebody's edge.
+
+    DEGRADED rather than unhealthy when families are unconfigured: nothing is
+    broken - a statistic is simply not entitled to include them until someone
+    declares what they claim. The families are NAMED, because a count is not a
+    to-do list.
+    """
+    path = Path(outcomes_path)
+    if not path.exists():
+        return _check(
+            "outcome_claim_kinds",
+            "Outcome claim semantics",
+            STATUS_UNKNOWN,
+            "No intraday outcome store on this machine, so what its families "
+            "claim is unmeasured - which is not the same as nothing to declare.",
+            source=path,
+        )
+    try:
+        import csv as _csv
+
+        import outcome_semantics
+        from evidence_rules import family_from_event_id
+
+        families: list[str] = []
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            for row in _csv.DictReader(handle):
+                families.append(family_from_event_id(row.get("event_id")))
+    except Exception as exc:  # noqa: BLE001
+        return _check(
+            "outcome_claim_kinds",
+            "Outcome claim semantics",
+            STATUS_UNKNOWN,
+            f"The outcome store could not be read, so claim coverage is unmeasured: {exc}",
+            source=path,
+        )
+    coverage = outcome_semantics.coverage(families)
+    status = STATUS_DEGRADED if coverage["unconfigured_families"] else STATUS_HEALTHY
+    return _check(
+        "outcome_claim_kinds",
+        "Outcome claim semantics",
+        status,
+        coverage["note"],
+        source=path,
+        details=coverage,
+    )
 
 
 def _questrade_chain_check(now: datetime, db_path: Path) -> dict[str, Any]:
@@ -2550,6 +2606,7 @@ def build_operations_audit(
     autopilot_state_path: Path | str | None = None,
     industry_state_path: Path | str | None = None,
     journal_db_path: Path | str | None = None,
+    outcome_store_path: Path | str | None = None,
     writer_health_path: Path | str | None = None,
     universe_paths: Iterable[Path | str] | None = None,
     market_data_probe_path: Path | str | None = None,
@@ -2577,6 +2634,11 @@ def build_operations_audit(
         diagnostics / "trade_journal.sqlite3"
         if diagnostics_dir is not None
         else Path(JOURNAL_DB_FILE)
+    )
+    outcomes_path = Path(outcome_store_path) if outcome_store_path is not None else (
+        diagnostics / "intraday_bounce_outcomes.csv"
+        if diagnostics_dir is not None
+        else Path(INTRADAY_BOUNCE_OUTCOMES_FILE)
     )
     health_path = (
         Path(writer_health_path)
@@ -2628,6 +2690,7 @@ def build_operations_audit(
         ledger,
         _ai_jobs_check(moment, local_tz),
         _questrade_chain_check(moment, journal_path),
+        _outcome_claim_coverage_check(outcomes_path),
         manifest,
         _away_report_check(report_path, auto_state_path, moment, local_tz, market_phase),
         _industry_board_check(industry_path, moment, local_tz, market_phase),

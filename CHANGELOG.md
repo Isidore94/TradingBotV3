@@ -21,6 +21,85 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - R10.B: the outcome store learns what its rows CLAIM
+
+- **Every registered row was measured as a trade, and most of them are not
+  trades.** `scripts/outcome_semantics.py` gives each family a declared
+  `claim_kind` - `entry_claim`, `annotation`, `information`, `unconfigured` -
+  and only an entry claim may carry an R, an exit policy or a path. Measured
+  over the live store: **entry_claim 68,237, annotation 147,713, information
+  35,407**. Nearly 60% of the store is H1 colour marks on bars that had already
+  closed, and they were being averaged as trades. `regime_pause_rw`'s all-time
+  mean of -1.82R across n=934 is the cost of that category error, not an edge.
+- **`unconfigured` is never silently a trade.** It is the honest default for a
+  family nobody declared, is counted loudly and NAMED in a new System Health
+  row (`Outcome claim semantics`), and is excluded from every trade statistic.
+  DEGRADED rather than unhealthy: nothing is broken, a statistic is simply not
+  entitled to those rows yet.
+- **The registry was corrected by reading the store, not the audit's prose.**
+  The first draft invented two H1 family names (`h1_red_after_blue`,
+  `h1_reversal`) and missed `h1_ema10_bounce` - the single largest family in
+  the store at 92,477 rows - and `h1_green_to_yellow`. Enumerating the 27
+  distinct level names is what found it.
+- **Compound families are decided by their parts.** `_make_bounce_event_id`
+  builds the family as the sorted level names joined by `-`, so splitting on it
+  recovers the exact parts; that is construction, not similarity. Without it
+  **158,053 live rows read as unconfigured**. A compound whose parts disagree
+  about what they claim, or that contains one undeclared level, stays
+  `unconfigured` - a row whose pieces disagree has not been classified.
+  Matching is by whole name and never by prefix, because the store contains the
+  trap: `h1_ema_15` is a bounce LEVEL (entry claim) while `h1_ema10_bounce` is
+  a colour ANNOTATION.
+- **LRSI produced zero outcome rows, and now produces gradeable ones** (audit
+  D5a). `_emit_lrsi_cross_alert` built one synthetic bar with
+  `open=high=low=close` and passed it everywhere; a long's stop comes from that
+  bar's LOW, so stop == entry, risk == 0, and `_register_bounce_outcome`
+  returned at its guard. The engine had been firing alerts nobody could ever
+  grade. The REAL signal bar is now recovered by index from the same cached
+  series the event was measured against - and a series that has moved yields
+  the fallback rather than a mis-indexed bar, because a wrong bar produces a
+  plausible stop from the wrong price. Applied to the confluence engine and the
+  first-candle ORB flow too; D5b stays UNTESTED, because that flow has never
+  fired and there is no row anywhere to check it against.
+- **The alert row and the tier still see the flat bar**, deliberately. They
+  feed `_evaluate_bounce_alert_quality`, so widening them would move alert
+  tiers - a scoring change, which plan.md sec 5 forbids without golden fixtures
+  first. Only the outcome registration, which is evidence, gets the real bar.
+- **H1 entry stamps are the bar CLOSE going forward** (audit D6a: 6,439 of
+  6,439 rows stamped on the bar START). An entry stamped an hour before the
+  signal existed makes every entry-timing statistic over 82% of the store
+  measure the wrong instant. Existing rows are NOT rewritten (ground rule 5).
+- **`evidence_rules.h1_bar_start_v2`**, because the fix was invisible to v1: an
+  H1 bar in PT starts at :30 and therefore also CLOSES at :30, so v1's
+  family-AND-minute heuristic would report a false positive on every forward
+  row. Rules are never edited in place, so the answer is a new NAME. Forward
+  rows record an explicit `entry_time_basis`; a row with none falls back to v1.
+- **Path capture** (`scripts/outcome_path.py`): MFE/MAE at 1/3/6/12/24/36/EOD,
+  first-touch stamps, giveback, and a compact per-bar excursion in R, so a
+  future exit model simulates offline with no refetch. Where one bar contains
+  both the target and the stop, the **STOP is taken first** and the row says so
+  (`stop_first_intrabar`) - OHLC carries no intrabar sequence, and assuming the
+  favourable order manufactures profit out of an unknown, in one direction
+  only. Attached to FINAL rows of entry claims only; anything else records an
+  explicit `path_absent` with its reason, so "not a trade" and "something
+  failed" stay distinguishable.
+- **The four frozen exit policies each report on their own** - `eod_hold`,
+  `trail_2bar_after_1r`, `vwap_close_after_1r`, `atr_1p5_trail` - and a policy
+  missing its input reports **unmeasured, never zero**: one that silently
+  degrades into a different policy publishes a number under the wrong name.
+  `oracle_best_ex_post_r` is the best of them chosen with hindsight, labelled
+  an upper bound in the payload itself, attributable to no policy (ground rule
+  12). "Realizable R" appears in no emitted field.
+- Fixture `outcome_path_eat_cake_v1` - 78 real M5 bars per symbol for
+  2026-08-21, fetched once from yfinance (**zero IB traffic**) and frozen so
+  every test runs offline. The tests assert the honest calculation and never a
+  desired sign. It deliberately carries no VWAP column, which is what exercises
+  `vwap_close_after_1r` reporting itself unmeasured.
+- **Golden fixtures byte-identical before and after** (ground rule 1), verified
+  by SHA-256 on all five. **R10.B touches a live writer, so its mechanics
+  canary is owed** - one live session confirming LRSI now registers gradeable
+  rows and H1 stamps land on the close.
+
 ### 2026-08-24 - AI-P2: the auto-tag backlog becomes drainable (trader-approved amendment)
 
 - **R8 §6's locked decision was "journal hook is the weekly auto-tag review
