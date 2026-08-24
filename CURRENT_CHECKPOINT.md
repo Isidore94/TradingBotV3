@@ -8,6 +8,28 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 evening - direction decisions recorded; R10.B-H build authorized
+
+**Branch `testing-week-2026-08-24`.** Trader decisions from the evening
+conversation are recorded in
+`docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` (classified in
+`docs/README.md`): the summaries' reader is a later LLM (briefs stay);
+the intraday market journal ask is R10.G/H/I as already specced; walk-away and
+setup-scoreboard AI reads approved as opt-in scopes over deterministic outputs;
+a new **AWAY day-recap** requirement (after-the-fact D1 analysis entry, Focus
+adjustment, best-of-day pick review) is authorized with its constraints stated;
+and the trader authorized building **R10.B, C, D, E, F, G, H, the two scopes,
+the recap packet, and — by a precisely-scoped sequencing override — R10.I's
+machinery** (its evidence-quality claims gate is NOT waived; reports over the
+unmet collection window must say so). A build prompt for Opus was issued; the
+build has not started at this stamp.
+
+**Verification baseline: unchanged** (`4df4bac`: 4547 passed / 19 subtests,
+exit 0; smoke 7/7; selftest 58/58) — documentation-only change. Owed items
+unchanged, including the R10.A mechanics canary and the Questrade token paste.
+
+---
+
 ## 2026-08-24 - review pass + documentation reconciliation sweep (docs only)
 
 **Branch `testing-week-2026-08-24`.** Fable's review pass over the five AI-P
