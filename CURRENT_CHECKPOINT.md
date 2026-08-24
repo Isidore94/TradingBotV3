@@ -37,15 +37,15 @@ also starts the two-week collection clock that gates R10.I.
 
 ---
 
-## 2026-08-24 - AI-layer packets: AI-P5, P3, P4, P1 done; P2 needs the trader
+## 2026-08-24 - AI-layer packets: AI-P5, P3, P4, P1, P2 all done
 
 **Branch `testing-week-2026-08-24`.** Building the packets in
 `docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` §5, in the order AI-P5 → AI-P3 →
 AI-P4 → AI-P1, with AI-P2 conditional on trader assent.
 
-| Check after AI-P1 | Result |
+| Check after AI-P2 | Result |
 |---|---|
-| `pytest tests/ -q` | **4544 passed / 19 subtests**, exit 0 |
+| `pytest tests/ -q` | **4547 passed / 19 subtests**, exit 0 |
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
 | `launch_gui.py --selftest` | **58/58**, exit 0 |
 
@@ -89,11 +89,11 @@ files by the named constants. Live read after the fix: **16 cohort rows and 605
 focus pick rows** for the 08-17 week, where the pane showed zero. R8 §10's
 one-real-weekend gate is the thing that would have caught this.
 
-**AI-P2 is NOT built and needs a trader decision.** It widens R8's locked
-decision ("journal hook is the weekly auto-tag review only") by adding a
-default-off "all pending" toggle so the 220-candidate backlog is burn-downable
-in one sitting. That is a spec amendment, so it was not built on an agent's
-judgement. The question is in the handoff.
+**AI-P2 was approved by the trader in session and built.** The weekend
+auto-tag sub-pane has a default-off "show all pending proposals" toggle;
+`WEEKEND_PREP_PLAN.md` §1 records the amendment. Measured on the live store:
+**48 closed trades carry the 220 candidate rows**, so the whole backlog fits
+inside the 60-row view and is one sitting's work.
 
 **Still owed on this branch** (unchanged by AI-P5, P3, P4 or P1): R10.V's live scan day, the
 R10.A mechanics canary, R9's four live proofs, and the 2026-08-21 fluidity

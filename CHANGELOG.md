@@ -21,6 +21,36 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - AI-P2: the auto-tag backlog becomes drainable (trader-approved amendment)
+
+- **R8 §6's locked decision was "journal hook is the weekly auto-tag review
+  only". The trader approved widening it on 2026-08-24**, so the weekend
+  auto-tag sub-pane gains a **default-off** "Show all pending proposals" toggle
+  backed by `journal_feed.pending_tag_candidates()`. The weekly scope remains
+  the default and is unchanged.
+- **Why it was needed:** the store held 220 auto-tag candidate rows against
+  **one** confirmed annotation, so the confirmation stream could only fill at
+  the weekly trickle - and every analysis that reads the trader's own tags
+  (per-setup performance, the AI layer's `journal_review` scope) waits behind
+  it. **Correcting a number used earlier in this program's notes:** those 220
+  rows span **48 closed trades**, not 220 review items - several proposals per
+  trade - so the backlog is one sitting's work, not a month's.
+- **The amendment widens what is LISTED and nothing else.** Same row shape,
+  same inclusion rule, and the confirm→`accept_auto_tags` /
+  correct→`correct_auto_tag` paths are taken unchanged; a characterization test
+  pins that, because a toggle that changed how a confirmation is written would
+  have quietly forked the trader's own annotation stream in two.
+- **Newest first**, because a backlog is reviewed by memory: the trader can
+  still say what they were thinking in March and cannot for 2023.
+- **`already_tagged` is reported, not filtered**, and the cap (60) prints what
+  it dropped. Accepting a suggestion does not delete its candidate row, so a
+  confirmed trade keeps proposing; hiding those would also hide a trade that
+  deserves a second tag, so the pane counts them and says so instead - which is
+  what lets a burn-down visibly shrink.
+- Toggling the backlog **never replays the walk-away**: the tag list moved into
+  its own `_reload_tags()`, because walk-away is a market-history run behind a
+  worker thread and this is a database read.
+
 ### 2026-08-24 - AI-P1: the mirror cohort, and the join that was reading nothing
 
 - **Focus Pick Review now shows the graded veto cohort**, which its subtitle

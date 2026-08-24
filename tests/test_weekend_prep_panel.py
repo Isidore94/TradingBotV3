@@ -357,3 +357,83 @@ def test_the_desk_still_resolves_every_page_after_the_new_tab():
     titles = [spec.title for spec in PAGE_SPECS]
     assert len(set(titles)) == len(titles)
     assert titles[-1] == "Settings", "Settings stays last and reachable"
+
+
+# ---------------------------------------------------------------------------
+# AI-P2 - the auto-tag backlog toggle (trader-approved amendment, 2026-08-24)
+#
+# R8 locked the journal hook to "the weekly auto-tag review only", and
+# `week_tag_candidates` scopes to the week's closed trades. But the backlog was
+# 220 proposals spanning history against ONE confirmed annotation, so the
+# confirmation stream could only ever fill at the weekly trickle - and every
+# analysis downstream of the trader's own tags waits on it.
+# ---------------------------------------------------------------------------
+def test_the_backlog_toggle_is_off_until_asked(panel, monkeypatch):
+    """Default off: the weekend ritual stays the weekly ritual unless the
+    trader deliberately opens the backlog."""
+    week_calls, pending_calls = [], []
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.walkaway_summary",
+                        lambda *_args: {"journal_rows": [], "focus_rows": [], "skipped_non_equity": 0})
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.week_trades",
+                        lambda *_args: {"closed": [], "still_open": []})
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.week_tag_candidates",
+                        lambda *_args: week_calls.append(1) or [])
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.pending_tag_candidates",
+                        lambda *a, **k: pending_calls.append(1) or [])
+
+    assert panel.walkaway.backlog_toggle.isChecked() is False
+    panel.walkaway.reload()
+    assert panel.walkaway._worker.wait(5000)
+    _app.processEvents()
+
+    assert week_calls and not pending_calls
+
+
+def test_the_backlog_toggle_shows_every_pending_proposal(panel, monkeypatch):
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.walkaway_summary",
+                        lambda *_args: {"journal_rows": [], "focus_rows": [], "skipped_non_equity": 0})
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.week_trades",
+                        lambda *_args: {"closed": [], "still_open": []})
+    monkeypatch.setattr(
+        "ui.panels.weekend_prep_panel.journal_feed.week_tag_candidates",
+        lambda *_args: pytest.fail("the backlog view must not fall back to the week"),
+    )
+    monkeypatch.setattr(
+        "ui.panels.weekend_prep_panel.journal_feed.pending_tag_candidates",
+        lambda *a, **k: [
+            {"trade_id": "t1", "trade_date": "2026-03-02", "symbol": "DELL",
+             "current_tags": "", "candidates": [{"tag": "avwap_signal"}],
+             "already_tagged": False},
+        ],
+    )
+
+    panel.walkaway.backlog_toggle.setChecked(True)
+    panel.walkaway.reload()
+    assert panel.walkaway._worker.wait(5000)
+    _app.processEvents()
+
+    assert [row["symbol"] for row in panel.walkaway._tag_rows] == ["DELL"]
+    assert "backlog" in panel.walkaway.tag_note.text().lower()
+
+
+def test_the_confirm_and_correct_paths_are_untouched_by_the_toggle(panel, monkeypatch):
+    """The amendment widens WHAT IS LISTED and nothing else. If the toggle
+    changed how a confirmation is written, it would have quietly forked the
+    trader's own annotation stream in two."""
+    accepted = []
+    row = {
+        "trade_id": "trade-9", "trade_date": "2026-03-02", "symbol": "DELL",
+        "current_tags": "", "candidates": [{"tag": "avwap_signal"}],
+        "already_tagged": False,
+    }
+    monkeypatch.setattr("ui.panels.weekend_prep_panel.journal_feed.accept_auto_tags",
+                        lambda trade_id, tags: accepted.append((trade_id, list(tags))))
+    panel.walkaway.backlog_toggle.setChecked(True)
+    panel.walkaway._tag_rows = [row]
+    panel.walkaway.tag_table.setRowCount(1)
+    panel.walkaway.tag_table.selectRow(0)
+
+    panel.walkaway._confirm_tag()
+
+    assert accepted == [("trade-9", ["avwap_signal"])]
+    assert service_recorded(panel.service, "trade-9")

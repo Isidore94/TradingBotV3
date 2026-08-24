@@ -752,6 +752,67 @@ def week_tag_candidates(monday: Any, friday: Any) -> list[dict[str, Any]]:
     return rows
 
 
+#: How many backlog rows the all-pending view returns at once. A burn-down
+#: needs a finite sitting, not a 220-row wall; what the cap drops is COUNTED
+#: and printed by the caller, because a silent top-N reads as "that was all
+#: of it".
+PENDING_TAG_LIMIT = 60
+
+
+def pending_tag_candidates(limit: int = PENDING_TAG_LIMIT) -> list[dict[str, Any]]:
+    """Every closed trade carrying an auto-tag proposal, newest first (AI-P2).
+
+    ``week_tag_candidates`` scopes to the reviewed week, which is R8's locked
+    decision and stays the default. This is the trader-approved amendment
+    (2026-08-24): on that date the store held **220 proposals against one
+    confirmed annotation**, so a weekly-only pane could never drain the
+    backlog, and every analysis that reads the trader's own tags was waiting
+    behind it.
+
+    Deliberately the same row shape and the same inclusion rule as the weekly
+    query, so the confirm and correct paths take it unchanged - the amendment
+    widens what is LISTED and nothing else.
+
+    Newest first because a backlog is reviewed by memory: the trader can still
+    say what they were thinking in March, and cannot for a trade from 2023.
+
+    ``already_tagged`` is reported, not filtered. Accepting a suggestion does
+    not delete the candidate row, so a confirmed trade keeps proposing; hiding
+    it would also hide a trade that legitimately deserves a second tag. The
+    pane shows the count instead, which is what makes a burn-down visibly
+    shrink.
+    """
+    rows: list[dict[str, Any]] = []
+    try:
+        trades = load_trades()
+    except Exception:
+        return []
+    for trade in trades:
+        if str(trade.raw.get("status") or "").upper() != "CLOSED":
+            continue
+        candidates = auto_tag_candidates(trade.trade_id)
+        if not candidates:
+            continue
+        current = str(trade.raw.get("setup_tags") or "")
+        rows.append(
+            {
+                "trade_id": trade.trade_id,
+                "symbol": trade.symbol,
+                "trade_date": trade.trade_date,
+                "current_tags": current,
+                "candidates": candidates,
+                "already_tagged": bool(current.strip()),
+            }
+        )
+    rows.sort(key=lambda row: str(row["trade_date"] or ""), reverse=True)
+    rows_total = len(rows)
+    if limit is not None and limit > 0:
+        rows = rows[:limit]
+    for row in rows:
+        row["backlog_total"] = rows_total
+    return rows
+
+
 def correct_auto_tag(trade_id: str, tags: str) -> None:
     """Record a correction: the trader's wording wins and the tagger learns.
 

@@ -23,6 +23,7 @@ from typing import Any
 
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -299,6 +300,15 @@ class WalkawayPage(_StepPage):
         self.tag_table = QTableWidget(0, 4)
         self.tag_table.setHorizontalHeaderLabels(["Date", "Symbol", "My tags", "Suggested"])
         self.tag_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # AI-P2, trader-approved amendment 2026-08-24. R8 locked the journal
+        # hook to the weekly review and that stays the DEFAULT; this opens the
+        # whole backlog on request, because 220 proposals against one confirmed
+        # annotation can never drain at a weekly trickle.
+        self.backlog_toggle = QCheckBox("Show all pending proposals, not just this week")
+        self.backlog_toggle.setChecked(False)
+        self.backlog_toggle.toggled.connect(lambda _checked: self._reload_tags())
+        self.tag_note = QLabel("")
+        self.tag_note.setWordWrap(True)
         self.confirm_button = QPushButton("Confirm suggested tag")
         self.confirm_button.clicked.connect(self._confirm_tag)
         self.correct_button = QPushButton("Correct to my tags")
@@ -315,7 +325,9 @@ class WalkawayPage(_StepPage):
         self._layout.addWidget(self.output, 2)
         self._layout.addWidget(self.open_note)
         self._layout.addWidget(QLabel("Auto-tag review"))
+        self._layout.addWidget(self.backlog_toggle)
         self._layout.addWidget(self.tag_table, 2)
+        self._layout.addWidget(self.tag_note)
         self._layout.addLayout(tag_buttons)
         self._finish_layout()
 
@@ -355,9 +367,25 @@ class WalkawayPage(_StepPage):
                     else ""
                 )
             )
-            self._tag_rows = journal_feed.week_tag_candidates(monday, friday)
         except Exception as exc:  # noqa: BLE001
             self.open_note.setText(f"Journal unavailable: {exc}")
+        self._reload_tags()
+
+    def _reload_tags(self) -> None:
+        """Fill the auto-tag list from whichever scope is selected.
+
+        Its own method so toggling the backlog never replays the walk-away:
+        that is a market-history run behind a worker thread, and the tag list
+        is a database read. Same reason `_confirm_tag` does not reload.
+        """
+        monday, friday = self.service.week_bounds
+        try:
+            if self.backlog_toggle.isChecked():
+                self._tag_rows = journal_feed.pending_tag_candidates()
+            else:
+                self._tag_rows = journal_feed.week_tag_candidates(monday, friday)
+        except Exception as exc:  # noqa: BLE001
+            self.tag_note.setText(f"Auto-tag proposals unavailable: {exc}")
             self._tag_rows = []
 
         self.tag_table.setRowCount(len(self._tag_rows))
@@ -365,6 +393,28 @@ class WalkawayPage(_StepPage):
             suggested = "; ".join(str(c.get("tag")) for c in row["candidates"][:3])
             for column, text in enumerate((row["trade_date"], row["symbol"], row["current_tags"], suggested)):
                 self.tag_table.setItem(index, column, QTableWidgetItem(str(text)))
+        self.tag_note.setText(self._tag_note_text())
+
+    def _tag_note_text(self) -> str:
+        shown = len(self._tag_rows)
+        if not self.backlog_toggle.isChecked():
+            return f"{shown} proposal(s) from the reviewed week."
+        if not shown:
+            return "No pending auto-tag proposals in the backlog."
+        total = int(self._tag_rows[0].get("backlog_total") or shown)
+        tagged = sum(1 for row in self._tag_rows if row.get("already_tagged"))
+        note = f"Backlog: showing {shown} of {total} pending proposal(s), newest first."
+        if total > shown:
+            # Said, never silent: a top-N the reader cannot see reads as
+            # "that was all of it".
+            note += f" {total - shown} more not shown - confirm these and refresh."
+        if tagged:
+            note += (
+                f" {tagged} of these already carry your tags; accepting a"
+                " suggestion does not remove its proposal, so they keep"
+                " appearing until you tag past them."
+            )
+        return note
 
     def _selected_tag_row(self) -> dict[str, Any] | None:
         index = self.tag_table.currentRow()

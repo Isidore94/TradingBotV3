@@ -29,7 +29,14 @@ persisted across sittings:
 
 Locked decisions: same strength formula on all timeframes; journal hook is the
 weekly auto-tag review only (no tag-performance stats, no tagging of weekend
-picks, no weekly journal entry in v1); Adopt routes to swing Focus + watchlist
+picks, no weekly journal entry in v1) — **amended 2026-08-24, trader-approved
+(AI-P2): the sub-pane gains a DEFAULT-OFF "show all pending proposals" toggle
+so the backlog is drainable. The weekly scope stays the default; the confirm
+and correct paths are unchanged; no tag-performance stats, no tagging of
+weekend picks and no weekly journal entry were added.** The amendment exists
+because the store held 220 candidate rows across 48 closed trades against ONE
+confirmed annotation, so a weekly-only pane could never let the confirmation
+stream fill; Adopt routes to swing Focus + watchlist
 injection; universe is `universe_all.txt` (~1,500 symbols; the broader-universe
 WISHLIST candidate stays gated as written); all refreshes are manual.
 
