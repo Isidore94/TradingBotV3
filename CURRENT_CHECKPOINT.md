@@ -37,15 +37,15 @@ also starts the two-week collection clock that gates R10.I.
 
 ---
 
-## 2026-08-24 - AI-layer packets (AI-P5, AI-P3 done; P4, P1 next)
+## 2026-08-24 - AI-layer packets (AI-P5, P3, P4 done; P1 next)
 
 **Branch `testing-week-2026-08-24`.** Building the packets in
 `docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` §5, in the order AI-P5 → AI-P3 →
 AI-P4 → AI-P1, with AI-P2 conditional on trader assent.
 
-| Check after AI-P3 | Result |
+| Check after AI-P4 | Result |
 |---|---|
-| `pytest tests/ -q` | **4524 passed / 19 subtests**, exit 0 |
+| `pytest tests/ -q` | **4537 passed / 19 subtests**, exit 0 |
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
 | `launch_gui.py --selftest` | **58/58**, exit 0 |
 
@@ -74,7 +74,13 @@ dead Questrade OAuth refresh chain, 0 of 142 days covered - survived five
 nights undiagnosed. The night now reports what it measured, and a failure names
 its own source. Reconciliation logic is untouched.
 
-**Still owed on this branch** (unchanged by AI-P5 or AI-P3): R10.V's live scan day, the
+**AI-P4 found the thing AI-P3 could not say.** The Questrade chain is DEAD on
+the live desk and the new System Health row says so in words, with the repair
+step. This is a **trader action**: get a fresh refresh token from the Questrade
+portal and paste it into Journal > Health. Until then Questrade contributes
+nothing to the journal, and 0 of 142 days stay uncovered.
+
+**Still owed on this branch** (unchanged by AI-P5, AI-P3 or AI-P4): R10.V's live scan day, the
 R10.A mechanics canary, R9's four live proofs, and the 2026-08-21 fluidity
 gates. Nothing merges to `main` until a live-session validation day passes.
 

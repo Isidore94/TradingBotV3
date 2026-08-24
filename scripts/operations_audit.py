@@ -71,6 +71,7 @@ from project_paths import (
     AUTOPILOT_STATE_FILE,
     CACHE_DIR,
     INDUSTRY_BOARD_STATE_FILE,
+    JOURNAL_DB_FILE,
     MASTER_AVWAP_DAILY_BARS_DIR,
     UNIVERSE_ALL_FILE,
     UNIVERSE_LONGS_FILE,
@@ -408,6 +409,59 @@ def _ai_store_dir() -> Path | None:
         return Path(raw).expanduser()
     except (OSError, ValueError):
         return None
+
+
+def _questrade_chain_check(now: datetime, db_path: Path) -> dict[str, Any]:
+    """Is the Questrade credential chain alive? (AI-P4)
+
+    A broken chain is invisible everywhere else on the desk: the nightly slot
+    records `failed`, the coverage grid fills with red for a broker the trader
+    is not looking at, and the journal simply stops gaining Questrade trades.
+    On 2026-08-24 that had been true since 2026-08-19 - 0 of 142 days covered,
+    one whole broker including a TFSA missing - and it was found by opening the
+    SQLite database by hand.
+
+    `not_configured` is HEALTHY on purpose, and the distinction from `unknown`
+    is the same one `_ai_jobs_check` makes: a machine with no Questrade token
+    has been measured, and the answer is that this broker was never asked for.
+    A database that could not be read has NOT been measured.
+    """
+    try:
+        import journal_health
+    except Exception:  # noqa: BLE001
+        return _check(
+            "questrade_chain",
+            "Questrade credential chain",
+            STATUS_UNKNOWN,
+            "The Questrade chain check could not be loaded, so the chain's "
+            "health is unmeasured - which is not the same as fine.",
+            source=Path(__file__),
+        )
+
+    # The path is INJECTED, never resolved here. Every other check in this
+    # audit takes its store as a parameter for the same reason: a test that
+    # hands this function a sandbox must not have it read the trader's real
+    # journal instead (test_capture_readiness_checks_reach_the_audit_and_
+    # never_read_the_shared_home, which caught exactly that here).
+    verdict = journal_health.questrade_chain_health(now=now, db_path=db_path)
+    status = {
+        journal_health.STATE_OK: STATUS_HEALTHY,
+        journal_health.STATE_NOT_CONFIGURED: STATUS_HEALTHY,
+        journal_health.STATE_STALE: STATUS_DEGRADED,
+        journal_health.STATE_DEAD: STATUS_UNHEALTHY,
+    }.get(verdict["state"], STATUS_UNKNOWN)
+    summary = verdict["headline"]
+    if verdict["action"]:
+        summary = f"{summary} {verdict['action']}"
+    return _check(
+        "questrade_chain",
+        "Questrade credential chain",
+        status,
+        summary,
+        source=db_path,
+        updated_at=str(verdict.get("last_refresh_at") or ""),
+        details=dict(verdict),
+    )
 
 
 def _ai_jobs_check(now: datetime, local_tz) -> dict[str, Any]:
@@ -2495,6 +2549,7 @@ def build_operations_audit(
     away_report_path: Path | str | None = None,
     autopilot_state_path: Path | str | None = None,
     industry_state_path: Path | str | None = None,
+    journal_db_path: Path | str | None = None,
     writer_health_path: Path | str | None = None,
     universe_paths: Iterable[Path | str] | None = None,
     market_data_probe_path: Path | str | None = None,
@@ -2517,6 +2572,11 @@ def build_operations_audit(
         diagnostics / "industry_board_snapshot.json"
         if diagnostics_dir is not None
         else Path(INDUSTRY_BOARD_STATE_FILE)
+    )
+    journal_path = Path(journal_db_path) if journal_db_path is not None else (
+        diagnostics / "trade_journal.sqlite3"
+        if diagnostics_dir is not None
+        else Path(JOURNAL_DB_FILE)
     )
     health_path = (
         Path(writer_health_path)
@@ -2567,6 +2627,7 @@ def build_operations_audit(
         heartbeat,
         ledger,
         _ai_jobs_check(moment, local_tz),
+        _questrade_chain_check(moment, journal_path),
         manifest,
         _away_report_check(report_path, auto_state_path, moment, local_tz, market_phase),
         _industry_board_check(industry_path, moment, local_tz, market_phase),

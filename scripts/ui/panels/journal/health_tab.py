@@ -76,6 +76,21 @@ class HealthTab(QFrame):
         self._task: _JournalTask | None = None
         self._suggestions: list[dict] = []
 
+        # AI-P4: a broken Questrade chain explains everything below it, so it
+        # goes above everything below it. Hidden entirely when there is nothing
+        # to say - a permanently-present "all good" strip is furniture, and the
+        # trader stops seeing furniture.
+        self.chain_banner = QFrame()
+        self.chain_banner.setObjectName("BrokerChainBanner")
+        self.chain_label = QLabel("")
+        self.chain_label.setObjectName("CautionLabel")
+        self.chain_label.setWordWrap(True)
+        self.chain_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        banner_layout = QVBoxLayout(self.chain_banner)
+        banner_layout.setContentsMargins(10, 8, 10, 8)
+        banner_layout.addWidget(self.chain_label)
+        self.chain_banner.setVisible(False)
+
         self.coverage_table = QTableWidget(0, 0)
         self.coverage_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.gaps_label = QLabel("")
@@ -129,6 +144,7 @@ class HealthTab(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.chain_banner)
         layout.addWidget(QLabel("Coverage"))
         layout.addWidget(self.coverage_table, 2)
         layout.addWidget(self.gaps_label)
@@ -150,12 +166,37 @@ class HealthTab(QFrame):
     # -- loading -----------------------------------------------------------
 
     def reload(self) -> None:
+        self._load_chain_health()
         self._load_coverage()
         self._load_reconciliation()
         self._load_fx()
         self._load_slot()
         self._load_runs()
         self._load_credentials()
+
+    def _load_chain_health(self) -> None:
+        """Show the Questrade credential chain only when it needs a hand.
+
+        Best-effort by design: this tab's job is showing the journal's health,
+        and a check that could not run must not stop it. A failure here leaves
+        the banner hidden and says so in the status line rather than raising -
+        but it never renders "fine", because it does not know that.
+        """
+        try:
+            import journal_health
+
+            verdict = journal_health.questrade_chain_health()
+        except Exception as exc:  # noqa: BLE001
+            self.chain_banner.setVisible(False)
+            self.statusChanged.emit(f"Questrade chain check unavailable: {exc}")
+            return
+        if verdict["state"] not in journal_health.ALERTING_STATES:
+            self.chain_banner.setVisible(False)
+            return
+        self.chain_label.setText(
+            "\n\n".join([verdict["headline"], verdict["action"]])
+        )
+        self.chain_banner.setVisible(True)
 
     def _load_coverage(self) -> None:
         grid = journal_feed.coverage_grid(days=30)

@@ -21,6 +21,51 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - AI-P4: a dead broker credential chain becomes visible
+
+- **The Questrade refresh chain had been dead since 2026-08-19 and nothing on
+  the desk said so.** 0 of 142 Questrade session days covered, 56 identical
+  `500 Server Error ... oauth2/token` rows, one whole broker - including a
+  TFSA - absent from the journal, from walk-away analysis and from everything
+  the AI layer reads. It was found by opening `trade_journal.sqlite3` by hand.
+  Questrade issues **single-use** refresh tokens, so a broken chain never heals
+  itself and no retry brings it back: it needs the trader, which is exactly why
+  it needed a surface rather than another log line.
+- **New `scripts/journal_health.py`** classifies the chain into five states and
+  is deliberately Qt-free and `ui`-free, so the Journal Health tab and
+  `operations_audit` (which renders inside System Health, frozen) can share one
+  verdict without either importing the other's world. A test asserts that
+  import cleanliness rather than trusting it.
+- **The honest states are the point.** An absent setting is `not_configured`,
+  never `ok` - "nobody set this up" and "this is working" must not render the
+  same. A database it cannot read is `unknown`, never `ok`. A token that never
+  refreshed reports its age as **absent**, not as zero (Phase 0.7 ground rule
+  6). A non-auth broker outage (503 on `/accounts`) does **not** read as a dead
+  chain, because telling the trader to paste a token would spend the one thing
+  the surface exists to spend - their attention.
+- **A recorded auth failure outranks a fresh-looking stamp.**
+  `journal_questrade_expires_at` records the last refresh that WORKED, so a
+  chain that broke an hour ago still carries this morning's timestamp; a
+  freshness check alone would have called the dead chain healthy for five days.
+  Silence beyond **3 days** (Questrade's own refresh-token lifetime) is
+  presumed dead on its own.
+- **Two defects were found in this packet's own first run against live data**
+  and are now pinned by tests: the headline reported the *coverage day* as the
+  failure date (a year-spanning backfill marks every session day FAILED from
+  one broken chain, so it claimed a 2025 outage for a chain that broke last
+  week - `day` and `recorded_at` are now distinct fields); and comparing an
+  aware caller clock against the naive stored stamp raised `TypeError`,
+  normalized by ATTACHING the caller's zone to the naive side, never stripping
+  the aware side (CLAUDE.md, `_gate_moment`).
+- **The audit check takes its store as a parameter**, like every other check
+  there. `test_capture_readiness_checks_reach_the_audit_and_never_read_the_shared_home`
+  caught the first draft reading the trader's real journal from a sandboxed
+  audit run; `build_operations_audit` now injects `journal_db_path`.
+- The Journal ▸ Health banner is hidden unless the chain needs a hand - a
+  permanently present "all good" strip is furniture - and its style lives in
+  `theme.qss` as `QFrame#BrokerChainBanner`, so showing it costs a property set
+  rather than a stylesheet parse.
+
 ### 2026-08-24 - AI-P3: the nightly journal slot stops being mute
 
 - **Every `journal_import` ledger row ever written carried an empty reason.**

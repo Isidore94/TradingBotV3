@@ -432,6 +432,13 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         # R10.A: the nightly dated backup of the hot evidence the cold push
         # excludes on purpose (data/runtime, the home-root files, diagnostics).
         "evidence_snapshot",
+        # AI-P4: the Questrade credential chain. Questrade issues single-use
+        # refresh tokens, so a broken chain never heals itself and nothing
+        # retries it back to life - it needs a human. It reports HEALTHY here
+        # because the sandbox has no token configured, which is a measured
+        # "this desk was never asked to import Questrade" rather than an
+        # unmeasured unknown, exactly as `ai_jobs` above.
+        "questrade_chain",
     }
     # Every dimension H2 implemented reports a measured status, and the ONLY
     # remaining UNKNOWN is the one nothing captures.
