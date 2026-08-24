@@ -83,7 +83,7 @@ also starts the two-week collection clock that gates R10.I.
 
 ---
 
-## 2026-08-24 evening - R10 build slate (packets 1-2 of 10 done)
+## 2026-08-24 evening - R10 build slate (packets 1-3 of 10 done)
 
 **Branch `testing-week-2026-08-24`.** Building the slate authorized in
 `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §4: R10.B-R10.H, the AWAY
@@ -94,7 +94,7 @@ sequencing override.
 |---|---|
 | **R10.B** outcome semantics + path capture | **BUILT** - canary owed |
 | **R10.C** evidence_stats + scoreboard | **BUILT** |
-| R10.D tracker transition ledger | not started |
+| **R10.D** tracker transition ledger | **BUILT** |
 | R10.E Focus membership events | not started |
 | R10.F like_cohort_grading | not started |
 | R10.G market context ledger | not started |
@@ -103,9 +103,9 @@ sequencing override.
 | Two opt-in scopes | not started |
 | R10.I machinery | not started |
 
-| Check after R10.C | Result |
+| Check after R10.D | Result |
 |---|---|
-| `pytest tests/ -q` | **4617 passed / 19 subtests**, exit 0 |
+| `pytest tests/ -q` | **4640 passed / 19 subtests**, exit 0 |
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
 | `launch_gui.py --selftest` | **58/58**, exit 0 |
 | Golden fixtures | **byte-identical**, SHA-256 verified on all five |
@@ -115,6 +115,19 @@ packet never marks its live gate met. One live session is needed to confirm
 that LRSI crossings now register gradeable outcome rows (the engine has been
 firing ungradeable alerts since it shipped) and that H1 stamps land on the bar
 close.
+
+**R10.D: one audit premise did NOT reproduce, and that is the finding.**
+S2 (setups carrying a mark dated later than the run's `data_session`) was
+measured at 2,739 setups by the audit on a 2026-08-20 payload. On the current
+payload - `data_session` 2026-08-21, written Monday over a completed Friday -
+there are **14,043 marks and zero later than the vintage**. The defect needs a
+tracker run during a live session to appear, so it is intermittent rather than
+refuted; the guard is built and reports whatever it finds on every save.
+S3a reproduced almost exactly (horizon 5 -> median 64 sessions, 10 -> 73, 42%
+of rows over 2x their declared horizon) and S3b reproduced exactly (0 of 10,928
+SPY-relative values). S3b is fixed from cached daily bars, zero IB. S3a is
+MEASURED and FLAGGED but the future-row selection is deliberately unchanged -
+re-selecting it would silently redefine every number the tracker has produced.
 
 **R10.C makes the claim-kind split visible in the numbers the trader reads.**
 On the 07-24..08-21 scoreboard window, of 5,970 settled above-the-floor rows

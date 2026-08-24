@@ -5133,9 +5133,73 @@ def save_setup_tracker_payload(
 
     save_json(SETUP_TRACKER_FILE, payload)
     try:
+        _append_setup_tracker_events(payload)
+    except Exception as exc:
+        # Evidence must never cost the tracker. A failed ledger write leaves the
+        # sidecar untouched, so the next run re-diffs against the same baseline
+        # and the transitions are recorded late rather than lost.
+        logging.warning("Could not append setup-tracker transition events: %s", exc)
+    try:
         save_setup_tracker_scoring_payload(payload)
     except Exception as exc:
         logging.warning("Could not publish tracker scoring snapshot after tracker save: %s", exc)
+
+
+def _setup_tracker_sidecar_path() -> Path:
+    return SETUP_TRACKER_FILE.with_name(SETUP_TRACKER_FILE.stem + "_digests.json")
+
+
+def _append_setup_tracker_events(payload: dict) -> dict:
+    """R10.D: append this run's transitions to the append-only ledger.
+
+    The payload is read IN PLACE - never copied. The previous state comes from
+    a small digest sidecar (one 16-char hash per setup), which is what makes
+    diffing a 951 MB snapshot affordable at all.
+
+    The sidecar is written LAST, and only after the ledger append succeeded, so
+    a crash between the two costs a repeat of this run's diff rather than a
+    silent hole in the stream. Re-emitting a transition is recoverable;
+    dropping one is not.
+    """
+    import setup_tracker_ledger as tracker_ledger
+    from evidence_ledger import EvidenceLedger
+
+    setups = payload.get("setups") or {}
+    if not isinstance(setups, dict):
+        return {"events": 0, "skipped": "payload carries no setups mapping"}
+    data_session = str(payload.get("data_session") or "")
+
+    sidecar_path = _setup_tracker_sidecar_path()
+    previous = tracker_ledger.load_sidecar(sidecar_path)
+    events = tracker_ledger.diff_setups(setups, previous, data_session=data_session)
+
+    # S2, measured on every run and recorded whatever it finds. It is NOT
+    # repaired here: rewriting a mark would be rewriting history (ground rule 5).
+    forming = tracker_ledger.forming_bar_marks(setups, data_session)
+
+    stream = EvidenceLedger(
+        stream=tracker_ledger.STREAM,
+        schema=tracker_ledger.SCHEMA_SETUP_TRACKER_EVENT,
+    )
+    written = 0
+    for event in events:
+        stream.append(event)
+        written += 1
+    # One run summary per save, so a reader can tell "nothing changed" from
+    # "the run did not happen" - a distinction an event stream alone cannot make.
+    stream.append(
+        {
+            "event_type": "run_summary",
+            "setups_in_payload": len(setups),
+            "events_emitted": written,
+            "tracker_data_session": data_session,
+            "forming_bar_marks": forming,
+        }
+    )
+    tracker_ledger.save_sidecar(
+        sidecar_path, tracker_ledger.build_sidecar(setups, data_session=data_session)
+    )
+    return {"events": written, "forming_bar_marks": forming}
 
 
 def _normalized_setup_family_text(value: str | None) -> str:
@@ -9081,6 +9145,11 @@ SCAN_FACTOR_OBSERVATION_COLUMNS = [
     "win",
     "spy_forward_return_pct",
     "spy_relative_side_return_pct",
+    # R10.D / audit S3a: the true exchange-session span, and whether it makes
+    # the declared horizon a fiction. Appended, so every existing reader is
+    # unaffected.
+    "sessions_spanned",
+    "stale_horizon",
 ]
 SCAN_FACTOR_LEADERBOARD_COLUMNS = [
     "generated_at",
@@ -9154,6 +9223,8 @@ TIER_OUTCOME_COLUMNS = [
     "win",
     "spy_forward_return_pct",
     "spy_relative_side_return_pct",
+    "sessions_spanned",
+    "stale_horizon",
     "positive_scan_factor_match_count",
     "positive_scan_factor_matches",
 ]
@@ -9517,6 +9588,51 @@ def _prepare_scan_factor_history_frame(history_df: pd.DataFrame | None) -> pd.Da
     return frame
 
 
+def _cached_spy_closes() -> dict[str, float]:
+    """SPY daily closes from the durable store, keyed by ISO date.
+
+    Read-only and best-effort: a missing store leaves the benchmark empty and
+    the SPY-relative columns stay null, which is what they already were. An
+    empty result is never an error here - it is the honest state of a machine
+    whose store has no SPY.
+    """
+    try:
+        from project_paths import MASTER_AVWAP_DAILY_BARS_DIR
+
+        path = Path(MASTER_AVWAP_DAILY_BARS_DIR) / "SPY.parquet"
+        if not path.exists():
+            return {}
+        frame = pd.read_parquet(path)
+    except Exception:
+        logging.debug("Cached SPY closes unavailable for tier outcomes.", exc_info=True)
+        return {}
+    closes: dict[str, float] = {}
+    try:
+        date_column = "date" if "date" in frame.columns else frame.columns[0]
+        for stamp, close in zip(frame[date_column], frame["close"]):
+            key = str(pd.to_datetime(stamp).date())
+            value = float(close)
+            if value > 0:
+                closes[key] = value
+    except Exception:
+        logging.debug("Cached SPY closes unreadable for tier outcomes.", exc_info=True)
+        return {}
+    return closes
+
+
+def _horizon_drift_columns(scan_date, future_scan_date, horizon) -> dict:
+    try:
+        from setup_tracker_ledger import horizon_drift
+
+        drift = horizon_drift(scan_date, future_scan_date, horizon)
+    except Exception:
+        return {"sessions_spanned": None, "stale_horizon": None}
+    return {
+        "sessions_spanned": drift["sessions_spanned"],
+        "stale_horizon": drift["stale_horizon"],
+    }
+
+
 def build_scan_factor_observation_rows(
     history_df: pd.DataFrame | None,
     *,
@@ -9532,6 +9648,14 @@ def build_scan_factor_observation_rows(
         close_value = _scan_factor_number(spy_row.get("_entry_close"))
         if close_value is not None and close_value > 0:
             benchmark_closes[str(spy_row.get("_scan_date_text") or "")] = float(close_value)
+    if not benchmark_closes:
+        # R10.D / audit S3b: `spy_forward_return_pct` and
+        # `spy_relative_side_return_pct` are non-null on **0 of 10,928** rows,
+        # because SPY only reaches this frame when it is itself a scanned
+        # symbol - and it never is. The durable daily-bar store already holds
+        # SPY, so the benchmark comes from there instead. Cached bars only:
+        # zero IB traffic (ground rule 8).
+        benchmark_closes = _cached_spy_closes()
 
     normalized_horizons = tuple(sorted({int(horizon) for horizon in horizons if int(horizon) > 0}))
     rows = []
@@ -9585,6 +9709,17 @@ def build_scan_factor_observation_rows(
                         "win": side_return_pct > 0,
                         "spy_forward_return_pct": spy_forward_return_pct,
                         "spy_relative_side_return_pct": spy_relative_side_return_pct,
+                        # R10.D / audit S3a. `future_idx = idx + horizon` indexes
+                        # this SYMBOL'S OWN scan rows, not exchange sessions, so a
+                        # name that appears on a watchlist irregularly has "5
+                        # sessions later" land far away: live medians are horizon
+                        # 5 -> 64 sessions and horizon 10 -> 73, with 42% of rows
+                        # spanning more than twice their declared horizon. These
+                        # two columns MEASURE and FLAG that. They do not re-select
+                        # the future row - doing so would silently redefine every
+                        # number the tracker has produced, which is a scoring
+                        # change and not this packet's to make.
+                        **_horizon_drift_columns(scan_date, future_scan_date, horizon),
                     }
                 )
 
@@ -10070,6 +10205,8 @@ def build_bot_tier_outcome_rows(
                 "win": bool(obs.get("win")),
                 "spy_forward_return_pct": obs.get("spy_forward_return_pct"),
                 "spy_relative_side_return_pct": obs.get("spy_relative_side_return_pct"),
+                "sessions_spanned": obs.get("sessions_spanned"),
+                "stale_horizon": obs.get("stale_horizon"),
                 "positive_scan_factor_match_count": len(matches),
                 "positive_scan_factor_matches": _format_positive_scan_factor_matches(matches),
             }

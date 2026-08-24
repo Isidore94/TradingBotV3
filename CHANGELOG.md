@@ -21,6 +21,65 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - R10.D: the tracker's transitions become an authority
+
+- **The setup tracker is a 951 MB snapshot with no memory**, and audit S1
+  measured what that costs: between one frozen pair, 218 setups changed status,
+  2,737 CLOSED scenarios changed status or reason, 1,306 changed exit date, and
+  AMCR LONG on 2026-07-28 went `TIME_STOP @ 46.69, R 0.577` to
+  `TARGET_HIT @ 45.55, R 0.360` **on the same date**. A snapshot can answer
+  only "what is true now". `setup_tracker_events.jsonl`
+  (`setup_tracker_event_v1`, month-segmented) is the append-only authority
+  beside it.
+- **Four event types**, and the last two carry the distinctions that matter.
+  `reopened` is named separately from `transition` because S1 measured 35
+  CLOSED→OPEN and 1 UNTRADEABLE→OPEN in a single pair. `tombstone` says a setup
+  **left the payload and says nothing about why** — it can leave because it
+  closed, because the tracker pruned it, or because a partial read lost it, and
+  a row that implied the flattering one would be worse than no row.
+- **Never by deep-copying the payload.** A digest sidecar holds one 16-char
+  hash per setup, so the diff is a dict comparison over ~10k short strings and
+  the payload is read once, in place. A test asserts the setup dicts handed in
+  are the same objects the caller holds.
+- **The digest covers only state-bearing fields.** Most of the payload's
+  hundreds of per-setup fields move every run — a price, a band, a note — so
+  digesting whole records would emit a transition for every setup on every run
+  and the stream would say nothing.
+- **The sidecar is written LAST**, only after the ledger append succeeded, so a
+  crash between the two costs a repeat of the run's diff rather than a hole in
+  the stream. Re-emitting a transition is recoverable; dropping one is not. A
+  sidecar written over a different field list re-seeds as `initial` rather than
+  emitting a wave of false transitions.
+- **One `run_summary` row per save**, because an event stream alone cannot
+  distinguish "nothing changed" from "the run did not happen" — the first thing
+  a reader needs when a day looks empty.
+- **S2 is measured on every run and never repaired.** A tracker run during a
+  session marks the FORMING bar, so a setup carries a close that does not exist
+  yet. Rewriting a mark would be rewriting history (ground rule 5), so the
+  count, the offending date and a sample ride on the run summary.
+  **Reproduction note: S2 does NOT reproduce on the current payload.** The
+  audit measured 2,739 offending setups on a `data_session` 2026-08-20 payload;
+  the 2026-08-24 payload (`data_session` 2026-08-21, written Monday over a
+  completed Friday) has **14,043 marks and zero later than its vintage**. The
+  defect is intermittent by nature — it needs a run during a live session — not
+  refuted.
+- **S3a reproduced almost exactly, and its root cause is now named in code.**
+  `future_idx = idx + horizon` indexes the symbol's OWN scan rows, not exchange
+  sessions, so a name that appears on a watchlist irregularly has "5 sessions
+  later" land far away. Live medians over 10,928 rows: horizon 1 → 1 session,
+  3 → 5, **5 → 64**, **10 → 73**, with **42%** of rows spanning more than twice
+  their declared horizon. New `sessions_spanned` and `stale_horizon` columns
+  MEASURE and FLAG it. They deliberately do **not** re-select the future row:
+  that would silently redefine every number the tracker has produced, which is
+  a scoring change and not this packet's to make.
+- **S3b reproduced exactly and is fixed.** `spy_forward_return_pct` and
+  `spy_relative_side_return_pct` were non-null on **0 of 10,928** rows, because
+  SPY only reaches the frame when it is itself a scanned symbol — and it never
+  is. The benchmark now falls back to the durable daily-bar store's SPY.
+  **Cached bars only: zero IB traffic** (ground rule 8). A machine whose store
+  has no SPY leaves the columns null, which is what they already were.
+- Golden fixtures byte-identical before and after (ground rule 1).
+
 ### 2026-08-24 - R10.C: one statistics discipline, and the numbers it moves
 
 - **`scripts/evidence_stats.py` implements ground rule 10 exactly once**, and

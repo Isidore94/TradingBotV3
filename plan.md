@@ -1264,7 +1264,11 @@ second scoreboard.
    the four trader-named findings under the new discipline and says plainly
    whether each survives. Output to the runtime report store with atomic
    last-good; `--freeze` copies a dated audit into `docs/analysis/`.
-5. **R10.D D1 setup tracker: point-in-time transition ledger** (S1–S4).
+5. **R10.D D1 setup tracker: point-in-time transition ledger** (S1–S4) - **BUILT 2026-08-24, GREEN.** `setup_tracker_ledger.py` + a digest sidecar
+   (never a payload copy); `sessions_spanned` / `stale_horizon` measure S3a
+   without re-selecting the future row; S3b fixed from cached daily bars,
+   zero IB. **S2 did not reproduce on the current payload** - it needs a run
+   during a live session - so the guard reports on every save.
    `setup_tracker_events.jsonl` (`setup_tracker_event_v1`, month-segmented)
    appended after every tracker run — `initial`, `transition`, `reopened`,
    `tombstone` — diffed via a small per-setup digest sidecar and **never by
