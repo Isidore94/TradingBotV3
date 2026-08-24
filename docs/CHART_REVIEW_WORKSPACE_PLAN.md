@@ -307,6 +307,17 @@ three post-earnings families and `second_dev_breakout` since 2026-08-21, so a
 claim can only ever be one of those — and "Veto D1 — but M5 today" writes an
 ordinary veto row, so some vetoed names were traded the same day.
 
+Since 2026-08-24 the picklist caveat is **derived, not retyped**: the offered
+list moved to `ui/annotations/setup_claims.py` (Qt-free; the rail re-exports
+it) and `ai_summary.scope_caveats()` builds the sentence from
+`offered_setup_claims()` at package time, so admitting a claim family updates
+the caveat by itself. A registry the headless path cannot read degrades to a
+stated UNKNOWN caveat, never to a remembered list — the hand-maintained
+version went stale across the 08-21 widening while its content-pinning test
+stayed green, which is the failure mode derivation exists to close
+(`docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` AI-P5). The veto-day-trade
+caveat stays a constant: it describes a verb, not a list.
+
 Nothing reads these files back into a detector, a score, an alert, a watchlist,
 Focus, the review queue, or `review_policy.json`.
 

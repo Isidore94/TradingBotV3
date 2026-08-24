@@ -8,6 +8,30 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 - review pass + documentation reconciliation sweep (docs only)
+
+**Branch `testing-week-2026-08-24`.** Fable's review pass over the five AI-P
+commits (`9209a75`..`4df4bac`): **no blockers** — both refuted premises
+verified genuine at the source, the 162 tests in the six touched files pass,
+each commit records a full-suite green, branch in sync with origin. Follow-up
+reconciliation for the docs the build commits did not reach: `CLAUDE.md` (LIKE
+picklist definition now in `ui/annotations/setup_claims.py`; new bullet for the
+nightly-journal reason semantics, the Questrade token paste point, and the
+named-constant lesson from the blank Focus Pick Review page) with `AGENTS.md`
+re-copied; `docs/CHART_REVIEW_WORKSPACE_PLAN.md` §6 (picklist caveat is
+derived, not retyped); `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md` (dated
+addendum for AI-P3/AI-P4, gates 1/3/6 advanced and still owed live). plan.md
+deliberately untouched: these packets were never plan.md work items — they
+came from the frozen review doc, and every owed live gate is unchanged.
+
+**Verification baseline: unchanged** from the last build commit (`4df4bac`:
+**4547 passed / 19 subtests**, exit 0; smoke 7/7; selftest 58/58) —
+documentation-only change, suite not re-run. Active build item remains the
+R10.A mechanics canary; trader actions outstanding: the Questrade token paste
+and this weekend's R8 §10 one-real-weekend run.
+
+---
+
 ## 2026-08-24 - AI-layer review delivered (analysis only, no code changed)
 
 **Branch `testing-week-2026-08-24`.** Trader-directed analysis task: classify

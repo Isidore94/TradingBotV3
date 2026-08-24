@@ -475,3 +475,40 @@ grid stays underneath, and both surfaces still filter the Trades tab on a click.
 
 The six live gates in this spec are unchanged and still owed; none of the above
 touches the store, the migration or the reconciliation path.
+
+## Nightly-slot honesty and the Questrade chain surface — BUILT 2026-08-24
+
+Two packets from `docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` §5 landed on
+`testing-week-2026-08-24` (`5350361`, `40d7d3a`); neither touches the store,
+the migration, or reconciliation itself.
+
+**AI-P3 — the nightly slot has something to say.** The review's stated defect
+was REFUTED by reproduction: reconcile mismatches never marked a run FAILED and
+never burned attempts — only a reconcile exception sets `had_errors`
+(`test_reconcile_mismatches_do_not_make_a_successful_import_a_failure` is the
+kept regression). The real defect: the runner records `outcome["reason"]` and
+this job returned only `messages`, so every `journal_import` ledger row ever
+written was mute — which is how the dead Questrade chain sat undiagnosed for
+five nights. Now `run_journal_backfill` returns `failures` beside `status`
+(every `had_errors` site names itself), and `_nightly_reason` builds the ledger
+line from what the night measured — imported/rebuilt/self-heal/reconcile
+counts, first three failures named, the dropped count printed
+(`NIGHTLY_REASON_FAILURE_LIMIT = 3`). A value not measured is absent, never
+zero: a night whose reconciliation did not run says "reconcile skipped", not
+"0 mismatches". §6's own precedent governs ("zero-execution night = ok").
+Advances gates 3 and 6, which remain owed as live proofs.
+
+**AI-P4 — a dead Questrade chain is visible on the desk.**
+`scripts/journal_health.py` reads `journal_questrade_expires_at` and the
+coverage ledger's most recent oauth-pattern failure (by attempt time, not
+coverage day — a year-spanning backfill marks every session day FAILED from
+one break, so the coverage day would misdate the outage) and renders
+UNHEALTHY/stale/not-configured states in the Journal Health tab and System
+Health (`operations_audit`), with the repair step in words: paste a fresh
+refresh token into Journal ▸ Health ▸ "Questrade refresh token". Absent
+settings read "not configured", an unreadable database reads unknown — never
+healthy-by-default. Naive/aware stamps are normalized by attaching the aware
+side's zone to the naive side, never by stripping. Advances gate 1 (the full
+Questrade backfill becomes reachable and its regressions visible); the gate
+itself still owes the trader's portal action and the covered-since-inception
+proof.
