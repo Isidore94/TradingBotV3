@@ -8,6 +8,35 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 late - autorun flipped ON by the trader; AWAY quiet rule recorded
+
+**Branch `testing-week-2026-08-24`.** Two trader actions, both taken in
+conversation with Fable:
+
+1. **`outcome_sweep_autorun` is now `"on"`** in
+   `%LOCALAPPDATA%\TradingBotV3\local_settings.json` (trader directed the
+   flip; a dated `.bak-20260824` sits beside the file). Takes effect at the
+   next desk restart — the next live weekday session IS the R10.A mechanics
+   canary, and it starts the two-week R10.A/B collection clock gating R10.I
+   claims. Predicted first sweep (measured read-only 2026-08-23): 576 pending
+   → 560 finalizing on recovered milestone rows (271 stop-outs), 16
+   `no_measurement_in_checkpoint`. Observe the `outcome_sweep` System Health
+   tile after the close.
+2. **AWAY quiet rule** (after a live AWAY day left 317 alerts waiting in the
+   review queue): an AWAY day ends in an EOD recap, not a queue — recorded as
+   a dated trader amendment in `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` and
+   folded into the AWAY day-recap packet's spec
+   (`AI_DIRECTION_DECISIONS_2026-08-24.md` §5). Evidence streams keep filling
+   unchanged; one sub-decision left open to the trader (whether the AWAY
+   hourly phone pushes are also deferred to EOD). CLAUDE.md/AGENTS.md matrix
+   bullet updated with the BUILD PENDING marker.
+
+**Verification baseline: unchanged** (`7fa655b`: 4587 passed / 19 subtests,
+exit 0; smoke 7/7; selftest 58/58) — settings + docs only. Opus's build
+program (R10.C onward) continues; packet 8 must absorb the AWAY amendment.
+
+---
+
 ## 2026-08-24 evening - direction decisions recorded; R10.B-H build authorized
 
 **Branch `testing-week-2026-08-24`.** Trader decisions from the evening

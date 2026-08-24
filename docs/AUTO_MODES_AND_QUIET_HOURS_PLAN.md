@@ -310,3 +310,40 @@ Two things the build settled that the spec had left implied:
   `after_close_wrapup_due` requires every slot to be done, so leaving them
   pending would have silently cancelled the after-close wrap-up — universe
   rebuild, learning refresh, integrity calibration — for the whole day.
+
+## Trader amendment 2026-08-24: an AWAY day ends in a recap, not a queue
+
+**Trader rule, stated after a full live AWAY day left 317 alerts waiting in the
+review queue (plus 128 hidden inside yesterday's range) on the return to the
+desk.** Verbatim intent: "Auto away should NOT produce that much noise. In
+general it should just send nothing until EOD, where it will show me what
+produced the best results intraday and also what focus picks needed managing.
+Auto evening is for when I will miss some of the morning session to sleep in,
+and auto desk is for when I am actively trading. Only auto desk should send
+317 signals over the course of the day."
+
+What this changes, and what it deliberately does not:
+
+- **Changes (BUILD PENDING — the AWAY day-recap packet,
+  `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` sec 5, absorbs this):**
+  in AWAY, the chart-review queue is not the return surface. Alerts do not
+  accumulate as 317 pending review items; the return surface is the EOD recap —
+  the day's best-ranked output (staged picks, classified D1 events, the
+  autopilot digest's numbered best swings) plus the Focus picks that needed
+  managing. The AWAY->DESK drain routes to the recap rather than dumping the
+  day into the review queue.
+- **Does not change:** discovery is still identical in every mode; the backing
+  alert list, History, the D1 badge, `alert_review_events.jsonl` and every
+  evidence stream still fill exactly as today (the repetition-control rule —
+  display decisions withhold nothing from evidence — is the precedent and the
+  constraint); staged-never-adopt in AWAY is unchanged; the two push
+  exceptions (Focus/Research price alerts in every mode, EVENING's SPY alarm)
+  are unchanged; EVENING keeps its existing queue-silently semantics.
+- **Open sub-decision (trader):** whether "send nothing until EOD" also covers
+  the AWAY hourly phone pushes (`_push_swing_picks`, `_maybe_push_d1_events` —
+  the deliberate 2026-08-11/14 remote surface) or only the desk's review-queue
+  accumulation. Until answered, the hourly pushes stand.
+
+The 2026-08-15 §1 matrix rows for AWAY remain accurate for what is BUILT
+today; this amendment governs the recap packet's build and the queue-routing
+change that lands with it.
