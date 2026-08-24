@@ -37,15 +37,15 @@ also starts the two-week collection clock that gates R10.I.
 
 ---
 
-## 2026-08-24 - AI-layer packets (AI-P5 done; P3, P4, P1 next)
+## 2026-08-24 - AI-layer packets (AI-P5, AI-P3 done; P4, P1 next)
 
 **Branch `testing-week-2026-08-24`.** Building the packets in
 `docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` §5, in the order AI-P5 → AI-P3 →
 AI-P4 → AI-P1, with AI-P2 conditional on trader assent.
 
-| Check after AI-P5 | Result |
+| Check after AI-P3 | Result |
 |---|---|
-| `pytest tests/ -q` | **4520 passed / 19 subtests**, exit 0 |
+| `pytest tests/ -q` | **4524 passed / 19 subtests**, exit 0 |
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
 | `launch_gui.py --selftest` | **58/58**, exit 0 |
 
@@ -64,7 +64,17 @@ and every test would stay green while it was wrong. It is derived now. Two
 genuinely stale doc lines were found and fixed en route (§7.2's enumeration,
 §6.4c's "QUEUED - do not build yet" on a slot that ships first).
 
-**Still owed on this branch** (unchanged by AI-P5): R10.V's live scan day, the
+**AI-P3's stated premise was also REFUTED, and again the packet was worth
+building.** Reconcile mismatches never caused a FAILED slot - only a reconcile
+*exception* does, and the reproduction test passed on its first run (it is kept
+as a regression). The real defect sat one layer over: the job returned its
+findings under `messages` while the runner reads `reason`, so **every**
+`journal_import` row ever written was mute. That is why the actual cause - a
+dead Questrade OAuth refresh chain, 0 of 142 days covered - survived five
+nights undiagnosed. The night now reports what it measured, and a failure names
+its own source. Reconciliation logic is untouched.
+
+**Still owed on this branch** (unchanged by AI-P5 or AI-P3): R10.V's live scan day, the
 R10.A mechanics canary, R9's four live proofs, and the 2026-08-21 fluidity
 gates. Nothing merges to `main` until a live-session validation day passes.
 

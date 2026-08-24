@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Mapping
 
 from journal_importers import (
     IBKR_CLIENT_ID_SETTING,
@@ -258,6 +258,11 @@ def run_journal_backfill(
 
     journal_store = store or JournalStore()
     messages: list[str] = []
+    # Every `had_errors = True` below also names ITSELF here. `messages` is the
+    # human log and mixes routine notes with failures; `failures` is only the
+    # things that made this run not-OK, so the caller can put them in a ledger
+    # reason without having to guess which lines mattered (AI-P3).
+    failures: list[str] = []
     total_imported = 0
     had_errors = False
     prefetched_positions: dict[str, list[dict[str, Any]]] = {}
@@ -286,6 +291,10 @@ def run_journal_backfill(
                 if "error" in chunk:
                     chunk_failures += 1
                     had_errors = True
+                    failures.append(
+                        f"Questrade {account_number} "
+                        f"{chunk['start']}..{chunk['end']}: {chunk['error']}"
+                    )
                     journal_store.finish_import_run(
                         run_id, status="FAILED", imported_executions=0, message=chunk["error"]
                     )
@@ -324,6 +333,10 @@ def run_journal_backfill(
                 if quarantined:
                     chunk_failures += 1
                     had_errors = True
+                    failures.append(
+                        f"Questrade {account_number}: {len(quarantined)} "
+                        "unreadable row(s) quarantined"
+                    )
                 # After the chunk is marked, never before: the cross-check below
                 # can downgrade a day to FAILED, and marking COVERED afterwards
                 # would paint over exactly the disagreement it just found.
@@ -334,6 +347,7 @@ def run_journal_backfill(
                 except RuntimeError as exc:
                     chunk_failures += 1
                     had_errors = True
+                    failures.append(f"Questrade {account_number} activities: {exc}")
                     journal_store.finish_import_run(
                         run_id, status="PARTIAL", imported_executions=count, message=str(exc)
                     )
@@ -353,6 +367,7 @@ def run_journal_backfill(
             # Only reachable before any chunk exists - account discovery itself
             # failing. No day is marked, because none was attempted.
             had_errors = True
+            failures.append(f"Questrade account discovery: {exc}")
             run_id = journal_store.start_import_run(
                 "QUESTRADE_BACKFILL", trigger="backfill",
                 coverage_start=start_date, coverage_end=end_date,
@@ -403,6 +418,9 @@ def run_journal_backfill(
             )
             if quarantined:
                 had_errors = True
+                failures.append(
+                    f"IBKR Flex: {len(quarantined)} unreadable row(s) quarantined"
+                )
                 messages.append(f"IBKR Flex quarantined {len(quarantined)} unreadable row(s)")
             total_imported += count
             messages.append(f"IBKR flex {count}")
@@ -425,9 +443,11 @@ def run_journal_backfill(
                     )
             else:
                 had_errors = True
+                failures.append("IBKR Flex: statement declared no span, coverage not marked")
                 messages.append("IBKR Flex coverage not marked: statement declared no span")
         except Exception as exc:
             had_errors = True
+            failures.append(f"IBKR Flex: {exc}")
             journal_store.finish_import_run(run_id, status="FAILED", imported_executions=0, message=str(exc))
             messages.append(f"IBKR flex failed: {exc}")
     else:
@@ -457,10 +477,12 @@ def run_journal_backfill(
             messages.append(f"rebuilt {trade_count} grouped trades")
         except Exception as exc:
             had_errors = True
+            failures.append(f"rebuild: {exc}")
             messages.append(f"rebuild failed: {exc}")
 
     return {
         "status": "FAILED" if had_errors else "OK",
+        "failures": failures,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "total_imported": total_imported,
@@ -474,6 +496,64 @@ def run_journal_backfill(
 #: broker can amend or late-report a fill for days after the fact, and a nightly
 #: job that only ever looked at yesterday would never see the amendment.
 NIGHTLY_LOOKBACK_DAYS = 7
+
+
+#: Cap on how many named failures the ledger reason carries. A dead Questrade
+#: chain names one failure per 31-day chunk, so an uncapped reason is a
+#: thousand-character row saying the same thing twelve times. The count of what
+#: was dropped is always printed - a silent truncation reads as "that was all
+#: of it", which is the one thing a ledger row must never imply.
+NIGHTLY_REASON_FAILURE_LIMIT = 3
+
+
+def _nightly_reason(
+    had_errors: bool, failures: list[str], findings: Mapping[str, Any]
+) -> str:
+    """One line for the ledger, built only from what the night measured.
+
+    The runner records ``outcome["reason"]``; this job returned its findings
+    under ``messages`` and nothing else, so **every** ``journal_import`` row
+    ever written carried an empty reason (AI-P3, review 2026-08-24 §5). Nine
+    lifetime failures were therefore mute: diagnosing them meant opening the
+    SQLite database by hand, which is exactly the failure mode the ledger
+    exists to prevent one level up.
+
+    A value that was not measured is simply absent. Nothing here substitutes a
+    zero for an unknown (plan.md Phase 0.7 ground rule 6): a night whose
+    reconciliation never ran says nothing about positions rather than claiming
+    it checked none.
+    """
+    parts: list[str] = []
+    imported = findings.get("imported")
+    if imported is not None:
+        parts.append(f"imported {imported} execution(s)")
+    trade_count = findings.get("trade_count")
+    if trade_count is not None:
+        parts.append(f"rebuilt {trade_count} trade(s)")
+    if findings.get("healed") or findings.get("heal_failed"):
+        parts.append(
+            f"self-heal repaired {findings.get('healed', 0)}, "
+            f"unresolved {findings.get('heal_failed', 0)}"
+        )
+    if "positions_checked" in findings:
+        parts.append(
+            f"reconciled {findings['positions_checked']} position(s), "
+            f"{findings.get('mismatched', 0)} mismatch(es)"
+        )
+    elif findings.get("reconcile_skipped"):
+        parts.append("reconcile skipped: no broker position source reachable")
+    if findings.get("fx_error"):
+        parts.append(f"fx unconverted: {findings['fx_error']}")
+
+    summary = "; ".join(parts) if parts else "nothing measured"
+    if not had_errors:
+        return summary
+    shown = failures[:NIGHTLY_REASON_FAILURE_LIMIT]
+    dropped = len(failures) - len(shown)
+    named = "; ".join(shown) if shown else "no source named itself"
+    if dropped > 0:
+        named += f"; and {dropped} more failure(s) not listed"
+    return f"failed: {named} | {summary}"
 
 
 def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: str = "nightly") -> dict[str, Any]:
@@ -500,6 +580,7 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
             "status": "FAILED",
             "ok": False,
             "trigger": trigger,
+            "reason": message,
             "start_date": "",
             "end_date": "",
             "trade_count": None,
@@ -507,6 +588,12 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
         }
     journal_store = store or JournalStore()
     messages: list[str] = []
+    #: What made this night not-OK, each naming its own source (AI-P3).
+    failures: list[str] = []
+    #: What the night actually measured. Only measured values are ever put in
+    #: here, so the reason line can never state a number nobody counted
+    #: (plan.md Phase 0.7 ground rule 6).
+    findings: dict[str, Any] = {}
     had_errors = False
     end_date = date.today()
     start_date = end_date - timedelta(days=NIGHTLY_LOOKBACK_DAYS)
@@ -514,6 +601,8 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
     backfill = run_journal_backfill(days=NIGHTLY_LOOKBACK_DAYS, store=journal_store, rebuild=False)
     messages.extend(backfill.get("messages") or [])
     had_errors = had_errors or backfill.get("status") == "FAILED"
+    failures.extend(backfill.get("failures") or [])
+    findings["imported"] = backfill.get("total_imported")
 
     # Self-heal before the rebuild: assembling a journal that is known to have
     # holes in it produces trades that are wrong in a way no later step can see.
@@ -523,6 +612,8 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
             lambda broker, account, day: _fetch_one_day(journal_store, broker, account, day),
             today=end_date,
         )
+        findings["healed"] = len(healed["repaired"])
+        findings["heal_failed"] = len(healed["failed"]) + len(healed["exhausted"])
         if healed["repaired"] or healed["failed"] or healed["exhausted"]:
             messages.append(
                 f"self-heal repaired {len(healed['repaired'])}, failed {len(healed['failed'])}, "
@@ -530,6 +621,7 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
             )
     except Exception as exc:  # noqa: BLE001 - one bad night is not a broken journal
         had_errors = True
+        failures.append(f"self-heal: {exc}")
         messages.append(f"self-heal failed: {exc}")
 
     try:
@@ -548,6 +640,10 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
                 + (f", {len(rates['errors'])} error(s)" if rates["errors"] else "")
             )
     except Exception as exc:  # noqa: BLE001 - unconverted is an honest state
+        # Deliberately NOT a failure: I5 says an unbooked rate renders as
+        # "unconverted", which is an honest state, not a broken night. It is
+        # still named in the reason so the trader can see it happened.
+        findings["fx_error"] = str(exc)
         messages.append(f"fx booking failed: {exc}")
 
     trade_count = None
@@ -563,6 +659,7 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
             )
     except Exception as exc:  # noqa: BLE001
         had_errors = True
+        failures.append(f"rebuild: {exc}")
         messages.append(f"rebuild failed: {exc}")
 
     try:
@@ -574,20 +671,28 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
             report = journal_reconcile.reconcile(
                 journal_store, positions, brokers=reachable, trigger=trigger
             )
+            findings["positions_checked"] = report["positions_checked"]
+            findings["mismatched"] = len(report["mismatched"])
             messages.append(
                 f"reconciled {report['positions_checked']} position(s), "
                 f"{len(report['mismatched'])} mismatch(es)"
             )
         else:
+            findings["reconcile_skipped"] = True
             messages.append("reconcile skipped: no broker position source was reachable")
     except Exception as exc:  # noqa: BLE001
         had_errors = True
+        failures.append(f"reconcile: {exc}")
         messages.append(f"reconcile failed: {exc}")
 
+    findings["trade_count"] = trade_count
     return {
         "status": "FAILED" if had_errors else "OK",
         "ok": not had_errors,
         "trigger": trigger,
+        "reason": _nightly_reason(had_errors, failures, findings),
+        "failures": failures,
+        "findings": findings,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "trade_count": trade_count,

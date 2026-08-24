@@ -21,6 +21,40 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - AI-P3: the nightly journal slot stops being mute
+
+- **Every `journal_import` ledger row ever written carried an empty reason.**
+  The runner records `outcome["reason"]`; `run_nightly_journal_import` returned
+  its findings under `messages` and no `reason` key at all. So the nine
+  lifetime failures said only "failed", and diagnosing any of them meant
+  opening `trade_journal.sqlite3` by hand - exactly the failure mode the ledger
+  exists to prevent one level up. The night now returns a `reason` built from
+  what it measured: executions imported, trades rebuilt, self-heal repaired and
+  unresolved, positions reconciled and mismatched, and FX left unconverted.
+- **A failure names its own source.** `run_journal_backfill` now returns
+  `failures` beside `status`, and every one of its eight `had_errors = True`
+  sites appends the thing that failed ("Questrade 51830546 2026-08-15..08-22:
+  500 Server Error ... oauth2/token", "IBKR Flex: statement declared no span").
+  `messages` mixes routine notes with failures; `failures` is only what made
+  the run not-OK, so a caller can build a ledger reason without guessing which
+  lines mattered. The reason names the first three and **prints the count it
+  dropped** - a dead Questrade chain fails once per 31-day chunk, and a silent
+  truncation would read as "that was all of it".
+- **The alleged defect was REFUTED by reproduction.** The review recorded that
+  a run which imports successfully but finds reconcile mismatches records
+  FAILED and burns its attempts. It does not, and never did: only a reconcile
+  *exception* sets `had_errors`, while mismatches are appended to `messages`
+  and the run returns OK. `test_reconcile_mismatches_do_not_make_a_successful_import_a_failure`
+  passed on first run and is kept as the regression that pins it.
+  What was actually wrong was the muteness above - the reason the real cause
+  (a dead Questrade OAuth refresh chain, 0 of 142 days covered) could sit
+  undiagnosed for five nights.
+- **Reconciliation itself is untouched.** MISMATCH is still written to
+  `import_runs` exactly as before; only the slot-status reporting changed.
+  Nothing here writes a number it did not measure (Phase 0.7 ground rule 6): a
+  night whose reconciliation never ran says nothing about positions rather than
+  claiming it checked none.
+
 ### 2026-08-24 - AI-P5: the picklist caveat stops being a hand-maintained fact
 
 - **`trader_judgement`'s picklist caveat is now DERIVED from the picklist.**

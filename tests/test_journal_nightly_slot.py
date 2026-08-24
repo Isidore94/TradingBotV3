@@ -423,3 +423,96 @@ def test_the_nightly_path_adds_no_timer_thread_or_notifier():
     # the thing it is checking for.
     for forbidden in {"QTimer", "Thread", "Timer", "ntfy", "send_push", "push_alert", "notify"}:
         assert forbidden not in names, f"{forbidden} has no business in the nightly journal path"
+
+
+# ==========================================================================
+# AI-P3 - the slot's status has to mean something (review 2026-08-24 §5)
+#
+# Nine lifetime failures and no `ok` row taught the trader nothing, because
+# every one of those rows was also MUTE: the runner records `outcome["reason"]`
+# and this job returned its findings under `messages`. Diagnosing a failing
+# night required opening the SQLite database by hand. R7 §6's precedent is the
+# rule being applied here - "a night with no executions is ok", because a job
+# that cries failure at a normal night teaches the trader to ignore it.
+# ==========================================================================
+def _reconcile_reporting(mismatches: int):
+    return lambda *a, **k: {
+        "positions_checked": 29,
+        "mismatched": [{"symbol": f"SYM{i}"} for i in range(mismatches)],
+    }
+
+
+def test_reconcile_mismatches_do_not_make_a_successful_import_a_failure(
+    quiet_night, store, monkeypatch
+):
+    """A mismatch is a FINDING about the broker's book, not a broken import.
+
+    The import landed every row it was asked for; reconciliation then said the
+    assembled positions disagree with the broker's. That disagreement is the
+    single most valuable thing the night produces and it must reach the trader
+    as a finding on a successful run, not as an indistinguishable failure.
+    """
+    monkeypatch.setattr(
+        journal_runner.journal_reconcile, "reconcile", _reconcile_reporting(19)
+    )
+    result = journal_runner.run_nightly_journal_import(store=store)
+
+    assert result["status"] == "OK" and result["ok"] is True
+    assert "19 mismatch(es)" in " ".join(result["messages"])
+
+
+def test_the_nights_findings_reach_the_ledger(quiet_night, store, monkeypatch):
+    """The runner records ``outcome["reason"]``; this job returned ``messages``.
+
+    So every journal_import row ever written carries an empty reason, and the
+    ledger - the one artifact the batch layer exists to leave behind - could
+    not say what went wrong on any of the nine failures.
+    """
+    monkeypatch.setattr(
+        journal_runner.journal_reconcile, "reconcile", _reconcile_reporting(19)
+    )
+    result = journal_runner.run_nightly_journal_import(store=store)
+
+    reason = str(result.get("reason") or "")
+    assert reason, "the runner reads 'reason'; without it the ledger row is mute"
+    assert "19 mismatch(es)" in reason
+
+
+def test_a_source_that_did_not_land_its_rows_still_fails_and_names_itself(
+    store, monkeypatch
+):
+    """`failed` is reserved for exactly this: a source that should have run and
+    did not. The Questrade refresh chain has been dead since 2026-08-19, and
+    the row must say so rather than merely being red."""
+
+    class _DeadChain(_QuietBroker):
+        def iter_execution_chunks(self, start_date, end_date):
+            yield {
+                "account_number": "51830546",
+                "start": start_date,
+                "end": end_date,
+                "error": "500 Server Error for url: .../oauth2/token",
+            }
+
+    monkeypatch.setattr(journal_runner, "QuestradeImporter", _DeadChain)
+    monkeypatch.setattr(
+        journal_runner, "import_ibkr_flex_executions",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("IBKR Flex is not configured.")),
+    )
+    monkeypatch.setattr(
+        journal_runner.journal_fx, "ensure_rates",
+        lambda store, pairs, **kwargs: {
+            "booked": 0, "carried_back": 0, "unavailable": [], "errors": []
+        },
+    )
+    result = journal_runner.run_nightly_journal_import(store=store)
+
+    assert result["status"] == "FAILED" and result["ok"] is False
+    assert "oauth2/token" in str(result.get("reason") or "")
+
+
+def test_a_quiet_night_says_so_in_its_reason(quiet_night, store):
+    """`ok` with an empty reason is indistinguishable from `ok` unrecorded."""
+    result = journal_runner.run_nightly_journal_import(store=store)
+    assert result["status"] == "OK"
+    assert str(result.get("reason") or "").strip()
