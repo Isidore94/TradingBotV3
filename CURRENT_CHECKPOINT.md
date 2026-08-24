@@ -37,15 +37,15 @@ also starts the two-week collection clock that gates R10.I.
 
 ---
 
-## 2026-08-24 - AI-layer packets (AI-P5, P3, P4 done; P1 next)
+## 2026-08-24 - AI-layer packets: AI-P5, P3, P4, P1 done; P2 needs the trader
 
 **Branch `testing-week-2026-08-24`.** Building the packets in
 `docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` §5, in the order AI-P5 → AI-P3 →
 AI-P4 → AI-P1, with AI-P2 conditional on trader assent.
 
-| Check after AI-P4 | Result |
+| Check after AI-P1 | Result |
 |---|---|
-| `pytest tests/ -q` | **4537 passed / 19 subtests**, exit 0 |
+| `pytest tests/ -q` | **4544 passed / 19 subtests**, exit 0 |
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
 | `launch_gui.py --selftest` | **58/58**, exit 0 |
 
@@ -80,7 +80,22 @@ step. This is a **trader action**: get a fresh refresh token from the Questrade
 portal and paste it into Journal > Health. Until then Questrade contributes
 nothing to the journal, and 0 of 142 days stay uncovered.
 
-**Still owed on this branch** (unchanged by AI-P5, AI-P3 or AI-P4): R10.V's live scan day, the
+**AI-P1 found a live-desk defect while wiring the mirror cohort.** Focus Pick
+Review had been rendering an **empty table since 2026-08-18**: `_join_focus_week`
+resolved its CSVs under `PERSISTENT_DATA_DIR` (the home root) while they live in
+`data/runtime`, and the step's own "a missing CSV is a quiet week" forgiveness
+made the miss look like a plausible blank page. Both joins now address their
+files by the named constants. Live read after the fix: **16 cohort rows and 605
+focus pick rows** for the 08-17 week, where the pane showed zero. R8 §10's
+one-real-weekend gate is the thing that would have caught this.
+
+**AI-P2 is NOT built and needs a trader decision.** It widens R8's locked
+decision ("journal hook is the weekly auto-tag review only") by adding a
+default-off "all pending" toggle so the 220-candidate backlog is burn-downable
+in one sitting. That is a spec amendment, so it was not built on an agent's
+judgement. The question is in the handoff.
+
+**Still owed on this branch** (unchanged by AI-P5, P3, P4 or P1): R10.V's live scan day, the
 R10.A mechanics canary, R9's four live proofs, and the 2026-08-21 fluidity
 gates. Nothing merges to `main` until a live-session validation day passes.
 

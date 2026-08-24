@@ -148,12 +148,22 @@ reconstruct it:
 
 ## 6. Step data contracts (inputs → refresh trigger → outputs)
 
-> **DEFERRED — release-candidate reconciliation, 2026-08-15:** Week in Review
-> does not yet join the two `rrs_*strength_extremes.csv` streams. Focus Pick
-> Review currently joins the daily-picks and outcomes CSVs only; the promised
-> `human_focus_performance.csv`, `pick_feedback.jsonl`, and `veto_cohort_*.csv`
-> mirror-cohort views remain future work. The release candidate does not present
-> those absent joins as completed review evidence.
+> **DEFERRED — release-candidate reconciliation, 2026-08-15; narrowed twice.**
+> The RS/RW extremes join and the picks↔outcomes join landed 2026-08-18 (see
+> "Retained joins" at the end of this file). The **`veto_cohort_*.csv`
+> mirror-cohort view landed 2026-08-24 as AI-P1**, pooled through
+> `canonical_veto_cohort` and labelled discovery-not-confirmation.
+>
+> Still future work, and still not presented as completed review evidence:
+> the `human_focus_performance.csv` and `pick_feedback.jsonl` views.
+>
+> AI-P1 also repaired a defect this step shipped with: `_join_focus_week`
+> resolved its CSVs under `PERSISTENT_DATA_DIR` (the home root) rather than
+> `data/runtime`, so Focus Pick Review rendered an **empty table on the live
+> desk** from 2026-08-18 until 2026-08-24. Both joins now address their files
+> by the named `project_paths` constants. §10's one-real-weekend live gate is
+> unchanged and still owed — and it is now the thing that would have caught
+> this, which is the argument for owing it.
 
 - **Week in review**: `review_learning.build_review_learning_state(window_days=7)`
   (takes/skips/rejects, blind spots, leaks, watch conversion; the

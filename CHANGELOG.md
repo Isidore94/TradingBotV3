@@ -21,6 +21,44 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - AI-P1: the mirror cohort, and the join that was reading nothing
+
+- **Focus Pick Review now shows the graded veto cohort**, which its subtitle
+  has promised since the step shipped while nothing loaded any `veto_cohort_*`
+  file. R8 §6's last DEFERRED join. It is the MIRROR of the picks table and
+  that is why it belongs there: the picks answer "how did what I took do", and
+  only the cohort answers "how did what I threw away do".
+- **The cohort is not week-scoped and loads first**, so a quiet week cannot
+  also hide the whole graded record of the trader's vetoes.
+- **Pooled through the one canonical function.** The rollup on disk is already
+  grouped by `canonical_veto_cohort`, so calling it here is idempotent - but it
+  is CALLED, never reimplemented, so a later vocabulary bump cannot leave the
+  pane and the rollup disagreeing about which rows are the same reason.
+- **Honesty carried over verbatim from the sibling join**: an unmeasured
+  statistic renders BLANK, never 0.00%; a missing file is an explicit absent
+  state ("this is an absent measurement, not a clean record") that leaves the
+  rest of the page working; every row shows its n. Nothing derives a number the
+  CSV does not carry (Phase 0.7 ground rule 6) - the caption states the horizon
+  and the sign convention, and labels the table **discovery, not
+  confirmation**. The two capture caveats travel with it: "Veto D1 - but M5
+  today" writes an ordinary veto row, and a reason introduced by a later
+  vocabulary keeps its own cohort.
+- **A pre-existing defect found while wiring it: the Focus Pick Review step had
+  been rendering an empty table on the live desk since it shipped on
+  2026-08-18.** `_join_focus_week` composed its paths as
+  `PERSISTENT_DATA_DIR / name`; that constant is the home ROOT while
+  `human_focus_daily_picks.csv` and `human_focus_outcomes.csv` live under
+  `data/runtime`. Both reads missed every time, and the function's own "a
+  missing CSV is a quiet week" forgiveness turned the miss into a plausible
+  blank page instead of an error. Both joins now use the NAMED CONSTANTS
+  (`HUMAN_FOCUS_DAILY_PICKS_FILE`, `HUMAN_FOCUS_OUTCOMES_FILE`,
+  `VETO_COHORT_PERFORMANCE_FILE`), which is the only spelling that cannot drift
+  from where the writers put them. The landed tests hid it by patching
+  `PERSISTENT_DATA_DIR` and writing the fixtures directly beneath it, so the
+  fixture encoded the same wrong assumption as the code; they now redirect each
+  file by its constant. Live read after the fix: **16 cohort rows and 605 focus
+  pick rows for the 08-17 week, where the pane previously showed zero.**
+
 ### 2026-08-24 - AI-P4: a dead broker credential chain becomes visible
 
 - **The Questrade refresh chain had been dead since 2026-08-19 and nothing on

@@ -192,12 +192,36 @@ class FocusReviewPage(_StepPage):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.note = QLabel("")
         self.note.setWordWrap(True)
+
+        # AI-P1: the mirror cohort, which is what the subtitle has promised
+        # since this step shipped. NOT week-scoped, unlike the table above -
+        # the cohort is the whole graded record of what the trader threw away,
+        # and a single week of it would answer nothing.
+        self.cohort_caption = QLabel("")
+        self.cohort_caption.setObjectName("SectionSubtitle")
+        self.cohort_caption.setWordWrap(True)
+        self.cohort_table = QTableWidget(0, 6)
+        self.cohort_table.setHorizontalHeaderLabels(
+            ["Veto reason", "Side", "n", "Win rate", "Avg return", "PF"]
+        )
+        self.cohort_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.cohort_note = QLabel("")
+        self.cohort_note.setWordWrap(True)
+
         self._layout.addWidget(self.refresh_button)
         self._layout.addWidget(self.table, 1)
         self._layout.addWidget(self.note)
+        self._layout.addWidget(QLabel("Vetoed picks, graded forward"))
+        self._layout.addWidget(self.cohort_caption)
+        self._layout.addWidget(self.cohort_table, 1)
+        self._layout.addWidget(self.cohort_note)
         self._finish_layout()
 
     def reload(self) -> None:
+        # The cohort first and unconditionally: it is not week-scoped, so a
+        # week with no picks must not also hide the graded record of the
+        # trader's vetoes.
+        self._reload_cohort()
         rows = _join_focus_week(self.service.week_bounds)
         self.table.setRowCount(len(rows))
         columns = ("date", "symbol", "side", "source", "h1", "h3", "h5", "h10", "matured")
@@ -218,6 +242,43 @@ class FocusReviewPage(_StepPage):
         if orphans:
             note += f" {orphans} row(s) have an outcome but no pick snapshot."
         self.note.setText(note)
+
+    def _reload_cohort(self) -> None:
+        rows = _read_veto_cohort()
+        self.cohort_table.setRowCount(len(rows))
+        columns = ("cohort", "side", "n", "win_rate", "avg_return", "profit_factor")
+        for index, row in enumerate(rows):
+            for column, key in enumerate(columns):
+                self.cohort_table.setItem(
+                    index, column, QTableWidgetItem(str(row.get(key) or ""))
+                )
+        if not rows:
+            self.cohort_caption.setText("")
+            self.cohort_note.setText(
+                "No graded veto cohort yet. It is written by the overnight "
+                "veto_cohort_grading slot, and a veto needs forward sessions "
+                "before it means anything - this is an absent measurement, "
+                "not a clean record."
+            )
+            return
+        # The label is fixed text, not a computed claim: it describes what the
+        # rows ARE. Nothing here derives a statistic the CSV does not carry
+        # (plan.md Phase 0.7 ground rule 6).
+        horizons = sorted({str(row.get("horizon") or "").strip() for row in rows} - {""})
+        span = ", ".join(horizons) if horizons else "unstated"
+        self.cohort_caption.setText(
+            f"Session horizon(s): {span}. Returns are side-adjusted, so POSITIVE "
+            "means the pick you vetoed would have WORKED. Read as DISCOVERY, not "
+            "confirmation: these are the trader's own rejections graded forward, "
+            "n is small per reason, and a blank is a horizon that has not matured."
+        )
+        self.cohort_note.setText(
+            f"{len(rows)} cohort row(s). Two capture facts travel with this "
+            "table: 'Veto D1 - but M5 today' writes an ordinary veto row, so "
+            "some of these names were day-traded the same day; and a reason "
+            "introduced by a later vocabulary keeps its own cohort rather than "
+            "back-filling the older one."
+        )
 
 
 class WalkawayPage(_StepPage):
@@ -669,12 +730,12 @@ def _join_focus_week(bounds) -> list[dict[str, Any]]:
     """
     import csv
 
-    from project_paths import PERSISTENT_DATA_DIR
+    import project_paths
 
     monday, friday = bounds
 
-    def _rows(name: str) -> list[dict[str, str]]:
-        path = PERSISTENT_DATA_DIR / name
+    def _rows(path) -> list[dict[str, str]]:
+        path = Path(path)
         if not path.is_file():
             return []
         try:
@@ -697,14 +758,14 @@ def _join_focus_week(bounds) -> list[dict[str, Any]]:
         return (stamp, symbol, str(raw.get("side") or "").strip().lower())
 
     outcomes: dict[tuple[str, str, str], dict[str, str]] = {}
-    for raw in _rows("human_focus_outcomes.csv"):
+    for raw in _rows(project_paths.HUMAN_FOCUS_OUTCOMES_FILE):
         key = _key(raw)
         if key is not None:
             outcomes[key] = raw
 
     joined: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
-    for raw in _rows("human_focus_daily_picks.csv"):
+    for raw in _rows(project_paths.HUMAN_FOCUS_DAILY_PICKS_FILE):
         key = _key(raw)
         if key is None:
             continue
@@ -715,6 +776,90 @@ def _join_focus_week(bounds) -> list[dict[str, Any]]:
             joined.append(_focus_row(key, None, raw, orphan=True))
     joined.sort(key=lambda row: (row["date"], row["symbol"]))
     return joined
+
+
+def _read_veto_cohort() -> list[dict[str, str]]:
+    """The graded veto cohort - R8 §6's last DEFERRED join (AI-P1).
+
+    The Focus Pick Review subtitle has promised "the veto cohort beside them"
+    since the step shipped, while nothing loaded any ``veto_cohort_*`` file.
+    This is the loader that sentence was describing.
+
+    It is the MIRROR of the picks table, and that is why it belongs on this
+    page: the picks answer "how did what I took do", and only the cohort can
+    answer "how did what I threw away do". A trader whose accepted picks look
+    fine and whose vetoes were mostly wrong has a problem that the left-hand
+    table cannot show.
+
+    The rollup on disk is already pooled by :func:`canonical_veto_cohort`
+    (``_rebuild_pooled_performance`` groups by it), so applying it here is
+    idempotent. It is applied anyway, through the ONE canonical function -
+    never a second pooling implementation - so a later vocabulary bump cannot
+    leave this pane and the rollup disagreeing about which rows are the same
+    reason.
+
+    Read-only and forgiving like every other weekend-prep reader: an
+    unreadable or missing file is a quieter page, not an error worth stopping
+    the routine for. Nothing here computes a statistic the CSV does not carry
+    (plan.md Phase 0.7 ground rule 6) - the columns are reformatted, never
+    derived.
+    """
+    import csv
+
+    import project_paths
+    from ui.annotations import veto_cohort
+
+    path = Path(project_paths.VETO_COHORT_PERFORMANCE_FILE)
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            raw_rows = list(csv.DictReader(handle))
+    except OSError:
+        return []
+
+    def _pct(value: str) -> str:
+        """A percentage, or BLANK. Never a substituted zero."""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            return f"{float(text) * 100:.1f}%"
+        except (TypeError, ValueError):
+            return text
+
+    def _signed_pct(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            return f"{float(text) * 100:+.2f}%"
+        except (TypeError, ValueError):
+            return text
+
+    def _ratio(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            return f"{float(text):.2f}"
+        except (TypeError, ValueError):
+            return text
+
+    rows: list[dict[str, str]] = []
+    for raw in raw_rows:
+        rows.append(
+            {
+                "cohort": veto_cohort.canonical_veto_cohort(raw.get("cohort") or ""),
+                "side": str(raw.get("side") or "").strip(),
+                "horizon": str(raw.get("horizon_sessions") or "").strip(),
+                "n": str(raw.get("sample_count") or "").strip(),
+                "win_rate": _pct(raw.get("win_rate")),
+                "avg_return": _signed_pct(raw.get("avg_side_return")),
+                "profit_factor": _ratio(raw.get("profit_factor")),
+            }
+        )
+    return rows
 
 
 def _focus_row(key, pick, outcome, *, orphan: bool) -> dict[str, Any]:
