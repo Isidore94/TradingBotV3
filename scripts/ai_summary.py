@@ -21,6 +21,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import os
 from collections import deque
 from datetime import date, datetime
@@ -133,22 +134,83 @@ SCOPE_LABELS = {
 #: because both are properties of the capture UI rather than of the trader's
 #: judgement, and a reader who does not know them will draw a confident wrong
 #: conclusion from a correct file.
-SCOPE_CAVEATS = {
-    "trader_judgement": (
-        "The like+claim control offers a bounded picklist: the whole 'Main "
-        "swing' claim group, plus Post-Earnings 52w Break, Post-Earnings "
-        "Candle Break, Post-Earnings AVWAPE Bounce and 2nd-Dev Breakout "
-        "(added 2026-08-21). Every other earnings-cycle, study and playbook "
-        "claim type is unreachable from that control. Their absence from the "
-        "data is a fact about the user interface, not a trader preference, "
-        "and must not be read as one. The list itself is MAIN_CLAIM_GROUP + "
-        "EXTRA_CLAIM_IDS in ui/widgets/capture_rail.py.",
-        "The 'Veto D1 - but M5 today' verb writes an ordinary veto row and "
-        "separately adds the name to M5 Focus. Some vetoed names were "
-        "therefore traded the same day. The veto stream cannot distinguish "
-        "them, so veto cohort returns include names the trader acted on.",
-    ),
-}
+#: The veto caveat is a property of a VERB, not of a list, so it is a constant.
+_VETO_D1_M5_CAVEAT = (
+    "The 'Veto D1 - but M5 today' verb writes an ordinary veto row and "
+    "separately adds the name to M5 Focus. Some vetoed names were "
+    "therefore traded the same day. The veto stream cannot distinguish "
+    "them, so veto cohort returns include names the trader acted on."
+)
+
+
+def _offered_claim_caveat() -> str:
+    """State the capture rail's picklist, read from the rail's own source.
+
+    This used to be a hand-maintained sentence, and on 2026-08-21 the picklist
+    widened while the sentence did not - a machine-written falsehood shipped
+    as data, which is the exact failure these caveats exist to prevent. It is
+    derived now, so admitting a claim updates the caveat by itself.
+
+    The import is local and guarded on purpose. ``ai_summary`` runs headless in
+    the overnight slate; the picklist lives under ``ui`` (Qt-free, but under a
+    package the headless path has no other reason to touch), and a registry it
+    cannot read must degrade to a stated unknown rather than to a remembered
+    list. Missing data is uncertainty, never confirmation (plan.md sec 5) - a
+    reader who trusts a stale enumeration draws precisely the confident wrong
+    conclusion this caveat is here to stop.
+    """
+    try:
+        from ui.annotations import setup_claims
+
+        offered = list(setup_claims.offered_setup_claims())
+        main_group = setup_claims.MAIN_CLAIM_GROUP
+    except Exception:  # noqa: BLE001 - any failure means "unknown", not "none"
+        logging.debug("Offered setup-claim picklist unreadable.", exc_info=True)
+        return (
+            "The like+claim control offers a bounded picklist, and it "
+            "could not be read while this package was built. Which claim "
+            "types were reachable is therefore UNKNOWN for this run: do not "
+            "read any claim's absence from the data as a trader preference, "
+            "and do not assume the list matches an earlier package."
+        )
+    if not offered:
+        return (
+            "The like+claim control offered NO claim types when this package "
+            "was built. Every claim's absence from the data is a fact about "
+            "the user interface, not a trader preference."
+        )
+    main = [claim.label for claim in offered if claim.group == main_group]
+    extras = [claim.label for claim in offered if claim.group != main_group]
+    parts = [
+        f"The like+claim control offers a bounded picklist of "
+        f"{len(offered)} claim type(s): the whole '{main_group}' claim group "
+        f"({len(main)} claim(s))"
+    ]
+    if extras:
+        parts.append(", plus " + ", ".join(extras))
+    parts.append(
+        ". Every other earnings-cycle, study and playbook claim type is "
+        "unreachable from that control. Their absence from the data is a "
+        "fact about the user interface, not a trader preference, and must "
+        "not be read as one. The list itself is MAIN_CLAIM_GROUP + "
+        "EXTRA_CLAIM_IDS in ui/annotations/setup_claims.py."
+    )
+    return "".join(parts)
+
+
+def scope_caveats(scope: str) -> tuple[str, ...]:
+    """Machine-written caveats for one scope, built fresh at package time.
+
+    Built rather than looked up because the picklist caveat is derived from
+    live source; a module-level dict would freeze it at import.
+    """
+    if scope == "trader_judgement":
+        return (_offered_claim_caveat(), _VETO_D1_M5_CAVEAT)
+    return ()
+
+
+#: Scopes that carry caveats at all. The texts come from :func:`scope_caveats`.
+SCOPE_CAVEATS_SCOPES = frozenset({"trader_judgement"})
 
 # --- source status vocabulary ---------------------------------------------
 #
@@ -1434,9 +1496,7 @@ def build_evidence_package(
             "forbidden_effects": ["scanner scores", "watchlists", "alerts", "bot state", "orders"],
         },
     }
-    caveats = [
-        text for scope in selected for text in SCOPE_CAVEATS.get(scope, ())
-    ]
+    caveats = [text for scope in selected for text in scope_caveats(scope)]
     if caveats:
         package["scope_caveats"] = caveats
     canonical = json.dumps(package, sort_keys=True, separators=(",", ":"), default=str)

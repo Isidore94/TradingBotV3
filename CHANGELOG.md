@@ -21,6 +21,42 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - AI-P5: the picklist caveat stops being a hand-maintained fact
+
+- **`trader_judgement`'s picklist caveat is now DERIVED from the picklist.**
+  The scope ships two machine-written caveats as package data, and one of them
+  states which setup claims the capture rail actually offers - a fact the model
+  is never asked to infer, because a reader who does not know it reads a claim's
+  absence as a trader preference. It was hand-written prose duplicating a
+  code-owned list. `ai_summary._offered_claim_caveat()` reads
+  `ui.annotations.setup_claims.offered_setup_claims()` - the same function the
+  rail renders from - so admitting a claim updates the caveat by itself. The
+  live text now names 13 claim types (Main swing's 9, plus the three
+  post-earnings families and `second_dev_breakout`).
+- **The premise this packet was authorized on was REFUTED, and the packet was
+  built anyway for a different reason.** The review recorded the caveat as
+  still saying "only the 'Main swing' group". It did not: the text had already
+  been corrected when the picklist widened on 2026-08-21, and
+  `test_the_two_caveats_travel_with_the_scope_as_data` already pinned the
+  corrected content. What was true is the failure mode *behind* the alleged
+  defect - the caveat only kept up because a human retyped it, and every test
+  stayed green while it was stale. Pinning content catches a caveat that has
+  gone stale; deriving it catches one that is about to.
+- **The picklist definition moved out from behind Qt.** `MAIN_CLAIM_GROUP`,
+  `EXTRA_CLAIM_IDS` and `offered_setup_claims()` moved from
+  `ui/widgets/capture_rail.py` (which imports PySide6) to
+  `ui/annotations/setup_claims.py` (Qt-free, and already the owner of the claim
+  registry), because `ai_summary` runs headless in the overnight slate. The
+  rail re-exports all three and delegates through the module, so existing
+  imports are unchanged and a test that patches the source patches both - the
+  rail and the caveat cannot disagree about what was offered.
+- **A picklist it cannot read is declared UNKNOWN**, never a remembered list
+  (plan.md sec 5: missing data is uncertainty, never confirmation).
+- Docs reconciled en route: `LOCAL_AI_AUTOMATION_PLAN` §7.2 carried the same
+  stale enumeration and now records that the caveat is derived rather than
+  restating it; §6.4c still read "QUEUED - do not build yet" for the
+  `journal_import` slot that ships **first** in `default_slots()`.
+
 ### 2026-08-23 - Sol's three blockers: the sweep becomes safe to enable
 
 - **The autorun could never actually sweep.** The worker fired at close+10, the

@@ -56,7 +56,12 @@ from PySide6.QtWidgets import (
 )
 
 from ui import theme
-from ui.annotations.setup_claims import setup_claim_groups  # noqa: F401  (re-exported for hosts/tests)
+from ui.annotations import setup_claims
+from ui.annotations.setup_claims import (  # noqa: F401  (re-exported for hosts/tests)
+    EXTRA_CLAIM_IDS,
+    MAIN_CLAIM_GROUP,
+    setup_claim_groups,
+)
 from ui.annotations.store import (
     EVENT_LIKE_CLAIM,
     EVENT_NOTE,
@@ -69,21 +74,6 @@ from ui.widgets.flow_layout import FlowLayout
 
 _REASON_ROLE = Qt.ItemDataRole.UserRole
 _CLAIM_ROLE = Qt.ItemDataRole.UserRole
-#: The claim group this rail offers whole (trader, 2026-08-20: "only do
-#: the main setups for now").
-MAIN_CLAIM_GROUP = "Main swing"
-
-#: Named claims from OTHER groups, in the order the trader asked for them
-#: (2026-08-21: "add my post earnings setups and 2nd stdev breakout"). Ids, not
-#: a group name, because that ask was specific: the three post-earnings
-#: families and the 2nd-dev breakout, not the mid-earnings retests beside them
-#: and not the rest of the study shelf. Adding one later is a line here.
-EXTRA_CLAIM_IDS = (
-    "post_earnings_52w_break",
-    "post_earnings_candle_break",
-    "post_earnings_avwap_bounce",
-    "second_dev_breakout",
-)
 
 #: One keystroke per claim, in list order. Digits first so the nine main-swing
 #: claims keep the exact keys the trader already presses; letters continue the
@@ -96,25 +86,13 @@ CLAIM_HOTKEYS = "1234567890qwertyuiop"
 def offered_setup_claims() -> list:
     """The claims this rail offers, in display order.
 
-    Main swing whole and in the registry's own order, then the named extras in
-    the order they are listed. Reads the registry rather than restating it, so
-    a label or summary edited in ``setup_docs`` shows up here unchanged.
-
-    An extra id the registry does not know is skipped rather than guessed at -
-    and ``test_the_rail_offers_every_claim_the_trader_asked_for`` fails loudly
-    if that ever happens, so a typo cannot quietly cost the trader a claim.
+    The definition moved to :mod:`ui.annotations.setup_claims` on 2026-08-24 so
+    that ``ai_summary`` can state the offered list as a machine-written caveat
+    without importing Qt. Delegated through the MODULE rather than bound at
+    import time, so a test that patches the source patches this too - the rail
+    and the caveat must never be able to disagree about what was offered.
     """
-    grouped = setup_claim_groups()
-    offered = []
-    for group_name, claims in grouped:
-        if group_name == MAIN_CLAIM_GROUP:
-            offered.extend(claims)
-    by_id = {claim.setup_id: claim for _group, claims in grouped for claim in claims}
-    for setup_id in EXTRA_CLAIM_IDS:
-        claim = by_id.get(setup_id)
-        if claim is not None and claim not in offered:
-            offered.append(claim)
-    return offered
+    return setup_claims.offered_setup_claims()
 
 
 class CaptureRail(QFrame):

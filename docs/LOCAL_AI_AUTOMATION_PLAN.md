@@ -1177,12 +1177,22 @@ written by the runner. Only `failed` and `degraded_no_narrative` rows spend an
 attempt: a `skipped` refusal (unmounted Drive) costs about a second and must
 keep self-healing.
 
-### 6.4c Nightly journal pull (QUEUED — trader-approved 2026-08-11, do not build yet)
+### 6.4c Nightly journal pull (BUILT — promoted into R7 §6; shipped as slot 1)
 
-> The trader approved queuing this on 2026-08-11 and explicitly deferred the
-> build ("we wont do it yet"). Do not implement it before the ticker-briefs
-> hardening packet (sec 6.4b) has its live proof and the trader says go. It is
-> recorded now so the design survives the wait.
+> **Status corrected 2026-08-24 (AI-P5).** This section read "QUEUED —
+> trader-approved 2026-08-11, do not build yet" long after the slot shipped.
+> The build was promoted into `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md` §6 and
+> `journal_import` is now the **first** entry in `ai_jobs.runner.default_slots()`
+> — the one sanctioned exception to "later phases append; they never reorder
+> these", because the summary and the briefs read the journal and running them
+> first means they read yesterday's trades.
+>
+> The original deferral is kept below as the design record. Read it as history:
+> the design survived the wait, and the wait is over.
+>
+> _Original note (2026-08-11): the trader approved queuing this and explicitly
+> deferred the build ("we wont do it yet"), pending the ticker-briefs hardening
+> packet's (sec 6.4b) live proof._
 
 **What it is.** A third Phase 1 runner slot, `journal_import`, that pulls
 broker executions unattended each night so the nightly `ai_summary` narrates a
@@ -1439,9 +1449,25 @@ Two **machine-written caveats** travel with the scope in the package as data,
 in the same sense `coverage` is — exact, code-owned, never inferred. Both are
 properties of the capture UI rather than of the trader's judgement, and a
 reader without them draws a confident wrong conclusion from a correct file:
-the like+claim control currently offers only the "Main swing" group, and the
-"Veto D1 — but M5 today" verb writes an ordinary veto row so some vetoed names
-were traded the same day.
+the like+claim control offers a bounded picklist, and the "Veto D1 — but M5
+today" verb writes an ordinary veto row so some vetoed names were traded the
+same day.
+
+**The picklist caveat is DERIVED, not written here** (AI-P5, 2026-08-24). This
+paragraph deliberately does not enumerate the offered claims, and neither does
+`ai_summary`: the picklist widened on 2026-08-21 (Main swing plus the three
+post-earnings families and `second_dev_breakout`) while both the caveat and
+this line still described the older, narrower control — a machine-written
+falsehood shipped as data, which is the exact failure the caveats exist to
+prevent. `ai_summary._offered_claim_caveat()` now reads
+`ui.annotations.setup_claims.offered_setup_claims()`, the same function the
+rail renders from, so admitting a claim updates the caveat by itself and no
+document has to keep up. The definition moved out of
+`ui/widgets/capture_rail.py` into `ui/annotations/setup_claims.py` for that
+reason — the summary runs headless and must not import Qt; the rail re-exports
+all three names, so existing imports are unchanged. A registry the summary
+cannot read yields a caveat that says the list is **UNKNOWN for this run**,
+never a remembered enumeration.
 
 ### 7.3 What is NOT built
 

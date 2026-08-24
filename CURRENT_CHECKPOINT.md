@@ -8,6 +8,68 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 - AI-layer review delivered (analysis only, no code changed)
+
+**Branch `testing-week-2026-08-24`.** Trader-directed analysis task: classify
+the four AI slots by reproduction, argue the binding constraint, and design the
+layer's evolution against R10. Deliverable:
+`docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` (frozen, hand-committed;
+classified in `docs/README.md`). Headline: `veto_cohort_grading` is the only
+PROVEN slot; the two model slots are UNKNOWN (no measured reader, `ticker_briefs`
+is 72 min and the whole model bill); `journal_import` has 0 lifetime `ok` rows;
+binding constraint is input poverty — the dead Questrade refresh chain
+(0/142 days covered, trader portal action to fix, paste point = Journal ▸
+Health ▸ "Questrade refresh token") and the 1-annotation / 220-candidate
+confirmation starvation. The weekend AI-ledger silence was REFUTED as a defect
+(designed one-`no_session`-row-per-slot dedup, verified in the per-firing
+logs). Five packet proposals (AI-P1…P5) and the trader questions are in the
+document's §5/§7 — none is authorized by the document itself.
+
+**Working state:** no file under `scripts/` or `tests/` touched. Uncommitted:
+the new analysis file, this entry, and the `docs/README.md` row (plus the
+pre-existing untracked `desk_report.xml`, not mine, left alone).
+
+**Verification baseline: unchanged** from the cut below (4518 passed / 19
+subtests, smoke 7/7, selftest 58/58) — documentation-only change, suite not
+re-run. The active build item remains the one below: the R10.A mechanics
+canary (trader flips `outcome_sweep_autorun="on"` on a live weekday), which
+also starts the two-week collection clock that gates R10.I.
+
+---
+
+## 2026-08-24 - AI-layer packets (AI-P5 done; P3, P4, P1 next)
+
+**Branch `testing-week-2026-08-24`.** Building the packets in
+`docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` §5, in the order AI-P5 → AI-P3 →
+AI-P4 → AI-P1, with AI-P2 conditional on trader assent.
+
+| Check after AI-P5 | Result |
+|---|---|
+| `pytest tests/ -q` | **4520 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **58/58**, exit 0 |
+
+**Frozen exe: no rebuild trigger fires.** AI-P5 adds no dependency, no
+non-`.py` runtime asset, no new top-level `scripts/` package and no dynamic
+import by string name. The moved picklist stays inside `ui/`, which the spec
+already collects. Stated rather than silently skipped, per CLAUDE.md.
+
+**AI-P5's stated premise was REFUTED; the packet shipped for a different
+reason.** The review recorded `ai_summary`'s caveat as still describing only
+the "Main swing" group. It did not - the text was corrected when the picklist
+widened on 2026-08-21, and a test already pinned the corrected content. The
+real defect is one level up: the caveat was hand-maintained prose duplicating a
+code-owned list, so it could only ever be correct *until the next widening*,
+and every test would stay green while it was wrong. It is derived now. Two
+genuinely stale doc lines were found and fixed en route (§7.2's enumeration,
+§6.4c's "QUEUED - do not build yet" on a slot that ships first).
+
+**Still owed on this branch** (unchanged by AI-P5): R10.V's live scan day, the
+R10.A mechanics canary, R9's four live proofs, and the 2026-08-21 fluidity
+gates. Nothing merges to `main` until a live-session validation day passes.
+
+---
+
 ## 2026-08-24 week - branch `testing-week-2026-08-24`
 
 Cut from `phase05-integration-blitz` at **`1a2fbde`**, which carries the whole

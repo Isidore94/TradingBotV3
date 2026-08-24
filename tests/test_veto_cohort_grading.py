@@ -435,6 +435,62 @@ def test_the_two_caveats_travel_with_the_scope_as_data():
     assert "Veto D1 - but M5 today" in joined and "traded the same day" in joined
 
 
+def test_the_picklist_caveat_is_derived_from_the_picklist_itself(monkeypatch):
+    """The caveat must MOVE when the control moves, not be edited to match it.
+
+    The test above pins today's prose, which catches a caveat that has already
+    gone stale. It cannot catch one that is ABOUT to: the picklist widened on
+    2026-08-21 and the caveat only kept up because a human retyped it. A
+    machine-written fact that a human has to maintain is a machine-written
+    falsehood on a delay, so the text is derived from the same function the
+    rail renders from - admitting a claim updates the caveat by itself.
+    """
+    import ai_summary
+    from ui.annotations import setup_claims
+
+    known = {
+        claim.setup_id: claim
+        for _group, claims in setup_claims.setup_claim_groups()
+        for claim in claims
+    }
+    admitted = known["playbook_volume_thrust"]
+    assert admitted not in setup_claims.offered_setup_claims()
+
+    original = setup_claims.offered_setup_claims
+
+    def _with_one_more_claim():
+        return [*original(), admitted]
+
+    monkeypatch.setattr(setup_claims, "offered_setup_claims", _with_one_more_claim)
+
+    package = ai_summary.build_evidence_package(["trader_judgement"])
+    joined = " ".join(package.get("scope_caveats") or [])
+    assert admitted.label in joined
+
+
+def test_a_picklist_it_cannot_read_is_declared_unknown(monkeypatch):
+    """Missing data is uncertainty, never confirmation (plan.md sec 5).
+
+    If the offered list cannot be read, the caveat must say so rather than
+    fall back to a remembered list - a reader trusting a stale enumeration
+    draws exactly the confident wrong conclusion these caveats exist to stop.
+    """
+    import ai_summary
+    from ui.annotations import setup_claims
+
+    def _boom():
+        raise RuntimeError("registry unreadable")
+
+    monkeypatch.setattr(setup_claims, "offered_setup_claims", _boom)
+    package = ai_summary.build_evidence_package(["trader_judgement"])
+    caveats = package.get("scope_caveats") or []
+    joined = " ".join(caveats)
+    assert len(caveats) == 2
+    assert "could not be read" in joined
+    # It must not invent the list it just failed to read.
+    assert "Post-Earnings 52w Break" not in joined
+
+
 def test_other_scopes_carry_no_caveats():
     import ai_summary
 
