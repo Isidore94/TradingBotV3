@@ -8,6 +8,55 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-25 post-close - Sol adversarial pass complete; live canaries failed
+
+**Branch `testing-week-2026-08-24`. Active item: Phase 0 validation and blocker
+removal.** The frozen attack record is
+`docs/analysis/SOL_ATTACK_2026-08-24.md`. Three non-fenced blockers were repaired
+and pushed in one commit each:
+
+- `0c62b63` makes hermetic teardown fail when `BounceBot.stop()` raises, even
+  after the thread has joined;
+- `8474383` excludes blank/non-finite unresolved finals from usable outcome
+  evidence; and
+- `21fd55e` sends full inclusive offset-bearing DateTimes to Questrade
+  `/activities`.
+
+**The 2026-08-25 live AWAY canary did not pass.** Queue routing itself behaved:
+the day had zero `shown` review impressions while `focus_d1_flag`,
+`level_fired`, `d1_event_fired`, the backing alert list, History and the hourly
+AWAY report continued to fill. The recap nevertheless had no input:
+`MainWindow` constructs `AwayRecapPanel` but never calls `set_alerts`, and the
+ordinary and D1 backing lists have no single ordered, session-scoped export.
+R10 10a remains live-owed.
+
+**The restarted outcome-sweep canary also did not pass.** The owning strategy
+loop logged `Scanning paused` at 13:30:11 (close+30), before the sweep's 13:35
+due time. At 14:21 the 2026-08-25 outcome slice had 656 registrations and zero
+finals, and `outcome_sweep_coverage.json` still carried the prior day's
+`swept_at`. The prior 2026-08-24 production sweep remains valid (687 finalized,
+0 failed, 0 commit-failed), but it does not close the restarted-process gate.
+
+Two further outcome-integrity attacks are **PROVEN and report-only** because the
+smallest repairs touch fenced `scripts/bounce_bot_lib/legacy.py`: shifted caches
+with duplicate closes can recover the preceding bar, and conflicting milestone
+rows can erase an earlier `stop_hit=True`. Ask-first authorization is required
+before either repair or the autorun scheduling repair.
+
+**Verification after all three code repairs:** two full suites each reported
+**4801 passed / 19 subtests**, exit 0; their JUnit pass sets were identical
+(`only_run1=0`, `only_run2=0`). Smoke was **7/7**, source selftest **70/70**, and
+the unchanged frozen executable selftest **70/70**, all exit 0. No packaging
+trigger fired. Working tree is reconciled; no live or promotion gate is marked
+met.
+
+**Immediate next action:** obtain the trader's ask-first decision for the three
+fenced outcome repairs, specify and build the ordered session-scoped AWAY recap
+feed, then repeat both post-close canaries. Phase 0 is not merge-ready while
+those blockers remain.
+
+---
+
 ## 2026-08-25 morning - first night on the new code: what the artifacts say
 
 **Branch `testing-week-2026-08-24`.** Fable read the overnight artifacts; no

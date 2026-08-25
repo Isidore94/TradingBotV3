@@ -1232,8 +1232,13 @@ second scoreboard.
    added to `launch_gui.py` as defence in depth. A failed commit is never
    reported as a finalization.
 
-   *Still owed:* **one live weekday session with `outcome_sweep_autorun="on"`**
-   (the mechanics canary - the switch stays OFF until the trader flips it);
+   *Still owed:* **one successful live weekday session with
+   `outcome_sweep_autorun="on"`**. The trader enabled the switch and the
+   2026-08-25 canary **FAILED**: the strategy loop paused at close+30 (13:30),
+   five minutes before the sweep became due at close+35, leaving 656 registered
+   events and zero finals while the coverage file remained dated 2026-08-24.
+   Repairing that scheduling seam touches fenced `bounce_bot_lib/legacy.py` and
+   therefore remains ask-first;
    R9.5's shadow store aligned to month segments and `session_date`; a restore
    test of the ledger directory; the launch catch-up for the sweep (it runs only
    while the strategy thread is alive, so never in OFF); and the decision to make
@@ -1329,8 +1334,13 @@ second scoreboard.
     `DEFAULT_SCOPES`. Nothing in this chain may reach a detector, score, alert,
     watchlist, Focus, the review queue or `review_policy.json`.
 
-10a. **AWAY day recap and queue routing** - **BUILT 2026-08-24, GREEN;
-    mechanics canary OWED** (one live AWAY day). Spec:
+10a. **AWAY day recap and queue routing** - **BUILT 2026-08-24, GREEN offline;
+    live mechanics canary FAILED 2026-08-25 and remains OWED.** The live AWAY
+    day correctly produced zero `shown` review impressions while the backing
+    alert/evidence streams continued to fill, but the recap was empty because
+    `MainWindow` never supplies either Alert Center backing list to
+    `AwayRecapPanel.set_alerts`. A repair needs one ordered, session-scoped
+    ordinary+D1 export contract before the canary can be repeated. Spec:
     `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §5 and the R1 trader
     amendment in `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. In AWAY the
     chart-review queue no longer accumulates; the return surface is the EOD

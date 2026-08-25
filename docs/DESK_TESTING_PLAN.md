@@ -1,6 +1,6 @@
 # Desk testing plan — what to check, and when
 
-Document role: **active operator runbook.** Last reconciled: **2026-08-18**.
+Document role: **active operator runbook.** Last reconciled: **2026-08-25**.
 
 > **This file restates the owed live proofs from `CURRENT_CHECKPOINT.md` for a
 > human reader.** It is not a second source of truth. Whenever those proofs
@@ -38,13 +38,25 @@ lines at the bottom. That is where today's activity is.
 
 # 0. Where things stand — read this first
 
-**Last updated: 2026-08-18**, after two live sessions.
+**Last updated: 2026-08-25**, after the post-close AWAY and outcome-sweep
+checks.
 
-You ran **2026-08-17 and 2026-08-18, both in AWAY the whole time**. That matters
-more than it sounds: AWAY exercises the machine *staging* picks and reporting to
-your phone, and it exercises none of the things that need you at the desk. So
-some checks below are done, and the rest are simply still waiting for the right
-kind of day.
+Two live checks failed and are now engineering blockers, not steps for you to
+repeat on the current build:
+
+- The AWAY review queue correctly stayed empty and the evidence/feed stores
+  continued to fill, but the **AWAY Recap was empty** because the main window
+  never hands it the day's alerts.
+- The after-close outcome sweep did not run on the restarted desk because its
+  strategy loop paused at 13:30, five minutes before the sweep became due.
+
+Do not use an empty recap or a stale sweep file as a pass. Both canaries remain
+owed after their repairs.
+
+The 2026-08-17 and 08-18 AWAY sessions proved staging and hourly reporting. The
+2026-08-25 AWAY session tested the newer no-review-queue/recap contract: queue
+routing behaved, but the recap had no input and failed. Checks that need you at
+the desk are still waiting for the right kind of day.
 
 ## What is finished
 
@@ -52,7 +64,7 @@ kind of day.
 |---|---|---|
 | §2.5 pick eviction | **PASSED** | `trading_bot.log` on 08-18 at 10:31, 11:40, 12:11 and 12:48 shows `Focus gate evicted N staged pick(s)` with a reason beside every symbol |
 | §1 quiet boot | **PASSED** | The 08-16 22:06 launch logged `nothing starts yet - weekend - quiet hours` and nothing automatic ran until 06:00 the next morning |
-| §2.3 AWAY day | **HALF done** | Two full days of picks staying staged, and every hourly phone report present. The other half — flipping back to DESK and watching what adopts — never happened, because you never flipped |
+| §2.3 historical AWAY staging | **PASSED** | Two full days of picks staying staged and every hourly phone report present. The later no-queue recap contract is a separate failed canary below |
 
 **One thing changed in this document because of what you saw.** The 08-16 boot
 also logged `IB: connected`. That is **expected and fine**: the BounceBot panel
@@ -101,6 +113,7 @@ adopted nothing.
 | §2.11 the rebuilt review pane (new, 2026-08-20) | the same DESK day |
 | §2.12 the phone actually wakes you (new, 2026-08-20) | the same EVENING night, **with Sleep Focus on** |
 | §2.13 the graded veto cohort (new, 2026-08-20) | **one weekend**, after two weeks of vetoes |
+| §2.3 AWAY recap and §3 after-close outcome sweep | **wait for engineering repairs, then one full AWAY day** |
 
 Still: **one DESK day and one EVENING night** — §2.11 and §2.12 ride the two
 already owed. §2.13 is the only genuinely new sitting, and it cannot happen
@@ -352,53 +365,48 @@ set EVENING.
 
 ---
 
-## 2.3 An AWAY day — do picks wait for you?
+## 2.3 An AWAY day — does the recap replace the review queue?
 
-> **Half done (2026-08-17 and 08-18).** Two full AWAY days proved picks
-> stay staged and the hourly phone reports arrive. What is left is the
-> second half: **flip back to DESK during a session and watch what
-> adopts.** Do that on the DESK day.
+> **FAILED on 2026-08-25; do not repeat until repaired.** The review queue
+> correctly accumulated nothing, while the ordinary feed, History, D1 badge,
+> evidence streams and hourly phone output continued to fill. The recap itself
+> was empty because it was never handed those alerts.
 
-**The question:** while you are away, does the machine hold its picks instead of
-dumping them into your watchlists, and does it stay silent?
+**The question:** while you are away, does the machine keep recording and
+reporting the day without leaving hundreds of charts to review, then give you a
+complete end-of-day recap?
 
 ### WHEN
-A session you are actually away for, or any session you are willing to leave in
-AWAY for an hour or two.
+After the AI reports that the AWAY recap feed repair has landed. Use one full
+AWAY session and check it after the close, before changing modes.
 
 ### DO
-1. Note what is currently in `C:\TradingBotData\longs.txt` and `shorts.txt`
-   (open them, or just note how many lines).
-2. Set the mode to **AWAY**.
-3. Leave it for at least an hour of live market.
-4. Come back, and **before changing anything**, check those two files again.
-5. Then set the mode back to **DESK** and watch the Alert Center for a moment.
+1. Set the mode to **AWAY** before alerts begin and leave it there through the
+   close.
+2. Confirm the hourly phone reports arrive and contain alerts.
+3. After the close, open **AWAY Recap**.
+4. Check that the recap covers today's alerts and that returning to DESK does
+   not produce an old chart-review backlog.
 
 ### GOOD
-- **While away:** `longs.txt` and `shorts.txt` are unchanged by auto picks. The
-  desk makes no sound when alerts arrive. The Alert Center feed and the **D1
-  Focus** tab's unread number both keep climbing — that number is how you see
-  what you missed.
-- **On the flip back to DESK:** a status message like
-  `N auto pick(s) added to M5 Focus for today (...)`.
-- **Important and new:** not everything that queued up will be adopted. Picks
-  that no longer qualify are refused on purpose. Fewer names arriving than you
-  expected is the gate doing its job.
 
-To see the refusals, open `trading_bot.log`, Ctrl+End, and look for:
-
-```
-Focus gate refused N staged pick(s) at adoption: SYM (not above session VWAP), ...
-```
+- The recap is populated, session-scoped to today and in the same order the
+  alerts occurred.
+- History, the D1 unread badge, the backing alert list and evidence stores still
+  contain the day.
+- The chart-review queue stayed empty in AWAY, so there is no hundreds-chart
+  drain on return.
 
 ### BAD
-- New symbols appearing in `longs.txt` / `shorts.txt` while you were away.
-- The desk beeping while in AWAY.
-- Every single queued pick being adopted with no refusals logged *and* the
-  market having clearly moved against some of them.
 
-**Copy to the AI:** the `Focus gate refused` lines from `trading_bot.log`, and
-say roughly how many picks you expected versus how many arrived.
+- An empty recap when the hourly reports or History show alerts.
+- Yesterday's alerts mixed into today's recap, ordinary and D1 alerts out of
+  order, or a review backlog appearing when you return.
+- Any missing History/evidence rows. Queue routing is presentation only.
+
+**Copy to the AI:** a screenshot of AWAY Recap, today's hourly report, and the
+matching History rows. Do not call an empty recap a quiet day when either source
+contains alerts.
 
 ---
 

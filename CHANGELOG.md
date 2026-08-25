@@ -1,9 +1,7 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-22** from the working copy of
-`phase05-integration-blitz` (cut from `testing-week-2026-08-17`, which carries
-testing-week + R1 + R1.1 + R2 + R3 + R4 + R5 + R6 + R7 + R8, with the four later
-`phase05-r2-focus-gating-strength-board` commits merged in on 2026-08-18)
+Last reconciled: **2026-08-25** from `testing-week-2026-08-24` after the Sol
+adversarial reproduction pass.
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -20,6 +18,33 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-25 - Sol adversarial repairs
+
+**Hermetic teardown now fails on a failed stop (`0c62b63`).** The BounceBot
+cleanup helper returns `stop()` exceptions to the autouse fixture even when the
+worker thread has already joined, so a logged cleanup exception cannot produce a
+green suite. A regression first reproduced the former false-green result.
+
+**Blank unresolved outcomes are excluded from usable evidence (`8474383`).**
+`setup_scoreboard.unsettled_close_mask` now treats missing and non-finite
+`close_r` as unsettled alongside the legacy zero/entry sentinel. Such rows stay
+unresolved and are never relabelled `fabricated_zero_v1`; the live 2026-08-24
+slice therefore reports zero usable finals instead of 93 entry-like claims.
+
+**Questrade activities use the documented DateTime request shape (`21fd55e`).**
+The completeness cross-check now sends inclusive Pacific day bounds as full ISO
+DateTimes with UTC offsets instead of bare dates. A failed cross-check still
+fails coverage under R7 I2; the repair changes the invalid request, not that
+honesty rule.
+
+The frozen attack report also proves four blockers that were not changed: the
+AWAY recap is never handed the Alert Center backing list; signal-bar recovery
+can choose an earlier duplicate-close bar; milestone recovery can erase an
+earlier stop fact; and the outcome sweep becomes due five minutes after its
+owning strategy loop pauses. The latter two outcome paths are in fenced
+`bounce_bot_lib/legacy.py`; no ask-first authorization was supplied. See
+`docs/analysis/SOL_ATTACK_2026-08-24.md`.
 
 ### 2026-08-24 - Wave 1 offline slate
 
