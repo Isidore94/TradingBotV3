@@ -279,8 +279,23 @@ def ensure_rates(
     return summary
 
 
+#: The one non-CAD currency this system also DISPLAYS in. A USD observation is
+#: booked for every session that has trades, not only the sessions that happen
+#: to hold a USD trade, because converting a CAD trade INTO USD needs the rate
+#: for that CAD trade's own day.
+DISPLAY_CURRENCY = "USD"
+
+
 def rates_needed_for_trades(store: Any) -> list[tuple[date, str]]:
-    """The (date, currency) pairs the current trade table needs converting."""
+    """The (date, currency) pairs the current trade table needs converting.
+
+    Two jobs, not one. Each trade's own currency is needed to book the
+    tax-grade CAD value (I5). **And a USD observation is needed for every
+    session that has trades at all**, including CAD-only ones - without it a
+    CAD trade can never be displayed in USD, however honest the render seam is.
+    That gap is why true USD conversion was deferred in the first place: the
+    rate was never asked for, so it was never there to book from.
+    """
     with store.connection() as conn:
         rows = conn.execute(
             """
@@ -288,13 +303,21 @@ def rates_needed_for_trades(store: Any) -> list[tuple[date, str]]:
             WHERE COALESCE(trade_date, '') != '' AND UPPER(COALESCE(currency, '')) != 'CAD'
             """
         ).fetchall()
+        sessions = conn.execute(
+            "SELECT DISTINCT trade_date FROM trades WHERE COALESCE(trade_date, '') != ''"
+        ).fetchall()
     pairs: list[tuple[date, str]] = []
     for row in rows:
         try:
             pairs.append((_as_date(row[0]), str(row[1]).upper()))
         except ValueError:
             continue
-    return pairs
+    for row in sessions:
+        try:
+            pairs.append((_as_date(row[0]), DISPLAY_CURRENCY))
+        except ValueError:
+            continue
+    return sorted(set(pairs))
 
 
 def rates_needed_for_executions(store: Any) -> list[tuple[date, str]]:

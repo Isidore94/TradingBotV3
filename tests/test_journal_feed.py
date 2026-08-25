@@ -199,7 +199,7 @@ def test_the_currency_toggle_never_relabels_an_unconverted_number(feed):
     assert value is None and label == "unconverted"
 
     fx.seed_rate(feed, day="2026-08-05", currency="USD", rate_to_cad=1.37)
-    feed.book_cad_values()
+    feed.book_currency_values()
     trade = journal_feed.load_trades()[0]
     value, label = journal_feed.convert_amount(trade, "CAD")
     assert value == pytest.approx(trade.raw["net_pnl"] * 1.37) and label == "CAD"
@@ -374,7 +374,7 @@ def test_calendar_and_analytics_use_the_same_selected_currency(feed):
     _round_trip(feed, "cad", "2026-08-06", 80.0, 85.0, currency="CAD", symbol="SHOP.TO")
     feed.rebuild_trades(refresh_tags=False)
     fx.seed_rate(feed, day="2026-08-05", currency="USD", rate_to_cad=1.4)
-    feed.book_cad_values()
+    feed.book_currency_values()
     trades = journal_feed.load_trades()
 
     calendar = journal_feed.calendar_pnl_by_day(currency_mode="CAD")

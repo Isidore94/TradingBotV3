@@ -166,7 +166,7 @@ def run_journal_import_for_date(
                 f"FX: {len(rates['unavailable'])} unavailable, {len(rates['errors'])} error(s)"
             )
         trade_count = journal_store.rebuild_trades()
-        journal_store.book_cad_values()
+        journal_store.book_currency_values()
         messages.append(f"rebuilt {trade_count} grouped trades")
     except Exception as exc:
         had_errors = True
@@ -473,7 +473,7 @@ def run_journal_backfill(
                     f"FX: {len(rates['unavailable'])} unavailable, {len(rates['errors'])} error(s)"
                 )
             trade_count = journal_store.rebuild_trades()
-            journal_store.book_cad_values()
+            journal_store.book_currency_values()
             messages.append(f"rebuilt {trade_count} grouped trades")
         except Exception as exc:
             had_errors = True
@@ -649,7 +649,7 @@ def run_nightly_journal_import(*, store: JournalStore | None = None, trigger: st
     trade_count = None
     try:
         trade_count = journal_store.rebuild_trades()
-        journal_store.book_cad_values()
+        journal_store.book_currency_values()
         messages.append(f"rebuilt {trade_count} trades")
         rekey = journal_store.last_rekey
         if rekey.get("ambiguous") or rekey.get("orphaned"):

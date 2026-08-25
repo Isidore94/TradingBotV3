@@ -8,6 +8,39 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (5) - Wave 1, packet W3: USD is booked, not estimated
+
+**Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W3 DONE**;
+W4-W8 not started.
+
+R7's 2026-08-18 USD deferral is reversed by the trader's recorded decision and
+BUILT. The gap was never the render seam: `rates_needed_for_trades` asked only
+for each trade's own currency, so a CAD-only session had no USD observation to
+convert from. It now asks for one on every session with trades, and
+`book_currency_values` (was `book_cad_values`) books `net_pnl_usd` from that
+trade's OWN session rate, with `fx_usd_rate` and the EFFECTIVE `fx_usd_rate_date`
+beside it. A missing observation stays "unconverted"; a disappearing one clears
+the booking rather than leaving a stale number.
+
+Three additive columns on `trades` via `NEW_COLUMNS_V3`, which `migrate_to_v3`
+applies idempotently on every open - **no schema version bump, so no
+trader-present migration is required** on the live database.
+
+**Golden fixture re-frozen with a note.** `journal_rebuild_trades_v1` gained
+three columns and nothing else; the diff is 28 added lines and one changed
+`intentional_difference`, and legs, opportunity events and the summary are
+byte-identical.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4795 passed / 19 subtests**, exit 0 |
+
+Smoke and selftest untouched by this packet and not re-run. **R7 gates 1, 3 and
+6 are unchanged and still owed** - building a conversion does not validate it
+against a broker statement.
+
+---
+
 ## 2026-08-24 night (4) - Wave 1, packet W2: R8's DEFERRED block is empty
 
 **Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1 and W2 DONE**;

@@ -144,7 +144,7 @@ def test_booking_a_rate_then_rebuilding_converts_the_trade(store):
     _round_trip(store, "u1", "USD", "2026-08-05", 100.0, 110.0)
     store.rebuild_trades(refresh_tags=False)
     fx.seed_rate(store, day="2026-08-05", currency="USD", rate_to_cad=1.37)
-    store.book_cad_values()
+    store.book_currency_values()
     with store.connection() as conn:
         row = dict(conn.execute("SELECT * FROM trades").fetchone())
     assert row["net_pnl_cad"] == pytest.approx(1370.0)
@@ -169,7 +169,7 @@ def test_removing_a_rate_returns_the_trade_to_unconverted(store):
     with store.connection() as conn:
         assert conn.execute("SELECT net_pnl_cad FROM trades").fetchone()[0] == pytest.approx(1370.0)
         conn.execute("DELETE FROM fx_rates")
-    store.book_cad_values()
+    store.book_currency_values()
     with store.connection() as conn:
         assert conn.execute("SELECT net_pnl_cad FROM trades").fetchone()[0] is None
 

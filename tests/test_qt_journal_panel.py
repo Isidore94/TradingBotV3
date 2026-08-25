@@ -317,7 +317,7 @@ def test_saving_a_plan_stores_it_and_the_r_appears(panel, populated):
     panel.trades_tab.table.selectRow(aapl_row)
     trade_id = panel.trades_tab._current.trade_id
     journal_fx.seed_rate(populated, day="2026-08-03", currency="USD", rate_to_cad=1.4)
-    populated.book_cad_values()
+    populated.book_currency_values()
 
     panel.trades_tab.planned_risk.setValue(500.0)
     panel.trades_tab._save_risk()

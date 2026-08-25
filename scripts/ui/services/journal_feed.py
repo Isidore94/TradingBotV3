@@ -251,7 +251,13 @@ def convert_amount(trade: JournalTrade, currency_mode: str) -> tuple[float | Non
     if mode == "USD":
         if str(raw.get("currency") or "").upper() == "USD":
             return native, "USD"
-        return None, "unconverted"
+        # True conversion, from the value BOOKED at import against this trade's
+        # own session (2026-08-24). Nothing is divided here: a rate resolved
+        # while a report is open makes the same trade worth different amounts on
+        # different days. A session with no booked observation stays
+        # "unconverted" - never 0, never the native number relabelled.
+        value = raw.get("net_pnl_usd")
+        return (value, "USD") if value is not None else (None, "unconverted")
     return native, str(raw.get("currency") or "")
 
 

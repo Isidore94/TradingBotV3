@@ -885,7 +885,7 @@ class JournalStore:
 
             self.last_rekey = self._rekey_annotations(conn, carried, leg_payloads)
 
-        self.book_cad_values()
+        self.book_currency_values()
 
         if refresh_tags:
             self.refresh_auto_tags()
@@ -1589,8 +1589,8 @@ class JournalStore:
             "anchor_execution_uid": str(trade.get("anchor_execution_uid") or ""),
         }
 
-    def book_cad_values(self) -> dict[str, int]:
-        """Convert every trade's net P&L to CAD from the **stored** rate table.
+    def book_currency_values(self) -> dict[str, int]:
+        """Book every trade's P&L in CAD **and** in USD from the stored rates.
 
         I5, and the reason it is a separate pass rather than part of assembly:
         assembly is a pure function of executions and adjustments, and it must
@@ -1601,8 +1601,21 @@ class JournalStore:
         A trade whose rate is not booked keeps ``net_pnl_cad = NULL``. That is
         the "unconverted" state the UI renders explicitly; it is never 0, and
         never the native number quietly relabelled.
+
+        **The USD half is a DISPLAY value and CAD stays the tax-grade one**
+        (2026-08-24; the 2026-08-18 deferral was reversed by the trader once the
+        BoC chain was booking observations nightly). It is computed from this
+        trade's own session rate - ``net_pnl_cad / rate_to_cad(USD, trade_date)``
+        - so a trade taken on a 1.28 day is not valued at what a 1.42 day says.
+        A USD-native trade books its own number and no rate at all, because
+        dividing USD by USD would introduce rounding for nothing.
+
+        Every rule the CAD half keeps, the USD half keeps: a missing observation
+        clears the booking rather than leaving a stale number, and the effective
+        date - which observation was actually used, after any weekend carry-back
+        - is stored beside the value.
         """
-        summary = {"converted": 0, "unconverted": 0}
+        summary = {"converted": 0, "unconverted": 0, "usd_converted": 0, "usd_unconverted": 0}
         with self.connection() as conn:
             rates = {
                 (str(row["rate_date"]), str(row["currency"]).upper()): (
@@ -1618,6 +1631,7 @@ class JournalStore:
                 currency = str(row["currency"] or "").upper()
                 trade_date = _date_text(row["trade_date"])
                 net_pnl = _coerce_float(row["net_pnl"])
+                cad_value: float | None
                 if currency == "CAD":
                     rate, effective = 1.0, trade_date
                 else:
@@ -1629,14 +1643,53 @@ class JournalStore:
                             (trade_id,),
                         )
                         summary["unconverted"] += 1
+                        cad_value = None
+                        self._book_usd(conn, trade_id, currency, net_pnl, cad_value, rates, trade_date, summary)
                         continue
                     rate, effective = booked
+                cad_value = net_pnl * rate
                 conn.execute(
                     "UPDATE trades SET net_pnl_cad = ?, fx_rate = ?, fx_rate_date = ? WHERE trade_id = ?",
-                    (net_pnl * rate, rate, effective, trade_id),
+                    (cad_value, rate, effective, trade_id),
                 )
                 summary["converted"] += 1
+                self._book_usd(conn, trade_id, currency, net_pnl, cad_value, rates, trade_date, summary)
         return summary
+
+    @staticmethod
+    def _book_usd(conn, trade_id, currency, net_pnl, cad_value, rates, trade_date, summary) -> None:
+        """The USD display value for one trade, from the same stored table.
+
+        Split out so the CAD path above reads as it always did. Clearing on a
+        missing rate is deliberate: a stale USD number surviving a deleted
+        observation would be a figure nothing on disk supports any more.
+        """
+        if currency == "USD":
+            # Its own number. No rate, and none recorded - there is nothing to
+            # be point-in-time about.
+            conn.execute(
+                "UPDATE trades SET net_pnl_usd = ?, fx_usd_rate = NULL, fx_usd_rate_date = '' "
+                "WHERE trade_id = ?",
+                (net_pnl, trade_id),
+            )
+            summary["usd_converted"] += 1
+            return
+        booked = rates.get((trade_date, "USD"))
+        if booked is None or cad_value is None or not booked[0]:
+            conn.execute(
+                "UPDATE trades SET net_pnl_usd = NULL, fx_usd_rate = NULL, fx_usd_rate_date = '' "
+                "WHERE trade_id = ?",
+                (trade_id,),
+            )
+            summary["usd_unconverted"] += 1
+            return
+        usd_rate, usd_effective = booked
+        conn.execute(
+            "UPDATE trades SET net_pnl_usd = ?, fx_usd_rate = ?, fx_usd_rate_date = ? "
+            "WHERE trade_id = ?",
+            (cad_value / usd_rate, usd_rate, usd_effective, trade_id),
+        )
+        summary["usd_converted"] += 1
 
     def list_trades(
         self,

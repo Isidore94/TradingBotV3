@@ -370,6 +370,12 @@ def _summary_for_rows(rows: list[dict[str, Any]], pnl_key: str = "net_pnl") -> d
 #: purpose: it must never be mistaken for a booked value in a log or a CSV.
 USD_ESTIMATE_KEY = "net_pnl_usd_estimated"
 
+#: Column booked by ``JournalStore.book_currency_values`` from the stored BoC
+#: observation for each trade's OWN session (2026-08-24). Preferred over the
+#: manual estimate wherever every selected row carries it - one is a
+#: measurement, the other is one rate applied to a year.
+USD_BOOKED_KEY = "net_pnl_usd"
+
 
 def apply_manual_usd_estimate(
     trades: list[dict[str, Any]], rate: float | None = None
@@ -440,6 +446,18 @@ def resolve_pnl_key(
         non_usd = [row for row in closed if str(row.get("currency") or "").upper() != "USD"]
         if not non_usd:
             return "net_pnl", ""
+        # True conversion first (2026-08-24). Every row carries a USD value
+        # booked at import from the BoC observation for its own session, so this
+        # is a measurement rather than an approximation - and it is preferred
+        # over the manual rate whenever it can answer for the WHOLE selection.
+        # Partially booked is not good enough: summing booked rows and estimated
+        # rows in one total would produce a number that is neither.
+        unbooked = [row for row in closed if row.get(USD_BOOKED_KEY) is None]
+        if not unbooked:
+            return USD_BOOKED_KEY, (
+                "converted to USD at each trade's booked Bank of Canada rate for "
+                "its own session"
+            )
         # A manually entered display rate is the ONLY way a mixed selection
         # gets a USD total, and it is an estimate, not a booked figure. It
         # converts from the booked CAD value, so a row the booked path could
@@ -458,10 +476,11 @@ def resolve_pnl_key(
                 f"ESTIMATE - non-USD trades converted at a manually entered "
                 f"{rate:.4f} CAD/USD, not each trade's booked rate. Not a tax figure."
             )
-        missing = sorted({str(row.get("currency") or "?").upper() for row in non_usd})
+        missing = sorted({str(row.get("currency") or "?").upper() for row in unbooked})
         return "", (
-            f"USD conversion is unavailable for {', '.join(missing)}; USD totals are not "
-            f"shown. Enter a USD/CAD rate in the Journal header for an estimate."
+            f"{len(unbooked)} of {len(closed)} trades have no booked USD rate for "
+            f"their session ({', '.join(missing)}); USD totals are not shown. Enter "
+            f"a USD/CAD rate in the Journal header for an estimate."
         )
     # Native mode (and legacy callers with no explicit mode) can add values only
     # when the selection has one currency. Legacy mixed selections retain the

@@ -337,7 +337,7 @@ def test_intraday_pull_books_fx_after_its_rebuild(store, monkeypatch):
         or {"booked": 0, "carried_back": 0, "unavailable": [], "errors": []},
     )
     monkeypatch.setattr(store, "rebuild_trades", lambda **_kwargs: order.append("rebuild") or 0)
-    monkeypatch.setattr(store, "book_cad_values", lambda: order.append("book") or {})
+    monkeypatch.setattr(store, "book_currency_values", lambda: order.append("book") or {})
 
     journal_runner.run_journal_import_for_date(
         date.today(), store=store, include_questrade=False, include_ibkr=False, trigger="gui"

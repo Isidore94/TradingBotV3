@@ -163,6 +163,13 @@ NEW_INDEXES_V3 = (
 )
 
 #: (table, column, DDL type + default). All additive; SQLite rewrites nothing.
+#:
+#: `migrate_to_v3` runs on EVERY open and is idempotent, adding whatever is
+#: missing - so an additive column appended here reaches an already-v3 database
+#: on its next launch without a version bump and without the trader-present
+#: preparation a real migration requires. That is deliberate and it is the only
+#: kind of change this list may carry: anything that rewrites or reinterprets
+#: existing data is a new schema version, not an entry here.
 NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     ("import_runs", "coverage_start", "TEXT NOT NULL DEFAULT ''"),
     ("import_runs", "coverage_end", "TEXT NOT NULL DEFAULT ''"),
@@ -175,6 +182,14 @@ NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     ("trades", "net_pnl_cad", "REAL"),
     ("trades", "fx_rate", "REAL"),
     ("trades", "fx_rate_date", "TEXT NOT NULL DEFAULT ''"),
+    # R7 true USD conversion (2026-08-24). A DISPLAY currency booked the same
+    # way the tax-grade CAD value is: once, at import, from the stored BoC
+    # observation for the trade's own session. Separate columns rather than
+    # reusing `pnl_usd`, which means something else - the native number when the
+    # trade is already USD - and a changed meaning is a new name.
+    ("trades", "net_pnl_usd", "REAL"),
+    ("trades", "fx_usd_rate", "REAL"),
+    ("trades", "fx_usd_rate_date", "TEXT NOT NULL DEFAULT ''"),
     ("trades", "reconcile_status", "TEXT NOT NULL DEFAULT ''"),
     ("trades", "anchor_execution_uid", "TEXT NOT NULL DEFAULT ''"),
     ("trade_annotations", "planned_entry", "REAL"),

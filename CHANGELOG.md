@@ -23,6 +23,44 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### 2026-08-24 - Wave 1 offline slate
 
+**Packet W3 - true USD conversion, booked rather than estimated.** R7 deferred
+this on 2026-08-18 for a good reason: the FX table booked CAD only, and inventing
+a rate is exactly the dishonesty the currency refusal was built to prevent. The
+trader reversed the deferral on 2026-08-24; nothing is invented, because the
+table no longer books CAD only.
+
+**The gap was upstream of the render seam.** `rates_needed_for_trades` asked only
+for each trade's OWN currency, so a CAD-only session never had a USD observation
+booked and could never be shown in USD however honest the display was. It now
+asks for a USD observation on every session that has trades.
+
+`book_cad_values` becomes `book_currency_values` and books both: `net_pnl_cad`
+exactly as before, and `net_pnl_usd` as the booked CAD value divided by that
+trade's OWN session rate - a trade taken on a 1.28 day is not valued at what a
+1.42 day says. A USD-native trade books its own number with no rate at all.
+`fx_usd_rate` and `fx_usd_rate_date` travel with it, and the date is the
+EFFECTIVE observation after any weekend carry-back, so the figure is auditable.
+`convert_amount` reads the column; it never divides at render.
+
+Every I5 rule carries over: booked once at import; a missing observation renders
+"unconverted", never 0 and never the native number relabelled; a rate that later
+disappears CLEARS the booking rather than leaving a number nothing on disk
+supports. `resolve_pnl_key` prefers the booked key only when EVERY closed row in
+the selection carries one - a total mixing booked rows with estimated ones is
+neither - and the manual USD/CAD field remains the labelled fallback for an
+unbooked session. The Analytics `None`-bucket exclusion is untouched, CAD stays
+the tax-grade value, and the I6 blended badge is untouched.
+
+Three additive columns on `trades`, appended to `NEW_COLUMNS_V3`, which
+`migrate_to_v3` applies idempotently on every open - so they reach an already-v3
+database with no version bump and none of the trader-present preparation a real
+migration requires. The `journal_rebuild_trades_v1` golden was re-frozen with an
+`intentional_difference` naming exactly what moved: three new columns and
+nothing else, with legs, opportunity events and the summary byte-identical.
+
+R7 gates 1/3/6 are unchanged and still owed - building a conversion does not
+validate it against a broker statement.
+
 **Packet W2 - R8's DEFERRED block is empty.** Three streams the Weekend Prep
 spec named as future scope and honestly did not claim now render, all under the
 reader idiom the AI-P1 repair established: address a home-folder store by its

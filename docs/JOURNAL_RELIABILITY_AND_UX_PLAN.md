@@ -302,10 +302,14 @@ warning badge when the selection spans tax groups (I6); **currency toggle**
 CAD/USD/Native; **date-range filter** (7d/30d/QTD/YTD/All + custom;
 `list_trades` gains `date_from`/`date_to`).
 
-> **DEFERRED — release-candidate reconciliation, 2026-08-15:** USD display is
-> currently exact only for USD-native trades. A selection containing CAD or
-> another currency refuses the USD total instead of relabeling native money;
-> true booked USD conversion remains future work. The Calendar ships the month
+> **DEFERRED — release-candidate reconciliation, 2026-08-15. TRUE USD
+> CONVERSION IS NO LONGER DEFERRED (2026-08-24, packet W3);** the trader's
+> reversal is recorded in
+> `docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md` §2 and the build is
+> described under "True USD conversion" at the end of this file. What follows
+> describes the state before that packet: USD display was exact only for
+> USD-native trades, and a selection containing CAD or another currency refused
+> the USD total instead of relabeling native money. The Calendar ships the month
 > grid but not the promised pyqtgraph year heatmap. Analytics ships its equity
 > curve and non-exclusive grouping table, but the per-setup/account bar charts,
 > day-of-week/time-of-day charts, and R-distribution/expectancy charts (plus
@@ -444,9 +448,11 @@ Live:
 
 R7 deferred three things at build time: true non-USD conversion, the Calendar
 year heatmap, and additional Analytics charts. The last two landed under the
-trader's 2026-08-18 integration redirect. **True USD conversion stays deferred**
-— the FX table books CAD only, and inventing a rate is exactly the dishonesty
-the currency refusal was built to prevent.
+trader's 2026-08-18 integration redirect. **True USD conversion landed
+2026-08-24** — see the section at the end of this file. The 2026-08-18 reasoning
+("the FX table books CAD only, and inventing a rate is exactly the dishonesty
+the currency refusal was built to prevent") was correct and is preserved: what
+changed is that the table no longer books CAD only, so nothing is invented.
 
 **Analytics per-group charts, with honest n and a CSV underneath.** A group
 picker over the breakdowns the tab already computed (my setups, auto tags,
@@ -512,3 +518,61 @@ side's zone to the naive side, never by stripping. Advances gate 1 (the full
 Questrade backfill becomes reachable and its regressions visible); the gate
 itself still owes the trader's portal action and the covered-since-inception
 proof.
+
+## True USD conversion — BUILT 2026-08-24 (packet W3)
+
+The 2026-08-18 deferral is reversed by the trader's recorded decision
+(`docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md` §2). Its reasoning
+stands and is why this build looks the way it does: **inventing a rate is the
+dishonesty the currency refusal exists to prevent.** Nothing is invented here —
+every USD figure comes from a Bank of Canada observation booked for the trade's
+own session, by the same I5 chain that books the tax-grade CAD value.
+
+**Where the gap actually was.** `rates_needed_for_trades` asked only for each
+trade's OWN currency, so a CAD-only session never had a USD observation booked
+and could never be displayed in USD however honest the render seam was. It now
+also asks for a USD observation on **every session that has trades**, which is
+what makes a CAD trade convertible at all.
+
+**Booked, never rendered.** `JournalStore.book_cad_values` is now
+`book_currency_values` and books both: `net_pnl_cad` exactly as before, and
+`net_pnl_usd` as `net_pnl_cad / rate_to_cad(USD, trade_date)` — this trade's own
+session, so a trade taken on a 1.28 day is not valued at what a 1.42 day says.
+A USD-native trade books its own number with no rate at all, because dividing
+USD by USD would introduce rounding for nothing. `fx_usd_rate` and
+`fx_usd_rate_date` travel with the value, and the date is the **effective**
+observation — after any weekend or holiday carry-back — so the figure is
+auditable. `journal_feed.convert_amount` reads the column; it does not divide.
+
+**The three I5 rules carry over unchanged.** Booked once at import. A missing
+observation renders "unconverted" — never 0, never the native number relabelled
+— and a rate that later disappears CLEARS the booking rather than leaving a
+number nothing on disk supports. A weekend carries the prior business day and
+says which day it used.
+
+**Totals.** `resolve_pnl_key` prefers `net_pnl_usd` whenever **every** closed row
+in the selection carries one. Partially booked is not good enough: a total mixing
+booked rows with estimated ones is neither. The manual USD/CAD field stays as the
+FALLBACK for a selection holding an unbooked session, keeps its `ESTIMATE` label,
+and still never touches `fx_rates`, `net_pnl_cad` or `net_pnl_usd`. The
+Analytics `None`-bucket rule is untouched: a bucket whose total is `None` is
+excluded, never zeroed.
+
+**CAD remains the tax currency** (I5) and the blended-tax badge (I6) is
+untouched. USD is a display currency for a Canadian filer, and nothing here is
+CRA-facing.
+
+**Schema.** Three additive columns on `trades`, appended to `NEW_COLUMNS_V3`.
+`migrate_to_v3` runs on every open and is idempotent, so they reach an
+already-v3 database on its next launch with no version bump and none of the
+trader-present preparation a real migration requires. That is the only kind of
+change that list may carry: anything rewriting or reinterpreting existing data
+is a new schema version.
+
+**Golden fixture re-frozen** (`journal_rebuild_trades_v1`) with its
+`intentional_difference` stating exactly what moved: three new columns, nothing
+else. No P&L, quantity, status, id, `net_pnl_cad`, `fx_rate` or `fx_rate_date`
+value changed; legs, opportunity events and the summary are byte-identical.
+
+**Gates 1/3/6 are unchanged and still owed.** Building a conversion does not
+validate it against a broker statement.

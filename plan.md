@@ -309,8 +309,10 @@ fixtures, full deterministic gate, governance close-out and push complete before
 the next starts. This redirect does not satisfy any live gate: R3's shadow week,
 R6's watchdog week, R1/R2's eight proofs, R7's migration/backfill/reconciliation
 sequence, and R8's real-weekend run all remain owed. After R6, only the explicitly
-named R7/R8 review-deferral completions are authorized; true USD conversion stays
-deferred pending a trader decision.
+named R7/R8 review-deferral completions are authorized. *(True USD conversion was
+the one exception held back "pending a trader decision"; that decision arrived on
+2026-08-24 and reversed the deferral — it is BUILT as packet W3, and R7's gates
+1/3/6 are still owed.)*
 
 R2's branch is cut from R1's and carries the R1.1 repair, so merging R2 brings the
 testing week, R1, R1.1 and R2 together. The R1 and R2 live proofs are both owed and

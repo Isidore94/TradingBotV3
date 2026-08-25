@@ -57,18 +57,20 @@ class JournalHeader(QFrame):
         self.currency_input.addItems(CURRENCY_MODES)
         self.currency_input.currentTextChanged.connect(self._on_currency_changed)
 
-        # Manual USD display rate. Booked CAD conversion is point-in-time and
-        # automatic (journal_fx); this is the separate, deliberately manual
-        # knob that lets a MIXED selection show a USD total at all. It is an
-        # estimate - it never touches fx_rates or net_pnl_cad - so it only
-        # appears in USD mode and says so in its own tooltip.
+        # Manual USD display rate. Since 2026-08-24 a mixed selection is
+        # normally converted from each trade's OWN booked session rate
+        # (JournalStore.book_currency_values), so this is now the FALLBACK for a
+        # selection holding a session with no booked BoC observation at all. It
+        # is an estimate - it never touches fx_rates, net_pnl_cad or
+        # net_pnl_usd - so it only appears in USD mode and says so.
         self.usd_rate_input = QLineEdit()
         self.usd_rate_input.setPlaceholderText("USD/CAD")
         self.usd_rate_input.setMaximumWidth(90)
         self.usd_rate_input.setToolTip(
-            "Estimate only. Non-USD trades are converted from their booked CAD "
-            "value at this one rate, not at each trade's own booked rate. "
-            "Never a tax figure; leave blank to refuse mixed USD totals."
+            "Fallback estimate. Trades are normally shown in USD at each "
+            "trade's own booked Bank of Canada rate; this one rate is used only "
+            "when a selected session has no booked observation. Never a tax "
+            "figure; leave blank to refuse a total that cannot be booked."
         )
         self.usd_rate_input.editingFinished.connect(self._on_usd_rate_entered)
         self.usd_rate_status = QLabel("")
