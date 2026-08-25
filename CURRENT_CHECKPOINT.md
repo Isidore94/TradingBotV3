@@ -8,6 +8,42 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-25 afternoon - Fable review of Sol's pass: ACCEPT WITH BLOCKERS; trader decisions A/B/C recorded
+
+**Branch `testing-week-2026-08-24`.** Independent review of `9edbf83..5a954d8`
+(no repository change by the review itself). Sol's three repairs verified
+minimal and correct (adjacent edge cases pass); suite 4801/4801 twice, smoke
+7/7, selftest 70/70 source and frozen. Findings that change the record:
+
+- **The restarted-process outcome sweep RAN today** - `swept_at
+  2026-08-25T14:27:36-07:00`, 656 pending / 656 finalized / 0 failed / 0
+  commit-failed / pending_after 0, yesterday's 553 finals untouched. The
+  "canary FAILED" language in the 14:28 entry below, plan.md and
+  DESK_TESTING_PLAN is superseded: the due logic is correct (offline
+  `_after_close_jobs_due` at 13:36 PT -> sweep due), the sweep started 52 min
+  late for an UNKNOWN cause (the loop was held inside one cycle from before
+  13:30 to 14:27). The observation stands; acceptance is the trader's.
+- **HIGH, new:** every sweep-finalized trade is invisible to every evidence
+  surface (blank eod-hold `close_r` by design; `usable` keys on it;
+  `_exit_policy_rows` never reads `context.exit`). Today: 656 finals, 0 usable.
+- AWAY recap unwired (`set_alerts` has no caller) - one call in
+  `_select_page` fixes it; T3 (stop erased by furthest milestone row: 0 of 84
+  candidates today, 35 of 207 yesterday) and T2 (wrong duplicate-close bar)
+  PROVEN and fenced; DESK_TESTING_PLAN sec 2.3 was relabelled PASSED by Sol
+  from HALF done - restored below.
+
+**Trader decisions (recorded in
+`docs/analysis/POST_ATTACK_AUTHORIZATION_2026-08-25.md`):** A - stop-outs
+count at `stop_exit_r`, other sweep finals at last-measured-close R, separate
+policies never blended; B - ask-first answered for the two evidence-side
+`legacy.py` repairs; C - recap wiring, record corrections, sec 2.3 restored.
+Opus build prompt issued; build not started at this stamp.
+
+**Verification baseline: unchanged** (`21fd55e` code state: 4801 passed / 19
+subtests, exit 0; smoke 7/7; selftest 70/70) - docs only.
+
+---
+
 ## 2026-08-25 post-close - Sol adversarial pass complete; live canaries failed
 
 **Branch `testing-week-2026-08-24`. Active item: Phase 0 validation and blocker
