@@ -8,6 +8,61 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (10) - W8 is HELD on the file-scoped ask-first rule
+
+**Branch `testing-week-2026-08-24`.** Wave 1 is **seven of eight**: W1-W7 built,
+committed and pushed. **W8 (P1.5 repository hygiene) is NOT started, and is
+deliberately blocked pending a trader answer.**
+
+**Why it is blocked.** P1.5 removes the retired Desk Link / satellite /
+mini-PC code. Measured, that removal reaches into
+`scripts/ui/panels/alert_center_panel.py`, which houses alert code, in **eight
+methods** - and two of them are decision paths rather than cosmetics:
+
+| Method | Lines | What it is |
+|---|---|---|
+| `attach_desk_link` | 3 | relay handle |
+| `attach_remote_feed` | 14 | satellite feed |
+| `desk_link_stream_symbols` | 10 | relay symbol list |
+| `apply_desk_link_intent` | 30 | **writes Focus** (`focus_service.add` / `remove_everywhere`) |
+| `_relay_alert_popup` | 28 | imports `desk_link.popup_payload` from the alert flow |
+| `_alert_has_focus_privilege` | 15 | **the feed gate, the beep and the relay all ask this** |
+| `_current_bot` | 17 | satellite fallback |
+| `_poll_auto_pick_pending` | 169 | the auto-pick adoption path |
+
+The file-scoped ask-first rule (checkpoint review 2026-08-08) says any edit to a
+file housing detector/scoring/alert code is asked about BEFORE it is made, *even
+for capture-side or evidence-only changes*, and that ambiguity is the trigger to
+ask rather than a licence to judge. The Wave 1 prompt repeats it: *"stop and ask
+if a packet forces it."* This packet forces it.
+
+**Partial removal is not an option**, and that is why nothing was started rather
+than half-done. P1.5's own rule is a fully green cleanup packet never mixed with
+behavior changes; deleting `scripts/desk_link/` while
+`alert_center_panel._relay_alert_popup` still imports it would leave the tree
+broken, which is the one thing the working agreement forbids outright.
+
+**Scope, measured, so the answer can be given once:** ~4,625 lines of source
+(`scripts/desk_link/` 7 modules, `ui/satellite.py`, `ui/desk_role.py`, the two
+`ui/services/desk_link_*` modules, `master_avwap_mini_pc.py`), ~2,057 lines and
+**63 tests** deleted with them, the Settings > Desk Link control and the
+`--desk-role` startup flag, the `desk_link` entry in
+`packaging/tradingbotv3.spec` (it is currently IN the bundle), and the matching
+allowlist entries in the spec-drift test and `selftest`. It fires the packaging
+triggers by design, so it ends with a rebuild and a frozen `--selftest` with the
+new count recorded.
+
+**Nothing else in Wave 1 is blocked by this.** W1-W7 are complete and pushed.
+
+| Check at this stamp | Result |
+|---|---|
+| `pytest tests/ -q` | **4868 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+Every canary and live gate listed in the entries below is still owed.
+
+---
+
 ## 2026-08-24 night (9) - Wave 1, packet W7: observability depth (P1.4)
 
 **Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W7 DONE**; only
