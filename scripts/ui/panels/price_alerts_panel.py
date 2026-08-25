@@ -334,7 +334,7 @@ class PriceAlertsPanel(QFrame):
         snapshot = self.service.status_snapshot()
         if self.read_only:
             self.status_label.setText(
-                "Read-only on this satellite. Monitoring, edits, and phone pushes run on the main desk."
+                "Read-only. Monitoring, edits, and phone pushes are disabled for this view."
             )
             return
         push_state = "configured" if snapshot.get("push_configured") else "NOT configured (set a topic)"

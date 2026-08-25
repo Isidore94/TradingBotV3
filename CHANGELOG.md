@@ -23,6 +23,44 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### 2026-08-24 - Wave 1 offline slate
 
+**Packet W8 - the retired topology is gone (plan.md P1.5).** The Desk Link
+satellite role was retired on 2026-08-08 and its code stayed in the tree for
+sixteen days "pending cleanup", which is exactly the state P1.5 exists to end: a
+supported runtime carrying a role nobody may use.
+
+Removed in one commit with no behavior change: the `desk_link` package (7
+modules), `ui/satellite.py`, `ui/desk_role.py`, both `ui/services/desk_link_*`
+modules, `master_avwap_mini_pc.py`, the Settings > Desk Link tab and its role
+picker, the control banner, the `--satellite` / `--link-token` /
+`--satellite-desk` / `--desk-role` flags, and 70 tests across 7 files.
+`desk_report.xml` is now ignored.
+
+**The file-scoped ask-first rule was invoked and answered first.** The removal
+reaches eight methods in `alert_center_panel.py`, which houses alert code, and
+two of them are decision paths rather than cosmetics: `apply_desk_link_intent`
+wrote Focus, and `_alert_has_focus_privilege` is what the feed gate, the beep and
+the relay all asked. Nothing was touched until the trader authorized full removal
+on 2026-08-24. Partial removal was never an option - deleting the package while
+`_relay_alert_popup` still imported it would leave the tree broken, which the
+working agreement forbids outright.
+
+**What deliberately SURVIVES**: the generic `read_only` mode on the price-alert
+board and panel. It is a widget capability with its own tests, not satellite
+plumbing; its only caller was the satellite, so it now has none, and its two
+user-facing strings stopped naming a machine that does not exist. Saying this out
+loud is the point - a silent half-removal is how the previous "pending cleanup"
+lasted sixteen days.
+
+**Packaging triggers fired by design.** `desk_link` was IN the bundle; the spec's
+`FIRST_PARTY_PACKAGES` entry is gone, the spec-drift test passes against the
+smaller tree, and the exe was rebuilt: `--selftest` returned **70/70 (frozen)**,
+exit 0, and Smart App Control did not refuse this hash. That says nothing about
+the next build - SAC verdicts are per file hash - and the desk still runs from
+source, so this is verification rather than delivery.
+
+Suite: 4868 -> **4798 passed**, exit 0. The drop is the 70 deleted tests and
+nothing else.
+
 **Packet W7 - observability depth over what is already on disk (plan.md P1.4).**
 Every figure Phase 1's exit gate asks for was already MEASURED: `run_manifest_v1`
 records per-phase seconds and the whole `provider.<family>.<event>[.<source>]`

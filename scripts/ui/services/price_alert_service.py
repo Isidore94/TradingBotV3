@@ -254,6 +254,6 @@ class PriceAlertService(QObject):
                 }
             )
             # Push deliberately happens before either local presentation or
-            # Desk Link relay. A broken display path cannot suppress the phone.
+            # A broken display path cannot suppress the phone.
             self.triggered.emit(message)
             self.alertTriggered.emit(payload)

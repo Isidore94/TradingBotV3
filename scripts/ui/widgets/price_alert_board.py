@@ -27,7 +27,7 @@ _SOFT_SYMBOL_LIMIT = 25
 
 
 class PriceAlertBoard(QFrame):
-    """A simple two-level price board; satellites deliberately stay read-only."""
+    """A simple two-level price board, with an optional read-only mode."""
 
     def __init__(
         self,
@@ -159,7 +159,7 @@ class PriceAlertBoard(QFrame):
             1 for entry in entries if entry.get("armed_above") or entry.get("armed_below")
         )
         if self.read_only:
-            text = "Read-only on this satellite. Edit and re-arm price alerts on the main desk."
+            text = "Read-only. Edit and re-arm price alerts on the Price Alerts page."
         elif armed > _SOFT_SYMBOL_LIMIT:
             text = (
                 f"{armed} armed tickers — above the {_SOFT_SYMBOL_LIMIT}-ticker soft limit; "

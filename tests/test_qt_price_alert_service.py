@@ -148,22 +148,6 @@ def test_the_wake_test_fails_quiet_exactly_like_the_ordinary_one(monkeypatch):
         service.shutdown()
 
 
-def test_a_satellite_never_sends_a_wake_test_either(monkeypatch):
-    import push_notify
-    from ui.services.price_alert_service import PriceAlertService
-
-    monkeypatch.setattr(
-        push_notify,
-        "send_push",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("push attempted")),
-    )
-    service = PriceAlertService(engine_enabled=False)
-    try:
-        assert service.test_push(urgent=True)["ok"] is False
-    finally:
-        service.shutdown()
-
-
 def test_the_panel_offers_the_wake_test_beside_the_ordinary_one(monkeypatch):
     import push_notify
     from ui.panels import price_alerts_panel as panel_module

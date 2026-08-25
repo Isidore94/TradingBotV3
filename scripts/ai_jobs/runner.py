@@ -1,6 +1,7 @@
 """Named-slot job runner (plan sec 3.4 / 6.3).
 
-The scheduling shape is the one ``master_avwap_mini_pc.py`` established: named
+The scheduling shape is the one the retired ``master_avwap_mini_pc.py``
+established (removed 2026-08-24, P1.5): named
 slots, per-slot status, and **skip-don't-pile-up** on overrun. A missed slot is
 skipped, never replayed late.
 

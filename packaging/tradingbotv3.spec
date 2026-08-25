@@ -43,8 +43,9 @@ PATHEX = [str(ROOT), str(SCRIPTS)]
 # neither listed here nor allowlisted there with a reason, so growing the tree
 # can no longer silently shrink the bundle.
 #
-# `desk_link` is here because ui.services.desk_link_feed/_service still import it
-# at module scope; the role is retired (CLAUDE.md) but the code is not yet gone.
+# `desk_link` was here until 2026-08-24 (P1.5): the Desk Link/satellite role was
+# retired on 2026-08-08 and its code is now gone from the tree, so the package
+# it named no longer exists to collect.
 FIRST_PARTY_PACKAGES = (
     "ui",
     "bounce_bot_lib",
@@ -52,7 +53,6 @@ FIRST_PARTY_PACKAGES = (
     "market_prep",
     "diagnostics",
     "research_warehouse",
-    "desk_link",
     # R5 (2026-08-17): `indicators` gained its first real importer when the LRSI
     # cross engine wired in - bounce_bot_lib.legacy -> m5_signal_engines ->
     # indicators.efficiency_lrsi. It was allowlisted as unreachable until then.

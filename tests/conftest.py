@@ -645,8 +645,9 @@ def _drain_chart_workers():
     Chart snapshots and prefetch batches run on pooled threads, and a test
     that queues work without waiting for it leaves those threads reading
     parquet during whatever test runs next. That is invisible until it lands
-    on a timing-sensitive one - a Desk Link socket handshake failed once this
-    way - and an intermittent failure in an unrelated file is far more
+    on a timing-sensitive one - a socket handshake in the retired Desk Link
+    suite failed once this way - and an intermittent failure in an unrelated
+    file is far more
     expensive to chase than this wait, which is a no-op when the pools are
     idle.
 
@@ -716,11 +717,11 @@ def _no_ib_session(request, monkeypatch):
     dials, which is the same state as a desk with TWS closed.
     """
     # Opt-out is `broker` ONLY, not `network`. The two markers mean different
-    # things: `network` is "this test uses the internet" (the Desk Link wire
-    # protocol tests), `broker` is "this test needs a live IBKR session".
-    # Letting `network` disable the IB stub is how the Desk Link files quietly
-    # reconnected to TWS after they were marked - a real connection, logged as
-    # "Sec-def data farm connection is OK", inside a suite meant to be offline.
+    # things: `network` is "this test uses the internet", `broker` is "this
+    # test needs a live IBKR session". Letting `network` disable the IB stub is
+    # how the (since-retired) Desk Link wire tests quietly reconnected to TWS
+    # after they were marked - a real connection, logged as "Sec-def data farm
+    # connection is OK", inside a suite meant to be offline.
     if request.node.get_closest_marker("broker"):
         yield
         return

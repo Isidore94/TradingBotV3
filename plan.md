@@ -1490,6 +1490,20 @@ and exe mtime recorded side by side in the checkpoint.
 5. **P1.5 Do bounded repository hygiene.** Ignore generated desk JUnit output and
    remove retired Desk Link/satellite/mini-PC code only in an explicit, fully green
    cleanup packet. Do not mix cleanup with behavior changes.
+   *DONE 2026-08-24 (packet W8), in one commit with no behavior change.* Removed:
+   the `desk_link` package (7 modules), `ui/satellite.py`, `ui/desk_role.py`, both
+   `ui/services/desk_link_*` modules, `master_avwap_mini_pc.py`, the Settings ▸
+   Desk Link tab, the `--satellite`/`--link-token`/`--satellite-desk`/`--desk-role`
+   flags, the control banner, and 70 tests across 7 deleted files. `desk_report.xml`
+   is ignored. **The edit reached eight methods in `alert_center_panel.py`**, which
+   houses alert code, so the file-scoped ask-first rule was invoked and the trader
+   authorized full removal on 2026-08-24 before anything was touched. What SURVIVES
+   deliberately: the generic `read_only` mode on the price-alert board and panel,
+   which is a widget capability with its own tests rather than satellite plumbing,
+   and now has no production caller. Packaging triggers fired by design — the spec's
+   `desk_link` entry is gone, the exe was rebuilt and
+   `dist\TradingBotV3\TradingBotV3.exe --selftest` returned **70/70 (frozen)**,
+   exit 0.
 
 Exit gate: tests are deterministic/offline by default, the chart-level policy is
 intentional, open branches are resolved, benchmark evidence is stable, and retired

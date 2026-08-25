@@ -2157,7 +2157,7 @@ def test_desk_auto_picks_land_in_m5_focus_for_today(tmp_path, monkeypatch):
 
 
 def test_desk_auto_picks_chart_for_approval_without_a_focus_service(tmp_path, monkeypatch):
-    """Fallback path only (satellite / no Focus store): staged picks still
+    """Fallback path only (no Focus store): staged picks still
     occupy the review chart with Approve/Pass verbs and route through
     resolve_auto_populate_pick, rather than vanishing silently."""
     try:

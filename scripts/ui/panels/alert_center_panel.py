@@ -959,67 +959,6 @@ class AlertCenterPanel(QFrame):
         if board_signal is not None:
             board_signal.connect(self.entry_board.update_board)
 
-    def attach_desk_link(self, service) -> None:
-        """Relay interrupt-worthy alerts to Desk Link satellites (Tier 1)."""
-        self._desk_link = service
-
-    def attach_remote_feed(self, feed) -> None:
-        """Satellite desk mode: relayed alerts enter the real feeds here.
-
-        The feed's payload bot also backs the M5 charts (see _current_bot),
-        so the desk renders as if the live bot's cache were local.
-        """
-        self._remote_feed = feed
-        feed.alertReceived.connect(self.add_alert)
-        # Tier 3 full relay: the remaining live surfaces, connected exactly
-        # as attach_service connects them to the live bot.
-        feed.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)
-        feed.rrsSnapshotChanged.connect(self.focus_strength.update_snapshot)
-        feed.statusChanged.connect(self._maybe_add_status_alert)
-        feed.entryBoardChanged.connect(self.entry_board.update_board)
-
-    def desk_link_stream_symbols(self) -> list[str]:
-        """Symbols whose M5 bars the live relay should stream: the chart on
-        review now, the queue behind it, and the freshest feed names."""
-        symbols: list[str] = []
-        if self._current_review_alert is not None and self._current_review_alert.symbol:
-            symbols.append(self._current_review_alert.symbol)
-        for alert in list(self._review_queue) + self._alerts[:20]:
-            if alert.symbol and alert.symbol not in symbols:
-                symbols.append(alert.symbol)
-        return symbols
-
-    def apply_desk_link_intent(self, machine: str, intent: dict) -> tuple[bool, str]:
-        """Apply one controller decision from a Desk Link satellite (Tier 2).
-
-        Every action routes through the exact code path the same click takes
-        locally, so evidence recording (review events, focus feedback with
-        origin) is identical to a decision made at the desk. All actions are
-        idempotent, which keeps at-least-once delivery safe.
-        """
-        action = str(intent.get("action") or "")
-        symbol = str(intent.get("symbol") or "").strip().upper()
-        if not symbol:
-            return False, "intent carries no symbol"
-        context = f"desk_link:{machine}"
-        if action == "ignore_for_day":
-            self._ignore_alert_symbol(symbol)
-            return True, f"{symbol} removed for the day"
-        if action == "focus_add":
-            side = str(intent.get("side") or "").strip().lower()
-            if side not in ("long", "short"):
-                return False, f"focus_add needs side long|short, got {side!r}"
-            if self.focus_service is None:
-                return False, "no focus service on the main desk"
-            self.focus_service.add(symbol, side, origin="desk_link", context=context)
-            return True, f"{symbol} added to Focus {side}s"
-        if action == "focus_remove":
-            if self.focus_service is None:
-                return False, "no focus service on the main desk"
-            removed = self.focus_service.remove_everywhere(symbol, origin="desk_link", context=context)
-            return True, f"{symbol} removed from Focus ({removed} entries)"
-        return False, f"unknown intent action {action!r}"
-
     #: The Auto mode is re-read from disk at most this often. Alerts arrive in
     #: bursts, and each one asks; a JSON read per alert is cheap but pointless.
     _AUTO_MODE_CACHE_SECONDS = 5.0
@@ -1060,35 +999,6 @@ class AlertCenterPanel(QFrame):
         if not self.sound_input.isChecked():
             return False
         return self._auto_mode_now() not in ("AWAY", "EVENING")
-
-    def _relay_alert_popup(self, alert: BounceAlert, *, is_focus: bool) -> None:
-        """Ship a self-contained chart popup to connected satellites.
-
-        Gated on the same "loud enough to interrupt" rule as the beep, but
-        NOT on the local sound checkbox - muting the main desk must not
-        silence the machine the trader is actually sitting at. Payload
-        capture is the same synchronous local read the main's own popup
-        performs; a failure here never touches the desk.
-        """
-        service = getattr(self, "_desk_link", None)
-        if service is None or not service.has_satellites or not alert.symbol:
-            return
-        if not (alert_should_sound(alert, is_focus=is_focus) or is_ready_d1_alert(alert)):
-            return
-        try:
-            from desk_link.popup_payload import capture_alert_popup
-
-            payload = capture_alert_popup(
-                alert,
-                bot=self._current_bot(),
-                armed_kinds=sorted(self.armed_watch_kinds(alert.symbol)),
-                armed_levels=[watch.to_dict() for watch in self.armed_levels_for(alert.symbol)],
-                armed_d1_events=[{"kind": kind} for kind in sorted(self.armed_d1_event_kinds(alert.symbol))],
-                guidance_text=self._guidance_for(alert).summary_text(),
-            )
-            service.publish_alert_popup(payload)
-        except Exception:
-            logging.exception("Desk Link alert relay failed; the desk itself is unaffected.")
 
     def add_alert(self, alert: BounceAlert) -> None:
         self._refresh_ignored_market_date()
@@ -1144,7 +1054,6 @@ class AlertCenterPanel(QFrame):
                 and alert_should_sound(alert, is_focus=is_focus)
             ):
                 QApplication.beep()
-            self._relay_alert_popup(alert, is_focus=is_focus)
         self._emit_feed_status()
 
     # -- R4 section 6.3: display-only repetition control -----------------
@@ -1283,7 +1192,6 @@ class AlertCenterPanel(QFrame):
             is_ready_d1_alert(alert) or self._alert_has_focus_privilege(alert)
         ):
             QApplication.beep()
-        self._relay_alert_popup(alert, is_focus=self._alert_has_focus_privilege(alert))
         self._emit_feed_status()
 
     def _d1_tab_is_current(self) -> bool:
@@ -1544,8 +1452,7 @@ class AlertCenterPanel(QFrame):
     def _alert_has_focus_privilege(self, alert: BounceAlert) -> bool:
         """Focus membership AND the prev-day break on the alert's own side.
 
-        This is what the feed gate, the beep, and the satellite relay ask -
-        NOT plain membership. A Focus long still inside yesterday's range is
+        This is what the feed gate and the beep ask - NOT plain membership. A Focus long still inside yesterday's range is
         ordinary: it competes on tier like any other name.
         """
         if not self._alert_is_focus(alert):
@@ -2031,22 +1938,13 @@ class AlertCenterPanel(QFrame):
         return int((datetime.now() - self._review_shown_at).total_seconds() * 1000)
 
     def _current_bot(self):
-        """The bounce service's live bot, or None - never raises.
-
-        Satellite desk mode: with no live bot, fall back to the Desk Link
-        feed's payload-backed cache so M5 charts render from relayed bars.
-        """
-        bot = None
-        if self._bounce_service is not None:
-            try:
-                bot = self._bounce_service.current_bot()
-            except Exception:
-                bot = None
-        if bot is None:
-            feed = getattr(self, "_remote_feed", None)
-            if feed is not None:
-                return feed.payload_bot()
-        return bot
+        """The bounce service's live bot, or None - never raises."""
+        if self._bounce_service is None:
+            return None
+        try:
+            return self._bounce_service.current_bot()
+        except Exception:
+            return None
 
     def _on_bars_refreshed(self, symbol: str) -> None:
         """Repaint when a refetch lands for the alert currently on the chart."""
@@ -2394,8 +2292,8 @@ class AlertCenterPanel(QFrame):
         expiry. Pruning a name from Focus removes the watchlist line with it,
         so a pruned pick stops alerting entirely.
 
-        With no Focus service (satellite, tests) this falls back to the old
-        approval queue - the picks must not silently vanish.
+        With no Focus service (tests) this falls back to the old approval
+        queue - the picks must not silently vanish.
 
         AWAY and EVENING both refuse adoption outright (trader rule
         2026-08-14). Nobody is at the desk to prune - away, or asleep - so a

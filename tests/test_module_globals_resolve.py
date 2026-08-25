@@ -31,7 +31,6 @@ if str(SCRIPTS_DIR) not in sys.path:
 #: notice a name vanishing out from under them.
 UNCONSTRUCTED_MODULES = (
     "master_avwap_lib.gui",
-    "master_avwap_mini_pc",
     "gui_app.app",
     "gui_app.master_panel",
 )

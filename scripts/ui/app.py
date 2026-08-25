@@ -103,10 +103,9 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, state: UiState, *, satellite_desk: bool = False) -> None:
+    def __init__(self, state: UiState) -> None:
         super().__init__()
         self.state = state
-        self._satellite_desk = satellite_desk
         self.price_alert_toasts = PriceAlertToastManager(self)
         self.setWindowTitle("TradingBotV3 Trading Desk")
         # Open at the desk's preferred size, but never larger than the screen
@@ -120,11 +119,7 @@ class MainWindow(QMainWindow):
             min(theme.px(1180), available[0]), min(theme.px(760), available[1])
         )
 
-        self.trading_panel = TradingDeskPanel(
-            workspace_mode=self.state.workspace_mode,
-            price_alert_engine_enabled=not satellite_desk,
-            price_alert_read_only=satellite_desk,
-        )
+        self.trading_panel = TradingDeskPanel(workspace_mode=self.state.workspace_mode)
         self.journal_panel = JournalPanel()
         self.market_journal_panel = MarketJournalPanel()
         self.away_recap_panel = AwayRecapPanel(
@@ -135,10 +130,7 @@ class MainWindow(QMainWindow):
             focus_service=self.trading_panel.focus_service
         )
         self.universe_panel = UniversePanel()
-        self.research_panel = ResearchPanel(
-            self.trading_panel.price_alert_service,
-            price_alert_read_only=satellite_desk,
-        )
+        self.research_panel = ResearchPanel(self.trading_panel.price_alert_service)
         self.autopilot_panel = AutopilotPanel(bounce_service=self.trading_panel.bounce_panel.service)
         # D1 level/event alerts -> the hourly Away phone push. The Alert Center
         # classifies (it owns the D1 routing rules); Auto Pilot aggregates and
@@ -148,73 +140,11 @@ class MainWindow(QMainWindow):
         )
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
-        # Desk Link relay (docs/MULTI_MACHINE_DESK_PROPOSAL.md Tier 1). The
-        # service always exists so the Settings page can toggle it live; it
-        # only serves after Settings (or the saved setting) enables it, and a
-        # failed start (port in use) degrades to a normal single-machine desk.
-        from ui.services.desk_link_service import DeskLinkService, desk_link_enabled
-
-        self.desk_link_service = DeskLinkService(self)
-        self.trading_panel.alert_center.attach_desk_link(self.desk_link_service)
-        self.desk_link_service.controlChanged.connect(self._on_desk_link_control_changed)
-        self.desk_link_service.intentReceived.connect(self._on_desk_link_intent)
-        # Tier 3 full relay: every live surface the bot feeds locally also
-        # publishes to satellites. publish_stream no-ops with no satellite
-        # connected, so a lone desk pays nothing.
-        _bounce = self.trading_panel.bounce_panel.service
-        _publish = self.desk_link_service.publish_stream
-        _bounce.rrsSnapshotChanged.connect(lambda snap: _publish("rrs", snap))
-        _bounce.statusChanged.connect(lambda status: _publish("status", status))
-        _bounce.autoRegimeChanged.connect(lambda reading: _publish("auto_regime", reading))
-        _board_signal = getattr(_bounce, "entryBoardChanged", None)
-        if _board_signal is not None:
-            _board_signal.connect(lambda board: _publish("entry_board", board))
-        self.desk_link_service.set_live_chart_source(
-            self.trading_panel.alert_center._current_bot,
-            self.trading_panel.alert_center.desk_link_stream_symbols,
-        )
-        self.desk_link_service.set_auto_mode_source(
-            lambda: self.autopilot_panel.service.auto_mode
-        )
-        self.desk_link_feed = None
-        if satellite_desk:
-            # Satellite desk (--satellite-desk): the FULL desk UI, fed by the
-            # main's relay instead of TWS. Never serves, never scans on its
-            # own, never re-relays - and deliberately does not auto-start the
-            # local Desk Link server even if this machine has it enabled.
-            import socket as _socket
-
-            from ui.satellite import load_saved_connection
-            from ui.services.desk_link_feed import DeskLinkFeedService
-
-            host, port, link_token = load_saved_connection()
-            self.desk_link_feed = DeskLinkFeedService(self)
-            self.desk_link_feed.priceAlertReceived.connect(self._on_remote_price_alert)
-            self.trading_panel.alert_center.attach_remote_feed(self.desk_link_feed)
-            self.desk_link_feed.linkStatusChanged.connect(self._on_satellite_link_status)
-            self.desk_link_feed.autoRegimeChanged.connect(self._set_auto_regime)
-            # Unpaired is a normal state, not a launch blocker: the desk opens
-            # and the trader pairs it in Settings -> Desk Link.
-            self._satellite_paired = bool(host and link_token)
-            if host and link_token:
-                self.desk_link_feed.start(
-                    host=host,
-                    port=port,
-                    token=link_token,
-                    machine_name=_socket.gethostname() or "satellite-desk",
-                )
-        elif desk_link_enabled():
-            self.desk_link_service.start()
-
         self.settings_panel = SettingsPanel(
             self.state,
             bounce_service=self.trading_panel.bounce_panel.service,
-            desk_link_service=self.desk_link_service,
-            desk_link_feed=self.desk_link_feed,
-            desk_role="satellite" if self._satellite_desk else "main",
         )
         self.settings_panel.stateChanged.connect(self._apply_state_changes)
-        self.settings_panel.deskRoleRestartRequested.connect(self._restart_for_desk_role)
         self.health_panel = HealthPanel()
         self.ai_summary_panel = AiSummaryPanel(bounce_service=self.trading_panel.bounce_panel.service)
 
@@ -361,26 +291,10 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.workspace_button)
         top_layout.addWidget(self.tabs_button)
 
-        # Desk Link control banner (Tier 2): visible only while a satellite
-        # holds the lease. It lives OUTSIDE the locked page stack so "Take
-        # back control" stays clickable at all times (trader decision).
-        self.desk_link_banner = QFrame()
-        self.desk_link_banner.setObjectName("DeskLinkBanner")
-        banner_layout = QHBoxLayout(self.desk_link_banner)
-        banner_layout.setContentsMargins(12, 8, 12, 8)
-        self.desk_link_banner_label = QLabel()
-        self.desk_link_banner_label.setWordWrap(True)
-        take_back_button = QPushButton("Take back control")
-        take_back_button.clicked.connect(lambda: self.desk_link_service.take_back_control())
-        banner_layout.addWidget(self.desk_link_banner_label, 1)
-        banner_layout.addWidget(take_back_button)
-        self.desk_link_banner.setVisible(False)
-
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
-        right_layout.addWidget(self.desk_link_banner)
         right_layout.addWidget(top_bar)
         right_layout.addWidget(self.pages, 1)
 
@@ -431,15 +345,6 @@ class MainWindow(QMainWindow):
         status.addPermanentWidget(self.universe_status)
         status.addPermanentWidget(self.data_status)
         status.addPermanentWidget(self.health_status)
-        self.satellite_link_label = None
-        if self._satellite_desk:
-            self.setWindowTitle("TradingBotV3 Trading Desk — SATELLITE (fed by main)")
-            self.satellite_link_label = QLabel(
-                "LINK … connecting"
-                if getattr(self, "_satellite_paired", False)
-                else "LINK ✕ not paired — Settings ▸ Desk Link"
-            )
-            status.addPermanentWidget(self.satellite_link_label)
 
     def _set_auto_regime(self, reading) -> None:
         chip, tooltip = format_auto_regime_reading(reading)
@@ -465,14 +370,6 @@ class MainWindow(QMainWindow):
 
     def _on_price_alert(self, payload: dict) -> None:
         self._present_price_alert(payload)
-        if not self._satellite_desk:
-            self.desk_link_service.publish_stream("price_alert", payload)
-            # Also update the sticky snapshot after the trigger log is durable,
-            # so reconnecting satellites see alerts fired during a Wi-Fi gap.
-            self.desk_link_service.publish_state_snapshot()
-
-    def _on_remote_price_alert(self, payload: dict) -> None:
-        self._present_price_alert(payload, replayed=bool(payload.get("replayed")))
 
     def _present_price_alert(self, payload: dict, *, replayed: bool = False) -> None:
         message = str(payload.get("message") or "Price alert fired")
@@ -505,7 +402,7 @@ class MainWindow(QMainWindow):
             self._set_auto_mode("OFF")
 
     def _set_auto_mode(self, mode: str) -> None:
-        """One entry point for every Auto mode change (button and Desk Link)."""
+        """One entry point for every Auto mode change."""
         service = self.autopilot_panel.service
         if mode == "OFF":
             service.set_enabled(False)
@@ -513,11 +410,6 @@ class MainWindow(QMainWindow):
             service.set_profile(mode)
             service.set_enabled(True)
         self._sync_auto_mode_button()
-        # Satellites mirror the mode from the state snapshot; push it now
-        # instead of leaving them a snapshot interval behind.
-        desk_link = getattr(self, "desk_link_service", None)
-        if desk_link is not None:
-            desk_link.publish_state_snapshot()
 
     def _sync_auto_mode_button(self) -> None:
         mode = self.autopilot_panel.service.auto_mode
@@ -694,77 +586,6 @@ class MainWindow(QMainWindow):
             self.universe_status.setStyleSheet("" if done else "color: #E06C75;")
             self._universe_poll.stop()
 
-    def _on_satellite_link_status(self, link_state: str, detail: str) -> None:
-        if getattr(self, "satellite_link_label", None) is None:
-            return
-        texts = {
-            "connected": f"LINK ● {detail}",
-            "connecting": "LINK … connecting",
-            "disconnected": f"LINK ✕ {detail}",
-            "rejected": "LINK ✕ token rejected - re-pair in Settings ▸ Desk Link",
-            "stopped": "LINK ✕ not paired - Settings ▸ Desk Link",
-        }
-        self.satellite_link_label.setText(texts.get(link_state, f"LINK {link_state}"))
-
-    def _restart_for_desk_role(self, _role: str) -> None:
-        """Shut down current owners, then relaunch through the one entrypoint."""
-        if getattr(self, "_desk_role_restart_pending", False):
-            return
-        self._desk_role_restart_pending = True
-        app = QApplication.instance()
-        if app is None:
-            return
-        app.aboutToQuit.connect(self._launch_replacement_desk)
-        if self.close():
-            QTimer.singleShot(0, app.quit)
-
-    def _launch_replacement_desk(self) -> None:
-        root = Path(__file__).resolve().parents[2]
-        launcher = root / "launch_gui.py"
-        ok, _pid = QProcess.startDetached(sys.executable, [str(launcher)], str(root))
-        if not ok:
-            logging.error(
-                "Could not restart the Trading Desk automatically. Run %s manually; the saved "
-                "desk role will apply.",
-                launcher,
-            )
-
-    def _on_desk_link_control_changed(self, machine: str) -> None:
-        """Satellite in control -> this desk is a relay: decision surfaces
-        lock, engines keep running, and only 'Take back control' stays live."""
-        controlled = bool(machine)
-        self.desk_link_banner.setVisible(controlled)
-        if controlled:
-            self.desk_link_banner_label.setText(
-                f"CONTROLLED BY {machine.upper()} — this desk is relaying. "
-                "Alerts, scans, and TWS keep running here; decisions happen on the satellite."
-            )
-        self.pages.setEnabled(not controlled)
-        status_bar = self.statusBar()
-        if status_bar is not None:
-            status_bar.setEnabled(not controlled)
-
-    def _on_desk_link_intent(self, machine: str, intent: dict) -> None:
-        try:
-            if str(intent.get("action") or "") == "set_auto_mode":
-                ok, detail = self._apply_auto_mode_intent(machine, intent)
-            else:
-                ok, detail = self.trading_panel.alert_center.apply_desk_link_intent(machine, intent)
-        except Exception:
-            logging.exception("Desk Link intent application failed.")
-            ok, detail = False, "intent application raised; see the main desk log"
-        self.desk_link_service.send_intent_result(machine, intent.get("seq"), ok, detail)
-
-    def _apply_auto_mode_intent(self, machine: str, intent: dict) -> tuple[bool, str]:
-        """Apply a satellite's Auto mode change through the same path as the
-        shell button. Idempotent, so at-least-once intent delivery is safe."""
-        mode = str(intent.get("mode") or "").strip().upper()
-        if mode not in ("OFF", "DESK", "AWAY", "EVENING"):
-            return False, f"set_auto_mode needs mode OFF|DESK|AWAY|EVENING, got {mode!r}"
-        self._set_auto_mode(mode)
-        logging.info("Auto mode set to %s by Desk Link satellite %s.", mode, machine)
-        return True, f"Auto mode -> {mode}"
-
     def closeEvent(self, event) -> None:
         for panel in (
             self.trading_panel,
@@ -779,15 +600,6 @@ class MainWindow(QMainWindow):
         ):
             try:
                 panel.shutdown()
-            except Exception:
-                pass
-        try:
-            self.desk_link_service.stop()
-        except Exception:
-            pass
-        if self.desk_link_feed is not None:
-            try:
-                self.desk_link_feed.stop()
             except Exception:
                 pass
         # Backstop for the shared writer lease: AutopilotService.shutdown
@@ -1098,39 +910,6 @@ def main(argv: list[str] | None = None) -> int:
         help="GUI color theme. Saved as the default for future launches.",
     )
     parser.add_argument(
-        "--satellite",
-        nargs="?",
-        const="",
-        metavar="HOST[:PORT]",
-        default=None,
-        help=(
-            "Launch as a view-only Desk Link satellite mirroring the main desk "
-            "(docs/MULTI_MACHINE_DESK_PROPOSAL.md). HOST is optional: without it the "
-            "window uses the saved connection or opens the connect dialog. No TWS, no scanners."
-        ),
-    )
-    parser.add_argument(
-        "--link-token",
-        default=None,
-        help="Desk Link token from the main machine. Saved locally after first use.",
-    )
-    parser.add_argument(
-        "--satellite-desk",
-        action="store_true",
-        help=(
-            "Compatibility alias for --desk-role satellite. Settings normally owns this choice."
-        ),
-    )
-    parser.add_argument(
-        "--desk-role",
-        choices=("main", "satellite"),
-        default=None,
-        help=(
-            "Compatibility override for the full desk role. The Settings page normally owns "
-            "this choice and launch_gui.py remembers it."
-        ),
-    )
-    parser.add_argument(
         "--ui-scale",
         choices=tuple(sorted(VALID_UI_SCALES)),
         default=None,
@@ -1168,28 +947,7 @@ def main(argv: list[str] | None = None) -> int:
         theme.resolve_scale(state.ui_scale, _available_screen_size()),
     )
 
-    if args.satellite is not None:
-        return _run_satellite(app, args.satellite, args.link_token)
-
-    from ui.desk_role import ROLE_SATELLITE, startup_desk_role
-
-    desk_role = startup_desk_role(
-        explicit=args.desk_role,
-        legacy_satellite=bool(args.satellite_desk),
-    )
-    satellite_desk = desk_role == ROLE_SATELLITE
-
-    if satellite_desk and args.link_token:
-        # Optional CLI convenience; pairing normally happens in the desk's own
-        # Settings -> Desk Link -> "Connect to a main desk", so an unpaired
-        # satellite desk still launches instead of blocking on a dialog.
-        from ui.satellite import load_saved_connection, save_connection
-
-        host, port, _ = load_saved_connection()
-        if host:
-            save_connection(host, port, args.link_token)
-
-    window = MainWindow(state, satellite_desk=satellite_desk)
+    window = MainWindow(state)
     window.show()
     # Off unless this machine asked for it. When on, every GUI-thread block
     # over the threshold is logged with the stack that caused it, which is
@@ -1197,34 +955,6 @@ def main(argv: list[str] | None = None) -> int:
     from ui.stall_watchdog import install as install_stall_watchdog
 
     window.stall_watchdog = install_stall_watchdog(window)
-    try:
-        return app.exec()
-    finally:
-        _print_qt_message_tally()
-
-
-def _run_satellite(app: QApplication, target: str, cli_token: str | None) -> int:
-    """View-only satellite. CLI host/token are optional overrides — the
-    window's connect dialog handles pairing and remembers everything."""
-    import socket as _socket
-
-    from desk_link.server import DEFAULT_PORT
-    from ui.satellite import SatelliteWindow
-
-    host, _, port_text = str(target or "").partition(":")
-    host = host.strip()
-    try:
-        port = int(port_text) if port_text.strip() else DEFAULT_PORT
-    except ValueError:
-        port = DEFAULT_PORT
-
-    window = SatelliteWindow(
-        machine_name=_socket.gethostname() or "satellite",
-        host=host,
-        port=port,
-        token=str(cli_token or "").strip(),
-    )
-    window.show()
     try:
         return app.exec()
     finally:

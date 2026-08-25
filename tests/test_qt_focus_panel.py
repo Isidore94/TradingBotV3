@@ -175,24 +175,6 @@ def test_focus_picks_is_top_level_app_page():
     assert window.market_regime_status.text() == "Auto: Bearish Strong"
 
 
-def test_satellite_app_uses_shared_read_only_non_engine_price_alert_service(monkeypatch):
-    import ui.satellite as satellite_module
-    from ui.app import MainWindow
-    from ui.state import UiState
-
-    monkeypatch.setattr(satellite_module, "load_saved_connection", lambda: ("", 47600, ""))
-    window = MainWindow(UiState(workspace_mode="workspace"), satellite_desk=True)
-    try:
-        service = window.trading_panel.price_alert_service
-        assert service.engine_enabled is False
-        assert not service._timer.isActive()
-        assert window.research_panel.price_alerts_panel.service is service
-        assert window.trading_panel.focus_picks_panel.price_alert_board.read_only is True
-        assert "not the engine machine" in service.status_snapshot()["note"]
-    finally:
-        window.close()
-
-
 def _row(symbol, side, **kwargs):
     from ui.models.setup import SetupRow
 

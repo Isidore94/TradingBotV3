@@ -20,17 +20,12 @@ QFrame#InfoDrawer {
     border-radius: @radius_panel@;
 }
 
-QFrame#DeskLinkBanner {
-    background: @accent_soft@;
-    border: 1px solid @caution@;
-    border-radius: 8px;
-}
-
-/* AI-P4: the broker credential-chain banner on Journal > Health. Same idiom
-   as DeskLinkBanner - a bordered soft-accent strip - because it is the same
-   kind of message: something outside this app needs the trader's hand, and
-   nothing inside it can fix itself. Styled here rather than per widget, so
-   showing it costs a property set and not a stylesheet parse. */
+/* AI-P4: the broker credential-chain banner on Journal > Health. A bordered
+   soft-accent strip, the idiom the retired Desk Link banner established
+   (removed 2026-08-24, P1.5), because it is the same kind of message:
+   something outside this app needs the trader's hand, and nothing inside it
+   can fix itself. Styled here rather than per widget, so showing it costs a
+   property set and not a stylesheet parse. */
 QFrame#BrokerChainBanner {
     background: @accent_soft@;
     border: 1px solid @caution@;

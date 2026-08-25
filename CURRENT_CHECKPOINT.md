@@ -8,6 +8,57 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (11) - Wave 1 is COMPLETE (8 of 8)
+
+**Branch `testing-week-2026-08-24`.** Every packet in
+`docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md` §3 is built, committed
+and pushed.
+
+| Packet | State |
+|---|---|
+| W1 P1.1 hermetic teardown | **DONE** |
+| W2 R8's last deferred joins | **DONE** |
+| W3 R7 true USD conversion | **DONE** |
+| W4 Phase 2 Daily Digest Ledger | **DONE** - ten-session gate owed |
+| W5 weekly synthesis machinery | **DONE** - runs gated |
+| W6 LOCAL-AI P3/P4 machinery | **DONE** - runs gated |
+| W7 P1.4 observability depth | **DONE** |
+| W8 P1.5 repository hygiene | **DONE** |
+
+**W8 was held and then authorized.** The removal reaches eight methods in
+`alert_center_panel.py`, which houses alert code, so the file-scoped ask-first
+rule was invoked; the trader answered "full removal" on 2026-08-24 and it was
+done in one commit with no behavior change. What deliberately survives is the
+generic `read_only` price-alert mode - a widget capability with its own tests,
+now with no production caller - and that is stated rather than left as a silent
+half-job.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4798 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **70/70**, exit 0 |
+| `dist\TradingBotV3\TradingBotV3.exe --selftest` | **70/70 (frozen)**, exit 0 |
+
+The suite count fell from 4868 because W8 deleted 70 tests with the code they
+covered; every other packet added tests. **Exe rebuilt 2026-08-24 21:16:21,
+committed the same minute** - Smart App Control did not refuse this hash, which
+says nothing about the next one, and the desk still runs from source.
+
+**NOTHING here is live-validated.** Every gate below stays owed, and this wave
+added three more: the **ten clean digest sessions plus a trader spot-audit of at
+least three fact packs** (W4), the **two weeks of graded cohort sessions** before
+the weekly synthesis narrates anything (W5), and the **two-week policy-draft
+side-by-side plus the trader's quality sign-off** before any draft becomes the
+live policy (W6). R7's gates 1/3/6 (W3) and R8 §10's one real weekend (W2) are
+unchanged. Nothing merges to `main` until a live-session validation day passes.
+
+**Deliberately NOT built**, per the authorization §4: plan.md P2.1-P2.6 and P6.4
+(authority cutovers, held for after the merge), P1.2, P1.3, Phases 4-7, any
+frontier call, and any run of the gated machinery before its gate.
+
+---
+
 ## 2026-08-24 night (10) - W8 is HELD on the file-scoped ask-first rule
 
 **Branch `testing-week-2026-08-24`.** Wave 1 is **seven of eight**: W1-W7 built,

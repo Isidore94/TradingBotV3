@@ -102,20 +102,3 @@ def test_removing_focus_pick_does_not_remove_price_alert(monkeypatch, tmp_path):
     finally:
         service.shutdown()
         board.close()
-
-
-def test_satellite_board_is_read_only(monkeypatch, tmp_path):
-    from ui.widgets.price_alert_board import PriceAlertBoard
-
-    service, _path = _alert_service(monkeypatch, tmp_path, engine_enabled=False)
-    board = PriceAlertBoard(service, _focus_service(tmp_path), read_only=True)
-    try:
-        assert not board.save_button.isEnabled()
-        assert "Read-only" in board.status_label.text()
-        board.symbol_input.setEditText("TSLA")
-        board.above_input.setText("500")
-        board._save_input()
-        assert service.entries() == []
-    finally:
-        service.shutdown()
-        board.close()
