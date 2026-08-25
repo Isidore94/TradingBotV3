@@ -1306,11 +1306,21 @@ second scoreboard.
    overlay, entries, an environment timeline with the auto-vs-manual agreement
    rate, the calendar strip, and the day-context table). The existing "Journal"
    page remains the trade/tax journal; the label difference is deliberate.
-10. **R10.I Scheduled report slot and opt-in AI scope**, after two weeks of
+10. **R10.I Scheduled report slot and opt-in AI scope** - **BUILT 2026-08-24, GREEN, under the trader's recorded SEQUENCING override (decision record §4). The evidence-quality CLAIMS GATE is NOT waived and remains binding**: until two weeks of R10.A/B collection exist every report states its n, labels everything `discovery`, and prints that the window is unmet. Originally specified as: after two weeks of
     R10.A collection. An `evidence_report` slot appended to the runner
     (deterministic, no model) and an opt-in `market_journal` scope absent from
     `DEFAULT_SCOPES`. Nothing in this chain may reach a detector, score, alert,
     watchlist, Focus, the review queue or `review_policy.json`.
+
+10a. **AWAY day recap and queue routing** - **BUILT 2026-08-24, GREEN;
+    mechanics canary OWED** (one live AWAY day). Spec:
+    `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §5 and the R1 trader
+    amendment in `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. In AWAY the
+    chart-review queue no longer accumulates; the return surface is the EOD
+    recap. Presentation only - no new detector, score, ranking or writer - and
+    the backing alert list, History, the D1 badge and every evidence stream are
+    unchanged. Also the like cohort beside the veto cohort on Focus Pick Review,
+    and the two opt-in scopes of decision record §3.
 
 11. **R10.V Daily-bar unit repair** — **BUILT 2026-08-23, GREEN; one live scan
     day owed** (S1's mechanism; authorized by the trader's 2026-08-22 R10.0b

@@ -8,6 +8,60 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night - the R10 slate is COMPLETE (10 of 10)
+
+**Branch `testing-week-2026-08-24`.** Every packet authorized in
+`docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §3-§5 is built.
+
+| Packet | State |
+|---|---|
+| R10.B outcome semantics + path capture | BUILT - canary owed |
+| R10.C evidence_stats + scoreboard | BUILT |
+| R10.D tracker transition ledger | BUILT |
+| R10.E Focus membership events | BUILT - canary owed |
+| R10.F like_cohort_grading | BUILT |
+| R10.G market context ledger | BUILT - canary owed |
+| R10.H Market Journal + two surfaces | BUILT - canary owed |
+| **AWAY day recap + queue routing** | **BUILT - canary owed** |
+| **Like cohort on the weekend surface** | **BUILT** |
+| **Two opt-in scopes** | **BUILT** |
+| **R10.I evidence_report + market_journal scope** | **BUILT - claims gate binding** |
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4767 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **70/70**, exit 0 |
+| `dist\TradingBotV3\TradingBotV3.exe --selftest` | **70/70 (frozen)**, exit 0 |
+| Golden fixtures | byte-identical, SHA-256 verified |
+
+**The AWAY queue no longer accumulates.** The trader's 317-alert return is what
+this fixed. The routing sits at `_enqueue_review_alert`, the single door into
+the review queue, and everything upstream - the backing alert list, the D1 feed
+and badge, History, every evidence stream - is asserted byte-identical between
+an AWAY panel and a DESK one. DESK unchanged, EVENING unchanged, the AWAY hourly
+phone pushes untouched per the resolved sub-decision.
+
+**R10.I is scaffolding and says so.** The override covered sequencing only. Its
+first live run read **13,394 ledger rows over 1 of 10 required sessions** and
+printed COLLECTION WINDOW NOT MET as the first line of the report. The clock
+starts at the first live session after the `outcome_sweep_autorun="on"` flip.
+
+**FIVE canaries now owed**, and building never marks a live gate met:
+- R10.B: LRSI registering gradeable rows; H1 stamping the bar close.
+- R10.E: membership events on an add/remove/day-roll.
+- R10.G: a regime shift writing a row.
+- R10.H: a journal entry round-tripping through both surfaces.
+- **The AWAY routing: one live AWAY day ending with an empty review queue and a
+  populated recap**, with History and the evidence streams unchanged.
+
+Also still owed and unchanged: R10.V's live scan day, the R10.A mechanics
+canary, R9's four live proofs, the 2026-08-21 fluidity gates, R7 gates 1/3/6,
+R8 §10's one real weekend, and the Questrade token paste. Nothing merges to
+`main` until a live-session validation day passes.
+
+---
+
 ## 2026-08-24 evening - R10 build slate (packets 1-7 of 10 done)
 
 **Branch `testing-week-2026-08-24`.** Building the slate authorized in

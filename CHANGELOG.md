@@ -21,6 +21,71 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - The AWAY recap, the like-cohort view, two opt-in scopes, and R10.I
+
+**Packet 8 - an AWAY day ends in a recap, not a queue** (R1 trader amendment
+2026-08-24; decision record §5). The trader returned from a full AWAY day to
+**317 alerts waiting in the chart review queue**, plus 128 hidden inside
+yesterday's range. In AWAY the queue no longer accumulates: `_enqueue_review_alert`
+diverts, and that line is the ONE door into the queue - the auto-pick drain, the
+D1 feed and the ordinary feed all arrive there. **What does not change is the
+harder half**: `self._alerts`, the D1 feed and badge, History and every evidence
+stream are written BEFORE that call and are asserted byte-identical between an
+AWAY panel and a DESK one. DESK is untouched; EVENING keeps its queue (it is for
+sleeping through the morning, and that queue is what the trader wakes up to);
+the AWAY hourly phone pushes are untouched, per the resolved sub-decision.
+Diverted alerts are **counted**, session-scoped, because "nothing accumulated"
+and "nothing happened" must not look the same on the return.
+
+The recap surface **writes nothing** - a test parses its AST and asserts it
+makes no IO call and imports no store - and **ranks nothing**: the numbered
+swings are the AWAY push's own ranking, the alerts the desk's own
+classification, the staged picks what the machine already staged. Each section
+states where its ORDER came from. A source that could not be read is NAMED
+(a page empty from a failed open must not read as a quiet day); a digest line
+that cannot be parsed is kept and marked. Every mutation is delegated:
+`FocusService` adds, the Alert Center removes, `MarketJournalService` takes the
+D1 write-up. The R2 adoption gate is SHOWN at click time and never blocks the
+trader - it governs the machine's adoptions, not theirs.
+
+**Packet 8b - the like cohort beside the veto cohort.** R10.F graded 45 LIKE
+claims into 28 cohorts and nothing read the file. Focus Pick Review now shows
+both: the two are the halves of one judgement, and keeping only the vetoes
+leaves you the flattering half. Read by NAMED CONSTANT (the like trio moved into
+`project_paths` beside the veto trio), because AI-P1 found this exact step
+rendering an empty table for six days from a composed path. No canonical pooling
+- that exists because the veto VOCABULARY is versioned, and a like's cohort is
+its claimed setup id, which is not.
+
+**Packet 9 - two opt-in evidence scopes** (decision record §3). `walkaway` and
+`setup_performance`, registered but not nightly. `setup_performance` reads the
+scoreboard's **output** and never the raw tracker: TB-0/TB-5 measured the
+tracker's text projection contributing zero symbol-specific content while
+starving every analysis it led, and a test asserts no source path names it.
+Caveats are **derived from live source**, not retyped (the AI-P5 lesson) -
+`setup_performance`'s reads the bundle's own claim-kind coverage, and a bundle
+it cannot read yields "UNKNOWN for this package" rather than a remembered
+enumeration.
+
+**Packet 10 - R10.I, and it says it is scaffolding.** Built under the recorded
+sequencing override; the claims gate was **not** waived and is not waived here.
+Every report states its n, labels everything `discovery`, and prints
+**COLLECTION WINDOW NOT MET ... Do not promote, demote, or change anything on
+the strength of this file** as the first thing rendered. Pinned by test over an
+empty ledger. A caller that cannot count sessions reads as unmet - the only
+direction that cannot turn scaffolding into a finding by accident. The
+`evidence_report` slot is appended last (it reads what the cohorts produced),
+deterministic, no model. First live run: **n=13394 ledger rows over 1 of 10
+sessions**, 44 cohort rows, 158 scoreboard rows, window not met. Plus the opt-in
+`market_journal` scope - free-text entries reach an AI scope opt-in only, a
+recorded trader decision, unchanged.
+
+- **Frozen exe rebuilt**: packet 8 fired the trigger (new page, two modules);
+  `--selftest` returns **70/70 (frozen)**, exit 0. SAC did not refuse this hash,
+  which says nothing about the next one.
+- **Canaries owed**: the AWAY routing needs one live AWAY day, and R10.B/E/G/H's
+  remain open. Building never marks a live gate met.
+
 ### 2026-08-24 - R10.E/F/G/H: provenance, the other cohort, the tape, and the words
 
 **R10.E - Focus membership becomes an episode.** Audit F5: 244 of 499
