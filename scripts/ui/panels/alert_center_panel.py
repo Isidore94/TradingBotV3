@@ -1710,6 +1710,34 @@ class AlertCenterPanel(QFrame):
         ):
             self._insert_item_into(self.d1_feed_layout, alert, MAX_D1_FEED_ITEMS)
 
+    def _note_away_recap_alert(self, alert: BounceAlert) -> None:
+        """Count an alert diverted from the queue into the AWAY recap.
+
+        A COUNT, not a store: the alerts themselves are already in
+        `self._alerts`, History and the evidence streams, so a second copy here
+        would be a second writer for data that already has one (ground rule 8).
+
+        The count exists because "nothing accumulated" and "nothing happened"
+        must not look the same on the return. It is session-scoped, so a day
+        roll starts it at zero rather than reporting yesterday's total as
+        today's.
+        """
+        from datetime import date as _date
+
+        today = _date.today().isoformat()
+        if getattr(self, "_away_recap_session", None) != today:
+            self._away_recap_session = today
+            self._away_recap_diverted = 0
+        self._away_recap_diverted = getattr(self, "_away_recap_diverted", 0) + 1
+
+    def away_recap_count(self) -> int:
+        """How many alerts this session routed to the recap instead of the queue."""
+        from datetime import date as _date
+
+        if getattr(self, "_away_recap_session", None) != _date.today().isoformat():
+            return 0
+        return int(getattr(self, "_away_recap_diverted", 0) or 0)
+
     def _enqueue_review_alert(self, alert: BounceAlert) -> None:
         """Queue one visual review per symbol; refresh the active symbol live.
 
@@ -1718,6 +1746,26 @@ class AlertCenterPanel(QFrame):
         from an old AUTO WATCHLIST line) - those must never occupy the
         review pane."""
         if not alert.symbol or not SYMBOL_RE.fullmatch(alert.symbol):
+            return
+        # R1 amendment 2026-08-24: an AWAY day ends in a RECAP, not a queue.
+        #
+        # The trader returned from one AWAY day to 317 pending review items.
+        # The chart-review queue is a return surface for someone sitting here;
+        # in AWAY nobody is, so it stops accumulating and the day is assembled
+        # into the EOD recap instead.
+        #
+        # This is the ONE door into the queue - the auto-pick drain, the D1
+        # feed and the ordinary feed all arrive here - which is why the routing
+        # belongs at this line and nowhere else. Everything upstream is
+        # untouched by design: `self._alerts`, the D1 feed and badge, History
+        # and every evidence stream are written BEFORE this call and never read
+        # from the queue. That is the repetition-control precedent holding -
+        # a display decision withholds nothing from evidence.
+        #
+        # EVENING deliberately keeps its queue: it is for sleeping through the
+        # morning, and the queue is what the trader wakes up to.
+        if self._auto_mode_now() == "AWAY":
+            self._note_away_recap_alert(alert)
             return
         # Parked = the trader armed a D1 alert on this chart and skipped:
         # decision made for the day, so ordinary alerts stop re-occupying the

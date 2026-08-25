@@ -150,6 +150,9 @@ def test_focus_picks_is_top_level_app_page():
         # the other what you THOUGHT. Merging them would turn the tax journal
         # into a diary.
         "Market Journal",
+        # R1 amendment 2026-08-24: the AWAY day's return surface, which
+        # replaced a 317-item chart review queue.
+        "AWAY Recap",
         # R8 registered Weekend Prep next to Journal: the weekend routine reads
         # the journal the walk-away and auto-tag steps depend on.
         "Weekend Prep",

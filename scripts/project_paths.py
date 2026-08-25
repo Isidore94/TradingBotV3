@@ -434,6 +434,14 @@ HUMAN_FOCUS_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "human_focus_performance.csv"
 VETO_COHORT_PICKS_FILE = RUNTIME_DATA_DIR / "veto_cohort_picks.csv"
 VETO_COHORT_OUTCOMES_FILE = RUNTIME_DATA_DIR / "veto_cohort_outcomes.csv"
 VETO_COHORT_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "veto_cohort_performance.csv"
+# R10.F: the LIKE mirror of the veto trio. Named here beside it so every reader
+# addresses these files by CONSTANT - AI-P1 found the Focus Pick Review step had
+# been rendering an empty table for six days because it composed a path under
+# PERSISTENT_DATA_DIR instead, and that is the spelling that cannot drift from
+# where the writers put them.
+LIKE_COHORT_PICKS_FILE = RUNTIME_DATA_DIR / "like_cohort_picks.csv"
+LIKE_COHORT_OUTCOMES_FILE = RUNTIME_DATA_DIR / "like_cohort_outcomes.csv"
+LIKE_COHORT_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "like_cohort_performance.csv"
 MASTER_AVWAP_BUCKET_STATE_FILE = RUNTIME_DATA_DIR / "master_avwap_bucket_state.json"
 
 SECTOR_ETF_MAP_FILE = DATA_DIR / "sector_etf_map.json"

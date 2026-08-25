@@ -37,16 +37,16 @@ from pathlib import Path
 from typing import Any
 
 from project_paths import (
+    LIKE_COHORT_OUTCOMES_FILE,
+    LIKE_COHORT_PERFORMANCE_FILE,
+    LIKE_COHORT_PICKS_FILE,
     MASTER_AVWAP_DAILY_BARS_DIR,
-    RUNTIME_DATA_DIR,
     TRADER_ANNOTATIONS_FILE,
 )
 from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
 
-#: The mirror trio. Named beside the veto files so the pair is obvious on disk.
-LIKE_COHORT_PICKS_FILE = RUNTIME_DATA_DIR / "like_cohort_picks.csv"
-LIKE_COHORT_OUTCOMES_FILE = RUNTIME_DATA_DIR / "like_cohort_outcomes.csv"
-LIKE_COHORT_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "like_cohort_performance.csv"
+#: The mirror trio, re-exported from `project_paths` where the veto trio also
+#: lives. Every reader addresses them by CONSTANT.
 
 #: Cohort namespace. `human_focus_tracking` groups on this prefix.
 LIKE_COHORT_PREFIX = "like"

@@ -78,6 +78,9 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "evidence_stats",
     "ui.services.market_journal_service",
     "ui.panels.market_journal_panel",
+    # R1 amendment: the AWAY day's return surface.
+    "away_recap",
+    "ui.panels.away_recap_panel",
     # NOT ai_jobs: the local AI batch layer is deliberately out of the bundle
     # (PACKAGES_NOT_IN_THE_BUNDLE in tests/test_packaging_spec_drift.py). Its
     # only entry point is scripts/run_ai_jobs.py, a scheduled CLI run from the

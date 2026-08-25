@@ -180,7 +180,10 @@ class FocusReviewPage(_StepPage):
 
     def __init__(self, service, parent=None) -> None:
         super().__init__("focus_review", service, parent)
-        self.subtitle.setText("The week's focus picks, their outcomes, and the veto cohort beside them.")
+        self.subtitle.setText(
+            "The week's focus picks, their outcomes, and both graded cohorts "
+            "beside them - what you vetoed and what you liked."
+        )
         self.refresh_button = QPushButton("Refresh picks")
         self.refresh_button.clicked.connect(self.reload)
         # One row per PICK, carrying its outcome - not picks and outcomes as
@@ -209,6 +212,17 @@ class FocusReviewPage(_StepPage):
         self.cohort_note = QLabel("")
         self.cohort_note.setWordWrap(True)
 
+        # Packet 8b: R10.F's LIKE cohort, beside the veto one. The two are the
+        # halves of one judgement - what you threw away and what you endorsed -
+        # and reading either alone gives half an answer.
+        self.like_table = QTableWidget(0, 6)
+        self.like_table.setHorizontalHeaderLabels(
+            ["Claimed setup", "Side", "n", "Win rate", "Avg return", "PF"]
+        )
+        self.like_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.like_note = QLabel("")
+        self.like_note.setWordWrap(True)
+
         self._layout.addWidget(self.refresh_button)
         self._layout.addWidget(self.table, 1)
         self._layout.addWidget(self.note)
@@ -216,6 +230,9 @@ class FocusReviewPage(_StepPage):
         self._layout.addWidget(self.cohort_caption)
         self._layout.addWidget(self.cohort_table, 1)
         self._layout.addWidget(self.cohort_note)
+        self._layout.addWidget(QLabel("Liked picks, graded forward"))
+        self._layout.addWidget(self.like_table, 1)
+        self._layout.addWidget(self.like_note)
         self._finish_layout()
 
     def reload(self) -> None:
@@ -223,6 +240,7 @@ class FocusReviewPage(_StepPage):
         # week with no picks must not also hide the graded record of the
         # trader's vetoes.
         self._reload_cohort()
+        self._reload_like_cohort()
         rows = _join_focus_week(self.service.week_bounds)
         self.table.setRowCount(len(rows))
         columns = ("date", "symbol", "side", "source", "h1", "h3", "h5", "h10", "matured")
@@ -243,6 +261,34 @@ class FocusReviewPage(_StepPage):
         if orphans:
             note += f" {orphans} row(s) have an outcome but no pick snapshot."
         self.note.setText(note)
+
+    def _reload_like_cohort(self) -> None:
+        """R10.F's cohort, rendered under the same honesty rules as the veto one."""
+        rows = _read_like_cohort()
+        self.like_table.setRowCount(len(rows))
+        columns = ("cohort", "side", "n", "win_rate", "avg_return", "profit_factor")
+        for index, row in enumerate(rows):
+            for column, key in enumerate(columns):
+                self.like_table.setItem(
+                    index, column, QTableWidgetItem(str(row.get(key) or ""))
+                )
+        if not rows:
+            self.like_note.setText(
+                "No graded LIKE cohort yet. It is written by the overnight "
+                "like_cohort_grading slot, and a claim needs forward sessions "
+                "before it means anything - this is an absent measurement, not "
+                "an empty record."
+            )
+            return
+        self.like_note.setText(
+            f"{len(rows)} cohort row(s), one per claimed setup family. Returns are "
+            "side-adjusted, so POSITIVE means the pick you liked WORKED - the "
+            "opposite reading from the veto table above, where positive means the "
+            "one you rejected would have. Read as DISCOVERY, not confirmation: "
+            "n is small per family and a blank is a horizon that has not matured. "
+            "The two tables are the mirror pair - what you threw away, and what "
+            "you endorsed."
+        )
 
     def _reload_cohort(self) -> None:
         rows = _read_veto_cohort()
@@ -910,6 +956,84 @@ def _read_veto_cohort() -> list[dict[str, str]]:
             }
         )
     return rows
+
+
+def _read_like_cohort() -> list[dict[str, str]]:
+    """The graded LIKE cohort - R10.F's output, given its surface (packet 8b).
+
+    The mirror of :func:`_read_veto_cohort`, and read the same way: by NAMED
+    CONSTANT, never by composing a filename, because AI-P1 found this step had
+    been rendering an empty table for six days from exactly that mistake.
+
+    The two cohorts are the halves of one judgement. The veto cohort answers
+    "was I right to throw that away"; this one answers "was I right to like
+    it". Reading either alone gives half an answer, and the half you get is
+    the flattering one if you only kept the vetoes.
+
+    No canonical pooling here, deliberately: pooling exists because the veto
+    VOCABULARY is versioned and identical reasons had to be re-joined across a
+    bump. A like's cohort is its claimed setup id, which is not versioned, so
+    pooling it would be machinery with nothing to do - and machinery with
+    nothing to do is machinery nobody notices going wrong.
+    """
+    import csv
+
+    import project_paths
+
+    path = Path(project_paths.LIKE_COHORT_PERFORMANCE_FILE)
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            raw_rows = list(csv.DictReader(handle))
+    except OSError:
+        return []
+
+    rows: list[dict[str, str]] = []
+    for raw in raw_rows:
+        rows.append(
+            {
+                "cohort": str(raw.get("cohort") or "").strip(),
+                "side": str(raw.get("side") or "").strip(),
+                "horizon": str(raw.get("horizon_sessions") or "").strip(),
+                "n": str(raw.get("sample_count") or "").strip(),
+                "win_rate": _cohort_pct(raw.get("win_rate")),
+                "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
+                "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+            }
+        )
+    return rows
+
+
+def _cohort_pct(value) -> str:
+    """A percentage, or BLANK. Never a substituted zero."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return f"{float(text) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return text
+
+
+def _cohort_signed_pct(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return f"{float(text) * 100:+.2f}%"
+    except (TypeError, ValueError):
+        return text
+
+
+def _cohort_ratio(value) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return f"{float(text):.2f}"
+    except (TypeError, ValueError):
+        return text
 
 
 def _focus_row(key, pick, outcome, *, orphan: bool) -> dict[str, Any]:

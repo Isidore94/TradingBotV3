@@ -335,3 +335,89 @@ def test_the_cohort_reads_its_named_constant_too(tmp_path, monkeypatch):
     )
 
     assert [row["n"] for row in _read_veto_cohort()] == ["78"]
+
+
+# ==========================================================================
+# Packet 8b - the LIKE cohort beside the veto one
+#
+# R10.F graded the trader's endorsements for the first time, and nothing read
+# the file. The two cohorts are the halves of one judgement: the veto table
+# answers "was I right to throw that away", this one "was I right to like it".
+# Reading either alone gives half an answer - and if you only kept the vetoes,
+# the half you get is the flattering one.
+# ==========================================================================
+def test_the_like_cohort_is_read_by_its_named_constant(tmp_path, monkeypatch):
+    """By CONSTANT, never by composing a filename: AI-P1 found this step had
+    rendered an empty table for six days from exactly that mistake."""
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_like_cohort
+
+    runtime = tmp_path / "data" / "runtime"
+    monkeypatch.setattr(project_paths, "PERSISTENT_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        project_paths, "LIKE_COHORT_PERFORMANCE_FILE",
+        runtime / "like_cohort_performance.csv",
+    )
+    _write(
+        runtime / "like_cohort_performance.csv",
+        "cohort,side,horizon_sessions,sample_count,win_rate,avg_side_return,"
+        "profit_factor,updated_at",
+        [
+            "human_focus_like,LONG,1,21,0.8095,0.019011,6.5473,2026-08-24T16:48:57",
+            "human_focus_like_post_earnings_52w_break,ALL,1,4,,,,2026-08-24T16:48:57",
+        ],
+    )
+
+    rows = _read_like_cohort()
+
+    assert [row["n"] for row in rows] == ["21", "4"]
+    assert rows[0]["win_rate"] == "81.0%"
+    assert rows[0]["avg_return"] == "+1.90%"
+    assert rows[0]["profit_factor"] == "6.55"
+
+
+def test_an_unmeasured_like_statistic_is_blank_never_zero(tmp_path, monkeypatch):
+    """Same rule the veto table keeps: a fabricated zero is a false lesson,
+    and here it would be a false lesson about the trader's own conviction."""
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_like_cohort
+
+    runtime = tmp_path / "data" / "runtime"
+    monkeypatch.setattr(project_paths, "PERSISTENT_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        project_paths, "LIKE_COHORT_PERFORMANCE_FILE",
+        runtime / "like_cohort_performance.csv",
+    )
+    _write(
+        runtime / "like_cohort_performance.csv",
+        "cohort,side,horizon_sessions,sample_count,win_rate,avg_side_return,"
+        "profit_factor,updated_at",
+        ["human_focus_like,LONG,3,2,,,,2026-08-24T16:48:57"],
+    )
+
+    row = _read_like_cohort()[0]
+    assert row["n"] == "2"
+    assert row["win_rate"] == "" and row["avg_return"] == "" and row["profit_factor"] == ""
+
+
+def test_a_missing_like_file_is_an_absent_state_not_a_crash(tmp_path, monkeypatch):
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_like_cohort
+
+    monkeypatch.setattr(project_paths, "PERSISTENT_DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        project_paths, "LIKE_COHORT_PERFORMANCE_FILE", tmp_path / "nope.csv"
+    )
+    assert _read_like_cohort() == []
+
+
+def test_the_subtitle_promises_both_cohorts_and_the_page_loads_both():
+    """The subtitle overclaimed once already (AI-P1). It must not again."""
+    from ui.panels import weekend_prep_panel
+
+    source = Path(weekend_prep_panel.__file__).read_text(encoding="utf-8")
+    focus_page = source.split("class FocusReviewPage")[1].split("\nclass ")[0]
+
+    assert "_read_like_cohort()" in focus_page
+    assert "_read_veto_cohort()" in focus_page
+    assert "what you vetoed and what you liked" in focus_page

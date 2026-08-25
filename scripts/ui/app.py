@@ -41,6 +41,7 @@ from ui.panels.autopilot_panel import AutopilotPanel
 from ui.panels.bounce_panel import format_auto_regime_reading
 from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
+from ui.panels.away_recap_panel import AwayRecapPanel
 from ui.panels.market_journal_panel import MarketJournalPanel
 from ui.panels.weekend_prep_panel import WeekendPrepPanel
 from ui.panels.research_panel import ResearchPanel
@@ -88,6 +89,9 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     # recorded: that one is the trade and tax record, this one is what the
     # trader thought. Merging them would turn the tax journal into a diary.
     PageSpec("Market Journal", "mdi.book-open-variant", "market_journal_panel"),
+    # R1 amendment 2026-08-24: an AWAY day ends in a recap, not a queue. This
+    # is the return surface that replaced 317 pending review items.
+    PageSpec("AWAY Recap", "mdi.calendar-check-outline", "away_recap_panel"),
     PageSpec("Weekend Prep", "mdi.calendar-weekend", "weekend_prep_panel"),
     PageSpec("Universe", "mdi.earth", "universe_panel"),
     PageSpec("Research", "mdi.flask-outline", "research_panel"),
@@ -123,6 +127,10 @@ class MainWindow(QMainWindow):
         )
         self.journal_panel = JournalPanel()
         self.market_journal_panel = MarketJournalPanel()
+        self.away_recap_panel = AwayRecapPanel(
+            focus_service=self.trading_panel.focus_service,
+            journal_service=self.market_journal_panel.service,
+        )
         self.weekend_prep_panel = WeekendPrepPanel(
             focus_service=self.trading_panel.focus_service
         )
