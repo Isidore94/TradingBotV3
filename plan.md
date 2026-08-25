@@ -1519,6 +1519,16 @@ non-authoritative. Their analysis/cutover steps remain ordered here.
    `docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4a. What remains owed: **trader answers to
    its six open questions**, then schema and tests. No digest schema may be built or
    frozen before those answers — the 2026-08-08 decision still stands.
+   *Satisfied and BUILT 2026-08-24 (packet W4):* the six answers were given and
+   recorded in `docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md` §1, so the
+   2026-08-08 decision is met rather than waived. `scripts/ai_jobs/digest.py` writes
+   the two artifacts per session — a deterministic fact pack (zero LLM, written even
+   when the model is down) and a medium-tier narration that reads the fact pack and
+   nothing else — and `daily_digest` is APPENDED last in `default_slots()`.
+   **Still owed here: the ten clean digest sessions plus the trader spot-audit of at
+   least three packs against raw evidence.** Building the ledger never marks that
+   gate met. The enrichment (P3) and policy-draft (P4) machinery is BUILT and
+   RUN-GATED under packet W6; what P3.3 retains is the gates, not the code.
    *Armed and built 2026-08-11:* the **ticker-briefs hardening packet**
    (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4b) was armed by the trader after the
    first overnight run and is **implemented**: project-then-budget evidence (TB-0),

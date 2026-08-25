@@ -566,7 +566,18 @@ credentials and could not reach the UNC store at all.
   against raw evidence and finds no fabricated facts (numbers all traceable
   to the deterministic layer).
 
-**Status 2026-08-08 — TO BE REDESIGNED, DESIGN PENDING. Do not build.**
+**Status 2026-08-24 — BUILT (packet W4). Ten-session live gate OWED.**
+
+The six §6.4a questions were answered by the trader on 2026-08-24
+(`docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md` §1), which satisfied
+the 2026-08-08 decision below, and §6.4a's design is now `scripts/ai_jobs/digest.py`
+with those answers frozen into it and carried inside every pack. The slot
+`daily_digest` is APPENDED last in `default_slots()`. **Its exit gate — ten
+consecutive session days of digests, with the trader spot-auditing at least
+three against raw evidence — is unchanged and still owed;
+`digest.clean_digest_sessions` counts sessions, and counting is not passing.**
+
+Everything below this line is the pre-build record, preserved.
 
 Phase 1's repairs changed what Phase 2 should be. The load-bearing lesson is
 that everything trustworthy in the nightly output came from *code* — the
@@ -909,7 +920,31 @@ Weekly and monthly views are computed on demand from the fact packs. A derived
 aggregate store would be a second thing to keep in sync and a second thing to be
 wrong.
 
-#### Open questions — the trader must answer these before anything is built
+#### Open questions — ANSWERED by the trader 2026-08-24, and BUILT
+
+> Answers are recorded verbatim in
+> `docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md` §1 and are frozen
+> into `ai_jobs.digest.ANSWERS`, which every fact pack carries: (1) BOTH win
+> metrics side by side, never blended; (2) env_key × side, no setup-family
+> slice in v1; (3) shadow-engine output EXCLUDED; (4) narration disposable,
+> facts permanent; (5) 16 KB hard cap, over-cap fails the job; (6) a
+> non-session writes an EMPTY pack.
+>
+> **Three build decisions §6.4a left open, recorded here rather than silently
+> taken.** *(a)* `MAX_SLICES = 16`, so the pack fits its cap BY CONSTRUCTION
+> (D5) rather than by truncation — the busiest measured shape lands at ~12.9 KB;
+> a larger cap would mean a busy session failing the job and losing its facts
+> entirely, which is the opposite of what over-cap-fails protects. *(b)* A slice
+> ROW carries one pointer (`source_id`, `selector`, `as_of`) and each metric
+> cell under it carries `value` and `n`; repeating the pointer per cell would
+> spend a third of the cap restating a query that does not change within the
+> row, and D2's requirement — no value without its provenance and its n — is
+> still met. *(c)* `env_key` is READ from the row's `context_json`, never
+> re-derived: a second copy of the day-part cutoffs would let the digest and the
+> learning state describe different days, and `ai_jobs` is barred by test from
+> importing the module that mutes alert segments.
+
+The questions as they stood:
 
 1. **What counts as "winning"?** R at scenario close, MFE/MAE, or both? This is
    the single decision the whole fact pack hangs on, and it is a trading

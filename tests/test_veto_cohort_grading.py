@@ -512,11 +512,12 @@ def test_the_scope_can_be_selected_on_demand():
         "ai_summary",
         "ticker_briefs",
         "veto_cohort_grading",
-        # R10.F appended the LIKE mirror after the veto slot, and R10.I the
-        # evidence report after that. Later phases append; they never reorder
-        # the ones above.
+        # R10.F appended the LIKE mirror after the veto slot, R10.I the evidence
+        # report after that, and LOCAL-AI Phase 2 the daily digest last. Later
+        # phases append; they never reorder the ones above.
         "like_cohort_grading",
         "evidence_report",
+        "daily_digest",
     ]
     # And the override is per-call: building again without it is untouched.
     assert default_slots()[1].run.__name__ == "run_daily_summary"

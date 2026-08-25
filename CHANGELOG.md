@@ -23,6 +23,57 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### 2026-08-24 - Wave 1 offline slate
 
+**Packet W4 - the Daily Digest Ledger (LOCAL-AI Phase 2).** The 2026-08-08
+trader decision forbade building or freezing any digest schema until six open
+questions were answered. They were answered on 2026-08-24, so the decision is
+MET rather than waived, and §6.4a's design is now `scripts/ai_jobs/digest.py`
+with the answers frozen into `ANSWERS` and carried inside every pack - a reader
+six months from now gets the rules with the record.
+
+**Two artifacts per session, and that split is the design.** `facts/<YYYY>/<date>.json`
+is written by code with zero LLM involvement and is written even when the model
+is down; `narration/<YYYY>/<date>.json` is medium tier, reads the fact pack and
+NOTHING else, and is simply absent when it fails (the slot returns
+`degraded_no_narrative`, which the runner does not count as coverage, so the
+next firing retries the narration). Because the narrator sees one bounded
+document, the 2026-08-10 truncation failure - a model handed a sheared prompt
+producing confident schema-valid output about evidence it never saw - cannot
+recur here by CONSTRUCTION rather than by vigilance.
+
+The six answers as built: **both win metrics side by side** (close-R is result,
+MFE/MAE is opportunity, and no field combines them); **slices are env_key
+(environment x day-part) x side**, no setup-family slice in v1; **shadow-engine
+output excluded**, champion facts only, pinned by an AST test; narration
+disposable and facts permanent; **16 KB hard cap where over-cap FAILS the job
+and writes nothing**; and a non-session writes an EMPTY pack so the gap is
+visible rather than looking like a missing file.
+
+Every measured value carries `{value, n, source_id, selector, as_of}` and `n` is
+mandatory - `measured()` raises without it, because a default would make the
+omission invisible. Champion outcomes are read through
+`setup_scoreboard.load_intraday_finals`, so the digest and the scoreboard cannot
+drift into two definitions of "usable", and rows whose family does not CLAIM an
+entry are never averaged as trades. Packs are append-only: a second run writes a
+superseding SIBLING naming what it supersedes, and never edits. Rollups are a
+read computed on demand (D8), weighting sessions by n rather than averaging
+day-means.
+
+**Three build decisions §6.4a left open** are recorded in that section rather
+than taken silently: `MAX_SLICES = 16` so the pack fits its cap by construction
+(worst measured shape 12.9 KB); one pointer per slice ROW with `value`/`n` per
+metric cell; and `env_key` READ from the row's `context_json` rather than
+re-derived. That last one caught a real boundary: computing the day-part meant
+importing `bounce_bot_lib.learning`, the module that MUTES alert segments, and
+an existing test bars every `ai_jobs` module from reaching into live decision
+code. Reading the stamp the alert path already writes is both the boundary-safe
+answer and the one that keeps a single definition of "midday".
+
+**The exit gate is owed and building never marks it met**: ten consecutive
+session days of digests, with the trader spot-auditing at least three packs
+against raw evidence and finding no fabricated fact.
+`digest.clean_digest_sessions` counts sessions - and counting is not passing. An
+empty non-session pack deliberately does not count towards it.
+
 **Packet W3 - true USD conversion, booked rather than estimated.** R7 deferred
 this on 2026-08-18 for a good reason: the FX table booked CAD only, and inventing
 a rate is exactly the dishonesty the currency refusal was built to prevent. The

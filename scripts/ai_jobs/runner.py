@@ -394,7 +394,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     night's trades are in it means they read yesterday's. It also costs seconds
     rather than the briefs' hours, so putting it first spends nothing.
     """
-    from ai_jobs import briefs, cohorts, evidence_report
+    from ai_jobs import briefs, cohorts, digest, evidence_report
     from journal_runner import run_nightly_journal_import
 
     return [
@@ -474,6 +474,29 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=evidence_report.run_evidence_report,
             reserve_minutes=5.0,
             description="Deterministic nightly evidence report (no model)",
+            max_attempts=3,
+        ),
+        # LOCAL-AI Phase 2, APPENDED last. Later phases append; they never
+        # reorder these.
+        #
+        # Last because the fact pack reads what the night produced - the job
+        # ledger rows above it included - and a digest written ahead of its own
+        # inputs would describe a night that had not happened yet. The ledger
+        # row for THIS slot is written after it returns, so a pack never
+        # contains its own outcome; that is a known and accepted one-row lag,
+        # stated rather than hidden.
+        #
+        # Its two artifacts fail independently: the fact pack is deterministic
+        # and is written even when the model is down, and a failed narration
+        # returns `degraded_no_narrative`, which the runner does not count as
+        # coverage - so the next firing retries the narration without rewriting
+        # the facts (a superseding sibling is written instead; a pack is never
+        # edited).
+        JobSlot(
+            name="daily_digest",
+            run=digest.run_daily_digest,
+            reserve_minutes=10.0,
+            description="Deterministic daily fact pack, plus medium-tier narration",
             max_attempts=3,
         ),
     ]

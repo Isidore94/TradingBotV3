@@ -8,6 +8,46 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (6) - Wave 1, packet W4: the Daily Digest Ledger
+
+**Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W4 DONE**;
+W5-W8 not started.
+
+LOCAL-AI Phase 2 is built. `scripts/ai_jobs/digest.py` writes two artifacts per
+session - a deterministic fact pack (zero LLM, written even when the model is
+down) and a medium-tier narration that reads the fact pack and nothing else -
+and `daily_digest` is APPENDED last in `default_slots()`. The six §6.4a
+questions were ANSWERED, so the 2026-08-08 decision is met rather than waived,
+and the answers are frozen into every pack.
+
+**One near-miss worth recording.** Computing the slice's day-part meant
+importing `bounce_bot_lib.learning` - the module that mutes alert segments - and
+an existing test bars every `ai_jobs` module from reaching into live decision
+code. It caught it. The fix reads the `env_key` R10.A already stamps into
+`context_json` instead, which is both boundary-safe and the only spelling that
+keeps ONE definition of "midday" between the digest and the learning state. A
+row written before that stamp existed gets `unknown` as its day-part, never a
+guess.
+
+**Sizing is by construction, not by truncation.** Measured: the busiest shape
+(600 outcomes, 30 environments, 16 slices kept) renders at **12,900 bytes**,
+inside the 16 KB hard cap. Over-cap fails the job and writes nothing.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4817 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+Selftest and the frozen bundle are untouched: `ai_jobs` is a documented
+`PACKAGES_NOT_IN_THE_BUNDLE` entry, so a new module inside it fires no
+packaging trigger.
+
+**The ten-clean-session gate is OWED**, plus the trader spot-audit of at least
+three packs against raw evidence. `clean_digest_sessions` counts; counting is
+not passing. Every earlier canary and live gate remains owed.
+
+---
+
 ## 2026-08-24 night (5) - Wave 1, packet W3: USD is booked, not estimated
 
 **Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W3 DONE**;

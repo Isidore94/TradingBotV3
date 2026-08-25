@@ -125,7 +125,10 @@ def test_the_slot_is_appended_last_and_never_reorders_the_others():
     names = [slot.name for slot in default_slots()]
 
     assert names[:3] == ["journal_import", "ai_summary", "ticker_briefs"]
-    assert names[-1] == "evidence_report"
+    # Phase 2's `daily_digest` was appended after this slot on 2026-08-24, so
+    # this is no longer last - which is the rule working, not breaking: later
+    # phases append, and the ones already here never move.
+    assert names.index("evidence_report") == 5
     # It reads what the cohorts produced, so it runs after them: a report ahead
     # of its inputs would describe last night's evidence.
     assert names.index("like_cohort_grading") < names.index("evidence_report")
