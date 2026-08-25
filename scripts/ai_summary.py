@@ -125,6 +125,13 @@ SCOPE_LABELS = {
     "move_forensics": "Move Forensics research",
     "pick_feedback": "Likes/dislikes feedback",
     "trader_judgement": "Trader judgement capture (vetoes, setup claims)",
+    # Decision record §3, 2026-08-24. Both read deterministic OUTPUT, never a
+    # raw store - see the funding notes at their source specs.
+    "walkaway": "Walk-away analysis output (how the exits went)",
+    "setup_performance": "Setup scoreboard and evidence-report output",
+    # R10.I. Free-text journal entries reach an AI scope OPT-IN ONLY - a
+    # recorded trader decision (plan.md L1118-1126), unchanged.
+    "market_journal": "Market journal entries and the day's machine context",
 }
 
 #: Machine-written facts a scope's evidence cannot be read correctly without.
@@ -198,6 +205,48 @@ def _offered_claim_caveat() -> str:
     return "".join(parts)
 
 
+def _setup_performance_caveat() -> str:
+    """State what the scoreboard EXCLUDED, read from the bundle it produced.
+
+    Derived, not retyped - the AI-P5 lesson. R10.B's claim-kind split removes
+    every row whose family does not claim an entry, and on the current window
+    that is most of the store; a model reading the scoreboard without knowing
+    which rows left would draw a confident wrong conclusion about coverage.
+    """
+    import json
+
+    try:
+        payload = json.loads(_scoreboard_bundle_file().read_text(encoding="utf-8"))
+        coverage = payload.get("coverage") or {}
+        by_kind = coverage.get("by_claim_kind") or {}
+    except Exception:
+        return (
+            "The setup scoreboard applies R10.B's claim-kind split, so rows "
+            "whose family does not CLAIM an entry are excluded. The bundle "
+            "could not be read here, so HOW MANY were excluded is UNKNOWN for "
+            "this package - do not read the scoreboard's n as the store's n."
+        )
+    kinds = ", ".join(f"{kind} {count}" for kind, count in sorted(by_kind.items()))
+    return (
+        "The setup scoreboard reports ENTRY CLAIMS only. Rows whose family does "
+        "not claim an entry - an H1 colour mark on a bar that had already "
+        "closed, a regime-pause observation - are excluded before anything is "
+        f"ranked. Settled rows by claim kind for this window: {kinds or 'unmeasured'}. "
+        "Their absence is a fact about what the families CLAIM, not about their "
+        "performance, and must not be read as either."
+    )
+
+
+def _walkaway_caveat() -> str:
+    return (
+        "The walk-away analysis is deterministic and this scope reads its "
+        "OUTPUT, never re-derives it. MFE is opportunity, not a result: a "
+        "position's best excursion is what was available, and no exit policy "
+        "achieved it. Do not report the gap between an exit and its MFE as "
+        "money left on the table without saying which policy could have taken it."
+    )
+
+
 def scope_caveats(scope: str) -> tuple[str, ...]:
     """Machine-written caveats for one scope, built fresh at package time.
 
@@ -206,11 +255,17 @@ def scope_caveats(scope: str) -> tuple[str, ...]:
     """
     if scope == "trader_judgement":
         return (_offered_claim_caveat(), _VETO_D1_M5_CAVEAT)
+    if scope == "setup_performance":
+        return (_setup_performance_caveat(),)
+    if scope == "walkaway":
+        return (_walkaway_caveat(),)
     return ()
 
 
 #: Scopes that carry caveats at all. The texts come from :func:`scope_caveats`.
-SCOPE_CAVEATS_SCOPES = frozenset({"trader_judgement"})
+SCOPE_CAVEATS_SCOPES = frozenset(
+    {"trader_judgement", "setup_performance", "walkaway"}
+)
 
 # --- source status vocabulary ---------------------------------------------
 #
@@ -247,6 +302,9 @@ SCOPE_BUDGET_WEIGHTS = {
     "move_forensics": 1,
     "pick_feedback": 1,
     "trader_judgement": 1,
+    "walkaway": 1,
+    "setup_performance": 1,
+    "market_journal": 1,
 }
 
 #: Below this a grant cannot carry anything a reader could use, so the source
@@ -382,6 +440,92 @@ def default_model_for(provider: str) -> str:
     return DEFAULT_MODELS[normalized]
 
 
+def _evidence_report_file() -> Path:
+    try:
+        from setup_scoreboard import report_store_dir
+
+        return Path(report_store_dir()) / "evidence_report.json"
+    except Exception:
+        from project_paths import REPORTS_DIR
+
+        return Path(REPORTS_DIR) / "evidence_reports" / "evidence_report.json"
+
+
+def _ledger_segment(stream: str) -> Path:
+    """The current month's segment of an evidence ledger stream."""
+    from datetime import date as _date
+
+    from evidence_ledger import default_ledger_dir
+
+    return Path(default_ledger_dir()) / f"{stream}-{_date.today().strftime('%Y%m')}.jsonl"
+
+
+def _daily_context_file() -> Path:
+    try:
+        from market_context_ledger import STREAM_CONTEXT
+
+        return _ledger_segment(STREAM_CONTEXT)
+    except Exception:
+        from project_paths import RUNTIME_DATA_DIR
+
+        return Path(RUNTIME_DATA_DIR) / "evidence_ledgers" / "daily_market_context.jsonl"
+
+
+def _market_journal_file() -> Path:
+    try:
+        from market_journal import STREAM
+
+        return _ledger_segment(STREAM)
+    except Exception:
+        from project_paths import RUNTIME_DATA_DIR
+
+        return Path(RUNTIME_DATA_DIR) / "evidence_ledgers" / "market_journal.jsonl"
+
+
+def _walkaway_text_file() -> Path:
+    try:
+        from journal_walkaway import WALKAWAY_TEXT_FILE
+
+        return Path(WALKAWAY_TEXT_FILE)
+    except Exception:
+        from project_paths import OUTPUT_DIR
+
+        return Path(OUTPUT_DIR) / "journal_walkaway.txt"
+
+
+def _walkaway_csv_file() -> Path:
+    try:
+        from journal_walkaway import WALKAWAY_CSV_FILE
+
+        return Path(WALKAWAY_CSV_FILE)
+    except Exception:
+        from project_paths import OUTPUT_DIR
+
+        return Path(OUTPUT_DIR) / "journal_walkaway.csv"
+
+
+def _scoreboard_bundle_file() -> Path:
+    try:
+        from setup_scoreboard import report_store_dir
+
+        return Path(report_store_dir()) / "setup_scoreboard.json"
+    except Exception:
+        from project_paths import REPORTS_DIR
+
+        return Path(REPORTS_DIR) / "evidence_reports" / "setup_scoreboard.json"
+
+
+def _scoreboard_report_file() -> Path:
+    try:
+        from setup_scoreboard import report_store_dir
+
+        return Path(report_store_dir()) / "setup_scoreboard.md"
+    except Exception:
+        from project_paths import REPORTS_DIR
+
+        return Path(REPORTS_DIR) / "evidence_reports" / "setup_scoreboard.md"
+
+
 def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
     short_horizon = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_short_horizon.csv")
     setup_types = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
@@ -447,6 +591,63 @@ def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
         # rollup is what answers "which veto reasons actually saved me
         # money"; the annotation log is the rawest and largest and would
         # starve the analysis derived from it if it led.
+        # Decision record §3: the walk-away ANALYSIS stays deterministic; this
+        # scope reads what it produced. The rendered report leads because it is
+        # the distilled answer; the per-position CSV follows for the detail.
+        "walkaway": [
+            (
+                "walkaway.report",
+                "Walk-away report (exits vs their own MFE)",
+                _walkaway_text_file(),
+            ),
+            (
+                "walkaway.positions",
+                "Walk-away per-position rows",
+                _walkaway_csv_file(),
+            ),
+        ],
+        # Decision record §3, and the one hard prohibition in it: **never the
+        # raw tracker**. TB-0/TB-5 measured the tracker's text projection
+        # contributing ZERO symbol-specific content while starving every
+        # analysis it led - 96.2% of a brief's payload was roster noise. The
+        # 960 MB payload and its roster dump are a measured failure mode, not a
+        # caution. So this scope reads OUTPUT only: R10.C's machine-readable
+        # bundle first (it already carries ground rule 10's statistics), then
+        # the Markdown, then the frozen audit.
+        "setup_performance": [
+            (
+                "setup_performance.bundle",
+                "Setup scoreboard bundle (machine-readable, evidence_stats)",
+                _scoreboard_bundle_file(),
+            ),
+            (
+                "setup_performance.report",
+                "Setup scoreboard report",
+                _scoreboard_report_file(),
+            ),
+        ],
+        # R10.I. The DISTILLED half first (the machine's own day context and the
+        # deterministic evidence report), the trader's free text LAST - the same
+        # funding rule the other scopes keep, and the reason is the same: the
+        # raw stream is the largest and would starve every analysis derived from
+        # it if it led.
+        "market_journal": [
+            (
+                "journal.evidence_report",
+                "Nightly evidence report (deterministic)",
+                _evidence_report_file(),
+            ),
+            (
+                "journal.day_context",
+                "Daily market context rows (machine-measured)",
+                _daily_context_file(),
+            ),
+            (
+                "journal.entries",
+                "Market journal entries (trader free text)",
+                _market_journal_file(),
+            ),
+        ],
         "trader_judgement": [
             (
                 "judgement.veto_performance",
