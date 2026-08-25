@@ -101,6 +101,11 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Settings", "mdi.cog-outline", "settings_panel"),
 )
 
+#: The one page that must be HANDED its input before it can say anything.
+#: Matched by title rather than index so a reorder cannot silently unwire it -
+#: which is the class of bug `test_qt_page_specs` exists for.
+AWAY_RECAP_PAGE_TITLE = "AWAY Recap"
+
 
 class MainWindow(QMainWindow):
     def __init__(self, state: UiState) -> None:
@@ -470,6 +475,64 @@ class MainWindow(QMainWindow):
         mode_visible = index == 0
         self.workspace_button.setVisible(mode_visible)
         self.tabs_button.setVisible(mode_visible)
+        if PAGE_SPECS[index].title == AWAY_RECAP_PAGE_TITLE:
+            self._feed_away_recap()
+
+    def _feed_away_recap(self) -> None:
+        """Hand the recap the Alert Center's own backing list, then reload.
+
+        Sol C1: the panel was constructed and `set_alerts` had no caller, so a
+        full AWAY day ended in an empty recap while the backing list, History
+        and every evidence stream were full. The alerts are handed in rather
+        than read by the panel, because the Alert Center's list IS the record
+        and a second reader would be a second definition of what the day
+        produced (ground rule 8).
+
+        The two backing lists are exported as ONE ordered stream here - the
+        Alert Center keeps them apart because the D1 feed is untiered and the
+        min-tier gate would silently swallow it, but a recap of the day is the
+        day, so a D1 row travels flagged rather than merged away. Both lists are
+        newest-first, so both are reversed: the order is the order the day
+        happened, which is the only ordering nobody has to defend.
+
+        **Known limitation, deliberately not papered over:** the Alert Center's
+        backing list is process-scoped and capped, not session-scoped. A desk
+        left running across midnight, or one restarted mid-session, hands the
+        recap what the PROCESS saw rather than what the session produced.
+
+        Failure is quiet on purpose - a recap that cannot be filled must never
+        cost the page switch that asked for it.
+        """
+        try:
+            from ui.panels.alert_center_panel import extract_alert_tier
+
+            center = self.trading_panel.alert_center
+            ordered = sorted(
+                list(reversed(center._alerts)) + list(reversed(center._d1_alerts)),
+                key=lambda alert: str(getattr(alert, "time_text", "") or ""),
+            )
+            self.away_recap_panel.set_alerts(
+                [
+                    {
+                        "symbol": str(getattr(alert, "symbol", "") or ""),
+                        "side": str(getattr(alert, "side", "") or ""),
+                        # The tier the desk assigned, read through the Alert
+                        # Center's own function. This page computes none.
+                        "tier": extract_alert_tier(alert),
+                        "trigger": str(getattr(alert, "trigger", "") or ""),
+                        "time_text": str(getattr(alert, "time_text", "") or ""),
+                        "is_d1": bool(getattr(alert, "is_d1", False)),
+                    }
+                    for alert in ordered
+                ]
+            )
+        except Exception:
+            logging.exception("The AWAY Recap could not be handed the day's alerts.")
+            return
+        try:
+            self.away_recap_panel.reload()
+        except Exception:
+            logging.exception("The AWAY Recap could not be reloaded.")
 
     def _set_workspace_mode(self, mode: str) -> None:
         self.state.workspace_mode = mode

@@ -19,6 +19,22 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-25 - the AWAY Recap is wired to the Alert Center backing list
+
+`MainWindow._select_page` now calls `_feed_away_recap()` when the AWAY Recap
+page is selected. `AwayRecapPanel.set_alerts` had no caller anywhere, so a full
+AWAY day ended in an empty recap while the backing list, History and every
+evidence stream were full (Sol C1). The page is matched by TITLE, not index, so
+a reorder cannot silently unwire it. The Alert Center's ordinary and D1 backing
+lists are exported as one ordered stream - both are newest-first so both are
+reversed, merged on `time_text`, with a D1 row flagged rather than merged away -
+and converted to the mappings `away_recap._alert_rows` reads; the tier comes
+from the Alert Center's own `extract_alert_tier`, and this page computes none.
+`alert_center_panel.py` is untouched. Failure is quiet: a recap that cannot be
+filled never costs the page switch. Known limitation: the backing list is
+process-scoped and capped, not session-scoped. The R10 10a live gate - one real
+AWAY day ending in a populated recap - is still owed.
+
 ### 2026-08-25 - Decision A: evidence usability under the sweep's own exit policies
 
 **A sweep-finalized trade now counts under the policy that measured it.** The

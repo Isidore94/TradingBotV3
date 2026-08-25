@@ -257,3 +257,93 @@ def test_the_recap_writes_nothing():
     # which is what keeps "presentation only" true rather than aspirational.
     assert not {"evidence_ledger", "project_paths", "focus_picks"} & imported
     assert "open(" not in source
+
+
+# ==========================================================================
+# the wiring: the recap must actually be HANDED the day's alerts
+# ==========================================================================
+@pytest.mark.qt
+def test_selecting_the_away_recap_page_hands_it_the_alert_center_backing_list(monkeypatch):
+    """Sol C1, as a regression.
+
+    `MainWindow` constructed `AwayRecapPanel` and never called `set_alerts`, so
+    a full AWAY day ended in a recap with nothing in it - the diverted alerts
+    were counted and the backing list was full, and none of it reached the one
+    surface built to show them. The reproduction printed `backing 1
+    recap_input 0`.
+    """
+    from ui.app import MainWindow, PAGE_SPECS
+    from ui.state import UiState
+
+    QApplication.instance() or QApplication([])
+    window = MainWindow(UiState(workspace_mode="workspace"))
+    try:
+        center = window.trading_panel.alert_center
+        center._auto_mode_now = lambda: "AWAY"
+        center.mover_state = lambda *args, **kwargs: "open"
+        center.add_alert(
+            BounceAlert(
+                time_text="10:00:00",
+                symbol="AAA",
+                side="LONG",
+                trigger="[S-TIER] VWAP reclaim",
+                timeframe="5m",
+                raw_text="[S-TIER] AAA: VWAP reclaim",
+            )
+        )
+        assert center._alerts, "the backing list must fill in AWAY - that half already worked"
+
+        index = [spec.title for spec in PAGE_SPECS].index("AWAY Recap")
+        window._select_page(index)
+
+        rows = window.away_recap_panel._alerts
+        assert rows, "the AWAY Recap was never handed the Alert Center backing list"
+        assert rows[0]["symbol"] == "AAA"
+        assert rows[0]["side"] == "LONG"
+        # `_alert_rows` reads mappings. Handing it the dataclasses would raise
+        # inside the worker thread and the page would stay blank in a way no
+        # assertion on `_alerts` could see.
+        assert all(hasattr(row, "get") for row in rows)
+    finally:
+        try:
+            window.close()
+        except Exception:
+            pass
+
+
+@pytest.mark.qt
+def test_the_recap_feed_is_oldest_first_and_carries_the_d1_rows(monkeypatch):
+    """The order is the order the day happened - the only ordering nobody has
+    to defend - and the D1 feed is part of the day, flagged rather than merged
+    away."""
+    from ui.app import MainWindow, PAGE_SPECS
+    from ui.models.bounce import FOCUS_D1_EVENT_TAG
+    from ui.state import UiState
+
+    QApplication.instance() or QApplication([])
+    window = MainWindow(UiState(workspace_mode="workspace"))
+    try:
+        center = window.trading_panel.alert_center
+        center._auto_mode_now = lambda: "AWAY"
+        center.mover_state = lambda *args, **kwargs: "open"
+        for stamp, symbol in (("10:00:00", "AAA"), ("11:00:00", "BBB")):
+            center.add_alert(
+                BounceAlert(time_text=stamp, symbol=symbol, side="LONG",
+                            trigger="VWAP reclaim", raw_text=f"{symbol}: VWAP reclaim")
+            )
+        d1 = BounceAlert(time_text="10:30:00", symbol="CCC", side="LONG",
+                         tag=FOCUS_D1_EVENT_TAG, trigger="MASTER_AVWAP_D1_ZONE: zone1",
+                         raw_text="MASTER_AVWAP_D1_ZONE CCC")
+        d1.is_d1 = True
+        center.add_alert(d1)
+
+        window._select_page([spec.title for spec in PAGE_SPECS].index("AWAY Recap"))
+        rows = window.away_recap_panel._alerts
+
+        assert [row["symbol"] for row in rows] == ["AAA", "CCC", "BBB"]
+        assert [row["is_d1"] for row in rows] == [False, True, False]
+    finally:
+        try:
+            window.close()
+        except Exception:
+            pass

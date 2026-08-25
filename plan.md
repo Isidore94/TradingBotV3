@@ -1344,12 +1344,19 @@ second scoreboard.
     watchlist, Focus, the review queue or `review_policy.json`.
 
 10a. **AWAY day recap and queue routing** - **BUILT 2026-08-24, GREEN offline;
-    live mechanics canary FAILED 2026-08-25 and remains OWED.** The live AWAY
-    day correctly produced zero `shown` review impressions while the backing
-    alert/evidence streams continued to fill, but the recap was empty because
-    `MainWindow` never supplies either Alert Center backing list to
-    `AwayRecapPanel.set_alerts`. A repair needs one ordered, session-scoped
-    ordinary+D1 export contract before the canary can be repeated. Spec:
+    live mechanics canary OWED (not yet repeated).** The live AWAY day of
+    2026-08-25 correctly produced zero `shown` review impressions while the
+    backing alert/evidence streams continued to fill, but the recap was empty
+    because `MainWindow` never supplied either Alert Center backing list to
+    `AwayRecapPanel.set_alerts`. **Wired 2026-08-25** (Decision C):
+    `_select_page` -> `_feed_away_recap()` exports both backing lists as one
+    ordered stream (both reversed to oldest-first, merged on `time_text`, D1
+    flagged rather than merged away) and converts them to the mappings
+    `away_recap._alert_rows` reads; `alert_center_panel.py` untouched. **Known
+    limitation, not a defect of this wiring:** the backing list is
+    process-scoped and capped, not session-scoped, so a desk running across
+    midnight hands the recap what the PROCESS saw. The canary is one real AWAY
+    day ending in a populated recap and is the trader's to accept. Spec:
     `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §5 and the R1 trader
     amendment in `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. In AWAY the
     chart-review queue no longer accumulates; the return surface is the EOD
