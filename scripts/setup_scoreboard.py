@@ -169,7 +169,7 @@ def risk_floor_mask(frame: pd.DataFrame, pct_of_entry: float = RISK_FLOOR_PCT_OF
 
 
 def unsettled_close_mask(frame: pd.DataFrame) -> pd.Series:
-    """True where ``close_r`` is 0 only because no EOD close was ever obtained.
+    """True where no settled ``close_r`` was ever obtained.
 
     Measured 2026-08-22 over the 2026-07-24..08-21 window: every one of the
     1,164 finals with ``close_r == 0`` has ``eod_close`` exactly equal to
@@ -177,6 +177,10 @@ def unsettled_close_mask(frame: pd.DataFrame) -> pd.Series:
     ``close_r`` does. Real closes do not land on the entry to the cent 1,164
     times and never otherwise - the writer defaults ``eod_close`` to the entry
     when it cannot read one.
+
+    New final rows preserve that uncertainty directly with a blank ``close_r``
+    and ``eod_close``. Older rows used the zero/entry sentinel described above;
+    both encodings are unresolved and must be excluded.
 
     These are not scratch trades, and treating them as such biases every mean
     upward: 563 of them have ``stop_hit`` true with a median ``mae_r`` of
@@ -186,7 +190,9 @@ def unsettled_close_mask(frame: pd.DataFrame) -> pd.Series:
     close_r = pd.to_numeric(frame.get("close_r"), errors="coerce")
     eod = pd.to_numeric(frame.get("eod_close"), errors="coerce")
     entry = pd.to_numeric(frame.get("entry_price"), errors="coerce")
-    return (close_r == 0) & (eod == entry)
+    missing_close = close_r.isna() | close_r.isin([float("inf"), float("-inf")])
+    legacy_sentinel = (close_r == 0) & (eod == entry)
+    return missing_close | legacy_sentinel
 
 
 def never_measured_mask(frame: pd.DataFrame) -> pd.Series:

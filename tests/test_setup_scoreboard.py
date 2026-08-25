@@ -231,6 +231,31 @@ def _write_outcomes(path, rows):
     frame[sb.OUTCOME_COLUMNS].to_csv(path, index=False)
 
 
+def test_a_blank_unresolved_final_is_not_usable(tmp_path):
+    """The new finalizer leaves close fields blank when no EOD close exists."""
+    path = tmp_path / "outcomes.csv"
+    _write_outcomes(
+        path,
+        [
+            _final(
+                "AAA_long_20260820_06_35_00_vwap",
+                "",
+                eod="",
+                context='{"finalization_basis":"unresolved"}',
+            )
+        ],
+    )
+
+    frame, coverage = sb.load_intraday_finals(
+        path, window_start="2026-08-01", window_end="2026-08-31"
+    )
+
+    assert coverage.unsettled == 1
+    assert coverage.usable == 0
+    assert bool(frame.iloc[0]["unsettled_close"])
+    assert not bool(frame.iloc[0]["usable"])
+
+
 def test_rows_that_do_not_claim_an_entry_leave_the_ranking(tmp_path):
     """R10.B's split, applied. An H1 colour mark on a bar that had already
     closed was being averaged as a trade; so was a regime-pause observation."""

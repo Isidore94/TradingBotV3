@@ -308,11 +308,15 @@ def test_the_legacy_detector_and_the_registry_rule_agree_on_the_old_signature():
     assert mask == tags == [True, False, False]
 
 
-def test_new_unresolved_rows_do_not_match_the_legacy_signature():
-    """The old mask keys on `close_r == 0`; the new rows are blank."""
+def test_new_unresolved_rows_are_excluded_without_calling_them_fabricated_zeroes():
+    """Blank is the new honest encoding; it is unresolved, not legacy fabrication."""
+    import evidence_rules
     from setup_scoreboard import unsettled_close_mask
 
     host = _host()
     row = _final(host, _state())
     frame = pd.DataFrame([{k: row[k] for k in ("close_r", "eod_close", "entry_price")}])
-    assert not any(unsettled_close_mask(frame))
+    assert any(unsettled_close_mask(frame))
+    assert not evidence_rules.fabricated_zero_v1(
+        close_r=row["close_r"], eod_close=row["eod_close"], entry_price=row["entry_price"]
+    ).tagged
