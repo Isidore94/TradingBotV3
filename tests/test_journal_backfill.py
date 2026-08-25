@@ -97,6 +97,29 @@ class QuestradeRangeTests(unittest.TestCase):
         self.assertEqual(accounts[0]["number"], "111")
 
 
+def test_questrade_activities_use_full_offset_datetimes():
+    """Questrade rejects the date-only values accepted by executions."""
+    importer = ji.QuestradeImporter.__new__(ji.QuestradeImporter)
+    calls = []
+
+    def fake_get(path, params=None):
+        calls.append((path, params))
+        return {"activities": []}
+
+    importer._authorized_get = fake_get
+
+    assert importer.get_activities("111", date(2026, 8, 17), date(2026, 8, 24)) == []
+    assert calls == [
+        (
+            "v1/accounts/111/activities",
+            {
+                "startTime": "2026-08-17T00:00:00-07:00",
+                "endTime": "2026-08-24T23:59:59-07:00",
+            },
+        )
+    ]
+
+
 def test_questrade_local_settings_win_over_stale_environment_tokens(monkeypatch):
     saved = {
         ji.QUESTRADE_REFRESH_TOKEN_SETTING: "local-refresh",

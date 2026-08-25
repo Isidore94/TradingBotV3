@@ -465,10 +465,15 @@ class QuestradeImporter:
 
     def get_activities(self, account_number: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
+        tz = zoneinfo.ZoneInfo(PACIFIC_TZ_NAME)
         for chunk_start, chunk_end in chunk_date_ranges(start_date, end_date, max_days=31):
+            start = datetime.combine(chunk_start, datetime.min.time(), tzinfo=tz)
+            end = datetime.combine(
+                chunk_end, datetime.max.time().replace(microsecond=0), tzinfo=tz
+            )
             payload = self._authorized_get(
                 f"v1/accounts/{account_number}/activities",
-                params={"startTime": chunk_start.isoformat(), "endTime": chunk_end.isoformat()},
+                params={"startTime": start.isoformat(), "endTime": end.isoformat()},
             )
             activities = payload.get("activities", []) if isinstance(payload, dict) else []
             rows.extend(dict(item) for item in activities if isinstance(item, dict))
