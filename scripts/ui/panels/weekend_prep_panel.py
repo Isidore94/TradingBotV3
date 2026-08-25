@@ -48,6 +48,11 @@ from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepS
 #: keeps the step readable; what it drops is printed, because a silent
 #: top-N reads as "that was all of it".
 RRS_ROWS_PER_BUCKET = 8
+#: Same idea for the group stream, and the same rule: what a cap drops is
+#: PRINTED, because a silent top-N reads as "that was all of it".
+RRS_GROUP_ROWS_PER_TYPE = 8
+#: A week of verdicts is a table to read, not a log to scroll.
+PICK_FEEDBACK_ROWS_SHOWN = 200
 
 STATUS_MARKS = {"pending": "○", "done": "●", "skipped": "–"}
 
@@ -141,6 +146,7 @@ class WeekReviewPage(_StepPage):
         # buried in a spec nobody opens on a Saturday.
         lines += ["", "Episodes fold on (trade_date, symbol): two setups in one name on one day read as one."]
         lines += self._rrs_lines()
+        lines += self._rrs_group_lines()
         self.summary.setPlainText("\n".join(lines))
 
 
@@ -174,6 +180,46 @@ class WeekReviewPage(_StepPage):
         lines.append(f"  ({shown} of {len(rows)} folded rows shown.)")
         return lines
 
+    def _rrs_group_lines(self) -> list[str]:
+        """The week's SECTOR and INDUSTRY extremes, beside the symbol ones.
+
+        R8 sec 6's last retained stream, built 2026-08-24. The symbol block
+        above says which names led the tape; this says which parts of the
+        market they came from, which is the difference between "a strong name"
+        and "a strong name in a strong group".
+
+        The group log stamps no bucket, so both extremes are printed and the
+        SIGN is what the reader reads - nothing here invents a direction the
+        file never recorded.
+        """
+        rows = _read_rrs_group_week(self.service.week_bounds)
+        if not rows:
+            return [
+                "",
+                "Sector/industry RS extremes: nothing recorded this week (or the "
+                "log is unreadable).",
+            ]
+        lines = ["", "Sector/industry RS extremes this week (folded per group):"]
+        shown = 0
+        for group_type in sorted({row["group_type"] for row in rows}):
+            in_type = [row for row in rows if row["group_type"] == group_type]
+            lines.append(f"  {group_type}: {len(in_type)} group(s)")
+            for row in in_type[:RRS_GROUP_ROWS_PER_TYPE]:
+                etf = f" ({row['etf']})" if row["etf"] and row["etf"] != row["group_key"] else ""
+                lines.append(
+                    f"    {row['group_key']}{etf}: {row['days']} day(s), "
+                    f"{row['sightings']} sighting(s), RRS {row['min_rrs']:+.2f} to "
+                    f"{row['max_rrs']:+.2f}, last {row['last_seen']}"
+                )
+                shown += 1
+            if len(in_type) > RRS_GROUP_ROWS_PER_TYPE:
+                lines.append(
+                    f"    ... {len(in_type) - RRS_GROUP_ROWS_PER_TYPE} more "
+                    f"{group_type} group(s) not shown"
+                )
+        lines.append(f"  ({shown} of {len(rows)} folded group rows shown.)")
+        return lines
+
 
 class FocusReviewPage(_StepPage):
     """Step 2: how the week's focus picks behaved."""
@@ -181,8 +227,9 @@ class FocusReviewPage(_StepPage):
     def __init__(self, service, parent=None) -> None:
         super().__init__("focus_review", service, parent)
         self.subtitle.setText(
-            "The week's focus picks, their outcomes, and both graded cohorts "
-            "beside them - what you vetoed and what you liked."
+            "The week's focus picks and their outcomes; both graded cohorts "
+            "beside them - what you vetoed and what you liked; the picks' own "
+            "forward record; and the week's like/dislike verdicts."
         )
         self.refresh_button = QPushButton("Refresh picks")
         self.refresh_button.clicked.connect(self.reload)
@@ -223,6 +270,29 @@ class FocusReviewPage(_StepPage):
         self.like_note = QLabel("")
         self.like_note.setWordWrap(True)
 
+        # Packet W2: R8 sec 6's last two DEFERRED joins. The cohorts above are
+        # the two judgement mirrors - what was thrown away, what was endorsed.
+        # These are the picks THEMSELVES: how they behaved, and what the trader
+        # said about them at the time.
+        self.performance_table = QTableWidget(0, 11)
+        self.performance_table.setHorizontalHeaderLabels(
+            [
+                "Cohort", "Side", "Horizon", "n", "Win rate", "Avg return",
+                "Median", "PF", "Symbols", "Sessions", "Block CI",
+            ]
+        )
+        self.performance_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.performance_note = QLabel("")
+        self.performance_note.setWordWrap(True)
+
+        self.feedback_table = QTableWidget(0, 7)
+        self.feedback_table.setHorizontalHeaderLabels(
+            ["Date", "Symbol", "Side", "Verdict", "Category", "Origin", "Reason"]
+        )
+        self.feedback_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.feedback_note = QLabel("")
+        self.feedback_note.setWordWrap(True)
+
         self._layout.addWidget(self.refresh_button)
         self._layout.addWidget(self.table, 1)
         self._layout.addWidget(self.note)
@@ -233,6 +303,12 @@ class FocusReviewPage(_StepPage):
         self._layout.addWidget(QLabel("Liked picks, graded forward"))
         self._layout.addWidget(self.like_table, 1)
         self._layout.addWidget(self.like_note)
+        self._layout.addWidget(QLabel("Focus picks, graded forward"))
+        self._layout.addWidget(self.performance_table, 1)
+        self._layout.addWidget(self.performance_note)
+        self._layout.addWidget(QLabel("What you said about them at the time"))
+        self._layout.addWidget(self.feedback_table, 1)
+        self._layout.addWidget(self.feedback_note)
         self._finish_layout()
 
     def reload(self) -> None:
@@ -241,6 +317,8 @@ class FocusReviewPage(_StepPage):
         # trader's vetoes.
         self._reload_cohort()
         self._reload_like_cohort()
+        self._reload_performance()
+        self._reload_feedback()
         rows = _join_focus_week(self.service.week_bounds)
         self.table.setRowCount(len(rows))
         columns = ("date", "symbol", "side", "source", "h1", "h3", "h5", "h10", "matured")
@@ -261,6 +339,82 @@ class FocusReviewPage(_StepPage):
         if orphans:
             note += f" {orphans} row(s) have an outcome but no pick snapshot."
         self.note.setText(note)
+
+    def _reload_performance(self) -> None:
+        """The picks' own forward record (R8 sec 6, packet W2).
+
+        Not week-scoped - see `_read_focus_performance`. Its as-of stamp is
+        printed instead, so a stale rollup reads as stale rather than as this
+        week's answer.
+        """
+        rows = _read_focus_performance()
+        self.performance_table.setRowCount(len(rows))
+        columns = (
+            "cohort", "side", "horizon", "n", "win_rate", "avg_return",
+            "median", "profit_factor", "symbols", "sessions", "ci",
+        )
+        for index, row in enumerate(rows):
+            for column, key in enumerate(columns):
+                self.performance_table.setItem(
+                    index, column, QTableWidgetItem(str(row.get(key) or ""))
+                )
+        if not rows:
+            self.performance_note.setText(
+                "No graded focus-pick rollup yet. It is written by the nightly "
+                "human-focus tracking pass, and a pick needs forward sessions "
+                "before it means anything - this is an absent measurement, not "
+                "a flat week."
+            )
+            return
+        stamps = sorted({row["updated_at"] for row in rows if row["updated_at"]})
+        as_of = stamps[-1] if stamps else "unstated"
+        blank_ci = sum(1 for row in rows if not row["ci"])
+        note = (
+            f"{len(rows)} rollup row(s), as of {as_of}. This table is the WHOLE "
+            "graded record, not this week - the rollup carries no trade date, so "
+            "scoping it to the week would have filtered on when it was last "
+            "rebuilt. Returns are side-adjusted; a blank is a horizon that has "
+            "not matured, never a zero. Read as DISCOVERY: n clears no floor by "
+            "itself, and 'Symbols'/'Sessions' beside n are what say whether a "
+            "large n is really one name on one day."
+        )
+        if blank_ci:
+            note += (
+                f" {blank_ci} row(s) carry no block interval - a sample spanning "
+                "one session cannot have one."
+            )
+        self.performance_note.setText(note)
+
+    def _reload_feedback(self) -> None:
+        """The week's like/dislike verdicts in the trader's own words."""
+        rows = _read_pick_feedback_week(self.service.week_bounds)
+        shown = rows[:PICK_FEEDBACK_ROWS_SHOWN]
+        self.feedback_table.setRowCount(len(shown))
+        columns = ("date", "symbol", "side", "verdict", "category", "origin", "reason")
+        for index, row in enumerate(shown):
+            for column, key in enumerate(columns):
+                self.feedback_table.setItem(
+                    index, column, QTableWidgetItem(str(row.get(key) or ""))
+                )
+        if not rows:
+            self.feedback_note.setText(
+                "No like/dislike verdicts recorded in the reviewed week, or the "
+                "feedback log is not readable. That is an absent record, not a "
+                "week without opinions."
+            )
+            return
+        verdicts: dict[str, int] = {}
+        for row in rows:
+            verdicts[row["verdict"] or "unstated"] = verdicts.get(row["verdict"] or "unstated", 0) + 1
+        tally = ", ".join(f"{count} {name}" for name, count in sorted(verdicts.items()))
+        note = (
+            f"{len(rows)} verdict(s) in the reviewed week ({tally}), dated by the "
+            "session they are ABOUT rather than when they were typed. These are "
+            "opinions, not outcomes - read them against the rollup above."
+        )
+        if len(rows) > len(shown):
+            note += f" {len(rows) - len(shown)} row(s) beyond the first {len(shown)} are not shown."
+        self.feedback_note.setText(note)
 
     def _reload_like_cohort(self) -> None:
         """R10.F's cohort, rendered under the same honesty rules as the veto one."""
@@ -1069,43 +1223,206 @@ def _focus_row(key, pick, outcome, *, orphan: bool) -> dict[str, Any]:
     }
 
 
-def _read_focus_week(bounds) -> list[dict[str, Any]]:
-    """The week's focus picks from the CSV evidence, or an empty list.
 
-    Read-only and forgiving: this step is a review, and a missing CSV is a
-    quieter week rather than an error worth stopping the routine for.
+
+def _read_focus_performance() -> list[dict[str, str]]:
+    """The graded focus-pick rollup - R8 sec 6's last DEFERRED join (packet W2).
+
+    The cohort tables answer "was I right to reject" and "was I right to
+    endorse". This one answers the plainest question of the three: **how did the
+    picks I actually took behave**, per cohort, side and horizon. Without it the
+    page shows the two judgement mirrors and never the thing being judged.
+
+    **NOT week-scoped, and that is deliberate**, exactly like the two cohort
+    tables beside it. The rollup carries no `trade_date` - only `updated_at`,
+    the stamp of when it was last rebuilt - so filtering it "to the week" the
+    spec asked for would filter on the REBUILD time and empty the table on any
+    week the nightly rollup happened not to run. That is a fabricated absence.
+    The as-of stamp travels on every row instead, so a reader can see how old
+    the measurement is.
+
+    Read by NAMED CONSTANT, like every reader on this page, because this step
+    shipped a blank table to the live desk for six days from exactly the
+    opposite habit. Nothing here computes a statistic the CSV does not carry
+    (ground rule 6); the columns are reformatted, never derived. A blank stays
+    blank - a fabricated zero would be a false lesson about the trader's own
+    picks.
     """
     import csv
 
-    from project_paths import PERSISTENT_DATA_DIR
+    import project_paths
+
+    path = Path(project_paths.HUMAN_FOCUS_PERFORMANCE_FILE)
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            raw_rows = list(csv.DictReader(handle))
+    except OSError:
+        return []
+
+    rows: list[dict[str, str]] = []
+    for raw in raw_rows:
+        low = str(raw.get("ci_low") or "").strip()
+        high = str(raw.get("ci_high") or "").strip()
+        rows.append(
+            {
+                "cohort": str(raw.get("cohort") or "").strip(),
+                "side": str(raw.get("side") or "").strip(),
+                "horizon": str(raw.get("horizon_sessions") or "").strip(),
+                "n": str(raw.get("sample_count") or "").strip(),
+                "win_rate": _cohort_pct(raw.get("win_rate")),
+                "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
+                "median": _cohort_signed_pct(raw.get("median_return")),
+                "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+                "symbols": str(raw.get("symbols") or "").strip(),
+                "sessions": str(raw.get("sessions") or "").strip(),
+                # An interval that could not be computed is BLANK, and its
+                # reason travels beside it: a blank with no explanation reads
+                # as an oversight rather than a refusal.
+                "ci": f"[{low}, {high}]" if low and high else "",
+                "ci_basis": str(raw.get("ci_basis") or "").strip(),
+                "updated_at": str(raw.get("updated_at") or "").strip(),
+            }
+        )
+    return rows
+
+
+def _read_pick_feedback_week(bounds) -> list[dict[str, str]]:
+    """The week's like/dislike verdicts - R8 sec 6's other last DEFERRED join.
+
+    The performance rollup says what the picks DID; this says what the trader
+    THOUGHT of them at the time, in their own words. Read together on a
+    Saturday they are the cheapest available check on whether a stated reason
+    predicts anything.
+
+    Week-scoped on `trade_date`, which is the session the verdict is ABOUT -
+    never on `ts`, which is when it was typed. A verdict entered on Saturday
+    about Friday belongs to Friday.
+
+    Read through `pick_feedback.load_pick_feedback`, the one loader that owns
+    this file, rather than a second JSONL parser on this page.
+    """
+    import project_paths
 
     monday, friday = bounds
-    rows: list[dict[str, Any]] = []
-    for name, source in (("human_focus_daily_picks.csv", "pick"), ("human_focus_outcomes.csv", "outcome")):
-        path = PERSISTENT_DATA_DIR / name
-        if not path.is_file():
+    path = Path(project_paths.PICK_FEEDBACK_FILE)
+    if not path.is_file():
+        return []
+    try:
+        from pick_feedback import load_pick_feedback
+
+        raw_rows = load_pick_feedback(path)
+    except Exception:  # noqa: BLE001 - a review page never stops the routine
+        return []
+
+    rows: list[dict[str, str]] = []
+    for raw in raw_rows:
+        stamp = str(raw.get("trade_date") or "")[:10]
+        if not stamp:
             continue
         try:
-            with path.open("r", encoding="utf-8", newline="") as handle:
-                for raw in csv.DictReader(handle):
-                    stamp = str(raw.get("date") or raw.get("trade_date") or "")[:10]
-                    if not stamp:
-                        continue
-                    try:
-                        when = datetime.fromisoformat(stamp).date()
-                    except ValueError:
-                        continue
-                    if not (monday <= when <= friday):
-                        continue
-                    rows.append(
-                        {
-                            "date": stamp,
-                            "symbol": str(raw.get("symbol") or "").upper(),
-                            "side": str(raw.get("side") or ""),
-                            "source": source,
-                            "outcome": str(raw.get("h5") or raw.get("outcome") or ""),
-                        }
-                    )
-        except OSError:
+            when = datetime.fromisoformat(stamp).date()
+        except ValueError:
             continue
-    return sorted(rows, key=lambda item: (item["date"], item["symbol"]))
+        if not (monday <= when <= friday):
+            continue
+        rows.append(
+            {
+                "date": stamp,
+                "symbol": str(raw.get("symbol") or "").strip().upper(),
+                "side": str(raw.get("side") or "").strip(),
+                "verdict": str(raw.get("verdict") or "").strip(),
+                "category": str(raw.get("category") or "").strip(),
+                "origin": str(raw.get("origin") or "").strip(),
+                "reason": str(raw.get("reason") or "").strip(),
+            }
+        )
+    rows.sort(key=lambda row: (row["date"], row["symbol"]))
+    return rows
+
+
+def _read_rrs_group_week(bounds) -> list[dict[str, Any]]:
+    """The week's SECTOR and INDUSTRY RS extremes, folded per group.
+
+    R8 sec 6's third DEFERRED join. The symbol stream beside this one says which
+    NAMES led the tape; this says which parts of the market they came from, and
+    a name that led a leading sector is a different observation from one that
+    led a lagging one.
+
+    Two differences from the symbol fold, both forced by the file:
+
+    * The group log records **no bucket**. `_log_group_strength_extremes`
+      writes the top and the bottom of each list with identical columns, unlike
+      the symbol log which stamps `strongest`/`weakest`. So this keeps BOTH
+      extremes it saw rather than inventing a direction the file never
+      recorded, and the sign is what the reader reads.
+    * Rows are keyed by `(group_type, group_key)`, so a sector and an industry
+      ETF that share a ticker never fold into each other.
+
+    Read-only and forgiving, like every reader here: a missing or unreadable
+    CSV is a quieter week, not an error worth stopping the routine for.
+    """
+    import csv
+
+    import project_paths
+
+    monday, friday = bounds
+    path = Path(project_paths.RRS_GROUP_STRENGTH_LOG_FILE)
+    if not path.is_file():
+        return []
+    folded: dict[tuple[str, str], dict[str, Any]] = {}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            for raw in csv.DictReader(handle):
+                stamp = str(raw.get("timestamp_local") or "")[:10]
+                group_key = str(raw.get("group_key") or "").strip()
+                group_type = str(raw.get("group_type") or "").strip() or "unknown"
+                if not stamp or not group_key:
+                    continue
+                try:
+                    when = datetime.fromisoformat(stamp).date()
+                except ValueError:
+                    continue
+                if not (monday <= when <= friday):
+                    continue
+                try:
+                    rrs = float(raw.get("rrs") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                key = (group_type, group_key)
+                entry = folded.get(key)
+                if entry is None:
+                    folded[key] = {
+                        "group_type": group_type,
+                        "group_key": group_key,
+                        "etf": str(raw.get("etf") or "").strip(),
+                        "sightings": 1,
+                        "days": {stamp},
+                        "max_rrs": rrs,
+                        "min_rrs": rrs,
+                        "last_seen": stamp,
+                    }
+                    continue
+                entry["sightings"] += 1
+                entry["days"].add(stamp)
+                entry["max_rrs"] = max(entry["max_rrs"], rrs)
+                entry["min_rrs"] = min(entry["min_rrs"], rrs)
+                entry["last_seen"] = max(entry["last_seen"], stamp)
+    except OSError:
+        return []
+    rows = [
+        {
+            "group_type": entry["group_type"],
+            "group_key": entry["group_key"],
+            "etf": entry["etf"],
+            "sightings": entry["sightings"],
+            "days": len(entry["days"]),
+            "max_rrs": round(float(entry["max_rrs"]), 4),
+            "min_rrs": round(float(entry["min_rrs"]), 4),
+            "last_seen": entry["last_seen"],
+        }
+        for entry in folded.values()
+    ]
+    rows.sort(key=lambda row: (row["group_type"], -row["max_rrs"], row["group_key"]))
+    return rows

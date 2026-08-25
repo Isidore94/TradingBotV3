@@ -651,11 +651,16 @@ are listed in `CURRENT_CHECKPOINT.md`.
    selftest 49/49 `(frozen)`, all exit 0.**
 
    The release-candidate review closed A1–A19 and B1–B14. Weekend board state
-   now persists across restart. The not-yet-built RRS-strength joins and Focus
-   performance/pick-feedback/veto joins are retained as explicit future scope in
-   the governing spec; they are not claimed by this build. R7 likewise defers
-   true non-USD conversion, the Calendar year heatmap, and additional Analytics
-   charts in its governing spec.
+   now persists across restart. **Every deferred join is now built**: the
+   RRS-strength symbol join and the picks↔outcomes join landed 2026-08-18, the
+   veto mirror cohort as AI-P1 and the LIKE cohort as R10's packet 8b on
+   2026-08-24, and the last three — `human_focus_performance.csv`,
+   `pick_feedback.jsonl` and `rrs_group_strength_extremes.csv` — as packet W2 the
+   same day, closing the spec's §6 DEFERRED block. Building a view never
+   validates it: §10's one-real-weekend gate covers all of them and is still
+   owed. R7's true USD conversion is no longer deferred either (packet W3, the
+   trader's recorded 2026-08-24 reversal); the Calendar year heatmap and the
+   additional Analytics charts landed 2026-08-18.
 
    **Owed: the one-real-weekend live proof** (spec §10) — the desk booting on a
    weekend with the tab present and no network activity until a button is

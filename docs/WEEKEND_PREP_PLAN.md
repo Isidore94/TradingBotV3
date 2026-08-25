@@ -161,8 +161,20 @@ reconstruct it:
 > mirror-cohort view landed 2026-08-24 as AI-P1**, pooled through
 > `canonical_veto_cohort` and labelled discovery-not-confirmation.
 >
-> Still future work, and still not presented as completed review evidence:
-> the `human_focus_performance.csv` and `pick_feedback.jsonl` views.
+> **Nothing in this block remains future work.** The
+> `human_focus_performance.csv` and `pick_feedback.jsonl` views landed
+> 2026-08-24 as packet W1's successor W2, together with the
+> `rrs_group_strength_extremes.csv` stream in Week in Review — see "The last
+> deferred joins" at the end of this file. §10's one-real-weekend live gate is
+> still owed for all of them: building a view never validates it.
+>
+> One deviation is recorded rather than papered over. This section asked for
+> `human_focus_performance.csv` "filtered to the week"; the rollup carries no
+> trade date, only the `updated_at` stamp of its last rebuild, so a week filter
+> would filter on when the nightly pass RAN and empty the table on any week it
+> did not. It renders whole, with its as-of stamp on the pane and the sentence
+> saying it is not week-scoped — the same treatment the two cohort tables
+> already get, and for the same reason.
 >
 > AI-P1 also repaired a defect this step shipped with: `_join_focus_week`
 > resolved its CSVs under `PERSISTENT_DATA_DIR` (the home root) rather than
@@ -179,8 +191,9 @@ reconstruct it:
   within the reviewed week. Button-refresh only.
 - **Focus pick review**: `human_focus_daily_picks.csv`,
   `human_focus_outcomes.csv` (h1/h3/h5/h10 side-adjusted returns),
-  `human_focus_performance.csv`, `pick_feedback.jsonl` filtered to the week;
-  `veto_cohort_*.csv` shown as the mirror cohort.
+  `human_focus_performance.csv` (whole rollup, as-of stamped — see the
+  deviation above), `pick_feedback.jsonl` filtered to the week on `trade_date`;
+  `veto_cohort_*.csv` and `like_cohort_*.csv` shown as the mirror cohorts.
 - **Walk-away**: `run_walkaway_analysis(source=..., write_outputs=False,
   since=<Mon>, until=<Fri>)` — the kwargs land in R7. "The week's trades" =
   closed within Mon–Fri of the reviewed week; still-open trades opened in the
@@ -341,3 +354,43 @@ Two honesty rules are load-bearing and are tested as such:
 Both readers stay read-only and forgiving, like every other weekend-prep reader:
 a missing or unreadable CSV is a quieter week, not an error worth stopping the
 routine for. The one-real-weekend live gate in §10 is unchanged and still owed.
+
+## The last deferred joins — BUILT 2026-08-24 (packet W2)
+
+§6's DEFERRED block is now empty. Three streams landed together, all under the
+same reader idiom the AI-P1 repair established: **address a home-folder store by
+its named `project_paths` constant, never by composing a filename**, because
+this step rendered a blank Focus table on the live desk for six days from
+exactly that mistake — and its fixture encoded the same wrong assumption, so
+nothing caught it.
+
+**Focus pick review — the picks' own forward record.** `_read_focus_performance`
+reads `human_focus_performance.csv`: cohort, side, horizon, n, win rate, mean
+and median side-adjusted return, profit factor, the symbol and session counts,
+and the session-block interval. The cohort tables beside it are the two
+judgement mirrors — what was thrown away, what was endorsed; this is the thing
+being judged. It renders the whole rollup rather than a week slice, for the
+reason recorded in §6, and prints its as-of stamp so a stale rollup reads as
+stale. A blank stays blank; an absent interval carries its reason.
+
+**Focus pick review — the week's verdicts.** `_read_pick_feedback_week` reads
+`pick_feedback.jsonl` through `pick_feedback.load_pick_feedback` (one loader per
+file, never a second JSONL parser on a panel) and scopes it on `trade_date` —
+the session the verdict is ABOUT, never `ts`, which is when it was typed. A
+verdict entered on Saturday about Friday belongs to Friday. The pane tallies the
+verdicts, says they are opinions rather than outcomes, and prints what its
+200-row cap dropped.
+
+**Week in review — the sector and industry extremes.** `_read_rrs_group_week`
+folds `rrs_group_strength_extremes.csv` per `(group_type, group_key)`. Two
+things differ from the symbol fold, both forced by the file: the group log
+records **no bucket** (the writer emits the top and bottom of each list with
+identical columns), so both extremes are printed and the sign is what the reader
+reads — nothing invents a direction the file never recorded; and the key carries
+the group type, so a sector and an industry ETF sharing a ticker never fold into
+each other. The cap prints what it dropped, like the symbol stream.
+
+**Also removed:** `_read_focus_week`, dead since 2026-08-18 and still resolving
+its CSVs under the home root. AI-P1 fixed the live reader and left the copy that
+encoded the defect; a future edit reaching for the nearest-looking helper would
+have restored it.

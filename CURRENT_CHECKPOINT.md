@@ -8,6 +8,36 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (4) - Wave 1, packet W2: R8's DEFERRED block is empty
+
+**Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1 and W2 DONE**;
+W3-W8 not started.
+
+Focus Pick Review gained the `human_focus_performance.csv` rollup and the week's
+`pick_feedback.jsonl` verdicts; Week in Review gained the
+`rrs_group_strength_extremes.csv` stream beside the symbol stream it already
+folds. `docs/WEEKEND_PREP_PLAN.md` §6's DEFERRED block now says nothing remains.
+
+**One deviation is on the record rather than papered over.** The spec asked for
+the performance rollup "filtered to the week"; it carries no trade date, only
+the `updated_at` stamp of its last rebuild, so a week filter would filter on
+when the nightly pass RAN and empty the table on any week it did not. It renders
+whole, as-of stamped, saying it is not week-scoped - the same treatment the two
+cohort tables already get.
+
+Also removed `_read_focus_week`, dead since 2026-08-18 and still carrying the
+wrong-directory defect AI-P1 repaired in the live reader.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4782 passed / 19 subtests**, exit 0 |
+
+Smoke and selftest untouched by this packet (no runtime module added or moved)
+and not re-run. **R8 §10's one-real-weekend live gate is unchanged and still
+owed** for all three streams - building a view never validates it.
+
+---
+
 ## 2026-08-24 night (3) - Wave 1, packet W1: the suite's teardown is bounded
 
 **Branch `testing-week-2026-08-24`.** Active item: Wave 1 of

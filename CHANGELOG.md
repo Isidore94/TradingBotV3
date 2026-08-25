@@ -23,6 +23,41 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### 2026-08-24 - Wave 1 offline slate
 
+**Packet W2 - R8's DEFERRED block is empty.** Three streams the Weekend Prep
+spec named as future scope and honestly did not claim now render, all under the
+reader idiom the AI-P1 repair established: address a home-folder store by its
+named `project_paths` constant, never by composing a filename.
+
+* **Focus Pick Review - the picks' own forward record.** `human_focus_performance.csv`
+  per cohort, side and horizon: n, win rate, mean and median side-adjusted
+  return, profit factor, the symbol and session counts, and the session-block
+  interval. The two cohort tables beside it are the judgement mirrors - what was
+  thrown away, what was endorsed - and this is the thing being judged. It renders
+  the WHOLE rollup rather than a week slice, and says so: the file carries no
+  trade date, only the `updated_at` stamp of its last rebuild, so the spec's
+  "filtered to the week" would have filtered on when the nightly pass RAN and
+  emptied the table on any week it did not. The deviation is recorded in the
+  spec rather than silently taken. Blank stays blank; an absent interval carries
+  its reason.
+* **Focus Pick Review - the week's verdicts.** `pick_feedback.jsonl` through
+  `pick_feedback.load_pick_feedback` (one loader per file, never a second JSONL
+  parser on a panel), scoped on `trade_date` - the session the verdict is ABOUT,
+  never `ts`, which is when it was typed. The pane tallies the verdicts, says
+  they are opinions rather than outcomes, and prints what its cap dropped.
+* **Week in Review - sector and industry extremes.** `rrs_group_strength_extremes.csv`
+  folded per `(group_type, group_key)`. The group log records **no bucket** - its
+  writer emits the top and the bottom of each list with identical columns, unlike
+  the symbol log - so the fold keeps BOTH extremes and the sign is what the
+  reader reads. Nothing invents a direction the file never recorded. The cap
+  prints what it dropped, like the symbol stream.
+
+**Also removed: `_read_focus_week`**, dead since 2026-08-18 and still resolving
+its CSVs under the home root. AI-P1 fixed the live reader and left the copy that
+encoded the defect where a future edit could reach for it.
+
+§10's one-real-weekend live gate is unchanged and still owed for all three -
+building a view never validates it.
+
 **Packet W1 - the test suite's teardown is bounded (plan.md P1.1).** The
 hermetic-suite packet of 2026-08-18 closed the network half: an offline tripwire
 that refuses and RECORDS any socket an unmarked test opens, adapter-boundary stubs

@@ -421,3 +421,238 @@ def test_the_subtitle_promises_both_cohorts_and_the_page_loads_both():
     assert "_read_like_cohort()" in focus_page
     assert "_read_veto_cohort()" in focus_page
     assert "what you vetoed and what you liked" in focus_page
+
+
+# ---------------------------------------------------------------------------
+# R8 §6's LAST deferred joins, built 2026-08-24 (packet W2). What was still
+# owed after AI-P1: the `human_focus_performance.csv` rollup and the
+# `pick_feedback.jsonl` verdicts in Focus Pick Review, and the
+# `rrs_group_strength_extremes.csv` stream in Week in Review beside the symbol
+# stream it already folds.
+#
+# Every one of them reads by NAMED CONSTANT. That rule is not stylistic: this
+# step shipped an empty Focus table on the live desk for six days because one
+# reader composed a filename under the wrong directory, and the fixture encoded
+# the same wrong assumption, so nothing caught it.
+# ---------------------------------------------------------------------------
+
+
+def _redirect_w2(monkeypatch, project_paths, tmp_path: Path) -> None:
+    for name, filename in (
+        ("HUMAN_FOCUS_PERFORMANCE_FILE", "human_focus_performance.csv"),
+        ("PICK_FEEDBACK_FILE", "pick_feedback.jsonl"),
+        ("RRS_GROUP_STRENGTH_LOG_FILE", "rrs_group_strength_extremes.csv"),
+    ):
+        monkeypatch.setattr(project_paths, name, tmp_path / filename)
+
+
+def test_the_focus_performance_rollup_is_read_by_its_named_constant(tmp_path, monkeypatch):
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_focus_performance
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+    _write(
+        tmp_path / "human_focus_performance.csv",
+        "cohort,side,horizon_sessions,sample_count,win_rate,avg_side_return,"
+        "profit_factor,updated_at,median_return,symbols,sessions,ci_low,ci_high,ci_basis",
+        [
+            "human_focus_pick,LONG,1,44,0.5000,0.004210,1.4400,2026-08-24T02:00:00-04:00,"
+            "0.0031,21,9,-0.001,0.009,5-95 percentile of a session-block bootstrap on the mean",
+        ],
+    )
+
+    rows = _read_focus_performance()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["cohort"] == "human_focus_pick"
+    assert row["n"] == "44"
+    assert row["win_rate"] == "50.0%"
+    assert row["avg_return"] == "+0.42%"
+    assert row["symbols"] == "21" and row["sessions"] == "9"
+    assert row["ci"] == "[-0.001, 0.009]"
+    assert row["updated_at"] == "2026-08-24T02:00:00-04:00"
+
+
+def test_an_unmeasured_performance_number_is_blank_and_an_unmeasured_ci_says_why(
+    tmp_path, monkeypatch
+):
+    """Blank, never zero - and an absent interval carries its reason."""
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_focus_performance
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+    _write(
+        tmp_path / "human_focus_performance.csv",
+        "cohort,side,horizon_sessions,sample_count,win_rate,avg_side_return,"
+        "profit_factor,updated_at,median_return,symbols,sessions,ci_low,ci_high,ci_basis",
+        [
+            "human_focus_pick,SHORT,10,3,,,,2026-08-24T02:00:00-04:00,,3,1,,,"
+            "unmeasured: only 1 session in the sample",
+        ],
+    )
+
+    row = _read_focus_performance()[0]
+    assert row["n"] == "3"
+    assert row["win_rate"] == "" and row["avg_return"] == "" and row["profit_factor"] == ""
+    assert row["ci"] == ""
+    assert "only 1 session" in row["ci_basis"]
+
+
+def test_a_missing_performance_rollup_is_an_absent_state_not_a_crash(tmp_path, monkeypatch):
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_focus_performance
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+    assert _read_focus_performance() == []
+
+
+def test_pick_feedback_is_filtered_to_the_reviewed_week(tmp_path, monkeypatch):
+    import json
+
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_pick_feedback_week
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+    rows = [
+        {"ts": "2026-08-11T07:00:00", "trade_date": "2026-08-11", "symbol": "AAPL",
+         "side": "LONG", "verdict": "like", "category": "", "origin": "swing", "reason": ""},
+        {"ts": "2026-08-13T07:00:00", "trade_date": "2026-08-13", "symbol": "TSLA",
+         "side": "SHORT", "verdict": "dislike", "category": "extended", "origin": "m5",
+         "reason": "too far from the level"},
+        {"ts": "2026-08-03T07:00:00", "trade_date": "2026-08-03", "symbol": "NVDA",
+         "side": "LONG", "verdict": "like", "category": "", "origin": "", "reason": ""},
+    ]
+    (tmp_path / "pick_feedback.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    week = _read_pick_feedback_week(WEEK)
+    assert [row["symbol"] for row in week] == ["AAPL", "TSLA"], "the prior week is not this week"
+    assert week[1]["verdict"] == "dislike"
+    assert week[1]["reason"] == "too far from the level"
+
+
+def test_a_missing_feedback_file_is_an_absent_state_not_a_crash(tmp_path, monkeypatch):
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_pick_feedback_week
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+    assert _read_pick_feedback_week(WEEK) == []
+
+
+def test_the_group_rs_stream_folds_per_group_and_keeps_both_extremes(tmp_path, monkeypatch):
+    """The group log records no bucket, so direction is read from the sign.
+
+    `_log_group_strength_extremes` writes the top and the bottom of each list
+    with identical columns - unlike the symbol log, which stamps a `bucket`. So
+    the fold reports the strongest AND the weakest reading it saw rather than
+    inventing a direction the file never recorded.
+    """
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_rrs_group_week
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+    _write(
+        tmp_path / "rrs_group_strength_extremes.csv",
+        "timestamp_local,timeframe,group_type,group_key,etf,rrs,power_index",
+        [
+            "2026-08-11 07:05:00 PDT,D1,sector,Information Technology,XLK,1.8000,0.9",
+            "2026-08-12 07:05:00 PDT,D1,sector,Information Technology,XLK,-0.4000,0.2",
+            "2026-08-12 07:05:00 PDT,D1,sector,Energy,XLE,-2.1000,0.1",
+            "2026-08-12 07:05:00 PDT,D1,industry,SMH,SMH,2.4000,0.8",
+            "2026-08-03 07:05:00 PDT,D1,sector,Energy,XLE,9.9000,0.9",
+        ],
+    )
+
+    rows = _read_rrs_group_week(WEEK)
+    tech = [row for row in rows if row["group_key"] == "Information Technology"][0]
+    assert tech["group_type"] == "sector"
+    assert tech["sightings"] == 2 and tech["days"] == 2
+    assert tech["max_rrs"] == 1.8 and tech["min_rrs"] == -0.4
+    assert tech["last_seen"] == "2026-08-12"
+    energy = [row for row in rows if row["group_key"] == "Energy"][0]
+    assert energy["sightings"] == 1, "the prior week is not this week"
+    assert energy["max_rrs"] == -2.1, "a week with only weak readings has no positive best"
+    assert {row["group_type"] for row in rows} == {"sector", "industry"}
+
+
+def test_a_missing_group_log_is_a_quieter_week_not_an_error(tmp_path, monkeypatch):
+    import project_paths
+    from ui.panels.weekend_prep_panel import _read_rrs_group_week
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+    assert _read_rrs_group_week(WEEK) == []
+
+
+def test_the_dead_reader_that_carried_the_wrong_path_is_gone():
+    """`_read_focus_week` resolved its CSVs under the home ROOT.
+
+    It was superseded by `_join_focus_week` in 2026-08-18 and left behind. AI-P1
+    fixed the live reader; this removes the copy that still encodes the defect,
+    so nobody restores it by reaching for the nearest-looking helper.
+    """
+    from ui.panels import weekend_prep_panel
+
+    assert not hasattr(weekend_prep_panel, "_read_focus_week")
+
+
+def test_the_new_streams_are_wired_to_their_pages_not_merely_defined():
+    """The AI-P1 lesson, applied forward.
+
+    A reader that exists but is never called renders exactly the same blank
+    page as a reader that reads the wrong directory, and the page's own
+    forgiveness makes both look like a quiet week.
+    """
+    from ui.panels import weekend_prep_panel
+
+    source = Path(weekend_prep_panel.__file__).read_text(encoding="utf-8")
+    week_page = source.split("class WeekReviewPage")[1].split("\nclass ")[0]
+    focus_page = source.split("class FocusReviewPage")[1].split("\nclass ")[0]
+
+    assert "_read_rrs_group_week(" in week_page
+    assert "_rrs_group_lines()" in week_page
+    assert "_read_focus_performance()" in focus_page
+    assert "_read_pick_feedback_week(" in focus_page
+
+
+def test_the_group_cap_prints_what_it_dropped(tmp_path, monkeypatch):
+    """A silent top-N reads as 'that was all of it'."""
+    import project_paths
+    from ui.panels import weekend_prep_panel
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+    rows = [
+        f"2026-08-11 07:05:00 PDT,D1,sector,GROUP{index},ETF{index},{index}.0,0.5"
+        for index in range(12)
+    ]
+    _write(
+        tmp_path / "rrs_group_strength_extremes.csv",
+        "timestamp_local,timeframe,group_type,group_key,etf,rrs,power_index",
+        rows,
+    )
+
+    class _Service:
+        week_bounds = WEEK
+
+    page = weekend_prep_panel.WeekReviewPage.__new__(weekend_prep_panel.WeekReviewPage)
+    page.service = _Service()
+    lines = page._rrs_group_lines()
+    text = "\n".join(lines)
+
+    assert "4 more sector group(s) not shown" in text
+    assert "8 of 12 folded group rows shown" in text
+
+
+def test_an_absent_group_log_says_so_on_the_page(tmp_path, monkeypatch):
+    import project_paths
+    from ui.panels import weekend_prep_panel
+
+    _redirect_w2(monkeypatch, project_paths, tmp_path)
+
+    class _Service:
+        week_bounds = WEEK
+
+    page = weekend_prep_panel.WeekReviewPage.__new__(weekend_prep_panel.WeekReviewPage)
+    page.service = _Service()
+    text = "\n".join(page._rrs_group_lines())
+    assert "nothing recorded this week" in text
