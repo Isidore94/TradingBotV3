@@ -448,6 +448,11 @@ def test_measured_runtime_audit_composes_all_sol3_surfaces(tmp_path):
         # R10.A: the nightly dated backup of the hot evidence the cold push
         # excludes on purpose (data/runtime, the home-root files, diagnostics).
         "evidence_snapshot",
+        # R10.G: whether the calendar overlay covers the year the desk is
+        # trading. The computed rules still work, so an uncovered year is
+        # DEGRADED rather than unhealthy - but a year nobody confirmed must not
+        # read as a year nobody needed to.
+        "market_calendar",
         # R10.B: what fraction of the outcome store is measured as a trade
         # WITHOUT claiming to be one. HEALTHY here because the fixture's store
         # declares every family it contains; an undeclared one is DEGRADED.
@@ -587,10 +592,17 @@ def test_capture_readiness_checks_reach_the_audit_and_never_read_the_shared_home
     assert checks["review_evidence_label"]["details"]["promotion_clock_started"] is False
     # The sandbox is self-contained: no check resolved back to the shared home.
     # Inventory-gap rows cite the plan bullet they came from, not a file.
+    repo_config = str(ROOT_DIR / "config")
     for check in payload["checks"]:
         assert (
             str(tmp_path) in check["source"]
             or check["source"].startswith("plan.md")
+            # R10.G: the market-calendar overlay is a REPO file, checked in and
+            # read-only, in the same category as plan.md above - not shared-home
+            # state. The guard is about the shared home, and a repo config file
+            # is not one; naming the directory keeps that explicit rather than
+            # letting the exception widen by accident.
+            or check["source"].startswith(repo_config)
             or check["source"].endswith(
                 ("review_capture_audit.py", "operations_audit.py", "scan_service.py")
             )

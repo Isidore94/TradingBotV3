@@ -339,10 +339,12 @@ What this changes, and what it deliberately does not:
   constraint); staged-never-adopt in AWAY is unchanged; the two push
   exceptions (Focus/Research price alerts in every mode, EVENING's SPY alarm)
   are unchanged; EVENING keeps its existing queue-silently semantics.
-- **Open sub-decision (trader):** whether "send nothing until EOD" also covers
-  the AWAY hourly phone pushes (`_push_swing_picks`, `_maybe_push_d1_events` —
-  the deliberate 2026-08-11/14 remote surface) or only the desk's review-queue
-  accumulation. Until answered, the hourly pushes stand.
+- **Sub-decision RESOLVED (trader, 2026-08-24, same conversation):** the
+  Master AVWAP swing scans and the AWAY hourly phone pushes
+  (`_push_swing_picks`, `_maybe_push_d1_events`) stay exactly as they are —
+  "send nothing until EOD" covers only the desk's review-queue accumulation.
+  The phone remains the deliberate remote surface while AWAY; the desk stops
+  hoarding a queue for the return.
 
 The 2026-08-15 §1 matrix rows for AWAY remain accurate for what is BUILT
 today; this amendment governs the recap packet's build and the queue-routing

@@ -2339,6 +2339,38 @@ def _context_with_path(context, state, rows_after_entry, *, finalize_eod=False):
     return context
 
 
+def _record_regime_shift(previous, env_key, source):
+    """Append one regime-shift row. Never raises into the regime change.
+
+    Module-level rather than a method: the test harnesses in this repo build
+    stub hosts that borrow individual BounceBot methods, so a new method is
+    invisible to them and turns an evidence addition into a crash in the thing
+    it was recording. Evidence about a decision must not be able to cost the
+    decision, and that includes at import time.
+    """
+    try:
+        from evidence_ledger import EvidenceLedger
+        from market_context_ledger import (
+            SCHEMA_MARKET_REGIME_SHIFT,
+            STREAM_REGIME,
+            regime_shift_event,
+        )
+
+        EvidenceLedger(
+            stream=STREAM_REGIME, schema=SCHEMA_MARKET_REGIME_SHIFT
+        ).append(
+            regime_shift_event(
+                from_regime=str(previous or ""),
+                to_regime=str(env_key or ""),
+                source=str(source or ""),
+                session_date=get_market_local_now().date().isoformat(),
+                detail=MARKET_ENVIRONMENTS.get(env_key, {}).get("label", ""),
+            )
+        )
+    except Exception:
+        logging.debug("Regime shift not recorded.", exc_info=True)
+
+
 def _forward_entry_time_basis() -> str:
     """Every forward registration stamps the bar CLOSE, and records that it did.
 
@@ -6715,7 +6747,16 @@ class BounceBot(EWrapper, EClient):
             return
         with self.market_environment_lock:
             changed = env_key != self.market_environment
+            previous = self.market_environment
             self.market_environment = env_key
+        if changed:
+            # R10.G / audit C2: `market_environment_annotations.jsonl` did not
+            # exist at all, so the regime the desk was operating under was
+            # unrecorded and unrecoverable. Both sources are kept - the
+            # machine's own read AND a trader override - because the difference
+            # between them is the agreement rate, and an agreement rate needs
+            # the disagreements.
+            _record_regime_shift(previous, env_key, source)
         if source == "user" and changed:
             # A real manual selection pins the regime for the session; the
             # GUI's startup sync (same value) does not count as an override.

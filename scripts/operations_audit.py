@@ -412,6 +412,38 @@ def _ai_store_dir() -> Path | None:
         return None
 
 
+def _market_calendar_check(today: datetime) -> dict[str, Any]:
+    """Does the calendar overlay cover the year the desk is trading? (R10.G)
+
+    The computed rules in `market_calendar.py` are the base and still work, so
+    this is DEGRADED rather than unhealthy. The point is that a year nobody
+    confirmed is a year nobody confirmed - an unscheduled close is exactly what
+    a rules engine cannot know - and the silence should not read as coverage.
+    """
+    try:
+        import market_context_ledger
+
+        overlay = market_context_ledger.load_calendar_overlay()
+        coverage = market_context_ledger.calendar_coverage(overlay, today=today.date())
+    except Exception as exc:  # noqa: BLE001
+        return _check(
+            "market_calendar",
+            "Market calendar coverage",
+            STATUS_UNKNOWN,
+            f"The calendar overlay could not be evaluated, so its coverage is unmeasured: {exc}",
+            source=Path(__file__),
+        )
+    status = STATUS_HEALTHY if coverage["status"] == "ok" else STATUS_DEGRADED
+    return _check(
+        "market_calendar",
+        "Market calendar coverage",
+        status,
+        coverage["note"],
+        source=Path(overlay.get("path") or ""),
+        details=coverage,
+    )
+
+
 def _outcome_claim_coverage_check(outcomes_path: Path) -> dict[str, Any]:
     """How much of the outcome store is measured as a trade WITHOUT claiming to be?
 
@@ -2691,6 +2723,7 @@ def build_operations_audit(
         _ai_jobs_check(moment, local_tz),
         _questrade_chain_check(moment, journal_path),
         _outcome_claim_coverage_check(outcomes_path),
+        _market_calendar_check(moment),
         manifest,
         _away_report_check(report_path, auto_state_path, moment, local_tz, market_phase),
         _industry_board_check(industry_path, moment, local_tz, market_phase),

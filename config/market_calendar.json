@@ -1,0 +1,45 @@
+{
+ "early_closes": {
+  "2026": {
+   "2026-07-03": "13:00",
+   "2026-11-27": "13:00",
+   "2026-12-24": "13:00"
+  },
+  "2027": {
+   "2027-11-26": "13:00",
+   "2027-12-23": "13:00"
+  }
+ },
+ "holidays": {
+  "2026": [
+   "2026-01-01",
+   "2026-01-19",
+   "2026-02-16",
+   "2026-04-03",
+   "2026-05-25",
+   "2026-06-19",
+   "2026-07-03",
+   "2026-09-07",
+   "2026-11-26",
+   "2026-12-25"
+  ],
+  "2027": [
+   "2027-01-01",
+   "2027-01-18",
+   "2027-02-15",
+   "2027-03-26",
+   "2027-05-31",
+   "2027-06-18",
+   "2027-07-05",
+   "2027-09-06",
+   "2027-11-25",
+   "2027-12-24"
+  ]
+ },
+ "note": "Trader-editable overlay on the COMPUTED calendar in scripts/market_calendar.py. The computed rules stay the base and the fallback; this file exists for what a rules engine cannot know - an unscheduled close, a newly declared holiday, an early close nobody predicted. A year absent from `years` is reported DEGRADED on the health surface rather than silently falling through, because a year nobody confirmed is a year nobody confirmed.",
+ "schema": "market_calendar_overlay_v1",
+ "years": [
+  "2026",
+  "2027"
+ ]
+}

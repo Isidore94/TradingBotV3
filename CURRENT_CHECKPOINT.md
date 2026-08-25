@@ -27,9 +27,11 @@ conversation with Fable:
    a dated trader amendment in `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` and
    folded into the AWAY day-recap packet's spec
    (`AI_DIRECTION_DECISIONS_2026-08-24.md` §5). Evidence streams keep filling
-   unchanged; one sub-decision left open to the trader (whether the AWAY
-   hourly phone pushes are also deferred to EOD). CLAUDE.md/AGENTS.md matrix
-   bullet updated with the BUILD PENDING marker.
+   unchanged; the sub-decision on the hourly phone pushes was RESOLVED by the
+   trader in the same conversation — the Master AVWAP scans and both AWAY
+   hourly pushes stay exactly as built, the rule covers only the desk's
+   review-queue accumulation. CLAUDE.md/AGENTS.md matrix bullet updated with
+   the BUILD PENDING marker.
 
 **Verification baseline: unchanged** (`7fa655b`: 4587 passed / 19 subtests,
 exit 0; smoke 7/7; selftest 58/58) — settings + docs only. Opus's build
