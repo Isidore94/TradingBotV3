@@ -637,6 +637,16 @@ are listed in `CURRENT_CHECKPOINT.md`.
    from the R7 tip. **§5's filter table is trader-approved as proposed
    (2026-08-15)**, so the discovery step is no longer blocked.
 
+   **MACHINERY BUILT 2026-08-24, RUN GATED (packet W5); the live gate is OWED.**
+   `scripts/ai_jobs/synthesis.py` rolls both graded cohorts up through
+   `evidence_stats` and narrates at medium tier over that rollup alone. It is
+   registered in `optional_slots()` — never nightly — and reached by
+   `run_ai_jobs.py --weekly-synthesis`. Below its gate (ten sessions in which a
+   graded cohort row matured, pooled across veto and LIKE) it writes
+   deterministic scaffolding whose first line says the gate is not met and calls
+   **no model at all**. No frontier call is authorized. The live gate below is
+   unchanged. The paragraph that follows is the pre-build record.
+
    **OWED, not built (2026-08-20): the weekly trader-judgement synthesis.**
    Nightly deterministic grading of the veto cohort now runs
    (`ai_jobs.cohorts`, slot `veto_cohort_grading`) and the `trader_judgement`

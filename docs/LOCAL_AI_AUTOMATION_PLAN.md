@@ -1504,12 +1504,51 @@ all three names, so existing imports are unchanged. A registry the summary
 cannot read yields a caveat that says the list is **UNKNOWN for this run**,
 never a remembered enumeration.
 
-### 7.3 What is NOT built
+### 7.3 The weekly synthesis: MACHINERY BUILT, RUN GATED (2026-08-24)
 
-A weekly synthesis pass over the graded cohort. The **cadence is decided**
-(weekly, on the weekend surface — recorded against R8 in `plan.md`) and it is
-**gated on two weeks of graded rows**. It is not authorized. Nor is any
-frontier call, any nightly LLM read of the raw annotation stream, or any path
-by which these files reach a detector, a score, an alert, a watchlist, Focus,
-the review queue or `review_policy.json`.
+Previously "not built". The trader authorized the **machinery** on 2026-08-24
+(`docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md` §3.2) on the R10.I
+scaffolding pattern. Neither decided thing changed: the **cadence is still
+weekly on the weekend surface** (recorded against R8 in `plan.md`) and it is
+still **gated on two weeks of graded rows**. `scripts/ai_jobs/synthesis.py`.
+
+**What the gate counts, precisely.** Sessions in which at least one graded
+cohort row has a MATURED horizon, pooled across the veto and LIKE cohorts.
+Sessions rather than rows, because two weeks means two weeks of forward
+evidence and counting rows would let one busy afternoon of vetoes clear a gate
+whose whole purpose is waiting for the market to answer them. Pooled, because
+the two cohorts are the halves of one judgement. With the first cohort day at
+2026-08-20, ten graded sessions land in early September.
+
+**Below the gate no model is called at all.** §7.2's reason for keeping
+`trader_judgement` off the nightly slate applies with more force here: an
+unattended read over a stream still filling narrates "too early" until a reader
+stops looking. An unmet gate writes the deterministic rollup with
+`SYNTHESIS GATE NOT MET.` as the first line of both artifacts, labels everything
+`discovery`, and asks nobody anything.
+
+**Above the gate it is still `discovery`.** The window was not declared in
+advance, and a large post-hoc sample is a large discovery, never a confirmation.
+
+Every cell is one `evidence_stats` summary per (cohort × side × horizon), capped
+at 40 with what the cap dropped printed. The Phase 2 digest rollup is folded in
+once at least one fact pack exists; before that it says so in words rather than
+rendering a zero, because an absent measurement and a flat week are different
+things.
+
+**Not nightly**: absent from `default_slots()`, registered in `optional_slots()`
+and reached only by `run_ai_jobs.py --weekly-synthesis`, constructed per call
+exactly as `--scopes` is, so it cannot become unattended by being set once. On a
+weekend morning pair it with `--force`, which skips the window timing and never
+the market-session block.
+
+**Still NOT built or authorized:** any **frontier** call (Phase 5's synthesis
+pass — this is medium tier or nothing, §6.4a D7), any nightly LLM read of the
+raw annotation stream, and any path by which these files reach a detector, a
+score, an alert, a watchlist, Focus, the review queue or `review_policy.json`.
+Tests walk the module's AST rather than trusting that sentence.
+
+**Owed:** R8's live gate for this — one weekend where the trader reads the
+graded cohort and confirms the reasons ranked against forward returns are the
+ones they recognise. Building the rollup never marks that met.
 

@@ -500,3 +500,30 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             max_attempts=3,
         ),
     ]
+
+
+def optional_slots() -> list[JobSlot]:
+    """Slots that are registered but NEVER nightly.
+
+    The precedent is `--scopes`: an opt-in thing must not be able to become
+    unattended by being set once, so this list is constructed per call and
+    `default_slots()` never reaches it.
+
+    `weekly_synthesis` (LOCAL-AI §7.3, built 2026-08-24) is the first entry. Its
+    cadence is weekly on the weekend surface and its gate is two weeks of graded
+    cohort rows; below that gate it writes deterministic scaffolding and asks no
+    model anything. Reached by ``run_ai_jobs.py --weekly-synthesis``, which on a
+    Saturday morning also wants ``--force`` - the window checks exist for the
+    unattended slate, and the market-session block is never skipped by either.
+    """
+    from ai_jobs import synthesis
+
+    return [
+        JobSlot(
+            name="weekly_synthesis",
+            run=synthesis.run_weekly_synthesis,
+            reserve_minutes=15.0,
+            description="Weekly rollup over both graded cohorts (gated; medium tier only)",
+            max_attempts=3,
+        ),
+    ]

@@ -121,6 +121,16 @@ def main(argv: list[str] | None = None) -> int:
              "an opt-in scope such as trader_judgement is exercised on a "
              "weekend without adding it to the unattended slate.",
     )
+    parser.add_argument(
+        "--weekly-synthesis",
+        action="store_true",
+        help="run ONLY the weekly trader-judgement synthesis (LOCAL-AI sec 7.3). "
+             "Registered but never nightly, like the trader_judgement scope: the "
+             "unattended slate cannot reach it. Below its two-week graded-cohort "
+             "gate it writes deterministic scaffolding and calls no model. On a "
+             "weekend morning pair it with --force, which skips the window timing "
+             "and never the market-session block.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -142,7 +152,12 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(
                 f"unknown scope(s) {unknown}; known: {sorted(ai_summary.SCOPE_LABELS)}"
             )
-    slots = runner.default_slots(summary_scopes=scopes or None)
+    if args.weekly_synthesis:
+        # Constructed per call and ONLY here, so the opt-in slot cannot leak
+        # into the unattended slate.
+        slots = runner.optional_slots()
+    else:
+        slots = runner.default_slots(summary_scopes=scopes or None)
     report = runner.run_slots(slots, force=args.force, only=args.slot)
     logging.info("%s", report.summary())
 

@@ -23,6 +23,40 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### 2026-08-24 - Wave 1 offline slate
 
+**Packet W5 - the weekly synthesis: machinery built, runs gated.** LOCAL-AI
+§7.3 listed this under "What is NOT built" with the cadence and the gate already
+decided and only the authorization missing. The trader gave it for the MACHINERY
+on 2026-08-24, on the R10.I pattern.
+
+**The gate counts sessions in which a graded cohort row MATURED**, pooled across
+the veto and LIKE cohorts. Sessions rather than rows, because two weeks means
+two weeks of forward evidence and counting rows would let one busy afternoon of
+vetoes clear a gate that exists to wait for the market to answer them. Pooled,
+because the two cohorts are the halves of one judgement.
+
+**Below the gate no model is called at all** - the deterministic rollup is
+written with `SYNTHESIS GATE NOT MET.` as the first line of both artifacts and
+everything labelled `discovery`. §7.2's reason for keeping `trader_judgement`
+off the nightly slate applies harder here: a read over a stream still filling
+narrates "too early" until a reader stops looking. Above the gate it is STILL
+`discovery`, because the window was not declared in advance.
+
+Every cell is one `evidence_stats` summary per (cohort x side x horizon), capped
+at 40 with what the cap dropped printed. The Phase 2 digest rollup folds in once
+a fact pack exists; before that it says so in words rather than rendering a zero.
+
+**Not nightly**, and structurally so: it lives in a new `optional_slots()` that
+`default_slots()` never reaches, constructed per call exactly as `--scopes` is,
+and is invoked by `run_ai_jobs.py --weekly-synthesis`. **Not frontier** - medium
+tier or nothing; Phase 5's frontier pass stays unauthorized. **Not a control
+signal** - an AST test pins that no decision-surface path or live-decision module
+is reachable from it, scanning only strings that could BE a path so the module
+stays free to name `review_policy.json` in the sentence forbidding itself from
+touching it.
+
+R8's live gate - one weekend where the trader confirms the ranked reasons are
+the ones they recognise - is unchanged and still owed.
+
 **Packet W4 - the Daily Digest Ledger (LOCAL-AI Phase 2).** The 2026-08-08
 trader decision forbade building or freezing any digest schema until six open
 questions were answered. They were answered on 2026-08-24, so the decision is

@@ -8,6 +8,36 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (7) - Wave 1, packet W5: the weekly synthesis, gated
+
+**Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W5 DONE**;
+W6-W8 not started.
+
+`scripts/ai_jobs/synthesis.py` rolls both graded cohorts up through
+`evidence_stats` (one summary per cohort x side x horizon, capped at 40 with the
+drop printed) and folds in the Phase 2 digest rollup once a pack exists.
+**Below its gate it calls no model at all** and writes scaffolding whose first
+line is `SYNTHESIS GATE NOT MET.`; above it, every figure is still `discovery`.
+
+The gate counts SESSIONS in which a graded cohort row matured, pooled across
+veto and LIKE - not rows, which one busy afternoon of vetoes could clear.
+Earliest pass is early September on the current cohort.
+
+**Never nightly, and structurally so**: a new `runner.optional_slots()` that
+`default_slots()` never reaches, invoked by `run_ai_jobs.py --weekly-synthesis`
+(pair with `--force` on a weekend morning; the market-session block is never
+skipped). No frontier call is authorized.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4836 passed / 19 subtests**, exit 0 |
+
+Selftest and the frozen bundle untouched (`ai_jobs` is not in the bundle).
+**R8's live gate for this - one weekend where the trader confirms the ranked
+reasons are the ones they recognise - is unchanged and still owed.**
+
+---
+
 ## 2026-08-24 night (6) - Wave 1, packet W4: the Daily Digest Ledger
 
 **Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W4 DONE**;
