@@ -394,7 +394,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     night's trades are in it means they read yesterday's. It also costs seconds
     rather than the briefs' hours, so putting it first spends nothing.
     """
-    from ai_jobs import briefs, cohorts
+    from ai_jobs import briefs, cohorts, evidence_report
     from journal_runner import run_nightly_journal_import
 
     return [
@@ -459,6 +459,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=cohorts.run_like_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade the trader's LIKE cohort (deterministic, no model)",
+            max_attempts=3,
+        ),
+        # R10.I, APPENDED last. Later phases append; they never reorder. It runs
+        # after both cohorts because it READS what they produced - a report
+        # ahead of its inputs would describe last night's evidence.
+        #
+        # Built ahead of its two-week collection window under the trader's
+        # recorded sequencing override (decision record §4). The override covers
+        # SEQUENCING only: until the window is met every report states in words
+        # that it is scaffolding rather than a finding.
+        JobSlot(
+            name="evidence_report",
+            run=evidence_report.run_evidence_report,
+            reserve_minutes=5.0,
+            description="Deterministic nightly evidence report (no model)",
             max_attempts=3,
         ),
     ]

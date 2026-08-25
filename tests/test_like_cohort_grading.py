@@ -170,8 +170,11 @@ def test_the_slot_is_appended_after_the_veto_slot():
     from ai_jobs.runner import default_slots
 
     names = [slot.name for slot in default_slots()]
-    assert names[-1] == "like_cohort_grading"
+    # R10.I appended `evidence_report` after this one, so the like slot is no
+    # longer last - but it is still after the veto slot, which is what this
+    # test exists to hold. Later phases append; they never reorder.
     assert names.index("veto_cohort_grading") < names.index("like_cohort_grading")
+    assert names.index("like_cohort_grading") < names.index("evidence_report")
 
 
 def test_the_slot_grades_the_history_retroactively(tmp_path):
