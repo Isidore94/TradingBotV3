@@ -8,6 +8,52 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-25 morning - first night on the new code: what the artifacts say
+
+**Branch `testing-week-2026-08-24`.** Fable read the overnight artifacts; no
+code changed. Desk restarted 2026-08-24 21:48 PT with `Outcome sweep autorun is
+ON` logged; the trader runs AWAY today, DESK not before Thursday.
+
+1. **The R10.A sweep ran in production, clean - 2026-08-24 16:45 PT**, in the
+   pre-restart process (which already carried the R10.A code under test).
+   `diagnostics/outcome_sweep_coverage.json`: pending_before **687** (the
+   backlog had grown from 576 during Monday's session), finalized 687, expired
+   7, failed 0, commit_failed 0, still_open 0. By reason: stop_hit 283 +
+   stop_hit:legacy_csv_milestones 112, last_measured_bar 183 + legacy 95,
+   no_measurement_in_checkpoint 7, expired_no_data 7. Log line 16:47:18. This
+   is the R10.A mechanics observation; a second live day on the restarted
+   process closes it.
+2. **The 22:00 slate ran all nine slots** (ledger, session 2026-08-24):
+   ai_summary ok (10 sources, 1 stale); ticker_briefs ok 175/175, 57 calls;
+   veto grading 130 picks / 21 cohorts; like grading 45 / 28; evidence_report
+   ok "window NOT met - scaffolding"; daily_digest ok (13,560 bytes, over the
+   8 KB target, under the 16 KB cap, **n=0 outcomes**); enrichment and
+   policy_draft both correctly gated. journal_import failed x3 then capped -
+   and for the first time the rows SAY WHY (AI-P3).
+3. **The Questrade chain is ALIVE - the token paste is not needed.**
+   `journal_questrade_expires_at` refreshed to 2026-08-25T00:30:03; Questrade
+   executions land daily (166 total; 2 on 08-24, latest 14:07 ET). The 204
+   FAILED coverage days are all one cause: the `/activities` cross-check
+   returns **400 Bad Request** on both accounts and the cross-check DOWNGRADES
+   an imported day to FAILED (R10.0 named this; it is now the dominant journal
+   defect and burns the slot's three attempts nightly). Yesterday's UNHEALTHY
+   badge read the 08-21 oauth failure as current. Fix packet owed: the
+   activities request (likely date-range/format) and, separately, a failed
+   cross-check should read "activities unknown" on a COVERED day, not FAILED.
+4. **IBKR Flex failed both nightly attempts** ("Statement could not be
+   generated at this time") - transient, self-heal retries.
+5. **UNKNOWN, flagged for Sol:** the digest reports n=0 outcomes for 2026-08-24
+   on the same day the sweep finalized 687 trades. Either the digest's source/
+   session filter is wrong or the finals carry a different session_date - the
+   R10.I "n=0 beside real data" bug class.
+
+**Verification baseline: unchanged** (4798 passed / 19 subtests; smoke 7/7;
+selftest 70/70) - no repository change. Today's AWAY session is the routing
+canary; after close: recap, journal entry, `outcome_sweep` and
+`daily_bar_units` tiles.
+
+---
+
 ## 2026-08-24 night (11) - Wave 1 is COMPLETE (8 of 8)
 
 **Branch `testing-week-2026-08-24`.** Every packet in
