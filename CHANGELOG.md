@@ -19,6 +19,29 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-25 - Decision A: evidence usability under the sweep's own exit policies
+
+**A sweep-finalized trade now counts under the policy that measured it.** The
+after-close sweep finalizes with a blank eod-hold `close_r` by design
+(`no_eod_close`), and `setup_scoreboard.usable` keyed on that blank, so all 656
+of the 2026-08-25 finals were invisible to every evidence surface while what the
+sweep DID measure sat unread in `context.exit`. `exit_policy_r` now derives three
+frozen exit policies per final - `eod_hold` (the settled `close_r`), `stop_exit`
+(the stored `context.exit.stop_exit_r`, only where `exit.stop_hit`), and
+`last_measured` (`(last_measured_close - entry_price) / risk_per_share`, sign
+flipped for a short) - attached as `r_eod_hold` / `r_stop_exit` /
+`r_last_measured`. A row is usable when at least one policy measured it; the risk
+floor and the R10.B claim split still apply; unresolved rows stay unusable and
+are counted by reason. The policies are **never blended**: one table per policy
+through `evidence_stats`, and the eod-hold ranking tables read `r_eod_hold` so a
+row with no EOD close cannot widen their n. Report section 1a prints the
+before/after and the policy behind every figure; the bundle gains
+`sweep_exit_policies` and four coverage keys; the daily digest carries
+`stop_exit_r` / `last_measured_r` beside `close_r`, each with its own n.
+Live read of the 2026-08-25 slice: 0 usable -> 255 usable (`stop_exit` n=99 mean
+-1.0R, `last_measured` n=255 mean +0.1546R, `eod_hold` n=0), 20 unresolved.
+Nothing here promotes or demotes anything.
+
 ### 2026-08-25 - Sol adversarial repairs
 
 **Hermetic teardown now fails on a failed stop (`0c62b63`).** The BounceBot

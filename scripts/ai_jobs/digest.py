@@ -330,6 +330,8 @@ def _overall_block(rows, session_date, as_of) -> dict[str, Any]:
     close = _numbers(rows, "close_r")
     mfe = _numbers(rows, "mfe_r")
     mae = _numbers(rows, "mae_r")
+    stop_exit = _numbers(rows, "r_stop_exit")
+    last_measured = _numbers(rows, "r_last_measured")
     selector = f"trade_date={session_date}&event_type=final&usable=true"
     block = {
         # Result.
@@ -350,10 +352,24 @@ def _overall_block(rows, session_date, as_of) -> dict[str, Any]:
             n=len(rows), source_id="outcomes.intraday_finals",
             selector=selector + "&metric=distinct_symbols", as_of=as_of,
         ),
+        # Decision A: the two policies the after-close sweep can measure. Their
+        # own n, beside close_r, never blended with it or with each other.
+        "stop_exit_r": measured(
+            _mean(stop_exit), n=len(stop_exit), source_id="outcomes.intraday_finals",
+            selector=selector + "&metric=stop_exit_r", as_of=as_of,
+        ),
+        "last_measured_r": measured(
+            _mean(last_measured), n=len(last_measured), source_id="outcomes.intraday_finals",
+            selector=selector + "&metric=last_measured_r", as_of=as_of,
+        ),
         "metric_note": (
             "close_r is the RESULT at scenario close; mfe_r/mae_r are the "
             "OPPORTUNITY the path offered. They are reported side by side and "
-            "are never blended into one number."
+            "are never blended into one number. stop_exit_r and "
+            "last_measured_r are the two frozen exit policies an after-close "
+            "sweep CAN measure (Decision A, 2026-08-25); a session finalized by "
+            "the sweep has no eod-hold close_r at all, so an n of 0 there beside "
+            "a real n here is the honest reading, not a missing number."
         ),
     }
     block["statistics"] = _statistics_summary(close, rows)
@@ -876,6 +892,13 @@ def _read_champion_finals(day: str, unavailable: dict[str, str]):
             "close_r": row.get("close_r"),
             "mfe_r": row.get("mfe_r"),
             "mae_r": row.get("mae_r"),
+            # Decision A (2026-08-25). A sweep-finalized trade has no eod-hold
+            # `close_r` at all; the R it DID reach is under one of these two
+            # policies. Carried beside `close_r`, never folded into it - a
+            # number that is a stop exit for some rows and an eod close for
+            # others is a different statistic wearing one name.
+            "r_stop_exit": row.get("r_stop_exit"),
+            "r_last_measured": row.get("r_last_measured"),
         }
         for row in usable.to_dict("records")
     ]
@@ -908,6 +931,10 @@ def _coverage_dict(coverage: Any) -> dict[str, Any]:
         "not_entry_claim": getattr(coverage, "not_entry_claim", 0),
         "by_claim_kind": dict(getattr(coverage, "by_claim_kind", {}) or {}),
         "usable": getattr(coverage, "usable", 0),
+        "usable_eod_hold_only": getattr(coverage, "usable_eod_hold_only", 0),
+        "policy_measured": dict(getattr(coverage, "policy_measured", {}) or {}),
+        "unresolved": getattr(coverage, "unresolved", 0),
+        "unresolved_by_reason": dict(getattr(coverage, "unresolved_by_reason", {}) or {}),
         "note": (
             "Excluded rows are counted by reason, never silently dropped. A "
             "family that does not CLAIM an entry is not a trade and is never "

@@ -301,7 +301,7 @@ def test_the_report_shows_what_the_split_moved_before_and_after(tmp_path):
         generated_at="2026-08-24T14:00:00-07:00",
     )
 
-    assert "1b. What the claim-kind split moved" in report
+    assert "1c. What the claim-kind split moved" in report
     assert "h1_ema10_bounce" in report
     assert "annotation" in report
     # A family removed entirely has no "after", and the report says what a
@@ -421,3 +421,180 @@ def test_exit_policies_are_reported_side_by_side_and_never_blended(tmp_path):
     assert row["trail_2bar_after_1r"]["mean_r"] == 0.5
     # A policy that reported itself unmeasured contributes nothing at all.
     assert "vwap_close_after_1r" not in row
+
+
+# ---------------------------------------------------------------------------
+# Decision A (2026-08-25): the sweep's own exit policies
+# ---------------------------------------------------------------------------
+def _sweep_final(event_id, *, symbol="AAA", direction="long", trade_date="2026-08-25",
+                 entry=100.0, risk=1.0, stop_hit=False, stop_exit_r=None,
+                 last_measured_close=None, reason="no_eod_close", exit_block=True):
+    """A row with the EXACT shape the after-close sweep writes.
+
+    `close_r` and `eod_close` are blank by design (`no_eod_close`): without bars
+    through the close there is no eod-hold number. What the sweep DID measure
+    lives in `context.exit`.
+    """
+    import json as _json
+
+    context: dict = {"finalization": {"basis": "last_measured_bar", "reason": reason}}
+    if exit_block:
+        block: dict = {"policy": "eod_hold", "stop_hit": stop_hit, "stop_price": entry - risk}
+        if stop_hit and stop_exit_r is not None:
+            block["stop_exit_r"] = stop_exit_r
+            block["stop_exit_assumption"] = "filled at the stop; only the touch is measured"
+        if last_measured_close is not None:
+            block["last_measured_close"] = last_measured_close
+        context["exit"] = block
+    return {
+        "event_id": event_id,
+        "event_type": "final",
+        "trade_date": trade_date,
+        "symbol": symbol,
+        "direction": direction,
+        "close_r": "",
+        "risk_per_share": risk,
+        "entry_price": entry,
+        "eod_close": "",
+        "bars_elapsed": 9,
+        "stop_hit": stop_hit,
+        "context_json": _json.dumps(context),
+    }
+
+
+def _load(tmp_path, rows):
+    path = tmp_path / "outcomes.csv"
+    _write_outcomes(path, rows)
+    return sb.load_intraday_finals(path, window_start="2026-08-01", window_end="2026-08-31")
+
+
+def test_a_sweep_finalized_stop_out_is_usable_at_its_stop_exit_r(tmp_path):
+    """Decision A. The sweep finalizes with a blank eod-hold `close_r` BY
+    DESIGN; the stop-out R lives in `context.exit`. Keying `usable` on
+    `close_r` made all 656 of the 2026-08-25 finals invisible to every evidence
+    surface."""
+    frame, coverage = _load(
+        tmp_path,
+        [_sweep_final("AAA_long_20260825_06_35_00_vwap", stop_hit=True, stop_exit_r=-1.0)],
+    )
+    assert coverage.usable == 1
+    assert frame["r_stop_exit"].tolist() == [-1.0]
+    # Never blended: the eod-hold column stays empty because no eod close exists.
+    assert pd.isna(frame["r_eod_hold"]).all()
+    assert coverage.policy_measured["stop_exit"] == 1
+    assert coverage.policy_measured["eod_hold"] == 0
+
+
+def test_a_sweep_final_without_a_stop_counts_at_its_last_measured_close(tmp_path):
+    """R from stored numbers only: (last_measured_close - entry) / risk. Nothing
+    is estimated."""
+    frame, coverage = _load(
+        tmp_path,
+        [_sweep_final("AAA_long_20260825_06_35_00_vwap", last_measured_close=100.5, risk=0.25)],
+    )
+    assert coverage.usable == 1
+    assert frame["r_last_measured"].tolist() == [2.0]
+    assert pd.isna(frame["r_stop_exit"]).all()
+
+
+def test_a_short_last_measured_close_takes_the_other_sign(tmp_path):
+    frame, _coverage = _load(
+        tmp_path,
+        [
+            _sweep_final(
+                "AAA_short_20260825_06_35_00_vwap",
+                direction="short",
+                last_measured_close=99.5,
+                risk=0.25,
+            )
+        ],
+    )
+    assert frame["r_last_measured"].tolist() == [2.0]
+
+
+def test_an_unknown_direction_yields_no_last_measured_r(tmp_path):
+    """Missing data is uncertainty, never confirmation (plan.md sec 5)."""
+    frame, coverage = _load(
+        tmp_path,
+        [_sweep_final("AAA_long_20260825_06_35_00_vwap", direction="", last_measured_close=100.5)],
+    )
+    assert pd.isna(frame["r_last_measured"]).all()
+    assert coverage.usable == 0
+
+
+def test_unresolved_sweep_rows_stay_unusable_and_are_counted_by_reason(tmp_path):
+    """`no_measurement_in_checkpoint` and `no_bars_after_entry` measured nothing
+    under ANY policy, so no policy may report them."""
+    frame, coverage = _load(
+        tmp_path,
+        [
+            _sweep_final(
+                "AAA_long_20260825_06_35_00_vwap",
+                reason="no_measurement_in_checkpoint",
+                exit_block=False,
+            ),
+            _sweep_final(
+                "BBB_long_20260825_06_35_00_vwap",
+                symbol="BBB",
+                reason="no_bars_after_entry",
+                exit_block=False,
+            ),
+            _sweep_final(
+                "CCC_long_20260825_06_35_00_vwap", symbol="CCC", stop_hit=True, stop_exit_r=-1.0
+            ),
+        ],
+    )
+    assert coverage.usable == 1
+    assert coverage.unresolved == 2
+    assert coverage.unresolved_by_reason == {
+        "no_measurement_in_checkpoint": 1,
+        "no_bars_after_entry": 1,
+    }
+    assert int(frame["usable"].sum()) == 1
+
+
+def test_the_two_sweep_policies_are_reported_beside_eod_hold_never_blended(tmp_path):
+    """Decision A: each policy is its own row with its own n, and no number is
+    an average across two of them."""
+    rows = [
+        _sweep_final(f"AAA{i}_long_20260825_06_35_00_vwap", stop_hit=True, stop_exit_r=-1.0)
+        for i in range(3)
+    ]
+    rows += [
+        _sweep_final(f"BBB{i}_long_20260825_06_35_00_vwap", last_measured_close=101.0)
+        for i in range(2)
+    ]
+    frame, coverage = _load(tmp_path, rows)
+    bundle = sb.build_bundle(
+        intraday=frame,
+        coverage=coverage,
+        playbook=pd.DataFrame(),
+        window_start="2026-08-01",
+        window_end="2026-08-31",
+        generated_at="2026-08-25T18:00:00",
+    )
+    policies = bundle["sweep_exit_policies"]
+    assert set(policies) >= {"eod_hold", "stop_exit", "last_measured"}
+    stop = next(row for row in policies["stop_exit"] if row["cell"] == "vwap")
+    last = next(row for row in policies["last_measured"] if row["cell"] == "vwap")
+    assert stop["n"] == 3 and stop["mean_r"] == -1.0
+    assert last["n"] == 2 and last["mean_r"] == 1.0
+    assert policies["eod_hold"] == []
+
+
+def test_the_eod_hold_tables_never_absorb_a_row_with_no_eod_close(tmp_path):
+    """A newly usable sweep row must not enter an eod-hold ranking cell at all -
+    not as a zero, and not by widening its n."""
+    frame, _coverage = _load(
+        tmp_path,
+        [
+            _final("AAA_long_20260820_06_35_00_vwap", 1.0),
+            _sweep_final("BBB_long_20260825_06_35_00_vwap", symbol="BBB", stop_hit=True,
+                         stop_exit_r=-1.0),
+        ],
+    )
+    usable = frame[frame["usable"]]
+    assert len(usable) == 2
+    table = sb.summarise(usable, "bounce_type", r_column="r_eod_hold")
+    row = next(item for item in table.to_dict("records") if item["cell"] == "vwap")
+    assert row["n"] == 1 and row["mean_r"] == 1.0

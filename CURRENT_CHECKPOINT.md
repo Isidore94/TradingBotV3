@@ -8,6 +8,84 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-25 evening (1) - Decision A built: a sweep-finalized trade counts under the policy that measured it
+
+**Branch `testing-week-2026-08-24`.** Packet 1 of the post-attack repair slate
+(`docs/analysis/POST_ATTACK_AUTHORIZATION_2026-08-25.md`, Decision A). No
+detector, scorer, alert or scheduling change; evidence-read only.
+
+**Reproduced first (ground rule 3).** Over the live store, read-only:
+`load_intraday_finals` for 2026-08-25 returned `in_window 656`, `unsettled 656`,
+**`usable 0`**. Every one of the day's 656 sweep-finalized trades was invisible
+to every evidence surface, because `usable` keyed on the eod-hold `close_r` the
+sweep leaves blank BY DESIGN (`no_eod_close`), while what the sweep measured sat
+in `context.exit` - `stop_exit_r` on 214 rows and `last_measured_close` on 636 -
+which `_exit_policy_rows` never read (it reads `context.path.exit_policies`).
+
+**Built.** `setup_scoreboard.exit_policy_r` derives three frozen exit policies
+per final and `load_intraday_finals` attaches them as `r_eod_hold`,
+`r_stop_exit`, `r_last_measured`:
+
+- `eod_hold` - the settled `close_r`, blank wherever no EOD close was obtained;
+- `stop_exit` - the STORED `context.exit.stop_exit_r`, read only when
+  `exit.stop_hit` is true;
+- `last_measured` - `(last_measured_close - entry_price) / risk_per_share`,
+  sign flipped for a short. Arithmetic on stored numbers; an unreadable close, a
+  non-positive risk or a direction that is not `long`/`short` yields no value at
+  all rather than a guess.
+
+`usable` is now "at least one policy has a measured value", still ANDed with the
+risk floor and the R10.B claim split. Unresolved rows stay unusable and are
+counted by reason (`coverage.unresolved`, `unresolved_by_reason`). The three
+policies are **never blended**: `sweep_exit_policy_rows` builds one table per
+policy through `summarise` -> `evidence_stats`, so every cell carries the full
+ground-rule-10 statistics including the 4R clip, and an n always means "rows this
+policy could measure". The eod-hold ranking tables now read `r_eod_hold` instead
+of `close_r`, so a newly usable row with no EOD close cannot widen their n.
+
+Report section **1a** prints the move rather than asserting it: usable under the
+old rule, usable now, unresolved by reason, what each policy could measure, and a
+per-family table per policy. The old 1a/1b became 1b/1c. The bundle gains
+`sweep_exit_policies` + `sweep_exit_policy_note` and four coverage keys. The
+digest inherits `usable` from the scoreboard as before and now carries
+`stop_exit_r` / `last_measured_r` beside `close_r`, each with its own n, never
+folded in - otherwise a sweep-finalized session would report n=0 close_r beside
+656 usable rows (the R10.I "n=0 beside real data" class).
+
+**Live check after (read-only, 2026-08-25 slice), recorded as observation:**
+
+| | rows |
+|---|---|
+| in window | 656 |
+| usable under the old rule | **0** |
+| **usable now** | **255** |
+| unresolved (`no_measurement_in_checkpoint`) | 20 |
+| measurable by `eod_hold` / `stop_exit` / `last_measured` | 0 / 214 / 636 |
+| excluded - below the risk floor | 18 |
+| excluded - family does not CLAIM an entry (R10.B) | 363 |
+
+Among the 255 usable: `stop_exit` n=99 mean **-1.0R**, `last_measured` n=255
+mean **+0.1546R**, `eod_hold` n=0. The two are reported side by side and are not
+averaged together. **These are observations, not a met gate.**
+
+**Known limitation, stated not papered over:** `stop_exit` is -1.0 under the
+sweep's stated fill assumption (only the touch is measured); it is stored that
+way and is read, not recomputed.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4808 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **70/70**, exit 0 |
+| golden fixtures | byte-identical (93 fixture/golden tests pass) |
+
+Suite is 4801 -> 4808: seven added, none removed. No packaging trigger: no new
+dependency, package, asset or dynamic import.
+
+**Immediate next action:** packet 2, the AWAY Recap wiring (Decision C).
+
+---
+
 ## 2026-08-25 afternoon - Fable review of Sol's pass: ACCEPT WITH BLOCKERS; trader decisions A/B/C recorded
 
 **Branch `testing-week-2026-08-24`.** Independent review of `9edbf83..5a954d8`

@@ -107,6 +107,17 @@ PLAYBOOK_COLUMNS = [
 ]
 BASELINE_FAMILY = "baseline_every5"
 
+#: Decision A (`docs/analysis/POST_ATTACK_AUTHORIZATION_2026-08-25.md`). The
+#: after-close sweep finalizes with a BLANK eod-hold ``close_r`` by design
+#: (``no_eod_close``): without bars through the close there is no such number
+#: and inventing one would make the same trade report differently depending on
+#: what the finalizer happened to hold. What the sweep DID measure lives in
+#: ``context.exit``. These are the three frozen exit policies a final row can be
+#: read under - reported side by side, each with its own n, **never blended**.
+SWEEP_EXIT_POLICIES = ("eod_hold", "stop_exit", "last_measured")
+#: The column each policy's R lands in.
+POLICY_R_COLUMNS = {name: f"r_{name}" for name in SWEEP_EXIT_POLICIES}
+
 
 # ---------------------------------------------------------------------------
 # pure helpers
@@ -201,6 +212,71 @@ def never_measured_mask(frame: pd.DataFrame) -> pd.Series:
     return unsettled_close_mask(frame) & (bars == 0)
 
 
+def exit_policy_r(frame: pd.DataFrame, parsed: "pd.Series | None" = None) -> pd.DataFrame:
+    """R under each frozen exit policy, one column per policy (Decision A).
+
+    Three policies, side by side, **never blended** - a number that is a stop
+    exit for some rows and an eod close for others is a different statistic
+    wearing one name:
+
+    * ``eod_hold`` - the settled ``close_r``. Blank wherever the eod close was
+      never obtained, which is exactly what `unsettled_close_mask` measures.
+    * ``stop_exit`` - the sweep's own ``context.exit.stop_exit_r``, read only
+      when ``context.exit.stop_hit`` is true. It is stored, not recomputed.
+    * ``last_measured`` - arithmetic on stored numbers:
+      ``(last_measured_close - entry_price) / risk_per_share``, sign flipped
+      for a short. Nothing here is estimated: an unreadable close, a
+      non-positive risk or a direction that is not ``long``/``short`` yields no
+      value at all rather than a guess (plan.md sec 5).
+    """
+    import numpy as np
+
+    if parsed is None:
+        parsed = frame["context_json"].map(_safe_json)
+    exits = parsed.map(lambda payload: (payload or {}).get("exit") or {})
+
+    close_r = pd.to_numeric(frame.get("close_r"), errors="coerce")
+    eod_hold = close_r.where(~unsettled_close_mask(frame))
+
+    stop_exit = pd.to_numeric(
+        exits.map(
+            lambda block: block.get("stop_exit_r") if block.get("stop_hit") else None
+        ),
+        errors="coerce",
+    )
+
+    entry = pd.to_numeric(frame.get("entry_price"), errors="coerce")
+    risk = pd.to_numeric(frame.get("risk_per_share"), errors="coerce")
+    last_close = pd.to_numeric(
+        exits.map(lambda block: block.get("last_measured_close")), errors="coerce"
+    )
+    side = frame.get("direction")
+    side = (side if side is not None else pd.Series("", index=frame.index)).astype(str).str.strip().str.lower()
+    # A blank side reads as LONG in some surfaces; it must not here. An R whose
+    # sign is a guess is not a measurement.
+    sign = pd.Series(np.nan, index=frame.index, dtype="float64")
+    sign[side == "long"] = 1.0
+    sign[side == "short"] = -1.0
+    last_measured = ((last_close - entry) / risk.where(risk > 0)) * sign
+
+    out = pd.DataFrame(index=frame.index)
+    out["r_eod_hold"] = _finite(eod_hold)
+    out["r_stop_exit"] = _finite(stop_exit)
+    out["r_last_measured"] = _finite(last_measured)
+    out["has_exit_block"] = exits.map(bool)
+    out["unresolved_reason"] = parsed.map(
+        lambda payload: str(((payload or {}).get("finalization") or {}).get("reason") or "").strip()
+    )
+    return out
+
+
+def _finite(values: "pd.Series") -> "pd.Series":
+    """`inf` is not a measurement; it is a division that should not have run."""
+    import numpy as np
+
+    return pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+
 # ---------------------------------------------------------------------------
 # loading
 # ---------------------------------------------------------------------------
@@ -223,6 +299,16 @@ class Coverage:
     by_claim_kind: dict = field(default_factory=dict)
     usable: int = 0
     usable_before_claim_split: int = 0
+    #: Decision A. How many in-window finals each frozen exit policy could
+    #: actually measure. `eod_hold` is the old sole basis; the other two are
+    #: what the after-close sweep leaves behind.
+    policy_measured: dict = field(default_factory=dict)
+    #: In-window finals no policy could measure at all, and why.
+    unresolved: int = 0
+    unresolved_by_reason: dict = field(default_factory=dict)
+    #: What `usable` was under the pre-Decision-A rule (settled `close_r` only),
+    #: kept so the report can print what moved rather than assert it.
+    usable_eod_hold_only: int = 0
     notes: list[str] = field(default_factory=list)
 
 
@@ -252,12 +338,38 @@ def load_intraday_finals(
     coverage.in_window = len(frame)
     coverage.sessions = int(frame["trade_date"].nunique())
     frame["bounce_type"] = frame["event_id"].map(bounce_type_from_event_id)
-    frame = _expand_context(frame)
+    parsed = frame["context_json"].map(_safe_json)
+    frame = _expand_context(frame, parsed)
 
     unsettled = unsettled_close_mask(frame)
     coverage.unsettled = int(unsettled.sum())
     coverage.never_measured = int(never_measured_mask(frame).sum())
     frame["unsettled_close"] = unsettled
+
+    # Decision A: a sweep-finalized trade is measured under the policy that
+    # actually saw something, not only under the eod hold it never reached.
+    policies = exit_policy_r(frame, parsed)
+    for column in policies.columns:
+        frame[column] = policies[column]
+    measured_any = pd.Series(False, index=frame.index)
+    for name in SWEEP_EXIT_POLICIES:
+        column = frame[POLICY_R_COLUMNS[name]]
+        coverage.policy_measured[name] = int(column.notna().sum())
+        measured_any = measured_any | column.notna()
+    frame["policy_measured"] = measured_any
+    unresolved = ~measured_any
+    coverage.unresolved = int(unresolved.sum())
+    coverage.unresolved_by_reason = {
+        # A row with no exit block at all is its own reason: the sweep never
+        # wrote one. Naming it is not the same as naming the reason it carried.
+        (reason or ("no_exit_block" if not has else "unstated")): count
+        for (reason, has), count in (
+            frame.loc[unresolved, ["unresolved_reason", "has_exit_block"]]
+            .apply(tuple, axis=1)
+            .value_counts()
+            .items()
+        )
+    } if coverage.unresolved else {}
 
     floor = risk_floor_mask(frame)
     coverage.below_risk_floor = int(floor.sum())
@@ -271,8 +383,9 @@ def load_intraday_finals(
     entry_claim = frame["claim_kind"] == _CLAIM_ENTRY
     frame["not_entry_claim"] = ~entry_claim
 
-    prior_usable = ~(unsettled | floor)
+    prior_usable = measured_any & ~floor
     coverage.usable_before_claim_split = int(prior_usable.sum())
+    coverage.usable_eod_hold_only = int((~(unsettled | floor) & entry_claim).sum())
     coverage.not_entry_claim = int((prior_usable & ~entry_claim).sum())
     coverage.by_claim_kind = {
         str(kind): int(count)
@@ -284,9 +397,10 @@ def load_intraday_finals(
     return frame, coverage
 
 
-def _expand_context(frame: pd.DataFrame) -> pd.DataFrame:
+def _expand_context(frame: pd.DataFrame, parsed: "pd.Series | None" = None) -> pd.DataFrame:
     """Lift the fields the review called starved out of ``context_json``."""
-    parsed = frame["context_json"].map(_safe_json)
+    if parsed is None:
+        parsed = frame["context_json"].map(_safe_json)
     for name in CONTEXT_FIELDS:
         frame[name] = parsed.map(lambda payload, key=name: payload.get(key))
     return frame
@@ -513,7 +627,7 @@ def _table(frame: pd.DataFrame, columns: list[str], *, limit: int | None = None)
 
 
 def _claim_split_section(coverage: Coverage, before, after) -> str:
-    """Section 1b: what the R10.B claim-kind split MOVED, side by side.
+    """Section 1c: what the R10.B claim-kind split MOVED, side by side.
 
     The split removes rows the previous reports averaged - 147,713 annotation
     rows across the whole store - so figures the trader has already read will
@@ -524,7 +638,7 @@ def _claim_split_section(coverage: Coverage, before, after) -> str:
     """
     import pandas as pd
 
-    lines = ["\n### 1b. What the claim-kind split moved (R10.B), before and after\n"]
+    lines = ["\n### 1c. What the claim-kind split moved (R10.B), before and after\n"]
     lines.append(
         "Rows whose family does not CLAIM an entry - an H1 colour mark on a bar that "
         "had already closed, a regime-pause observation - were previously averaged as "
@@ -641,8 +755,16 @@ def build_bundle(
     cannot disagree.
     """
     usable = intraday[intraday["usable"]] if not intraday.empty else intraday
-    families = summarise(usable, "bounce_type") if not usable.empty else pd.DataFrame()
-    sides = summarise(usable, ["bounce_type", "direction"]) if not usable.empty else pd.DataFrame()
+    # `r_eod_hold`, not `close_r`: since Decision A a usable row may have no
+    # eod close at all, and an eod-hold table must not widen its n with rows
+    # that never reached one. `summarise` drops the blanks, so these cells are
+    # the same cells they were before the policy split.
+    families = summarise(usable, "bounce_type", r_column="r_eod_hold") if not usable.empty else pd.DataFrame()
+    sides = (
+        summarise(usable, ["bounce_type", "direction"], r_column="r_eod_hold")
+        if not usable.empty
+        else pd.DataFrame()
+    )
     return {
         "schema": BUNDLE_SCHEMA,
         "generated_at": generated_at,
@@ -659,12 +781,25 @@ def build_bundle(
             "not_entry_claim": coverage.not_entry_claim,
             "by_claim_kind": dict(coverage.by_claim_kind or {}),
             "usable": coverage.usable,
+            "usable_eod_hold_only": coverage.usable_eod_hold_only,
+            "policy_measured": dict(coverage.policy_measured or {}),
+            "unresolved": coverage.unresolved,
+            "unresolved_by_reason": dict(coverage.unresolved_by_reason or {}),
             "notes": list(coverage.notes),
         },
         "ledger_rows_read": ledger_rows,
         "families": families.to_dict("records") if not families.empty else [],
         "family_by_side": sides.to_dict("records") if not sides.empty else [],
         "exit_policies": _exit_policy_rows(usable),
+        "sweep_exit_policies": sweep_exit_policy_rows(usable),
+        "sweep_exit_policy_note": (
+            "Decision A (2026-08-25). Each frozen policy on its own, per family, "
+            "with its own n: a stop-out counts at its stored `stop_exit_r`, any "
+            "other sweep-finalized trade at the R of its last measured close, "
+            "and `eod_hold` only where an EOD close was actually obtained. They "
+            "are NEVER blended and no row appears under a policy that could not "
+            "measure it."
+        ),
         "declared_window": declared_window(generated_at[:10]),
         "declared_window_note": (
             "reprinted from R9.3 §5 unchanged; NOT measured here and not "
@@ -684,6 +819,28 @@ def evidence_stats_schema() -> str:
     import evidence_stats
 
     return evidence_stats.SUMMARY_SCHEMA
+
+
+def sweep_exit_policy_rows(usable) -> dict[str, list[dict]]:
+    """Per-family R under each frozen sweep exit policy (Decision A).
+
+    One table per policy, each built by `summarise` so every cell carries the
+    full ground-rule-10 statistics from `evidence_stats` - the same contract as
+    every other ranking view, including the 4R clip. Never blended: a row with
+    no value under a policy is simply absent from that policy's table, so an n
+    always means "rows this policy could measure".
+    """
+    if usable is None or getattr(usable, "empty", True):
+        return {name: [] for name in SWEEP_EXIT_POLICIES}
+    rows: dict[str, list[dict]] = {}
+    for name in SWEEP_EXIT_POLICIES:
+        column = POLICY_R_COLUMNS[name]
+        if column not in usable.columns:
+            rows[name] = []
+            continue
+        table = summarise(usable, "bounce_type", r_column=column)
+        rows[name] = table.to_dict("records") if not table.empty else []
+    return rows
 
 
 def _exit_policy_rows(usable) -> list[dict]:
@@ -727,6 +884,67 @@ def _exit_policy_rows(usable) -> list[dict]:
             }
         rows.append(entry)
     return rows
+
+
+def _policy_split_section(coverage: Coverage, usable) -> str:
+    """Section 1a: what Decision A moved, and which policy supplied each figure.
+
+    "Numbers the trader has seen will move" — so the move is PRINTED, with the
+    policy behind every figure, rather than a larger total quietly appearing as
+    though it had always been there.
+    """
+    lines = [
+        "\n### 1a. Decision A — a sweep-finalized trade counts under the policy that measured it\n",
+        "The after-close sweep finalizes with a blank eod-hold `close_r` **by design**\n"
+        "(`no_eod_close`): with no bars through the close there is no such number, and\n"
+        "inventing one would make the same trade report differently depending only on\n"
+        "what the finalizer happened to hold. Until 2026-08-25 `usable` keyed on that\n"
+        "blank, so every sweep-finalized trade was invisible to every evidence surface.\n"
+        "A stop-out now counts at its stored `stop_exit_r`; any other sweep final counts\n"
+        "at the R of its last measured close. **The three policies are never blended** —\n"
+        "each cell below is n rows that *that* policy could measure.\n",
+        f"\n| | rows |\n|---|---|\n"
+        f"| usable under the old rule (settled `close_r` only) | "
+        f"{coverage.usable_eod_hold_only:,} |\n"
+        f"| **usable now** | **{coverage.usable:,}** |\n"
+        f"| unresolved — no policy could measure them | {coverage.unresolved:,} |\n",
+    ]
+    if coverage.unresolved_by_reason:
+        lines.append(
+            "\nUnresolved by reason: "
+            + ", ".join(
+                f"`{reason}` {count:,}"
+                for reason, count in sorted(
+                    coverage.unresolved_by_reason.items(), key=lambda item: -item[1]
+                )
+            )
+            + ".\n"
+        )
+    lines.append(
+        "\nIn-window finals each policy could measure: "
+        + ", ".join(
+            f"`{name}` {coverage.policy_measured.get(name, 0):,}"
+            for name in SWEEP_EXIT_POLICIES
+        )
+        + ".\n"
+    )
+
+    tables = sweep_exit_policy_rows(usable)
+    cols = [
+        "cell", "n", "symbols", "sessions", "mean_r", "trimmed_mean_r", "median_r",
+        "clipped_mean_r", "stop_out_rate", "evidence_label",
+    ]
+    for name in SWEEP_EXIT_POLICIES:
+        rows = tables.get(name) or []
+        lines.append(f"\n**Policy `{name}` — per family.**\n")
+        if not rows:
+            lines.append(
+                "\nNo row in this window carried a value under this policy. That is a "
+                "count of zero, not a result of zero.\n"
+            )
+            continue
+        lines.append(_table(pd.DataFrame(rows), cols))
+    return "".join(lines)
 
 
 def render_report(
@@ -773,14 +991,16 @@ def render_report(
         f"| …of those, never advanced a bar | {coverage.never_measured:,} |\n"
         f"| excluded — stop under {RISK_FLOOR_PCT_OF_ENTRY}% of entry | "
         f"{coverage.below_risk_floor:,} |\n"
-        f"| settled, above the floor (what earlier reports ranked) | "
+        f"| measured by at least one exit policy, above the floor | "
         f"{coverage.usable_before_claim_split:,} |\n"
         f"| excluded — family does not CLAIM an entry (R10.B) | "
         f"{coverage.not_entry_claim:,} |\n"
         f"| **usable** | **{coverage.usable:,}** |\n"
     )
 
-    add("\n### 1a. The `close_r == 0` mass is a defect, not a population of scratches\n")
+    add(_policy_split_section(coverage, usable))
+
+    add("\n### 1b. The `close_r == 0` mass is a defect, not a population of scratches\n")
     if coverage.in_window:
         share = coverage.unsettled / coverage.in_window * 100
         add(
@@ -818,7 +1038,7 @@ def render_report(
         "clipped_mean_r", "stop_out_rate", "p10_r", "p90_r", "ci_low", "ci_high",
         "top_symbol_share", "evidence_label", "meets_n_floor",
     ]
-    add(_table(summarise(usable, "bounce_type"), cols))
+    add(_table(summarise(usable, "bounce_type", r_column="r_eod_hold"), cols))
 
     add("\n### 2a. By market environment — the axis the review called starved\n")
     add(
@@ -826,7 +1046,7 @@ def render_report(
         "The review reported this axis at n=130 because it read the review store; the "
         "outcome store carries it on every row.\n\n"
     )
-    add(_table(summarise(usable, "market_environment"), cols))
+    add(_table(summarise(usable, "market_environment", r_column="r_eod_hold"), cols))
 
     add("\n### 2b. By session RVOL bucket\n")
     if not usable.empty and "session_rvol" in usable:
@@ -836,12 +1056,12 @@ def render_report(
             [0, 0.8, 1.2, 2.0, 1e9],
             labels=["<0.8", "0.8-1.2", "1.2-2.0", ">2.0"],
         ).astype(str)
-        add(_table(summarise(rvol[rvol["rvol_bucket"] != "nan"], "rvol_bucket"), cols))
+        add(_table(summarise(rvol[rvol["rvol_bucket"] != "nan"], "rvol_bucket", r_column="r_eod_hold"), cols))
     else:
         add("_no RVOL on these rows_\n")
 
     add("\n### 2c. By sector\n")
-    add(_table(summarise(usable, "sector"), cols, limit=20))
+    add(_table(summarise(usable, "sector", r_column="r_eod_hold"), cols, limit=20))
 
     add("\n## 3. Swing families vs their own control (`setup_playbook_episodes.csv`)\n")
     lift = baseline_lift(playbook)

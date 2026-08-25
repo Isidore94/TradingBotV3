@@ -1286,6 +1286,15 @@ second scoreboard.
    the four trader-named findings under the new discipline and says plainly
    whether each survives. Output to the runtime report store with atomic
    last-good; `--freeze` copies a dated audit into `docs/analysis/`.
+   **Extended 2026-08-25 by trader Decision A** (`docs/analysis/POST_ATTACK_AUTHORIZATION_2026-08-25.md`):
+   what makes a sweep-finalized trade usable is now three frozen exit policies
+   derived from `context.exit` - `eod_hold`, `stop_exit` (the stored
+   `stop_exit_r`), `last_measured` (R of the last measured close) - reported
+   side by side, never blended, each through `evidence_stats`; `usable` means
+   at least one policy measured the row. Live 2026-08-25 read moved 0 -> 255
+   usable. **CANARY OWED:** a second session read after a normal after-close
+   sweep, confirming the policy breakdown and that no eod-hold cell absorbed a
+   row with no EOD close. Nothing here is accepted as a met gate.
 5. **R10.D D1 setup tracker: point-in-time transition ledger** (S1–S4) - **BUILT 2026-08-24, GREEN.** `setup_tracker_ledger.py` + a digest sidecar
    (never a payload copy); `sessions_spanned` / `stale_horizon` measure S3a
    without re-selecting the future row; S3b fixed from cached daily bars,
