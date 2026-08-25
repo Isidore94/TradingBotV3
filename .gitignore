@@ -43,3 +43,6 @@ run_master_avwap_mini_pc.cmd
 # and a git add -A swept 3,440 dist/ files into a commit (2026-08-08).
 /build/
 /dist/
+
+# Generated desk test output (P1.5). It is a run artifact, never a source file.
+desk_report.xml
