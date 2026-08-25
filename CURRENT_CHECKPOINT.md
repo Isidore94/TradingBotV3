@@ -8,6 +8,108 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 evening - R10 build slate (packets 1-7 of 10 done)
+
+**Branch `testing-week-2026-08-24`.** Building the slate authorized in
+`docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §4: R10.B-R10.H, the AWAY
+day recap (§5), two opt-in scopes (§3) and R10.I's machinery under the recorded
+sequencing override.
+
+| Packet | State |
+|---|---|
+| **R10.B** outcome semantics + path capture | **BUILT** - canary owed |
+| **R10.C** evidence_stats + scoreboard | **BUILT** |
+| **R10.D** tracker transition ledger | **BUILT** |
+| **R10.E** Focus membership events | **BUILT** - canary owed |
+| **R10.F** like_cohort_grading | **BUILT** |
+| **R10.G** market context ledger | **BUILT** - canary owed |
+| **R10.H** Market Journal + two surfaces | **BUILT** - canary owed |
+| AWAY day recap | not started |
+| Two opt-in scopes | not started |
+| R10.I machinery | not started |
+
+| Check after R10.H | Result |
+|---|---|
+| `pytest tests/ -q` | **4708 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **68/68**, exit 0 |
+| `dist\TradingBotV3\TradingBotV3.exe --selftest` | **68/68 (frozen)**, exit 0 |
+| Golden fixtures | **byte-identical**, SHA-256 verified on all five |
+
+**R10.B touches a live writer, so its mechanics canary is OWED.** Building a
+packet never marks its live gate met. One live session is needed to confirm
+that LRSI crossings now register gradeable outcome rows (the engine has been
+firing ungradeable alerts since it shipped) and that H1 stamps land on the bar
+close.
+
+**The frozen exe was rebuilt and it RAN.** R10.H fired the trigger (a new
+left-nav page and seven new lazily-imported modules), so the bundle was rebuilt
+and `--selftest` returned 68/68 (frozen), exit 0. Smart App Control did not
+refuse this hash. **That says nothing about the next build** - SAC verdicts are
+per file hash - and the desk still runs from source, so this is verification
+rather than delivery.
+
+**Three more canaries are now owed: R10.E, R10.G, R10.H** - a live session
+each, confirming Focus membership events appear on an add/remove/day-roll, that
+a regime shift writes a row, and that a journal entry round-trips through both
+surfaces. R10.B's is still open. Building a packet never marks its live gate
+met.
+
+**What R10.F found on its first run:** 45 LIKE claims merged and graded across
+28 cohorts. Read it beside the veto cohort on the weekend surface - the two are
+the halves of one decision, and this is the first time both have had a forward
+record.
+
+**File-scoped ask-first, answered in session:** R10.H edits
+`alert_center_panel.py`, which houses alert code. The trader authorized the
+packet explicitly on 2026-08-24 ("go ahead and do R10E R10F R10G R10H"). The
+edit is presentation only - a tab, a text box, a save button, a shortcut - and
+touches no alert, tier, fold, digest or queue behaviour.
+
+**R10.D: one audit premise did NOT reproduce, and that is the finding.**
+S2 (setups carrying a mark dated later than the run's `data_session`) was
+measured at 2,739 setups by the audit on a 2026-08-20 payload. On the current
+payload - `data_session` 2026-08-21, written Monday over a completed Friday -
+there are **14,043 marks and zero later than the vintage**. The defect needs a
+tracker run during a live session to appear, so it is intermittent rather than
+refuted; the guard is built and reports whatever it finds on every save.
+S3a reproduced almost exactly (horizon 5 -> median 64 sessions, 10 -> 73, 42%
+of rows over 2x their declared horizon) and S3b reproduced exactly (0 of 10,928
+SPY-relative values). S3b is fixed from cached daily bars, zero IB. S3a is
+MEASURED and FLAGGED but the future-row selection is deliberately unchanged -
+re-selecting it would silently redefine every number the tracker has produced.
+
+**R10.C makes the claim-kind split visible in the numbers the trader reads.**
+On the 07-24..08-21 scoreboard window, of 5,970 settled above-the-floor rows
+**4,442 were annotations and 526 observations - only 1,002 were entry claims**.
+83% of what earlier reports ranked was not a trade. Section 1b prints every
+moved family before and after with the rows removed and the claim kind that
+removed them, so nothing moves silently. R9.3's 40-session window is reprinted
+unchanged and the report states it did not measure it.
+
+**What R10.B measured that changes how the store should be read:** the live
+outcome store is **entry_claim 68,237 / annotation 147,713 / information
+35,407**. Nearly 60% of it is H1 colour marks on already-closed bars. Any
+existing statistic over "the outcome store" that did not filter by claim kind
+was averaging those in.
+
+**Two corrections found by reproduction rather than reading** (ground rule 3):
+the registry's first draft invented two H1 family names and missed the largest
+family in the store; and compound families (`10_candle_high-vwap_lower_band`)
+made 158,053 rows read as unconfigured until parts-based classification landed.
+
+**Frozen exe: no rebuild trigger from R10.B.** `outcome_semantics.py` and
+`outcome_path.py` are modules under `scripts/`, not new top-level packages, and
+are imported by name from already-collected code. The new fixture is under
+`tests/`, which the bundle does not ship.
+
+**Still owed on this branch** (unchanged): R10.V's live scan day, the R10.A
+mechanics canary, R9's four live proofs, the 2026-08-21 fluidity gates, R7
+gates 1/3/6, R8 §10's one real weekend, and the Questrade token paste. Nothing
+merges to `main` until a live-session validation day passes.
+
+---
+
 ## 2026-08-24 late - autorun flipped ON by the trader; AWAY quiet rule recorded
 
 **Branch `testing-week-2026-08-24`.** Two trader actions, both taken in
@@ -111,108 +213,6 @@ subtests, smoke 7/7, selftest 58/58) — documentation-only change, suite not
 re-run. The active build item remains the one below: the R10.A mechanics
 canary (trader flips `outcome_sweep_autorun="on"` on a live weekday), which
 also starts the two-week collection clock that gates R10.I.
-
----
-
-## 2026-08-24 evening - R10 build slate (packets 1-7 of 10 done)
-
-**Branch `testing-week-2026-08-24`.** Building the slate authorized in
-`docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §4: R10.B-R10.H, the AWAY
-day recap (§5), two opt-in scopes (§3) and R10.I's machinery under the recorded
-sequencing override.
-
-| Packet | State |
-|---|---|
-| **R10.B** outcome semantics + path capture | **BUILT** - canary owed |
-| **R10.C** evidence_stats + scoreboard | **BUILT** |
-| **R10.D** tracker transition ledger | **BUILT** |
-| **R10.E** Focus membership events | **BUILT** - canary owed |
-| **R10.F** like_cohort_grading | **BUILT** |
-| **R10.G** market context ledger | **BUILT** - canary owed |
-| **R10.H** Market Journal + two surfaces | **BUILT** - canary owed |
-| AWAY day recap | not started |
-| Two opt-in scopes | not started |
-| R10.I machinery | not started |
-
-| Check after R10.H | Result |
-|---|---|
-| `pytest tests/ -q` | **4708 passed / 19 subtests**, exit 0 |
-| `scripts/smoke_check.py` | **7/7**, exit 0 |
-| `launch_gui.py --selftest` | **68/68**, exit 0 |
-| `dist\TradingBotV3\TradingBotV3.exe --selftest` | **68/68 (frozen)**, exit 0 |
-| Golden fixtures | **byte-identical**, SHA-256 verified on all five |
-
-**R10.B touches a live writer, so its mechanics canary is OWED.** Building a
-packet never marks its live gate met. One live session is needed to confirm
-that LRSI crossings now register gradeable outcome rows (the engine has been
-firing ungradeable alerts since it shipped) and that H1 stamps land on the bar
-close.
-
-**The frozen exe was rebuilt and it RAN.** R10.H fired the trigger (a new
-left-nav page and seven new lazily-imported modules), so the bundle was rebuilt
-and `--selftest` returned 68/68 (frozen), exit 0. Smart App Control did not
-refuse this hash. **That says nothing about the next build** - SAC verdicts are
-per file hash - and the desk still runs from source, so this is verification
-rather than delivery.
-
-**Three more canaries are now owed: R10.E, R10.G, R10.H** - a live session
-each, confirming Focus membership events appear on an add/remove/day-roll, that
-a regime shift writes a row, and that a journal entry round-trips through both
-surfaces. R10.B's is still open. Building a packet never marks its live gate
-met.
-
-**What R10.F found on its first run:** 45 LIKE claims merged and graded across
-28 cohorts. Read it beside the veto cohort on the weekend surface - the two are
-the halves of one decision, and this is the first time both have had a forward
-record.
-
-**File-scoped ask-first, answered in session:** R10.H edits
-`alert_center_panel.py`, which houses alert code. The trader authorized the
-packet explicitly on 2026-08-24 ("go ahead and do R10E R10F R10G R10H"). The
-edit is presentation only - a tab, a text box, a save button, a shortcut - and
-touches no alert, tier, fold, digest or queue behaviour.
-
-**R10.D: one audit premise did NOT reproduce, and that is the finding.**
-S2 (setups carrying a mark dated later than the run's `data_session`) was
-measured at 2,739 setups by the audit on a 2026-08-20 payload. On the current
-payload - `data_session` 2026-08-21, written Monday over a completed Friday -
-there are **14,043 marks and zero later than the vintage**. The defect needs a
-tracker run during a live session to appear, so it is intermittent rather than
-refuted; the guard is built and reports whatever it finds on every save.
-S3a reproduced almost exactly (horizon 5 -> median 64 sessions, 10 -> 73, 42%
-of rows over 2x their declared horizon) and S3b reproduced exactly (0 of 10,928
-SPY-relative values). S3b is fixed from cached daily bars, zero IB. S3a is
-MEASURED and FLAGGED but the future-row selection is deliberately unchanged -
-re-selecting it would silently redefine every number the tracker has produced.
-
-**R10.C makes the claim-kind split visible in the numbers the trader reads.**
-On the 07-24..08-21 scoreboard window, of 5,970 settled above-the-floor rows
-**4,442 were annotations and 526 observations - only 1,002 were entry claims**.
-83% of what earlier reports ranked was not a trade. Section 1b prints every
-moved family before and after with the rows removed and the claim kind that
-removed them, so nothing moves silently. R9.3's 40-session window is reprinted
-unchanged and the report states it did not measure it.
-
-**What R10.B measured that changes how the store should be read:** the live
-outcome store is **entry_claim 68,237 / annotation 147,713 / information
-35,407**. Nearly 60% of it is H1 colour marks on already-closed bars. Any
-existing statistic over "the outcome store" that did not filter by claim kind
-was averaging those in.
-
-**Two corrections found by reproduction rather than reading** (ground rule 3):
-the registry's first draft invented two H1 family names and missed the largest
-family in the store; and compound families (`10_candle_high-vwap_lower_band`)
-made 158,053 rows read as unconfigured until parts-based classification landed.
-
-**Frozen exe: no rebuild trigger from R10.B.** `outcome_semantics.py` and
-`outcome_path.py` are modules under `scripts/`, not new top-level packages, and
-are imported by name from already-collected code. The new fixture is under
-`tests/`, which the bundle does not ship.
-
-**Still owed on this branch** (unchanged): R10.V's live scan day, the R10.A
-mechanics canary, R9's four live proofs, the 2026-08-21 fluidity gates, R7
-gates 1/3/6, R8 §10's one real weekend, and the Questrade token paste. Nothing
-merges to `main` until a live-session validation day passes.
 
 ---
 
