@@ -41,6 +41,7 @@ from ui.panels.autopilot_panel import AutopilotPanel
 from ui.panels.bounce_panel import format_auto_regime_reading
 from ui.panels.health_panel import HealthPanel
 from ui.panels.journal_panel import JournalPanel
+from ui.panels.market_journal_panel import MarketJournalPanel
 from ui.panels.weekend_prep_panel import WeekendPrepPanel
 from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
@@ -83,6 +84,10 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Focus Picks", "mdi.star-outline", "trading_panel.focus_picks_panel"),
     PageSpec("Strength Board", "mdi.trending-up", "strength_board_panel"),
     PageSpec("Journal", "mdi.notebook-outline", "journal_panel"),
+    # R10.H. The label difference from "Journal" above is deliberate and
+    # recorded: that one is the trade and tax record, this one is what the
+    # trader thought. Merging them would turn the tax journal into a diary.
+    PageSpec("Market Journal", "mdi.book-open-variant", "market_journal_panel"),
     PageSpec("Weekend Prep", "mdi.calendar-weekend", "weekend_prep_panel"),
     PageSpec("Universe", "mdi.earth", "universe_panel"),
     PageSpec("Research", "mdi.flask-outline", "research_panel"),
@@ -117,6 +122,7 @@ class MainWindow(QMainWindow):
             price_alert_read_only=satellite_desk,
         )
         self.journal_panel = JournalPanel()
+        self.market_journal_panel = MarketJournalPanel()
         self.weekend_prep_panel = WeekendPrepPanel(
             focus_service=self.trading_panel.focus_service
         )

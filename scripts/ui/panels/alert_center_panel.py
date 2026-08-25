@@ -778,6 +778,22 @@ class AlertCenterPanel(QFrame):
         capture_scroll.setWidget(self.chart_review.capture_rail)
         self._capture_tab_index = self.tabs.addTab(capture_scroll, "Capture")
 
+        # R10.H: the market-journal tab, AFTER Capture. A note written while
+        # the tape is still moving, M5 by default because that is what the
+        # trader is watching when they reach for it. It writes through the same
+        # MarketJournalService the left-nav page uses - one store, one writer -
+        # so an entry means the same thing whichever surface produced it.
+        #
+        # File-scoped ask-first note: this file houses alert code, so the rule
+        # fires on any edit here. The trader authorized this packet explicitly
+        # on 2026-08-24 ("go ahead and do R10E R10F R10G R10H"), which is that
+        # answer. The edit itself is presentation only: a tab, a text box and a
+        # save button. No alert, tier, fold, digest or queue behaviour is
+        # touched.
+        self._journal_tab_index = self.tabs.addTab(
+            self._build_journal_tab(), "Journal"
+        )
+
         self._refresh_armed_list()
         self.chart_review.armedSummaryChanged.connect(self._refresh_armed_tab_label)
         self._refresh_armed_tab_label(self.chart_review.armed_count())
@@ -3605,6 +3621,66 @@ class AlertCenterPanel(QFrame):
     def armed_levels_for(self, symbol: str) -> list:
         symbol = str(symbol or "").strip().upper()
         return [watch for watch in self._d1_level_watches if watch.symbol == symbol]
+
+    def _build_journal_tab(self):
+        """The in-session market-journal note (R10.H).
+
+        Deliberately small: a timeframe, a box, a button and a status line.
+        The sit-down review lives on the left-nav Market Journal page; this is
+        for the thought you have at 10:40 and would otherwise lose.
+        """
+        from PySide6.QtWidgets import QComboBox, QPlainTextEdit
+
+        import market_journal
+        from ui.services.market_journal_service import MarketJournalService
+
+        self.market_journal_service = MarketJournalService(self)
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        self._journal_timeframe = QComboBox()
+        self._journal_timeframe.addItems(list(market_journal.TIMEFRAMES))
+        self._journal_timeframe.setCurrentText(market_journal.TIMEFRAME_M5)
+        self._journal_text = QPlainTextEdit()
+        self._journal_text.setPlaceholderText(
+            "What the tape is doing, and what you make of it. Ctrl+Enter saves."
+        )
+        self._journal_status = QLabel("")
+        self._journal_status.setWordWrap(True)
+        save = QPushButton("Save entry (Ctrl+Enter)")
+        save.clicked.connect(self._commit_journal_entry)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Timeframe"))
+        row.addWidget(self._journal_timeframe)
+        row.addStretch(1)
+        row.addWidget(save)
+
+        layout.addWidget(QLabel("Market journal - this session"))
+        layout.addWidget(self._journal_text, 1)
+        layout.addLayout(row)
+        layout.addWidget(self._journal_status)
+
+        self.market_journal_service.statusChanged.connect(self._journal_status.setText)
+        shortcut = QShortcut(QKeySequence("Ctrl+Return"), container)
+        shortcut.activated.connect(self._commit_journal_entry)
+        self._journal_shortcut = shortcut
+        return container
+
+    def _commit_journal_entry(self) -> None:
+        from datetime import date
+
+        import market_journal
+
+        result = self.market_journal_service.write_entry(
+            text=self._journal_text.toPlainText(),
+            session_date=date.today().isoformat(),
+            timeframe=self._journal_timeframe.currentText(),
+            origin=market_journal.ORIGIN_DESK_TAB,
+        )
+        if result.get("ok"):
+            self._journal_text.clear()
 
     def _refresh_armed_list(self) -> None:
         self.armed_list.set_watches(

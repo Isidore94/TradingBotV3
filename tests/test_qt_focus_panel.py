@@ -145,6 +145,11 @@ def test_focus_picks_is_top_level_app_page():
         # its output goes (packet R2 Part B).
         "Strength Board",
         "Journal",
+        # R10.H sits the Market Journal next to the trade/tax Journal, and the
+        # near-identical labels are deliberate: one records what you TRADED,
+        # the other what you THOUGHT. Merging them would turn the tax journal
+        # into a diary.
+        "Market Journal",
         # R8 registered Weekend Prep next to Journal: the weekend routine reads
         # the journal the walk-away and auto-tag steps depend on.
         "Weekend Prep",

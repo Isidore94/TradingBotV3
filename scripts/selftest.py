@@ -62,6 +62,22 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "ui.annotations.vocabulary",
     "ui.annotations.setup_claims",
     "ui.annotations.veto_cohort",
+    # R10.F: the LIKE mirror of the veto trio.
+    "ui.annotations.like_cohort",
+    # R10.B/D/E/G/H: the evidence modules the desk imports lazily. Each is
+    # reachable from a frozen run - the outcome writer, the tracker save, the
+    # Focus store, the regime setter and the two journal surfaces all import
+    # them at call time - so a bundle missing one dies at the first capture
+    # rather than at launch, which is the failure mode this list exists for.
+    "outcome_semantics",
+    "outcome_path",
+    "setup_tracker_ledger",
+    "focus_membership_events",
+    "market_context_ledger",
+    "market_journal",
+    "evidence_stats",
+    "ui.services.market_journal_service",
+    "ui.panels.market_journal_panel",
     # NOT ai_jobs: the local AI batch layer is deliberately out of the bundle
     # (PACKAGES_NOT_IN_THE_BUNDLE in tests/test_packaging_spec_drift.py). Its
     # only entry point is scripts/run_ai_jobs.py, a scheduled CLI run from the
