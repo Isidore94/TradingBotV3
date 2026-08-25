@@ -23,6 +23,43 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### 2026-08-24 - Wave 1 offline slate
 
+**Packet W7 - observability depth over what is already on disk (plan.md P1.4).**
+Every figure Phase 1's exit gate asks for was already MEASURED: `run_manifest_v1`
+records per-phase seconds and the whole `provider.<family>.<event>[.<source>]`
+counter tree, and `ai_job_ledger.jsonl` records every overnight job's outcome.
+What was missing was a reader that turns them into a TREND, so "the scan feels
+slower" becomes a number with an n beside it.
+
+`scripts/diagnostics/observability_trends.py` folds the last N runs against the
+N before them: per-phase median and p90 with the change against the baseline,
+provider lookups/cache hits/attempts/failures per family and per source, run and
+job failure counts with the errors quoted verbatim, and coverage from the scan's
+own `symbols_processed`.
+
+**Zero new measurement**, and an AST test keeps it so - the module calls no
+clock, sleeps nowhere, and imports no live decision module. It opens files that
+were written hours ago.
+
+Three refusals carry the honesty: **n on every figure**, because a median over
+two runs is not a trend; **a change needs both halves**, so a phase with no
+baseline reports its recent median and NAMES the absence rather than computing a
+change against nothing; and **absent is not zero** - a run that never recorded a
+phase is counted in `runs_missing_phase` rather than contributing a zero, and a
+family with no attempts has `failure_rate: null` with the reason beside it,
+because zero failures out of zero attempts is not a 0% rate.
+
+Frozen by the golden fixture `observability_trends_v1` under the Milestone 3
+contract. Its inputs are hand-written to contain each shape the reader has a
+rule for - a phase new to the recent window, a phase missing from one run, a
+family that never dialled out, a failed run carrying an error, a job with a
+mixed record - rather than a copy of one machine's diagnostics, which would
+drift the moment the desk ran again.
+
+**Its first live read found two real failures nobody was counting**:
+`journal_import` failed 9 of 12 recorded runs (the dead Questrade refresh chain,
+already a known trader action) and `ticker_briefs` 11 of 30. Neither is new
+behaviour; what is new is that a single command says so.
+
 **Packet W6 - LOCAL-AI Phase 3 and Phase 4 machinery, runs gated.** Both were
 authorized ahead of their phase gates on the R10.I pattern, and they are gated
 in DIFFERENT ways because their gates are different things.

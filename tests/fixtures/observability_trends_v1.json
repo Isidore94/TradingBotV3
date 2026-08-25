@@ -1,0 +1,404 @@
+{
+  "acquired_at": "2026-08-25T03:00:00+00:00",
+  "as_of": "2026-08-25T03:00:00+00:00",
+  "configuration": {
+    "window": 3
+  },
+  "coverage": {
+    "symbols_processed": {
+      "median": 1120.0,
+      "n": 3,
+      "p90": 1121.6,
+      "runs_missing": 0
+    },
+    "tracked_rows": {
+      "median": null,
+      "n": 0,
+      "p90": null,
+      "runs_missing": 3
+    }
+  },
+  "expected_keys": [
+    "stage_latency",
+    "providers",
+    "jobs",
+    "runs",
+    "coverage"
+  ],
+  "feature_version": "p1.4-trends-v1",
+  "intentional_difference": "Initial freeze - P1.4 packet W7. Representative shapes, hand-written.",
+  "job_rows": [
+    {
+      "job": "journal_import",
+      "session_date": "2026-08-20",
+      "status": "ok"
+    },
+    {
+      "job": "journal_import",
+      "session_date": "2026-08-21",
+      "status": "ok"
+    },
+    {
+      "job": "ai_summary",
+      "session_date": "2026-08-20",
+      "status": "ok"
+    },
+    {
+      "job": "ai_summary",
+      "session_date": "2026-08-21",
+      "status": "degraded_no_narrative"
+    },
+    {
+      "job": "ticker_briefs",
+      "session_date": "2026-08-21",
+      "status": "failed"
+    },
+    {
+      "job": "ticker_briefs",
+      "session_date": "2026-08-20",
+      "status": "ok"
+    },
+    {
+      "job": "veto_cohort_grading",
+      "session_date": "2026-08-22",
+      "status": "skipped"
+    }
+  ],
+  "jobs": [
+    {
+      "by_status": {
+        "failed": 1,
+        "ok": 1
+      },
+      "degraded": 0,
+      "failed": 1,
+      "failure_rate": 0.5,
+      "job": "ticker_briefs",
+      "n": 2,
+      "ok": 1,
+      "skipped": 0
+    },
+    {
+      "by_status": {
+        "degraded_no_narrative": 1,
+        "ok": 1
+      },
+      "degraded": 1,
+      "failed": 0,
+      "failure_rate": 0.0,
+      "job": "ai_summary",
+      "n": 2,
+      "ok": 1,
+      "skipped": 0
+    },
+    {
+      "by_status": {
+        "ok": 2
+      },
+      "degraded": 0,
+      "failed": 0,
+      "failure_rate": 0.0,
+      "job": "journal_import",
+      "n": 2,
+      "ok": 2,
+      "skipped": 0
+    },
+    {
+      "by_status": {
+        "skipped": 1
+      },
+      "degraded": 0,
+      "failed": 0,
+      "failure_rate": 0.0,
+      "job": "veto_cohort_grading",
+      "n": 1,
+      "ok": 0,
+      "skipped": 1
+    }
+  ],
+  "manifests": [
+    {
+      "counters": {
+        "provider.daily_bars.attempt.yahoo": 5,
+        "provider.daily_bars.cache_hit": 1145,
+        "provider.daily_bars.failure.yahoo": 0,
+        "provider.daily_bars.lookup": 1150,
+        "provider.daily_bars.success.yahoo": 5,
+        "symbols_processed": 1100
+      },
+      "ended_at": "2026-08-18T20:11:00+00:00",
+      "error": "",
+      "job_type": "master_scan",
+      "phases": [
+        {
+          "label": "prep+fetch+priority",
+          "seconds": 200.0
+        },
+        {
+          "label": "output writes",
+          "seconds": 88.0
+        }
+      ],
+      "run_id": "master_scan-baseline-1",
+      "schema": "run_manifest_v1",
+      "started_at": "2026-08-18T20:05:00+00:00",
+      "status": "ok",
+      "total_seconds": 360.0
+    },
+    {
+      "counters": {
+        "provider.daily_bars.attempt.yahoo": 10,
+        "provider.daily_bars.cache_hit": 1150,
+        "provider.daily_bars.failure.yahoo": 1,
+        "provider.daily_bars.lookup": 1160,
+        "provider.daily_bars.success.yahoo": 9,
+        "symbols_processed": 1110
+      },
+      "ended_at": "2026-08-19T20:11:30+00:00",
+      "error": "",
+      "job_type": "master_scan",
+      "phases": [
+        {
+          "label": "prep+fetch+priority",
+          "seconds": 210.0
+        },
+        {
+          "label": "output writes",
+          "seconds": 90.0
+        }
+      ],
+      "run_id": "master_scan-baseline-2",
+      "schema": "run_manifest_v1",
+      "started_at": "2026-08-19T20:05:00+00:00",
+      "status": "ok",
+      "total_seconds": 390.0
+    },
+    {
+      "counters": {
+        "provider.daily_bars.attempt.yahoo": 5,
+        "provider.daily_bars.cache_hit": 1150,
+        "provider.daily_bars.failure.yahoo": 0,
+        "provider.daily_bars.lookup": 1155,
+        "provider.daily_bars.success.yahoo": 5,
+        "symbols_processed": 1105
+      },
+      "ended_at": "2026-08-20T20:11:00+00:00",
+      "error": "",
+      "job_type": "master_scan",
+      "phases": [
+        {
+          "label": "prep+fetch+priority",
+          "seconds": 205.0
+        },
+        {
+          "label": "output writes",
+          "seconds": 92.0
+        }
+      ],
+      "run_id": "master_scan-baseline-3",
+      "schema": "run_manifest_v1",
+      "started_at": "2026-08-20T20:05:00+00:00",
+      "status": "ok",
+      "total_seconds": 372.0
+    },
+    {
+      "counters": {
+        "provider.daily_bars.attempt.yahoo": 5,
+        "provider.daily_bars.cache_hit": 1171,
+        "provider.daily_bars.failure.yahoo": 2,
+        "provider.daily_bars.lookup": 1176,
+        "provider.daily_bars.success.yahoo": 3,
+        "provider.earnings_calendar.cache_hit": 342,
+        "provider.earnings_calendar.lookup": 342,
+        "symbols_processed": 1120
+      },
+      "ended_at": "2026-08-21T20:13:00+00:00",
+      "error": "",
+      "job_type": "master_scan",
+      "phases": [
+        {
+          "label": "prep+fetch+priority",
+          "seconds": 260.0
+        },
+        {
+          "label": "output writes",
+          "seconds": 95.0
+        },
+        {
+          "label": "output/scan-factors",
+          "seconds": 62.0
+        },
+        {
+          "label": "TOTAL (theta enrichment deferred)",
+          "seconds": 470.0
+        }
+      ],
+      "run_id": "master_scan-recent-1",
+      "schema": "run_manifest_v1",
+      "started_at": "2026-08-21T20:05:00+00:00",
+      "status": "ok",
+      "total_seconds": 470.0
+    },
+    {
+      "counters": {
+        "provider.daily_bars.attempt.yahoo": 8,
+        "provider.daily_bars.cache_hit": 1172,
+        "provider.daily_bars.failure.yahoo": 1,
+        "provider.daily_bars.lookup": 1180,
+        "provider.daily_bars.success.yahoo": 7,
+        "provider.earnings_calendar.cache_hit": 340,
+        "provider.earnings_calendar.lookup": 340,
+        "symbols_processed": 1122
+      },
+      "ended_at": "2026-08-22T20:13:20+00:00",
+      "error": "",
+      "job_type": "master_scan",
+      "phases": [
+        {
+          "label": "prep+fetch+priority",
+          "seconds": 265.0
+        },
+        {
+          "label": "output/scan-factors",
+          "seconds": 64.0
+        }
+      ],
+      "run_id": "master_scan-recent-2",
+      "schema": "run_manifest_v1",
+      "started_at": "2026-08-22T20:05:00+00:00",
+      "status": "ok",
+      "total_seconds": 480.0
+    },
+    {
+      "counters": {
+        "provider.daily_bars.attempt.ibkr": 20,
+        "provider.daily_bars.cache_hit": 400,
+        "provider.daily_bars.failure.ibkr": 20,
+        "provider.daily_bars.lookup": 420,
+        "provider.earnings_calendar.cache_hit": 120,
+        "provider.earnings_calendar.lookup": 120,
+        "symbols_processed": 400
+      },
+      "ended_at": "2026-08-24T20:09:00+00:00",
+      "error": "IB refused the connection after 3 attempts",
+      "job_type": "master_scan",
+      "phases": [
+        {
+          "label": "prep+fetch+priority",
+          "seconds": 240.0
+        },
+        {
+          "label": "output writes",
+          "seconds": 0.5
+        },
+        {
+          "label": "output/scan-factors",
+          "seconds": 60.0
+        }
+      ],
+      "run_id": "master_scan-recent-3",
+      "schema": "run_manifest_v1",
+      "started_at": "2026-08-24T20:05:00+00:00",
+      "status": "failed",
+      "total_seconds": 240.0
+    }
+  ],
+  "numeric_tolerance": 0.0,
+  "provider_assumptions": "No broker, network or filesystem access. The inputs are hand-written run manifests and job-ledger rows chosen to contain each shape the reader has a rule for, not a copy of any machine's diagnostics.",
+  "providers": [
+    {
+      "attempts": 33,
+      "by_source": {
+        "ibkr": {
+          "attempts": 20,
+          "failures": 20,
+          "successes": 0
+        },
+        "yahoo": {
+          "attempts": 13,
+          "failures": 3,
+          "successes": 10
+        }
+      },
+      "cache_hit_rate": 0.9881,
+      "cache_hits": 2743,
+      "failure_rate": 0.697,
+      "failures": 23,
+      "family": "daily_bars",
+      "lookups": 2776,
+      "rate_basis": "failures / attempts",
+      "runs": 3
+    },
+    {
+      "attempts": 0,
+      "by_source": {},
+      "cache_hit_rate": 1.0,
+      "cache_hits": 802,
+      "failure_rate": null,
+      "failures": 0,
+      "family": "earnings_calendar",
+      "lookups": 802,
+      "rate_basis": "no attempt was made in this window, so there is no failure rate - zero failures out of zero attempts is not a 0% rate",
+      "runs": 3
+    }
+  ],
+  "raw_input_keys": [
+    "manifests",
+    "job_rows"
+  ],
+  "raw_input_sha256": "a960cb9f99247919671d5390123375187f8ddb6ce25159953fe5ca54d9cbf04d",
+  "runs": {
+    "by_job_type": {
+      "master_scan": 3
+    },
+    "errors_not_quoted": 0,
+    "failed": 1,
+    "failure_rate": 0.3333,
+    "n": 3,
+    "recent_errors": [
+      "IB refused the connection after 3 attempts"
+    ],
+    "total_seconds_median": 470.0,
+    "total_seconds_p90": 478.0
+  },
+  "schema": "observability_trends/v1",
+  "stage_latency": [
+    {
+      "baseline_median": 205.0,
+      "baseline_n": 3,
+      "change_basis": "median of the recent window against the median of the one before it",
+      "change_pct": 26.83,
+      "direction": "slower",
+      "label": "prep+fetch+priority",
+      "median": 260.0,
+      "n": 3,
+      "p90": 264.0,
+      "runs_missing_phase": 0
+    },
+    {
+      "baseline_median": null,
+      "baseline_n": 0,
+      "change_basis": "no baseline: this phase was not recorded in the earlier window, so there is nothing to compare against",
+      "change_pct": null,
+      "direction": null,
+      "label": "output/scan-factors",
+      "median": 62.0,
+      "n": 3,
+      "p90": 63.6,
+      "runs_missing_phase": 0
+    },
+    {
+      "baseline_median": 90.0,
+      "baseline_n": 3,
+      "change_basis": "median of the recent window against the median of the one before it",
+      "change_pct": -46.94,
+      "direction": "faster",
+      "label": "output writes",
+      "median": 47.75,
+      "n": 2,
+      "p90": 85.55,
+      "runs_missing_phase": 1
+    }
+  ],
+  "universe_version": "n/a (diagnostics fixture; no symbol universe is read)"
+}

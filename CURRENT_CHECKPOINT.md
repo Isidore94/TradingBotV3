@@ -8,6 +8,36 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (9) - Wave 1, packet W7: observability depth (P1.4)
+
+**Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W7 DONE**; only
+W8 (P1.5 repository hygiene) remains.
+
+`scripts/diagnostics/observability_trends.py` folds the run manifests and the AI
+job ledger into a trend - per-phase latency against the previous window,
+provider cache-hit and failure rates per family and source, run/job failures
+with errors quoted, coverage from the scan's own counter. **Zero new
+measurement**, pinned by an AST test. Frozen by the golden fixture
+`observability_trends_v1`, whose inputs are hand-written to contain each shape
+the reader has a rule for.
+
+**It found something on its first live read.** `journal_import` has failed 9 of
+its last 12 recorded runs and `ticker_briefs` 11 of 30. The first is the dead
+Questrade OAuth refresh chain, which is already a known TRADER action (paste a
+fresh token into Journal > Health); the second is not yet explained. Neither is
+new behaviour - what is new is that one command says so instead of nobody
+counting.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4868 passed / 19 subtests**, exit 0 |
+| `observability_trends.py --window 5` | ran against live diagnostics, exit 0 |
+
+Selftest and the frozen bundle untouched: `scripts/diagnostics` is already a
+bundled package and this adds a module inside it, not a new top-level one.
+
+---
+
 ## 2026-08-24 night (8) - Wave 1, packet W6: P3/P4 machinery, runs gated
 
 **Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W6 DONE**;

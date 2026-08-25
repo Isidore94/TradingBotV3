@@ -1473,6 +1473,20 @@ and exe mtime recorded side by side in the checkpoint.
    consolidation.
 4. **P1.4 Finish observability depth.** Add representative benchmark/golden fixtures
    and trends for timings, provider calls, failures, coverage, and scan-stage latency.
+   *BUILT 2026-08-24 (packet W7).* `scripts/diagnostics/observability_trends.py`
+   reads the run manifests and `ai_job_ledger.jsonl` that already exist and folds
+   them into a trend: per-phase latency against the window before it, the
+   `provider.<family>` counter tree with cache-hit and failure rates, run and job
+   failure counts with the errors quoted, and coverage from the scan's own
+   `symbols_processed`. **Zero new measurement** — nothing is instrumented, timed
+   or run during a scan, and an AST test keeps it that way. Frozen by the golden
+   fixture `observability_trends_v1`, whose inputs are hand-written to contain
+   each shape the reader has a rule for (a phase with no baseline, a phase absent
+   from one run, a family with no attempts, a failed run, a mixed job record)
+   rather than a copy of one machine's diagnostics. Its first live read named
+   two real failures the desk had not been counting: `journal_import` 9 of 12
+   (the dead Questrade refresh chain, a trader action) and `ticker_briefs` 11 of
+   30.
 5. **P1.5 Do bounded repository hygiene.** Ignore generated desk JUnit output and
    remove retired Desk Link/satellite/mini-PC code only in an explicit, fully green
    cleanup packet. Do not mix cleanup with behavior changes.
