@@ -8,6 +8,39 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (3) - Wave 1, packet W1: the suite's teardown is bounded
+
+**Branch `testing-week-2026-08-24`.** Active item: Wave 1 of
+`docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md` §3. **W1 (plan.md
+P1.1) is DONE**; W2-W8 not started.
+
+**Measured, then fixed, then re-measured.** A full run under a thread-recording
+plugin found **22 tests leaving a thread alive past their own teardown and 19
+`run_strategy` threads still alive at session end** - exactly the standing crowd
+`conftest.py`'s GC block already named as unjoined. `conftest`'s new
+`retire_leaked_bounce_bots` calls BounceBot's own cooperative `stop(timeout=...)`
+for any strategy loop a test leaves behind, and fails the leaking test if one
+survives. After: **0 scanner threads survive the session**, 7 leaking tests left,
+all of which end on their own before the session does.
+
+The 06:30-07:00 PT flake class was already repaired on 2026-08-23 (the two panel
+tests pin their clocks); verified, not re-fixed.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4771 passed / 19 subtests**, exit 0 |
+| Determinism | three consecutive full runs, identical counts, exit 0 |
+| Stray scanner threads at session end | 19 -> **0** |
+
+Baseline before this packet was 4767 passed; the four new tests are
+`tests/test_suite_hermetic_teardown.py`. Smoke and selftest unchanged by this
+packet (no runtime module added or moved) and not re-run.
+
+**Nothing here changes a live gate.** Every canary and live gate listed in the
+two entries below is still owed.
+
+---
+
 ## 2026-08-24 night (2) - offline-build authorization; digest questions answered
 
 **Branch `testing-week-2026-08-24`.** After the R10 slate completed, the trader

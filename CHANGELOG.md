@@ -21,6 +21,43 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - Wave 1 offline slate
+
+**Packet W1 - the test suite's teardown is bounded (plan.md P1.1).** The
+hermetic-suite packet of 2026-08-18 closed the network half: an offline tripwire
+that refuses and RECORDS any socket an unmarked test opens, adapter-boundary stubs
+for IB, yfinance and the market-prep feeds, and `network`/`broker` as the only
+opt-outs. The teardown half was still open, and `conftest.py`'s
+garbage-collection block said so in its own honesty paragraph - "several tests
+leave threads running past their own teardown ... and nothing in this block joins
+them".
+
+Measured before it was fixed, with a thread-recording plugin over a full run:
+**22 tests left at least one thread alive past their own teardown, and 19
+`run_strategy` threads were still alive when the session ENDED.** A BounceBot
+strategy loop is not idle - it re-reads the watchlists, refreshes learning state
+and reloads Focus picks - so every later test was sharing mutable state with a
+scanner nobody was watching.
+
+No new machinery was needed, only a call: BounceBot already implements
+cooperative shutdown. `conftest.retire_leaked_bounce_bots` finds the owning bot
+through the thread's own `_target.__self__` (a name is a label anyone can set;
+the target IS the object that can be stopped), calls `stop(timeout=...)` once per
+BOT rather than once per thread, and FAILS the leaking test by name if one
+survives - the same rule the chart-worker drain already follows, because a
+teardown that swallows its timeout cannot prove the quiescence it exists to
+provide. Deliberately narrow: the other leaks the measurement found
+(`scan-*-drain`, `qt-health-audit`, `industry-board-refresh`, the Desk Link
+reader) finish on their own and were gone before the session ended, so a blanket
+"no thread outlives its test" rule would have failed 22 tests to fix 19 threads.
+
+Re-measured after the fix: **0 scanner threads survive the session**, 22 leaking
+tests down to 7, and three consecutive full runs agree on their counts. The
+wall-clock flake class named in the R10.V review - two panel tests that failed
+only between 06:30 and 07:00 PT, inside the open-burst digest window - was
+repaired on 2026-08-23 by pinning those tests' clocks rather than disabling the
+digest, and is verified still pinned.
+
 ### 2026-08-24 - The AWAY recap, the like-cohort view, two opt-in scopes, and R10.I
 
 **Packet 8 - an AWAY day ends in a recap, not a queue** (R1 trader amendment

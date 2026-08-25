@@ -1432,6 +1432,22 @@ and exe mtime recorded side by side in the checkpoint.
 
 1. **P1.1 Make the test suite hermetic.** Stop Qt app tests from starting live
    universe/yfinance work; keep explicit network/broker markers and bounded teardown.
+   *Built 2026-08-18 (offline tripwire, IB/yfinance/market-prep stubs, `network`/
+   `broker` opt-outs) and **completed 2026-08-24** (packet W1): the last unbounded
+   half of teardown is closed. Measured with a thread-recording plugin over a full
+   run: **22 tests left a thread running past their own teardown and 19
+   `run_strategy` threads were still alive when the session ENDED** - the standing
+   crowd `conftest.py`'s garbage-collection block already named and said it did not
+   join. `conftest.retire_leaked_bounce_bots` now calls BounceBot's own
+   `stop(timeout=...)` for any strategy loop a test leaves behind and FAILS the
+   leaking test if one survives; re-measured after the fix, **0 scanner threads
+   survive the session** and the other seven leaks (`scan-*-drain`,
+   `qt-health-audit`, `industry-board-refresh`, the Desk Link reader) all end on
+   their own before it. The wall-clock flake class (two panel tests that failed
+   only between 06:30 and 07:00 PT, inside the open-burst digest window) was
+   repaired 2026-08-23 by pinning those tests' clocks; verified still pinned.
+   Determinism evidence: three consecutive full runs, identical pass counts,
+   exit 0.*
 2. **P1.2 Resolve the measured D1 line-display defect.** After the testing week,
    decide the red-level threshold and total clutter budget from desk evidence. Ask
    before touching any fenced detector/scoring/alert-hosting file.

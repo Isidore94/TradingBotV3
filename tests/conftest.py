@@ -541,6 +541,103 @@ def load_fixture_contract(fixture: str | Path) -> FixtureContract:
     return FixtureContract(name=name, path=path, data=contract.data)
 
 
+# ---------------------------------------------------------------------------
+# Bounded retirement of leaked scanners (P1.1, 2026-08-24).
+#
+# MEASURED FIRST. A full-suite run with a thread-recording plugin found 22 tests
+# leaving at least one thread running past their own teardown, and 19
+# ``run_strategy`` threads still alive when the session ENDED. That is the
+# "standing crowd of bounce_bot_lib.legacy.run_strategy threads" the
+# garbage-collection block above names in its own honesty paragraph: it removed
+# the threshold-GC hazard and said plainly that it joined none of these.
+#
+# A strategy loop is not an idle thread. It re-reads the watchlist files,
+# refreshes learning state, reloads Focus picks, and on a desk with TWS open
+# would dial IB. One left running shares mutable state with every later test.
+#
+# BounceBot already implements cooperative shutdown - ``stop(timeout=...)`` sets
+# its stop event, disconnects, and joins its own threads - so the harness does
+# not need any new machinery, only to CALL it. A thread that survives anyway is
+# named and fails the leaking test, on the same rule as the chart drain above:
+# a teardown that swallows the timeout cannot prove the quiescence it exists to
+# provide.
+#
+# Deliberately narrow. The other leaks the same measurement found
+# (``scan-*-drain``, ``qt-health-audit``, ``industry-board-refresh``) finish on
+# their own and were gone before the session ended; a blanket "no thread may
+# outlive its test" rule would fail 22 tests to fix 19 threads that one rule
+# already covers.
+# ---------------------------------------------------------------------------
+
+#: Per-bot budget for the cooperative stop. Bounded, because a wedged worker
+#: must cost one slow teardown rather than a hung suite.
+BOUNCE_RETIREMENT_TIMEOUT_SECONDS = 5.0
+
+
+def owning_bounce_bot(thread):
+    """The BounceBot whose strategy loop this thread runs, or None.
+
+    Identified through the thread's own target rather than its name: a name is
+    a label anyone can set, while ``_target.__self__`` IS the object that owns
+    the loop and the only handle that can stop it.
+    """
+    target = getattr(thread, "_target", None)
+    if getattr(target, "__name__", "") != "run_strategy":
+        return None
+    owner = getattr(target, "__self__", None)
+    if owner is None or not callable(getattr(owner, "stop", None)):
+        return None
+    return owner
+
+
+def retire_leaked_bounce_bots(threads, *, timeout=BOUNCE_RETIREMENT_TIMEOUT_SECONDS):
+    """Cooperatively stop every bot behind ``threads``; return what still runs.
+
+    One ``stop()`` per BOT, not per thread: a bot's own stop joins its strategy,
+    API and evidence threads together, so calling it twice would only spend the
+    budget again.
+    """
+    import logging
+
+    owned = []
+    bots = {}
+    for thread in threads:
+        bot = owning_bounce_bot(thread)
+        if bot is not None:
+            owned.append(thread)
+            bots.setdefault(id(bot), bot)
+    for bot in bots.values():
+        try:
+            bot.stop(timeout=timeout)
+        except Exception:  # noqa: BLE001 - a failed stop is reported, never raised here
+            logging.exception("test teardown: BounceBot.stop() raised")
+    # Only threads this function was RESPONSIBLE for are reported. A thread it
+    # never tried to stop is not something it can honestly call a leak.
+    return [thread.name for thread in owned if thread.is_alive()]
+
+
+@pytest.fixture(autouse=True)
+def _retire_bounce_bots():
+    """Let no scanner outlive the test that started it."""
+    import threading as _threading
+
+    before = {id(thread) for thread in _threading.enumerate()}
+    yield
+    strayed = [
+        thread
+        for thread in _threading.enumerate()
+        if id(thread) not in before and owning_bounce_bot(thread) is not None
+    ]
+    if not strayed:
+        return
+    still_running = retire_leaked_bounce_bots(strayed)
+    if still_running:
+        raise AssertionError(
+            "BounceBot strategy thread(s) started by this test ignored a "
+            "cooperative stop and are still running: " + ", ".join(still_running)
+        )
+
+
 @pytest.fixture(autouse=True)
 def _drain_chart_workers():
     """Let no chart worker outlive the test that queued it.
