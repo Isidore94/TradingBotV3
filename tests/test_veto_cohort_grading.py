@@ -518,6 +518,11 @@ def test_the_scope_can_be_selected_on_demand():
         "like_cohort_grading",
         "evidence_report",
         "daily_digest",
+        # LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run gated:
+        # the enrichment pass refuses below the digest's ten-session counter,
+        # and the policy draft writes only `review_policy_draft.json`.
+        "journal_enrichment",
+        "review_policy_draft",
     ]
     # And the override is per-call: building again without it is untouched.
     assert default_slots()[1].run.__name__ == "run_daily_summary"

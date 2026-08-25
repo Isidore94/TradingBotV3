@@ -152,6 +152,24 @@ NEW_TABLES_V3: dict[str, str] = {
             imported_at TEXT NOT NULL
         )
     """,
+    # LOCAL-AI Phase 3 (packet W6). ADVISORY ONLY and deliberately its own
+    # table: R7's invariant I7 says tags, notes, reviews and planned risk belong
+    # to the trader, so a machine pass gets somewhere else to write. Append-only
+    # by convention - a re-run adds a row rather than rewriting what an earlier
+    # night believed - which is why there is no primary key on trade_id.
+    "ai_trade_enrichment": """
+        CREATE TABLE IF NOT EXISTS ai_trade_enrichment (
+            enrichment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id TEXT NOT NULL,
+            session_date TEXT NOT NULL DEFAULT '',
+            schema TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL DEFAULT '',
+            tags TEXT NOT NULL DEFAULT '',
+            evidence_json TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            generated_at TEXT NOT NULL DEFAULT ''
+        )
+    """,
 }
 
 NEW_INDEXES_V3 = (

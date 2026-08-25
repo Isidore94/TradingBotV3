@@ -1997,6 +1997,58 @@ class JournalStore:
                     (top_summary, top_confidence, _now_iso(), trade["trade_id"]),
                 )
 
+    def save_ai_enrichment(
+        self,
+        *,
+        trade_id: str,
+        session_date: str,
+        summary: str,
+        tags: Any = (),
+        evidence: Any = (),
+        model: str = "",
+        now: str = "",
+    ) -> None:
+        """Append one ADVISORY enrichment row (LOCAL-AI Phase 3).
+
+        Its own table on purpose. R7's invariant I7 says the trader owns tags,
+        notes, reviews, planned stop/risk and tax status, so no machine path
+        writes them - and the cheapest way to keep that true is to give the
+        machine somewhere else to write rather than a rule to remember.
+
+        Append-only: a second pass over the same trade adds a row rather than
+        rewriting what an earlier night believed, which is what makes the
+        history of the advice auditable.
+        """
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_trade_enrichment(
+                    trade_id, session_date, schema, summary, tags, evidence_json,
+                    model, generated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(trade_id),
+                    str(session_date or ""),
+                    "ai_trade_enrichment_v1",
+                    str(summary or ""),
+                    "; ".join(str(tag) for tag in (tags or ())),
+                    _json_dumps(list(evidence or ())),
+                    str(model or ""),
+                    str(now or _now_iso()),
+                ),
+            )
+
+    def list_ai_enrichment(self, trade_id: str) -> list[dict[str, Any]]:
+        """Every advisory row for one trade, oldest first."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ai_trade_enrichment WHERE trade_id = ? "
+                "ORDER BY enrichment_id",
+                (str(trade_id),),
+            ).fetchall()
+        return [_row_to_dict(row) for row in rows]
+
     def list_auto_tag_candidates(self, trade_id: str) -> list[dict[str, Any]]:
         with self.connection() as conn:
             rows = conn.execute(

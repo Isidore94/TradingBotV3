@@ -8,6 +8,44 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-24 night (8) - Wave 1, packet W6: P3/P4 machinery, runs gated
+
+**Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W6 DONE**;
+W7-W8 not started.
+
+Two slots appended, gated in two different ways because their gates are
+different things.
+
+**`journal_enrichment`** refuses below Phase 2's ten-clean-digest counter - no
+model, no write - and reads that counter from `digest.digest_gate_state` rather
+than keeping a second copy. Advisory only: a new `ai_trade_enrichment` table
+written through the `JournalStore` API, append-only, with the trader's
+`trade_annotations` row never opened (I7). Tags outside the
+`SETUPS_MAJOR`/`SETUPS_TEST` vocabulary are dropped and counted.
+
+**`review_policy_draft`** RUNS while its gate is unmet, deliberately: the gate
+IS two weeks of drafts, so refusing would make the window unreachable. It writes
+`review_policy_draft.json`, archives one copy per session, and says NOT MET in
+the draft's own notes. The live `review_policy.json` is never written and cannot
+be resolved from that module.
+
+**A new journal table, and no migration cost.** `NEW_TABLES_V3` is applied
+idempotently by `migrate_to_v3` on every open, so the advisory table appears on
+the live database at its next launch with no schema-version bump and no
+trader-present preparation.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4854 passed / 19 subtests**, exit 0 |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+
+Selftest and the frozen bundle untouched (`ai_jobs` is not in the bundle).
+**Both phase gates are owed**: ten clean digest sessions with a trader
+spot-audit before enrichment runs at all, and the two-week side-by-side plus the
+trader's quality sign-off before any draft becomes the live policy.
+
+---
+
 ## 2026-08-24 night (7) - Wave 1, packet W5: the weekly synthesis, gated
 
 **Branch `testing-week-2026-08-24`.** Active item: Wave 1. **W1-W5 DONE**;

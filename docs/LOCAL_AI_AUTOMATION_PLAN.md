@@ -603,6 +603,23 @@ That redesign has **not been done**. Concretely, for the next agent:
 
 ### Phase 3 — Journal enrichment (trader priority #2)
 
+> **MACHINERY BUILT 2026-08-24 (packet W6); the RUN is gated.**
+> `scripts/ai_jobs/enrichment.py`, slot `journal_enrichment`, APPENDED to
+> `default_slots()`. **Below Phase 2's ten-clean-digest-session counter it calls
+> no model and writes nothing** — the counter is read from
+> `digest.digest_gate_state`, never restated, so there is one definition of it
+> in the repo. Enriching a journal from a layer whose own facts have not been
+> audited is what the phase order exists to prevent.
+>
+> Advisory fields only, structurally: the pass writes one new table,
+> `ai_trade_enrichment`, through the `JournalStore` API, and never opens the
+> trader's `trade_annotations` row (I7). It is append-only — a re-run adds a
+> row rather than rewriting what an earlier night believed. Tags come from
+> `docs/SETUPS_MAJOR.md` / `SETUPS_TEST.md`; anything outside that vocabulary is
+> DROPPED and counted, because an invented family name is a bucket nobody can
+> compare against anything. The weekly retro named below is NOT built.
+
+
 - Nightly pass over new journal rows: summarize, tag with setup names from
   `docs/SETUPS_MAJOR.md` / `SETUPS_TEST.md`, link entries to that day's
   alert/review evidence. Augments the existing `AutoTagger`
@@ -619,6 +636,25 @@ That redesign has **not been done**. Concretely, for the next agent:
   (advisory fields), preserving the single-writer discipline.
 
 ### Phase 4 — Review-policy curation (trader priority #3)
+
+> **MACHINERY BUILT 2026-08-24 (packet W6); drafts only.**
+> `scripts/ai_jobs/policy_draft.py`, slot `review_policy_draft`, APPENDED last.
+> It writes `review_policy_draft.json` and archives one copy per session under
+> the AI store, so the two-week side-by-side has something to compare.
+>
+> **This one RUNS while its gate is unmet**, unlike the Phase 3 pass: the gate
+> IS two weeks of drafts, so a writer that refused would make the window
+> unreachable. Every draft carries the NOT-MET statement in its own `notes`
+> field until the window closes, and the window closing is only half the gate —
+> the trader's quality sign-off is the other half and no counter answers it.
+>
+> **`review_policy.json` is never written.** No code path in that module
+> resolves the live file; a test walks the AST for both the constant name and
+> the filename as a path token. Deltas come from the existing mechanical
+> translator (`draft_policy_from_state`, clamped); the model may only write the
+> sentence a chart shows. Ranks and annotates only, no suppression field, FIFO
+> untouched.
+
 
 - The `docs/REVIEW_LEARNING_LOOP.md` AI step (read review artifacts → write
   `review_policy.json` rank/annotate output) moves to **the frontier model, or

@@ -44,7 +44,13 @@ to surface the best alerts.
   `watch_kind`/`fill_source` presets (hint only, never auto-armed).
   `python scripts/review_policy.py --draft` turns the scoreboard callouts
   into `review_policy_draft.json` as a starting point - curate it, then
-  save as `review_policy.json`. The Alert Center picks the file up on mtime
+  save as `review_policy.json`. **Since 2026-08-24 the overnight slot
+  `review_policy_draft` writes that same draft file nightly** (LOCAL-AI Phase 4
+  machinery, packet W6): the same mechanical deltas, with a medium-tier model
+  adding only the annotation sentence. It writes the DRAFT and nothing else -
+  saving `review_policy.json` stays the trader's act, and no code path in that
+  module can resolve the live file. Its two-week side-by-side gate is unchanged;
+  every draft says so in its own `notes` until the window closes. The Alert Center picks the file up on mtime
   change, no restart needed (`review_guidance.py` scores each alert as
   take-prob*100 + segment-R*20 + delta*10; chart-watch hits always stay at
   the queue front). Rank and annotate only - never auto-suppress an alert

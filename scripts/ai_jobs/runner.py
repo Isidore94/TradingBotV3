@@ -394,7 +394,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     night's trades are in it means they read yesterday's. It also costs seconds
     rather than the briefs' hours, so putting it first spends nothing.
     """
-    from ai_jobs import briefs, cohorts, digest, evidence_report
+    from ai_jobs import briefs, cohorts, digest, enrichment, evidence_report, policy_draft
     from journal_runner import run_nightly_journal_import
 
     return [
@@ -497,6 +497,35 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=digest.run_daily_digest,
             reserve_minutes=10.0,
             description="Deterministic daily fact pack, plus medium-tier narration",
+            max_attempts=3,
+        ),
+        # LOCAL-AI Phase 3, APPENDED. Later phases append; they never reorder.
+        #
+        # It runs after the digest because its GATE is the digest's counter -
+        # ten clean fact packs - and below that gate it calls no model and
+        # writes nothing, so an ungated night costs a ledger row and a second.
+        # Advisory fields only: R7's I7 keeps tags, notes and planned risk with
+        # the trader, and this pass writes its own table instead.
+        JobSlot(
+            name="journal_enrichment",
+            run=enrichment.run_journal_enrichment,
+            reserve_minutes=20.0,
+            description="Advisory summaries and setup tags for the night's journal rows (gated)",
+            max_attempts=3,
+        ),
+        # LOCAL-AI Phase 4, APPENDED last.
+        #
+        # Unlike the pass above, this one RUNS while its gate is unmet - the
+        # gate IS two weeks of drafts compared side by side, so a writer that
+        # refused would make the window unreachable. It writes
+        # `review_policy_draft.json` and archives one copy per session; the live
+        # `review_policy.json` is the trader's to save, and no code path here
+        # can resolve it.
+        JobSlot(
+            name="review_policy_draft",
+            run=policy_draft.run_review_policy_draft,
+            reserve_minutes=10.0,
+            description="Draft review policy (ranks and annotates only; never the live file)",
             max_attempts=3,
         ),
     ]

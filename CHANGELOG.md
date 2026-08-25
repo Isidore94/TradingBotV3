@@ -23,6 +23,43 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ### 2026-08-24 - Wave 1 offline slate
 
+**Packet W6 - LOCAL-AI Phase 3 and Phase 4 machinery, runs gated.** Both were
+authorized ahead of their phase gates on the R10.I pattern, and they are gated
+in DIFFERENT ways because their gates are different things.
+
+**Phase 3, journal enrichment** (`ai_jobs/enrichment.py`, slot
+`journal_enrichment`). Below Phase 2's ten-clean-digest-session counter it calls
+no model and writes nothing - and it reads that counter from
+`digest.digest_gate_state` rather than restating it, so the repo has one
+definition of "ten clean digest sessions". Enriching a journal from a layer
+whose own facts have never been audited is what the phase order exists to
+prevent. Advisory fields only, and structurally so: it writes one new table,
+`ai_trade_enrichment`, through the `JournalStore` API, and never opens the
+trader's `trade_annotations` row (I7). The table is append-only - a re-run adds
+a row rather than rewriting what an earlier night believed. Tags come from
+`SETUPS_MAJOR.md`/`SETUPS_TEST.md`; anything outside that vocabulary is DROPPED
+and counted, because an invented family name is a bucket nobody can compare
+against anything.
+
+**Phase 4, the policy draft** (`ai_jobs/policy_draft.py`, slot
+`review_policy_draft`). This one RUNS while its gate is unmet, and that is not
+an inconsistency: **the gate IS two weeks of drafts**, so a writer that refused
+until the window passed would make the window unreachable. It writes
+`review_policy_draft.json`, archives one copy per session so the comparison has
+something to compare, and carries the NOT-MET statement in the draft's own
+`notes` until the window closes - which is still only half the gate, since the
+trader's quality sign-off is the other half and no counter answers it.
+`review_policy.json` is never written, and no code path in the module resolves
+it. Deltas come from the existing mechanical translator, clamped; the model may
+only write the sentence a chart shows. Ranks and annotates only, no suppression
+field, FIFO untouched.
+
+**The boundary is walked, not asserted.** AST tests check that neither module
+names the live policy file as a path token, that neither writes a trader-owned
+journal field or calls the trader-facing saves, and that neither imports a live
+decision module. Path scans deliberately ignore prose, so both modules stay free
+to NAME the files they are forbidden to write in the sentences forbidding it.
+
 **Packet W5 - the weekly synthesis: machinery built, runs gated.** LOCAL-AI
 §7.3 listed this under "What is NOT built" with the cadence and the gate already
 decided and only the authorization missing. The trader gave it for the MACHINERY
