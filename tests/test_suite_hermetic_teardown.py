@@ -100,6 +100,24 @@ def test_retirement_is_bounded_and_reports_what_it_could_not_stop():
         assert not thread.is_alive()
 
 
+def test_a_stop_exception_is_reported_even_if_the_thread_joined():
+    """A cleanup exception cannot become a green teardown after joining."""
+    import conftest
+
+    class _RaisesAfterJoin(_FakeBot):
+        def stop(self, timeout: float = 10.0) -> None:
+            super().stop(timeout=timeout)
+            raise RuntimeError("stop cleanup failed after join")
+
+    bot = _RaisesAfterJoin()
+    thread = bot.start()
+
+    failures = conftest.retire_leaked_bounce_bots([thread], timeout=1.0)
+
+    assert not thread.is_alive()
+    assert failures and "stop cleanup failed after join" in failures[0]
+
+
 def test_a_thread_that_is_not_a_bounce_bot_is_left_alone():
     """The teardown retires scanners, not every thread a test happens to start."""
     import conftest

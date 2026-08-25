@@ -606,14 +606,19 @@ def retire_leaked_bounce_bots(threads, *, timeout=BOUNCE_RETIREMENT_TIMEOUT_SECO
         if bot is not None:
             owned.append(thread)
             bots.setdefault(id(bot), bot)
+    failures = []
     for bot in bots.values():
         try:
             bot.stop(timeout=timeout)
-        except Exception:  # noqa: BLE001 - a failed stop is reported, never raised here
+        except Exception as exc:  # noqa: BLE001 - returned to the fixture below
             logging.exception("test teardown: BounceBot.stop() raised")
+            failures.append(
+                f"BounceBot.stop() raised {type(exc).__name__}: {exc}"
+            )
     # Only threads this function was RESPONSIBLE for are reported. A thread it
     # never tried to stop is not something it can honestly call a leak.
-    return [thread.name for thread in owned if thread.is_alive()]
+    failures.extend(thread.name for thread in owned if thread.is_alive())
+    return failures
 
 
 @pytest.fixture(autouse=True)
@@ -633,8 +638,8 @@ def _retire_bounce_bots():
     still_running = retire_leaked_bounce_bots(strayed)
     if still_running:
         raise AssertionError(
-            "BounceBot strategy thread(s) started by this test ignored a "
-            "cooperative stop and are still running: " + ", ".join(still_running)
+            "BounceBot teardown failed for thread(s) started by this test: "
+            + ", ".join(still_running)
         )
 
 
