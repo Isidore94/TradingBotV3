@@ -21,6 +21,71 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-24 - R10.E/F/G/H: provenance, the other cohort, the tape, and the words
+
+**R10.E - Focus membership becomes an episode.** Audit F5: 244 of 499
+(symbol, side) pairs - **49%** - appear on two or more sessions, DOCN SHORT on
+seven, and the snapshot store cannot say whether that is a name surviving the
+day roll or the trader re-adding it. `focus_membership_events.jsonl`
+(`focus_membership_event_v1`) records episodes, so a re-add after a departure
+is a NEW `membership_episode_id`. Three refusals carry it: the pick key
+includes the **category** (F3 - a name on both the swing and M5 list silently
+lost a row, and the CSV's zero multi-source keys is the signature of that
+collision, not evidence against it); no marker in a store with **no** markers
+is `unknown_legacy`, never `trader` (F4 measured `focus_auto_picks.json` exists
+for no historical date); and a missed snapshot is an `observation_gap` row,
+because membership is never reconstructed from current state.
+`expire_m5_if_new_day` emits **one row per name**, so a survivor is visible
+rather than hidden inside a "cleared N". Emitted from the ONE Focus writer and
+never at the pick's expense.
+
+**R10.F - the likes get graded too.** Audit C1: 52 `like_claim` rows over two
+sessions and **no** `like_cohort_*` file. The trader's rejections had a forward
+record; their endorsements had none. `like_cohort` mirrors the veto trio
+deliberately - same `_pick_key`, same first-of-day rule, same sideless refusal,
+same delegate through path parameters - so a difference between the two cohorts
+comes from the data and never from two implementations that drifted. The cohort
+source is the **claimed setup id** rather than a reason code, and stamps carry
+UTC plus `session_date` (ground rule 7). `like_cohort_grading` is **appended**
+after `veto_cohort_grading`. **First live run: 45 claims merged and graded, 28
+cohorts, 0 skipped for no side** - and because the rollup routes through R10.C's
+`evidence_stats`, it arrived with the robust half already attached.
+
+**R10.G - the machine's half of the day's record.** Audit C2:
+`market_environment_annotations.jsonl` **did not exist**, so the regime the desk
+operated under was unrecorded and unrecoverable. Every shift is now a row from
+the ONE setter, keeping **both** the auto read and a trader override, because
+the difference between them is the agreement rate and an agreement rate needs
+the disagreements. `daily_market_context_v1` carries one row per session at
+close+grace, completed at next launch if missed and flagged `completed_late` -
+never fabricated, so a session nobody measured leaves a gap.
+`config/market_calendar.json` overlays the computed rules for what a rules
+engine cannot know; a year it does not cover reports **DEGRADED** on System
+Health rather than silently falling through.
+
+**R10.H - somewhere to write what you thought.** `market_journal.jsonl`
+(`market_journal_entry_v1`) behind one service, two surfaces: a **Journal tab**
+on the Trading Desk after Capture (M5 default, Ctrl+Enter commits) and a
+left-nav **Market Journal** page (entries, the environment timeline with its
+agreement rate, the calendar strip, R10.G's day-context row). The existing
+"Journal" page stays the trade/tax journal - the near-identical labels are
+deliberate: one records what you TRADED, the other what you THOUGHT.
+After-the-fact entries are first class and **never backdated**: an entry written
+Saturday about Friday carries both stamps, and `written_after_the_session` is
+COMPUTED rather than claimed, so a caller cannot set it wrongly. Corrections
+supersede and the original stays on disk. The agreement rate refuses to
+flatter - zero comparable sessions is UNMEASURED, not 100%. A failed write is
+reported as failed and never as saved.
+
+- **Frozen exe rebuilt and verified**: the trigger fired (new page, seven new
+  lazily-imported modules), `selftest.LAZY_ENGINE_MODULES` gained them all
+  disjoint from `PACKAGES_NOT_IN_THE_BUNDLE`, and
+  `dist\TradingBotV3\TradingBotV3.exe --selftest` returned **68/68 (frozen)**,
+  exit 0. Smart App Control did not refuse this hash - which per its per-file
+  nature says nothing about the next build.
+- **Mechanics canaries owed** for R10.E, R10.G and R10.H (and R10.B's, still
+  open). Building a packet never marks its live gate met.
+
 ### 2026-08-24 - R10.D: the tracker's transitions become an authority
 
 - **The setup tracker is a 951 MB snapshot with no memory**, and audit S1

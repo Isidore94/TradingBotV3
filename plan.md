@@ -1276,7 +1276,7 @@ second scoreboard.
    later than the run's `data_session`. `tier_outcomes` horizons in exchange
    sessions with `sessions_spanned` and a `stale_horizon` flag, and SPY-relative
    columns populated from cached daily bars (no IB).
-6. **R10.E Focus provenance** (F1–F6). `focus_membership_events.jsonl`
+6. **R10.E Focus provenance** (F1–F6) - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** `focus_membership_events.jsonl`
    (`focus_membership_event_v1`) emitted by the one Focus writer, with a
    `membership_episode_id` and an owner of `trader` | `machine` |
    `unknown_legacy`; `expire_m5_if_new_day` emits `expired` per name it clears,
@@ -1287,18 +1287,18 @@ second scoreboard.
    snapshot writes an explicit `observation_gap` row — membership is never
    reconstructed from current state. Outcome rows carry `days_on_list` and an
    age bucket; the rollup adds origin and age via `evidence_stats`.
-7. **R10.F LIKE cohort grading** (C1, C3). `like_cohort_{picks,outcomes,performance}.csv`
+7. **R10.F LIKE cohort grading** (C1, C3) - **BUILT 2026-08-24, GREEN.** First run graded 45 claims across 28 cohorts. `like_cohort_{picks,outcomes,performance}.csv`
    mirroring the veto trio; a deterministic `like_cohort_grading` slot
    **appended** after `veto_cohort_grading` (later phases append, never
    reorder). Stamps carry UTC + `session_date`, which makes the ET/PT mismatch
    moot.
-8. **R10.G Market context ledger, auto-shift rows, calendar** (C2, season).
+8. **R10.G Market context ledger, auto-shift rows, calendar** (C2, season) - **BUILT 2026-08-24, GREEN; mechanics canary OWED.**
    Every auto-regime shift becomes a row. `daily_market_context.jsonl`
    (`daily_market_context_v1`), one row per session at close+grace, completed at
    next launch if missed with a `completed_late` flag and **never fabricated**.
    `config/market_calendar.json` multi-year capable, with a visible **degraded**
    state when the active year is not covered.
-9. **R10.H Market Journal: store and two surfaces.** `market_journal.jsonl`
+9. **R10.H Market Journal: store and two surfaces** - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** Frozen exe rebuilt, `--selftest` 68/68 (frozen). `market_journal.jsonl`
    (`market_journal_entry_v1`) behind one writer/service used by both surfaces:
    a "Journal" tab on the Trading Desk after "Capture" (M5 default in-session,
    Ctrl+Enter commits) and a left-nav "Market Journal" page (six D1 charts

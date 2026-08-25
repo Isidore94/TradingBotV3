@@ -114,7 +114,7 @@ also starts the two-week collection clock that gates R10.I.
 
 ---
 
-## 2026-08-24 evening - R10 build slate (packets 1-3 of 10 done)
+## 2026-08-24 evening - R10 build slate (packets 1-7 of 10 done)
 
 **Branch `testing-week-2026-08-24`.** Building the slate authorized in
 `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` §4: R10.B-R10.H, the AWAY
@@ -126,19 +126,20 @@ sequencing override.
 | **R10.B** outcome semantics + path capture | **BUILT** - canary owed |
 | **R10.C** evidence_stats + scoreboard | **BUILT** |
 | **R10.D** tracker transition ledger | **BUILT** |
-| R10.E Focus membership events | not started |
-| R10.F like_cohort_grading | not started |
-| R10.G market context ledger | not started |
-| R10.H Market Journal + two surfaces | not started |
+| **R10.E** Focus membership events | **BUILT** - canary owed |
+| **R10.F** like_cohort_grading | **BUILT** |
+| **R10.G** market context ledger | **BUILT** - canary owed |
+| **R10.H** Market Journal + two surfaces | **BUILT** - canary owed |
 | AWAY day recap | not started |
 | Two opt-in scopes | not started |
 | R10.I machinery | not started |
 
-| Check after R10.D | Result |
+| Check after R10.H | Result |
 |---|---|
-| `pytest tests/ -q` | **4640 passed / 19 subtests**, exit 0 |
+| `pytest tests/ -q` | **4708 passed / 19 subtests**, exit 0 |
 | `scripts/smoke_check.py` | **7/7**, exit 0 |
-| `launch_gui.py --selftest` | **58/58**, exit 0 |
+| `launch_gui.py --selftest` | **68/68**, exit 0 |
+| `dist\TradingBotV3\TradingBotV3.exe --selftest` | **68/68 (frozen)**, exit 0 |
 | Golden fixtures | **byte-identical**, SHA-256 verified on all five |
 
 **R10.B touches a live writer, so its mechanics canary is OWED.** Building a
@@ -146,6 +147,30 @@ packet never marks its live gate met. One live session is needed to confirm
 that LRSI crossings now register gradeable outcome rows (the engine has been
 firing ungradeable alerts since it shipped) and that H1 stamps land on the bar
 close.
+
+**The frozen exe was rebuilt and it RAN.** R10.H fired the trigger (a new
+left-nav page and seven new lazily-imported modules), so the bundle was rebuilt
+and `--selftest` returned 68/68 (frozen), exit 0. Smart App Control did not
+refuse this hash. **That says nothing about the next build** - SAC verdicts are
+per file hash - and the desk still runs from source, so this is verification
+rather than delivery.
+
+**Three more canaries are now owed: R10.E, R10.G, R10.H** - a live session
+each, confirming Focus membership events appear on an add/remove/day-roll, that
+a regime shift writes a row, and that a journal entry round-trips through both
+surfaces. R10.B's is still open. Building a packet never marks its live gate
+met.
+
+**What R10.F found on its first run:** 45 LIKE claims merged and graded across
+28 cohorts. Read it beside the veto cohort on the weekend surface - the two are
+the halves of one decision, and this is the first time both have had a forward
+record.
+
+**File-scoped ask-first, answered in session:** R10.H edits
+`alert_center_panel.py`, which houses alert code. The trader authorized the
+packet explicitly on 2026-08-24 ("go ahead and do R10E R10F R10G R10H"). The
+edit is presentation only - a tab, a text box, a save button, a shortcut - and
+touches no alert, tier, fold, digest or queue behaviour.
 
 **R10.D: one audit premise did NOT reproduce, and that is the finding.**
 S2 (setups carrying a mark dated later than the run's `data_session`) was
