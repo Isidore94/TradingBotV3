@@ -1,6 +1,6 @@
 # TradingBotV3 documentation index
 
-Last reconciled: **2026-08-25**
+Last reconciled: **2026-08-26**
 
 Start here when a supporting detail is not in the four root documents. This index
 classifies every maintained Markdown document so a historical plan cannot be mistaken
@@ -16,6 +16,7 @@ for current status.
 | [`CURRENT_CHECKPOINT.md`](../CURRENT_CHECKPOINT.md) | Active item, branch, working state, and verification checkpoint |
 | [`WISHLIST.md`](../WISHLIST.md) | Candidate integrations; never an implementation queue |
 | [`CLAUDE.md`](../CLAUDE.md) / [`AGENTS.md`](../AGENTS.md) | Agent operating context; kept as identical copies |
+| [`BRANCH_HISTORY.md`](BRANCH_HISTORY.md) | Branch provenance: what every development branch held, where it landed, and the containment proof required before deleting one. Not a roadmap |
 
 If a supporting document claims a different implementation status, the root
 `CHANGELOG.md`/`plan.md` pair wins.
@@ -61,6 +62,7 @@ status.
 | [`SETUPS_TEST.md`](SETUPS_TEST.md) | AI-stated study/research setup doctrine for trader correction |
 | [`BROKER_ADAPTERS.md`](BROKER_ADAPTERS.md) | Deferred provider/broker boundary design; execution remains out of scope |
 | [`SHIP_READINESS.md`](SHIP_READINESS.md) | Packaging/cleanup direction, subordinate to the current single-main topology |
+| [`prompts/TRADE_ANALYSIS_OPUS_ULTRACODE_PROMPT.md`](prompts/TRADE_ANALYSIS_OPUS_ULTRACODE_PROMPT.md) | Reusable operator prompt for an Opus trade-analysis session on the desk: the setup scoreboard read, the earliness audit, and the AEP DT case. Analysis-only by construction - it forbids detector/scoring/alert edits and requires every promote/demote to name its `plan.md` §7.1 rung. It authorizes nothing and marks no gate met |
 
 ## Historical evidence: do not use as the current roadmap
 

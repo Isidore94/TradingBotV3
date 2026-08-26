@@ -8,6 +8,49 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-26 - CONSOLIDATION: the trunk is `main` again
+
+**Branch `main`.** Trader-directed branch cleanup. `testing-week-2026-08-24` was
+fast-forwarded onto `main` (354 commits, 480 files); `main` had been a strict
+ancestor of it, so no conflict was possible and none was resolved. Three fully
+contained branches were deleted; one unlanded document was merged; one branch was
+deliberately left open.
+
+### What the working branch is now
+
+Active work continues on **`testing-week-2026-08-24`**, which was kept alive for the
+GUI-optimization pass in flight. `main` now carries everything that branch carried as
+of `ed277a7`. The next consolidation is a fast-forward again if that branch keeps
+`main` as an ancestor.
+
+### Verification - read this before quoting a number
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **NOT RE-RUN for this merge.** The `ed277a7` baseline of 4844 passed / 19 subtests, exit 0, describes `main` exactly |
+| Code-state proof | `git diff --name-only ed277a7 HEAD` returns **only `.md` files** - the verified code tree is byte-identical |
+| `scripts/smoke_check.py` | Not re-run; unchanged from the `ed277a7` 7/7 |
+| `launch_gui.py --selftest` | Not re-run; unchanged from the `ed277a7` 70/70 |
+| Packaging triggers | **None.** No dependency, no non-`.py` runtime asset, no new `scripts/` package, no dynamic import, no `__file__`/`ROOT_DIR`/`sys.path` change. No rebuild owed |
+
+The consolidation ran in a cloud container with no project virtualenv and Python
+3.11 against a project floor of 3.12. A suite run there would have proved nothing,
+so none was claimed. The Markdown-only diff is what carries the baseline forward,
+and it is checkable in one command.
+
+**Live gates:** none marked met, none waived. This merge promotes nothing, changes
+no detector, scorer or alert, and moves no row.
+
+### Held open, deliberately
+
+`claude/alert-center-quality-packet-5btu3w` (8 commits, tip `57fcf47`) stays
+unmerged pending two trader answers: the file-scoped ask-first rule governs it
+because it edits `scripts/ui/panels/alert_center_panel.py`, and it collides with
+`main` at `docs/ALERT_CENTER_QUALITY_PACKET.md`, where a *different* historical file
+already lives. Both are written up in `docs/BRANCH_HISTORY.md`.
+
+---
+
 ## 2026-08-25 night - the Questrade chain has ONE owner; stale failures are reachable again
 
 **Branch `testing-week-2026-08-24`.** Trader-directed after a fresh token was

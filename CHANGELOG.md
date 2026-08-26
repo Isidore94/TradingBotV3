@@ -1,7 +1,7 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-25** from `testing-week-2026-08-24` after the Sol
-adversarial reproduction pass.
+Last reconciled: **2026-08-26** on `main`, at the consolidation that
+fast-forwarded `testing-week-2026-08-24` onto the trunk.
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -18,6 +18,56 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-26 - the Phase 0.5 work is on `main`, and the branch chain is retired
+
+**Three weeks of Phase 0.5 development became the trunk.** From 2026-08-04 the work
+ran on a nested chain of branches rather than on `main`, because the trader was
+running unmerged branch code in production through a scheduled task
+(`docs/CHECKPOINT_REVIEW_2026-08-08.md`). The chain ended at
+`testing-week-2026-08-24`, which contained every commit of its predecessors, and
+`main` was a **strict ancestor** of it. The consolidation was therefore a
+fast-forward: 354 commits, 480 files, no conflict, and no merge resolution
+performed. `git merge-base --is-ancestor` proved the relationship before the merge
+rather than after it.
+
+**The code state on `main` is byte-identical to the state that was verified.** The
+only non-`main` content added beside the fast-forward is Markdown, so the
+4844-passed/19-subtest baseline recorded for `ed277a7` describes `main` exactly. It
+was **not** re-run for this merge: the container this consolidation ran in has no
+project virtualenv and Python 3.11 against a project floor of 3.12, so a run there
+would have proved nothing. That is a stated limit of this entry, not a claim of
+green.
+
+**One unlanded document was brought in.** `claude/trade-analysis-opus-prompt`, a
+single additive commit from 2026-08-22, contributes
+`docs/prompts/TRADE_ANALYSIS_OPUS_ULTRACODE_PROMPT.md` - the Opus trade-analysis
+prompt carrying the scoreboard read, the earliness audit and the AEP DT case. Its
+context list still told the reader to load `SOL_PROGRESS.md`, which this repository
+deleted when `CHANGELOG.md` and `CURRENT_CHECKPOINT.md` took over that role; the
+reference now names the pair. The prompt is classified in `docs/README.md` and is
+authorization for nothing.
+
+**Three branches were deleted, and what they were is written down.** New
+`docs/BRANCH_HISTORY.md` records every branch in the chain with its commit count,
+date range, tip SHA and disposition, so deleting a merged branch never destroys the
+only account of what it held. `claude/ticker-briefs-hardening-imcm8r` (94 commits),
+`phase05-r2-focus-gating-strength-board` (150) and `phase05-integration-blitz` (308)
+were each proved contained in `main` before deletion. `testing-week-2026-08-24` is
+**kept** - the active GUI-optimization work continues on it.
+
+**The Alert Center quality packet remains unmerged, by decision.**
+`claude/alert-center-quality-packet-5btu3w` (8 commits, tip `57fcf47`, 2026-08-18)
+builds the alert-delivery measurement surface `GUI_TRADE_DISCOVERY_LEARNING_PLAN.md`
+sec 10.3/17 specify but never built: `scripts/alert_quality.py`,
+`scripts/alert_delivery_events.py`, a delivery-capture emit in
+`scripts/ui/panels/alert_center_panel.py`, a System Health surface, and its tests.
+Two things block it and both are recorded rather than guessed at - it **edits alert
+code**, so the file-scoped ask-first rule governs the merge itself; and it adds its
+own `docs/ALERT_CENTER_QUALITY_PACKET.md` at the same path where `main` already
+carries the *different* historical P1.6 packet recovered from `671ee57`, so a
+content merge would silently destroy one of the two. Nothing on `main` depends on
+it. No alert behavior changed in this consolidation.
 
 ### 2026-08-25 - the Questrade credential chain has one owner
 

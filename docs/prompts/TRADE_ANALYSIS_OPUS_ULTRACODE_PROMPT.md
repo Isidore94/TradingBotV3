@@ -18,7 +18,8 @@ report plus a ranked recommendation list.
 ## Context you must load first
 Read `plan.md` sections 5 (invariants), 6 (live validation), 7 (shadow evidence and
 promotion ladder), and 12 (work queue); `docs/SETUPS_MAJOR.md`; `docs/SETUPS_TEST.md`;
-`docs/REVIEW_LEARNING_LOOP.md`; and `SOL_PROGRESS.md`. Every promote/demote
+`docs/REVIEW_LEARNING_LOOP.md`; and `CHANGELOG.md` beside `CURRENT_CHECKPOINT.md`
+(the pair that replaced `SOL_PROGRESS.md`). Every promote/demote
 recommendation you make must be expressed in terms of the Section 7.1 ladder (which
 rung the setup is on, which gate is or isn't met) — never recommend jumping rungs,
 and never suggest a shadow engine influence live decisions.
