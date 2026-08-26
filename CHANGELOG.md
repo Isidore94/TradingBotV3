@@ -19,6 +19,29 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-25 - the AWAY Recap draws the day's alerts and charts them
+
+**Correction to the entry below.** "The AWAY Recap is wired to the Alert Center
+backing list" was true at the input and overstated as a claim about the page:
+`build_recap` has always returned `classified_alerts` and
+`AwayRecapPanel._render` never read it, so the alerts reached the page and were
+dropped. The only trace of a full AWAY day was the word "alert(s)" in the
+summary line, and the page carried no chart at all - `symbolActivated` was
+declared with no emitter and no host connection.
+
+`AwayRecapPanel` now draws an **alerts table** - time, symbol, side, tier, a
+`D1` flag and the trigger - in the order the day produced them, with no
+re-ranking. A D1 row is flagged rather than merged away, because the Alert
+Center keeps that feed separate. Activating an alert or swing row emits
+`symbolActivated`, which `MainWindow` connects to
+`alert_center.show_board_symbol`: **the same snapshot popup** the Strength
+Board, RS/RW and Industry boards open (the R4 pattern), so the chart carries the
+bot-backed series, the painted levels and the capture rail and no second chart
+widget exists anywhere. A blank symbol asks for no chart.
+
+The backing list remains PROCESS-scoped, so the R10 10a live gate needs a
+restart before a session and the page read after its close. It is unmet.
+
 ### 2026-08-25 - record correction: the restarted-process outcome sweep RAN
 
 The 2026-08-25 after-close outcome sweep was recorded as a FAILED canary in

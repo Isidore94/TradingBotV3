@@ -8,6 +8,66 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-25 evening (6) - the recap had no OUTLET: alerts drawn, rows chartable
+
+**Branch `testing-week-2026-08-24`.** Trader-directed, after reading the live
+page: *"nothing useful appears in the away journal. It's just a few tickers no
+charts."* Correct, and packet 2 fixed only half of it.
+
+**Correction to this checkpoint's own packet-2 entry.** It said the AWAY Recap
+"is wired to the Alert Center backing list". That is true at the INPUT and was
+too strong as a claim about the page: `build_recap` has always returned
+`classified_alerts`, and `AwayRecapPanel._render` **never read it**. The page
+drew three tables - best swings, staged picks, Focus names - so a whole AWAY
+day's alerts left exactly one trace, the word "alert(s)" in the summary line.
+Packet 2 connected a pipe to a blocked outlet.
+
+**What the trader was actually looking at, measured.** The running desk is pid
+36300, started **2026-08-24 21:48**, i.e. before any of today's commits, so
+`set_alerts` had no caller in that process either. Run headless against today's
+files, the recap says:
+
+> `10 ranked swing(s), 0 alert(s), 54 staged pick(s) and 0 Focus name(s) for 2026-08-25.`
+
+Ten swing rows and fifty-four staged tickers, and nothing else - "a few
+tickers". And there was **no chart anywhere on the page**: `symbolActivated` was
+declared and nothing emitted it, while `app.py` connected only the Strength
+Board's.
+
+**Built.**
+
+- **An alerts table** - time, symbol, side, tier, a `D1` flag and the trigger -
+  in the order the day produced them. No re-ranking, which is this page's own
+  provenance rule. A D1 row is FLAGGED rather than merged away, because the
+  Alert Center keeps that feed separate (it is untiered) and a reader has to be
+  able to tell them apart.
+- **Rows open the desk's existing snapshot popup.** `_activate_alert` /
+  `_activate_swing` emit `symbolActivated`; `MainWindow` connects it to
+  `alert_center.show_board_symbol` - **the same popup** the Strength Board,
+  RS/RW and Industry boards use (the R4 pattern), so the chart carries the
+  bot-backed series, the painted levels and the capture rail and **no second
+  chart widget exists**. A blank symbol asks for nothing: an empty popup reads
+  as a broken chart rather than an empty row.
+
+Fail-before: seven new tests, all seven red (`panel.alerts` did not exist;
+`symbolActivated` had no emitter and no host connection).
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4830 passed / 19 subtests**, pytest exit **0** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **70/70**, exit 0 |
+
+4823 -> 4830: seven added. No packaging trigger. The 93% segfault seen once
+earlier did not recur in either of the two runs since.
+
+**Still true and still owed:** the backing list is PROCESS-scoped, so the test
+is a restart BEFORE a session and the page AFTER its close. Restarting now shows
+no alerts, because today's went with the old process. R10 10a's live gate is
+unchanged and unmet.
+
+---
+
 ## 2026-08-25 evening (5) - what held the strategy loop from 12:55 to 14:27 - evidence only, no fix
 
 **Branch `testing-week-2026-08-24`.** Packet 5. **No code change**, no scheduling

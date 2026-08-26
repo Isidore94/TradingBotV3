@@ -347,3 +347,120 @@ def test_the_recap_feed_is_oldest_first_and_carries_the_d1_rows(monkeypatch):
             window.close()
         except Exception:
             pass
+
+
+# ==========================================================================
+# the outlet: the alerts the page is handed must be VISIBLE, and chartable
+# ==========================================================================
+def _recap_panel():
+    from ui.panels.away_recap_panel import AwayRecapPanel
+
+    QApplication.instance() or QApplication([])
+    return AwayRecapPanel()
+
+
+def test_the_days_alerts_are_drawn_not_only_counted():
+    """The page was handed the alerts and had nowhere to put them.
+
+    `build_recap` produced `classified_alerts` and `_render` never read it, so
+    the only trace of a whole AWAY day's alerts was the word "alert(s)" in the
+    summary line. A recap that drops the thing it was opened for is not a
+    recap.
+    """
+    panel = _recap_panel()
+    panel._render(
+        {
+            "summary": "s",
+            "classified_alerts": [
+                {"symbol": "AAA", "side": "LONG", "tier": "S", "trigger": "VWAP reclaim",
+                 "time_text": "10:00:00", "is_d1": False},
+                {"symbol": "BBB", "side": "SHORT", "tier": "", "trigger": "zone1",
+                 "time_text": "11:30:00", "is_d1": True},
+            ],
+        }
+    )
+
+    assert panel.alerts.rowCount() == 2
+    row = [panel.alerts.item(0, column).text() for column in range(panel.alerts.columnCount())]
+    assert row[:4] == ["10:00:00", "AAA", "LONG", "S"]
+    assert panel.alerts.item(1, 4).text() == "D1", "a D1 row is flagged, never merged away"
+    assert panel.alerts.item(0, 4).text() == ""
+
+
+def test_the_alert_order_is_the_order_the_day_produced():
+    """No re-ranking anywhere on this page (the recap's own provenance note)."""
+    panel = _recap_panel()
+    panel._render(
+        {
+            "classified_alerts": [
+                {"symbol": "AAA", "time_text": "09:00:00"},
+                {"symbol": "BBB", "time_text": "10:00:00"},
+                {"symbol": "CCC", "time_text": "11:00:00"},
+            ]
+        }
+    )
+    assert [panel.alerts.item(index, 1).text() for index in range(3)] == ["AAA", "BBB", "CCC"]
+
+
+def test_an_empty_alert_list_leaves_an_empty_table_not_a_stale_one():
+    panel = _recap_panel()
+    panel._render({"classified_alerts": [{"symbol": "AAA", "time_text": "09:00:00"}]})
+    panel._render({"classified_alerts": []})
+    assert panel.alerts.rowCount() == 0
+
+
+def test_activating_an_alert_row_asks_the_host_to_chart_it():
+    """The page owns no chart. It ASKS, exactly as the Strength Board does, and
+    the host opens the Alert Center's existing snapshot popup."""
+    panel = _recap_panel()
+    panel._render({"classified_alerts": [{"symbol": "AAA", "time_text": "09:00:00"}]})
+    seen: list[str] = []
+    panel.symbolActivated.connect(seen.append)
+
+    panel._activate_alert(panel.alerts.item(0, 1))
+
+    assert seen == ["AAA"]
+
+
+def test_activating_a_swing_row_charts_it_too():
+    panel = _recap_panel()
+    panel._render({"best_swings": [{"rank": 1, "symbol": "VNO", "side": "LONG", "text": "1. VNO"}]})
+    seen: list[str] = []
+    panel.symbolActivated.connect(seen.append)
+
+    panel._activate_swing(panel.swings.item(0, 1))
+
+    assert seen == ["VNO"]
+
+
+def test_a_blank_symbol_asks_for_no_chart():
+    """Missing data is uncertainty: an empty row must not open a chart for ""."""
+    panel = _recap_panel()
+    panel._render({"classified_alerts": [{"symbol": "", "time_text": "09:00:00"}]})
+    seen: list[str] = []
+    panel.symbolActivated.connect(seen.append)
+
+    panel._activate_alert(panel.alerts.item(0, 1))
+
+    assert seen == []
+
+
+@pytest.mark.qt
+def test_the_desk_charts_a_recap_symbol_through_the_one_snapshot_popup():
+    """One chart surface for the whole desk. A second chart widget on this page
+    would be a second definition of what a symbol looks like."""
+    from ui.app import MainWindow
+    from ui.state import UiState
+
+    QApplication.instance() or QApplication([])
+    window = MainWindow(UiState(workspace_mode="workspace"))
+    try:
+        seen: list[str] = []
+        window.trading_panel.alert_center.show_board_symbol = seen.append
+        window.away_recap_panel.symbolActivated.emit("AAA")
+        assert seen == ["AAA"]
+    finally:
+        try:
+            window.close()
+        except Exception:
+            pass

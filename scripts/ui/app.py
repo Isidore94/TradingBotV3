@@ -175,6 +175,13 @@ class MainWindow(QMainWindow):
         self.strength_board_panel.symbolActivated.connect(
             self.trading_panel.alert_center.show_board_symbol
         )
+        # The AWAY Recap charts through the SAME popup, for the same reason: a
+        # trader reading the day back needs the chart beside the alert, and a
+        # second chart widget on that page would be a second definition of what
+        # a symbol looks like.
+        self.away_recap_panel.symbolActivated.connect(
+            self.trading_panel.alert_center.show_board_symbol
+        )
         # The page's RS/RW half reads the SAME rrsSnapshotChanged payload the
         # Alert Center's RS/RW tab reads (trader, 2026-08-21). A second
         # listener on one signal, not a second source: the bounce service

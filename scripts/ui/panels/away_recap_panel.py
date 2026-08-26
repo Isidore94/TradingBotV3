@@ -130,6 +130,19 @@ class AwayRecapPanel(QFrame):
         self.swings = QTableWidget(0, 4)
         self.swings.setHorizontalHeaderLabels(["#", "Symbol", "Side", "Line"])
         self.swings.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.swings.itemActivated.connect(self._activate_swing)
+        self.swings.itemDoubleClicked.connect(self._activate_swing)
+        # The day's alerts. `build_recap` has always produced them and this page
+        # never drew them, so a whole AWAY day's alerts left one trace: the word
+        # "alert(s)" in the summary line. A recap that drops the thing it was
+        # opened for is not a recap.
+        self.alerts = QTableWidget(0, 6)
+        self.alerts.setHorizontalHeaderLabels(
+            ["Time", "Symbol", "Side", "Tier", "", "Trigger"]
+        )
+        self.alerts.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.alerts.itemActivated.connect(self._activate_alert)
+        self.alerts.itemDoubleClicked.connect(self._activate_alert)
         self.staged = QTableWidget(0, 3)
         self.staged.setHorizontalHeaderLabels(["Symbol", "Side", "Gate at click time"])
         self.staged.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -165,6 +178,10 @@ class AwayRecapPanel(QFrame):
         layout.addWidget(self.summary)
         layout.addWidget(QLabel("Best swing trades (as the day ranked them)"))
         layout.addWidget(self.swings, 2)
+        layout.addWidget(
+            QLabel("Alerts, in the order the day produced them - open one to chart it")
+        )
+        layout.addWidget(self.alerts, 3)
         layout.addWidget(QLabel("Staged picks - never adopted while AWAY"))
         layout.addWidget(self.staged, 2)
         layout.addWidget(self.add_button)
@@ -207,6 +224,23 @@ class AwayRecapPanel(QFrame):
             ],
         )
         self._fill(
+            self.alerts,
+            [
+                (
+                    str(row.get("time_text") or ""),
+                    str(row.get("symbol") or ""),
+                    str(row.get("side") or ""),
+                    str(row.get("tier") or ""),
+                    # Flagged, never merged away: the Alert Center keeps the D1
+                    # feed separate because it is untiered, and a reader of this
+                    # page has to be able to tell the two apart.
+                    "D1" if row.get("is_d1") else "",
+                    str(row.get("trigger") or ""),
+                )
+                for row in recap.get("classified_alerts") or []
+            ],
+        )
+        self._fill(
             self.staged,
             [(row["symbol"], row["side"], "") for row in recap.get("staged_picks") or []],
         )
@@ -221,6 +255,33 @@ class AwayRecapPanel(QFrame):
         for index, row in enumerate(rows):
             for column, value in enumerate(row):
                 table.setItem(index, column, QTableWidgetItem(str(value)))
+
+    # -- charting (delegated; this page owns no chart) ---------------------
+    def _activate_alert(self, item) -> None:
+        """Ask the host to chart the alert's symbol. Column 1 is the symbol."""
+        self._ask_for_chart(self.alerts, item)
+
+    def _activate_swing(self, item) -> None:
+        self._ask_for_chart(self.swings, item)
+
+    def _ask_for_chart(self, table: QTableWidget, item) -> None:
+        """One chart surface for the whole desk (the R4 pattern).
+
+        This page opens nothing itself. It emits the symbol and the host wires
+        that to the Alert Center's existing snapshot popup - the same one the
+        Strength Board, RS/RW and Industry boards use - so the chart carries the
+        bot-backed series, the painted levels and the capture rail without a
+        second chart widget existing anywhere.
+        """
+        if item is None:
+            return
+        cell = table.item(item.row(), 1)
+        symbol = (cell.text() if cell is not None else "").strip().upper()
+        # A blank cell is not a symbol. Asking for a chart of "" would open an
+        # empty popup, which reads as a broken chart rather than an empty row.
+        if not symbol:
+            return
+        self.symbolActivated.emit(symbol)
 
     # -- actions (delegated; this page owns no store) ----------------------
     def _selected_staged(self) -> tuple[str, str] | None:

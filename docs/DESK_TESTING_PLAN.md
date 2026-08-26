@@ -395,11 +395,20 @@ after the close, before changing modes.
 3. After the close, open **AWAY Recap**.
 4. Check that the recap covers today's alerts and that returning to DESK does
    not produce an old chart-review backlog.
+5. Open one alert row (double-click or Enter). The desk's usual chart popup
+   should appear — the same one the Strength Board opens. Try a swing row too.
+
+**Start the desk BEFORE the session, not after.** The recap can only show what
+the running program itself saw. If you restart after the close, the day's alerts
+went with the old process and the page will be empty through no fault of its
+own.
 
 ### GOOD
 
 - The recap is populated, session-scoped to today and in the same order the
   alerts occurred.
+- The alerts table has rows in it — time, symbol, side, tier, a `D1` mark on the
+  D1 ones — and opening a row charts that symbol.
 - History, the D1 unread badge, the backing alert list and evidence stores still
   contain the day.
 - The chart-review queue stayed empty in AWAY, so there is no hundreds-chart

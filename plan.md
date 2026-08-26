@@ -1366,7 +1366,14 @@ second scoreboard.
     `_select_page` -> `_feed_away_recap()` exports both backing lists as one
     ordered stream (both reversed to oldest-first, merged on `time_text`, D1
     flagged rather than merged away) and converts them to the mappings
-    `away_recap._alert_rows` reads; `alert_center_panel.py` untouched. **Known
+    `away_recap._alert_rows` reads; `alert_center_panel.py` untouched. **That
+    wiring alone was not enough and the record said otherwise for one commit:**
+    `_render` never read `classified_alerts`, so the page drew three tables and
+    dropped the alerts. Since the same evening it draws an **alerts table**
+    (time, symbol, side, tier, D1 flag, trigger, in the day's own order) and any
+    alert or swing row opens the desk's existing snapshot popup via
+    `symbolActivated` -> `alert_center.show_board_symbol`, the R4 one-chart
+    pattern. **Known
     limitation, not a defect of this wiring:** the backing list is
     process-scoped and capped, not session-scoped, so a desk running across
     midnight hands the recap what the PROCESS saw. The canary is one real AWAY
