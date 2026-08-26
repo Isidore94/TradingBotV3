@@ -34,14 +34,39 @@ fast-forward. No conflict was possible and no merge resolution was performed.
 | Branch | Commits | Range | Tip | Disposition |
 |---|---|---|---|---|
 | `testing-week-2026-08-24` | 354 | 2026-08-04 → 2026-08-25 | `ed277a7` | **The release candidate.** Fast-forwarded onto `main` on 2026-08-26. Kept alive — active GUI-optimization work continues on it |
-| `phase05-integration-blitz` | 308 | 2026-08-04 → 2026-08-23 | `1a2fbde` | Contained in `testing-week-2026-08-24`. Branch deleted 2026-08-26 |
+| `phase05-integration-blitz` | 308 | 2026-08-04 → 2026-08-23 | `1a2fbde` | Contained in `main`. **Cleared for deletion 2026-08-26; deletion still owed** (see below) |
 | `testing-week-2026-08-17` | 262 | 2026-08-04 → 2026-08-20 | `170172b` | The previous week's release candidate. All but one commit contained in `testing-week-2026-08-24`; the exception is a doc-reconciliation note superseded by the 2026-08-25 reconciliation. Branch retained for now |
-| `phase05-r2-focus-gating-strength-board` | 150 | 2026-08-04 → 2026-08-18 | `a8c696a` | R2 Focus gating and the M5 strength board. Contained in `testing-week-2026-08-24`. Branch deleted 2026-08-26 |
-| `claude/ticker-briefs-hardening-imcm8r` | 94 | 2026-08-04 → 2026-08-11 | `9e0df9e` | Ticker-brief hardening and the first night's measurements. Contained in `testing-week-2026-08-24`. Branch deleted 2026-08-26 |
+| `phase05-r2-focus-gating-strength-board` | 150 | 2026-08-04 → 2026-08-18 | `a8c696a` | R2 Focus gating and the M5 strength board. Contained in `main`. **Cleared for deletion 2026-08-26; deletion still owed** (see below) |
+| `claude/ticker-briefs-hardening-imcm8r` | 94 | 2026-08-04 → 2026-08-11 | `9e0df9e` | Ticker-brief hardening and the first night's measurements. Contained in `main`. **Cleared for deletion 2026-08-26; deletion still owed** (see below) |
 | `claude/trade-analysis-opus-prompt-vgg1n8` | 1 | 2026-08-22 | `6c1398f` | One additive document, merged into `main` on 2026-08-26 as `docs/prompts/TRADE_ANALYSIS_OPUS_ULTRACODE_PROMPT.md` |
 
-The three branches marked deleted held **no commit** that is not on `main`. That was
-verified with `git merge-base --is-ancestor` before deletion, not assumed.
+### The deletion itself is owed, and why
+
+The three branches above hold **no commit** that is not on `main`. That was verified
+with `git merge-base --is-ancestor` against the post-merge `main` (`226fbac`), not
+assumed, so deleting them discards nothing.
+
+**The deletion could not be performed from the cloud session.** Its GitHub credential
+pushes fine - `main` and a new branch both went through in the same session - but
+refuses ref deletion with `HTTP 403`, and the egress proxy recorded no policy denial,
+so the refusal is GitHub-side token scope rather than a blocked host. The GitHub MCP
+surface offers `create_branch` and no delete counterpart. Run from the desk:
+
+```
+git push origin --delete claude/ticker-briefs-hardening-imcm8r
+git push origin --delete phase05-r2-focus-gating-strength-board
+git push origin --delete phase05-integration-blitz
+```
+
+Re-prove containment first if any time has passed - the check is one command per
+branch and it is the whole safety argument:
+
+```
+git fetch origin --prune
+git merge-base --is-ancestor origin/<branch> origin/main && echo SAFE
+```
+
+Update this table when the deletions land.
 
 ### Work that did NOT land, and is not lost
 

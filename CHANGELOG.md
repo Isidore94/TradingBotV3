@@ -48,13 +48,18 @@ deleted when `CHANGELOG.md` and `CURRENT_CHECKPOINT.md` took over that role; the
 reference now names the pair. The prompt is classified in `docs/README.md` and is
 authorization for nothing.
 
-**Three branches were deleted, and what they were is written down.** New
+**Three branches are cleared for deletion, and what they were is written down.** New
 `docs/BRANCH_HISTORY.md` records every branch in the chain with its commit count,
 date range, tip SHA and disposition, so deleting a merged branch never destroys the
 only account of what it held. `claude/ticker-briefs-hardening-imcm8r` (94 commits),
 `phase05-r2-focus-gating-strength-board` (150) and `phase05-integration-blitz` (308)
-were each proved contained in `main` before deletion. `testing-week-2026-08-24` is
-**kept** - the active GUI-optimization work continues on it.
+each hold no commit that is not on `main`, proved with
+`git merge-base --is-ancestor` against `226fbac`. **The deletion itself did not
+happen and is owed to the desk:** the cloud session's GitHub credential pushes but
+refuses ref deletion with `HTTP 403`, with no proxy policy denial recorded, and the
+GitHub MCP surface has no delete-branch counterpart to `create_branch`. The three
+commands are in `docs/BRANCH_HISTORY.md`. `testing-week-2026-08-24` is **kept** -
+the active GUI-optimization work continues on it.
 
 **The Alert Center quality packet remains unmerged, by decision.**
 `claude/alert-center-quality-packet-5btu3w` (8 commits, tip `57fcf47`, 2026-08-18)

@@ -12,9 +12,9 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 **Branch `main`.** Trader-directed branch cleanup. `testing-week-2026-08-24` was
 fast-forwarded onto `main` (354 commits, 480 files); `main` had been a strict
-ancestor of it, so no conflict was possible and none was resolved. Three fully
-contained branches were deleted; one unlanded document was merged; one branch was
-deliberately left open.
+ancestor of it, so no conflict was possible and none was resolved. One unlanded
+document was merged; one branch was deliberately left open; three fully contained
+branches were cleared for deletion but **not deleted** - see below.
 
 ### What the working branch is now
 
@@ -40,6 +40,15 @@ and it is checkable in one command.
 
 **Live gates:** none marked met, none waived. This merge promotes nothing, changes
 no detector, scorer or alert, and moves no row.
+
+### Owed to the desk: three branch deletions
+
+`claude/ticker-briefs-hardening-imcm8r`, `phase05-r2-focus-gating-strength-board`
+and `phase05-integration-blitz` each hold no commit that is not on `main`
+(`git merge-base --is-ancestor` against `226fbac`). The cloud session's GitHub
+credential pushes but refuses ref deletion with `HTTP 403`, and the egress proxy
+recorded no policy denial, so the refusal is token scope rather than a blocked host.
+Commands and the re-prove step are in `docs/BRANCH_HISTORY.md`.
 
 ### Held open, deliberately
 
