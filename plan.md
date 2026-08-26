@@ -1551,14 +1551,41 @@ nothing else.
    a thread. **Owed:** `first_paint` and `chart_ready` marks, which need the
    receiving paint path instrumented rather than the emit seam; and the Alert
    Center inner tab, which is fenced.
-5. **G-P1.4 Convert hot `QTableWidget` rebuilds** to model/view or incremental
-   diffs, System Health first, preserving selection and scroll position across
-   updates. **NOT STARTED.**
-6. **G-P1.5 Audit every `reload()`** reachable from a click or page selection
-   for CSV/JSONL/SQLite reads or row-building on Qt, and move violators to
-   workers. Never clear a populated page while its refresh runs. **NOT
-   STARTED** — `WeekAheadPage` and `DiscoveryPage` in the Weekend Prep panel are
-   known unaudited candidates.
+5. **G-P1.4 Convert hot `QTableWidget` rebuilds.** *Built 2026-08-26
+   (`49744a7`).* System Health's three tables are written in place rather than
+   rebuilt, with scroll position held across the update and selection still
+   surviving by check id.
+6. **G-P1.5 Audit every `reload()`** reachable from a click or page selection.
+   *Audit DONE, one fix landed 2026-08-26 (`49744a7`); the remainder is listed
+   below and is NOT done.*
+
+   Fixed: `WarehouseReadoutPanel.refresh` read the DAS research lake inline —
+   the only read in the audit that leaves the machine, against a share known to
+   drop — and blanked its table on every failure path. Now on a single-flight
+   worker, keeping last-good on failure while still clearing on a successful
+   empty read.
+
+   Audited clean: `WeekAheadPage` and `DiscoveryPage` both refresh through
+   service signals, so `weekend_prep_panel.py` is fully off the Qt thread.
+
+   **Still owed — eight panels with a click-reachable read and no worker at
+   all**, in rough order of measured IO surface: `setup_tracker_panel` (12 IO
+   call sites), `industry_panel` (6), `master_avwap_panel` (4),
+   `master_market_prep_panel` (3), `theta_panel` (2), `watchlists_panel` (2),
+   `rs_window_panel` (1), and `universe_panel` (has a worker, reload unaudited).
+   Each needs the same treatment and its own fail-before-fix test. None was
+   touched: a partial conversion of a page is worse than an honest list of
+   which pages still need one.
+7. **G-P1.6 The HealthPanel audit thread outlived its panel.** *Fixed 2026-08-26
+   (`49744a7`), found by the G-P1.5 audit and pre-dating this wave.*
+   Constructing the panel starts a daemon thread that emits a Qt signal back
+   into it; `shutdown` stopped the timer and never joined the thread, so it
+   could emit into a freed C++ object — an access violation, not a Python
+   `RuntimeError`, so the guard at the emit could not catch it. Intermittent:
+   4 runs in 6 segfaulted an unrelated Qt test two files later. **Worth a
+   sweep:** any other panel that starts a bare `threading.Thread` and emits a
+   Qt signal back into itself has the same defect. This wave fixed the one it
+   tripped over, not the class.
 
 Gates: **the live-session soak in the proposal's §11.3 is OWED and cannot be
 discharged by any test run.** Its acceptance targets are stall count, p90 and

@@ -1,7 +1,7 @@
 # TradingBotV3 implemented history
 
 Last reconciled: **2026-08-26** on `claude/gui-p1-fluidity`, at GUI fluidity
-Wave P1 items G-P1.0 through G-P1.3.
+Wave P1 - every code item built, the live soak owed.
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -90,10 +90,59 @@ attachment, and the diff there is six added lines and no deletion. The mover mem
 was implemented in the consumer rather than at its natural point inside that
 file.
 
-Tests 4844 -> 4877, exit 0; smoke 7/7. No packaging trigger. **Owed:** items
-G-P1.4 (hot `QTableWidget` rebuilds) and G-P1.5 (the `reload()` audit) are not
-started; `first_paint`/`chart_ready` marks need the receiving paint path; and the
-§11.3 live soak is the trader's to run.
+**The mover memo moved to its source.** The trader extended the fence
+authorization, so the memo now lives in `AlertCenterPanel._measure_mover_state`
+as well - the review queue asks the same question once per alert and now gets
+the same answer for free. The design came from a measurement rather than a
+guess: per (symbol, side), m5 materialization is 0.049 ms and everything after
+it is 0.186 ms, so **79% of the cost is memo-able after materialization**. That
+is why the key is the identity of the bars measured - session date plus the
+length and last timestamp of both series - and not a clock. `mover_state` feeds
+the movers-only review filter, which decides what the trader SEES; a time-based
+cache would let a name that has just broken yesterday's high stay hidden until
+it lapsed. A new bar is a new key.
+
+**System Health stopped rebuilding itself**, and the warehouse readout stopped
+reading a network share on the Qt thread. `_fill` and the checks table built a
+fresh `QTableWidgetItem` per cell of three tables every 15 seconds - which is
+also where the scroll position went, so a trader reading the bottom of the jobs
+list was pulled back to the top mid-read, on a timer, with nothing on screen to
+explain it. `WarehouseReadoutPanel.refresh` called `ResearchStore.open()` and
+`slice_readout()` inline against the DAS lake; that share is known to drop, and
+an SMB read against a dropped share blocks until it times out. It was the only
+read in the whole audit that leaves the machine. It also blanked its table on
+every failure path - an unreadable lake is not an empty lake - and now keeps
+last-good on failure while still clearing on a successful empty read.
+
+**The `reload()` audit is complete, and most of what it found is still owed.**
+Fourteen panels have a reload/refresh plus file IO; eight own no worker at all.
+One was fixed (above); `WeekAheadPage` and `DiscoveryPage` audited clean.
+The other eight are named in `plan.md` under G-P1.5, `setup_tracker_panel`
+first. Nothing was half-converted: a partial page is worse than an honest list.
+
+**A latent crash the audit found (G-P1.6).** Adding a second
+HealthPanel-constructing test file made an unrelated Qt test segfault two files
+later - 4 runs in 6. `HealthPanel.shutdown` stopped the panel's timer and left
+its audit thread running; that thread emits a Qt signal back into the panel, so
+it could fire into a freed C++ object - an **access violation**, which the
+`except RuntimeError` at the emit cannot catch because it is not a Python
+exception. Reproduced at the committed HEAD with all work stashed, so it
+pre-dates this wave. `shutdown` now joins the thread and a `_closing` flag stops
+a refresh queued before shutdown (construction uses `singleShot(0, ...)`) from
+starting a fresh one after it. **The class is not closed:** any panel that
+starts a bare `threading.Thread` and emits a Qt signal back into itself has the
+same defect.
+
+Three shutdown lists in this wave named their threaded children by hand and had
+each fallen behind: `WeekendPrepPanel` (named only `walkaway`), `ResearchPanel`
+(missed the readout), and the `MainWindow` list the readout sits under. Two were
+fixed by naming the missing child; the weekend prep one now iterates its pages.
+
+Tests 4844 -> 4897, exit 0; smoke 7/7. No packaging trigger. **Owed:** the eight
+panels under G-P1.5, the bare-thread sweep under G-P1.6, the
+`first_paint`/`chart_ready` marks (which need the receiving paint path
+instrumented rather than the emit seam), and **the §11.3 live soak, which is the
+trader's to run and which no test discharges.**
 
 ### 2026-08-26 - the Phase 0.5 work is on `main`, and the branch chain is retired
 

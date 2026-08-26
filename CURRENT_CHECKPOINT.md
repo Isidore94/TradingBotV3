@@ -8,7 +8,7 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## 2026-08-26 - ACTIVE: GUI fluidity Wave P1 (Phase 0.8), four of six items built
+## 2026-08-26 - ACTIVE: GUI fluidity Wave P1 (Phase 0.8), every code item built; the live soak is what remains
 
 **Branch `claude/gui-p1-fluidity`, off `main` at `53b9733`.** The trader
 authorized **Wave P1 only** from `docs/GUI_REDESIGN_PLAN_2026-08-25.md` §11.1 on
@@ -17,11 +17,15 @@ U1-U3, S1 and Snappy P2 remain PROPOSAL and are NOT authorized.
 
 ### Immediate next action
 
-**G-P1.4** (hot `QTableWidget` rebuilds -> model/view or incremental diffs,
-System Health first, selection and scroll preserved) then **G-P1.5** (audit
-every click-reachable `reload()` for reads on Qt; `WeekAheadPage` and
-`DiscoveryPage` in `weekend_prep_panel.py` are the known unaudited candidates).
-Then the §11.3 live soak, which is the trader's to run.
+**The §11.3 live soak - the trader's to run.** Every code item in Wave P1 is
+built. Enable `ui_stall_watchdog`, work a normal session, then compare the log
+against the 2026-08-25 capture. Stall records now carry an `interaction_id`, so
+an event-loop-only sample names the click behind it.
+
+After that, the largest remaining known cost is the **eight panels listed under
+G-P1.5 that still read on the Qt thread** - `setup_tracker_panel` first. That
+is new work, not unfinished work: the audit is complete and says exactly which
+pages need it.
 
 ### Landed on this branch
 
@@ -32,12 +36,14 @@ Then the §11.3 live soak, which is the trader's to run.
 | `d050ee1` | G-P1.1 - Weekend Prep reads on a worker; the measured 8.45 s freeze |
 | `0f04240` | G-P1.2 - Focus mover state memoized per poll instead of per redraw (36 stalls / 5.93 s) |
 | `6bd7eef` | G-P1.3 - interaction id stamped on every stall record |
+| `10a3008` | G-P1.2b - the mover memo at its SOURCE, under the extended fence authorization |
+| `49744a7` | G-P1.4 incremental health tables; G-P1.5 the lake off the Qt thread; G-P1.6 a daemon thread that outlived its panel |
 
 ### Verification - read this before quoting a number
 
 | Check | Result |
 |---|---|
-| `pytest tests/ -q` | **4877 passed / 19 subtests, exit 0** (2026-08-26, `.venv` 3.12.13). Baseline was 4844; the 33 new tests are the fail-before-fix pins for this work |
+| `pytest tests/ -q` | **4897 passed / 19 subtests, exit 0** (2026-08-26, `.venv` 3.12.13). Baseline was 4844; the 53 new tests are the fail-before-fix pins for this work |
 | `scripts/smoke_check.py` | **7/7**, re-run at each commit |
 | `launch_gui.py --selftest` | Not re-run; unchanged from the `ed277a7` 70/70 |
 | Packaging triggers | **None.** `scripts/ui/interaction_trace.py` is a new module inside the already-collected `ui` package and the spec-drift guard passes unchanged. No dependency, asset, top-level package, dynamic import or `__file__` change. No rebuild owed |
@@ -59,16 +65,37 @@ Also owed inside G-P1.3: the `first_paint` and `chart_ready` marks, which need
 the receiving paint path instrumented rather than the emit seam, and the Alert
 Center inner tab, which is fenced.
 
+### A latent crash the audit found, and what it implies
+
+G-P1.6 was not on anyone's list. Adding a second HealthPanel-constructing test
+file made an unrelated Qt test segfault two files later - 4 runs in 6 - and
+bisecting it reached `HealthPanel.shutdown`, which stopped the panel's timer and
+left its audit thread running. That thread emits a Qt signal back into the
+panel, so it could fire into a freed C++ object: an **access violation**, which
+the `except RuntimeError` guard at the emit cannot catch, because it is not a
+Python exception.
+
+It was reproduced at the committed HEAD with every uncommitted change stashed,
+so it pre-dates this wave; the new tests only made it frequent enough to see.
+
+**The class is not closed.** Any panel that starts a bare `threading.Thread` and
+emits a Qt signal back into itself has the same defect. This wave fixed the one
+it tripped over. A sweep is recorded in plan.md and is not done.
+
 ### Fence discipline
 
 `scripts/ui/panels/alert_center_panel.py` is fenced under the file-scoped
 ask-first rule. The trader pre-authorized ONE change there - attaching the chart
 symbol to the quick journal write - and the diff in that file is six added lines
 and no deletion. G-P1.2's natural memo point is also in that file
-(`_measure_mover_state`); it was implemented in the CONSUMER
-(`focus_picks_panel.py`) instead to stay inside the authorization. **Open trader
-question:** memoizing at the Alert Center would also serve the review queue,
-which asks the same question per alert - worth a decision, not worth assuming.
+(`_measure_mover_state`). It was first implemented in the CONSUMER
+(`focus_picks_panel.py`) to stay inside the authorization; **the trader extended
+the authorization on 2026-08-26** and it now also lives at the source
+(`10a3008`), so the review queue gets it too. The design was chosen from a
+measurement rather than a guess: 79% of the per-(symbol, side) cost sits AFTER
+bar materialization, so the memo is keyed on the identity of the bars it
+measured - not on a clock, because `mover_state` decides what the trader SEES
+and a time-based cache could hide a live break.
 
 ---
 
