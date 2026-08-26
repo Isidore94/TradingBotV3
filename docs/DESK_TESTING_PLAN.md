@@ -231,6 +231,25 @@ The page starts migration by itself, the tabs are enabled before preparation,
 the page fails to open, or anything raises. Any of those is a real problem and
 worth stopping for.
 
+### One thing worth knowing about the Questrade buttons (2026-08-25)
+
+Questrade's token is **single use**: every refresh burns the old one. Until
+2026-08-25 three different things could each spend it — "Pull today now", the
+backfill, and the nightly job — so a token you pasted could be dead within
+minutes, which is exactly what happened on 2026-08-25 (an import worked at
+20:54, a backfill ran at 20:59, the chain was refused at 21:06). Only one thing
+can spend it now, and the others wait their turn.
+
+Two things follow for you:
+
+- **A red Health tile is not always a dead token.** Most of the failed days on
+  that tile are old failures from while the chain was broken. **"Retry failed
+  Questrade days"** now goes back and re-tries them, including days that had
+  given up — it tells you how many it reopened.
+- **Some failed days can never go green**, and that is not a bug to chase: 44 of
+  them are older than the point Questrade stops returning executions
+  (2026-06-10 on your accounts). They need a decision from you, not a retry.
+
 ### DO NOT, YET
 
 Do **not** click **Prepare Journal database**, run the full backfill, or use

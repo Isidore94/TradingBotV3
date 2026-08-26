@@ -323,6 +323,7 @@ def self_heal(
     max_days_per_night: int = DEFAULT_MAX_DAYS_PER_NIGHT,
     max_attempts_per_day: int = DEFAULT_MAX_ATTEMPTS_PER_DAY,
     failed_only: bool = False,
+    include_exhausted: bool = False,
 ) -> dict[str, Any]:
     """Repair gaps and retry failures, oldest first, within a night's budget.
 
@@ -337,6 +338,16 @@ def self_heal(
     A day that has failed ``max_attempts_per_day`` times is skipped and counted
     as ``exhausted``. It stays FAILED and stays visible; it just stops eating
     the budget every night.
+
+    ``include_exhausted`` lifts that cap for ONE deliberate run (2026-08-25).
+    The cap counts failures against a day, not against a cause, so the 140 days
+    that failed while the Questrade credential chain was broken burned their
+    budget and were then skipped forever - a repaired chain could never turn
+    them green and the Health tile stayed red on a problem that no longer
+    existed. An automatic run must keep the cap, or a dead chain eats the whole
+    budget every night; a trader pressing "retry failed days" is making their
+    own decision and gets the days back. ``attempts`` is untouched either way:
+    it is history, and history is not rewritten (ground rule 5).
     """
     reference = today or date.today()
     horizon_start = reference - timedelta(days=max(1, int(lookback_days)))
@@ -352,6 +363,10 @@ def self_heal(
         "exhausted": [],
         "budget": int(max_days_per_night),
         "budget_exhausted": False,
+        #: How many days this run reached ONLY because the cap was lifted. A
+        #: number the trader can check against the tile, rather than a silent
+        #: change in what the button does.
+        "reopened_exhausted": 0,
     }
     if not pairs:
         return summary
@@ -379,9 +394,14 @@ def self_heal(
         if len(summary["attempted"]) >= budget:
             summary["budget_exhausted"] = True
             break
-        if attempts_for(store, broker=broker, account_number=account_number, day=day) >= max_attempts_per_day:
-            summary["exhausted"].append({"broker": broker, "account": account_number, "day": day.isoformat()})
-            continue
+        spent = attempts_for(store, broker=broker, account_number=account_number, day=day)
+        if spent >= max_attempts_per_day:
+            if not include_exhausted:
+                summary["exhausted"].append(
+                    {"broker": broker, "account": account_number, "day": day.isoformat()}
+                )
+                continue
+            summary["reopened_exhausted"] += 1
         summary["attempted"].append({"broker": broker, "account": account_number, "day": day.isoformat()})
         try:
             count = int(fetch(broker, account_number, day))

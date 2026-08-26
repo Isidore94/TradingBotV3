@@ -591,6 +591,22 @@ are listed in `CURRENT_CHECKPOINT.md`.
    tab (account/tax-status selection that never silently blends, date-range +
    calendar + fees views, R-multiples with alert prefill, pyqtgraph analytics,
    surfaced walk-away). Spec: `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`.
+   **Credential-chain repair 2026-08-25 (trader-directed).** The Questrade
+   refresh chain is single-use and had three consumers - "Pull today now", the
+   gap backfill and the nightly slot - so a pasted token died in eleven
+   minutes. The refresh is now serialized on `local_writer_lock`, re-reads the
+   token inside the lock, writes its four rotated values in one
+   `save_local_settings` (temp file + `os.replace`), and a 401 caused by
+   another consumer's rotation reuses their access token instead of spending a
+   refresh. `self_heal(include_exhausted=True)` - passed only by "Retry failed
+   Questrade days" - lets days that burned their attempt budget while the chain
+   was dead be reached again; the nightly keeps the cap and `attempts` is never
+   rewritten. **OWED:** one live paste that survives a backfill.
+   **OPEN TRADER DECISION:** 44 of the 45 `activities report trades…` days
+   predate 2026-06-10, the executions endpoint's retention horizon, so no retry
+   can recover them; importing them from `/activities` (lower fidelity, feeds
+   tax) or labelling them permanently uncovered needs a new coverage status and
+   is not built. 2026-08-13 is the one such day inside the window.
    Built on `phase05-r7-journal-reliability-ux`, cut from the R2 tip (trader
    redirect 2026-08-15, second of the day; see the preamble), in the spec's §9
    commit order. **Deterministic gates green: 3203 passed / 19 subtests, smoke

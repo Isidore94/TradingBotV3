@@ -475,7 +475,9 @@ def test_health_routes_the_three_broker_actions_distinctly(panel, monkeypatch, q
     )
     monkeypatch.setattr(
         journal_feed, "self_heal_gaps",
-        lambda *, failed_only=False: calls.append("failed" if failed_only else "gaps")
+        lambda *, failed_only=False, include_exhausted=False: calls.append(
+            ("failed" if failed_only else "gaps", include_exhausted)
+        )
         or {"repaired": [], "failed": [], "exhausted": [], "unsupported_brokers": ["IBKR"]},
     )
 
@@ -484,7 +486,10 @@ def test_health_routes_the_three_broker_actions_distinctly(panel, monkeypatch, q
         assert panel.health_tab._task.wait(5000)
         qapp.processEvents()
 
-    assert calls == ["pull", "gaps", "failed"]
+    # "Retry failed days" is an explicit trader decision and reaches days that
+    # burned their attempt budget while the credential chain was broken;
+    # "Backfill gaps" keeps the cap (2026-08-25).
+    assert calls == ["pull", ("gaps", False), ("failed", True)]
 
 
 def test_health_lists_a_reconciliation_and_its_suggestions(panel, populated):

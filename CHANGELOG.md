@@ -19,6 +19,43 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-25 - the Questrade credential chain has one owner
+
+**The chain kept snapping because several things spent it.** Questrade rotates
+on every refresh - a success invalidates the access token it replaces and
+consumes the refresh token it was given - so "Pull today now", the gap backfill
+and the nightly slot were three consumers of one single-use chain. The live desk
+showed it exactly: a Questrade import OK at 20:54:59, a year-wide backfill at
+20:59, `400 Bad Request` on the refresh endpoint at 21:06:51, eleven minutes
+after a fresh token was pasted.
+
+`QuestradeImporter.refresh_access_token` now holds the machine-local writer lock
+(`local_writer_lock`, the primitive the outcome finalizer uses), **re-reads the
+token inside the lock** so a caller that waited spends what the winner left, and
+writes the four rotated values in ONE save. `_authorized_get` answers a 401 that
+is explained by someone else's rotation by picking up **their** new access token
+rather than burning a refresh to rediscover it. A failed refresh still saves
+nothing and leaves the stored token alone. New
+`project_paths.save_local_settings()` writes several keys in one
+read-modify-write via a temp file and `os.replace`; the settings file holds every
+machine-local secret and a direct write could truncate it.
+
+**A day whose cause was repaired can be retried again.** The attempt cap counts
+failures against a day, not against a cause, so the 140 days that failed while
+the chain was dead burned their budget and were skipped forever - a repaired
+chain could never clear them. `journal_coverage.self_heal(include_exhausted=True)`
+lifts the cap for one deliberate run and is passed only by the Health tab's
+"Retry failed Questrade days"; the nightly keeps the cap. `attempts` is never
+rewritten, and the run reports `reopened_exhausted`.
+
+**Not built, and recorded as a trader decision:** 44 of the 45
+`activities report trades the executions endpoint did not return` days have no
+execution within +/-3 days and predate 2026-06-10, which is the executions
+endpoint's retention horizon on both accounts. Retrying them can never work.
+Importing them from `/activities` (lower fidelity, feeds tax) or labelling them
+permanently uncovered is the trader's call and needs a new coverage status.
+2026-08-13 is the one such day inside the retention window.
+
 ### 2026-08-25 - the scan cycle is timed, and the sweep canary is accepted
 
 **The R10.A restarted-process outcome-sweep canary is MET** by the trader's

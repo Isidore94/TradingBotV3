@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import csv
 import hashlib
+import logging
 import json
 import os
 import threading
@@ -17,7 +19,12 @@ import zoneinfo
 import requests
 
 from journal_identity import canonical_option_symbol, normalize_security_type, stable_execution_uid
-from project_paths import get_local_setting, save_local_setting
+from project_paths import get_local_setting, save_local_setting, save_local_settings
+
+try:  # pragma: no cover - the primitive ships beside this module
+    from local_writer_lock import local_writer_lock
+except Exception:  # pragma: no cover
+    local_writer_lock = None  # type: ignore[assignment]
 
 
 PACIFIC_TZ_NAME = "America/Vancouver"
@@ -49,6 +56,38 @@ except Exception:  # pragma: no cover - exercised when ibapi is not installed.
     Contract = object  # type: ignore
     ExecutionFilter = object  # type: ignore
     IBAPI_AVAILABLE = False
+
+
+#: One lock name for the Questrade credential chain, agreed by every process on
+#: this machine. Not derived from a path: the thing being protected is a
+#: single-use TOKEN, and the settings file it happens to live in is written by
+#: plenty of callers that have nothing to do with Questrade.
+QUESTRADE_REFRESH_LOCK_KEY = "questrade_refresh_chain"
+#: A refresh is one HTTP round trip. Waiting a minute for another consumer's is
+#: fine; waiting forever is not, and neither is starting a second one.
+QUESTRADE_REFRESH_LOCK_TIMEOUT_SECONDS = 60.0
+
+
+@contextlib.contextmanager
+def _questrade_refresh_lock():
+    """Serialize the rotation across every process on this machine.
+
+    Falls back to no exclusion only when the primitive is genuinely absent, and
+    says so: a chain that cannot be locked is still better refreshed than not
+    refreshed at all, because the alternative is no journal import.
+    """
+    if local_writer_lock is None:  # pragma: no cover - primitive missing
+        logging.warning(
+            "No machine-local writer lock is available; the Questrade refresh is "
+            "running unserialized and a second consumer could break the chain."
+        )
+        yield
+        return
+    with local_writer_lock(
+        QUESTRADE_REFRESH_LOCK_KEY,
+        timeout_seconds=QUESTRADE_REFRESH_LOCK_TIMEOUT_SECONDS,
+    ):
+        yield
 
 
 def pacific_now() -> datetime:
@@ -378,41 +417,80 @@ class QuestradeImporter:
         return lines
 
     def refresh_access_token(self) -> dict[str, Any]:
-        refresh_token = self.refresh_token
-        if not refresh_token:
-            raise RuntimeError("Questrade refresh token is not configured.")
-        response = self.session.get(
-            QUESTRADE_LOGIN_URL,
-            params={"grant_type": "refresh_token", "refresh_token": refresh_token},
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        access_token = str(payload.get("access_token") or "").strip()
-        api_server = str(payload.get("api_server") or "").strip()
-        next_refresh = str(payload.get("refresh_token") or "").strip()
-        expires_in = int(payload.get("expires_in", 0) or 0)
-        expires_at = (datetime.now() + timedelta(seconds=max(0, expires_in))).isoformat(timespec="seconds")
+        """Spend the refresh token, once, under the machine-local writer lock.
 
-        if access_token:
-            save_local_setting(QUESTRADE_ACCESS_TOKEN_SETTING, access_token)
-        if api_server:
-            save_local_setting(QUESTRADE_API_SERVER_SETTING, api_server)
-        if next_refresh:
-            save_local_setting(QUESTRADE_REFRESH_TOKEN_SETTING, next_refresh)
-        save_local_setting(QUESTRADE_EXPIRES_AT_SETTING, expires_at)
-        return payload
+        **Questrade rotates on every refresh**: a success invalidates the access
+        token it replaces AND consumes the refresh token it was given. So two
+        consumers on one machine - "Pull today now", the gap backfill, the
+        nightly slot - are enough to break the chain permanently, and on
+        2026-08-25 they did: an import OK at 20:54:59, a year-wide backfill at
+        20:59, `400 Bad Request` on this endpoint at 21:06:51, eleven minutes
+        after the trader pasted a fresh token.
+
+        Three things keep the chain intact:
+
+        * the refresh is **serialized** across every process on this machine,
+          with the same primitive the outcome finalizer uses;
+        * the token is **re-read inside the lock**, so a caller that waited
+          spends what the winner LEFT rather than what it read before waiting;
+        * the four rotated values are written in **one** save, because four
+          read-modify-write cycles are four chances to lose the new token.
+
+        A failed refresh saves nothing and leaves the stored token exactly as it
+        was: a rejected token might still be the good one (a network blip is not
+        a dead chain), and clearing it would make the repair "paste it again"
+        every time.
+        """
+        with _questrade_refresh_lock():
+            # Inside the lock: whoever held it before us may have rotated.
+            refresh_token = self.refresh_token
+            if not refresh_token:
+                raise RuntimeError("Questrade refresh token is not configured.")
+            response = self.session.get(
+                QUESTRADE_LOGIN_URL,
+                params={"grant_type": "refresh_token", "refresh_token": refresh_token},
+                timeout=20,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            access_token = str(payload.get("access_token") or "").strip()
+            api_server = str(payload.get("api_server") or "").strip()
+            next_refresh = str(payload.get("refresh_token") or "").strip()
+            expires_in = int(payload.get("expires_in", 0) or 0)
+            expires_at = (
+                datetime.now() + timedelta(seconds=max(0, expires_in))
+            ).isoformat(timespec="seconds")
+
+            rotated: dict[str, Any] = {QUESTRADE_EXPIRES_AT_SETTING: expires_at}
+            if access_token:
+                rotated[QUESTRADE_ACCESS_TOKEN_SETTING] = access_token
+            if api_server:
+                rotated[QUESTRADE_API_SERVER_SETTING] = api_server
+            if next_refresh:
+                rotated[QUESTRADE_REFRESH_TOKEN_SETTING] = next_refresh
+            save_local_settings(rotated)
+            return payload
 
     def _authorized_get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if not self.access_token or not self.api_server:
             self.refresh_access_token()
         url = self.api_server + path.lstrip("/")
-        headers = {"Authorization": f"Bearer {self.access_token}"}
+        used = self.access_token
+        headers = {"Authorization": f"Bearer {used}"}
         response = self.session.get(url, headers=headers, params=params or {}, timeout=30)
         if response.status_code == 401 and self.refresh_token:
-            self.refresh_access_token()
+            # A 401 does NOT always mean the chain needs spending. Another
+            # consumer on this machine refreshing is enough to invalidate the
+            # access token we just used - and its replacement is already in the
+            # settings. Picking that up costs nothing; burning a rotation to
+            # rediscover it is what snapped the chain on 2026-08-25.
+            current = self.access_token
+            if current and current != used:
+                headers = {"Authorization": f"Bearer {current}"}
+            else:
+                self.refresh_access_token()
+                headers = {"Authorization": f"Bearer {self.access_token}"}
             url = self.api_server + path.lstrip("/")
-            headers = {"Authorization": f"Bearer {self.access_token}"}
             response = self.session.get(url, headers=headers, params=params or {}, timeout=30)
         response.raise_for_status()
         return response.json()

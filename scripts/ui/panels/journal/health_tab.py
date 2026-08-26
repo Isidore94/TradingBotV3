@@ -61,7 +61,13 @@ class _JournalTask(QThread):
             if self.action == "pull":
                 result = journal_feed.pull_today()
             else:
-                result = journal_feed.self_heal_gaps(failed_only=self.action == "failed")
+                failed_only = self.action == "failed"
+                # "Retry failed Questrade days" is an explicit trader decision,
+                # so it reaches days that burned their attempt budget while the
+                # credential chain was broken. "Backfill gaps" keeps the cap.
+                result = journal_feed.self_heal_gaps(
+                    failed_only=failed_only, include_exhausted=failed_only
+                )
             self.finished_with.emit(result)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
@@ -368,6 +374,9 @@ class HealthTab(QFrame):
                 f"failed {len(summary.get('failed') or [])}, "
                 f"skipped {len(summary.get('exhausted') or [])}"
             )
+            reopened = int(summary.get("reopened_exhausted") or 0)
+            if reopened:
+                message += f"; {reopened} day(s) reopened past the attempt cap"
             if "IBKR" in (summary.get("unsupported_brokers") or []):
                 message += "; IBKR historical gaps require a Flex backfill"
         self.statusChanged.emit(message)

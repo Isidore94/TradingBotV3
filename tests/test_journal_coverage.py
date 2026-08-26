@@ -434,3 +434,63 @@ def test_self_heal_with_nothing_to_do_is_a_quiet_success(store):
     summary = jc.self_heal(store, lambda b, a, d: 1 / 0, accounts=[("QUESTRADE", "5")],
                            today=date(2026, 8, 10), lookback_days=7)
     assert summary["attempted"] == [] and summary["failed"] == []
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-25: a day whose CAUSE was repaired must be reachable again
+# ---------------------------------------------------------------------------
+def test_an_exhausted_day_is_retried_when_the_trader_asks_for_it(store):
+    """The 140 stale OAuth days.
+
+    They failed while the Questrade chain was broken, burned their attempt
+    budget, and were then permanently skipped - so a repaired chain could never
+    turn them green and the Health tile stayed red forever on a fixed problem.
+    `attempts` still only goes up (it is history, and history is not rewritten);
+    what changes is that an EXPLICIT trader retry may ignore the cap. The
+    nightly still respects it, or a dead chain eats the budget every night.
+    """
+    day = date(2026, 2, 3)
+    for _ in range(jc.DEFAULT_MAX_ATTEMPTS_PER_DAY):
+        jc.mark_coverage(store, broker="QUESTRADE", account_number="A1", day=day,
+                         status=jc.FAILED, message="oauth chain was dead")
+    assert jc.attempts_for(store, broker="QUESTRADE", account_number="A1", day=day) >= (
+        jc.DEFAULT_MAX_ATTEMPTS_PER_DAY
+    )
+
+    calls: list[date] = []
+
+    def _fetch(broker, account, when):
+        calls.append(when)
+        return 2
+
+    skipped = jc.self_heal(store, _fetch, accounts=[("QUESTRADE", "A1")],
+                           today=date(2026, 2, 10), failed_only=True)
+    assert calls == [], "the nightly budget must still respect the attempt cap"
+    assert skipped["exhausted"], "and it must say the day was skipped, not silently drop it"
+
+    repaired = jc.self_heal(store, _fetch, accounts=[("QUESTRADE", "A1")],
+                            today=date(2026, 2, 10), failed_only=True,
+                            include_exhausted=True)
+
+    assert calls == [day], "an explicit retry must reach the day whose cause was fixed"
+    assert [row["day"] for row in repaired["repaired"]] == [day.isoformat()]
+    assert repaired["exhausted"] == []
+    # History is not rewritten: the attempts it burned are still on the record.
+    assert jc.attempts_for(store, broker="QUESTRADE", account_number="A1", day=day) >= (
+        jc.DEFAULT_MAX_ATTEMPTS_PER_DAY
+    )
+
+
+def test_the_explicit_retry_reports_how_many_exhausted_days_it_reopened(store):
+    """A number the trader can check against the tile, rather than a silent
+    change in what the button does."""
+    for day in (date(2026, 2, 3), date(2026, 2, 4)):
+        for _ in range(jc.DEFAULT_MAX_ATTEMPTS_PER_DAY):
+            jc.mark_coverage(store, broker="QUESTRADE", account_number="A1", day=day,
+                             status=jc.FAILED, message="oauth chain was dead")
+
+    summary = jc.self_heal(store, lambda *a: 1, accounts=[("QUESTRADE", "A1")],
+                           today=date(2026, 2, 10), failed_only=True,
+                           include_exhausted=True)
+
+    assert summary["reopened_exhausted"] == 2

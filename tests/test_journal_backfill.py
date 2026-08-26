@@ -146,6 +146,9 @@ def test_questrade_rotation_is_saved_even_when_environment_seeds_exist(monkeypat
     monkeypatch.setenv("QUESTRADE_ACCESS_TOKEN", "old-env-access")
     monkeypatch.setattr(ji, "get_local_setting", lambda key, default="": saved.get(key, default))
     monkeypatch.setattr(ji, "save_local_setting", lambda key, value: saved.__setitem__(key, value))
+    # The rotation is written in ONE save now: four read-modify-write cycles
+    # were four chances for a concurrent writer to drop the new refresh token.
+    monkeypatch.setattr(ji, "save_local_settings", lambda values: saved.update(values))
 
     class _Response:
         def raise_for_status(self):

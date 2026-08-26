@@ -659,10 +659,31 @@ def get_local_setting(key: str, default=None):
 
 
 def save_local_setting(key: str, value) -> None:
+    save_local_settings({key: value})
+
+
+def save_local_settings(values: dict) -> None:
+    """Write several settings in ONE read-modify-write.
+
+    Four separate `save_local_setting` calls are four full read-modify-write
+    cycles over one JSON file, and each gap is a window in which another process
+    can read the file, edit its own key and write back - dropping whatever was
+    saved in between. The Questrade rotation saves four related keys, one of
+    which is a single-use token: losing it costs the trader the whole credential
+    chain (2026-08-25).
+
+    The write goes through a temp file and `os.replace`, so a crash or a full
+    disk cannot leave a half-written settings file behind. This file holds every
+    machine-local secret; truncating it is not an acceptable failure mode.
+    """
+    if not values:
+        return
     LOCAL_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     payload = _load_local_settings()
-    payload[key] = value
-    LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    payload.update(values)
+    tmp = LOCAL_SETTINGS_FILE.with_name(LOCAL_SETTINGS_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, LOCAL_SETTINGS_FILE)
     invalidate_local_settings_cache()
 
 

@@ -657,8 +657,17 @@ def nightly_slot_status() -> dict[str, Any]:
     return {"rows": rows[-5:], "available": True}
 
 
-def self_heal_gaps(max_days: int = 62, *, failed_only: bool = False) -> dict[str, Any]:
-    """The Health tab's "Backfill gaps" button. Runs in a worker, never on the GUI thread."""
+def self_heal_gaps(
+    max_days: int = 62, *, failed_only: bool = False, include_exhausted: bool = False
+) -> dict[str, Any]:
+    """The Health tab's "Backfill gaps" button. Runs in a worker, never on the GUI thread.
+
+    ``include_exhausted`` is what "Retry failed Questrade days" passes. The
+    attempt cap counts failures against a DAY, not against a cause, so days that
+    failed while the credential chain was broken were skipped forever once they
+    burned it - and a repaired chain could never clear them. A trader pressing
+    the button is making their own decision; the nightly run keeps the cap.
+    """
     import journal_coverage
     from journal_runner import _fetch_one_day
 
@@ -670,6 +679,7 @@ def self_heal_gaps(max_days: int = 62, *, failed_only: bool = False) -> dict[str
         accounts=supported,
         max_days_per_night=max_days,
         failed_only=failed_only,
+        include_exhausted=include_exhausted,
     )
     summary["unsupported_brokers"] = sorted(
         {str(broker).upper() for broker, _account in all_accounts if str(broker).upper() != "QUESTRADE"}

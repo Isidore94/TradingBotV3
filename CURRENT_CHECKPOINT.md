@@ -8,6 +8,97 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-25 night - the Questrade chain has ONE owner; stale failures are reachable again
+
+**Branch `testing-week-2026-08-24`.** Trader-directed after a fresh token was
+pasted and Journal Health stayed red. Three findings, two repairs, one decision
+left to the trader.
+
+### What was actually happening (reproduced from the live desk, read-only)
+
+The token **worked**. `import_runs` shows `QUESTRADE OK` at **20:54:59**, and
+today's single Questrade execution is in `raw_executions` for 2026-08-25. Then a
+year-wide backfill ran at 20:59, and at **21:06:51** the next Questrade run
+failed `400 Bad Request` on the refresh endpoint - eleven minutes after the
+paste. **Disclosure:** one of the failed runs is the AI's - `pull_today()` was
+run once headless to reproduce the button. It was rejected at the refresh, so it
+rotated nothing, but it wrote a FAILED `import_runs` row.
+
+Health was red for a **different** reason than the token. 185 FAILED Questrade
+days: **140** carrying OAuth/400 messages from before the 2026-08-25 DateTime
+repair, and **45** saying `activities report trades the executions endpoint did
+not return`. No token can clear either set.
+
+### Repair 1 - the chain snapped because it had several owners
+
+Questrade rotates on every refresh: a success invalidates the access token it
+replaces AND consumes the refresh token it was given. "Pull today now", the gap
+backfill and the nightly slot are three consumers of one single-use chain, and
+that is enough to break it. Three changes, in `journal_importers.py`:
+
+* the refresh is **serialized across every process on this machine**
+  (`local_writer_lock`, the primitive the outcome finalizer already uses);
+* the token is **re-read inside the lock**, so a caller that waited spends what
+  the winner LEFT rather than what it read before waiting;
+* a **401 explained by someone else's rotation reuses their new access token**
+  instead of burning a refresh to rediscover it. That cascade - our access token
+  killed by their refresh, our 401 answered by spending a consumed refresh
+  token - is the exact shape of the 21:06:51 failure.
+
+Beside it, `project_paths.save_local_settings()` writes several keys in **one**
+read-modify-write, through a temp file and `os.replace`. The rotation saves four
+related keys, one of them a single-use token; four separate cycles were four
+windows for a concurrent writer to drop it, and a direct `write_text` over a
+file holding every machine-local secret could truncate it.
+
+A failed refresh still saves nothing and **leaves the stored token alone** -
+a rejected token may still be the good one, and clearing it makes the repair
+"paste it again" every time.
+
+### Repair 2 - a day whose CAUSE was fixed could never come back
+
+The attempt cap counts failures against a DAY, not against a cause. The 140
+OAuth-era days burned their budget while the chain was dead and were then
+skipped forever, so a repaired chain could not clear them and the tile stayed
+red on a solved problem. `journal_coverage.self_heal(include_exhausted=True)`
+lifts the cap for ONE deliberate run; the Health tab passes it from **"Retry
+failed Questrade days"** only. The nightly keeps the cap - a dead chain must not
+eat the budget every night. **`attempts` is not rewritten** (ground rule 5): it
+stays the record of what the day cost, and the run reports
+`reopened_exhausted` so the trader sees a number rather than a silent change.
+
+### Finding 3 - the 45 mismatches are real, and NOT repairable by retrying
+
+Measured, read-only: **44 of the 45** have no Questrade execution within +/-3
+days, so this is not a timezone skew between the two endpoints. They span
+2025-11-13 to 2026-08-13 and cluster in 2025-11 (8), 2025-12 (12), 2026-01 (19),
+2026-02 (5). The journal holds **no Questrade execution before 2026-06-10** on
+either account, which is the executions endpoint's retention horizon; the
+activities endpoint reaches back much further. So the executions endpoint can no
+longer supply those trades **at all**, and every retry of them is futile.
+
+**Left to the trader, deliberately not built.** The choices are to import those
+days from `/activities` - a lower-fidelity source that lacks execution-level
+detail, in a record that feeds tax - or to label them permanently uncovered and
+stop implying they are actionable. That is a decision about the trade/tax
+record, not a plumbing fix, and it needs a new coverage status either way.
+**One exception worth a look: 2026-08-13 falls INSIDE the retention window**, so
+that day may be genuinely recoverable and is not explained by retention.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4844 passed / 19 subtests**, pytest exit **0** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **70/70**, exit 0 |
+| `test_packaging_spec_drift.py` | 17 passed, exit 0 - no packaging trigger |
+
+4837 -> 4844: seven added.
+
+**Live gates:** none marked met. The chain repair is proved by tests, not by a
+live session; the next real proof is a paste that survives a backfill.
+
+---
+
 ## 2026-08-25 evening (7) - trader accepts the sweep canary; the scan cycle is now timed
 
 **Branch `testing-week-2026-08-24`.** Two trader decisions, both recorded here
