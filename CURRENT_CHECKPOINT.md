@@ -57,6 +57,47 @@ unmerged pending two trader answers: the file-scoped ask-first rule governs it
 because it edits `scripts/ui/panels/alert_center_panel.py`, and it collides with
 `main` at `docs/ALERT_CENTER_QUALITY_PACKET.md`, where a *different* historical file
 already lives. Both are written up in `docs/BRANCH_HISTORY.md`.
+## 2026-08-25 night (UI planning redirect) - full 4K desk review recorded; no build authorized
+
+**Branch `testing-week-2026-08-24`, head `ed277a7`.** The trader explicitly
+redirected to a planning-only review of every GUI page/tab for a main 4K monitor
+using full height and about 90% width, followed by a measured speed plan and a
+Settings offload plan. No application code, runtime contract, detector, scorer,
+alert, schedule, store, or roadmap item was changed.
+
+The supporting proposal is
+[`docs/GUI_REDESIGN_PLAN_2026-08-25.md`](docs/GUI_REDESIGN_PLAN_2026-08-25.md).
+It is deliberately marked **PROPOSAL — NOT AUTHORIZED WORK** and is indexed as
+an active product reference, not another roadmap. `plan.md` remains unchanged;
+implementation begins only if the trader accepts the decisions in the proposal
+and promotes the selected work into the root roadmap.
+
+### Review evidence
+
+- Exercised the live PySide desk top-to-bottom across all 14 pages and every
+  nested tab at the current 4K Windows logical viewport.
+- Projected the stated 90%-width target as a 2304 × 1392 outer window / roughly
+  2060 × 1308 Trading Desk content surface. Capture measured 1195 × 352 against
+  a 759px content hint with setups hidden, and 679 × 352 with setups shown: the
+  permanent 60/40 Focus Strength companion is the primary Veto-layout defect.
+- Read the locked chart/capture, Chart Review, Trade Journal, Weekend Prep, and
+  GUI-fluidity contracts before writing the proposal.
+- Filtered the live stall log to the current GUI process: 264 stalls, 117.3 ms
+  median, 205.1 ms p90, 8.45 s worst, 46.0 s total blocked in about 45 minutes.
+  The worst freeze was Weekend Prep doing review-learning/CSV work on Qt; Focus
+  mover-state refreshes and Desk mode reparents were also reproduced.
+- Focused planning baseline: **116 passed** across the desk-layout, scale,
+  Market Journal, AWAY Recap, fluidity/watchdog, and page-spec suites.
+- `git diff --check` and Markdown/index checks are the only additional
+  verification required for this docs-only change.
+
+### Roadmap/baseline effect
+
+None. The 4844-test / 19-subtest, smoke 7/7, selftest 70/70 baseline below is
+unchanged, and every existing live gate remains owed exactly as recorded. The
+immediate active implementation action therefore remains the Questrade-chain
+live proof/trader decision below unless the trader promotes part of the GUI
+proposal.
 
 ---
 
