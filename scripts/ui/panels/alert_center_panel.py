@@ -3619,10 +3619,16 @@ class AlertCenterPanel(QFrame):
 
         import market_journal
 
+        # The chart in front of the trader, when there is one. A stale symbol
+        # would be worse than none: it would assert a link they never made.
+        current = getattr(self, "_current_review_alert", None)
+        symbol = str(getattr(current, "symbol", "") or "").strip().upper()
+
         result = self.market_journal_service.write_entry(
             text=self._journal_text.toPlainText(),
             session_date=date.today().isoformat(),
             timeframe=self._journal_timeframe.currentText(),
+            symbols=[symbol] if symbol else [],
             origin=market_journal.ORIGIN_DESK_TAB,
         )
         if result.get("ok"):

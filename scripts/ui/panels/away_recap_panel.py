@@ -72,10 +72,15 @@ class _RecapWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             unavailable["staged picks"] = str(exc)
         try:
-            from focus_picks import load_focus_map
+            import focus_picks
 
+            # Keyword-only, and deliberately read ONCE: the no-argument form
+            # unions the swing and m5 lists, which is what "what Focus held
+            # today" means. Calling it per side both re-read the store and -
+            # because it takes no positional argument - could only ever raise.
+            by_side = focus_picks.load_focus_map()
             focus = {
-                side: sorted(load_focus_map(side) or [])
+                side: sorted(by_side.get(side) or [])
                 for side in ("long", "short")
             }
         except Exception as exc:  # noqa: BLE001
@@ -323,15 +328,28 @@ class AwayRecapPanel(QFrame):
         )
 
     def _gate_text(self, symbol: str, side: str) -> str:
-        try:
-            from focus_adoption_gate import mover_state
+        """Say plainly that the gate was not measured here, and why.
 
-            state, reason = mover_state(side, None, None, None)
-        except Exception as exc:  # noqa: BLE001
-            return f"adoption gate unavailable ({exc}); your action is unaffected"
+        This used to call `mover_state(side, None, None, None)`. That signature
+        is `(side, price, prev_high, prev_low)`, so with no price and no
+        previous-day extremes it could only ever return UNKNOWN - and the page
+        rendered that as a gate verdict for the symbol. A measurement that was
+        never taken must not read like one that came back inconclusive.
+
+        The recap has no bar source: it is an end-of-day page assembled from
+        stores, and fetching the last completed M5 bar plus yesterday's extremes
+        at click time would put a network/disk read on the Qt thread in a click
+        handler - the exact defect this pass exists to remove. UNKNOWN stays
+        UNKNOWN rather than being invented into a pass, and the trader is
+        pointed at the surfaces that DO measure it, where the bars are already
+        in hand.
+        """
         return (
-            f"R2 adoption gate for {symbol}: {state} ({reason}). "
-            "Shown for context - it governs the machine's adoptions, not yours."
+            f"R2 adoption gate: not measured on this page for {symbol} - the recap "
+            "reads stores, not bars, so it has no completed M5 bar or previous-day "
+            "extreme to measure against. The Strength Board and Focus surfaces "
+            "re-check it at click time. It governs the machine's adoptions, never "
+            "yours, so your action is unaffected."
         )
 
     def _write_journal(self) -> None:
