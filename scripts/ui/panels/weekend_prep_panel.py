@@ -73,6 +73,34 @@ class _WalkawayWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class _ReadWorker(QThread):
+    """Runs ONE read function off the Qt thread and hands back what it returned.
+
+    Deliberately dumb: it measures nothing, decides nothing, and schedules
+    nothing. Every page that owns one owns exactly one, which is what keeps
+    "one component owns each timer/thread" true when a trader clicks Refresh
+    three times.
+
+    Note what it does NOT do: it never touches the widget it will update, and
+    it never blanks anything. Clearing a populated page to say "refreshing"
+    destroys the only copy of what that page knew, which matters most in
+    exactly the case you would want it least - a refresh that then fails.
+    """
+
+    finished_with = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, work, parent=None) -> None:
+        super().__init__(parent)
+        self._work = work
+
+    def run(self) -> None:  # pragma: no cover - exercised through its signals
+        try:
+            self.finished_with.emit(self._work())
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
 class _StepPage(QFrame):
     """Shared furniture: a title, a body, and the two buttons every step has."""
 
@@ -112,6 +140,18 @@ class _StepPage(QFrame):
     def reload(self) -> None:  # pragma: no cover - overridden
         pass
 
+    def shutdown(self) -> None:
+        """Join this page's worker, if it has one.
+
+        On the base rather than per page: three pages now own a reader, and a
+        thread that outlives the widget it was going to update is the failure
+        this pass exists to avoid creating. `getattr` because a page without a
+        worker is a normal page, not a broken one.
+        """
+        worker = getattr(self, "_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.wait()
+
 
 class WeekReviewPage(_StepPage):
     """Step 1: what happened, from the review-learning state and the RS extremes."""
@@ -123,19 +163,55 @@ class WeekReviewPage(_StepPage):
         self.refresh_button = QPushButton("Refresh week")
         self.refresh_button.clicked.connect(self.reload)
         self.summary = QTextBrowser()
+        # A separate slot for "refreshing" and for a stated failure, so neither
+        # has to be written over the content the page is already showing.
+        self.refresh_note = QLabel("")
+        self.refresh_note.setWordWrap(True)
+        self._worker: _ReadWorker | None = None
         self._layout.addWidget(self.refresh_button)
+        self._layout.addWidget(self.refresh_note)
         self._layout.addWidget(self.summary, 1)
         self._finish_layout()
 
     def reload(self) -> None:
-        try:
-            from review_learning import build_review_learning_state
+        """Start the week's reads on this page's worker. Single-flight.
 
-            state = build_review_learning_state(window_days=7)
-        except Exception as exc:  # noqa: BLE001
-            self.summary.setPlainText(f"Week review unavailable: {exc}")
-            self.statusChanged.emit(f"week review unavailable: {exc}")
+        This method used to BE the read: `build_review_learning_state` plus two
+        RS log scans, straight through the click that selected the page. It was
+        the worst measured stall on the desk - 8.45 s with the whole GUI frozen
+        (fluidity capture, 2026-08-25).
+        """
+        if self._worker is not None and self._worker.isRunning():
             return
+        self.refresh_button.setEnabled(False)
+        self.refresh_note.setText("Refreshing the week...")
+        worker = _ReadWorker(self._build_summary_text, self)
+        worker.finished_with.connect(self._on_summary_ready)
+        worker.failed.connect(self._on_summary_failed)
+        self._worker = worker
+        worker.start()
+
+    def _on_summary_ready(self, text: object) -> None:  # pragma: no cover - signal seam
+        self.refresh_button.setEnabled(True)
+        self.refresh_note.setText("")
+        self.summary.setPlainText(str(text))
+
+    def _on_summary_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        self.refresh_button.setEnabled(True)
+        stated = f"Week review unavailable: {message}"
+        self.refresh_note.setText(stated)
+        # Last-good survives. Only an empty page shows the failure as its body,
+        # because there a blank would say "no decisions this week" - which is a
+        # different claim from "the store could not be read".
+        if not self.summary.toPlainText().strip():
+            self.summary.setPlainText(stated)
+        self.statusChanged.emit(f"week review unavailable: {message}")
+
+    def _build_summary_text(self) -> str:
+        """Every store this page reads, and no widget. Runs on the worker."""
+        from review_learning import build_review_learning_state
+
+        state = build_review_learning_state(window_days=7)
         lines = [f"Week of {self.service.week_bounds[0]} to {self.service.week_bounds[1]}", ""]
         for key in ("takes", "skips", "rejects", "blind_spots", "leaks", "watch_conversion"):
             value = state.get(key) if isinstance(state, dict) else None
@@ -147,7 +223,7 @@ class WeekReviewPage(_StepPage):
         lines += ["", "Episodes fold on (trade_date, symbol): two setups in one name on one day read as one."]
         lines += self._rrs_lines()
         lines += self._rrs_group_lines()
-        self.summary.setPlainText("\n".join(lines))
+        return "\n".join(lines)
 
 
     def _rrs_lines(self) -> list[str]:
@@ -233,6 +309,7 @@ class FocusReviewPage(_StepPage):
         )
         self.refresh_button = QPushButton("Refresh picks")
         self.refresh_button.clicked.connect(self.reload)
+        self._worker: _ReadWorker | None = None
         # One row per PICK, carrying its outcome - not picks and outcomes as
         # separate rows, which listed the same name twice and could not answer
         # "how did this pick do" (R8 retained scope, built 2026-08-18).
@@ -312,14 +389,61 @@ class FocusReviewPage(_StepPage):
         self._finish_layout()
 
     def reload(self) -> None:
-        # The cohort first and unconditionally: it is not week-scoped, so a
-        # week with no picks must not also hide the graded record of the
-        # trader's vetoes.
-        self._reload_cohort()
-        self._reload_like_cohort()
-        self._reload_performance()
-        self._reload_feedback()
-        rows = _join_focus_week(self.service.week_bounds)
+        """Start all five reads on this page's worker. Single-flight.
+
+        This page ran five CSV/JSONL reads and then built every cell of five
+        tables inside the click that selected it. The reads are now off the Qt
+        thread and the render happens in one pass when they all land.
+
+        The cohort still comes first and unconditionally when rendering: it is
+        not week-scoped, so a week with no picks must not also hide the graded
+        record of the trader's vetoes.
+        """
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self.refresh_button.setEnabled(False)
+        worker = _ReadWorker(self._read_everything, self)
+        worker.finished_with.connect(self._on_focus_ready)
+        worker.failed.connect(self._on_focus_failed)
+        self._worker = worker
+        worker.start()
+
+    def _read_everything(self) -> dict:
+        """Every store this page reads, and no widget. Runs on the worker."""
+        return {
+            "cohort": _read_veto_cohort(),
+            "like": _read_like_cohort(),
+            "performance": _read_focus_performance(),
+            "feedback": _read_pick_feedback_week(self.service.week_bounds),
+            "week": _join_focus_week(self.service.week_bounds),
+        }
+
+    def _on_focus_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        self.refresh_button.setEnabled(True)
+        data = payload if isinstance(payload, dict) else {}
+        self._render_cohort(data.get("cohort") or [])
+        self._render_like_cohort(data.get("like") or [])
+        self._render_performance(data.get("performance") or [])
+        self._render_feedback(data.get("feedback") or [])
+        self._render_week(data.get("week") or [])
+
+    def _on_focus_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        """State the failure; keep every row already on screen.
+
+        Before this page had a worker it had no error handling at all, so an
+        unreadable CSV propagated straight out of the click. Either way the
+        graded cohorts are the whole forward record of the trader's own
+        judgement - erasing them because one week would not load would be the
+        worst possible response to a bad read.
+        """
+        self.refresh_button.setEnabled(True)
+        self.note.setText(
+            f"The focus review could not be refreshed: {message}. What is shown "
+            "is the last good read, not this week's answer."
+        )
+        self.statusChanged.emit(f"focus review unavailable: {message}")
+
+    def _render_week(self, rows) -> None:
         self.table.setRowCount(len(rows))
         columns = ("date", "symbol", "side", "source", "h1", "h3", "h5", "h10", "matured")
         for index, row in enumerate(rows):
@@ -340,14 +464,13 @@ class FocusReviewPage(_StepPage):
             note += f" {orphans} row(s) have an outcome but no pick snapshot."
         self.note.setText(note)
 
-    def _reload_performance(self) -> None:
+    def _render_performance(self, rows) -> None:
         """The picks' own forward record (R8 sec 6, packet W2).
 
         Not week-scoped - see `_read_focus_performance`. Its as-of stamp is
         printed instead, so a stale rollup reads as stale rather than as this
         week's answer.
         """
-        rows = _read_focus_performance()
         self.performance_table.setRowCount(len(rows))
         columns = (
             "cohort", "side", "horizon", "n", "win_rate", "avg_return",
@@ -385,9 +508,8 @@ class FocusReviewPage(_StepPage):
             )
         self.performance_note.setText(note)
 
-    def _reload_feedback(self) -> None:
+    def _render_feedback(self, rows) -> None:
         """The week's like/dislike verdicts in the trader's own words."""
-        rows = _read_pick_feedback_week(self.service.week_bounds)
         shown = rows[:PICK_FEEDBACK_ROWS_SHOWN]
         self.feedback_table.setRowCount(len(shown))
         columns = ("date", "symbol", "side", "verdict", "category", "origin", "reason")
@@ -416,9 +538,8 @@ class FocusReviewPage(_StepPage):
             note += f" {len(rows) - len(shown)} row(s) beyond the first {len(shown)} are not shown."
         self.feedback_note.setText(note)
 
-    def _reload_like_cohort(self) -> None:
+    def _render_like_cohort(self, rows) -> None:
         """R10.F's cohort, rendered under the same honesty rules as the veto one."""
-        rows = _read_like_cohort()
         self.like_table.setRowCount(len(rows))
         columns = ("cohort", "side", "n", "win_rate", "avg_return", "profit_factor")
         for index, row in enumerate(rows):
@@ -444,8 +565,7 @@ class FocusReviewPage(_StepPage):
             "you endorsed."
         )
 
-    def _reload_cohort(self) -> None:
-        rows = _read_veto_cohort()
+    def _render_cohort(self, rows) -> None:
         self.cohort_table.setRowCount(len(rows))
         columns = ("cohort", "side", "n", "win_rate", "avg_return", "profit_factor")
         for index, row in enumerate(rows):
@@ -641,11 +761,6 @@ class WalkawayPage(_StepPage):
         self.service.record_tag_review(row["trade_id"], corrected_to=row["current_tags"])
         self.statusChanged.emit(f"corrected {row['symbol']} to your tags")
         self._reload_review_data()
-
-    def shutdown(self) -> None:
-        worker = self._worker
-        if worker is not None and worker.isRunning():
-            worker.wait()
 
 
 class DiscoveryPage(_StepPage):
@@ -868,7 +983,14 @@ class WeekendPrepPanel(QFrame):
             self.pages.setCurrentIndex(row)
 
     def shutdown(self) -> None:
-        self.walkaway.shutdown()
+        # Every page, not a named one: this listed only `walkaway` while it was
+        # the only page with a thread, and that is exactly the kind of list
+        # that silently stops being complete.
+        for index in range(self.pages.count()):
+            page = self.pages.widget(index)
+            shutdown = getattr(page, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
         self.service.shutdown()
 
 
