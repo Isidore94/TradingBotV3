@@ -137,14 +137,57 @@ def _table(columns: tuple[str, ...], *, stretch_column: int) -> QTableWidget:
     return table
 
 
+def _cell(table: QTableWidget, row: int, column: int) -> QTableWidgetItem:
+    """The cell that is already there, or a new one if there genuinely is none."""
+    item = table.item(row, column)
+    if item is None:
+        item = QTableWidgetItem()
+        table.setItem(row, column, item)
+    return item
+
+
+class _KeepView:
+    """Hold a table's scroll position across an update.
+
+    These tables refresh on a 15-second timer. Rebuilding one sends it back to
+    the top, so a trader reading the bottom of the jobs list was pulled away
+    from it every fifteen seconds with nothing on screen to explain why.
+    """
+
+    def __init__(self, table: QTableWidget) -> None:
+        self._table = table
+        self._vertical = 0
+        self._horizontal = 0
+
+    def __enter__(self) -> "_KeepView":
+        self._vertical = self._table.verticalScrollBar().value()
+        self._horizontal = self._table.horizontalScrollBar().value()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self._table.verticalScrollBar().setValue(self._vertical)
+        self._table.horizontalScrollBar().setValue(self._horizontal)
+        return None
+
+
 def _fill(table: QTableWidget, rows: list[tuple[str, ...]], *, tones: list[str] | None = None) -> None:
-    table.setRowCount(len(rows))
-    for row_index, values in enumerate(rows):
-        for column, value in enumerate(values):
-            item = QTableWidgetItem(str(value))
-            if column == 0 and tones:
-                item.setForeground(QColor(theme.color(tones[row_index])))
-            table.setItem(row_index, column, item)
+    """Write into the cells that exist; create only what is genuinely new.
+
+    G-P1.4. This built a fresh `QTableWidgetItem` for every cell of every table
+    on every refresh. Same rows, same text, same colours - and a steady churn of
+    Qt objects on a timer, which is also where the scroll position went.
+    """
+    with _KeepView(table):
+        if table.rowCount() != len(rows):
+            table.setRowCount(len(rows))
+        for row_index, values in enumerate(rows):
+            for column, value in enumerate(values):
+                item = _cell(table, row_index, column)
+                text = str(value)
+                if item.text() != text:
+                    item.setText(text)
+                if column == 0 and tones:
+                    item.setForeground(QColor(theme.color(tones[row_index])))
 
 
 class HealthPanel(QFrame):
@@ -237,6 +280,11 @@ class HealthPanel(QFrame):
         layout.addWidget(splitter, 1)
 
         self._audit_thread: threading.Thread | None = None
+        #: Set by `shutdown`. Construction schedules a refresh with
+        #: `singleShot(0, ...)`, so without this a refresh queued before
+        #: shutdown can fire after it and start a fresh audit thread into a
+        #: panel that is going away.
+        self._closing = False
         self._audit_ready.connect(self.set_payload)
         self._timer = QTimer(self)
         self._timer.setInterval(max(5_000, int(refresh_interval_ms)))
@@ -256,6 +304,8 @@ class HealthPanel(QFrame):
         runs at a time; a tick that lands while one is in flight is skipped -
         the running audit's result is at most seconds away.
         """
+        if self._closing:
+            return
         if self._audit_thread is not None and self._audit_thread.is_alive():
             return
         self._audit_thread = threading.Thread(
@@ -343,33 +393,37 @@ class HealthPanel(QFrame):
         if 0 <= self.table.currentRow() < len(getattr(self, "_checks", [])):
             selected_id = str(self._checks[self.table.currentRow()].get("id") or "")
         self._checks = checks
-        self.table.setRowCount(len(checks))
-        selected_row = 0 if checks else -1
-        for row_index, check in enumerate(checks):
-            check_status = str(check.get("status") or _UNKNOWN).lower()
-            if check_status not in _STATUS_TONES:
-                check_status = _UNKNOWN
-            values = (
-                check_status.upper(),
-                str(check.get("label") or check.get("id") or ""),
-                str(check.get("summary") or ""),
-                str(check.get("updated_at") or ""),
-            )
-            foreground = QColor(theme.color(_STATUS_TONES.get(check_status, "neutral")))
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if column == 0:
-                    item.setForeground(foreground)
-                    font = item.font()
-                    font.setBold(True)
-                    # Colour alone is not a distinction: UNKNOWN also reads as
-                    # italic so an unmeasured row is obvious without relying on
-                    # hue discrimination.
-                    font.setItalic(check_status == _UNKNOWN)
-                    item.setFont(font)
-                self.table.setItem(row_index, column, item)
-            if str(check.get("id") or "") == selected_id:
-                selected_row = row_index
+        # G-P1.4: updated in place rather than rebuilt - see `_fill`.
+        with _KeepView(self.table):
+            if self.table.rowCount() != len(checks):
+                self.table.setRowCount(len(checks))
+            selected_row = 0 if checks else -1
+            for row_index, check in enumerate(checks):
+                check_status = str(check.get("status") or _UNKNOWN).lower()
+                if check_status not in _STATUS_TONES:
+                    check_status = _UNKNOWN
+                values = (
+                    check_status.upper(),
+                    str(check.get("label") or check.get("id") or ""),
+                    str(check.get("summary") or ""),
+                    str(check.get("updated_at") or ""),
+                )
+                foreground = QColor(theme.color(_STATUS_TONES.get(check_status, "neutral")))
+                for column, value in enumerate(values):
+                    item = _cell(self.table, row_index, column)
+                    if item.text() != value:
+                        item.setText(value)
+                    if column == 0:
+                        item.setForeground(foreground)
+                        font = item.font()
+                        font.setBold(True)
+                        # Colour alone is not a distinction: UNKNOWN also reads
+                        # as italic so an unmeasured row is obvious without
+                        # relying on hue discrimination.
+                        font.setItalic(check_status == _UNKNOWN)
+                        item.setFont(font)
+                if str(check.get("id") or "") == selected_id:
+                    selected_row = row_index
         if selected_row >= 0:
             self.table.selectRow(selected_row)
             self._show_selected_check(selected_row)
@@ -451,4 +505,16 @@ class HealthPanel(QFrame):
         )
 
     def shutdown(self) -> None:
+        self._closing = True
         self._timer.stop()
+        # The audit runs on a plain daemon thread that emits a Qt signal back
+        # into this panel. Left unjoined it can emit into a panel whose C++
+        # half has already been freed, and THAT is an access violation rather
+        # than a Python RuntimeError - so the `except RuntimeError` at the emit
+        # cannot catch it. Joining here is what makes that guard's job
+        # possible. Intermittent, and it took a segfault two test files later
+        # to find: 4 runs in 6 crashed `test_qt_alert_capture` merely because a
+        # HealthPanel had been constructed earlier in the same process.
+        thread, self._audit_thread = self._audit_thread, None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)

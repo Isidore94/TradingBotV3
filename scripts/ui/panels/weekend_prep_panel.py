@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 
 import weekend_strength
 from ui.services import journal_feed
+from ui.read_worker import ReadWorker
 from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
 
 #: How many folded RS/RW rows one bucket may show in the week review. A cap
@@ -73,32 +74,9 @@ class _WalkawayWorker(QThread):
             self.failed.emit(str(exc))
 
 
-class _ReadWorker(QThread):
-    """Runs ONE read function off the Qt thread and hands back what it returned.
-
-    Deliberately dumb: it measures nothing, decides nothing, and schedules
-    nothing. Every page that owns one owns exactly one, which is what keeps
-    "one component owns each timer/thread" true when a trader clicks Refresh
-    three times.
-
-    Note what it does NOT do: it never touches the widget it will update, and
-    it never blanks anything. Clearing a populated page to say "refreshing"
-    destroys the only copy of what that page knew, which matters most in
-    exactly the case you would want it least - a refresh that then fails.
-    """
-
-    finished_with = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, work, parent=None) -> None:
-        super().__init__(parent)
-        self._work = work
-
-    def run(self) -> None:  # pragma: no cover - exercised through its signals
-        try:
-            self.finished_with.emit(self._work())
-        except Exception as exc:  # noqa: BLE001
-            self.failed.emit(str(exc))
+#: One owner for the read-off-the-Qt-thread shape; the private alias is kept
+#: so nothing that already refers to `_ReadWorker` has to move.
+_ReadWorker = ReadWorker
 
 
 class _StepPage(QFrame):
