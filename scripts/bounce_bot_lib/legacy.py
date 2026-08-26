@@ -4412,12 +4412,43 @@ class BounceBot(EWrapper, EClient):
         `last_close` is reconstructed from `close_r` and the trade's own entry
         and risk, which is arithmetic on stored numbers rather than an estimate.
         Anything unreadable is simply not recovered.
+
+        **A recovery may not erase a fact the trade already recorded** (Sol T3 /
+        trader Decision B.1, 2026-08-25). The first row at the furthest
+        milestone used to win outright, so a 12-bar row saying `stop_hit=False`
+        erased a 3-bar row that had already recorded the stop, and the trade
+        finalized as an ordinary last-measured bar. `stop_hit` is therefore
+        `any()` across the trade's recoverable rows, and where one exists the
+        exit numbers come from the EARLIEST stop-hit row: R10.0's stop-first
+        decision applied here, because once the stop is reached the trade is
+        over and later rows describe price action after an exit that already
+        happened. With no stop anywhere, the best-rank row still wins - the
+        furthest milestone is the most complete measurement of a trade that was
+        never cut short. Measured on the live store: **35 of the 207 finals the
+        2026-08-24 sweep recovered this way** carried a milestone stop the final
+        does not. Those rows are **tagged, never rewritten** (ground rule 5) -
+        see `evidence_rules.milestone_stop_erased_v1`.
         """
         wanted = {str(item) for item in (event_ids or []) if str(item or "").strip()}
         if not wanted:
             return {}
         best: dict[str, dict] = {}
         rank = {name: index for index, name in enumerate(self.RECOVERABLE_EVENT_TYPES)}
+
+        def _stop_row(row) -> bool:
+            return str(row.get("stop_hit") or "").strip().lower() in {"true", "1", "yes"}
+
+        def _stop_order(row):
+            """How early a stop-hit row is. An unreadable count cannot be
+            ordered, so it sorts LAST rather than winning by accident."""
+            try:
+                bars = float(row.get("bars_elapsed"))
+                if bars != bars:  # NaN
+                    raise ValueError
+            except (TypeError, ValueError):
+                bars = float("inf")
+            return (bars, str(row.get("logged_at") or ""))
+
         try:
             if not INTRADAY_BOUNCE_OUTCOMES_CSV.exists():
                 return {}
@@ -4429,13 +4460,35 @@ class BounceBot(EWrapper, EClient):
                     event_type = str(row.get("event_type") or "")
                     if event_type not in rank:
                         continue
-                    previous = best.get(event_id)
-                    if previous is not None and rank[event_type] >= previous["_rank"]:
-                        continue
-                    best[event_id] = {"_rank": rank[event_type], "row": row, "type": event_type}
+                    # Streaming, O(1) per trade: the best-rank row, the earliest
+                    # stop-hit row, and whether any row recorded a stop at all.
+                    # Keeping every row would hold the whole backlog's milestone
+                    # history in memory for the sake of two of them.
+                    found = best.get(event_id)
+                    if found is None:
+                        found = {"_rank": None, "row": None, "type": "",
+                                 "stop_any": False, "_stop_row": None,
+                                 "_stop_type": "", "_stop_key": None}
+                        best[event_id] = found
+                    if found["_rank"] is None or rank[event_type] < found["_rank"]:
+                        found["_rank"] = rank[event_type]
+                        found["row"] = row
+                        found["type"] = event_type
+                    if _stop_row(row):
+                        found["stop_any"] = True
+                        key = _stop_order(row)
+                        if found["_stop_key"] is None or key < found["_stop_key"]:
+                            found["_stop_key"] = key
+                            found["_stop_row"] = row
+                            found["_stop_type"] = event_type
+            for found in best.values():
+                if found["stop_any"] and found["_stop_row"] is not None:
+                    found["row"] = found["_stop_row"]
+                    found["type"] = found["_stop_type"]
         except Exception:
             logging.exception("Could not recover measurements from the outcome CSV.")
             return {}
+        best = {event_id: found for event_id, found in best.items() if found["row"] is not None}
 
         def _number(value):
             try:
@@ -4465,7 +4518,10 @@ class BounceBot(EWrapper, EClient):
                 "best_price": _number(row.get("best_price")) if _number(row.get("best_price")) is not None else "",
                 "worst_price": _number(row.get("worst_price")) if _number(row.get("worst_price")) is not None else "",
                 "last_close": last_close if last_close is not None else "",
-                "stop_hit": str(row.get("stop_hit") or "").strip().lower() in {"true", "1", "yes"},
+                # `any()` across the trade's rows, not this row's flag alone: a
+                # stop the trade already recorded is a fact, and a later row
+                # that did not see it cannot unrecord it (Decision B.1).
+                "stop_hit": bool(found["stop_any"]),
                 "target_1r_hit": str(row.get("target_1r_hit") or "").strip().lower() in {"true", "1", "yes"},
                 "target_2r_hit": str(row.get("target_2r_hit") or "").strip().lower() in {"true", "1", "yes"},
                 "minutes_elapsed": _number(row.get("minutes_elapsed")) or "",
@@ -8260,7 +8316,7 @@ class BounceBot(EWrapper, EClient):
         if signal_type in self.m5_signal_toggles:
             self.m5_signal_toggles[signal_type] = bool(enabled)
 
-    def _signal_bar_dict(self, symbol, bar_index, fallback):
+    def _signal_bar_dict(self, symbol, bar_index, fallback, bar_time=None):
         """The REAL bar an M5 signal fired on, or the caller's fallback.
 
         R10.B / audit D5a. `_emit_lrsi_cross_alert` built one synthetic bar with
@@ -8277,6 +8333,16 @@ class BounceBot(EWrapper, EClient):
         series, a different session) yields the fallback instead of a
         mis-indexed bar - a wrong bar would be worse than no bar, because it
         would produce a plausible stop from the wrong price.
+
+        **The close match alone is not an identity** (Sol T2 / trader Decision
+        B.2, 2026-08-25). A cache shifted by one bar, where two adjacent bars
+        happen to close at the same price, returned the 06:30 bar for a 06:35
+        event. The recovered bar must also carry the event's own `bar_time`.
+        With no stamp to check against - `bar_time` absent, or a bar with no
+        `dt` - there is no way to know the index still points at the event's
+        bar, so the fallback is returned: missing data is uncertainty, never
+        confirmation (plan.md sec 5), and the fallback is at least the event's
+        own prices.
         """
         try:
             bars = self.get_cached_5m_bars(symbol) or []
@@ -8286,6 +8352,9 @@ class BounceBot(EWrapper, EClient):
         if index < 0 or index >= len(bars):
             return fallback
         bar = bars[index]
+        stamp_at = getattr(bar, "dt", None)
+        if bar_time is None or stamp_at is None or stamp_at != bar_time:
+            return fallback
         try:
             stamp = bar.dt.strftime("%Y%m%d  %H:%M:%S") if getattr(bar, "dt", None) else ""
             recovered = {
@@ -8320,7 +8389,10 @@ class BounceBot(EWrapper, EClient):
         # and therefore alert tiers - a scoring change, which plan.md sec 5
         # forbids without golden fixtures first. Only the outcome registration,
         # which is evidence, gets the real bar.
-        signal_bar = self._signal_bar_dict(symbol, getattr(event, "bar_index", None), bar_dict)
+        signal_bar = self._signal_bar_dict(
+            symbol, getattr(event, "bar_index", None), bar_dict,
+            bar_time=getattr(event, "bar_time", None),
+        )
         levels = {bounce_type: event.close}
         strength = "strongest" if event.is_strongest else "ordinary"
         event_row = self._log_bounce_candidate_event(
@@ -8458,7 +8530,10 @@ class BounceBot(EWrapper, EClient):
         }
         # Same D5a defect, same fix, same boundary: the real bar reaches the
         # outcome ledger, the flat bar keeps feeding the alert row and the tier.
-        signal_bar = self._signal_bar_dict(symbol, getattr(event, "bar_index", None), bar_dict)
+        signal_bar = self._signal_bar_dict(
+            symbol, getattr(event, "bar_index", None), bar_dict,
+            bar_time=getattr(event, "bar_time", None),
+        )
         levels = {M5_CONFLUENCE_TYPE: event.close}
         event_row = self._log_bounce_candidate_event(
             "confirmed",
@@ -8560,7 +8635,10 @@ class BounceBot(EWrapper, EClient):
         # there is no row anywhere to check this against. The same flat bar is
         # here, so the same fix is applied - and the first time this flow does
         # fire it will register a gradeable row instead of silently dropping it.
-        signal_bar = self._signal_bar_dict(symbol, getattr(event, "bar_index", None), bar_dict)
+        signal_bar = self._signal_bar_dict(
+            symbol, getattr(event, "bar_index", None), bar_dict,
+            bar_time=getattr(event, "bar_time", None),
+        )
         levels = {bounce_type: event.close}
         extreme_word = "high" if side == "long" else "low"
         if event.kind == ORB_CANDIDATE:

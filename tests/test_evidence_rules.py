@@ -354,3 +354,75 @@ def test_an_explicit_family_wins_over_the_id():
         event_id="AAPL_long_20260724_06_30_00_h1_blue_after_red",
     )
     assert not tag.tagged
+
+
+# ---------------------------------------------------------------------------
+# milestone_stop_erased_v1 (Decision B.1, 2026-08-25)
+# ---------------------------------------------------------------------------
+def _recovered_final(stop_hit, source="legacy_csv_milestones"):
+    import json as _json
+
+    return {
+        "event_id": "a",
+        "event_type": "final",
+        "stop_hit": stop_hit,
+        "context_json": _json.dumps(
+            {"finalization": {"basis": "last_measured_bar", "measurement_source": source}}
+        ),
+    }
+
+
+def test_a_recovered_final_that_dropped_a_milestone_stop_is_tagged():
+    tag = evidence_rules.milestone_stop_erased_v1(
+        final_row=_recovered_final("False"),
+        milestone_rows=[
+            {"event_type": "3_bar", "stop_hit": "True"},
+            {"event_type": "12_bar", "stop_hit": "False"},
+        ],
+    )
+    assert tag.rule == evidence_rules.RULE_MILESTONE_STOP_ERASED
+    assert tag.verdict == evidence_rules.VERDICT_MIXED
+    assert "1 milestone row(s)" in tag.reason
+
+
+def test_a_recovered_final_that_kept_its_stop_is_clean():
+    tag = evidence_rules.milestone_stop_erased_v1(
+        final_row=_recovered_final("True"),
+        milestone_rows=[{"event_type": "3_bar", "stop_hit": "True"}],
+    )
+    assert tag.verdict == evidence_rules.VERDICT_SHARES
+
+
+def test_no_surviving_stop_row_reads_clean_and_says_what_that_means():
+    """Clean here means "no evidence of erasure", not "no erasure" - the rule
+    cannot see a trade whose milestone rows were pruned."""
+    tag = evidence_rules.milestone_stop_erased_v1(
+        final_row=_recovered_final("False"),
+        milestone_rows=[{"event_type": "12_bar", "stop_hit": "False"}],
+    )
+    assert tag.verdict == evidence_rules.VERDICT_SHARES
+    assert "no evidence of erasure" in tag.reason
+
+
+def test_a_final_measured_in_state_is_unknown_not_clean():
+    """Missing data is uncertainty, never confirmation. This rule has nothing
+    to say about a final that never went through milestone recovery."""
+    tag = evidence_rules.milestone_stop_erased_v1(
+        final_row=_recovered_final("False", source=""),
+        milestone_rows=[{"event_type": "3_bar", "stop_hit": "True"}],
+    )
+    assert tag.verdict == evidence_rules.VERDICT_UNKNOWN
+
+
+def test_an_unparseable_context_does_not_raise():
+    tag = evidence_rules.milestone_stop_erased_v1(
+        final_row={"stop_hit": "False", "context_json": "{not json"},
+        milestone_rows=[{"event_type": "3_bar", "stop_hit": "True"}],
+    )
+    assert tag.verdict == evidence_rules.VERDICT_UNKNOWN
+
+
+def test_the_rule_is_described_for_a_report_footer():
+    text = evidence_rules.describe(evidence_rules.RULE_MILESTONE_STOP_ERASED)
+    assert "milestone_stop_erased_v1" in text
+    assert "2026-08-25" in text

@@ -292,3 +292,67 @@ def test_the_alert_row_and_the_tier_still_see_the_flat_bar(at_the_crossing):
     assert seen, "the alert row is still logged"
     flat = seen[0]
     assert flat["open"] == flat["high"] == flat["low"] == flat["close"]
+
+
+# ---------------------------------------------------------------------------
+# Decision B.2 (2026-08-25): the recovered bar must BE the event's bar
+# ---------------------------------------------------------------------------
+def _shifted_cache_bot(bars):
+    from types import SimpleNamespace  # noqa: F401  (used by the callers below)
+
+    bot = legacy.BounceBot.__new__(legacy.BounceBot)
+    bot.get_cached_5m_bars = lambda symbol: bars
+    return bot
+
+
+def test_a_shifted_cache_with_duplicate_closes_does_not_recover_the_wrong_bar():
+    """Sol C3, reproduced verbatim.
+
+    The close match alone is not an identity. A cache that has shifted by one
+    bar, where two adjacent bars happen to close at the same price, returned the
+    06:30 bar for a 06:35 event - and a wrong bar is worse than no bar, because
+    it produces a plausible stop from the wrong price. The event's own
+    `bar_time` now has to match too.
+    """
+    from types import SimpleNamespace
+
+    bars = [
+        SimpleNamespace(dt=datetime(2026, 8, 25, 6, 30), open=98, high=103, low=97, close=100),
+        SimpleNamespace(dt=datetime(2026, 8, 25, 6, 35), open=99, high=101, low=98, close=100),
+    ]
+    bot = _shifted_cache_bot(bars)
+    fallback = {"time": "20260825  06:35:00", "open": 100, "high": 100, "low": 100, "close": 100}
+
+    got = bot._signal_bar_dict("AAA", 0, fallback, bar_time=datetime(2026, 8, 25, 6, 35))
+
+    assert got is fallback, "a shifted cache recovered the 06:30 bar for a 06:35 event"
+
+
+def test_the_matching_bar_is_still_recovered():
+    """The repair must not cost the recovery it exists for (D5a)."""
+    from types import SimpleNamespace
+
+    bars = [
+        SimpleNamespace(dt=datetime(2026, 8, 25, 6, 30), open=98, high=103, low=97, close=100),
+        SimpleNamespace(dt=datetime(2026, 8, 25, 6, 35), open=99, high=101, low=98, close=100),
+    ]
+    bot = _shifted_cache_bot(bars)
+    fallback = {"time": "20260825  06:35:00", "open": 100, "high": 100, "low": 100, "close": 100}
+
+    got = bot._signal_bar_dict("AAA", 1, fallback, bar_time=datetime(2026, 8, 25, 6, 35))
+
+    assert got is not fallback
+    assert got["high"] == 101 and got["low"] == 98
+
+
+def test_an_event_with_no_bar_time_falls_back_rather_than_guessing():
+    """Missing data is uncertainty, never confirmation (plan.md sec 5). With no
+    stamp to check against there is no way to know the index still points at the
+    event's bar, and the flat fallback is at least the event's own prices."""
+    from types import SimpleNamespace
+
+    bars = [SimpleNamespace(dt=datetime(2026, 8, 25, 6, 35), open=99, high=101, low=98, close=100)]
+    bot = _shifted_cache_bot(bars)
+    fallback = {"time": "", "open": 100, "high": 100, "low": 100, "close": 100}
+
+    assert bot._signal_bar_dict("AAA", 0, fallback, bar_time=None) is fallback

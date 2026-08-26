@@ -53,6 +53,31 @@ answer will live.
 The interim measure that stops the store getting more mixed is the
 `daily_bars_source` pin (`master_avwap_lib.daily_bars_source_pin`); this rule
 describes the rows written before it.
+
+---
+
+## `milestone_stop_erased_v1`
+
+**What is wrong.** `_recover_measurements_from_csv` rebuilt a backlog trade's
+measurement from the first row at its FURTHEST milestone, outright. So a 12-bar
+row saying `stop_hit=False` erased a 3-bar row that had already recorded the
+stop, and the trade finalized as an ordinary last-measured bar at a positive R.
+Measured over the live store: **35 of the 207 finals the 2026-08-24 sweep
+recovered this way** carry no stop while their own surviving milestone rows do.
+The 2026-08-25 sweep has 0, because its trades measured in state rather than by
+recovery.
+
+**The repair and the rows.** From 2026-08-25 (trader Decision B.1) `stop_hit` is
+`any()` across the trade's recoverable rows and the exit comes from the EARLIEST
+stop-hit row — R10.0's stop-first decision. That changes what the NEXT sweep
+records. **The 35 rows already on disk are not rewritten** (ground rule 5); this
+rule is how a reader learns what they are missing.
+
+**Conjunctive, and `unknown` is a real third answer.** A final not recovered
+from milestone rows reads `unknown` — its `stop_hit` was measured some other way
+and this rule has nothing to say about it. A recovered final with no surviving
+stop-hit milestone row reads clean, and that means *no evidence of erasure*: the
+rule cannot see a trade whose milestone rows were pruned.
 """
 
 from __future__ import annotations
@@ -80,6 +105,10 @@ RULE_H1_BAR_START_V2 = "h1_bar_start_v2"
 RULE_FABRICATED_ZERO = "fabricated_zero_v1"
 RULE_DUPLICATE_ROW = "duplicate_row_v1"
 RULE_RISK_BELOW_FLOOR = "risk_below_floor_v1"
+#: Trader Decision B.1, 2026-08-25. Finals written before the repair, whose own
+#: CSV milestone rows recorded a stop the final does not carry. The rows stay
+#: exactly as they are; this is how a reader learns what is wrong with them.
+RULE_MILESTONE_STOP_ERASED = "milestone_stop_erased_v1"
 
 # verdicts
 VERDICT_MIXED = "mixed"
@@ -188,6 +217,30 @@ RULES: Mapping[str, RuleSpec] = {
         applies_to="R statistics; the raw `risk_per_share` and `stop_price` are never edited",
         introduced="2026-08-22 (R10.0 decision 6, R9.3's floor)",
         precision="1,127 all-time finals qualify; all-time max |close_r| is 799.0",
+    ),
+    RULE_MILESTONE_STOP_ERASED: RuleSpec(
+        name=RULE_MILESTONE_STOP_ERASED,
+        summary=(
+            "A final recovered from legacy CSV milestone rows says `stop_hit` false "
+            "while at least one of the trade's own milestone rows recorded the stop. "
+            "The furthest milestone won outright, so a later row that did not see the "
+            "stop erased an earlier one that did."
+        ),
+        applies_to=(
+            "stop-out rates, and any R statistic that reads `stop_hit` or the "
+            "`stop_exit` exit policy, over the intraday outcome store"
+        ),
+        introduced="2026-08-25 (trader Decision B.1; Sol T3)",
+        precision=(
+            "exact where the milestone rows survive in the store, and conjunctive - "
+            "the final must carry `finalization.measurement_source == "
+            "'legacy_csv_milestones'` AND say stop_hit false AND have a stop-hit "
+            "milestone row. 35 of the 207 finals the 2026-08-24 sweep recovered this "
+            "way match; 0 of the 2026-08-25 sweep's finals do, because that sweep's "
+            "trades measured in state. It cannot see a trade whose milestone rows "
+            "were pruned, so a clean answer is 'no evidence of erasure', not 'no "
+            "erasure'"
+        ),
     ),
 }
 
@@ -656,6 +709,89 @@ def risk_below_floor_v1(*, risk_per_share, entry_price) -> EvidenceTag:
         verdict=VERDICT_SHARES,
         reason="risk is at or above the floor",
     )
+
+
+#: The milestone event types the sweep's recovery reads. Duplicated here rather
+#: than imported: pulling it from `bounce_bot_lib.legacy` would make a
+#: reader-side rule import the detector, and this list is frozen by what the
+#: already-written rows contain, not by what the sweep reads next.
+_RECOVERABLE_MILESTONE_TYPES = frozenset({"12_bar", "6_bar", "3_bar", "1_bar", "update"})
+_LEGACY_MILESTONE_SOURCE = "legacy_csv_milestones"
+
+
+def _truthy(value) -> bool:
+    return str(value or "").strip().lower() in {"true", "1", "yes"}
+
+
+def milestone_stop_erased_v1(
+    *, final_row: Mapping, milestone_rows: Iterable[Mapping] = ()
+) -> EvidenceTag:
+    """Did this recovered final drop a stop its own milestone rows recorded?
+
+    Reads. Never writes. The 35 already-written finals this tags on 2026-08-24
+    are **not rewritten** (ground rule 5) - the repair in
+    `_recover_measurements_from_csv` changes what the NEXT sweep records, and
+    this rule is how every reader learns what the existing rows are missing.
+
+    Conjunctive by design: a final that was not recovered from milestone rows
+    cannot have had a milestone stop erased by that path, and is `unknown`
+    rather than clean - its `stop_hit` was measured some other way and this rule
+    has nothing to say about it.
+    """
+    context = final_row.get("context") if isinstance(final_row, Mapping) else None
+    if not isinstance(context, Mapping):
+        context = _context_of(final_row)
+    source = str(((context or {}).get("finalization") or {}).get("measurement_source") or "")
+    if source != _LEGACY_MILESTONE_SOURCE:
+        return EvidenceTag(
+            rule=RULE_MILESTONE_STOP_ERASED,
+            verdict=VERDICT_UNKNOWN,
+            reason=(
+                "not recovered from legacy CSV milestone rows, so this rule has "
+                "nothing to say about how its stop_hit was measured"
+            ),
+        )
+    stops = [
+        row for row in (milestone_rows or ())
+        if str((row or {}).get("event_type") or "") in _RECOVERABLE_MILESTONE_TYPES
+        and _truthy((row or {}).get("stop_hit"))
+    ]
+    if not stops:
+        return EvidenceTag(
+            rule=RULE_MILESTONE_STOP_ERASED,
+            verdict=VERDICT_SHARES,
+            reason=(
+                "no surviving milestone row records a stop - no evidence of erasure, "
+                "which is not the same as no erasure if rows were pruned"
+            ),
+        )
+    if _truthy(final_row.get("stop_hit")):
+        return EvidenceTag(
+            rule=RULE_MILESTONE_STOP_ERASED,
+            verdict=VERDICT_SHARES,
+            reason="the final carries the stop its milestone rows recorded",
+        )
+    return EvidenceTag(
+        rule=RULE_MILESTONE_STOP_ERASED,
+        verdict=VERDICT_MIXED,
+        reason=(
+            f"{len(stops)} milestone row(s) recorded a stop this final does not carry; "
+            "its stop_hit, its stop-out rate contribution and its stop_exit policy "
+            "value are all understated"
+        ),
+    )
+
+
+def _context_of(row: Mapping) -> dict:
+    """`context_json` as a dict, or an empty one. Never raises."""
+    raw = row.get("context_json") if isinstance(row, Mapping) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def duplicate_row_v1(rows: Iterable[Mapping], *, window: str) -> dict:

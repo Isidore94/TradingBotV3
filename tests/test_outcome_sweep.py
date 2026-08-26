@@ -464,6 +464,12 @@ def test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows(tmp_path, monkeyp
     `last_measured` landed on 2026-08-23 and no trade already in the checkpoint
     carries it, so without this the whole backlog finalizes as having seen no
     bars - including trades whose milestone rows are sitting in the CSV.
+
+    **Expectations changed 2026-08-25 by trader Decision B.1.** Both rows here
+    record the stop, and the exit now comes from the EARLIEST of them rather
+    than the furthest milestone: R10.0's stop-first decision says the trade was
+    over at bar 3, so bar 12's wider excursion describes price action after an
+    exit that had already happened. The recovery itself is unchanged.
     """
     path = _csv(tmp_path, [
         {"event_id": "a", "event_type": "3_bar", "close_r": "-0.8", "mfe_r": "0.4",
@@ -483,12 +489,12 @@ def test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows(tmp_path, monkeyp
     # It has evidence, and that evidence is recorded - but there is still no
     # close-through-the-session, so `close_r` stays blank (MAJOR-3).
     assert row["status"] == "unresolved"
-    assert row["stop_hit"] is True and row["mae_r"] == pytest.approx(-1.8)
+    assert row["stop_hit"] is True and row["mae_r"] == pytest.approx(-1.5)
     assert _context(row)["exit"]["stop_exit_r"] == -1.0
     finalization = _context(row)["finalization"]
     assert finalization["basis"] == "stop_hit_from_prior_measurement"
     assert finalization["measurement_source"] == "legacy_csv_milestones"
-    assert finalization["recovered_from"] == "12_bar", "the furthest milestone wins"
+    assert finalization["recovered_from"] == "3_bar", "the earliest stop-hit milestone wins"
     assert counts["by_reason"]["stop_hit:legacy_csv_milestones"] == 1
 
 
@@ -608,3 +614,92 @@ def test_an_unreadable_checkpoint_is_quarantined_and_loud_not_silently_empty(tmp
     assert any("Quarantining" in record.getMessage() for record in caplog.records)
     assert not path.exists(), "the unreadable file is moved aside, not left to be overwritten"
     assert list(tmp_path.glob("state.corrupt-*.json")), "and it is kept, so the rows are recoverable"
+
+
+# ---------------------------------------------------------------------------
+# Decision B.1 (2026-08-25): milestone recovery must not erase a recorded stop
+# ---------------------------------------------------------------------------
+def test_a_later_milestone_cannot_erase_an_earlier_recorded_stop(tmp_path, monkeypatch):
+    """Sol C4, reproduced verbatim.
+
+    The first row at the FURTHEST milestone won outright, so a 12-bar row
+    saying `stop_hit=False` erased the 3-bar row that had already recorded the
+    stop, and the trade finalized `last_measured_bar` at +0.5R. `stop_hit` is
+    now `any()` across the trade's recoverable rows, and the exit comes from the
+    EARLIEST stop-hit row - R10.0's stop-first decision, applied here: once the
+    stop is reached the trade is over, and later rows describe price action
+    after an exit that already happened.
+    """
+    _csv(tmp_path, [
+        {"event_id": "a", "event_type": "3_bar", "close_r": "-1.0", "mae_r": "-1.2",
+         "stop_hit": "True", "bars_elapsed": "3", "logged_at": "2026-08-21T08:00:00"},
+        {"event_id": "a", "event_type": "12_bar", "close_r": "0.5", "mae_r": "-0.2",
+         "stop_hit": "False", "bars_elapsed": "12", "logged_at": "2026-08-21T09:00:00"},
+    ])
+    host = _host(tmp_path)
+    _seed(host, {"a": _state(event_id="a")})
+
+    counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
+    row = host.rows[-1]
+
+    assert row["stop_hit"] is True, "a later milestone erased an earlier recorded stop hit"
+    assert _context(row)["exit"]["stop_exit_r"] == -1.0
+    assert _context(row)["finalization"]["basis"] == "stop_hit_from_prior_measurement"
+    assert _context(row)["finalization"]["recovered_from"] == "3_bar"
+    # The exit numbers are the earliest stop-hit row's, not the furthest row's.
+    assert row["mae_r"] == pytest.approx(-1.2)
+    assert counts["by_reason"]["stop_hit:legacy_csv_milestones"] == 1
+
+
+def test_the_earliest_stop_hit_row_wins_even_when_a_later_one_also_stopped(tmp_path, monkeypatch):
+    """Two rows both record the stop. The trade was over at the first one."""
+    _csv(tmp_path, [
+        {"event_id": "a", "event_type": "12_bar", "close_r": "-1.2", "mae_r": "-1.8",
+         "stop_hit": "True", "bars_elapsed": "12", "logged_at": "2026-08-21T09:00:00"},
+        {"event_id": "a", "event_type": "3_bar", "close_r": "-0.8", "mae_r": "-1.5",
+         "stop_hit": "True", "bars_elapsed": "3", "logged_at": "2026-08-21T08:00:00"},
+    ])
+    host = _host(tmp_path)
+    _seed(host, {"a": _state(event_id="a")})
+    host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
+    row = host.rows[-1]
+
+    assert row["stop_hit"] is True
+    assert _context(row)["finalization"]["recovered_from"] == "3_bar"
+    assert row["mae_r"] == pytest.approx(-1.5)
+
+
+def test_with_no_stop_anywhere_the_best_rank_row_still_wins(tmp_path, monkeypatch):
+    """Unchanged where nothing stopped: the furthest milestone is still the
+    most complete measurement of a trade that was never cut short."""
+    _csv(tmp_path, [
+        {"event_id": "a", "event_type": "3_bar", "close_r": "0.2", "mae_r": "-0.1",
+         "stop_hit": "False", "bars_elapsed": "3", "logged_at": "2026-08-21T08:00:00"},
+        {"event_id": "a", "event_type": "12_bar", "close_r": "0.5", "mae_r": "-0.2",
+         "stop_hit": "False", "bars_elapsed": "12", "logged_at": "2026-08-21T09:00:00"},
+    ])
+    host = _host(tmp_path)
+    _seed(host, {"a": _state(event_id="a")})
+    host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
+    row = host.rows[-1]
+
+    assert row["stop_hit"] is False
+    assert _context(row)["finalization"]["recovered_from"] == "12_bar"
+    assert row["mae_r"] == pytest.approx(-0.2)
+
+
+def test_an_unreadable_bar_count_does_not_make_a_stop_row_look_earliest(tmp_path, monkeypatch):
+    """A blank `bars_elapsed` cannot be ordered, so it sorts LAST among the
+    stop rows rather than winning by accident."""
+    _csv(tmp_path, [
+        {"event_id": "a", "event_type": "update", "close_r": "-1.0", "mae_r": "-9.9",
+         "stop_hit": "True", "bars_elapsed": "", "logged_at": "2026-08-21T07:00:00"},
+        {"event_id": "a", "event_type": "3_bar", "close_r": "-1.0", "mae_r": "-1.2",
+         "stop_hit": "True", "bars_elapsed": "3", "logged_at": "2026-08-21T08:00:00"},
+    ])
+    host = _host(tmp_path)
+    _seed(host, {"a": _state(event_id="a")})
+    host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
+
+    assert _context(host.rows[-1])["finalization"]["recovered_from"] == "3_bar"
+    assert host.rows[-1]["mae_r"] == pytest.approx(-1.2)

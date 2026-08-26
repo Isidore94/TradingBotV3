@@ -41,22 +41,27 @@ lines at the bottom. That is where today's activity is.
 **Last updated: 2026-08-25**, after the post-close AWAY and outcome-sweep
 checks.
 
-Two live checks failed and are now engineering blockers, not steps for you to
-repeat on the current build:
+**One live check failed, one did not — that second reading was wrong and is
+corrected here (2026-08-25 evening).**
 
 - The AWAY review queue correctly stayed empty and the evidence/feed stores
   continued to fill, but the **AWAY Recap was empty** because the main window
-  never hands it the day's alerts.
-- The after-close outcome sweep did not run on the restarted desk because its
-  strategy loop paused at 13:30, five minutes before the sweep became due.
+  never handed it the day's alerts. **Repaired the same evening**; the check is
+  owed again on a real AWAY day, not repeated on the old build.
+- **The after-close outcome sweep DID run.** `swept_at
+  2026-08-25T14:27:36-07:00`, 656 pending / 656 finalized / 0 expired / 0 failed
+  / 0 commit failures / 0 still open. The earlier "did not run" reading was
+  taken at 14:21, six minutes before the sweep started. What is real is that it
+  started **52 minutes after its 13:35 due time, for a cause nobody has found
+  yet** — the due logic itself is correct. Nothing was changed about scheduling.
 
-Do not use an empty recap or a stale sweep file as a pass. Both canaries remain
-owed after their repairs.
+So: do not use an empty recap as a pass, and **do not read the sweep as a
+failure**. Whether the delayed start is acceptable is your call, not the AI's.
 
 The 2026-08-17 and 08-18 AWAY sessions proved staging and hourly reporting. The
 2026-08-25 AWAY session tested the newer no-review-queue/recap contract: queue
-routing behaved, but the recap had no input and failed. Checks that need you at
-the desk are still waiting for the right kind of day.
+routing behaved and the recap had no input. Checks that need you at the desk are
+still waiting for the right kind of day.
 
 ## What is finished
 
@@ -64,7 +69,7 @@ the desk are still waiting for the right kind of day.
 |---|---|---|
 | §2.5 pick eviction | **PASSED** | `trading_bot.log` on 08-18 at 10:31, 11:40, 12:11 and 12:48 shows `Focus gate evicted N staged pick(s)` with a reason beside every symbol |
 | §1 quiet boot | **PASSED** | The 08-16 22:06 launch logged `nothing starts yet - weekend - quiet hours` and nothing automatic ran until 06:00 the next morning |
-| §2.3 historical AWAY staging | **PASSED** | Two full days of picks staying staged and every hourly phone report present. The later no-queue recap contract is a separate failed canary below |
+| §2.3 AWAY day | **HALF DONE** | The **staging half is proved**: two full days (08-17, 08-18) of picks staying staged with every hourly phone report present, and on 08-25 the queue correctly accumulated nothing while the feed, History, the D1 badge and the hourly reports filled. The **flip-back-to-DESK half is owed** — a populated recap and no chart-review backlog on the return. It was relabelled PASSED on 2026-08-25 and is restored here |
 
 **One thing changed in this document because of what you saw.** The 08-16 boot
 also logged `IB: connected`. That is **expected and fine**: the BounceBot panel
@@ -113,7 +118,8 @@ adopted nothing.
 | §2.11 the rebuilt review pane (new, 2026-08-20) | the same DESK day |
 | §2.12 the phone actually wakes you (new, 2026-08-20) | the same EVENING night, **with Sleep Focus on** |
 | §2.13 the graded veto cohort (new, 2026-08-20) | **one weekend**, after two weeks of vetoes |
-| §2.3 AWAY recap and §3 after-close outcome sweep | **wait for engineering repairs, then one full AWAY day** |
+| §2.3 the AWAY recap half (the DESK flip back) | **one full AWAY day** — the recap feed repair landed 2026-08-25 |
+| the after-close outcome sweep on a restarted desk | **your acceptance** — it ran clean on 2026-08-25 (656/656, 0 failed) but started 52 minutes late for an unknown reason. One more clean day would settle whether the delay repeats |
 
 Still: **one DESK day and one EVENING night** — §2.11 and §2.12 ride the two
 already owed. §2.13 is the only genuinely new sitting, and it cannot happen
@@ -367,18 +373,20 @@ set EVENING.
 
 ## 2.3 An AWAY day — does the recap replace the review queue?
 
-> **FAILED on 2026-08-25; do not repeat until repaired.** The review queue
-> correctly accumulated nothing, while the ordinary feed, History, D1 badge,
-> evidence streams and hourly phone output continued to fill. The recap itself
-> was empty because it was never handed those alerts.
+> **HALF DONE. The staging half is proved; the recap half is owed.** On
+> 2026-08-25 the review queue correctly accumulated nothing while the ordinary
+> feed, History, the D1 badge, the evidence streams and the hourly phone output
+> continued to fill — that half behaved. The recap itself was empty because it
+> was never handed those alerts. **That was repaired the same evening**, so this
+> section is now waiting for one real AWAY day rather than for engineering.
 
 **The question:** while you are away, does the machine keep recording and
 reporting the day without leaving hundreds of charts to review, then give you a
 complete end-of-day recap?
 
 ### WHEN
-After the AI reports that the AWAY recap feed repair has landed. Use one full
-AWAY session and check it after the close, before changing modes.
+The recap feed repair landed 2026-08-25. Use one full AWAY session and check it
+after the close, before changing modes.
 
 ### DO
 1. Set the mode to **AWAY** before alerts begin and leave it there through the

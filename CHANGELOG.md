@@ -19,6 +19,57 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-25 - record correction: the restarted-process outcome sweep RAN
+
+The 2026-08-25 after-close outcome sweep was recorded as a FAILED canary in
+`CURRENT_CHECKPOINT.md`, `plan.md` and `docs/DESK_TESTING_PLAN.md`. It ran.
+`diagnostics/outcome_sweep_coverage.json`: `swept_at
+2026-08-25T14:27:36-07:00`, pending_before **656**, finalized **656**, expired
+0, failed 0, commit_failed 0, pending_after 0, recovered_from_csv 636; by reason
+last_measured_bar 422 / stop_hit 214 / no_measurement_in_checkpoint 20.
+Yesterday's 553 finals were untouched. The failure reading was taken at 14:21,
+six minutes before the sweep started.
+
+What is real is a **52-minute start delay of UNKNOWN cause**. The due logic is
+correct - the sweep became due at close+35 (13:35) - and the top-of-loop check
+that finds it due did not run until 14:27:36 because the strategy loop spent
+12:55:00 to 14:27:36 inside one cycle whose whole preamble logs nothing. The
+investigation is recorded and **no scheduling change was made or authorized**.
+Acceptance of the canary is the trader's.
+
+`docs/DESK_TESTING_PLAN.md` sec 2.3 is restored from PASSED to **HALF DONE**:
+the AWAY staging half is proved (08-17, 08-18, and the 08-25 queue routing), the
+flip-back-to-DESK half - a populated recap and no chart-review backlog on return
+- is owed. `docs/analysis/SOL_ATTACK_2026-08-24.md` is a frozen report and is
+deliberately NOT edited; the correction lives here.
+
+### 2026-08-25 - two fenced evidence repairs in the outcome path (Decision B)
+
+**Milestone recovery can no longer erase a recorded stop.**
+`BounceBot._recover_measurements_from_csv` took the first row at the FURTHEST
+milestone outright, so a 12-bar row saying `stop_hit=False` erased a 3-bar row
+that had already recorded the stop and the trade finalized `last_measured_bar`
+at a positive R. `stop_hit` is now `any()` across the trade's recoverable rows,
+and where a stop exists the exit numbers come from the EARLIEST stop-hit row -
+R10.0's stop-first decision: the trade was over at that bar. With no stop
+anywhere the best-rank row still wins, and an unreadable `bars_elapsed` sorts
+last among the stop rows rather than winning by accident. The scan stays
+streaming and O(1) per trade. One champion expectation changed with the rule:
+`test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows` now takes its exit
+from the 3-bar row. **The already-written rows are tagged, never rewritten**
+(ground rule 5): new reader-side rule `evidence_rules.milestone_stop_erased_v1`,
+conjunctive on `finalization.measurement_source == "legacy_csv_milestones"`,
+with `unknown` as a real third answer. Live confirmation: 2026-08-24 finals tag
+35 mixed / 172 clean / 907 unknown; 2026-08-25 tags 0 mixed / 737 unknown.
+
+**Signal-bar recovery must match the event's bar.** `_signal_bar_dict` matched
+only on close, so a cache shifted by one bar with two adjacent equal closes
+returned the 06:30 bar for a 06:35 event. It now takes the event's `bar_time`
+from all three call sites and requires `bar.dt == event.bar_time` as well; no
+`bar_time`, or a bar with no `dt`, yields the fallback. The alert row, the tier,
+the fold, the digest and the queue are untouched, and the golden fixtures are
+byte-identical.
+
 ### 2026-08-25 - the AWAY Recap is wired to the Alert Center backing list
 
 `MainWindow._select_page` now calls `_feed_away_recap()` when the AWAY Recap

@@ -8,6 +8,213 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-25 evening (5) - what held the strategy loop from 12:55 to 14:27 - evidence only, no fix
+
+**Branch `testing-week-2026-08-24`.** Packet 5. **No code change**, no scheduling
+change, nothing proposed as built. Logs and read-only reads only.
+
+**The narrowing, from `logs/trading_bot.log` and `trading_bot.log.1`.** Cycle
+boundaries (`Monitoring N strongest/weakest symbols for EMA bounces`, logged
+once per cycle at `run_strategy` line ~13465) ran **11:46:54, 11:57:01,
+12:20:37, 12:32:42, 12:47:21** - gaps of 10, 23, 12 and 15 minutes - and then
+**14:27:36**. The last `wait_for_candle_close` line is **12:51:29** with 211 s
+to go, so that cycle's wait ended at **12:55:00**, and no `Waiting for candle to
+close` line appears after it. The `legacy.py` output between 12:56 and 13:10 is
+**not** the strategy loop: it is the Master AVWAP runner's 13:02 swing scan and
+its theta option enrichment, interleaved with `runner.py` lines on the same
+thread.
+
+**So the loop spent 12:55:00 -> 14:27:36 (92 minutes) inside ONE iteration**,
+and specifically between the loop top and its cycle-boundary log line - the
+preamble at `run_strategy` lines 13428-13465: the watchlist loads,
+`emit_master_avwap_d1_flags`, `_prune_latest_bars_for_cycle`, `build_atr_cache`,
+`update_auto_market_environment`, `run_rrs_scan`, `check_regime_pause_setups`,
+`entry_assist_auto_tick`, the two `_maybe_refresh_*` calls, the five M5 engines
+and `check_h1_color_setups`. **Every one of them is silent on the normal path**,
+which is why 92 minutes produced no line at all.
+
+**The consequence for the sweep is arithmetic, not a scheduling defect.**
+`_maybe_refresh_learning_after_close` is called at the TOP of every iteration
+with a 60 s throttle, and the sweep's `swept_at` is stamped on entry. The stamp
+is 14:27:36, the same second as the cycle-boundary line, so the top-of-loop
+check first found the sweep due 52 minutes after its 13:35 due time. The due
+logic itself is correct.
+
+**Candidates, and what the evidence does to them:**
+
+1. **Mass IB request timeouts in `run_rrs_scan` / `build_atr_cache`** - the
+   arithmetic fits (92 min / 15 s = 368 requests) but the evidence does **not**:
+   each timeout logs `Timeout waiting for RRS data`, and the whole log holds
+   **one**, at 13:01:25, on the swing-scan thread. **Refuted as the main cause.**
+2. **Contention with the 13:02 swing scan** on the one IB connection - it ran
+   13:02:03 to 13:10:19 and spent a 240-option-quote budget. Real, but it covers
+   8 minutes of 92. **Contributing at most.**
+3. **`_maybe_refresh_auto_regime_while_paused`** - it pops the SPY series and
+   refetches once a minute, and logs nothing. It is only reached on the PAUSED
+   branch, and the loop was not on that branch. **Not it.**
+4. **A slow, non-timing-out IB path inside the preamble** - requests that return
+   late rather than time out. Consistent with everything measured and
+   **unfalsifiable from the current log**, because nothing in the preamble is
+   instrumented.
+
+**Cause: UNKNOWN**, narrowed to those lines. It is not called a defect and
+nothing was changed.
+
+**One thing the logs cannot settle, stated rather than smoothed over.** At
+14:27:36 the loop reached the SCANNING branch, past the paused-branch
+`continue`, although `set_scanning_enabled(False)` was logged at 13:30:11 and no
+`Scanning enabled.` line follows it. Either the flag was restored without a log
+line, or that line belongs to the tail of an in-flight cycle and the sweep's
+stamp coincides. Separating them needs instrumentation.
+
+**Sweep throughput beside the live loop (measured):**
+
+| | 2026-08-24 | 2026-08-25 |
+|---|---|---|
+| sweep start | 16:45:43 | 14:27:36 |
+| finalize complete | 16:47:18 | 14:46:35 |
+| trades | 687 | 656 |
+| wall clock | **1 m 35 s** | **19 m 0 s** |
+| per trade | **0.14 s** | **1.74 s** |
+
+**~12x slower, and the likely contention point is what else was running.** The
+08-24 sweep ran at 16:45, long after the desk had gone quiet. The 08-25 sweep
+started in the same second the strategy loop began a fresh scanning cycle, and
+that cycle held the IB connection for the whole 19 minutes. Both threads append
+to the same 200 MB outcome CSV and both take `local_writer_lock`. Two further
+measured costs: `_recover_measurements_from_csv` scanned the whole CSV in **1 m
+56 s** (14:27:36 -> 14:29:32 for 636 trades), and a **second** full scan ran at
+14:31:16 for **one** trade - two whole-file passes within four minutes.
+
+**Proposals (not built, not authorized):**
+
+1. **A cycle-boundary INFO line** in `run_strategy` - cycle start, cycle end,
+   and the after-close check's outcome - which is the one thing that would have
+   answered this in a minute rather than an afternoon. `bounce_bot_lib/legacy.py`
+   is fenced and Decision B names two repairs, neither of which is this, so it
+   is **ASK-FIRST and was not written.** Recommended shape: per-stage elapsed
+   time across the preamble, not only start/end, since start/end alone would
+   have narrowed this no further than the log already did.
+2. **Nothing about scheduling.** Deferring the sweep while a cycle is in flight,
+   or checking the pause flag mid-cycle, are both scheduling changes and are
+   explicitly not authorized.
+
+---
+
+## 2026-08-25 evening (4) - record correction: the restarted-process outcome sweep RAN
+
+**Branch `testing-week-2026-08-24`.** Packet 4 (Decision C, bullets 2-3).
+Documentation only; no code change, baseline unchanged from packet 3.
+
+**What actually happened on 2026-08-25**, read from
+`diagnostics/outcome_sweep_coverage.json` and `logs/trading_bot.log`:
+
+| | |
+|---|---|
+| `swept_at` | **2026-08-25T14:27:36-07:00** |
+| pending_before / finalized | **656 / 656** |
+| expired / failed / commit_failed | **0 / 0 / 0** |
+| pending_after | **0** |
+| recovered_from_csv | 636 |
+| by reason | last_measured_bar 422, stop_hit 214, no_measurement_in_checkpoint 20 |
+
+Yesterday's 553 finals were untouched. Three documents said the canary
+**FAILED**; they were written from a 14:21 read, six minutes before the sweep
+started. The word is replaced by the observation, and acceptance is the
+trader's: **no gate is marked met here.**
+
+**The 52-minute start delay is real and its cause is UNKNOWN.** The sweep became
+due at close+35 (13:35 PT) and the due logic is correct; the top-of-loop check
+that finds it due did not run until 14:27:36. What is measured is in packet 5's
+entry below. Nothing about the delay is called a scheduling defect, and no
+scheduling change was made.
+
+**`docs/DESK_TESTING_PLAN.md` sec 2.3 restored to HALF done.** Sol relabelled it
+PASSED; it is not. The AWAY staging half was observed on 08-17/08-18 and again
+on 08-25 (queue routing behaved: zero `shown` impressions while the backing
+list, History, the D1 badge and the hourly phone reports filled). The
+flip-back-to-DESK half - a populated recap, and no chart-review backlog on the
+return - is still owed and now has code behind it (packet 2).
+
+**Sol's frozen attack report is NOT edited.** `SOL_ATTACK_2026-08-24.md` records
+what was true when it was frozen; the correction lives here, in `CHANGELOG.md`
+and in `plan.md`.
+
+**Verification baseline: unchanged from packet 3** - docs only.
+
+---
+
+## 2026-08-25 evening (3) - the two fenced evidence repairs (Decision B)
+
+**Branch `testing-week-2026-08-24`.** Packet 3. `scripts/bounce_bot_lib/legacy.py`
+was edited ONLY for the two repairs Decision B names. No alert, tier, fold,
+digest or queue behavior changed; no scheduling change; the R5 wiring tests and
+the C9 boundary tests are green untouched, and the golden fixtures are
+byte-identical.
+
+**B.1 - milestone recovery may not erase a recorded stop** (Sol T3, C4
+reproduced verbatim as a test). `_recover_measurements_from_csv` took the first
+row at the FURTHEST milestone outright, so a 12-bar row saying `stop_hit=False`
+erased a 3-bar row that had already recorded the stop and the trade finalized
+`last_measured_bar` at +0.5R. Now `stop_hit` is `any()` across the trade's
+recoverable rows, and where a stop exists the exit numbers come from the
+EARLIEST stop-hit row - R10.0's stop-first decision applied here: the trade was
+over at that bar, and later rows describe price action after an exit that had
+already happened. With no stop anywhere the best-rank row still wins. An
+unreadable `bars_elapsed` cannot be ordered, so it sorts LAST among the stop
+rows rather than winning by accident. The scan stays streaming and O(1) per
+trade: the best-rank row, the earliest stop-hit row and the any() flag, never
+the whole milestone history.
+
+**One existing champion expectation changed, deliberately and named.**
+`test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows` has two stop-hit
+rows; its exit is now the 3-bar row's (`mae_r` -1.5, `recovered_from` `3_bar`)
+rather than the 12-bar row's (-1.8, `12_bar`). That is the rule Decision B.1
+states, not a regression.
+
+**The 35 already-written rows are TAGGED, never rewritten** (ground rule 5):
+`evidence_rules.milestone_stop_erased_v1`. Reproduced read-only over the live
+store and confirmed after: 2026-08-24 finals tag **35 mixed / 172 clean / 907
+unknown**; 2026-08-25 tags **0 mixed / 737 unknown**, because that sweep's
+trades measured in state rather than by recovery. The rule is conjunctive - a
+final not recovered from milestone rows is `unknown`, not clean - and a clean
+answer means "no evidence of erasure", never "no erasure", because it cannot see
+a trade whose milestone rows were pruned.
+
+**B.2 - signal-bar recovery must match the event's bar** (Sol T2, C3 reproduced
+verbatim). `_signal_bar_dict` matched only on close, and a cache shifted by one
+bar with two adjacent equal closes returned the 06:35 event's 06:30 bar. It now
+takes the event's `bar_time` - passed from all three call sites - and requires
+`bar.dt == event.bar_time` in addition to the close match. No `bar_time`, or a
+bar with no `dt`, yields the fallback: missing data is uncertainty, never
+confirmation, and the fallback is at least the event's own prices. The real call
+path is unaffected -
+`test_the_outcome_registration_gets_the_real_signal_bar` and
+`test_the_alert_row_and_the_tier_still_see_the_flat_bar` pass unmodified.
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4823 passed / 19 subtests**, pytest exit **0** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **70/70**, exit 0 |
+| golden fixtures / R5 / sweep / outcome sets | **405 passed**, exit 0 |
+
+**A method note that cost a rerun, recorded so it is not repeated.** The first
+three suite runs were piped (`pytest ... | tail -5; echo $?`), which reports
+**tail's** exit code, not pytest's - exactly what CLAUDE.md's Commands section
+warns against. Run unpiped, the packet-3 suite **segfaulted at 93% (exit 139)**
+with zero test failures. It did **not** reproduce: the rerun reached 100% and
+exited 0, and the warehouse set that was executing at 93% passes 322/322 alone.
+Recorded as an unexplained one-off crash, not as a pass and not as a defect.
+Every count above is from an unpiped run whose own exit code was read.
+
+**Canaries owed:** one live after-close sweep on the repaired recovery (the
+2026-08-25 sweep would not exercise it - it recovered nothing from milestones);
+and the first live LRSI/confluence/ORB registration after B.2, confirming a
+gradeable row still lands.
+
+---
+
 ## 2026-08-25 evening (2) - the AWAY Recap is wired to the Alert Center backing list
 
 **Branch `testing-week-2026-08-24`.** Packet 2 (Decision C, first bullet). One

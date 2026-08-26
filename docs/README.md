@@ -70,7 +70,7 @@ superseded by `plan.md`.
 
 | File | Historical value |
 |---|---|
-| [`analysis/SOL_ATTACK_2026-08-24.md`](analysis/SOL_ATTACK_2026-08-24.md) | Frozen adversarial reproduction pass over the 2026-08-24 build slate: exact commands, seven proven blocker classes, three surgical repairs, four report-only blockers, refuted attack claims, and the post-close AWAY/outcome-sweep evidence. It promotes nothing and marks no live gate met |
+| [`analysis/SOL_ATTACK_2026-08-24.md`](analysis/SOL_ATTACK_2026-08-24.md) | Frozen adversarial reproduction pass over the 2026-08-24 build slate: exact commands, seven proven blocker classes, three surgical repairs, four report-only blockers, refuted attack claims, and the post-close AWAY/outcome-sweep evidence. It promotes nothing and marks no live gate met. **Frozen and never edited — one reading in it is superseded:** its C5 "second production sweep missed its own clock" was taken at 14:21 and the sweep ran at 14:27:36 (656/656, 0 failed). The correction is in `CHANGELOG.md`, `plan.md` R10.A and the 2026-08-25 evening (4) checkpoint entry |
 | [`CHECKPOINT_REVIEW_2026-08-08.md`](CHECKPOINT_REVIEW_2026-08-08.md) | Review and merge rulings for durability/local-AI branches |
 | [`HANDOFF_A4_PACKAGING_2026-08-09.md`](HANDOFF_A4_PACKAGING_2026-08-09.md) | A4/A5 and packaging handoff/desk verification record |
 | [`RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md`](RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md) | Warehouse defect review; later BD entries record the repairs |

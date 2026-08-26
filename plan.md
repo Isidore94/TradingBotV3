@@ -1233,12 +1233,26 @@ second scoreboard.
    reported as a finalization.
 
    *Still owed:* **one successful live weekday session with
-   `outcome_sweep_autorun="on"`**. The trader enabled the switch and the
-   2026-08-25 canary **FAILED**: the strategy loop paused at close+30 (13:30),
-   five minutes before the sweep became due at close+35, leaving 656 registered
-   events and zero finals while the coverage file remained dated 2026-08-24.
-   Repairing that scheduling seam touches fenced `bounce_bot_lib/legacy.py` and
-   therefore remains ask-first;
+   `outcome_sweep_autorun="on"`, accepted by the trader**. The trader enabled
+   the switch and the sweep **RAN on 2026-08-25** - `swept_at
+   2026-08-25T14:27:36-07:00`, pending_before 656, finalized 656, expired 0,
+   failed 0, commit_failed 0, pending_after 0, recovered_from_csv 636; by reason
+   last_measured_bar 422 / stop_hit 214 / no_measurement_in_checkpoint 20, with
+   yesterday's 553 finals untouched. The earlier "FAILED" reading was taken at
+   14:21, six minutes before the sweep started, and is **corrected** (trader
+   Decision C, 2026-08-25). What is real is a **52-minute start delay of UNKNOWN
+   cause**: the due logic is correct (`_after_close_jobs_due` -> due at close+35,
+   13:35) and the top-of-loop check that finds it due did not run until 14:27:36,
+   because the strategy loop spent 12:55:00-14:27:36 inside one unlogged cycle
+   preamble. The measurement is the 2026-08-25 evening (5) checkpoint entry; **no
+   scheduling change was made and none is authorized.** Acceptance is the
+   trader's; nothing here is marked met. Two fenced evidence repairs landed
+   2026-08-25 under Decision B and each carries its own canary: the milestone
+   recovery (one live sweep that actually recovers from CSV milestones - the
+   2026-08-25 sweep would not exercise it) and `_signal_bar_dict`'s bar-time
+   match (the first live LRSI/confluence/ORB registration after it). The 35
+   already-written finals the old recovery mis-stopped are tagged by
+   `evidence_rules.milestone_stop_erased_v1`, **never rewritten**;
    R9.5's shadow store aligned to month segments and `session_date`; a restore
    test of the ledger directory; the launch catch-up for the sweep (it runs only
    while the strategy thread is alive, so never in OFF); and the decision to make
