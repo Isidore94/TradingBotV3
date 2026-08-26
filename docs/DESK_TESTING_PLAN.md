@@ -41,22 +41,23 @@ lines at the bottom. That is where today's activity is.
 **Last updated: 2026-08-25**, after the post-close AWAY and outcome-sweep
 checks.
 
-**One live check failed, one did not — that second reading was wrong and is
-corrected here (2026-08-25 evening).**
+**One live check failed, one did not — that second reading was wrong, is
+corrected here, and you have since accepted it (2026-08-25 evening).**
 
 - The AWAY review queue correctly stayed empty and the evidence/feed stores
   continued to fill, but the **AWAY Recap was empty** because the main window
   never handed it the day's alerts. **Repaired the same evening**; the check is
   owed again on a real AWAY day, not repeated on the old build.
-- **The after-close outcome sweep DID run.** `swept_at
+- **The after-close outcome sweep DID run, and you accepted it.** `swept_at
   2026-08-25T14:27:36-07:00`, 656 pending / 656 finalized / 0 expired / 0 failed
   / 0 commit failures / 0 still open. The earlier "did not run" reading was
-  taken at 14:21, six minutes before the sweep started. What is real is that it
-  started **52 minutes after its 13:35 due time, for a cause nobody has found
-  yet** — the due logic itself is correct. Nothing was changed about scheduling.
+  taken at 14:21, six minutes before the sweep started. It started **52 minutes
+  after its 13:35 due time, for a cause nobody has found yet** — the due logic
+  itself is correct. You accepted that on 2026-08-25, so **this check is done**.
+  Nothing was changed about scheduling; the desk now logs one timing line per
+  scan cycle, so if the delay happens again the log will name what caused it.
 
-So: do not use an empty recap as a pass, and **do not read the sweep as a
-failure**. Whether the delayed start is acceptable is your call, not the AI's.
+So: do not use an empty recap as a pass, and the sweep check needs no repeat.
 
 The 2026-08-17 and 08-18 AWAY sessions proved staging and hourly reporting. The
 2026-08-25 AWAY session tested the newer no-review-queue/recap contract: queue
@@ -119,7 +120,7 @@ adopted nothing.
 | §2.12 the phone actually wakes you (new, 2026-08-20) | the same EVENING night, **with Sleep Focus on** |
 | §2.13 the graded veto cohort (new, 2026-08-20) | **one weekend**, after two weeks of vetoes |
 | §2.3 the AWAY recap half (the DESK flip back) | **one full AWAY day** — the recap feed repair landed 2026-08-25 |
-| the after-close outcome sweep on a restarted desk | **your acceptance** — it ran clean on 2026-08-25 (656/656, 0 failed) but started 52 minutes late for an unknown reason. One more clean day would settle whether the delay repeats |
+| ~~the after-close outcome sweep on a restarted desk~~ | **DONE — you accepted it on 2026-08-25** ("52min late is fine"). It ran clean: 656/656, 0 failed, 0 commit failures. The 52-minute delay is accepted as known, not explained; the desk now logs a timing line per scan cycle so that if it happens again, the log names what caused it |
 
 Still: **one DESK day and one EVENING night** — §2.11 and §2.12 ride the two
 already owed. §2.13 is the only genuinely new sitting, and it cannot happen

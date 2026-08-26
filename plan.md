@@ -1232,8 +1232,9 @@ second scoreboard.
    added to `launch_gui.py` as defence in depth. A failed commit is never
    reported as a finalization.
 
-   *Still owed:* **one successful live weekday session with
-   `outcome_sweep_autorun="on"`, accepted by the trader**. The trader enabled
+   *The live weekday session with `outcome_sweep_autorun="on"` is **MET** -
+   accepted by the trader on 2026-08-25 ("52min late is fine"), which is the
+   only authority that can close it.* The trader enabled
    the switch and the sweep **RAN on 2026-08-25** - `swept_at
    2026-08-25T14:27:36-07:00`, pending_before 656, finalized 656, expired 0,
    failed 0, commit_failed 0, pending_after 0, recovered_from_csv 636; by reason
@@ -1245,8 +1246,12 @@ second scoreboard.
    13:35) and the top-of-loop check that finds it due did not run until 14:27:36,
    because the strategy loop spent 12:55:00-14:27:36 inside one unlogged cycle
    preamble. The measurement is the 2026-08-25 evening (5) checkpoint entry; **no
-   scheduling change was made and none is authorized.** Acceptance is the
-   trader's; nothing here is marked met. Two fenced evidence repairs landed
+   scheduling change was made and none is authorized.** The delay is accepted
+   as KNOWN, not explained. A **timing instrument** was authorized separately
+   the same evening ("Yes you can add the timing log") and is built:
+   `ScanCycleClock` plus one log line per scan cycle naming the slowest preamble
+   stages, and an after-close "jobs due" line - instrumentation only. If the
+   stall repeats, one line names the stage that ate it. Two fenced evidence repairs landed
    2026-08-25 under Decision B and each carries its own canary: the milestone
    recovery (one live sweep that actually recovers from CSV milestones - the
    2026-08-25 sweep would not exercise it) and `_signal_bar_dict`'s bar-time

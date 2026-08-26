@@ -1056,6 +1056,63 @@ class HistoricalDataFilter(logging.Filter):
 ##########################################
 # Utility Functions
 ##########################################
+class ScanCycleClock:
+    """Elapsed seconds per named stage of one scan cycle. **Evidence only.**
+
+    Authorized by the trader on 2026-08-25 after the 2026-08-25 investigation,
+    which could narrow the loop's 92-minute silence no further than "somewhere
+    between the top of `run_strategy` and its cycle-boundary log line" - because
+    every call in that stretch is silent on the normal path. Start/end alone
+    would have narrowed it no further either, which is why this records each
+    stage.
+
+    It measures and formats. It decides nothing, waits for nothing and changes
+    no scheduling. A clock that could alter a cycle would be a scheduling change
+    wearing an instrument's name.
+    """
+
+    #: Only the stages worth naming in one line; the rest are summed as "other".
+    SUMMARY_STAGES = 5
+
+    def __init__(self, now=None):
+        self._now = now or time.time
+        self._started = self._now()
+        self._last = self._started
+        self.marks: list[tuple[str, float]] = []
+
+    def mark(self, stage: str) -> float:
+        """Close the stage that just ran and return its elapsed seconds."""
+        moment = self._now()
+        elapsed = max(0.0, moment - self._last)
+        self._last = moment
+        self.marks.append((str(stage), elapsed))
+        return elapsed
+
+    def total(self) -> float:
+        return max(0.0, self._last - self._started)
+
+    def summary(self, limit: int | None = None) -> str:
+        """`92.4s total: rrs 88.1s, atr 2.0s, +3 other 2.3s` - slowest first.
+
+        The slowest stages are named because the question this answers is always
+        "what took the time", and a breakdown in declaration order buries the
+        answer among stages that cost nothing.
+        """
+        limit = self.SUMMARY_STAGES if limit is None else int(limit)
+        total = self.total()
+        if not self.marks:
+            return f"{total:.1f}s total"
+        ranked = sorted(self.marks, key=lambda item: item[1], reverse=True)
+        named = ranked[:limit] if limit > 0 else []
+        rest = ranked[limit:] if limit > 0 else ranked
+        parts = [f"{stage} {elapsed:.1f}s" for stage, elapsed in named]
+        if rest:
+            # Counted, never dropped: a breakdown that silently omits stages
+            # reads as a complete account of the time and is not one.
+            parts.append(f"+{len(rest)} other {sum(item[1] for item in rest):.1f}s")
+        return f"{total:.1f}s total: " + ", ".join(parts)
+
+
 def wait_for_candle_close(stop_event=None):
     now = get_market_local_now()
     sec_since_5 = (now.minute % 5) * 60 + now.second
@@ -5498,12 +5555,26 @@ class BounceBot(EWrapper, EClient):
         if getattr(self, "_after_close_worker_running", False):
             # A worker from an earlier tick is still going. Starting a second
             # would put two sweeps on the same machine-wide lock for no reason.
+            # Said ONCE per worker, not once a minute: the 2026-08-25 record
+            # could not tell "still working" from "never started".
+            if not getattr(self, "_after_close_wait_logged", False):
+                self._after_close_wait_logged = True
+                logging.info("After-close jobs: an earlier worker is still running; waiting.")
             return
         now = get_market_local_now()
         due = self._after_close_jobs_due(now)
         if not due["sweep"] and not due["refresh"]:
             return
         today = due["today"]
+        # Evidence only. This fires when the check first finds work due, which
+        # is the timestamp the 2026-08-25 investigation had to infer from the
+        # sweep's own stamp. Deliberately not logged when nothing is due - that
+        # would be a line a minute, all evening, saying nothing happened.
+        logging.info(
+            "After-close jobs due at %s (sweep=%s, refresh=%s); starting the worker.",
+            now.isoformat(timespec="seconds"), bool(due["sweep"]), bool(due["refresh"]),
+        )
+        self._after_close_wait_logged = False
         self._after_close_worker_running = True
 
         def worker():
@@ -13425,6 +13496,12 @@ class BounceBot(EWrapper, EClient):
                     last_warning_reset = current_date
                     logging.info("Daily warning cache reset completed")
 
+                # Evidence only (trader-authorized 2026-08-25). Everything from
+                # here to the "Monitoring N" line below is silent on the normal
+                # path, which is why 2026-08-25's 92-minute stall could not be
+                # narrowed past "somewhere in the preamble". The clock decides
+                # nothing; it records what each stage cost.
+                cycle_clock = ScanCycleClock()
                 self.longs = read_tickers(LONGS_FILENAME)
                 self.shorts = read_tickers(SHORTS_FILENAME)
                 self.auto_longs = read_tickers(AUTO_LONGS_FILENAME)
@@ -13436,6 +13513,7 @@ class BounceBot(EWrapper, EClient):
                 self.load_master_avwap_d1_zone_arms()
                 self.update_watchlists_from_master_avwap()
                 self.emit_master_avwap_d1_flags()
+                cycle_clock.mark("watchlists")
                 self.alerted_symbols.clear()
                 self.symbol_metrics = {}
                 self._scan_cycle_index = int(getattr(self, "_scan_cycle_index", -1)) + 1
@@ -13445,6 +13523,7 @@ class BounceBot(EWrapper, EClient):
                 refresh_background = self._is_background_refresh_cycle()
                 self._prune_latest_bars_for_cycle(refresh_background, background_symbols)
                 self.build_atr_cache()
+                cycle_clock.mark("atr_cache")
 
                 # Auto-track the intraday regime (SPY vs yesterday's close)
                 # before anything downstream reads the environment.
@@ -13452,6 +13531,7 @@ class BounceBot(EWrapper, EClient):
                     self.update_auto_market_environment()
                 except Exception:
                     logging.exception("Auto market regime update failed.")
+                cycle_clock.mark("auto_regime")
 
                 enabled_bounce_types = {
                     bounce_type for bounce_type, enabled in self.bounce_type_toggles.items() if enabled
@@ -13461,12 +13541,14 @@ class BounceBot(EWrapper, EClient):
                 except Exception:
                     focus_fast_lane_symbols = set()
                     logging.exception("M5 Focus fast-lane scan failed.")
+                cycle_clock.mark("focus_fast_lane")
 
                 # Log strongest/weakest names for key intraday timeframes each cycle.
                 for timeframe_key in ("5m", "15m", "1h"):
                     self.run_rrs_scan(timeframe_key_override=timeframe_key, emit_gui=False)
                 # Keep the GUI view synced with user-selected RRS timeframe.
                 self.run_rrs_scan()
+                cycle_clock.mark("rrs_scan")
 
                 # Regime-pause bangers: SPY paused against the tape -> flag the
                 # longs/shorts.txt names that refuse to participate.
@@ -13474,6 +13556,7 @@ class BounceBot(EWrapper, EClient):
                     self.check_regime_pause_setups()
                 except Exception:
                     logging.exception("Regime pause sweep failed.")
+                cycle_clock.mark("regime_pause")
 
                 # Entry assist in auto mode: open/close pullback windows in
                 # strong regimes, 30m movers cadence in weak/chop regimes.
@@ -13481,6 +13564,7 @@ class BounceBot(EWrapper, EClient):
                     self.entry_assist_auto_tick()
                 except Exception:
                     logging.exception("Entry assist auto tick failed.")
+                cycle_clock.mark("entry_assist")
 
                 # Universe auto-populate: keep longs/shorts.txt stocked with
                 # PDH/PDL breakers moving > 0.5 ADR (regime-capped top-N).
@@ -13488,6 +13572,7 @@ class BounceBot(EWrapper, EClient):
                     self._maybe_refresh_auto_populated_watchlists()
                 except Exception:
                     logging.exception("Auto-populate watchlist refresh failed.")
+                cycle_clock.mark("auto_populate")
 
                 # TC2000 same-time-of-day volume baselines (static per day):
                 # fetched once per symbol per day so every alert can carry a
@@ -13496,6 +13581,7 @@ class BounceBot(EWrapper, EClient):
                     self._maybe_refresh_rvol_baselines()
                 except Exception:
                     logging.exception("RVOL baseline refresh failed.")
+                cycle_clock.mark("rvol_baselines")
 
                 # Trader-favorite day-trade sweeps on longs/shorts.txt: delayed
                 # 5m opening-range breaks and 8-EMA grind squeezes into HOD/LOD.
@@ -13521,6 +13607,7 @@ class BounceBot(EWrapper, EClient):
                     self.check_h1_color_setups()
                 except Exception:
                     logging.exception("H1 color sweep failed.")
+                cycle_clock.mark("m5_and_h1_engines")
 
                 d1_watch_symbols = set(self.get_master_avwap_d1_watch_symbols())
                 monitored_symbols = self.get_monitored_extreme_symbols() | d1_watch_symbols
@@ -13540,6 +13627,16 @@ class BounceBot(EWrapper, EClient):
                     scannable_symbols = priority_symbols | (background_symbols & pending_outcome_symbols)
                 else:
                     scannable_symbols = set(all_symbols)
+                cycle_clock.mark("symbol_sets")
+                # The one line the 2026-08-25 investigation needed and did not
+                # have. Once per cycle, so a quiet evening costs a few lines a
+                # night, and it names the slowest stages because "what took the
+                # time" is always the question being asked of it.
+                logging.info(
+                    "Scan cycle %s preamble: %s",
+                    getattr(self, "_scan_cycle_index", "?"),
+                    cycle_clock.summary(),
+                )
                 logging.info(f"Monitoring {len(monitored_symbols)} strongest/weakest symbols for EMA bounces.")
                 processed_symbols = set(focus_fast_lane_symbols)
                 outcome_update_symbols = set(focus_fast_lane_symbols)

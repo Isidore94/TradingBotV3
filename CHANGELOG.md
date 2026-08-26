@@ -19,6 +19,28 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-25 - the scan cycle is timed, and the sweep canary is accepted
+
+**The R10.A restarted-process outcome-sweep canary is MET** by the trader's
+explicit acceptance ("52min late is fine", 2026-08-25) of the 2026-08-25 run:
+656 pending / 656 finalized, 0 expired, 0 failed, 0 commit failures,
+`pending_after 0`. The 52-minute start delay is accepted as KNOWN, not
+explained - its cause remains UNKNOWN and the investigation stands. The two
+fenced repairs' own canaries and R10 10a are separate and still owed.
+
+**`ScanCycleClock` times each stage of a scan cycle** (trader-authorized
+instrumentation in the fenced `bounce_bot_lib/legacy.py`; no scheduling,
+detector, scorer or alert change). `run_strategy` marks eleven stages across the
+preamble and logs one line per cycle, slowest stage first, before the existing
+"Monitoring N" line. Every call in that stretch was silent on the normal path,
+which is why the 2026-08-25 investigation could narrow a 92-minute stall no
+further than "somewhere in the preamble". Stages past the named few are counted,
+never dropped; a backwards clock reports 0.0s rather than a negative stage.
+`_maybe_refresh_learning_after_close` now logs when it first finds work due, and
+once per worker when it is waiting on an earlier one - and stays silent when
+nothing is due. The instrument decides nothing, and a test parses the class to
+assert it calls no `sleep`, `wait`, `start` or `Thread`.
+
 ### 2026-08-25 - the AWAY Recap draws the day's alerts and charts them
 
 **Correction to the entry below.** "The AWAY Recap is wired to the Alert Center

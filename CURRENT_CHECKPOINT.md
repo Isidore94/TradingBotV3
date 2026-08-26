@@ -8,6 +8,79 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-25 evening (7) - trader accepts the sweep canary; the scan cycle is now timed
+
+**Branch `testing-week-2026-08-24`.** Two trader decisions, both recorded here
+verbatim because they are the only authority for what follows.
+
+### 1. The R10.A restarted-process sweep canary is ACCEPTED
+
+Trader, 2026-08-25: **"52min late is fine."** The 2026-08-25 run is therefore
+the successful live weekday session R10.A owed - `swept_at
+2026-08-25T14:27:36-07:00`, 656 pending / 656 finalized, 0 expired, 0 failed, 0
+commit failures, `pending_after 0`, yesterday's 553 finals untouched. **This gate
+is met by the trader's acceptance, not by an AI's judgement**, and the delay is
+accepted as known rather than explained: its cause is still UNKNOWN and the
+investigation stands.
+
+What this does NOT do: it does not accept the two fenced repairs' own canaries
+(the milestone recovery and `_signal_bar_dict`), which are separate and still
+owed, and it does not touch R10 10a.
+
+### 2. The scan-cycle timing instrument is authorized and BUILT
+
+Trader, 2026-08-25: **"Yes you can add the timing log."** This is the ask-first
+answer for `bounce_bot_lib/legacy.py` beyond Decision B's two repairs, and it is
+scoped to instrumentation: **no scheduling change, no detector, scorer or alert
+change.**
+
+`ScanCycleClock` (module level, pure) records elapsed seconds per named stage
+and formats them slowest-first. `run_strategy` builds one per cycle and marks
+ten stages across the preamble - `watchlists`, `atr_cache`, `auto_regime`,
+`focus_fast_lane`, `rrs_scan`, `regime_pause`, `entry_assist`, `auto_populate`,
+`rvol_baselines`, `m5_and_h1_engines`, `symbol_sets` - then logs **one** line
+before the existing "Monitoring N" line:
+
+> `Scan cycle 41 preamble: 92.4s total: rrs_scan 88.1s, atr_cache 2.0s, +8 other 2.3s`
+
+Once per cycle, so a quiet evening costs a few lines a night. Stages past the
+named few are **counted, never dropped**: a breakdown that silently omits stages
+reads as a complete account of the time and is not one. A backwards clock (a
+Windows adjustment) reports 0.0s rather than a negative stage, which would read
+as an instrument fault rather than a measurement.
+
+Beside it, `_maybe_refresh_learning_after_close` now says **when it first finds
+work due** - the timestamp the 2026-08-25 investigation had to infer from the
+sweep's own stamp - and says **once per worker** when it is waiting on an
+earlier one. Deliberately silent when nothing is due: that would be a line a
+minute, all evening, saying nothing happened. The 60 s throttle, the due logic
+and the worker are untouched.
+
+**The instrument decides nothing, and a test enforces that**: the class is
+parsed and asserted to call no `sleep`, `wait`, `start` or `Thread`. A timing
+helper that could defer or skip would be a scheduling change wearing an
+instrument's name, and scheduling is exactly what was not authorized.
+
+Fail-before: `test_the_loop_logs_one_cycle_line_with_the_breakdown` red (the
+class existed and `run_strategy` never built one - the same "present but never
+called" shape as the recap's `set_alerts`).
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4837 passed / 19 subtests**, pytest exit **0** |
+| `scripts/smoke_check.py` | **7/7**, exit 0 |
+| `launch_gui.py --selftest` | **70/70**, exit 0 |
+| golden fixtures + bounce/sweep sets | **456 passed**, exit 0 |
+
+4830 -> 4837: seven added. No packaging trigger. The one-off 93% segfault has
+not recurred in the four runs since.
+
+**What it is expected to show.** If the 12:55-14:27 stall repeats, one line will
+name the stage that ate it. If it does not repeat, the lines are a normal-cycle
+baseline, which is the other half of the answer.
+
+---
+
 ## 2026-08-25 evening (6) - the recap had no OUTLET: alerts drawn, rows chartable
 
 **Branch `testing-week-2026-08-24`.** Trader-directed, after reading the live
