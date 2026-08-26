@@ -198,6 +198,16 @@ class ChartDataService(QObject):
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return 0
+        # Diagnostics only (P1 item 3). Marks the seam, then closes: the build
+        # itself is on the pool, so holding the span open would attribute the
+        # worker's wall-clock to the GUI thread, which is the opposite of what
+        # this log is for.
+        try:
+            from ui import interaction_trace
+
+            interaction_trace.mark("chart_request")
+        except Exception:
+            pass
         request_id = next(self._counter)
         with self._lock:
             self._newest[symbol] = request_id

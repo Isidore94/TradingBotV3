@@ -475,15 +475,29 @@ class MainWindow(QMainWindow):
         return target
 
     def _select_page(self, index: int) -> None:
-        self.pages.setCurrentIndex(index)
-        self.title_label.setText(PAGE_SPECS[index].title)
-        for button_index, button in enumerate(self.nav_buttons):
-            button.setChecked(button_index == index)
-        mode_visible = index == 0
-        self.workspace_button.setVisible(mode_visible)
-        self.tabs_button.setVisible(mode_visible)
-        if PAGE_SPECS[index].title == AWAY_RECAP_PAGE_TITLE:
-            self._feed_away_recap()
+        # Diagnostics only (P1 item 3): a stall sampled inside Qt's own event
+        # dispatch names no application code, so the watchdog's record needs
+        # the click to be legible at all. This decides nothing and defers
+        # nothing - see `ui/interaction_trace.py`.
+        from ui import interaction_trace
+
+        interaction_trace.begin("page_select", PAGE_SPECS[index].title)
+        try:
+            self.pages.setCurrentIndex(index)
+            interaction_trace.mark("model_apply")
+            self.title_label.setText(PAGE_SPECS[index].title)
+            for button_index, button in enumerate(self.nav_buttons):
+                button.setChecked(button_index == index)
+            mode_visible = index == 0
+            self.workspace_button.setVisible(mode_visible)
+            self.tabs_button.setVisible(mode_visible)
+            interaction_trace.mark("layout")
+            if PAGE_SPECS[index].title == AWAY_RECAP_PAGE_TITLE:
+                self._feed_away_recap()
+        finally:
+            # Closed here rather than left open: a span that outlived its click
+            # would attribute every later idle stall to the last page visited.
+            interaction_trace.end()
 
     def _feed_away_recap(self) -> None:
         """Hand the recap the Alert Center's own backing list, then reload.
