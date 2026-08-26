@@ -58,6 +58,13 @@ class FocusPicksPanel(QFrame):
         #: the desk (`set_mover_source`); absent on a bare panel, which simply
         #: shows no flag rather than guessing.
         self._mover_source = None
+        #: (symbol, side) -> state, for ONE mover-refresh cycle. `_refresh_all`
+        #: is triggered by things that have nothing to do with previous-day
+        #: extremes - a BounceBot alert, an RS/RW snapshot, a side edit - and
+        #: each one used to walk every chip back through the D1/M5 series.
+        #: Cleared by `refresh_mover_flags`, which IS the signal that a newer
+        #: measurement exists, so this never pins the board to a stale answer.
+        self._mover_cache: dict[tuple[str, str], str] = {}
         self._rrs_state: dict[str, dict[str, str]] = {}
 
         self.editors: list[FocusSideEditor] = []
@@ -266,7 +273,11 @@ class FocusPicksPanel(QFrame):
         Rides the Alert Center's existing 60-second D1 poll - the cadence this
         board already depends on for its BOUNCE/RRS chips - so no timer is
         added and nothing is fetched.
+
+        This is also the one place the per-cycle memo is discarded: the signal
+        that brought us here is exactly "a newer measurement exists".
         """
+        self._mover_cache.clear()
         self._refresh_all()
 
     def set_mover_source(self, resolver) -> None:
@@ -278,18 +289,29 @@ class FocusPicksPanel(QFrame):
         has already answered.
         """
         self._mover_source = resolver
+        # A different source is a different answer; nothing measured by the old
+        # one may survive it.
+        self._mover_cache.clear()
         self._refresh_all()
 
     def _mover_state_for(self, symbol: str, side: str) -> str:
         resolver = getattr(self, "_mover_source", None)
         if resolver is None:
             return ""
+        key = (str(symbol or "").upper(), str(side or "").lower())
+        cached = self._mover_cache.get(key)
+        if cached is not None:
+            return cached
         try:
-            return str(resolver(symbol, side) or "")
+            state = str(resolver(symbol, side) or "")
         except Exception:
             # A flag is decoration over a measurement. If the measurement is
-            # unavailable, show no flag rather than a wrong one.
+            # unavailable, show no flag rather than a wrong one - and do NOT
+            # remember the miss, or one transient failure would keep the flag
+            # off until the next poll.
             return ""
+        self._mover_cache[key] = state
+        return state
 
     def _live_state_for(self, symbol: str, side: str = "") -> dict[str, dict[str, str]]:
         symbol = str(symbol or "").upper()
