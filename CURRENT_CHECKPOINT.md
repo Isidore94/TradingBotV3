@@ -8,6 +8,70 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-26 - ACTIVE: GUI fluidity Wave P1 (Phase 0.8), four of six items built
+
+**Branch `claude/gui-p1-fluidity`, off `main` at `53b9733`.** The trader
+authorized **Wave P1 only** from `docs/GUI_REDESIGN_PLAN_2026-08-25.md` §11.1 on
+2026-08-26 and it is now `plan.md` Phase 0.8 (items G-P1.0 … G-P1.5). Waves
+U1-U3, S1 and Snappy P2 remain PROPOSAL and are NOT authorized.
+
+### Immediate next action
+
+**G-P1.4** (hot `QTableWidget` rebuilds -> model/view or incremental diffs,
+System Health first, selection and scroll preserved) then **G-P1.5** (audit
+every click-reachable `reload()` for reads on Qt; `WeekAheadPage` and
+`DiscoveryPage` in `weekend_prep_panel.py` are the known unaudited candidates).
+Then the §11.3 live soak, which is the trader's to run.
+
+### Landed on this branch
+
+| Commit | What |
+|---|---|
+| `cc2d2a3` | Sol's 2026-08-25 GUI review proposal, its checkpoint entry and its `docs/README.md` row, carried onto `main` |
+| `db99271` | G-P1.0 - three verified defects (Focus lists never read; adoption-gate line measured nothing; quick journal dropped its symbol) |
+| `d050ee1` | G-P1.1 - Weekend Prep reads on a worker; the measured 8.45 s freeze |
+| `0f04240` | G-P1.2 - Focus mover state memoized per poll instead of per redraw (36 stalls / 5.93 s) |
+| `6bd7eef` | G-P1.3 - interaction id stamped on every stall record |
+
+### Verification - read this before quoting a number
+
+| Check | Result |
+|---|---|
+| `pytest tests/ -q` | **4877 passed / 19 subtests, exit 0** (2026-08-26, `.venv` 3.12.13). Baseline was 4844; the 33 new tests are the fail-before-fix pins for this work |
+| `scripts/smoke_check.py` | **7/7**, re-run at each commit |
+| `launch_gui.py --selftest` | Not re-run; unchanged from the `ed277a7` 70/70 |
+| Packaging triggers | **None.** `scripts/ui/interaction_trace.py` is a new module inside the already-collected `ui` package and the spec-drift guard passes unchanged. No dependency, asset, top-level package, dynamic import or `__file__` change. No rebuild owed |
+
+Every fix was written fail-before-fix: the test was shown failing on the current
+code, then the code changed. Where a test itself was wrong (two were - a wrong
+output key on `build_recap`, a cache warmed by the fixture's own setup) the test
+was corrected and re-proved against the unfixed code by stashing the change.
+
+### Live gates - OWED, and no test run can discharge them
+
+The proposal's **§11.3 acceptance targets need a real desk session** with the
+stall watchdog enabled, compared against the 2026-08-25 capture (264 stalls,
+117.3 ms median, 205.1 ms p90, 8.45 s worst, 46.0 s blocked in ~45 min).
+Deterministic tests prove the reads moved off the Qt thread; they cannot prove
+the desk feels different. Wave P1 is not done until that soak runs.
+
+Also owed inside G-P1.3: the `first_paint` and `chart_ready` marks, which need
+the receiving paint path instrumented rather than the emit seam, and the Alert
+Center inner tab, which is fenced.
+
+### Fence discipline
+
+`scripts/ui/panels/alert_center_panel.py` is fenced under the file-scoped
+ask-first rule. The trader pre-authorized ONE change there - attaching the chart
+symbol to the quick journal write - and the diff in that file is six added lines
+and no deletion. G-P1.2's natural memo point is also in that file
+(`_measure_mover_state`); it was implemented in the CONSUMER
+(`focus_picks_panel.py`) instead to stay inside the authorization. **Open trader
+question:** memoizing at the Alert Center would also serve the review queue,
+which asks the same question per alert - worth a decision, not worth assuming.
+
+---
+
 ## 2026-08-26 - CONSOLIDATION: the trunk is `main` again
 
 **Branch `main`.** Trader-directed branch cleanup. `testing-week-2026-08-24` was

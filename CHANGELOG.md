@@ -1,7 +1,7 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-26** on `main`, at the consolidation that
-fast-forwarded `testing-week-2026-08-24` onto the trunk.
+Last reconciled: **2026-08-26** on `claude/gui-p1-fluidity`, at GUI fluidity
+Wave P1 items G-P1.0 through G-P1.3.
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -18,6 +18,82 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-26 - GUI fluidity Wave P1: the desk stops reading its stores on the click
+
+**IMPLEMENTED / GREEN. The live soak is OWED and no test discharges it.**
+`plan.md` Phase 0.8, promoted by the trader from
+`docs/GUI_REDESIGN_PLAN_2026-08-25.md` §11.1 on 2026-08-26. Presentation and
+threading only: no detector, scorer, alert, queue, scheduler, evidence stream or
+store changed behavior, and no read was added or removed - only moved.
+
+**Three verified defects, each reproduced at source before it was touched.** The
+AWAY Recap called `focus_picks.load_focus_map(side)` against a keyword-only
+signature: TypeError on every run, absorbed by a fail-quiet `except` and shown to
+the trader as "Focus lists unavailable". The page had therefore NEVER read the
+Focus lists, and no amount of the files being present could have changed that.
+The same page's adoption-gate line called `mover_state(side, None, None, None)`
+against `(side, price, prev_high, prev_low)` - with nothing to compare it could
+only return UNKNOWN, which was then rendered as a gate verdict for the symbol. It
+now says the gate was not measured here and why, and points at the surfaces that
+do measure it; UNKNOWN stays UNKNOWN. And the Desk quick-journal write (Ctrl+Enter,
+the one used mid-session with a chart up) dropped the `symbols` field
+`MarketJournalService.write_entry` has accepted since R10.H, so the entries most
+likely to be about one name were the ones stored with no name.
+
+The shared shape of the first two is worth keeping: **a `try/except` written to
+keep a page from crashing had been absorbing a programming error and reporting it
+as missing data.** Fail-quiet is right for a store that might not be there; it is
+wrong for a call that can never work.
+
+**Weekend Prep now reads on a worker.** `WeekReviewPage.reload` ran
+`build_review_learning_state(window_days=7)` plus two RS log scans, and
+`FocusReviewPage.reload` ran five CSV/JSONL reads and built five tables of cells,
+all inside the click that selected the page - the worst measured stall on the
+desk, 8.45 s frozen. `WalkawayPage` in the same file already owned a QThread, so
+one `_ReadWorker` now serves all three. Deliberately NOT copied from it: that
+page blanks its body to "Running walk-away..." while refreshing. **Clearing a
+populated page to announce a refresh destroys the only copy of what it knew**,
+most damagingly when the refresh then fails, so the new pages keep last-good
+visible and put "refreshing" and any stated error in their own slot. On
+`FocusReviewPage` a failed refresh keeps every row: the graded cohorts are the
+whole forward record of the trader's own vetoes and likes. That page previously
+had no error handling at all - a bad CSV propagated out of the click. Panel
+shutdown, which named `walkaway` while that was the only threaded page, now joins
+every page.
+
+**The Focus board measures each mover state once per poll, not once per redraw**
+(36 repeating stalls, 5.93 s). `_refresh_all` fires on things unrelated to
+previous-day extremes - a BounceBot alert, an RS/RW snapshot, a side edit - and
+each walked every chip through `AlertCenterPanel.mover_state`, reading the D1/M5
+series per symbol per side. Memoized per (symbol, side), discarded by
+`refresh_mover_flags`, which is not an arbitrary expiry but the signal that a
+newer measurement exists. A FAILED measurement is never cached: a flag is
+decoration over a measurement, and one transient miss must not switch it off
+until the next poll.
+
+**A stall record now says which click it belongs to.** `scripts/ui/interaction_trace.py`
+plus stamping in `StallWatchdog._write`. The watchdog names the frame that held
+the GUI thread, which is the wrong question whenever the modal frame sits inside
+Qt's own event dispatch and names no application code. The trace is read from the
+sampler thread and therefore holds **no lock** - live state is one module-level
+tuple replaced whole, because a lock in a diagnostic could stall the thread it
+exists to measure. It owns no timer and no thread, and a test PARSES the module
+and fails on any call to sleep/wait/start/join/Thread/Timer/QTimer - the
+`ScanCycleClock` rule, for the same reason. An empty interaction id means an
+idle-desk stall, which is a fact about the stall rather than a gap. Wired at page
+select, the Journal inner tab and the chart request.
+
+**Fence discipline.** `alert_center_panel.py` is fenced under the file-scoped
+ask-first rule; the trader pre-authorized only the quick-journal symbols
+attachment, and the diff there is six added lines and no deletion. The mover memo
+was implemented in the consumer rather than at its natural point inside that
+file.
+
+Tests 4844 -> 4877, exit 0; smoke 7/7. No packaging trigger. **Owed:** items
+G-P1.4 (hot `QTableWidget` rebuilds) and G-P1.5 (the `reload()` audit) are not
+started; `first_paint`/`chart_ready` marks need the receiving paint path; and the
+§11.3 live soak is the trader's to run.
 
 ### 2026-08-26 - the Phase 0.5 work is on `main`, and the branch chain is retired
 

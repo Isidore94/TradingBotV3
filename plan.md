@@ -221,6 +221,7 @@ where the phase says so; it never authorizes an early promotion.
 |---:|---|---|
 | **0 — NOW** | Validate and merge | Prove the testing-week build on the real desk and merge it safely |
 | **0.5** | Trader refinement packets | Build the trader's 2026-08-14/15 desk requests in ranked order (R1–R8) |
+| **0.8** | GUI fluidity Wave P1 | Repair the measured Standard-mode stalls and three verified GUI defects |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
 | **3** | Evidence and capture | Mature warehouse/AI/shadow evidence and capture trader commentary honestly |
@@ -1512,6 +1513,61 @@ Section 7 and R9.3's declared window; nothing in R10 promotes anything. Frozen
 exe triggers (new runtime asset, new page, new top-level module) require a
 rebuild plus `dist\TradingBotV3\TradingBotV3.exe --selftest`, with commit time
 and exe mtime recorded side by side in the checkpoint.
+
+### Phase 0.8 — GUI fluidity Wave P1 (authorized 2026-08-26)
+
+Source: `docs/GUI_REDESIGN_PLAN_2026-08-25.md` §11.1 / Wave P1. The trader
+promoted **Wave P1 only** on 2026-08-26. Waves U1–U3, S1 and the experimental
+Snappy mode (P2) remain PROPOSAL and are not authorized; do not build from them.
+
+Naming note: the proposal calls this "Wave P1" while Phase 1 below already uses
+`P1.x` item ids. Items here are numbered **G-P1.x** so the two never collide.
+
+**Scope bound.** Presentation and threading only. No detector, scorer, alert,
+queue, scheduler, evidence stream or storage behavior may change, and no read
+may be added or removed — only moved off the Qt thread. `alert_center_panel.py`
+stays fenced under the file-scoped ask-first rule; the trader's 2026-08-26
+pre-authorization in that file covers the quick-journal symbols attachment and
+nothing else.
+
+1. **G-P1.0 Three verified defects.** *Built and pinned 2026-08-26 (`db99271`).*
+   The AWAY Recap called `load_focus_map(side)` against a keyword-only
+   signature, so it reported the Focus lists unreadable on every run; its
+   adoption-gate line called `mover_state(side, None, None, None)`, which can
+   only return UNKNOWN, and rendered that as a verdict; the Desk quick-journal
+   write dropped the chart symbol `write_entry` already accepts.
+2. **G-P1.1 Weekend Prep off the Qt thread.** *Built 2026-08-26 (`d050ee1`).*
+   The measured 8.45 s freeze. `WeekReviewPage` and `FocusReviewPage` now read
+   on an owned single-flight worker; last-good survives a refresh and a failed
+   read is stated, never blank. Panel shutdown joins every page.
+3. **G-P1.2 Focus mover-state memo.** *Built 2026-08-26 (`0f04240`).* 36
+   repeating stalls / 5.93 s. Resolved once per (symbol, side) per mover-refresh
+   cycle, discarded by the poll signal that produces a newer measurement. A
+   failed measurement is never cached.
+4. **G-P1.3 Interaction id on the stall log.** *Built 2026-08-26 (`6bd7eef`).*
+   `scripts/ui/interaction_trace.py` plus stamping in the stall watchdog, wired
+   at page select, the Journal inner tab and the chart request. Diagnostics
+   only; a test parses the module and fails if it can ever sleep, wait or start
+   a thread. **Owed:** `first_paint` and `chart_ready` marks, which need the
+   receiving paint path instrumented rather than the emit seam; and the Alert
+   Center inner tab, which is fenced.
+5. **G-P1.4 Convert hot `QTableWidget` rebuilds** to model/view or incremental
+   diffs, System Health first, preserving selection and scroll position across
+   updates. **NOT STARTED.**
+6. **G-P1.5 Audit every `reload()`** reachable from a click or page selection
+   for CSV/JSONL/SQLite reads or row-building on Qt, and move violators to
+   workers. Never clear a populated page while its refresh runs. **NOT
+   STARTED** — `WeekAheadPage` and `DiscoveryPage` in the Weekend Prep panel are
+   known unaudited candidates.
+
+Gates: **the live-session soak in the proposal's §11.3 is OWED and cannot be
+discharged by any test run.** Its acceptance targets are stall count, p90 and
+worst-case blocked time measured over a real desk session with the watchdog
+enabled — deterministic tests prove the reads moved, not that the desk feels
+different. Re-run the §14 performance workflow on the same sequence and compare
+against the 2026-08-25 capture (264 stalls, 117.3 ms median, 205.1 ms p90,
+8.45 s worst, 46.0 s blocked in ~45 min) before calling Wave P1 done. No
+packaging trigger applies to the work landed so far.
 
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
