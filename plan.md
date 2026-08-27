@@ -1613,6 +1613,44 @@ against the 2026-08-25 capture (264 stalls, 117.3 ms median, 205.1 ms p90,
 8.45 s worst, 46.0 s blocked in ~45 min) before calling Wave P1 done. No
 packaging trigger applies to the work landed so far.
 
+### Phase 0.9 — GUI follow-ons from the 2026-08-26 live session (authorized 2026-08-26)
+
+Source: `docs/GUI_REDESIGN_PLAN_2026-08-25.md` §15 decisions 9, 10, 11, 14,
+accepted by the trader on 2026-08-26 ("i authorize all changes") with the
+recommended answers. Waves U1–U3, S1 and Snappy P2 are still NOT authorized.
+Same scope bound as Phase 0.8: presentation and threading only; no detector,
+scorer, alert, queue, scheduler, evidence or storage behavior changes;
+`alert_center_panel.py` stays fenced (file-scoped ask-first). Each item gets
+its own fail-before-fix test and a soak between fluidity slices.
+
+1. **G-P2.0 Table width rule** (proposal §12, §3.4 A). Tables stretch to the
+   available width, the widest text column takes the slack, identifiers elide
+   in the MIDDLE. Apply through the shared shell, not per panel; first on
+   Weekend Prep ▸ Focus pick review (`human_foc…`) and AWAY Recap (`Line`).
+2. **G-P2.1 AWAY Recap as a return surface** (§8.3, decision 9). Hide-and-count
+   scanner status rows (blank symbol, `WATCH`) in the recap panel only; a
+   visible `Chart` action plus `Enter` on the selected row; symbol-less rows
+   rendered distinctly with no chart action. The Alert Center's backing list
+   is not changed.
+3. **G-P2.2 Desk Journal route** (§5.3, decision 10). One shortcut that selects
+   the Journal tab and focuses the composer, plus a hint on the tab label. No
+   second row under the charts; a verb-row verb only if the trader asks for a
+   mouse route. Touches the fenced file: ask before the edit.
+4. **G-P2.3 Next fluidity slice, in measured order** (§11.1, decision 14):
+   `DataTable.fit_columns` bounded measurement; the Theta refresh (explain the
+   3.0 s → 26.6 s → 49.2 s growth first, then parse on a worker and diff rows
+   into the model); `watchlist_utils.read_text` off Qt; `project_paths` `stat`
+   measured before touched; then the eight G-P1.5 panels one whole page at a
+   time. The panel-thread sweep (G-P1.6's class; candidates in proposal §2)
+   rides along.
+5. **G-P2.4 GC measurement packet** (decision 11). Measurement FIRST: what
+   produces the cyclic garbage, sweep cost per generation, growth per hour.
+   **No scheduling change is authorized by this item** - a change to
+   `_GuiGcController` needs its own ask with the measurement in hand.
+
+Gates: the Phase 0.8 live soak still comes first; each G-P2.3 slice is
+followed by a soak against the archived 2026-08-26 baseline.
+
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
 1. **P1.1 Make the test suite hermetic.** Stop Qt app tests from starting live

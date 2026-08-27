@@ -12,8 +12,20 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 **Branch `claude/gui-p1-fluidity`, off `main` at `53b9733`.** The trader
 authorized **Wave P1 only** from `docs/GUI_REDESIGN_PLAN_2026-08-25.md` §11.1 on
-2026-08-26 and it is now `plan.md` Phase 0.8 (items G-P1.0 … G-P1.5). Waves
+2026-08-26 and it is now `plan.md` Phase 0.8 (items G-P1.0 … G-P1.7). Waves
 U1-U3, S1 and Snappy P2 remain PROPOSAL and are NOT authorized.
+
+**Evening update (2026-08-26): the trader authorized all changes** from the
+reviewer's reconciliation. Applied: the proposal revision, CHANGELOG and this
+file committed; CLAUDE.md/AGENTS.md corrected (arm bar under the chart; SAC
+reads OFF, source launch stays production by trader decision; new rule - chat
+messages to the trader are written VERY simply, five-year-old level);
+`trading_desk.cmd` header corrected; **`plan.md` Phase 0.9** added (G-P2.0
+table width rule, G-P2.1 AWAY Recap, G-P2.2 Desk Journal route, G-P2.3 next
+fluidity slice in measured order + thread sweep, G-P2.4 GC measurement packet
+- measurement only). Nothing in Phase 0.9 is built. Verification for this
+evening's commits: docs, CLAUDE.md and a `.cmd` comment only - the 4902 / 19
+subtests baseline is unchanged and was not re-run.
 
 ### Immediate next action
 
@@ -36,8 +48,14 @@ directory, so the next session writes a clean `ui_stalls.jsonl` that is entirely
 post-fix. Nothing was deleted (an earlier `ui_stalls_prefluidity_2026-08-21.jsonl`
 archive sits beside it).
 
-**This morning's real session (2026-08-26, 06:15-10:25, all pre-fix code)** is a
-far better baseline than the 45-minute sample in the proposal:
+**This morning's real session (2026-08-26, all pre-fix code)** is a far better
+baseline than the 45-minute sample in the proposal. **Window correction
+(reviewer, 2026-08-26 evening):** the archive's 2026-08-26 rows run from
+**00:00 to 10:25**, not 06:15 - the desk ran overnight. 1212 stalls / 303 s
+fell before 06:00 on an unattended desk (idle loop + GC), 138 / 26 s in
+06:00-06:15; the attended 06:15-10:25 window is **2000 stalls / 1129 s in
+~4h10m**. The totals below are the whole-day figures; no ranking changes
+under either window.
 
 | Measure | Pre-fix (2026-08-26 session) |
 |---|---|
@@ -70,6 +88,42 @@ measured 12.5% item plus the Health page's churn, and makes the 42.6%
 `app.exec()` bucket legible for the first time. It does **not** touch the GC
 (17.1%) or the two table paths (13.3%). Do not expect the total to halve.
 
+### The proposal is reconciled to the build (docs only, 2026-08-26 evening)
+
+`docs/GUI_REDESIGN_PLAN_2026-08-25.md` was revised so the next UI effort plans
+against what is now true: Wave P1 BUILT with commit ids (§13), the archived
+pre-fix session as the baseline (§3.2, by blocked time), the honest expected
+effect of Wave P1 (§11.3: ~12.5% + Health churn; GC 17.1% and the two Qt table
+paths 13.3% untouched - do not expect the total to halve), the owed fluidity
+work re-ordered by measured time (§11.1 - `data_table.py:35` and the Theta
+refresh are Qt measurement costs, NOT reads; the Theta refresh grew 3.0 s ->
+26.6 s -> 49.2 s across three hourly file-watcher refreshes and that growth is
+itself a finding), the trader's live findings (§3.4: narrow columns on every
+table page; AWAY Recap unusable as a return surface; Desk Journal
+undiscoverable) folded into a §12 table-width/middle-elision RULE and §8.3
+page decisions, the build's standing constraints (§2), and the SAC environment
+change (§3.5). **Deleted as now-false:** the recap's `load_focus_map` defect
+line, the quick-journal "writes no symbol" gap, the §2 "arm-bar mismatch" and
+§15 decision 3 / U1's arm-bar item.
+
+**Two things the trader has to decide, neither decided here:**
+
+1. **The CLAUDE.md/AGENTS.md arm-bar line is stale, not the source.** It says
+   the arm bar lives on the Armed tab; `4c05de5` (2026-08-20 second pass,
+   CHANGELOG "the hotbuttons return") put it back under the chart on the
+   trader's own instruction, and `alert_center_panel.py:711` passes
+   `dock_arm_bar=True` with that quote beside it. The 2026-08-25 proposal
+   built a recommendation on the stale line. Correcting CLAUDE.md is an
+   operating-instruction change and is left for the trader.
+2. **Smart App Control reads OFF** (`VerifiedAndReputablePolicyState = 0`,
+   `SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), while CLAUDE.md and
+   `trading_desk.cmd` still say it is enforced. Both launchers start source,
+   nothing is broken; whether the frozen exe becomes production again - with
+   its rebuild-before-merge delivery gap - is the trader's call.
+
+Seen in passing: System Health reports `daily_bars/yahoo: 4/5 attempts failed
+(80%)`. Data-source finding, not a GUI one.
+
 ### Landed on this branch
 
 | Commit | What |
@@ -81,12 +135,14 @@ measured 12.5% item plus the Health page's churn, and makes the 42.6%
 | `6bd7eef` | G-P1.3 - interaction id stamped on every stall record |
 | `10a3008` | G-P1.2b - the mover memo at its SOURCE, under the extended fence authorization |
 | `49744a7` | G-P1.4 incremental health tables; G-P1.5 the lake off the Qt thread; G-P1.6 a daemon thread that outlived its panel |
+| `e0f78ae` | Every shutdown join bounded (`join_worker`, 5 s) after the process outlived its window on the DAS reader; source-level guard test. (Recorded here by the reviewer - the commit carried no doc reconciliation) |
+| *uncommitted* | **Docs only:** `docs/GUI_REDESIGN_PLAN_2026-08-25.md` reconciled to the build and the 2026-08-26 live session (see "The proposal is reconciled" below); CHANGELOG and this file updated. No code, no tests changed |
 
 ### Verification - read this before quoting a number
 
 | Check | Result |
 |---|---|
-| `pytest tests/ -q` | **4897 passed / 19 subtests, exit 0** (2026-08-26, `.venv` 3.12.13). Baseline was 4844; the 53 new tests are the fail-before-fix pins for this work |
+| `pytest tests/ -q` | **4902 passed / 19 subtests, exit 0** (re-run 2026-08-26 evening by the reviewer on the uncommitted docs-only tree, 254.8 s, `.venv` 3.12.13; 4897 at `49744a7`, +5 guard tests at `e0f78ae`). Baseline was 4844; the new tests are the fail-before-fix pins for this work |
 | `scripts/smoke_check.py` | **7/7**, re-run at each commit |
 | `launch_gui.py --selftest` | Not re-run; unchanged from the `ed277a7` 70/70 |
 | Packaging triggers | **None.** `scripts/ui/interaction_trace.py` is a new module inside the already-collected `ui` package and the spec-drift guard passes unchanged. No dependency, asset, top-level package, dynamic import or `__file__` change. No rebuild owed |
@@ -141,6 +197,25 @@ measured - not on a clock, because `mover_state` decides what the trader SEES
 and a time-based cache could hide a live break.
 
 ---
+
+## 2026-08-26 evening - PROPOSAL recorded: AVWAP band variant study (no build authorized)
+
+The trader compared the same earnings-anchored chart in TradingView (their own
+`AVWAPE` script) and a second program whose 1σ band is wide from the very first
+bar and ≈1.5× the champion's width thirteen bars later - and was the level the
+last bar rejected. Instruction: replicate the second program's σ, then test it
+against the trader's method, integrated into the setup tracker; **plan only, no
+code.** The plan is `docs/AVWAP_BAND_VARIANT_STUDY.md`: the inference that any
+one-price-one-volume-per-bar formula has σ = 0 on the anchor bar, so the other
+program uses in-bar information (range or intraday prints), a percentage/ATR
+width, or an earlier anchor; a fifty-candidate closed-form fit against hover
+readings with a champion-vs-TradingView control run first; a frozen pure
+`indicators/` module; and three shadow harnesses with criteria declared before
+the first run. It touches nothing until the trader answers its §6 questions
+(which program, which symbols/anchors, the hover readings) and promotes it into
+`plan.md`. The champion σ stays frozen (decision 0008) throughout; a winning
+variant would be an additional level family, never a swap. Active item, branch
+and verification baseline are unchanged - no code or tests changed.
 
 ## 2026-08-26 - CONSOLIDATION: the trunk is `main` again
 

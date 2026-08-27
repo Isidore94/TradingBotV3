@@ -138,7 +138,49 @@ each fallen behind: `WeekendPrepPanel` (named only `walkaway`), `ResearchPanel`
 (missed the readout), and the `MainWindow` list the readout sits under. Two were
 fixed by naming the missing child; the weekend prep one now iterates its pages.
 
-Tests 4844 -> 4897, exit 0; smoke 7/7. No packaging trigger. **Owed:** the eight
+**Every shutdown join is bounded (`e0f78ae`).** Found in live use, not by a
+test: the trader closed the window on 2026-08-26, it "froze for a few seconds",
+and the PROCESS OUTLIVED THE WINDOW. Four shutdown paths joined their reader
+with a bare `worker.wait()`, which has no upper bound - two from this wave
+(weekend prep, warehouse readout), two older (journal panel, weekend prep
+service) - and the warehouse reader is on the DAS, the one read in the desk
+that can block for minutes when the share is unwell, which is exactly when a
+trader gives up and closes the app. `ui/read_worker.join_worker` (5 s default)
+replaces all four. On timeout the worker is DISOWNED AND PARKED in a
+module-level list rather than dropped, because dropping the last Python
+reference to a running `QThread` destroys its C++ half mid-run - a crash, not a
+leak; these are reads with no side effects and the process is leaving anyway.
+`tests/test_shutdown_waits_are_bounded.py` is a source-level guard: a bare
+`.wait()` on a shutdown path fails the suite. Tests 4897 -> 4902.
+
+**The proposal is reconciled to the build (docs only, 2026-08-26 evening).**
+`docs/GUI_REDESIGN_PLAN_2026-08-25.md` now records Wave P1 as BUILT with
+commit ids, replaces its 45-minute fluidity sample with the archived full
+pre-fix session (3350 stalls / 1457.5 s; by blocked time, not count), states
+what Wave P1 can and cannot be expected to change against it, re-orders the
+owed fluidity work by measured time (the two Qt table paths and the growing
+Theta refresh first - those are Qt measurement costs, not reads, so a worker
+does not fix them), folds in the trader's 2026-08-26 live findings (narrow
+columns on every table page; AWAY Recap unusable as a return surface; the Desk
+Journal undiscoverable) as a table-width RULE plus page decisions, adds the
+build's standing constraints (bounded joins, panel threads, child lists,
+never-blank refresh, the fence, the unwired paint marks), and records that
+Smart App Control now reads OFF. **One premise of the 2026-08-25 draft was
+refuted at source:** its "arm bar contract/source mismatch" - the arm bar is
+under the chart by the trader's 2026-08-20 second-pass instruction
+(`4c05de5`, "the hotbuttons return"), so the CLAUDE.md/AGENTS.md line placing
+it on the Armed tab is the stale one. Flagged for the trader; not edited.
+Waves U1-U3, S1 and Snappy P2 remain PROPOSAL. **The trader then authorized
+all changes (same evening):** CLAUDE.md/AGENTS.md now say the arm bar is under
+the chart, that SAC reads OFF and the source launch stays production by trader
+decision, and carry a new rule that chat messages to the trader are written
+very simply; `trading_desk.cmd`'s header matches; `plan.md` gained Phase 0.9
+(table width rule, AWAY Recap return surface, Desk Journal route, the next
+fluidity slice in measured order, a GC MEASUREMENT packet with no scheduling
+change). Nothing in Phase 0.9 is built.
+
+Tests 4844 -> 4902, exit 0 (4897 at `49744a7`, 4902 at `e0f78ae`); smoke 7/7.
+No packaging trigger. **Owed:** the eight
 panels under G-P1.5, the bare-thread sweep under G-P1.6, the
 `first_paint`/`chart_ready` marks (which need the receiving paint path
 instrumented rather than the emit seam), and **the §11.3 live soak, which is the
