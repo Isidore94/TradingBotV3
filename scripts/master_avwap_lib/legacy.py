@@ -5318,6 +5318,20 @@ def _setup_id_for_row(row: dict, symbol_entry: dict, scan_date: str | None = Non
 BAND_VARIANT_STOP_SOURCE = "band_variant"
 
 
+def _is_band_variant_stop(stop_candidate: object) -> bool:
+    """True for a challenger STOP CANDIDATE, before it becomes scenarios.
+
+    The candidate-side twin of `_is_band_variant_scenario`, kept beside it so
+    the two spellings of "is this the shadow" cannot drift apart: a candidate
+    carries `source_type` and the scenario it becomes carries
+    `stop_source_type`, and both name the same constant.
+    """
+    return (
+        isinstance(stop_candidate, dict)
+        and str(stop_candidate.get("source_type") or "").strip() == BAND_VARIANT_STOP_SOURCE
+    )
+
+
 def _is_band_variant_scenario(scenario: object) -> bool:
     """True for a challenger scenario, which every champion aggregate skips.
 
@@ -5539,6 +5553,17 @@ def _build_tracker_scenarios(
 
     for stop in stop_candidates:
         for template in SETUP_EXIT_TEMPLATES:
+            # Trader decision 2026-08-26: the band-variant shadow crosses the
+            # four BASELINE exit templates only, not the experimental ones.
+            # Six variant scenarios per setup cost 9,508 bytes of tracker JSON
+            # (~144 MB forward on a 950 MB file) while the stats table pairs
+            # champion against challenger on ONE template anyway; four keeps a
+            # per-template comparison possible at a third less cost. The
+            # experimental templates are a comparison framework for the
+            # CHAMPION's stops, and a challenger inside them would be two
+            # variables at once.
+            if bool(template.get("experimental")) and _is_band_variant_stop(stop):
+                continue
             scenario = _build_tracker_scenario(entry_price, stop, side, priority_bucket, template)
             scenarios[scenario["scenario_id"]] = scenario
     return scenarios
@@ -11121,10 +11146,20 @@ def export_setup_tracker_views(payload: dict) -> None:
     pd.DataFrame(short_horizon_rows).to_csv(SETUP_SHORT_HORIZON_FILE, index=False)
     pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
     pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
-    # Shadow evidence, same pass, read by nothing that scores or alerts.
-    pd.DataFrame(
-        build_band_variant_stats_rows(setups), columns=list(BAND_VARIANT_STATS_COLUMNS)
-    ).to_csv(SETUP_BAND_VARIANT_STATS_FILE, index=False)
+    # Shadow evidence, same pass, read by nothing that scores or alerts - and
+    # GUARDED, because this function's caller runs `save_setup_tracker_payload`
+    # AFTER it. Unguarded, one malformed setup dict reaching
+    # `build_band_variant_stats_rows` would abort the day's tracker save: the
+    # evidence store would have cost the thing it records (R10). The guard is
+    # around the shadow write ONLY - every champion export above it is already
+    # written by the time this runs, and a champion export that fails must
+    # still fail loudly.
+    try:
+        pd.DataFrame(
+            build_band_variant_stats_rows(setups), columns=list(BAND_VARIANT_STATS_COLUMNS)
+        ).to_csv(SETUP_BAND_VARIANT_STATS_FILE, index=False)
+    except Exception as exc:
+        logging.warning("Could not write the band variant stats export (%s).", exc)
 
 
 def _infer_tracker_scan_date(

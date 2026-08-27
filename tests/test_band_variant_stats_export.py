@@ -16,8 +16,10 @@ The rules this file pins:
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -186,21 +188,35 @@ def test_an_empty_tracker_exports_no_rows():
     assert legacy.build_band_variant_stats_rows({}) == []
 
 
+#: Every export path `export_setup_tracker_views` writes, champion first.
+EXPORT_FILES = (
+    "SETUP_SCENARIOS_FILE",
+    "SETUP_DAILY_FILE",
+    "SETUP_STATS_FILE",
+    "SETUP_TYPE_STATS_FILE",
+    "SETUP_TYPE_RECENT_STATS_FILE",
+    "SETUP_PLAYBOOKS_FILE",
+    "SETUP_SHORT_HORIZON_FILE",
+    "SETUP_ATTRIBUTES_FILE",
+    "SETUP_ATTRIBUTE_LEADERBOARD_FILE",
+    "SETUP_BAND_VARIANT_STATS_FILE",
+)
+CHAMPION_FILES = tuple(name for name in EXPORT_FILES if name != "SETUP_BAND_VARIANT_STATS_FILE")
+
+
+def _redirect_exports(monkeypatch, tmp_path) -> None:
+    for name in EXPORT_FILES:
+        monkeypatch.setattr(legacy, name, tmp_path / f"{name.lower()}.csv")
+
+
+def _exploding_builder(*_args, **_kwargs):
+    """What one malformed setup dict looks like from inside the shadow builder."""
+    raise ValueError("malformed setup dict reached the shadow builder")
+
+
 def test_the_export_writes_the_csv_in_the_same_pass(tmp_path, monkeypatch):
     """It rides the existing `export_setup_tracker_views` pass, not a new one."""
-    for name in (
-        "SETUP_SCENARIOS_FILE",
-        "SETUP_DAILY_FILE",
-        "SETUP_STATS_FILE",
-        "SETUP_TYPE_STATS_FILE",
-        "SETUP_TYPE_RECENT_STATS_FILE",
-        "SETUP_PLAYBOOKS_FILE",
-        "SETUP_SHORT_HORIZON_FILE",
-        "SETUP_ATTRIBUTES_FILE",
-        "SETUP_ATTRIBUTE_LEADERBOARD_FILE",
-        "SETUP_BAND_VARIANT_STATS_FILE",
-    ):
-        monkeypatch.setattr(legacy, name, tmp_path / f"{name.lower()}.csv")
+    _redirect_exports(monkeypatch, tmp_path)
 
     setup = _setup("AAA")
     legacy.export_setup_tracker_views({"setups": {setup["setup_id"]: setup}})
@@ -213,3 +229,127 @@ def test_the_export_writes_the_csv_in_the_same_pass(tmp_path, monkeypatch):
     # The champion's own scenario CSV never sees the shadow.
     scenarios = (tmp_path / "setup_scenarios_file.csv").read_text(encoding="utf-8")
     assert "VARIANT_LOWER_1" not in scenarios
+
+
+# ---------------------------------------------------------------------------
+# Review fix 1 (2026-08-26 night): the shadow export may never cost the save.
+#
+# `export_setup_tracker_views` writes the band-variant CSV as its LAST
+# statement, and its caller runs `save_setup_tracker_payload` after it. An
+# unguarded raise there would abort the day's tracker save - the evidence store
+# costing the thing it records, which R10 forbids everywhere else in this
+# codebase.
+# ---------------------------------------------------------------------------
+
+
+def test_a_raising_shadow_builder_never_costs_the_champion_exports(
+    tmp_path, monkeypatch, caplog
+):
+    _redirect_exports(monkeypatch, tmp_path)
+    monkeypatch.setattr(legacy, "build_band_variant_stats_rows", _exploding_builder)
+
+    setup = _setup("AAA")
+    with caplog.at_level(logging.WARNING):
+        # No raise: the caller must get control back.
+        legacy.export_setup_tracker_views({"setups": {setup["setup_id"]: setup}})
+
+    for name in CHAMPION_FILES:
+        assert getattr(legacy, name).exists(), f"{name} was not written"
+    # The shadow's own file is absent rather than half-written, and the failure
+    # is SAID rather than swallowed - a quiet miss would read as "no rows".
+    assert not legacy.SETUP_BAND_VARIANT_STATS_FILE.exists()
+    assert any(
+        "band variant" in record.getMessage().lower() for record in caplog.records
+    ), [record.getMessage() for record in caplog.records]
+
+
+def test_the_scan_still_saves_its_tracker_when_the_shadow_export_raises(
+    tmp_path, monkeypatch
+):
+    """The reach that actually matters: `save_setup_tracker_payload` is called.
+
+    Exercised through the real `export_setup_tracker_views`, because the point
+    is the seam between the two - a test that mocked the export away would
+    prove nothing about it.
+    """
+    _redirect_exports(monkeypatch, tmp_path)
+    monkeypatch.setattr(legacy, "build_band_variant_stats_rows", _exploding_builder)
+
+    payload = {"setups": {}, "control_setups": {}, "study_setups": {}, "daily_watchlists": {}}
+    with mock.patch.object(legacy, "write_control_discovery_report"), mock.patch.object(
+        legacy, "write_master_avwap_study_report"
+    ), mock.patch.object(legacy, "save_setup_tracker_payload") as save_mock:
+        legacy.update_setup_tracker_from_scan(
+            [],
+            {"symbols": {}},
+            {},
+            {},
+            None,
+            auto_tune=False,
+            tracker_payload=payload,
+        )
+
+    save_mock.assert_called_once()
+    assert save_mock.call_args.args[0] is payload
+
+
+def test_only_the_shadow_write_is_guarded(tmp_path, monkeypatch):
+    """A champion export that fails must still fail LOUDLY.
+
+    The guard is scoped to the shadow deliberately: swallowing a champion
+    export failure would hand the trader a stale CSV with no way to know.
+    """
+    _redirect_exports(monkeypatch, tmp_path)
+    monkeypatch.setattr(legacy, "build_tracker_setup_type_rows", _exploding_builder)
+
+    setup = _setup("AAA")
+    with pytest.raises(ValueError):
+        legacy.export_setup_tracker_views({"setups": {setup["setup_id"]: setup}})
+
+
+# ---------------------------------------------------------------------------
+# Review fix 3 (trader decision, 2026-08-26): the shadow crosses the four
+# BASELINE exit templates only.
+# ---------------------------------------------------------------------------
+
+
+def test_the_shadow_stop_skips_the_experimental_exit_templates():
+    baseline = [t for t in legacy.SETUP_EXIT_TEMPLATES if not t.get("experimental")]
+    experimental = [t for t in legacy.SETUP_EXIT_TEMPLATES if t.get("experimental")]
+    assert len(baseline) == 4 and experimental, "the template set changed shape"
+
+    champion_stop = {
+        "label": "LOWER_1",
+        "level": 43.0,
+        "source_type": "current_anchor",
+        "close_failure_limit": 2,
+    }
+    variant_stop = {
+        "label": "VARIANT_LOWER_1",
+        "level": 42.0,
+        "source_type": legacy.BAND_VARIANT_STOP_SOURCE,
+        "close_failure_limit": 2,
+    }
+    scenarios = legacy._build_tracker_scenarios(45.0, [champion_stop, variant_stop], "LONG")
+
+    champion = [s for s in scenarios.values() if not legacy._is_band_variant_scenario(s)]
+    shadow = [s for s in scenarios.values() if legacy._is_band_variant_scenario(s)]
+    # The champion is untouched - it still crosses every template.
+    assert len(champion) == len(legacy.SETUP_EXIT_TEMPLATES)
+    assert len(shadow) == len(baseline)
+    assert all(not s["experimental"] for s in shadow)
+    # ...and the shadow still covers EVERY baseline template, so the stats
+    # table's per-template pairing is still possible.
+    assert {s["exit_template_id"] for s in shadow} == {t["id"] for t in baseline}
+
+
+def test_the_candidate_side_and_scenario_side_agree_on_what_the_shadow_is():
+    """Two spellings of one question; they must never drift apart."""
+    candidate = {"source_type": legacy.BAND_VARIANT_STOP_SOURCE}
+    scenario = {"stop_source_type": legacy.BAND_VARIANT_STOP_SOURCE}
+    assert legacy._is_band_variant_stop(candidate)
+    assert legacy._is_band_variant_scenario(scenario)
+    # Neither answers yes to the other's shape by accident.
+    assert not legacy._is_band_variant_stop(scenario)
+    assert not legacy._is_band_variant_scenario(candidate)
+    assert not legacy._is_band_variant_stop({"source_type": "current_anchor"})
