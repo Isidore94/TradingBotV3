@@ -8,7 +8,7 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## 2026-08-27 - ASSESSMENT (Fable) of both overnight Opus runs: GO; G-P2.2 awaits the trader's yes; docs owed for G-P2.0/2.1
+## 2026-08-27 - ASSESSMENT (Fable) of both overnight Opus runs: GO; G-P2.2 landed mid-review; docs owed for G-P2.0/2.1/2.2
 
 Reproduced on a detached worktree at the committed tip `cc7dffa`:
 **5010 passed / 19 subtests, exit 0** (279 s) - the builder's number.
@@ -36,14 +36,15 @@ scanner-status rows, `Chart ▸` cell + `Enter`, symbol-less rows muted/italic
 through a theme token (`setForeground`, no stylesheet). The Alert Center's list
 untouched.
 
-**Phase 0.9 G-P2.2 - edited, UNCOMMITTED, correctly stopped at the fence.**
+**Phase 0.9 G-P2.2 - committed as `fd76923` by the GUI session while this
+assessment was being written** (it was an uncommitted fenced edit when the
+review began, i.e. the session had stopped at the ask as instructed).
 `alert_center_panel.py` carries the Ctrl+J route exactly in the prompt's shape
-(panel scope, `WidgetWithChildrenShortcut`, label hint, no row) and
-`tests/test_desk_journal_route.py` is untracked beside it. It passes 6/6 -
-after one unexplained 6/6 failure on its first run here (4.3 s, then green three
-times at 1.3 s; likely a collision with the other session still finishing).
-Watch it in the first full-suite run after it is committed. **The trader's
-"yes" is the gate**: on it, commit both files; without it, revert both.
+(panel scope, `WidgetWithChildrenShortcut`, label hint, no row) with
+`tests/test_desk_journal_route.py`. It passes 6/6 - after one unexplained 6/6
+failure on its first run here (4.3 s, then green three times at 1.3 s; likely a
+collision with the other session still finishing). Watch it in the first full
+suite that includes it; the 5010 reproduced above is the tip BEFORE it.
 
 **Owed by the GUI session, because it stopped at the ask before its handoff:**
 CHANGELOG entries for G-P2.0/G-P2.1 (the header mentions them; there is no
