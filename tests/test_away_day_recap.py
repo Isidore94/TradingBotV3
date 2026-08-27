@@ -434,9 +434,17 @@ def test_activating_a_swing_row_charts_it_too():
 
 
 def test_a_blank_symbol_asks_for_no_chart():
-    """Missing data is uncertainty: an empty row must not open a chart for ""."""
+    """Missing data is uncertainty: an empty row must not open a chart for "".
+
+    Since G-P2.1 a blank-symbol row is a SCANNER STATUS row and is hidden and
+    counted, so it is revealed here first - otherwise this would pass because
+    the row is absent rather than because a blank symbol charts nothing, which
+    is a different claim.
+    """
     panel = _recap_panel()
     panel._render({"classified_alerts": [{"symbol": "", "time_text": "09:00:00"}]})
+    panel._reveal_status_rows()
+    assert panel.alerts.rowCount() == 1
     seen: list[str] = []
     panel.symbolActivated.connect(seen.append)
 
