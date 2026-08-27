@@ -30,6 +30,8 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from ui.read_worker import join_worker
+
 from diagnostics.artifact_io import atomic_write_json
 import market_calendar
 import weekend_strength
@@ -341,11 +343,14 @@ class WeekendPrepService(QObject):
         for worker in workers:
             worker.requestInterruption()
         for worker in workers:
-            if worker.isRunning():
-                # The fetch functions are not safely cancellable mid-request.
-                # Never drop the last reference and let Qt destroy a live
-                # QThread; close waits for the bounded provider call to finish.
-                worker.wait()
+            # The fetch functions are not safely cancellable mid-request, and
+            # dropping the last reference to a live QThread lets Qt destroy it
+            # mid-run. `join_worker` handles both: it waits, and on timeout it
+            # disowns and PARKS the worker rather than dropping it. The wait is
+            # bounded because "the provider call is itself bounded" is an
+            # assumption about someone else's timeout, and a wrong one costs
+            # the trader a desk that will not close (2026-08-26).
+            join_worker(worker)
         self._workers.clear()
 
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QTabWidget, QVBoxLayout
 
+from ui.read_worker import join_worker
 from ui.panels.journal.analytics_tab import AnalyticsTab
 from ui.panels.journal.calendar_tab import CalendarTab
 from ui.panels.journal.fees_tab import FeesTab
@@ -180,7 +181,7 @@ class JournalPanel(QFrame):
     def shutdown(self) -> None:
         worker = self._migration_worker
         if worker is not None and worker.isRunning():
-            worker.wait()
+            join_worker(worker)
         for tab in self._tabs():
             if hasattr(tab, "shutdown"):
                 tab.shutdown()

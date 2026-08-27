@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ui.read_worker import ReadWorker
+from ui.read_worker import ReadWorker, join_worker
 
 from ui.widgets.section_header import SectionHeader
 
@@ -164,9 +164,10 @@ class WarehouseReadoutPanel(QFrame):
         )
 
     def shutdown(self) -> None:
-        worker = self._worker
-        if worker is not None and worker.isRunning():
-            worker.wait()
+        # Bounded: this reader waits on the DAS, which is precisely the read
+        # that can take minutes when the share is unwell.
+        join_worker(self._worker)
+        self._worker = None
 
     def _set_rows(self, rows) -> None:
         self.table.setRowCount(len(rows))

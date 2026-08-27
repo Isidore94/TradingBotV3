@@ -14,7 +14,23 @@ the case you would want it least: a refresh that then fails.
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QThread, Signal
+
+#: How long a shutdown may wait for one reader. Bounded on purpose.
+#: `_GuiGcController` learned this the hard way on 2026-08-21: a wait with no
+#: upper bound is a hang waiting for a slow day. The warehouse readout waits on
+#: the DAS, which is exactly the read that can take minutes when the share is
+#: unwell, so an unbounded join there would hold the whole process open at exit.
+SHUTDOWN_JOIN_MS = 5_000
+
+#: Readers that outlived their deadline. Kept referenced ON PURPOSE: dropping
+#: the last Python reference to a running QThread destroys its C++ half while
+#: it runs, which is a crash rather than a leak. These are READS - no writes,
+#: no side effects - so letting one finish into a void costs nothing, and the
+#: process is on its way out anyway.
+_abandoned: list["ReadWorker"] = []
 
 
 class ReadWorker(QThread):
@@ -32,3 +48,30 @@ class ReadWorker(QThread):
             self.finished_with.emit(self._work())
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
+
+
+def join_worker(worker, *, timeout_ms: int = SHUTDOWN_JOIN_MS) -> bool:
+    """Wait for one reader, but never forever. True if it finished in time.
+
+    On timeout the worker is disowned and parked in `_abandoned` rather than
+    left attached to a widget that is being destroyed. Shutdown continues: a
+    desk that will not close is worse than a read that nobody collects.
+    """
+    if worker is None:
+        return True
+    try:
+        if not worker.isRunning():
+            return True
+        if worker.wait(int(timeout_ms)):
+            return True
+        worker.setParent(None)
+        _abandoned.append(worker)
+        logging.warning(
+            "A background read did not finish within %.1fs of shutdown; "
+            "closing anyway and leaving it to end on its own.",
+            timeout_ms / 1000.0,
+        )
+        return False
+    except Exception:  # noqa: BLE001 - shutdown must not raise
+        logging.debug("Joining a background read failed.", exc_info=True)
+        return False

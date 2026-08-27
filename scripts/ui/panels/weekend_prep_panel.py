@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 
 import weekend_strength
 from ui.services import journal_feed
-from ui.read_worker import ReadWorker
+from ui.read_worker import ReadWorker, join_worker
 from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
 
 #: How many folded RS/RW rows one bucket may show in the week review. A cap
@@ -126,9 +126,7 @@ class _StepPage(QFrame):
         this pass exists to avoid creating. `getattr` because a page without a
         worker is a normal page, not a broken one.
         """
-        worker = getattr(self, "_worker", None)
-        if worker is not None and worker.isRunning():
-            worker.wait()
+        join_worker(getattr(self, "_worker", None))
 
 
 class WeekReviewPage(_StepPage):
