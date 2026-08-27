@@ -8,6 +8,37 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 (12:30) - ticker popup no longer edge to edge; desk RESTARTED on the new code
+
+**Branch `claude/warehouse-build-memory`.**
+
+**The desk was restarted at 12:22** at the trader's request and is running
+`a8eeb48` from source (`trading_desk.cmd`, pids 12552/33996). The restart caught
+the memory bug live: the outgoing desk (launched 09:54, old code) was measured
+at **7.53 GB, climbing to 9.47 GB in five seconds, and 10.73 GB at the moment it
+was stopped**, with a warehouse build in flight. The new desk settled at
+**0.82 GB**. Before stopping it: no scan scheduled task was running, and a
+killed build's `single_flight` lock is reclaimed rather than obeyed
+(`cli.single_flight`, "a dead holder's lock is reclaimed"), so an interrupted
+build is a designed-for case. **This is not the live gate** - that still needs a
+full swing-scan slot's build to stay under 3 GB.
+
+**Popup height (this entry's change).** Trader: "make the charts that pop up
+when i click on a ticker just a little less tall... reduce by 10% top and
+bottom." `inset_vertical_bounds` (pure, in `symbol_snapshot_dialog`) leaves 10%
+of the anchor free at each end; `POPUP_MIN_HEIGHT = 760` floors it so the
+2026-08-11 squeeze cannot return on a short monitor. Measured on the desk's
+monitors: 4K 2052 -> 1690 px (211px each end), 2560x1392 1332 -> 1114 px (139px
+each end).
+
+**Verification:** `pytest tests/ -q` -> **5198 passed, 19 subtests, exit 0**
+(309 s). `tests/test_snapshot_popup_height.py` (6 new): **6/6 fail** before the
+change. No packaging trigger.
+
+**Note:** the popup is created once per owner panel and reused, so the new size
+applies from the first ticker click after a restart - the desk restarted at
+12:22 predates this commit, so it needs another restart to show it.
+
 ## 2026-08-27 (afternoon) - the desk's 8-13 GB memory jumps: BUILT, all three causes; one live gate owed
 
 **Branch `claude/warehouse-build-memory`**, cut from `claude/group-tape-rebuild`

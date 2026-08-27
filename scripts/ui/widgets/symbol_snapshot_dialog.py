@@ -199,6 +199,35 @@ def _legend_html(
 # at most every 5 minutes, so this bounds display staleness the same way.
 REFRESH_INTERVAL_MS = 30_000
 
+#: Fraction of the anchor's height left free at the TOP and again at the
+#: BOTTOM when the ticker popup opens (trader rule 2026-08-27: "i dont want
+#: them edge to edge on the screen just reduce by 10% top and bottom"). The
+#: popup therefore opens at 80% of whatever it is anchored to.
+POPUP_VERTICAL_INSET = 0.10
+#: The popup will not shrink below this whatever the inset says. Both charts
+#: carry a 120px minimum, and a squeezed popup is exactly what the 2026-08-11
+#: sizing change was made to fix; on a short monitor that floor wins.
+POPUP_MIN_HEIGHT = 760
+
+
+def inset_vertical_bounds(
+    anchor_top: int, anchor_height: int, *, minimum: int = POPUP_MIN_HEIGHT
+) -> tuple[int, int]:
+    """(top, height) for a popup inset by `POPUP_VERTICAL_INSET` at each end.
+
+    Pure, so the proportion and the equal gaps can be pinned without depending
+    on what `availableGeometry()` reports on a headless runner.
+
+    The gaps are produced by CENTRING the final height inside the anchor rather
+    than by adding the inset to the top, so they stay equal even when the
+    floor below has overridden the inset - and the popup is never pushed off
+    the top of the screen to honour that floor.
+    """
+    inset = int(round(anchor_height * POPUP_VERTICAL_INSET))
+    height = max(int(minimum), anchor_height - 2 * inset)
+    top = anchor_top + max(0, (anchor_height - height) // 2)
+    return top, height
+
 
 def _bars_fingerprint(bars: list) -> tuple | None:
     """Cheap change detector for a rendered bar series.
@@ -1036,20 +1065,27 @@ class SymbolSnapshotDialog(QDialog):
         start_staggered(self._refresh_timer, 57_000)
 
     def _resize_to_desk_height(self) -> None:
-        """Open as tall as the desk window itself (trader ask 2026-08-11).
+        """Open tall, but NOT edge to edge (trader asks 2026-08-11, 2026-08-27).
 
-        The popup used to open at a fixed 1180x760 regardless of the monitor,
-        which on the desk's screen left the two charts squeezed into roughly
-        half the vertical space the rest of the program was using. Take the
-        height from the hosting window when there is one (so the popup matches
-        whatever the desk is currently sized to) and from the screen's
-        available area otherwise, minus a small allowance for this window's own
-        title bar - the frame is not measurable before the first show. This
-        only sets the *opening* size: a trader resize afterwards is kept,
+        2026-08-11: the popup opened at a fixed 1180x760 regardless of the
+        monitor, which on the desk's screen left the two charts squeezed into
+        roughly half the vertical space the rest of the program was using. So
+        the height came to be taken from the hosting window when there is one
+        (matching whatever the desk is currently sized to) and from the
+        screen's available area otherwise.
+
+        2026-08-27: that went too far the other way - "i dont want them edge to
+        edge on the screen just reduce by 10% top and bottom". The anchor is
+        chosen exactly as before; `inset_vertical_bounds` then leaves a tenth
+        of it free at each end, which also replaces the old 60px/40px
+        title-bar allowances (a tenth is far larger, and the frame is not
+        measurable before the first show anyway).
+
+        This only sets the *opening* size: a trader resize afterwards is kept,
         because the dialog is constructed once per panel and reused.
         """
         width = 1180
-        height = 760
+        height = POPUP_MIN_HEIGHT
         try:
             parent = self.parent()
             window = parent.window() if parent is not None else None
@@ -1065,17 +1101,17 @@ class SymbolSnapshotDialog(QDialog):
             area = None
         anchor = None
         if area is not None:
-            height = max(height, area.height() - 60)
             anchor = area
         if window is not None and window.isVisible():
             frame = window.frameGeometry()
             if frame.height() > 200:
-                height = frame.height() - 40
                 anchor = frame
+        top = None
+        if anchor is not None:
+            top, height = inset_vertical_bounds(anchor.top(), anchor.height())
         self.resize(width, height)
         if anchor is not None:
             left = anchor.center().x() - width // 2
-            top = anchor.top() + 20
             if area is not None:
                 left = min(max(left, area.left()), max(area.left(), area.right() - width))
                 top = min(max(top, area.top()), max(area.top(), area.bottom() - height))

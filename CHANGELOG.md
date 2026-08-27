@@ -27,6 +27,46 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-27 - The ticker popup opens 10% short of the screen, top and bottom
+
+**IMPLEMENTED / GREEN.** Trader: "make the charts that pop up when i click on a
+ticker just a little less tall. i dont want them edge to edge on the screen just
+reduce by 10% top and bottom."
+
+This is the 2026-08-11 sizing ask corrected, not reverted. That one fixed the
+opposite problem - the popup opened at a fixed 1180x760 whatever the monitor,
+squeezing both charts into about half the vertical space - by taking the height
+from the hosting desk window, or the screen's available area, minus a 60px/40px
+title-bar allowance. On this desk's monitors that is edge to edge.
+
+- `symbol_snapshot_dialog.inset_vertical_bounds(anchor_top, anchor_height)` is
+  a new PURE helper: it leaves `POPUP_VERTICAL_INSET` (0.10) of the anchor free
+  at the top and again at the bottom, so the popup opens at 80% of whatever it
+  is anchored to. The gaps come from CENTRING the final height inside the
+  anchor rather than from adding the inset to the top, so they stay equal even
+  when the floor below overrides the inset.
+- `POPUP_MIN_HEIGHT` (760) is a floor the inset cannot go under - both charts
+  carry a 120px minimum and a squeezed popup is exactly what 2026-08-11 fixed -
+  and it never pushes the popup off the top of the screen to honour itself.
+- The anchor is chosen exactly as before (hosting window frame if visible, else
+  the screen's available area). The proportional inset replaces the old 60/40
+  allowances, which it dwarfs.
+- Measured on the desk's three monitors: 4K panels go 2052 -> **1690 px** with
+  211px free at each end; the 2560x1392 goes 1332 -> **1114 px** with 139px at
+  each end. 82-84% of the old height.
+
+One dialog class and one factory (`show_symbol_snapshot`) serve every ticker
+click - Alert Center, Industry, Master AVWAP, and through them the Strength
+Board and the group tape - so this is one change for all of them. It sets only
+the OPENING size; a trader resize afterwards is still kept, because the dialog
+is created once per owner panel and reused.
+
+Tests: `tests/test_snapshot_popup_height.py` (6) - the tenth at each end, equal
+gaps across four anchor sizes, the constant, the floor winning on a short
+screen, the floor not pushing the popup off-screen, and the dialog actually
+routing through the shared helper. Fail-before-fix: 6/6. Full suite **5198
+passed, 19 subtests, exit 0**.
+
 ### 2026-08-27 - The desk's 8-13 GB memory jumps: three causes, all fixed
 
 **IMPLEMENTED / GREEN. One live gate owed.** plan.md Phase 0.9 item 6, built to
