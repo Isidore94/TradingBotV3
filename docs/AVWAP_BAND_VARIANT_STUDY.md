@@ -44,8 +44,9 @@ band that is wide on bar 1 must therefore be doing one of three things:
 The ≈1.5× width at bar 13 is the second constraint: (2) and (3) can explain the
 start but not a persistent 50% excess on a 13-bar trending tape, while (1) can
 explain both, because within-bar dispersion adds to between-bar dispersion on
-every bar, not just the first. So the leading theory is (1); the protocol below
-is built to *kill* candidates, not to confirm the favourite.
+every bar, not just the first. So the leading theory was (1); the protocol below
+is built to *kill* candidates, not to confirm the favourite — and §2b records
+the first kill round, run the same evening on the trader's OKTA reading.
 
 One more observation to verify with hover values rather than eyes: on the second
 screenshot the lower cyan line ends near 229–230, which is ~11 below the VWAP
@@ -80,6 +81,75 @@ runs roughly 233–252), C2a gives σ₁ ≈ 5.5, C2b ≈ 9.5, C3 somewhere betw
 depending on how the day traded. The screenshot's first-bar half-width looks like
 4–6, which favours C2a or C3 — but that is a reading of pixels, and the whole
 point of §3 is to replace it with numbers.
+
+## 2b. First data point (OKTA, anchor 2026-05-29) — what it killed, what survives, what to hover next
+
+The trader named the program (**OneOption / Option Stalker Pro**) and gave one
+hover on OKTA at the anchor bar, 2026-05-29: AVWAPE **118.19**, +1σ **128.47**,
+−1σ **107.90**. The vendor's release notes call these "true Standard Deviation"
+bands (Aug 2024; "AVWAP(E,Q) Standard Deviation (SD) Line" dialogues, Feb 2024)
+and publish no formula, so R0 does not short-circuit anything. Note the
+vocabulary: OneOption's "AVWAP E / Q" (earnings / quarter) is where the
+codebase's `AVWAPE` name comes from.
+
+Read against the durable D1 store (`daily_bars/OKTA.parquet`, 2026-05-29:
+O 107.535, H 124.790, L 106.501, C 123.270, V 17.58 M) — a scratch calculation,
+no repository code:
+
+- **Typical price is HLC/3, confirmed to the cent.** (124.79 + 106.50 + 123.27)/3
+  = **118.187**; OHLC/4 would be 115.52. The trader's suspicion was right.
+- **The anchor is that single bar.** A VWAP that equals one bar's hlc3 to the
+  cent cannot contain an earlier bar (the pre-gap bar's hlc3 is 93.8), so C5
+  (anchor offset) is **dead**, and so is intraday data for the centre line: an
+  intraday VWAP landing within ±0.005 of the daily hlc3 by chance is ~1 in 1000.
+- **The bands are symmetric** (10.28 above, 10.29 below): C7 is dead.
+- **σ on a one-bar anchor is 10.28**, so C0 and C1 (0 on one bar) are dead as
+  the *whole* answer, and the simple range forms are dead too: (H−L)/2 = 9.15,
+  (H−L)/√12 = 5.28, rms of H and L around hlc3 = 9.49, rms of H/L/C = 8.29,
+  1× or 2× ATR14 = 5.4 / 10.8. So is any percentage: nothing about 8.7% is natural.
+
+Two candidates survive the anchor bar, and they diverge sharply afterwards:
+
+| Candidate | σ at 2026-05-29 | How it works |
+|---|---|---|
+| **S1 — sample stdev of every O, H, L, C print since the anchor, around the running AVWAP** (n − 1 denominator; volume-weighted or not, identical on one bar) | **10.32** (0.4% off; an 11-cent difference in OneOption's *open* print vs IB's — the one price hlc3 does not check — closes the gap exactly) | a real anchored deviation: four prints per bar, so bar 1 already has dispersion, and later bars shrink or grow it with the tape |
+| **S2 — 20-bar population stdev of closes** (a Bollinger σ centred on the AVWAP) | **10.284** (0.04% off) | no memory of the anchor at all; the width is the last twenty closes' volatility, which the gap had just blown up |
+
+S2's exactness must be discounted: it was one of ~250 closed forms tried against a
+single number, and at that count a 0.05% coincidence has roughly a one-in-four
+chance. On the OneOption screenshot itself the bands at the last bar (2026-08-26,
+close 134.42) read about 146 / 118 against a centre near 132 — S1 predicts
+145.1 / 118.7 and S2 predicts 139.0 / 124.8 — so the pixels already favour S1, but
+pixels are what §3 exists to replace. **Three more hovers on OKTA decide it:**
+
+| Hover date | AVWAP (both) | S1 sample-OHLC (unweighted / vol-weighted) | S2 Bollinger-20 |
+|---|---|---|---|
+| 2026-06-01 | 124.85 | 137.91 / 111.80 · 138.04 / 111.67 | 140.18 / 109.53 |
+| 2026-06-02 | 126.78 | 138.09 / 115.47 · 139.14 / 114.42 | 144.82 / 108.74 |
+| 2026-06-03 | 126.84 | 136.79 / 116.90 · 138.26 / 115.42 | 145.88 / 107.80 |
+| 2026-08-26 | 131.91 | 145.09 / 118.72 · 144.92 / 118.89 | 139.01 / 124.80 |
+
+If the 06-02 upper reads ≈138 it is S1 (and the unweighted/weighted split is the
+06-03 lower: 116.9 vs 115.4); if it reads ≈145 it is S2; anything else means
+both are dead and R3 widens the set (an EWMA of deviations is the next natural
+shape, since S1's σ *falls* from 13.1 on 06-01 to 9.9 on 06-03 while the
+tape consolidates). Either way the AVWAP column should match every time — if it
+does not, the volume inputs differ and R2's data check comes first.
+
+**Data hazard found on the way, for R2:** the store's OKTA volumes are
+mixed-unit — thousands before 2026-05-27 and again on 2026-06-04, shares
+otherwise (`volume_unit = unknown` on every row). The table above normalised
+them with a scratch rule; the real fit must go through the champion's own
+normalisation (the `mixed_unit_avwap_v1` fixture exists for exactly this), not a
+threshold.
+
+What this does to the rest of the plan: §2's C2/C3 rows are superseded by S1/S2;
+R1's hover list is now specific (the four dates above, on OKTA, then the same
+five-bar pattern on two more names); R4's module implements whichever of S1/S2
+survives, with the other pinned as the discriminator fixture. §4 is unchanged —
+except that if S2 wins, the "variant" is not an anchored deviation at all but a
+volatility band on an anchored centre, and T1's bars-since-anchor buckets become
+the most interesting cut, because S2's width never fans out from the anchor.
 
 ## 3. Replication protocol
 
@@ -289,10 +359,11 @@ Expected files (Phase A first; nothing exists yet):
 
 ## 6. Open questions for the trader (Phase A cannot start without 1–3)
 
-1. **Which program** is the second chart from?
+1. ~~Which program~~ — answered: OneOption / Option Stalker Pro.
 2. **Which symbols and anchor dates** for the sample (§3 R1), and the rule you
    use to pick the anchor bar — the earnings *reaction* bar, or the report date?
-3. **Hover readings** at the five bars per symbol, from both programs.
+3. **Hover readings** — first the four OKTA dates in §2b's table, then five bars per
+   symbol on two more names, from both programs.
 4. Is your TradingView `AVWAPE` script exactly the codebase formula (ohlc4 typical
    price, deviation from the running AVWAP, volume-weighted)? R2 will check, but
    knowing the script's source avoids a false alarm.
