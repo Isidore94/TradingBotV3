@@ -301,7 +301,7 @@ Expected files (Phase A first; nothing exists yet):
 
 ## 7. Authority and placement
 
-- Not in `plan.md`. If promoted, the natural home is a new Phase 0.9 packet
+- Not in `plan.md`. If promoted, the natural home is the next free Phase 0.x packet (0.9 is now the GUI follow-ons)
   ("AVWAP band challenger") ahead of Phase 1, because it is a bounded study with
   a frozen metric, not a product feature; its promotion step belongs with Phase
   6's P6.2 setup-family ladder.
