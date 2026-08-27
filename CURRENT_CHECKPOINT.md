@@ -8,6 +8,65 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 (10:00) - INVESTIGATION ONLY, nothing changed: why the desk jumps to 10 GB
+
+Trader: "there are times the program jumps to 10gb of RAM usage. investigate to
+see why." Measured live on the desk (pid 33336, launched 08:10): **10.7 GB
+working set / 12.8 GB private at 09:25:55, 2.5 GB at 09:29:03.** A fresh desk
+(pid 2296, 09:39) stayed at **0.9-1.25 GB through a whole BounceBot preamble**
+including all four RRS passes, so the scan loop is NOT the holder.
+
+**Cause 1 (the jump, every swing-scan slot): the research-warehouse post-scan
+build runs INSIDE the desk process** (`ScanService.start_warehouse_build` ->
+`research_warehouse.cli.run_build` on a thread) and three of its steps
+materialise the WHOLE current-month `bar_m5` partition as Python dicts:
+`aggregate.build_derived_bars` (`store.read_table("bar_m5", partition).to_pylist()`,
+aggregate.py:277), `features.build_intraday_snapshots` (features.py:809, plus
+`bar_derived` at :817) and `cli._run_outcomes` (cli.py:328) - each then filters
+to ONE session in Python. Measured on the lake: `month=2026-08` = **8,175,471
+rows / 384 MB parquet / 151 files**, and `to_pylist()` costs **1,627 B/row ->
+13.3 GB** if fully held. The lake manifest (UTC) puts the 09:00 slot's build at
+16:14:43-16:28:43 = **09:14:43-09:28:43 PT**, `bar_derived` 09:16-09:21 and
+`feature_snapshot_intraday` 09:22-09:28:43 - exactly the window of the 10.7 GB
+sample and the 09:29 release. The first session's 8.3 GB at 08:07 sits inside
+the 07:43 slot's build (15:05-15:07 UTC + later steps). It grows through the
+month (the partition is month-keyed), which is why 08-21 saw 8 GB and today 10.7.
+
+**Cause 2 (once per tracker rewrite): `run_bronze_ingest` snapshot-ingests
+`master_avwap_setup_tracker.json` (1.03 GB)** in the desk: `read_bytes()` +
+`decode` + `json.loads` of the whole file (ingest_existing.py:365-416) - several
+GB more, on the days the 07:xx scan rewrites the tracker (`bronze_setup_tracker`
+at 15:06:16 UTC today; skipped by sha at 09:15 because the 09:00 run did not
+touch it).
+
+**Cause 3 (slow leak, all day): `BounceBot.data[reqId]` is never freed** on the
+non-RRS request paths - `request_and_detect_bounce` (legacy.py:12465-12499),
+`build_atr_cache` (11425) and the dynamic-VWAP checks (13701/13733/13767)
+`del` only `data_ready_events[reqId]`; `request_historical_bars` pops both.
+Measured 206 KB per 390-bar request -> ~80 MB per scan cycle (~400 calls) ->
+1.5-2 GB over a session. This is the 2.5 GB floor after the build released.
+
+Not the cause, checked and cleared: the GC controller (full sweeps every ~60 s,
+0.2-2.1 s each all morning), `latest_bars` (~110 KB/symbol), chart items (pooled),
+ChartDataService caches (bounded 60/160/500), the RRS O(n^2) profile (CPU only;
+the 15m pass took 14 min at 09:15-09:29 because it ran under the build's memory
+pressure, 2 min otherwise), the Setup Tracker CSVs (< 6 MB), the review queue.
+
+Also seen, not memory: `_poll_focus_d1_interest` -> `FocusSideEditor.refresh`
+stalled the GUI 12-70 s repeatedly 09:17-09:25 (392 s total at
+focus_picks_panel.py:441 today), and the RS-window `_auto_tick` read 1,412
+daily parquet files on the GUI thread (92 s at 09:25:52) after the scan
+rewrote them.
+
+Nothing was changed. Fix direction (needs the trader's go; `legacy.py` is
+ask-first): (a) run `run_build` in a child process like the scan, or have the
+three readers filter `bar_m5` by `session_id`/`interval_start` in Arrow
+(`open_dataset(...).to_table(filter=...)`) before `to_pylist`; (b) stream or
+skip the 1 GB tracker snapshot; (c) pop `self.data[reqId]` on every request
+path. Diagnostic traces from this session live only in the session scratchpad.
+
+---
+
 ## 2026-08-27 (morning) - four trader rules BUILT: regime-pause auto-Focus (`479c25c`), the VWAP-side / show-time review filter (`76e0b7b`), the D1 SMA trend leg + snapshot Prev/Next (`f3abda7`), the M5 alert bar; queue scan done
 
 **Branch `claude/gui-phase-0-9`** (this session, on top of `fd76923`). Trader,
@@ -109,6 +168,24 @@ pastes into TC2000, a click charts and clears its line, the waiting count is
 D1-only. **Desk
 restart needed** to pick up rules 3 and 4 (the desk relaunched at 08:10 runs
 `76e0b7b`).
+
+### Group RS/RW tape - REMOVED by trader decision (10:05), rebuild parked
+
+Investigated: right maths, late read (refreshes only when a scan cycle's RRS
+pass finishes - 10-30 min apart today; one 60-min window with the overnight
+gap in the first hour; ETF proxies). Trader: "just remove it for now and put
+this build plan in the .md files for the future." `group_tape.setVisible(False)`
+on the desk, widget/tests/wiring kept; the full rebuild plan is in plan.md
+Phase 0.5 item 11 and AUTHORIZED for an Opus session via
+`docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md` (trader, 10:15). One test
+added. **Needs a desk
+restart to take effect.** Also noted there: today's 27-minute scan cycle
+(`rrs_scan` 1084 s over 302 symbols) is a separate, unaddressed finding.
+
+| Measure | Value |
+|---|---|
+| Full suite | **5116 passed / 19 subtests, exit 0** (307 s) |
+| `scripts/smoke_check.py` | 7/7 |
 
 ### Restart observation, 08:07-08:10 (trader asked for a safe restart to drop 112 waiting charts)
 

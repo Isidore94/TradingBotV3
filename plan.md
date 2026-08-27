@@ -863,6 +863,59 @@ are listed in `CURRENT_CHECKPOINT.md`.
    expiry does not reach the bar (rows carry their time; the queue rule was
    "queue only"); and whether the bar should fold repeats per symbol.
 
+   **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision);
+   rebuild AUTHORIZED for an Opus build session the same day ("make me a
+   prompt to get Opus to do it") - `docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md`
+   is the spec and its hard rules bind the builder.** The trader:
+   "often times the sectors and industry RS/RW thing at the top is totally
+   wrong and doesn't reflect what is actually strong over the last 30-60-90
+   minutes." Investigated the same morning; the maths is right, the timing
+   is not:
+   - It refreshes only when a scan cycle's RRS pass finishes
+     (`compute_group_strengths` inside `run_rrs_scan`): 06:36, 06:46, 06:56,
+     07:06, 07:18, 07:33, 07:53, 08:15, 08:33, 08:55, 09:15, 09:46 that day -
+     10-30 min apart (cycle 4's preamble took 1609 s, `rrs_scan` 1084 s) -
+     and is frozen in between. From 09:15 to 09:46 it said XLE +2.9 / XLP
+     +1.7 led; at 09:46 it flipped to XLP -7.9 / XLB -6.4. Thirty-one minutes
+     late.
+   - Its one intraday number is `real_relative_strength` over
+     `RRS_LENGTH = 12` M5 bars (60 min) on `5 D` bars, so for the first hour
+     the window straddles the overnight gap: 06:36 read XLK +10.5 / XLC
+     -18.6 - the gap, not the morning. There is no 30 or 90.
+   - "Industry" is an ETF proxy: 136 industries map to 49 ETFs
+     (`C:\TradingBotData\data\industry_etf_map.json`); sectors are the 11
+     SPDRs.
+   - Checked independently against fresh Yahoo 5-min bars at 09:55: same
+     ranking for the same 60-minute window. Late and coarse, not wrong.
+
+   **The rebuild** (presentation + one small service; no
+   BounceBot / `legacy.py` change, zero IB traffic):
+   1. `ui/services/group_tape_service.py` - single-flight owner of one
+      QTimer (5 min, quiet-hours gated like the Strength Board), one batched
+      `yfinance` `period=1d, interval=5m` download for SPY + the 11 sector
+      ETFs + the 49 industry ETFs (61 symbols, one request), last-good on
+      failure, runs on a worker and publishes a payload; the Strength
+      Board's zero-IB pattern.
+   2. Today's session bars only (no gap); `real_relative_strength` (the
+      existing formula, ATR-normalized) over 6 / 12 / 18 completed bars =
+      30 / 60 / 90 min; UNKNOWN until enough bars (never "as many as we
+      have"); completed bars only.
+   3. `GroupTapeStrip` sparkline reads `30 | 60 | 90` instead of
+      `D1 | H1 | M5`; chips ranked by the 30-min read; the rotation callout
+      becomes "up on 30, still down on 90" and its mirror. The widget, its
+      tests and the desk mount point (`tape_host`, hidden `group_tape`) are
+      all still in place.
+   4. The RS Window tab keeps the existing scan-cycle payload (a different
+      question - who led over the selected window at scan time).
+   5. Optional, later: industry = median member return over the same bars
+      (the `industry_intraday_rs_snapshot` contract) instead of the ETF
+      proxy - but that needs member bars, which is an IB-budget question.
+   **Tests it would need:** the service never runs on the Qt thread, one
+   request per tick, last-good on a failed download, the 30/60/90 maths on
+   fixtures, gap exclusion, the strip's relabel. **Separate finding, also
+   parked:** the 27-minute scan cycle that day (302 symbols through IB in
+   `rrs_scan`) - a cycle-time question, not a tape question.
+
 12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).** "I want this
    program to be very fluid to use." Measured first: 1843 stalls over 50 ms and
    1008 s blocked in 3h20m, plus the two GC freezes. The trader's own hypothesis

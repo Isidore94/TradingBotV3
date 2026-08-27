@@ -144,6 +144,16 @@ class TradingDeskPanel(QWidget):
         self.group_tape.symbolActivated.connect(self.alert_center.chart_symbol)
         self.bounce_panel.service.rrsSnapshotChanged.connect(self.group_tape.update_groups)
         tape_layout.addWidget(self.group_tape, 1)
+        # REMOVED from the desk by trader decision 2026-08-27 ("just remove it
+        # for now"): the read is right but LATE - it refreshes only when a
+        # scan cycle's RRS pass finishes (10-30 min apart that day, frozen in
+        # between), its one "M5" number is a 60-minute window that carries
+        # the overnight gap for the first hour, and "industry" is an ETF
+        # proxy. Hidden rather than deleted: the widget, its tests and this
+        # wiring stay so the rebuild in plan.md (a 5-minute Yahoo-batched
+        # 30|60|90 tape off today's bars, zero IB) drops back into the same
+        # mount point. Nothing upstream changed - the payload still flows.
+        self.group_tape.setVisible(False)
         # The setups column opens hidden, so the way back has to live somewhere
         # that is always on screen and independent of it. The tape row is the
         # only full-width strip that survives a workspace<->tabs switch.

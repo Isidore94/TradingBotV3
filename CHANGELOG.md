@@ -3,7 +3,8 @@
 Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the four trader
 rules of that morning (regime-pause auto-Focus `479c25c`, the VWAP-side /
 show-time review filter `76e0b7b`, the D1 SMA trend leg + snapshot Prev/Next
-`f3abda7`, then the M5 alert bar) after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
+`f3abda7`, the M5 alert bar `41963de`/`39c3ef7`, then the group tape removed)
+after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
 surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
 checkout on 2026-08-26; see `CURRENT_CHECKPOINT.md`).
@@ -23,6 +24,31 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - Group RS/RW tape removed from the desk (trader decision); rebuild plan parked in plan.md
+
+**IMPLEMENTED / GREEN (a hide).** "Often times the sectors and industry RS/RW
+thing at the top is totally wrong and doesn't reflect what is actually strong
+over the last 30-60-90 minutes." Investigated: the formula
+(`real_relative_strength`, ATR-normalized) is right - an independent Yahoo
+recompute at 09:55 ranked the same window the same way - but the tape refreshes
+only when a scan cycle's RRS pass finishes (10-30 min apart that day, frozen in
+between, once 31 minutes late on a flip), its one intraday number is a
+60-minute window that carries the overnight gap for the first hour, and
+"industry" is one of 49 ETF proxies for 136 industries. Trader: "just remove
+it for now and put this build plan in the .md files for the future."
+
+- `TradingDeskPanel`: `group_tape.setVisible(False)`. Hidden, not deleted -
+  the widget, `tests/test_qt_group_tape.py`, the `rrsSnapshotChanged` wiring
+  and the `tape_host` mount point all stay, so the rebuild drops into place.
+  Nothing upstream changed; the RS Window tab still reads the scan payload.
+- The rebuild (a 5-minute Yahoo-batched 30|60|90 tape off today's bars, zero
+  IB, no `legacy.py` change) is written out under plan.md Phase 0.5 item 11
+  and, later the same morning, authorized for an Opus build session:
+  `docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md` (packets T-1..T-4, hard
+  rules: zero IB, no `legacy.py`, completed today-only bars, UNKNOWN never
+  invented, parity test against `real_relative_strength`).
+- Test added: the tape is hidden on the desk and still wired.
 
 ### 2026-08-27 - Intraday alerts are a list beside the chart, not a queue in front of it (trader rule 4: the M5 alert bar)
 

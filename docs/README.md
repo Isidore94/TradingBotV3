@@ -1,4 +1,4 @@
-# TradingBotV3 documentation index
+﻿# TradingBotV3 documentation index
 
 Last reconciled: **2026-08-26**
 
@@ -28,6 +28,7 @@ These describe actions an operator may perform now.
 | File | Use |
 |---|---|
 | [`prompts/GUI_PHASE_0_9_OPUS_PROMPT.md`](prompts/GUI_PHASE_0_9_OPUS_PROMPT.md) | Paste-ready Opus build prompt for `plan.md` Phase 0.9 (G-P2.0 table width rule through one shell, G-P2.1 AWAY Recap return surface, G-P2.2 Desk Journal route with the fenced-file ask, G-P2.3 fluidity slice in measured order with two soak stops, G-P2.4 GC measurement only). Waves U1–U3/S1/P2 stay unauthorized; run after the AVWAP challenger session in the same checkout |
+| [`prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md`](prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md) | Paste-ready Opus build prompt for the group RS/RW tape rebuild (plan.md Phase 0.5 item 11): a pure `group_rrs` module with a parity test against `legacy.real_relative_strength`, a 5-minute Yahoo-batched zero-IB service in the Strength Board's shape, a 30/60/90 strip face, hidden -> shown. Forbids `legacy.py`, IB and RS Window changes |
 | [`prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`](prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md) | Paste-ready Opus build prompt for Phase 0.10 packets B-0..B-3 (module + fixture, fit script, tracker shadow stops + stats + panel section, D1 overlay), with the pre-authorized `legacy.py`/`runner.py` edits enumerated |
 | [`AWAY_SCANNER_RUNBOOK.md`](AWAY_SCANNER_RUNBOOK.md) | Single-main Auto/Away operation and report recovery |
 | [`EVENING_MODE_RUNBOOK.md`](EVENING_MODE_RUNBOOK.md) | Sleep-in EVENING mode and ntfy setup |
@@ -76,6 +77,7 @@ superseded by `plan.md`.
 
 | File | Historical value |
 |---|---|
+| [`analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md`](analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md) | Paste-ready builder prompt for the desk's 8-13 GB memory jumps (investigation in the 2026-08-27 (10:00) checkpoint entry): session-scoped Arrow reads for the three warehouse readers that `to_pylist()` the whole month of `bar_m5` inside the desk, a chunked-sha / no-parse path for the 1 GB tracker snapshot ingest, and the trader-authorised `legacy.py` fix that frees `self.data[reqId]` on every IB request path. Fail-before-fix tests, equivalence proof, measured before/after, one live gate owed. **Authorises exactly that packet; the subprocess move and the GUI-stall items stay out of scope** |
 | [`analysis/SOL_ATTACK_2026-08-24.md`](analysis/SOL_ATTACK_2026-08-24.md) | Frozen adversarial reproduction pass over the 2026-08-24 build slate: exact commands, seven proven blocker classes, three surgical repairs, four report-only blockers, refuted attack claims, and the post-close AWAY/outcome-sweep evidence. It promotes nothing and marks no live gate met. **Frozen and never edited — one reading in it is superseded:** its C5 "second production sweep missed its own clock" was taken at 14:21 and the sweep ran at 14:27:36 (656/656, 0 failed). The correction is in `CHANGELOG.md`, `plan.md` R10.A and the 2026-08-25 evening (4) checkpoint entry |
 | [`CHECKPOINT_REVIEW_2026-08-08.md`](CHECKPOINT_REVIEW_2026-08-08.md) | Review and merge rulings for durability/local-AI branches |
 | [`HANDOFF_A4_PACKAGING_2026-08-09.md`](HANDOFF_A4_PACKAGING_2026-08-09.md) | A4/A5 and packaging handoff/desk verification record |

@@ -150,3 +150,21 @@ def test_the_tape_is_wired_to_the_existing_rrs_payload_on_the_desk():
         "XBI",
     }
     desk.close()
+
+
+def test_the_tape_is_hidden_on_the_desk_but_still_wired():
+    """Trader decision 2026-08-27: "just remove it for now." Hidden, not
+    deleted - the payload still flows into it, so the rebuild planned in
+    plan.md lands on a live mount point."""
+    from ui.panels.trading_desk import TradingDeskPanel
+    from ui.widgets.group_tape_strip import GroupChip
+
+    desk = TradingDeskPanel(workspace_mode="workspace")
+    try:
+        desk.show()
+        assert not desk.group_tape.isVisibleTo(desk)
+        desk.bounce_panel.service.rrsSnapshotChanged.emit({"group_strength": _groups()})
+        assert desk.group_tape.findChildren(GroupChip), "still wired"
+        assert not desk.group_tape.isVisibleTo(desk)
+    finally:
+        desk.close()
