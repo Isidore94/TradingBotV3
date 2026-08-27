@@ -873,10 +873,14 @@ are listed in `CURRENT_CHECKPOINT.md`.
    expiry does not reach the bar (rows carry their time; the queue rule was
    "queue only"); and whether the bar should fold repeats per symbol.
 
-   **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision);
-   rebuild AUTHORIZED for an Opus build session the same day ("make me a
-   prompt to get Opus to do it") - `docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md`
-   is the spec and its hard rules bind the builder.** The trader:
+   **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision),
+   then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`,
+   one live gate owed.** The rebuild was authorized as an Opus build session
+   ("make me a prompt to get Opus to do it") and built to
+   `docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md` packets T-1..T-4; that
+   prompt's hard rules bound the build and all ten held (zero IB, no
+   `legacy.py` change, completed today-only bars, UNKNOWN never invented, the
+   RS Window tab untouched, fail-before-fix per file). The trader:
    "often times the sectors and industry RS/RW thing at the top is totally
    wrong and doesn't reflect what is actually strong over the last 30-60-90
    minutes." Investigated the same morning; the maths is right, the timing
@@ -898,33 +902,51 @@ are listed in `CURRENT_CHECKPOINT.md`.
    - Checked independently against fresh Yahoo 5-min bars at 09:55: same
      ranking for the same 60-minute window. Late and coarse, not wrong.
 
-   **The rebuild** (presentation + one small service; no
-   BounceBot / `legacy.py` change, zero IB traffic):
-   1. `ui/services/group_tape_service.py` - single-flight owner of one
-      QTimer (5 min, quiet-hours gated like the Strength Board), one batched
-      `yfinance` `period=1d, interval=5m` download for SPY + the 11 sector
-      ETFs + the 49 industry ETFs (61 symbols, one request), last-good on
-      failure, runs on a worker and publishes a payload; the Strength
-      Board's zero-IB pattern.
-   2. Today's session bars only (no gap); `real_relative_strength` (the
-      existing formula, ATR-normalized) over 6 / 12 / 18 completed bars =
-      30 / 60 / 90 min; UNKNOWN until enough bars (never "as many as we
-      have"); completed bars only.
-   3. `GroupTapeStrip` sparkline reads `30 | 60 | 90` instead of
-      `D1 | H1 | M5`; chips ranked by the 30-min read; the rotation callout
-      becomes "up on 30, still down on 90" and its mirror. The widget, its
-      tests and the desk mount point (`tape_host`, hidden `group_tape`) are
-      all still in place.
-   4. The RS Window tab keeps the existing scan-cycle payload (a different
-      question - who led over the selected window at scan time).
-   5. Optional, later: industry = median member return over the same bars
-      (the `industry_intraday_rs_snapshot` contract) instead of the ETF
-      proxy - but that needs member bars, which is an IB-budget question.
-   **Tests it would need:** the service never runs on the Qt thread, one
-   request per tick, last-good on a failed download, the 30/60/90 maths on
-   fixtures, gap exclusion, the strip's relabel. **Separate finding, also
-   parked:** the 27-minute scan cycle that day (302 symbols through IB in
+   **The rebuild - BUILT** (`c4fa8c3` T-1/T-2, `3dbff23` T-3; presentation +
+   one small service; no BounceBot / `legacy.py` change, zero IB traffic):
+   1. `scripts/group_rrs.py` (T-1, pure) - the formula lifted out UNCHANGED
+      and proven so: a parity test feeds identical bars to it and to
+      `legacy.real_relative_strength` and asserts equality to 1e-9, for all
+      three lengths and for dict-shaped and `IbBar`-shaped bars. Session
+      filter = `completed_bars.completed_m5_bars` AND a same-date filter (the
+      gap); `align_bars` intersects on normalized stamps; `rrs_windows` runs
+      6/12/18 bars off ONE filtered+aligned series. `SECTOR_ETFS` is a COPY of
+      legacy's map, drift-tested, so the tape survives BounceBot being off.
+   2. `ui/services/group_tape_service.py` (T-2) - single-flight owner of one
+      QTimer (5 min, quiet-hours gated like the Strength Board, `refresh_now`
+      never gated), ONE batched `yfinance` `period=1d, interval=5m` download
+      for SPY + the 11 sector ETFs + the 49 industry ETFs (deduped to ~53
+      symbols) and NO retry inside the tick, last-good on failure with the
+      failure in `status_text`, runs on a worker and publishes a payload;
+      bounded `shutdown`. A missing industry map = sectors only, said out
+      loud; no completed SPY bars today = said out loud, not an empty strip.
+   3. `GroupTapeStrip` (T-3) - sparkline reads `90 | 60 | 30`, chips ranked by
+      the 30-min read, an unmeasured window BLANK (never 0.0), the callout
+      "up on 30 while still down on 90" plus the as-of and the status. Chips
+      now DIFF instead of being rebuilt and the variants moved to `theme.qss`
+      on a `side` dynamic property - the old path was 34 CSS parses plus 34
+      widget constructions per payload on the GUI thread.
+   4. The desk shows the tape again, feeds it from the service, and shuts the
+      service down; the RS Window tab and `focus_picks_panel` keep the
+      scan-cycle payload (a different question - who led over the selected
+      window at scan time), pinned by a test.
+   5. Optional, later, and explicitly NOT built: industry = median member
+      return over the same bars (the `industry_intraday_rs_snapshot`
+      contract) instead of the ETF proxy - that needs member bars, which is an
+      IB-budget question.
+   **Live gate owed (one DESK session):** the tape moves every five minutes
+   (not 10-30); the 06:30-07:00 read carries no overnight gap and windows that
+   cannot answer yet are blank rather than zero; a stale or failed read says so
+   on the callout line; a chip click still charts the ETF. **Separate finding,
+   still parked:** the 27-minute scan cycle that day (302 symbols through IB in
    `rrs_scan`) - a cycle-time question, not a tape question.
+
+   **Found while building, fixed, not caused by it:**
+   `test_review_watch_buttons_arm_trigger_and_flag_red` was a clock bomb - its
+   fixture's last bar starts at 11:25, so the 2026-08-27 VWAP-side leg read
+   UNKNOWN (and showed the chart) before 11:30 local and correctly HID it
+   after. The test now switches the show-time filter off, as five sibling
+   files already do; the production rule is unchanged and right.
 
 12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).** "I want this
    program to be very fluid to use." Measured first: 1843 stalls over 50 ms and

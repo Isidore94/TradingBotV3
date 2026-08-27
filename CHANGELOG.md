@@ -4,7 +4,7 @@ Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the four trader
 rules of that morning (regime-pause auto-Focus `479c25c`, the VWAP-side /
 show-time review filter `76e0b7b`, the D1 SMA trend leg + snapshot Prev/Next
 `f3abda7`, the M5 alert bar `41963de`/`39c3ef7` and its click-away skip, then
-the group tape removed)
+the group tape removed and REBUILT on `claude/group-tape-rebuild`)
 after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
 surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
@@ -25,6 +25,100 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - Group RS/RW tape rebuilt: its own five-minute clock, 90 | 60 | 30 minutes, today's bars only
+
+**IMPLEMENTED / GREEN. Live gate owed** (one DESK session). plan.md Phase 0.5
+item 11, built through `docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md`
+(packets T-1..T-4), which the trader authorized the same morning after deciding
+to hide the old tape rather than delete it.
+
+The complaint was "often times the sectors and industry RS/RW thing at the top
+is totally wrong and doesn't reflect what is actually strong over the last
+30-60-90 minutes". The investigation found the maths RIGHT and the clock wrong,
+so the formula is lifted out unchanged and given a new clock, a new source and
+three windows.
+
+- `scripts/group_rrs.py` (pure: bars in, floats out, no I/O, no Qt, `now`
+  always passed in). `wilder_atr_last` + `real_relative_strength` reproduce
+  `legacy`'s, including the two details a re-derivation gets wrong - the ATR
+  seeds on the first `length` true ranges and smooths over ALL the rest, so it
+  depends on the whole series and not its tail, and a non-positive ATR is
+  `None` rather than 0, which is what stops the division producing an infinity.
+  `session_bars` = `completed_bars.completed_m5_bars` AND a same-date filter,
+  which is what stops a window reaching over the overnight gap; `align_bars`
+  intersects the two series on normalized stamps, so an ETF that halted for a
+  bar cannot have its move measured over a longer span than SPY's and read as
+  strength, and an ET-stamped ETF still meets a UTC-stamped SPY. `rrs_windows`
+  = 6/12/18 bars = 30/60/90 minutes off ONE filtered+aligned series, so the
+  three numbers are guaranteed to describe the same bars. A window without
+  `length + 2` bars is `None`. `SECTOR_ETFS` is a COPY of `legacy`'s map, not
+  an import - the tape must survive BounceBot being off and must not drag a
+  14k-line detector module onto a worker thread - and a drift test pins the
+  copy.
+- `scripts/ui/services/group_tape_service.py`, the Strength Board's shape: one
+  `QTimer`, single-flight worker, last-good on failure, `status_text`, bounded
+  `shutdown`. **ONE batched `yfinance` download per tick** (SPY + the 11 SPDRs
+  + the 49 industry proxies, deduped to ~53 symbols), `period=1d interval=5m`,
+  **no retry inside the tick** - Yahoo rate-limits bursts, and the next tick is
+  the retry. **Zero IB traffic and no `legacy.py` change**, so the locked
+  pacing budget is untouched. Quiet-hours gated on `auto_scanning_due`,
+  fail-open; `refresh_now` never gated. A missing or unreadable industry map
+  means SECTORS ONLY, said in the status line - two thirds of the chips
+  disappearing silently would read as "nothing is moving". No completed SPY
+  bars for today is said out loud rather than rendered as an empty strip.
+- `GroupTapeStrip`: `SPARK_TIMEFRAMES = ("90", "60", "30")`, ranked by the 30.
+  An unmeasured window draws NOTHING - a zero-height bar on the zero line is
+  indistinguishable from "exactly in line with SPY", which is a claim - and the
+  tooltip names which windows are still filling. `rotation_callout` is now "up
+  on 30 while still down on 90" and its mirror, and the callout line carries
+  the payload's as-of plus the service's `status_text`, so a stale or failed
+  read is visible rather than silent. **Chips diff**, keyed by ETF: reused,
+  re-labelled and re-ordered instead of destroyed and re-created, and the
+  variants moved from a per-chip f-string `setStyleSheet` into `theme.qss`
+  keyed on a `side` dynamic property with six pre-mixed rgba tokens in
+  `theme._derived_tokens`. The old path was 34 CSS parses plus 34 widget
+  constructions every payload, on the GUI thread - the exact shape the
+  2026-08-21 fluidity pass measured. `GroupChip` sets `WA_StyledBackground`,
+  which a widget carrying its own stylesheet got for free.
+- `TradingDeskPanel`: the tape is VISIBLE again and fed by
+  `tapeChanged`/`statusChanged`; the `rrsSnapshotChanged -> update_groups`
+  wiring is gone. **The RS Window tab and `focus_picks_panel` still receive
+  `rrsSnapshotChanged` unchanged** - it answers a different question (who led
+  over the selected window at scan time) - and a test pins that both wirings
+  coexist. The service is shut down in the desk's shutdown list, and that list
+  now resolves it the way it already resolved `price_alert_service`: naming it
+  inline made a missing attribute raise while the component list was being
+  BUILT, before the fan-out loop ran, so a desk whose `__init__` died partway
+  would have released nothing instead of one thing.
+
+**Deliberately NOT built** (from the prompt's own "not in this prompt"):
+industry = median member return instead of the ETF proxy (needs member bars -
+an IB-budget question), any change to the 27-minute scan cycle, and anything in
+`legacy.py`.
+
+**No packaging trigger**: `scripts/group_rrs.py` and the new service are
+ordinary static imports on a chain reachable from `launch_gui.py`, so
+PyInstaller collects them by dependency analysis - no new dependency, asset,
+top-level package or dynamic import. The spec-drift guard passes.
+
+Two failures were found on the way and fixed; **neither was caused by this
+work**. `test_review_watch_buttons_arm_trigger_and_flag_red` was a CLOCK BOMB:
+its fixture's last bar starts at 11:25, so before 11:30 local that bar was
+still forming, the 2026-08-27 VWAP-side leg read UNKNOWN and the chart showed -
+after 11:30 both bars complete, the fixture's long sits under its own session
+VWAP and the filter correctly hid it. It passed at 10:xx and failed at 11:36 on
+the same tree. The production behaviour is right; the test is about the watch
+buttons, so it now switches the show-time filter off the way five sibling files
+already do. `test_trading_desk_shutdown_continues_after_one_component_raises`
+needed the new component on its `SimpleNamespace` desk.
+
+Tests: `tests/test_group_rrs.py` 16, `tests/test_group_tape_service.py` 16,
+`tests/test_qt_group_tape.py` rewritten to 17, plus one new partial-desk
+shutdown test. Fail-before-fix shown per file: 16/16, 16/16, and 15/17 (the two
+survivors are the deliberate regression guards - the silent callout, and the RS
+Window tab still receiving `rrsSnapshotChanged`). Full suite **5161 passed, 19
+subtests, exit 0** (305 s); smoke 7/7.
 
 ### 2026-08-27 - Clicking away from an M5 chart is a skip, not a re-queue (trader rule 4, third pass)
 

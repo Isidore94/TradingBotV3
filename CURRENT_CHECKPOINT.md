@@ -8,6 +8,89 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 (afternoon) - Group RS/RW tape REBUILT (plan.md Phase 0.5 item 11, packets T-1..T-4); live gate owed
+
+**Branch `claude/group-tape-rebuild`**, cut from `claude/gui-phase-0-9` at
+`48c0ad4` as the build prompt requires (not rebased onto `main`). Commits
+`c4fa8c3` (T-1/T-2) and `3dbff23` (T-3). Built to
+`docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md`; **all ten of its hard rules
+held** - zero IB traffic, no `legacy.py` / `run_rrs_scan` / scan-cycle change,
+nothing expensive on the Qt thread, completed today-only bars through
+`completed_bars`, UNKNOWN never invented, one formula proven equal to legacy's,
+quiet-hours gated with the manual refresh exempt, the RS Window tab untouched,
+fail-before-fix shown per test file, and the tree never left broken.
+
+### What shipped
+
+- **T-1 `scripts/group_rrs.py`** (pure - bars in, floats out, no I/O, no Qt,
+  `now` always passed in). The formula lifted out UNCHANGED and proven so.
+  Session filter = `completed_m5_bars` **+ a same-date filter** (the gap);
+  `align_bars` intersects on normalized stamps; `rrs_windows` = 6/12/18 bars
+  off ONE filtered+aligned series; `< length + 2` bars is `None`.
+  `SECTOR_ETFS` is a drift-tested COPY of legacy's map.
+- **T-2 `scripts/ui/services/group_tape_service.py`** - Strength Board shape.
+  ONE batched `yfinance` `period=1d interval=5m` download per 5-minute tick
+  (SPY + 11 SPDRs + 49 industry proxies, deduped to ~53), **no retry inside
+  the tick**, last-good on failure with the failure in `status_text`, bounded
+  `shutdown`, `auto_scanning_due` gate with `refresh_now` exempt.
+- **T-3 `GroupTapeStrip` + the desk** - `90 | 60 | 30`, ranked by the 30,
+  unmeasured windows BLANK, the new rotation callout carrying the as-of and
+  the status, chips DIFFED keyed by ETF, variants moved from per-chip
+  `setStyleSheet` into `theme.qss` on a `side` property with six pre-mixed
+  rgba tokens. The tape is SHOWN again and fed by `tapeChanged`; the
+  `rrsSnapshotChanged -> update_groups` wiring is gone while the RS Window tab
+  and `focus_picks_panel` keep that signal (pinned by a test); the service is
+  in the desk's shutdown list, resolved via `getattr` so a partially-built desk
+  still releases everything else.
+
+### Verification
+
+`.venv\Scripts\python.exe -m pytest tests/ -q` -> **5161 passed, 19 subtests,
+exit 0** (305 s). `scripts/smoke_check.py` -> **7/7**. Baseline was 5119 at
+`48c0ad4`; +32 at `c4fa8c3` (5151), +10 at `3dbff23`.
+
+**Fail-before-fix, per file** (module/files moved aside, suite re-run, restored):
+- `tests/test_group_rrs.py` - **16/16 fail** without `scripts/group_rrs.py`.
+- `tests/test_group_tape_service.py` - **16/16 fail** without the service.
+- `tests/test_qt_group_tape.py` - **15/17 fail** with the four production files
+  stashed. The two that pass are deliberate regression guards: the callout
+  staying silent on an unsupported payload, and the RS Window tab still
+  receiving `rrsSnapshotChanged`.
+
+**No packaging trigger and no exe rebuild.** Both new modules are ordinary
+static imports on a chain reachable from `launch_gui.py`, so PyInstaller
+collects them by dependency analysis - no new dependency, asset, top-level
+package, dynamic import or `__file__` handling. The spec-drift guard passes in
+the suite above. The desk runs from source by trader decision 2026-08-26.
+
+### Two failures found on the way - NEITHER caused by this work
+
+1. `test_review_watch_buttons_arm_trigger_and_flag_red` is a **clock bomb**.
+   Its fixture's last bar starts at 11:25, so before 11:30 local that bar is
+   still forming, the 2026-08-27 VWAP-side leg reads UNKNOWN and the chart
+   shows; after 11:30 both bars complete, the fixture's LONG sits under its own
+   session VWAP (VWAP 104.25, last close 104.00) and the show-time filter
+   correctly hides it. It passed at 10:xx and failed at 11:36 **on the same
+   tree** - reproduced with the whole rebuild stashed. The production rule is
+   right; the test is about the WATCH BUTTONS, so it now sets
+   `_review_movers_only = False` the way five sibling files already do.
+   *Worth a sweep: other fixtures anchored near the current wall clock may
+   carry the same bomb.*
+2. `test_trading_desk_shutdown_continues_after_one_component_raises` builds a
+   `SimpleNamespace` desk and needed the new component; it now carries it and
+   asserts it is called, plus a new sibling test for the partial-desk path.
+
+### Owed / next
+
+- **Live gate (one DESK session, with the four trader rules of this morning):**
+  the tape moves every five minutes rather than every 10-30; the 06:30-07:00
+  read carries no overnight gap and unfillable windows are blank rather than
+  zero; a stale or failed read says so on the callout line; a chip click still
+  charts the ETF.
+- **Immediate next action:** the trader restarts the desk to pick this up (the
+  desk runs from source, so the branch must be checked out). Branch is NOT
+  merged to `main`.
+
 ## 2026-08-27 (later) - trader rule 4, third pass BUILT: clicking away from an M5 chart is a skip, not a re-queue
 
 **Branch `claude/gui-phase-0-9`.** Trader: "When I click on an alert in the new
