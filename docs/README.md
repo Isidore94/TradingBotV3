@@ -27,6 +27,7 @@ These describe actions an operator may perform now.
 
 | File | Use |
 |---|---|
+| [`prompts/GUI_PHASE_0_9_OPUS_PROMPT.md`](prompts/GUI_PHASE_0_9_OPUS_PROMPT.md) | Paste-ready Opus build prompt for `plan.md` Phase 0.9 (G-P2.0 table width rule through one shell, G-P2.1 AWAY Recap return surface, G-P2.2 Desk Journal route with the fenced-file ask, G-P2.3 fluidity slice in measured order with two soak stops, G-P2.4 GC measurement only). Waves U1–U3/S1/P2 stay unauthorized; run after the AVWAP challenger session in the same checkout |
 | [`prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`](prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md) | Paste-ready Opus build prompt for Phase 0.10 packets B-0..B-3 (module + fixture, fit script, tracker shadow stops + stats + panel section, D1 overlay), with the pre-authorized `legacy.py`/`runner.py` edits enumerated |
 | [`AWAY_SCANNER_RUNBOOK.md`](AWAY_SCANNER_RUNBOOK.md) | Single-main Auto/Away operation and report recovery |
 | [`EVENING_MODE_RUNBOOK.md`](EVENING_MODE_RUNBOOK.md) | Sleep-in EVENING mode and ntfy setup |

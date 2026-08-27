@@ -212,7 +212,11 @@ default; B-4 backfills after review). Build prompt for the Opus session:
 `docs/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`. **Nothing is built yet**;
 the champion σ stays frozen (decision 0008) and the parity fixture comes first.
 The Wave P1 live soak above is still owed and is unaffected. Verification
-baseline unchanged - docs only.
+baseline unchanged - docs only. **Also written the same evening:** the Phase 0.9
+build prompt `docs/prompts/GUI_PHASE_0_9_OPUS_PROMPT.md` (G-P2.0..G-P2.4 with
+two soak stops, GC measurement only, fenced-file ask for the Journal route) -
+to be run AFTER the Phase 0.10 session, because both build in this checkout
+and the desk launches from it.
 
 (Earlier the same evening this entry read "PROPOSAL recorded"; the paragraph
 below is that record.)

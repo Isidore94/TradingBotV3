@@ -1649,7 +1649,9 @@ its own fail-before-fix test and a soak between fluidity slices.
    `_GuiGcController` needs its own ask with the measurement in hand.
 
 Gates: the Phase 0.8 live soak still comes first; each G-P2.3 slice is
-followed by a soak against the archived 2026-08-26 baseline.
+followed by a soak against the archived 2026-08-26 baseline. Build prompt:
+`docs/prompts/GUI_PHASE_0_9_OPUS_PROMPT.md` (two soak stops inside it; run
+after the Phase 0.10 session, same checkout).
 
 ### Phase 0.10 — AVWAP band challenger (authorized 2026-08-26)
 
