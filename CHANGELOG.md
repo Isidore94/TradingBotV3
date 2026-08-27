@@ -1,8 +1,8 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the with-trend
-regime-pause auto-Focus rule (trader rule 2026-08-27, on top of `fd76923`) after
-Phase 0.9's first three packets - the table width rule, the AWAY Recap return
+Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the two trader
+rules of that morning (regime-pause auto-Focus `479c25c`, then the VWAP-side /
+show-time review filter) after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
 surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
 checkout on 2026-08-26; see `CURRENT_CHECKPOINT.md`).
@@ -22,6 +22,53 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - Chart review hides the wrong side of VWAP, and checks at show time (trader rule 2)
+
+**IMPLEMENTED / GREEN.** The chart it came out of: EPD, a Focus D1 flag
+("New 5-day high", M5 bar 06:30) that reached the review pane at 07:30 sitting
+under session VWAP and fading - "a stock like this really is just wasting my
+time." Two defects in the movers-only filter of 2026-08-19: it had only the
+prev-day-extreme leg, and it was measured when a row was QUEUED, not when the
+chart was SHOWN, so a queue 74 deep served hour-old verdicts.
+
+**The rule:** a long charts only above session VWAP, a short only below it,
+and the filter is asked again the moment a chart is about to show. Hidden
+names are counted on the same button ("N hidden (inside yesterday's range /
+wrong side of VWAP) - show") and one click reveals them for the session. Same
+exemptions as before: a deliberate Focus review and an armed chart-watch hit
+always show.
+
+- `AlertCenterPanel.vwap_state(symbol, side)` - the adoption gate's own VWAP
+  leg, `focus_adoption_gate.session_vwap_state`, fed by
+  `regime_pause_hold.session_levels` over the cached M5 series (session VWAP
+  from `chart_snapshot.session_vwap_series` on completed bars; never
+  BounceBot's dynamic/EOD VWAP). Memoized on the bar-series identity like
+  `_measure_mover_state`; a sideless row is UNKNOWN. No fetch, no IB traffic.
+- `_review_chart_state(alert)` - both legs, one answer: CLOSED when EITHER leg
+  is verified against the name, UNKNOWN when nothing is verified against it
+  and something could not be measured (SHOWS, tagged), OPEN otherwise. This is
+  deliberately not the gate's ordering ("could not measure" before "failed"):
+  the gate explains an eviction, the filter decides a display, and one
+  measured reason to hide is enough.
+- `_enqueue_review_alert` reads `_review_chart_state` at queue time (was the
+  extreme leg alone); `_advance_review_queue` reads it again at show time and
+  withholds a candidate that has since gone wrong, walking on to the next.
+  The revealed-for-the-session flag switches both checks off together.
+- The review badge gains `wrong side of VWAP` for a revealed name the VWAP
+  leg hid; `MOVING` now means extreme verified AND VWAP not verified against.
+- Unchanged: it hides, never deletes; nothing reaches the review-learning
+  stream, `review_policy.json`, any store or watchlist; the chart in front of
+  the trader is not re-judged while they look at it; the Focus chip's own
+  `MOVING` flag still reads the extreme leg alone.
+
+Tests: `tests/test_qt_review_vwap_side.py` (21: the leg, the badge, the
+button, the exemptions, no evidence written; show-time withholding, reveal,
+the session-scoped switch-off, an armed hit never withheld; the measurement
+over real bars - under/over VWAP, no bars / no volume / no side is UNKNOWN,
+an unreadable read is UNKNOWN, the memo is keyed on the bars). All 21 fail
+with the panel and widget changes stashed. `test_movers_only_review.py` is
+untouched and still green.
 
 ### 2026-08-27 - With-trend regime-pause rows auto-join M5 Focus (trader rule, same morning)
 

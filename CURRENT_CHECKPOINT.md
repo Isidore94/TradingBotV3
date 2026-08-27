@@ -8,7 +8,7 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## 2026-08-27 (morning) - trader rule BUILT: with-trend regime-pause rows auto-join M5 Focus; queue scan done
+## 2026-08-27 (morning) - two trader rules BUILT: regime-pause auto-Focus (`479c25c`) and the VWAP-side / show-time review filter; queue scan done
 
 **Branch `claude/gui-phase-0-9`** (this session, on top of `fd76923`). Trader,
 07:20: "I've been doing nothing but managing the bot all morning. There are
@@ -35,6 +35,26 @@ rule's authorisation).
 **Live gate owed:** one DESK session on a directional day - rows land in Focus
 with no chart, "Not today" from the Focus surfaces still removes them, and a
 count of charts saved.
+
+### Rule 2 - BUILT (after the scan; trader's "yes build it")
+
+EPD, a Focus D1 flag from the 06:30 bar shown at 07:30 under VWAP and fading.
+The movers-only review filter now has the session-VWAP leg and is re-asked at
+show time (`AlertCenterPanel.vwap_state`, `_review_chart_state`,
+`_advance_review_queue`; badge `wrong side of VWAP`). Presentation only - see
+`CHANGELOG.md` 2026-08-27 (rule 2). Trader-directed in chat.
+
+| Measure | Value |
+|---|---|
+| Tests added | 21 (`test_qt_review_vwap_side.py`) |
+| Fail-before-fix | panel + widget changes stashed: 21 of 21 fail |
+| Full suite | **5067 passed / 19 subtests, exit 0** (313 s; 5046 after rule 1) |
+| `scripts/smoke_check.py` | 7/7 |
+| Packaging trigger | none |
+
+**Live gate owed:** the hidden count moving at show time on a real queue, the
+`wrong side of VWAP` badge on a revealed name, and charts-shown-per-hour
+against the 124-in-46-minutes baseline below.
 
 ### The scan - what else fills the queue
 

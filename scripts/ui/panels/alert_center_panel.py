@@ -627,6 +627,8 @@ class AlertCenterPanel(QFrame):
         #: (symbol, side) -> (bar-identity stamp, state). One entry per pair,
         #: replaced when its bars change - see `_measure_mover_state`.
         self._mover_measure_cache: dict[tuple[str, str], tuple[tuple, str]] = {}
+        #: Same shape for the session-VWAP leg (trader rule 2026-08-27).
+        self._vwap_measure_cache: dict[tuple[str, str], tuple[tuple, str]] = {}
         self._focus_break_open_at: dict[str, datetime] = {}
         self._focus_gate_held = 0
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
@@ -1426,6 +1428,71 @@ class AlertCenterPanel(QFrame):
             return PREV_DAY_UNKNOWN
         return PREV_DAY_CLOSED
 
+    def vwap_state(self, symbol: str, side: str) -> str:
+        """OPEN / CLOSED / UNKNOWN for "on the right side of session VWAP".
+
+        Trader rule 2026-08-27: "it's below VWAP trending lower on the M5 -
+        what a waste of my time." The predicate is the adoption gate's own
+        VWAP leg, `focus_adoption_gate.session_vwap_state`, fed by
+        `regime_pause_hold.session_levels` over the cached M5 series - session
+        VWAP from `chart_snapshot.session_vwap_series` on completed bars, never
+        BounceBot's dynamic/EOD VWAP (CLAUDE.md, packet R2). A sideless row has
+        no right side and is UNKNOWN, which shows.
+        """
+        symbol = str(symbol or "").strip().upper()
+        side_key = str(side or "").strip().lower()
+        if not symbol or side_key not in ("long", "short"):
+            return PREV_DAY_UNKNOWN
+        try:
+            moment = datetime.now()
+            m5_bars = self._m5_bars_for(symbol)
+            stamp = (moment.date(), self._series_stamp(m5_bars))
+            remembered = self._vwap_measure_cache.get((symbol, side_key))
+            if remembered is not None and remembered[0] == stamp:
+                return remembered[1]
+            levels = regime_pause_hold.session_levels(m5_bars, now=moment)
+            state = focus_adoption_gate.session_vwap_state(
+                side_key, levels.price, levels.vwap
+            )
+            self._vwap_measure_cache[(symbol, side_key)] = (stamp, state)
+            return state
+        except Exception:
+            logging.debug("Session VWAP state unavailable for %s.", symbol, exc_info=True)
+            return PREV_DAY_UNKNOWN
+
+    def _review_chart_state(self, alert: BounceAlert) -> str:
+        """Should this chart show? Both legs, one answer.
+
+        CLOSED when EITHER leg is verified against the name - inside
+        yesterday's range, or on the wrong side of session VWAP. One measured
+        reason to hide is enough; that is deliberately not the adoption gate's
+        ordering, which reports "could not measure" before "measured and
+        failed" because it is explaining an eviction, not deciding a display.
+        UNKNOWN (nothing verified against it, something unmeasurable) SHOWS,
+        tagged; OPEN is a verified pass on both legs.
+        """
+        mover = self.mover_state(alert.symbol, alert.side)
+        vwap = self.vwap_state(alert.symbol, alert.side)
+        if PREV_DAY_CLOSED in (mover, vwap):
+            return PREV_DAY_CLOSED
+        if PREV_DAY_UNKNOWN in (mover, vwap):
+            return PREV_DAY_UNKNOWN
+        return PREV_DAY_BREAK_OPEN
+
+    def _review_badge_state(self, alert: BounceAlert) -> str:
+        """What the review chart's badge says about the name in front of you.
+
+        `open` (MOVING) needs the extreme leg verified and the VWAP leg not
+        verified against it; a name revealed after the VWAP leg hid it says
+        `wrong_side_vwap`; the extreme leg's own answers are unchanged.
+        """
+        mover = self.mover_state(alert.symbol, alert.side)
+        if mover != PREV_DAY_BREAK_OPEN:
+            return mover
+        if self.vwap_state(alert.symbol, alert.side) == PREV_DAY_CLOSED:
+            return "wrong_side_vwap"
+        return mover
+
     @staticmethod
     def _series_stamp(bars) -> tuple:
         """Cheap identity for a bar series: how many, and when the last one is.
@@ -1778,7 +1845,7 @@ class AlertCenterPanel(QFrame):
         # counts; it deletes nothing, mutes nothing and records nothing to the
         # review-learning stream.
         if self._review_movers_only and not self._review_shows_regardless(alert):
-            if self.mover_state(alert.symbol, alert.side) == PREV_DAY_CLOSED:
+            if self._review_chart_state(alert) == PREV_DAY_CLOSED:
                 self._hidden_inside_range[alert.symbol] = alert
                 self.chart_review.set_hidden_count(len(self._hidden_inside_range))
                 return
@@ -1850,9 +1917,34 @@ class AlertCenterPanel(QFrame):
         self._render_current_review()
 
     def _advance_review_queue(self) -> None:
-        self._current_review_alert = (
-            self._review_queue.pop(0) if self._review_queue else None
-        )
+        """Show the next chart - measured NOW, not when it was queued.
+
+        Trader rule 2026-08-27: EPD was flagged on the 06:30 bar and reached
+        the pane at 07:30, by which time it sat under VWAP and was fading -
+        the queue-time answer was an hour stale. So the filter is asked again
+        at the moment a chart is about to show, and a name that has since
+        fallen inside yesterday's range or onto the wrong side of session VWAP
+        is withheld (counted, one click reveals) instead of shown. Same
+        exemptions as at queue time: a deliberate Focus review and an armed
+        chart-watch hit always show, and once the trader has revealed the
+        hidden names for the session nothing is re-checked.
+        """
+        hidden_before = len(self._hidden_inside_range)
+        next_alert = None
+        while self._review_queue:
+            candidate = self._review_queue.pop(0)
+            if (
+                self._review_movers_only
+                and not self._review_shows_regardless(candidate)
+                and self._review_chart_state(candidate) == PREV_DAY_CLOSED
+            ):
+                self._hidden_inside_range[candidate.symbol] = candidate
+                continue
+            next_alert = candidate
+            break
+        self._current_review_alert = next_alert
+        if len(self._hidden_inside_range) != hidden_before:
+            self.chart_review.set_hidden_count(len(self._hidden_inside_range))
         self._render_current_review()
         self._prefetch_review_queue()
 
@@ -2133,7 +2225,7 @@ class AlertCenterPanel(QFrame):
             armed_levels=self.armed_levels_for(alert.symbol),
             armed_d1_events=self.armed_d1_event_kinds(alert.symbol),
             any_bounce_armed=self.any_bounce_armed_for(alert.symbol),
-            mover_state=self.mover_state(alert.symbol, alert.side),
+            mover_state=self._review_badge_state(alert),
             guidance_text=guidance.summary_text(),
             in_focus=self._alert_is_focus(alert),
             auto_adopted=self._alert_is_auto_adopted(alert),

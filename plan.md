@@ -828,6 +828,16 @@ are listed in `CURRENT_CHECKPOINT.md`.
    flags at 54% of charts shown, LRSI crosses at 20% - `CHANGELOG.md`
    2026-08-27).
 
+   **Trader rule 2, same morning - BUILT 2026-08-27:** the movers-only chart
+   review (2026-08-19) gained the session-VWAP leg (a long charts only above
+   it, a short only below) and is now re-asked at SHOW time, not only at
+   queue time - EPD reached the pane an hour after its flag, under VWAP and
+   fading. Presentation only: hidden and counted on the existing button,
+   one click reveals, UNKNOWN shows. **Live gate owed:** a DESK session
+   confirming the hidden count moves at show time, that a revealed name is
+   badged `wrong side of VWAP`, and a before/after count of charts shown per
+   hour against the 124-in-46-minutes baseline of 2026-08-27.
+
 12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).** "I want this
    program to be very fluid to use." Measured first: 1843 stalls over 50 ms and
    1008 s blocked in 3h20m, plus the two GC freezes. The trader's own hypothesis
