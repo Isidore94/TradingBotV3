@@ -136,6 +136,20 @@ shape, since S1's σ *falls* from 13.1 on 06-01 to 9.9 on 06-03 while the
 tape consolidates). Either way the AVWAP column should match every time — if it
 does not, the volume inputs differ and R2's data check comes first.
 
+**Second hover (trader, same evening): OKTA 2026-06-02 upper band = 144.6.**
+S1 predicted 138.09 and is **dead**; S2 predicted 144.82 and is the family:
+the width is a lookback standard deviation of closes laid on the anchored
+HLC/3 centre — a Bollinger width on an AVWAP, with no memory of the anchor.
+What is not yet pinned is the lookback and the denominator, because the
+reading was taken without the AVWAP beside it: with the store's AVWAP
+(126.78) the implied σ is 17.82, which n=22 population (17.78) or n=25 sample
+(17.77) fit within 0.4% while n=20 population (18.04) is 1.2% off — but if
+OneOption's AVWAP on 06-02 is 126.56 rather than 126.78 (a 0.17% volume-feed
+difference), n=20 population is exact at both bars again. **One more hover
+resolves it: the AVWAP and the lower band on 2026-06-02.** AVWAP 126.78 →
+the width is n≈22 pop / 25 sample; AVWAP 126.56 → n=20 pop, the textbook
+Bollinger σ, which is by far the likelier implementation.
+
 **Data hazard found on the way, for R2:** the store's OKTA volumes are
 mixed-unit — thousands before 2026-05-27 and again on 2026-06-04, shares
 otherwise (`volume_unit = unknown` on every row). The table above normalised
