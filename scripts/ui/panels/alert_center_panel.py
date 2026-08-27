@@ -794,13 +794,14 @@ class AlertCenterPanel(QFrame):
         # save button. No alert, tier, fold, digest or queue behaviour is
         # touched.
         self._journal_tab_index = self.tabs.addTab(
-            self._build_journal_tab(), "Journal"
+            self._build_journal_tab(), "Journal  Ctrl+J"
         )
 
         self._refresh_armed_list()
         self.chart_review.armedSummaryChanged.connect(self._refresh_armed_tab_label)
         self._refresh_armed_tab_label(self.chart_review.armed_count())
         self._bind_capture_shortcuts()
+        self._bind_journal_shortcut()
         self._d1_unread = 0
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._refresh_d1_tab_label()
@@ -1254,6 +1255,30 @@ class AlertCenterPanel(QFrame):
         """Raise the Capture tab, then arm/focus the rail exactly as before."""
         self.tabs.setCurrentIndex(self._capture_tab_index)
         handler()
+
+    def _bind_journal_shortcut(self) -> None:
+        """Ctrl+J: select the Journal tab and focus the composer.
+
+        §5.3 option (a), decision 10. The trader could not find this tab on
+        2026-08-26; it is the sixth of the lower strip and reachable only by
+        clicking it. A keyboard route costs no row, so the 2026-08-20 rule -
+        at most ONE slim row between the charts and the tab strip - is intact.
+        No verb-row verb: that is a mouse route and needs its own ask.
+
+        Panel scope with WidgetWithChildrenShortcut, exactly like the capture
+        keys: a QShortcut bound inside a hidden tab page never fires. Ctrl+J is
+        unbound everywhere else in scripts/ui (Ctrl+R, Ctrl+F, F9, Ctrl+Return
+        and Alt+V/K/S/N are the whole inventory) - two live bindings for one
+        sequence is an ambiguous shortcut and Qt fires NEITHER.
+        """
+        shortcut = QShortcut(QKeySequence("Ctrl+J"), self)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(self._focus_journal_composer)
+        self._journal_route_shortcut = shortcut
+
+    def _focus_journal_composer(self) -> None:
+        self.tabs.setCurrentIndex(self._journal_tab_index)
+        self._journal_text.setFocus()
 
     def _emit_feed_status(self) -> None:
         loud = sum(
