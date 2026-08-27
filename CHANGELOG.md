@@ -1,7 +1,8 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-26** on `claude/avwap-band-challenger`, at Phase 0.10
-packets B-0..B-3 - the AVWAP band challenger built and shadow-fenced, its three
+Last reconciled: **2026-08-26** on `claude/gui-phase-0-9`, at Phase 0.10's
+review fixes - the AVWAP band challenger built, shadow-fenced, its fence guarded
+at source and its export guarded against costing the tracker save; its three
 forward gates owed.
 
 Authoritative for: **what exists and the historical sequence of revisions**
@@ -19,6 +20,64 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-26 night - Phase 0.10 review fixes: the shadow cannot cost the save, and the fence is no longer a hand-maintained list
+
+**IMPLEMENTED / GREEN.** Fable's review of `002f2a3..292e335` returned GO with
+two fixes owed before B-4 and one trader decision recorded. All three landed in
+`ac9a952` on `claude/gui-phase-0-9`.
+
+**The shadow export is guarded.** `export_setup_tracker_views` wrote the
+band-variant CSV as its last statement with no guard, and
+`update_setup_tracker_from_scan` runs `save_setup_tracker_payload` AFTER it - so
+one malformed setup dict reaching `build_band_variant_stats_rows` would have
+aborted the day's tracker save. That is the evidence store costing the thing it
+records, which R10 forbids everywhere else in this codebase. The `try/except` +
+`logging.warning` wraps the SHADOW write only: every champion export above it is
+already on disk by then, and a champion export that fails must still fail
+loudly - asserted as its own test.
+
+**The fence is guarded at source.** Seven readers filter on
+`_is_band_variant_scenario`, and three of those were found by the parity fixture
+rather than by reading the code - so an eighth would not be found by reading
+either. `tests/test_band_variant_fence_guard.py` walks the AST of `legacy.py`
+and requires every scenario-iteration site to mention the fence inside its
+enclosing function or to be named in `ALLOWED_UNFENCED` with its reason. Two
+entries, both readers that MUST see the shadow: the stop rebuild on replay
+(`_extract_tracker_stop_candidates_from_setup`, which sorts by label so
+`VARIANT_*` still lands last) and sealed-record compaction
+(`_compact_tracker_setup_record`, which strips the shadow's per-bar event log
+exactly as it strips the champion's).
+
+The detector is deliberately wider than the spelling the fence was written
+against - `setup["scenarios"].values()`, `.get("scenarios", {}).values()` and a
+local `working_scenarios.values()` all count - because a guard that only
+recognizes today's spelling is passed by tomorrow's. It finds nine readers where
+the narrow `(setup.get("scenarios") or {}).values()` pattern finds six. Proved
+against real code rather than a mutation: pointed at `5613eec:legacy.py`, the
+tree as it stood before the fence, it reports six unfenced readers. Four
+companion tests keep the guard itself honest. It does NOT claim that mentioning
+the helper means it was used correctly - a name in a function is not a proof
+about its logic, and the parity fixture remains what proves the values did not
+move.
+
+**The shadow crosses the four BASELINE exit templates only** (trader decision,
+2026-08-26). `_is_band_variant_stop` is the candidate-side twin of
+`_is_band_variant_scenario`, kept beside it so the two spellings of "is this the
+shadow" cannot drift apart, and `_build_tracker_scenarios` skips experimental
+templates for such a stop. The champion is untouched and still crosses all six;
+the experimental templates are a comparison framework for the CHAMPION's stops,
+and a challenger inside them would be two variables at once. Re-measured:
+**9,982 -> 6,524 bytes per new setup** (474 anchor blocks + 6,050 for four
+variant scenarios), so **~144 MB -> ~89.5 MB, 15% -> 9.4%** at the live
+14,386-setup / 950.2 MB scale, forward only - and 5,739 bytes once sealed-record
+compaction strips the event logs. All four baseline templates remain, so the
+stats table's per-template pairing is still possible.
+
+Verification: **4995 passed / 19 subtests, exit 0**; smoke 7/7. Eleven tests
+added, every one proved failing first. **Owed, unchanged**: T4's three criteria,
+>= 20 sessions of forward accrual before T3 counts, and B-4 - which these two
+fixes were the gate on.
 
 ### 2026-08-26 - AVWAP band challenger: a second formula, computed beside the champion and unable to reach it
 

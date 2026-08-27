@@ -8,6 +8,82 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-26 night - Phase 0.10 review fixes APPLIED; B-4 is unblocked
+
+**Branch `claude/gui-phase-0-9`** (cut from `292e335`, so the Phase 0.10 build
+is in its history). Commit `ac9a952`. Both fixes the review below owed are done,
+and the growth decision it recorded is taken.
+
+| Measure | Value |
+|---|---|
+| Full suite | **4995 passed / 19 subtests, exit 0** |
+| `scripts/smoke_check.py` | 7/7 |
+| Tests added | 11, every one proved failing first |
+
+**1. The shadow export is guarded.** `export_setup_tracker_views` now wraps the
+band-variant CSV write in `try/except Exception` + `logging.warning`. Only the
+shadow write: every champion export above it is already on disk by then, and a
+champion export that fails must still fail loudly - which is its own test.
+Proved by a raising `build_band_variant_stats_rows`: all nine champion CSVs
+still written, no shadow CSV (absent rather than half-written), the failure
+logged, and `update_setup_tracker_from_scan` still reaching
+`save_setup_tracker_payload` with the payload it was handed. That last one runs
+through the REAL export, because the seam between the two is the thing under
+test.
+
+**2. The fence is guarded at source.** `tests/test_band_variant_fence_guard.py`
+walks `legacy.py`'s AST: every scenario-iteration site must mention
+`_is_band_variant_scenario` inside its enclosing function or be named in
+`ALLOWED_UNFENCED` with its reason. Two entries, both readers that MUST see the
+shadow - the stop rebuild on replay and sealed-record compaction. The detector
+is wider than the spelling the fence was written against (`setup["scenarios"]
+.values()`, `.get("scenarios", {}).values()` and a local
+`working_scenarios.values()` all count), because a guard that only knows today's
+spelling is passed by tomorrow's: it finds **9** readers where the narrow
+pattern finds 6.
+
+Fail-before-fix on real code rather than a mutation: pointed at
+`5613eec:legacy.py` - the tree as it stood before the fence - the guard reports
+**six** unfenced readers (`_flatten_tracker_scenarios`,
+`_summarize_tracker_setup_outcome`, `_tracker_short_horizon_risk_per_share`,
+`build_tracker_playbook_rows`, `build_tracker_setup_record`,
+`recompute_tracker_setup_record`). Four companion tests keep the guard honest:
+it must still see the known readers, its allowlist may not name a function that
+no longer reads scenarios or carry a one-word reason, no read may sit outside a
+function, and the fence helper must still exist under that name. **What it does
+not claim**: that mentioning the helper means it was used correctly. The parity
+fixture is what proves the values did not move.
+
+**3. The shadow crosses the four BASELINE exit templates only** - the trader
+decision the review recorded, taken. `_is_band_variant_stop` is the
+candidate-side twin of `_is_band_variant_scenario`, kept beside it so the two
+spellings cannot drift; `_build_tracker_scenarios` skips experimental templates
+for such a stop. The champion still crosses all six. Re-measured:
+
+| | Before | After |
+|---|---:|---:|
+| Bytes per new setup | 9,982 | **6,524** |
+| Forward growth at 14,386 setups / 950.2 MB | ~144 MB (15%) | **~89.5 MB (9.4%)** |
+| Once sealed-record compaction strips the event logs | - | 5,739 |
+
+All four baseline templates are still present, so the stats table's
+per-template pairing stays possible.
+
+**Note on this checkout's state.** The working tree carried uncommitted Phase
+0.9 AWAY-recap work (`away_recap_panel.py`, `test_away_day_recap.py`, an
+untracked `test_away_recap_return_surface.py`) that is not this session's. It
+was red on arrival - 14 failures / 18 errors, all in the AWAY-recap and Qt-page
+tests. It was stashed for the duration and restored afterwards; the 4995 green
+number is the tree at `ac9a952` with that WIP set aside, and nothing in these
+fixes touches it.
+
+**Owed, unchanged:** T4's three criteria, >= 20 sessions of forward accrual with
+>= 40 finalized setups before T3 counts, and B-4 (the T1 level-quality backfill
+and the T2 playbook re-run) - which the review's two fixes were the gate on, and
+which is now unblocked.
+
+---
+
 ## 2026-08-26 night - REVIEW of Phase 0.10 B-0..B-3 (Fable): GO with two fixes owed before B-4
 
 Reviewed `002f2a3..292e335` by reproduction on a detached worktree, not from the
