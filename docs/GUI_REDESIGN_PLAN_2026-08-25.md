@@ -1191,6 +1191,27 @@ The one wave the trader promoted. Every code item is built on
 post-fix build with the watchdog enabled, compared against the §3.2 baseline
 under the expectation stated in §11.3 — no test run discharges it.
 
+### Phase 0.9 follow-ons (§15 decisions 9, 10, 14) — **G-P2.0…G-P2.2 BUILT 2026-08-27**
+
+`plan.md` Phase 0.9, on `claude/gui-phase-0-9`; suite 5016 passed / 19 subtests,
+exit 0; smoke 7/7; 37 tests, every one proved failing on the un-fixed code.
+
+| Item | Commit | What landed |
+|---|---|---|
+| G-P2.0 the §12 width rule | `1fd9e6e` | `data_table.apply_width_rule` + `apply_width_rule_to_table_widget` + `MiddleElideDelegate`; `fit_columns` routes through it, so every `DataTable` user gets it, and AWAY Recap's four raw tables and Weekend Prep ▸ Focus pick review's five call it directly. Text columns may be named or MEASURED; identifier columns elide in the middle with the full value as the tooltip |
+| G-P2.1 AWAY Recap as a return surface | `a5fa6a9` | §8.3 decisions 1–4: scanner status rows hidden and counted (one click reveals for the session, nothing deleted, the Alert Center's list untouched); a `Chart ▸` cell per chartable row plus `Enter` plus a hint line; symbol-less rows muted/italic from a theme token with no chart action |
+| G-P2.2 Desk Journal route | `fd76923` | §5.3 option (a): `Ctrl+J` selects the Journal tab and focuses the composer; tab label reads `Journal  Ctrl+J`; panel scope, `WidgetWithChildrenShortcut`; no second row and no verb-row verb. Fenced file — the trader approved the exact diff in chat first |
+| G-P2.3 next fluidity slice | — | **NOT started; gated on SOAK 1** |
+| G-P2.4 GC measurement | — | **NOT started**; measurement only, no scheduling change authorized |
+
+**One caveat for whoever soaks this:** `measure_column_widths` is still
+`resizeColumnsToContents()` — the 7.9% / 115 s site — and G-P2.0 now reaches it
+from two more pages. It is deliberately ONE seam, bounded by G-P2.3 item 1. Do
+not judge table cost from a soak taken before that lands.
+
+**Still OWED:** SOAK 1 against
+`ui_stalls_prefix_baseline_2026-08-26.jsonl`, then G-P2.3 and G-P2.4.
+
 ### Waves U1–U3, S1 and P2 — **PROPOSAL, not authorized**
 
 Nothing above promotes them. The new material they must plan against is

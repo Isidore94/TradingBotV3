@@ -8,6 +8,95 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 - ACTIVE: Phase 0.9, G-P2.0..G-P2.2 BUILT and committed; **SOAK 1 is the gate on G-P2.3**
+
+**Branch `claude/gui-phase-0-9`, tip `fd76923`.** Governing document
+`docs/GUI_REDESIGN_PLAN_2026-08-25.md` (§12, §8.3, §5.3, §15 decisions 9/10/14);
+build prompt `docs/prompts/GUI_PHASE_0_9_OPUS_PROMPT.md`. Presentation and
+threading only: no detector, scorer, alert, queue, scheduler, evidence-stream or
+storage behaviour changed, and no read was added or removed.
+
+### Verification
+
+| Measure | Value |
+|---|---|
+| Baseline before the packet (`cc7dffa`) | 5010 passed / 19 subtests, exit 0 |
+| After G-P2.0..G-P2.2 | **5016 passed / 19 subtests, exit 0** |
+| `scripts/smoke_check.py` | 7/7 |
+| Tests added | **37**, every one proved failing on the un-fixed code |
+| Packaging trigger | none (no new dependency, asset, top-level package or `__file__` change) |
+
+### Landed
+
+| Commit | What |
+|---|---|
+| `1fd9e6e` | G-P2.0 - the §12 width rule through one shell, plus middle elision |
+| `a5fa6a9` | G-P2.1 - AWAY Recap as a return surface |
+| `fd76923` | G-P2.2 - `Ctrl+J` to the Desk Journal (fenced file; trader approved the diff in chat first) |
+
+### How fail-before-fix was proved, per file
+
+- `test_table_width_rule_pages.py` (2 tests) - fails on the ASSERTION with the
+  three source files stashed: the cohort column and the `Line` column do not
+  stretch. It exists separately from `test_table_width_rule.py` precisely so
+  there is a page-level behavioural failure and not only an import error.
+- `test_table_width_rule.py` (14) - fails at import, the helper not existing.
+- `test_away_recap_return_surface.py` (15) - all 15 fail with the panel stashed.
+- `test_desk_journal_route.py` (6) - all 6 fail with the panel stashed.
+- `test_away_day_recap.py::test_a_blank_symbol_asks_for_no_chart` was
+  STRENGTHENED rather than left alone: it would otherwise have passed because
+  the blank-symbol row is now hidden, which is a different claim from "a blank
+  symbol charts nothing". It now reveals the status rows first.
+
+### Two things a later reader needs
+
+1. **`measure_column_widths` is still `resizeColumnsToContents()`** - the 7.9% /
+   115 s site of the 2026-08-26 measurement - and G-P2.0 now reaches it from two
+   more pages. That is deliberate: it is ONE seam, and G-P2.3 item 1 bounds it
+   there. **Do not soak-judge table cost until item 1 lands.**
+2. **`Ctrl+J` must stay the only binding of that sequence.** Two live bindings
+   for one sequence is an ambiguous shortcut and Qt fires NEITHER, silently.
+   `test_desk_journal_route.py` greps every `QKeySequence("...")` under
+   `scripts/ui` and fails if a second one appears.
+
+### SOAK 1 - OWED, and it is the gate on G-P2.3
+
+Not dischargeable by any test run. Work a normal session with the stall watchdog
+on (`ui_stall_watchdog: true`), then run the
+`docs/GUI_FLUIDITY_MEASUREMENT_RUNBOOK.md` command with `--compare` against
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\ui_stalls_prefix_baseline_2026-08-26.jsonl`
+and record stalls / median / p90 / worst / total blocked in this file before
+G-P2.3 begins. Archive `ui_stalls.jsonl` first or the session is compared
+against itself.
+
+| Baseline (2026-08-26 pre-fix, attended 06:15-10:25 window) | |
+|---|---:|
+| Stalls over 50 ms | 2000 |
+| Total blocked | 1129 s (~19 min in ~4h10m) |
+| Worst single stall | 49.25 s (`theta_table_model.py:72`) |
+| SOAK 1 result | **not yet run** |
+
+### Owed after the soak
+
+- **G-P2.3**, in the measured order: bounded `fit_columns` measurement; the
+  Theta refresh (explain the 3.0 s -> 26.6 s -> 49.2 s growth FIRST);
+  `watchlist_utils.read_watchlist_symbols` off Qt; the `project_paths` `stat`
+  MEASURED before touched; then Setups and `setup_tracker_panel` only, with the
+  G-P1.6 panel-thread sweep riding along. SOAK 2 after it.
+- **G-P2.4**, the GC measurement packet - measurement only; no
+  `_GuiGcController` scheduling change is authorized.
+- The Phase 0.8 live soak, still the trader's to run.
+- A live desk session confirming the three surfaces above render on real data.
+
+### Process finding, repeated here because it cost real time
+
+Two Opus sessions ran in ONE checkout on 2026-08-26 and the Phase 0.10 session
+stashed this session's in-flight G-P2.1 work to get a clean tree; it was
+recovered from the stash (including the untracked test file, via `stash@{0}^3`)
+and nothing was lost. The Phase 0.10 review-fix commits `ac9a952..cc7dffa` are
+consequently in `claude/gui-phase-0-9`'s history rather than on the AVWAP
+branch. **One build session per checkout; a second needs `git worktree`.**
+
 ## 2026-08-27 - ASSESSMENT (Fable) of both overnight Opus runs: GO; G-P2.2 landed mid-review; docs owed for G-P2.0/2.1/2.2
 
 Reproduced on a detached worktree at the committed tip `cc7dffa`:

@@ -1623,35 +1623,44 @@ scorer, alert, queue, scheduler, evidence or storage behavior changes;
 `alert_center_panel.py` stays fenced (file-scoped ask-first). Each item gets
 its own fail-before-fix test and a soak between fluidity slices.
 
-1. **G-P2.0 Table width rule** (proposal §12, §3.4 A). Tables stretch to the
+1. **G-P2.0 Table width rule** *(BUILT 2026-08-27, `1fd9e6e`)* (proposal §12,
+   §3.4 A). Tables stretch to the
    available width, the widest text column takes the slack, identifiers elide
    in the MIDDLE. Apply through the shared shell, not per panel; first on
    Weekend Prep ▸ Focus pick review (`human_foc…`) and AWAY Recap (`Line`).
-2. **G-P2.1 AWAY Recap as a return surface** (§8.3, decision 9). Hide-and-count
+2. **G-P2.1 AWAY Recap as a return surface** *(BUILT 2026-08-27, `a5fa6a9`)*
+   (§8.3, decision 9). Hide-and-count
    scanner status rows (blank symbol, `WATCH`) in the recap panel only; a
    visible `Chart` action plus `Enter` on the selected row; symbol-less rows
    rendered distinctly with no chart action. The Alert Center's backing list
    is not changed.
-3. **G-P2.2 Desk Journal route** (§5.3, decision 10). One shortcut that selects
+3. **G-P2.2 Desk Journal route** *(BUILT 2026-08-27, `fd76923`; the trader
+   approved the exact diff in chat before the fenced edit)* (§5.3, decision 10).
+   One shortcut that selects
    the Journal tab and focuses the composer, plus a hint on the tab label. No
    second row under the charts; a verb-row verb only if the trader asks for a
    mouse route. Touches the fenced file: ask before the edit.
-4. **G-P2.3 Next fluidity slice, in measured order** (§11.1, decision 14):
+4. **G-P2.3 Next fluidity slice, in measured order** *(NOT STARTED - gated on
+   SOAK 1)* (§11.1, decision 14):
    `DataTable.fit_columns` bounded measurement; the Theta refresh (explain the
    3.0 s → 26.6 s → 49.2 s growth first, then parse on a worker and diff rows
    into the model); `watchlist_utils.read_text` off Qt; `project_paths` `stat`
    measured before touched; then the eight G-P1.5 panels one whole page at a
    time. The panel-thread sweep (G-P1.6's class; candidates in proposal §2)
    rides along.
-5. **G-P2.4 GC measurement packet** (decision 11). Measurement FIRST: what
+5. **G-P2.4 GC measurement packet** *(NOT STARTED)* (decision 11). Measurement
+   FIRST: what
    produces the cyclic garbage, sweep cost per generation, growth per hour.
    **No scheduling change is authorized by this item** - a change to
    `_GuiGcController` needs its own ask with the measurement in hand.
 
-Gates: the Phase 0.8 live soak still comes first; each G-P2.3 slice is
-followed by a soak against the archived 2026-08-26 baseline. Build prompt:
+Gates: the Phase 0.8 live soak still comes first; **SOAK 1 (after G-P2.2, before
+G-P2.3) is OWED and is the gate on item 4** - see `CURRENT_CHECKPOINT.md` for the
+command and the baseline numbers; each G-P2.3 slice is then followed by a soak
+against the archived 2026-08-26 baseline. Build prompt:
 `docs/prompts/GUI_PHASE_0_9_OPUS_PROMPT.md` (two soak stops inside it; run
-after the Phase 0.10 session, same checkout).
+after the Phase 0.10 session, same checkout - which, note, cost a stash
+collision on 2026-08-26: one build session per checkout).
 
 ### Phase 0.10 — AVWAP band challenger (authorized 2026-08-26)
 

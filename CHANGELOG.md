@@ -1,10 +1,10 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-26** on `claude/gui-phase-0-9` (tip `714f717`, which
-also carries Phase 0.9 G-P2.0/G-P2.1), at Phase 0.10's
-review fixes - the AVWAP band challenger built, shadow-fenced, its fence guarded
-at source and its export guarded against costing the tracker save; its three
-forward gates owed.
+Last reconciled: **2026-08-27** on `claude/gui-phase-0-9` (tip `fd76923`), at
+Phase 0.9's first three packets - the table width rule, the AWAY Recap return
+surface and the Desk Journal keyboard route. The same branch also carries Phase
+0.10's AVWAP band challenger and its review fixes (two sessions shared one
+checkout on 2026-08-26; see `CURRENT_CHECKPOINT.md`).
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -21,6 +21,75 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - Phase 0.9 G-P2.0..G-P2.2: the three presentation follow-ons from the 2026-08-26 live session
+
+**IMPLEMENTED / GREEN.** `plan.md` Phase 0.9 items 1-3, from
+`docs/GUI_REDESIGN_PLAN_2026-08-25.md` §15 decisions 9, 10 and 14, all
+presentation only: no detector, scorer, alert, queue, scheduler, evidence-stream
+or storage behaviour changed, and no read was added or removed.
+
+**The table width rule now has one implementation** (`1fd9e6e`, G-P2.0). §12's
+rule - "the widest TEXT column takes the slack, numeric and badge columns keep
+their measured width, and the last section is not the only one that stretches" -
+lives in `scripts/ui/widgets/data_table.py` as module-level `apply_width_rule`,
+with `apply_width_rule_to_table_widget` for raw `QTableWidget`s. Two of the three
+pages the rule was learned on do not use `DataTable` at all, so a rule applied
+only through the shell would have missed them. `DataTable.fit_columns` routes
+through it, so every existing `DataTable` user gets the rule with no per-panel
+edit; AWAY Recap's four tables and Weekend Prep - Focus pick review's five call
+it directly. A caller may name its text columns; one that does not gets a
+MEASURED answer (a column whose every non-empty sampled value parses as a number
+is numeric; of what is left the widest stretches, ties to the lowest index), so
+the rule cannot fall behind the way a hand-maintained per-panel list would.
+Identifier columns get `MiddleElideDelegate`: middle elision through
+`QStyleOptionViewItem.textElideMode`, per item, with the full value as the
+tooltip - `human_f...tracking`, never `human_foc...`, because the identity is in
+the tail and an elision that leaves every row reading the same is a rendering
+defect. `measure_column_widths` is the one seam every caller measures through;
+it is `resizeColumnsToContents()` today, unchanged in cost, and it is the 7.9% /
+115 s site of the 2026-08-26 measurement, so G-P2.3 item 1 bounds it in exactly
+one place.
+
+**AWAY Recap is a return surface** (`a5fa6a9`, G-P2.1; §8.3, decision 9).
+Charting was wired the whole time and nothing on the page said so, and the day's
+only two alerts were scanner status messages with a blank symbol, so the trader's
+verdict was "i also cant even check charts from here. kinda useless." Scanner
+status rows - the blank-symbol test, because a row with no symbol cannot be
+charted whatever its side says - are hidden from the alerts table and COUNTED in
+one line, revealed for the session by one click; nothing is deleted, nothing is
+muted, and the Alert Center's backing list is untouched with `set_alerts` still
+its one reader here. Every chartable row carries a visible `Chart` cell (a plain
+item, never a cell widget: a widget per row is the shape the 2026-08-21 fluidity
+pass spent a day removing, and an AWAY day can produce hundreds of alerts),
+`Enter` on the selected row opens it through an event filter rather than Qt's
+per-platform `itemActivated`, and a hint line says so. A symbol-less row renders
+muted and italic from the `text_muted` THEME TOKEN - not a per-widget stylesheet,
+and Qt style sheets do not reach view items at all - and offers no chart action
+by either route.
+
+**The Desk Journal has a keyboard route** (`fd76923`, G-P2.2; §5.3 option (a),
+decision 10). The trader could not find the sixth lower tab. `Ctrl+J` selects it
+and focuses the composer; the tab label reads `Journal  Ctrl+J`. Bound at PANEL
+scope with `WidgetWithChildrenShortcut`, copying `_bind_capture_shortcuts`,
+because a `QShortcut` bound inside a hidden tab page never fires - and the
+Journal page is hidden exactly when the trader reaches for it. `Ctrl+J` was
+verified unbound across `scripts/ui` first (the whole inventory is Ctrl+R,
+Ctrl+F, F9, Ctrl+Return and Alt+V/K/S/N), because two live bindings for one
+sequence is an ambiguous shortcut and Qt fires NEITHER, silently; a source-level
+test now fails if a second binding ever appears. No second row under the charts
+and no verb-row verb: the 2026-08-20 one-row rule holds, and a mouse route stays
+the trader's to ask for. `alert_center_panel.py` is fenced and the trader
+approved this exact diff in chat before the edit.
+
+**Verification.** 5016 passed / 19 subtests, exit 0; smoke 7/7. 37 new tests, and
+every one was proved failing on the un-fixed code by stashing the source file and
+re-running. No packaging trigger: no new dependency, asset, top-level package or
+`__file__` change.
+
+**Owed:** the §11.3 soak against
+`ui_stalls_prefix_baseline_2026-08-26.jsonl` before G-P2.3 starts, and G-P2.3 /
+G-P2.4 themselves.
 
 ### 2026-08-26 night - Phase 0.10 review fixes: the shadow cannot cost the save, and the fence is no longer a hand-maintained list
 
