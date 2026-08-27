@@ -440,6 +440,10 @@ class AlertCenterPanel(QFrame):
         self._alerts: list[BounceAlert] = []
         self._d1_alerts: list[BounceAlert] = []
         self._review_queue: list[BounceAlert] = []
+        # Whether the chart in front belongs to the waiting list (dequeued, or
+        # a clicked D1 row) or was merely clicked off the M5 alert bar. Decides
+        # what a click elsewhere does with it: re-queue, or skip for now.
+        self._current_review_holds_place: bool = True
         #: Trader rule 2026-08-19 (evening): "a long inside yesterday's range is
         #: probably chop. Chart review should only show me longs above the
         #: previous day's high and shorts below the previous day's low."
@@ -1978,8 +1982,9 @@ class AlertCenterPanel(QFrame):
 
     def chart_alert(self, alert: BounceAlert) -> None:
         """Public: chart this alert now (the M5 bar's click). Same path as a
-        feed-row click, so the chart in front is kept at the head of the
-        queue rather than lost."""
+        feed-row click. A D1 chart in front keeps its place at the head of
+        the queue; an M5 chart in front is skipped (trader rule 2026-08-27,
+        second pass - see `_select_review_alert`)."""
         self._select_review_alert(alert)
 
     def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
@@ -2001,7 +2006,19 @@ class AlertCenterPanel(QFrame):
             return 0.0
 
     def _select_review_alert(self, alert: BounceAlert) -> None:
-        """A feed-row click makes that alert the active visual review."""
+        """A feed-row or M5-bar click makes that alert the active visual review.
+
+        What happens to the chart it replaces depends on where that chart
+        came from. A chart that HOLDS A PLACE in the waiting list (it was
+        dequeued, or it is a D1 row / armed hit the trader clicked) goes back
+        to the head of the queue, so a look-elsewhere never loses it. An M5
+        chart clicked off the alert bar holds no place - the bar is a list,
+        not a queue (trader rule 2026-08-27) - so clicking away from it is a
+        "skip for now": a `skip` review event is written and it is NOT put in
+        the waiting list (trader, same day, second pass: "it shouldn't queue
+        the old m5 alert in the waiting list"). Its line already left the bar
+        when it was clicked; the feed and History keep it.
+        """
         if not alert.symbol or alert.symbol in self._ignored_symbols:
             return
         current = self._current_review_alert
@@ -2011,12 +2028,22 @@ class AlertCenterPanel(QFrame):
                 for queued in self._review_queue
                 if queued.symbol not in {current.symbol, alert.symbol}
             ]
-            self._review_queue.insert(0, current)
+            if self._current_review_holds_place:
+                self._review_queue.insert(0, current)
+            else:
+                self._record_review_event(
+                    "skip",
+                    alert=current,
+                    dwell_ms=self._review_dwell_ms(current.symbol),
+                    queue_len=len(self._review_queue),
+                    detail={"reason": "clicked_away_from_m5_alert"},
+                )
         else:
             self._review_queue = [
                 queued for queued in self._review_queue if queued.symbol != alert.symbol
             ]
         self._current_review_alert = alert
+        self._current_review_holds_place = not self._is_m5_review_alert(alert)
         self._render_current_review()
 
     def _advance_review_queue(self) -> None:
@@ -2046,6 +2073,9 @@ class AlertCenterPanel(QFrame):
             next_alert = candidate
             break
         self._current_review_alert = next_alert
+        # Popped from the waiting list, so it keeps a place there if the
+        # trader clicks elsewhere for a moment (see `_select_review_alert`).
+        self._current_review_holds_place = True
         if len(self._hidden_inside_range) != hidden_before:
             self.chart_review.set_hidden_count(len(self._hidden_inside_range))
         self._render_current_review()

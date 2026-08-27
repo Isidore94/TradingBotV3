@@ -3,7 +3,8 @@
 Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the four trader
 rules of that morning (regime-pause auto-Focus `479c25c`, the VWAP-side /
 show-time review filter `76e0b7b`, the D1 SMA trend leg + snapshot Prev/Next
-`f3abda7`, the M5 alert bar `41963de`/`39c3ef7`, then the group tape removed)
+`f3abda7`, the M5 alert bar `41963de`/`39c3ef7` and its click-away skip, then
+the group tape removed)
 after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
 surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
@@ -24,6 +25,52 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - Clicking away from an M5 chart is a skip, not a re-queue (trader rule 4, third pass)
+
+**IMPLEMENTED / GREEN.** Trader: "When I click on an alert in the new M5 alert
+bar and then click to another one, it shouldn't queue the old M5 alert in the
+waiting list. It should just be considered a 'skip for now' situation." The
+bar took M5 alerts OUT of the waiting list, but `_select_review_alert` - the
+shared feed-row/bar click path - still pushed whatever chart it replaced to
+the HEAD of that list, so a trader working down the bar refilled the D1 queue
+with the M5 rows the bar was built to keep out of it.
+
+- `AlertCenterPanel._current_review_holds_place` (new, defaults `True`)
+  records where the chart in front CAME FROM, which is the thing the decision
+  actually turns on. `_advance_review_queue` sets it `True` (that chart was
+  popped off the waiting list and keeps its place); `_select_review_alert`
+  sets it to `not _is_m5_review_alert(alert)` (a clicked D1 row / armed hit
+  holds a place, an M5 bar row does not). On the next click, a chart that
+  holds a place is re-inserted at the head exactly as before and one that
+  does not is skipped.
+- Why a flag rather than re-testing the outgoing alert: the refresh path
+  (`_enqueue_review_alert`, same-symbol branch) REPLACES a queued D1 chart's
+  alert object with that symbol's newer M5 alert, so `_is_m5_review_alert`
+  asked about the outgoing object would answer "M5" for a chart that really
+  is holding a D1 queue slot, and clicking away would silently drop it.
+  Pinned by `test_a_refreshed_d1_chart_still_holds_its_place`.
+- The skip is RECORDED, not silent: `_record_review_event("skip", ...)` with
+  the dwell and `detail={"reason": "clicked_away_from_m5_alert"}`. The
+  impression was already written - `_render_current_review` emits `shown` for
+  a bar-clicked chart like any other - and `shown` is the denominator for
+  P(take | shown), so leaving the click-away unanswered would have stranded
+  an impression with no verb and biased the rate. `skip` is that stream's
+  existing definition of "looked at the chart and passed"
+  (`scripts/review_events.py`), which is the trader's own phrase. No status
+  line: the replacement chart is already up, so a message would be noise.
+- Unchanged, deliberately: the routing at `_enqueue_review_alert` still
+  records nothing, the M5 bar is still not a queue, the feed and History
+  still keep every clicked-away row, and no parking happens here (that stays
+  specific to Skip-after-arming-a-D1 in `_skip_review_alert`).
+
+Tests: `tests/test_qt_m5_alert_bar.py` +3 (22 total, whole suite 5119 passed):
+the second bar click skips rather than queues and writes exactly one `skip`
+with its reason; a queued D1 chart still returns to the head of the queue when
+a bar row is clicked, while the M5 that replaced it does not; and the
+refreshed-D1 regression guard. With the panel change stashed the first two
+fail on the old behaviour (`['AMD', 'NVDA', 'MUFG', 'XOM']` where the queue
+should read `['AMD', 'MUFG', 'XOM']`) and the third passes, as a guard should.
 
 ### 2026-08-27 - Group RS/RW tape removed from the desk (trader decision); rebuild plan parked in plan.md
 

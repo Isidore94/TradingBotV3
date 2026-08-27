@@ -857,9 +857,19 @@ are listed in `CURRENT_CHECKPOINT.md`.
    the review queue, which now holds D1 rows, Focus D1 flags, armed hits and
    the trader's own charts. Routing sits at the one door
    (`_enqueue_review_alert`), after the AWAY branch; nothing upstream
-   changed. **Live gate owed:** one DESK session - the bar fills in alert
-   order, Copy all pastes into TC2000, a click charts, the waiting count is
-   D1-only. **Not built, the trader's call:** the 15-minute regime-pause
+   changed. **Third pass the same day - BUILT:** clicking from one bar row to
+   the next no longer re-queues the chart it replaces. `_select_review_alert`
+   pushed every outgoing chart to the head of the waiting list, which refilled
+   the D1 queue with the very M5 rows the bar exists to keep out of it; a new
+   `_current_review_holds_place` flag records whether the chart in front was
+   POPPED off the queue (or is a clicked D1 row / armed hit) or merely clicked
+   off the bar, and only the former is re-inserted. The latter writes a `skip`
+   review event with its dwell and `detail.reason = clicked_away_from_m5_alert`,
+   because `_render_current_review` already wrote the `shown` impression and
+   `shown` is the denominator for P(take | shown). **Live gate owed:** one DESK
+   session - the bar fills in alert order, Copy all pastes into TC2000, a click
+   charts, clicking down the bar leaves the waiting count D1-only and unchanged.
+   **Not built, the trader's call:** the 15-minute regime-pause
    expiry does not reach the bar (rows carry their time; the queue rule was
    "queue only"); and whether the bar should fold repeats per symbol.
 

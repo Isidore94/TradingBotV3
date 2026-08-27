@@ -8,6 +8,55 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 (later) - trader rule 4, third pass BUILT: clicking away from an M5 chart is a skip, not a re-queue
+
+**Branch `claude/gui-phase-0-9`.** Trader: "When I click on an alert in the new
+M5 alert bar and then click to another one, it shouldn't queue the old M5 alert
+in the waiting list. It should just be considered a 'skip for now' situation."
+
+The bar already kept M5 alerts OUT of the waiting list at
+`_enqueue_review_alert`. What leaked was the click path they SHARE with the
+feed: `_select_review_alert` pushed whatever chart it replaced to the HEAD of
+the queue, so a trader working down the bar refilled the D1 queue with exactly
+the M5 rows the bar was built to remove from it.
+
+- `AlertCenterPanel._current_review_holds_place` (new, defaults `True`) records
+  where the chart in front came from. `_advance_review_queue` sets it `True`
+  (popped off the queue, so it keeps its place); `_select_review_alert` sets it
+  `not _is_m5_review_alert(alert)`. Only a place-holder is re-inserted at the
+  head; an M5 bar row is skipped.
+- A flag, not a re-test of the outgoing alert, because the same-symbol refresh
+  branch REPLACES a queued D1 chart's alert object with that symbol's newer M5
+  alert - re-testing would answer "M5" for a real queue member and silently
+  drop it. Pinned by `test_a_refreshed_d1_chart_still_holds_its_place`.
+- The skip is recorded, not silent: `_record_review_event("skip", ...)` with
+  the dwell and `detail={"reason": "clicked_away_from_m5_alert"}`.
+  `_render_current_review` already writes the `shown` impression for a
+  bar-clicked chart, and `shown` is the denominator for P(take | shown), so an
+  unanswered impression would bias the rate. `skip` is `review_events.py`'s own
+  definition of "looked at the chart and passed" - the trader's phrase. No
+  status line (the replacement chart is already up) and no parking (that stays
+  specific to Skip-after-arming-a-D1 in `_skip_review_alert`).
+
+**Files:** `scripts/ui/panels/alert_center_panel.py` (+34/-4),
+`tests/test_qt_m5_alert_bar.py` (+3 tests, 22 total).
+
+**Verification:** `.venv\Scripts\python.exe -m pytest tests/ -q` ->
+**5119 passed, 19 subtests passed in 313s, exit 0.** Fail-before-fix checked
+by stashing only the panel change: the two behaviour tests fail on the old code
+(queue read `['AMD', 'NVDA', 'MUFG', 'XOM']` where it should read
+`['AMD', 'MUFG', 'XOM']`) and the refreshed-D1 regression guard passes, as a
+guard should. No exe rebuild: no packaging trigger (no new dependency, asset,
+top-level package, dynamic import or `__file__` handling), and the desk runs
+from source by trader decision 2026-08-26.
+
+**Live gate owed** (with the other three rules of the morning): one DESK
+session - clicking down the M5 bar leaves the waiting count D1-only and
+unchanged, and the D1 chart that was in front when a bar row is clicked is
+still there afterwards.
+
+**Immediate next action:** commit and push; then the owed live gates.
+
 ## 2026-08-27 (10:00) - INVESTIGATION ONLY, nothing changed: why the desk jumps to 10 GB
 
 Trader: "there are times the program jumps to 10gb of RAM usage. investigate to

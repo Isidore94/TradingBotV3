@@ -238,6 +238,54 @@ class TestTheRouting:
         made.chart_alert(alert)
         assert made._current_review_alert is alert
 
+    def test_clicking_a_second_bar_row_skips_the_first_instead_of_queueing_it(
+        self, panel, monkeypatch
+    ):
+        """Trader rule 2026-08-27 (second pass): "when I click on an alert in
+        the new M5 alert bar and then click to another one, it shouldn't queue
+        the old M5 alert in the waiting list. It should just be considered a
+        'skip for now' situation"."""
+        made, _posted = panel
+        written = []
+        monkeypatch.setattr(
+            made, "_record_review_event", lambda action, **kw: written.append((action, kw))
+        )
+        first, second = _m5("NVDA"), _m5("AMD")
+        made.add_alert(first)
+        made.add_alert(second)
+        made.chart_alert(first)
+        made.chart_alert(second)
+        assert made._current_review_alert is second
+        assert _queued(made) == ["AMD"], "NVDA is not waiting behind AMD"
+        # Two impressions and one terminal action: the chart the trader left
+        # is answered rather than stranded as a `shown` with no verb.
+        assert [a for a, _ in written] == ["shown", "skip", "shown"]
+        skipped = [kw for a, kw in written if a == "skip"][0]
+        assert skipped["alert"] is first
+        assert skipped["detail"] == {"reason": "clicked_away_from_m5_alert"}
+
+    def test_a_bar_click_still_keeps_a_queued_d1_chart_at_the_head(self, panel):
+        made, _posted = panel
+        made.add_alert(_d1("MUFG", "SHORT"))
+        made.add_alert(_d1("XOM"))
+        assert _queued(made) == ["MUFG", "XOM"]
+        m5 = _m5("NVDA")
+        made.add_alert(m5)
+        made.chart_alert(m5)
+        assert _queued(made) == ["NVDA", "MUFG", "XOM"], "the D1 in front went back to the head"
+        made.chart_alert(_m5("AMD"))
+        assert _queued(made) == ["AMD", "MUFG", "XOM"], "and the M5 did not"
+
+    def test_a_refreshed_d1_chart_still_holds_its_place(self, panel):
+        """The header in front refreshes from its own M5 alert (test above);
+        that does not turn a queued D1 chart into a bar click."""
+        made, _posted = panel
+        made.add_alert(_d1("NVDA"))
+        made.add_alert(_m5("NVDA", trigger="[S-TIER] VWAP reclaim"))
+        assert not made._current_review_alert.is_d1
+        made.chart_alert(_m5("AMD"))
+        assert _queued(made) == ["AMD", "NVDA"]
+
     def test_the_day_roll_tells_the_bar(self, panel, monkeypatch):
         made, _posted = panel
         rolled = []
