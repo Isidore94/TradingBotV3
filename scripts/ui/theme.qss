@@ -289,3 +289,51 @@ QToolButton#AlertDislikeButton {
     font-size: 12pt;
     padding: 0 4px;
 }
+
+/* ------------------------------------------------------------------ */
+/* Group RS/RW tape chips.                                              */
+/*                                                                      */
+/* These were an f-string setStyleSheet per chip inside GroupChip's      */
+/* constructor, on a strip that deleted and re-created all of its chips  */
+/* on every payload - up to 34 CSS parses and re-polishes every five     */
+/* minutes, on the GUI thread. Stated once here, the variant now costs   */
+/* a dynamic property set plus an unpolish/polish.                       */
+/* ------------------------------------------------------------------ */
+
+QFrame#GroupChip {
+    border: 1px solid @group_chip_unknown_border@;
+    border-radius: 6px;
+    background: @group_chip_unknown_bg@;
+}
+
+QFrame#GroupChip[side="long"] {
+    border: 1px solid @group_chip_long_border@;
+    background: @group_chip_long_bg@;
+}
+
+QFrame#GroupChip[side="short"] {
+    border: 1px solid @group_chip_short_border@;
+    background: @group_chip_short_bg@;
+}
+
+QFrame#GroupChip QLabel {
+    border: none;
+    background: transparent;
+}
+
+QLabel#GroupChipName {
+    color: @neutral@;
+    font-weight: 700;
+}
+
+QLabel#GroupChipName[side="long"] {
+    color: @long@;
+}
+
+QLabel#GroupChipName[side="short"] {
+    color: @short@;
+}
+
+QLabel#GroupChipValue {
+    color: @text_muted@;
+}

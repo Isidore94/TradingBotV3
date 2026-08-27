@@ -98,6 +98,8 @@ def _derived_tokens(values: Mapping[str, str]) -> dict[str, str]:
     """
     short = values.get("short", "#ff5555")
     favorite = values.get("favorite", "#ffc857")
+    long_ = values.get("long", "#4ade80")
+    neutral = values.get("neutral", "#9aa0a6")
     return {
         "alert_watch_border": with_alpha(short, 0.90),
         "alert_watch_bg": with_alpha(short, 0.12),
@@ -105,6 +107,15 @@ def _derived_tokens(values: Mapping[str, str]) -> dict[str, str]:
         "alert_focus_bg": with_alpha(favorite, 0.14),
         "alert_star_dim": with_alpha(favorite, 0.75),
         "alert_dislike": with_alpha(short, 0.65),
+        # Group tape chips. Up to 34 of them re-render every five minutes, so
+        # the two alphas the chip used to mix in an f-string live here and the
+        # variant costs a property set instead of a stylesheet parse.
+        "group_chip_long_border": with_alpha(long_, 0.45),
+        "group_chip_long_bg": with_alpha(long_, 0.10),
+        "group_chip_short_border": with_alpha(short, 0.45),
+        "group_chip_short_bg": with_alpha(short, 0.10),
+        "group_chip_unknown_border": with_alpha(neutral, 0.35),
+        "group_chip_unknown_bg": with_alpha(neutral, 0.06),
     }
 
 

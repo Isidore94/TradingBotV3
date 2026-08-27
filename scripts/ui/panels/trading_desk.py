@@ -25,6 +25,7 @@ from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
+from ui.services.group_tape_service import GroupTapeService
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
 
@@ -137,23 +138,27 @@ class TradingDeskPanel(QWidget):
         tape_layout = QHBoxLayout(self.tape_host)
         tape_layout.setContentsMargins(0, 0, 0, 0)
         tape_layout.setSpacing(6)
-        # Sector/industry strength, always visible across the desk. Fed off the
-        # SAME rrsSnapshotChanged payload the Alert Center already receives -
-        # no new service, thread, timer, or IB request.
+        # Sector/industry strength, always visible across the desk. Since the
+        # 2026-08-27 rebuild (plan.md Phase 0.5 item 11) it is fed by its OWN
+        # service - one batched yfinance read of today's completed bars every
+        # five minutes, zero IB traffic - and no longer by BounceBot's
+        # rrsSnapshotChanged, which only moved when a scan cycle's RRS pass
+        # finished: 10-30 minutes apart, once 31 minutes late on a flip, and
+        # its one intraday number reached across the overnight gap for the
+        # first hour. The trader had it hidden between that finding and this
+        # rebuild.
+        #
+        # The RS Window tab still reads rrsSnapshotChanged, deliberately: it
+        # answers a different question (who led over the selected window at
+        # scan time), so both wirings coexist and neither is a copy of the
+        # other.
         self.group_tape = GroupTapeStrip()
         self.group_tape.symbolActivated.connect(self.alert_center.chart_symbol)
-        self.bounce_panel.service.rrsSnapshotChanged.connect(self.group_tape.update_groups)
+        self.group_tape_service = GroupTapeService(self)
+        self.group_tape_service.tapeChanged.connect(self.group_tape.update_groups)
+        self.group_tape_service.statusChanged.connect(self.group_tape.set_status)
+        self.group_tape.set_status(self.group_tape_service.status_text())
         tape_layout.addWidget(self.group_tape, 1)
-        # REMOVED from the desk by trader decision 2026-08-27 ("just remove it
-        # for now"): the read is right but LATE - it refreshes only when a
-        # scan cycle's RRS pass finishes (10-30 min apart that day, frozen in
-        # between), its one "M5" number is a 60-minute window that carries
-        # the overnight gap for the first hour, and "industry" is an ETF
-        # proxy. Hidden rather than deleted: the widget, its tests and this
-        # wiring stay so the rebuild in plan.md (a 5-minute Yahoo-batched
-        # 30|60|90 tape off today's bars, zero IB) drops back into the same
-        # mount point. Nothing upstream changed - the payload still flows.
-        self.group_tape.setVisible(False)
         # The setups column opens hidden, so the way back has to live somewhere
         # that is always on screen and independent of it. The tape row is the
         # only full-width strip that survives a workspace<->tabs switch.
@@ -268,6 +273,15 @@ class TradingDeskPanel(QWidget):
             ("industry board", self.industry_panel.shutdown),
             ("master scan service", self.master_panel.scan_service.shutdown),
         ))
+        # Resolved the way `price_alert_service` above is, and for the same
+        # reason: a desk whose __init__ died partway must still hand every
+        # service it DID build its bounded cleanup. Naming the attribute
+        # inline would make a missing one raise while the tuple is being
+        # built - before the loop below runs at all - so nothing would be
+        # released rather than one thing.
+        group_tape_service = getattr(self, "group_tape_service", None)
+        if group_tape_service is not None:
+            components.append(("group tape", group_tape_service.shutdown))
         for label, close in components:
             try:
                 close()

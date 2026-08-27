@@ -1247,6 +1247,15 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
     bot = _Bot()
     bot.bars = [bar(20, 110.0, 99.0), bar(25, 108.0, 100.0)]
     panel = AlertCenterPanel()
+    # The show-time filter is off here for the same reason the routing is:
+    # this test is about the WATCH BUTTONS, not about which rows reach the
+    # pane. Leaving it on made the test a clock bomb - the fixture's last bar
+    # starts at 11:25, so before 11:30 local it was still forming and the VWAP
+    # side read UNKNOWN (which shows), while after 11:30 both bars complete,
+    # the fixture's long sits under its own session VWAP, and the 2026-08-27
+    # rule correctly hid the chart. The bars' comment above claims the timing
+    # is deterministic; with the filter on it was not.
+    panel._review_movers_only = False
     panel._bounce_service = _Service(bot)
     alert = BounceAlert(
         time_text="11:30:00",
