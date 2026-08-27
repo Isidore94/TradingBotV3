@@ -31,6 +31,60 @@ globals().update(
 TRACKER_PURITY_MAX_QUARANTINE_FRACTION = 0.2
 
 
+# ---------------------------------------------------------------------------
+# AVWAP band challenger (plan.md Phase 0.10 / T3 in docs/AVWAP_BAND_VARIANT_STUDY.md).
+#
+# SHADOW ONLY. This block is computed beside `current_anchor_meta` and
+# `prev_anchor_meta` from the same frame and the same anchor index, and nothing
+# in the live path reads it: no detector, score, rank, tier, alert, zone arm,
+# Focus list or review queue. `calc_anchored_vwap_bands` is untouched and frozen
+# (decision 0008) - the challenger sits BESIDE it so the two can be graded
+# against each other, never in place of it.
+# ---------------------------------------------------------------------------
+
+
+def build_anchor_band_variant_meta(df, anchor_index, anchor_date) -> dict:
+    """The challenger's answer for one anchor, in the anchor-meta shape.
+
+    Always returns a dict, and it always says why when it has no numbers -
+    missing data is uncertainty, so an absent sigma is `None` with a stated
+    reason rather than a zero or a silently missing key. Fewer than the
+    challenger's 20-close lookback before the anchor bar is the ordinary case
+    for a newly listed name, and it must read as "not measured", never as a
+    band sitting exactly on its centre.
+
+    Never raises: this is evidence beside a live scan, and an evidence store is
+    never allowed to cost the thing it records.
+    """
+    block = {
+        "formula_version": "",
+        "date": str(anchor_date or ""),
+        "vwap": None,
+        "stdev": None,
+        "bands": {},
+        "reason": "",
+    }
+    if df is None or anchor_index is None:
+        block["reason"] = "no anchor bar in the frame"
+        return block
+    try:
+        from indicators.avwap_band_variants import FEATURE_VERSION, oneoption_avwap_bands
+
+        block["formula_version"] = FEATURE_VERSION
+        vwap, stdev, bands = oneoption_avwap_bands(df, int(anchor_index))
+    except Exception as exc:  # pragma: no cover - defensive; shadow must never throw
+        block["reason"] = f"band variant failed: {exc}"
+        return block
+    block["vwap"] = float(vwap) if vwap is not None else None
+    block["stdev"] = float(stdev) if stdev is not None else None
+    block["bands"] = {key: float(value) for key, value in (bands or {}).items()}
+    if block["vwap"] is None:
+        block["reason"] = "no positive-volume bar since the anchor"
+    elif block["stdev"] is None:
+        block["reason"] = "fewer than the lookback's closes before this bar"
+    return block
+
+
 def evaluate_setup_tracker_purity(
     tracked_symbols,
     daily_frames_by_symbol,
@@ -649,6 +703,9 @@ def _run_master_impl(
         symbol_multi_day = []
         current_anchor_meta = None
         prev_anchor_meta = None
+        # Phase 0.10 shadow: always present, always says why when it has no numbers.
+        current_anchor_variant = build_anchor_band_variant_meta(None, None, "")
+        previous_anchor_variant = build_anchor_band_variant_meta(None, None, "")
         symbol_signal_info = {}
         skip_current_events = False
 
@@ -698,6 +755,8 @@ def _run_master_impl(
             if not idxs.empty:
                 anchor_idx = int(idxs[0])
                 vwap_c, sd_c, bands_c = calc_anchored_vwap_bands(df, anchor_idx)
+                # Shadow, beside the champion and from the same frame + index.
+                current_anchor_variant = build_anchor_band_variant_meta(df, anchor_idx, curr_iso)
                 if pd.notna(vwap_c) and bands_c:
                     current_anchor_meta = {
                         "date": curr_iso,
@@ -757,6 +816,7 @@ def _run_master_impl(
             if not idxs.empty:
                 anchor_idx = int(idxs[0])
                 vwap_p, sd_p, bands_p = calc_anchored_vwap_bands(df, anchor_idx)
+                previous_anchor_variant = build_anchor_band_variant_meta(df, anchor_idx, prev_iso)
                 if pd.notna(vwap_p) and bands_p:
                     prev_anchor_meta = {
                         "date": prev_iso,
@@ -1269,6 +1329,8 @@ def _run_master_impl(
             "last_trade_date": last_trade_date.isoformat(),
             "current_anchor": current_anchor_meta,
             "previous_anchor": prev_anchor_meta,
+            "current_anchor_variant": current_anchor_variant,
+            "previous_anchor_variant": previous_anchor_variant,
             "events_today": symbol_events_today,
             "multi_day_patterns": symbol_multi_day,
             "events_all_for_day": full_event_list,

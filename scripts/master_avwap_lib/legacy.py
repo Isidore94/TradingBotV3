@@ -372,6 +372,9 @@ SETUP_PLAYBOOKS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.
 # Short-term (1-2 session) playbook: per-family follow-through in the first
 # 1-2 sessions after entry, ranked so the top row is the current best.
 SETUP_SHORT_HORIZON_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_short_horizon.csv")
+# Phase 0.10 shadow evidence. Written in the same pass as the other stats CSVs
+# and read by nothing that scores, ranks, alerts or gates.
+SETUP_BAND_VARIANT_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_band_variant_stats.csv")
 CONTROL_DISCOVERY_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
 # Study namespace (B4): new setup ideas (1h/4h trend, HV-level break, compression
 # break, ...) are measured here for hit-rate / realized R BEFORE they touch scoring.
@@ -5303,6 +5306,66 @@ def _setup_id_for_row(row: dict, symbol_entry: dict, scan_date: str | None = Non
     return f"{scan_date}:{row.get('symbol', '')}:{normalize_side(row.get('side'))}:{anchor_date}:{bucket}"
 
 
+# ---------------------------------------------------------------------------
+# AVWAP band challenger (plan.md Phase 0.10). SHADOW ONLY - carried on the setup
+# record so the two formulas can be graded against each other later. Nothing in
+# the live path reads these blocks, and `calc_anchored_vwap_bands` is untouched
+# and frozen (decision 0008).
+# ---------------------------------------------------------------------------
+
+#: Marks a stop candidate/scenario as challenger evidence rather than a stop the
+#: champion would ever take. Every champion aggregate filters on it.
+BAND_VARIANT_STOP_SOURCE = "band_variant"
+
+
+def _is_band_variant_scenario(scenario: object) -> bool:
+    """True for a challenger scenario, which every champion aggregate skips.
+
+    Trader-authorized 2026-08-26. Appending the shadow stop AFTER the champion's
+    candidates leaves `representative_total_r` alone - it is picked by label -
+    but it is NOT enough on its own: `_summarize_tracker_setup_outcome` averages
+    `total_r` across every tradeable non-experimental scenario, and that average
+    reaches `build_tracker_setup_type_rows` ->
+    `apply_tracker_setup_type_adjustments` -> `row["score"]`. Measured on
+    `tracker_record_band_variant_parity_v1` before this fence existed: eight of
+    sixteen summary values moved, `avg_total_r` -0.0790 -> -0.0755 and
+    `tradeable_scenario_count` 8 -> 12. A shadow that changes a live priority
+    score is not a shadow.
+
+    Six readers filter on this: the outcome summary above, the scenario CSV
+    flattener (which also feeds `master_avwap_setup_stats.csv`), the attribute
+    flattener, the short-horizon risk-per-share pick, `setup_status` (in BOTH
+    the record builder and the forward replay's open/closed counts), and the
+    per-bar daily mark's `scenario_events` list. The last two were found by the
+    parity fixture rather than by reading, which is the argument for freezing
+    it first: `daily_marks[1].scenario_events` went 10 -> 15 on the long.
+    """
+    return (
+        isinstance(scenario, dict)
+        and str(scenario.get("stop_source_type") or "").strip() == BAND_VARIANT_STOP_SOURCE
+    )
+
+
+def _tracker_anchor_variant_block(value: object, *, missing_reason: str) -> dict:
+    """Normalize a challenger anchor block, or state that there is not one.
+
+    A record built by a caller that predates the shadow (a replay, a test, an
+    older payload) has no block at all. It gets one that SAYS SO rather than an
+    empty dict a later reader could mistake for "measured, and the bands were
+    empty".
+    """
+    if isinstance(value, dict) and value:
+        return copy.deepcopy(value)
+    return {
+        "formula_version": "",
+        "date": "",
+        "vwap": None,
+        "stdev": None,
+        "bands": {},
+        "reason": missing_reason,
+    }
+
+
 def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
     side = normalize_side(row.get("side") or symbol_entry.get("side") or "LONG")
     current_anchor = symbol_entry.get("current_anchor") or {}
@@ -5447,6 +5510,21 @@ def _find_tracker_stop_candidates(row: dict, symbol_entry: dict) -> list[dict]:
                 continue
             if abs(float(level) - float(primary_stop_level)) <= float(atr20):
                 _add(str(label), float(level), "sma")
+
+    # --- Phase 0.10 shadow: the challenger's protective band ----------------
+    # APPENDED LAST, after every champion candidate, and tagged
+    # `band_variant` so `_is_band_variant_scenario` keeps it out of every
+    # champion aggregate. Same close-failure budget as the champion's own
+    # protective-band stop, so the two are compared on equal terms rather than
+    # the challenger being handed a longer leash as well as a wider stop.
+    # A missing sigma means NO candidate - never a stop at the centre line.
+    variant_anchor = symbol_entry.get("current_anchor_variant")
+    if isinstance(variant_anchor, dict):
+        _add(
+            f"VARIANT_{primary_stop_label}",
+            _anchor_level_value(variant_anchor, primary_stop_label),
+            BAND_VARIANT_STOP_SOURCE,
+        )
 
     return candidates
 
@@ -5640,6 +5718,15 @@ def build_tracker_setup_record(
         "compression_break_note": row.get("compression_break_note") or symbol_entry.get("compression_break_note") or "",
         "current_anchor_entry": current_anchor,
         "previous_anchor_entry": previous_anchor,
+        # Phase 0.10 shadow blocks. Additive; no existing key reads them.
+        "current_anchor_variant": _tracker_anchor_variant_block(
+            symbol_entry.get("current_anchor_variant"),
+            missing_reason="no band-variant block on the scan entry",
+        ),
+        "previous_anchor_variant": _tracker_anchor_variant_block(
+            symbol_entry.get("previous_anchor_variant"),
+            missing_reason="no band-variant block on the scan entry",
+        ),
         "post_earnings_anchor_entry": symbol_entry.get("post_earnings_anchor") or {},
         "post_earnings_anchor_date": row.get("post_earnings_anchor_date") or symbol_entry.get("latest_release_anchor_date") or "",
         "post_earnings_gap_date": row.get("post_earnings_gap_date") or symbol_entry.get("latest_release_gap_date") or "",
@@ -5728,7 +5815,15 @@ def build_tracker_setup_record(
         "scenarios": scenarios,
         "daily_marks": [],
         "latest_snapshot": {},
-        "setup_status": "OPEN" if any(item.get("tradeable") for item in scenarios.values()) else "UNTRADEABLE",
+        "setup_status": (
+            "OPEN"
+            if any(
+                item.get("tradeable")
+                for item in scenarios.values()
+                if not _is_band_variant_scenario(item)
+            )
+            else "UNTRADEABLE"
+        ),
         "open_scenario_count": 0,
         "closed_scenario_count": 0,
         "feature_row": feature_row or {},
@@ -6172,19 +6267,24 @@ def recompute_tracker_setup_record(
                 dynamic_level_overrides[label] = _anchor_level_value(post_earnings_levels, label)
         for scenario in working_scenarios.values():
             was_open = _scenario_is_open(scenario.get("status", "OPEN")) and bool(scenario.get("tradeable"))
-            scenario_events.extend(
-                _evaluate_tracker_scenario_bar(
-                    scenario,
-                    normalize_side(setup.get("side")),
-                    trade_date,
-                    bar_row,
-                    current_levels,
-                    indicator_row,
-                    is_entry_day=(trade_date == entry_trade_date),
-                    dynamic_level_overrides=dynamic_level_overrides,
-                    bar_index=idx,
-                )
+            bar_events = _evaluate_tracker_scenario_bar(
+                scenario,
+                normalize_side(setup.get("side")),
+                trade_date,
+                bar_row,
+                current_levels,
+                indicator_row,
+                is_entry_day=(trade_date == entry_trade_date),
+                dynamic_level_overrides=dynamic_level_overrides,
+                bar_index=idx,
             )
+            # The shadow IS graded here - the call above is what accrues its R -
+            # but its events stay off the champion's daily mark, which is a
+            # record key and a column in master_avwap_setup_daily.csv. The
+            # scenario keeps its own `events` list, which is all the grading and
+            # the variant stats export need.
+            if not _is_band_variant_scenario(scenario):
+                scenario_events.extend(bar_events)
             # Freeze days_held at the bar that closed the scenario; replay bars
             # past the close are marks-only and are not time in the trade.
             if was_open:
@@ -6210,7 +6310,11 @@ def recompute_tracker_setup_record(
         setup["entry_feature_snapshot"] = copy.deepcopy(daily_marks[0]["feature_snapshot"])
     setup["latest_snapshot"] = daily_marks[-1] if daily_marks else {}
     setup["short_horizon"] = _build_tracker_short_horizon_summary(setup) or {}
-    baseline_scenarios = [scenario for scenario in working_scenarios.values() if not bool(scenario.get("experimental"))]
+    baseline_scenarios = [
+        scenario
+        for scenario in working_scenarios.values()
+        if not bool(scenario.get("experimental")) and not _is_band_variant_scenario(scenario)
+    ]
     setup["open_scenario_count"] = sum(1 for scenario in baseline_scenarios if _scenario_is_open(scenario.get("status")))
     setup["closed_scenario_count"] = sum(
         1
@@ -6230,6 +6334,8 @@ def _flatten_tracker_scenarios(setups: dict[str, dict]) -> list[dict]:
     rows = []
     for setup in setups.values():
         for scenario in (setup.get("scenarios") or {}).values():
+            if _is_band_variant_scenario(scenario):
+                continue  # shadow: never in the champion's scenario/stats CSVs
             rows.append(
                 {
                     "setup_id": setup.get("setup_id"),
@@ -6337,7 +6443,7 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     scenarios = [
         scenario
         for scenario in (setup.get("scenarios") or {}).values()
-        if isinstance(scenario, dict)
+        if isinstance(scenario, dict) and not _is_band_variant_scenario(scenario)
     ]
     if not include_experimental:
         scenarios = [scenario for scenario in scenarios if not bool(scenario.get("experimental"))]
@@ -6424,7 +6530,9 @@ def _tracker_short_horizon_risk_per_share(setup: dict) -> float | None:
     scenarios = [
         scenario
         for scenario in (setup.get("scenarios") or {}).values()
-        if isinstance(scenario, dict) and not bool(scenario.get("experimental"))
+        if isinstance(scenario, dict)
+        and not bool(scenario.get("experimental"))
+        and not _is_band_variant_scenario(scenario)
     ]
     primary_label = _representative_stop_label_for_setup(setup)
     ordered = sorted(
@@ -8494,6 +8602,8 @@ def build_tracker_playbook_rows(setups: dict[str, dict]) -> list[dict]:
         for scenario in (setup.get("scenarios") or {}).values():
             if not isinstance(scenario, dict) or not scenario.get("tradeable"):
                 continue
+            if _is_band_variant_scenario(scenario):
+                continue  # shadow: never in the attribute leaderboard
 
             profit_take_summary = _format_tracker_exit_summary(
                 partial_target_label=scenario.get("partial_target_label"),
@@ -10794,6 +10904,198 @@ def build_recent_setup_type_stat_rows(payload: dict) -> list[dict]:
     return rows
 
 
+# ---------------------------------------------------------------------------
+# Band-variant stats export (plan.md Phase 0.10 B-2 item 4). Shadow evidence.
+# ---------------------------------------------------------------------------
+
+#: Column order for `master_avwap_band_variant_stats.csv`. Counts first, then
+#: the paired measures, so a reader meets the n before any rate.
+BAND_VARIANT_STATS_COLUMNS = (
+    "setup_family",
+    "side",
+    "priority_bucket",
+    "exit_template_id",
+    "n",
+    "n_variant",
+    "n_variant_unmeasured",
+    "n_closed_champion",
+    "n_closed_variant",
+    "avg_total_r_champion",
+    "avg_total_r_variant",
+    "stop_out_rate_champion",
+    "stop_out_rate_variant",
+    "target_hit_rate_champion",
+    "target_hit_rate_variant",
+    "mean_stop_distance_atr_champion",
+    "mean_stop_distance_atr_variant",
+)
+
+
+def _band_variant_paired_scenarios(setup: dict) -> tuple[dict | None, dict | None, str]:
+    """The champion's primary-stop scenario and the challenger's, same template.
+
+    Pairing on the exit template is the whole reason this is a function: a
+    comparison across two different templates carries two variables and measures
+    neither. The champion's side is chosen exactly the way
+    `_summarize_tracker_setup_outcome` chooses its representative - by the
+    primary protective-stop LABEL - so this table and the tracker's own headline
+    R are talking about the same scenario.
+    """
+    scenarios = [
+        scenario
+        for scenario in (setup.get("scenarios") or {}).values()
+        if isinstance(scenario, dict) and not bool(scenario.get("experimental"))
+    ]
+    primary_label = _representative_stop_label_for_setup(setup)
+    champion = next(
+        (
+            scenario
+            for scenario in scenarios
+            if scenario.get("tradeable")
+            and str(scenario.get("stop_reference_label") or "") == primary_label
+        ),
+        None,
+    )
+    if champion is None:
+        return None, None, ""
+    template = str(champion.get("exit_template_id") or "")
+    variant = next(
+        (
+            scenario
+            for scenario in scenarios
+            if scenario.get("tradeable")
+            and _is_band_variant_scenario(scenario)
+            and str(scenario.get("exit_template_id") or "") == template
+        ),
+        None,
+    )
+    return champion, variant, template
+
+
+def _band_variant_stop_distance_atr(setup: dict, scenario: dict | None) -> float | None:
+    if not isinstance(scenario, dict):
+        return None
+    entry = _coerce_float(setup.get("entry_price"))
+    level = _coerce_float(scenario.get("stop_reference_level"))
+    snapshot = setup.get("entry_feature_snapshot")
+    atr = _coerce_float(snapshot.get("atr20")) if isinstance(snapshot, dict) else None
+    if entry is None or level is None or not atr or atr <= 0:
+        return None
+    return abs(entry - level) / float(atr)
+
+
+def _band_variant_rate(matching: int, closed: int):
+    """A rate, or a BLANK when there is nothing behind it.
+
+    0.0 would read as "none of them stopped out", which is a claim; an empty
+    cell is the absence of one. Ground rule 10: never a rate without its n.
+    """
+    return (matching / closed) if closed else ""
+
+
+def _band_variant_mean(values: list[float]):
+    return (sum(values) / len(values)) if values else ""
+
+
+def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
+    """One row per (setup family, side, priority bucket): champion vs challenger.
+
+    SHADOW EVIDENCE. Nothing reads these rows but the Setup Tracker panel's
+    "Band variant" section and a human. The R values are clipped with the same
+    `TRACKER_SCORING_R_CLIP` the champion's own averages use, because a
+    comparison in which one side is outlier-clipped and the other is not
+    measures the clip.
+
+    A setup whose challenger sigma was unmeasurable counts in
+    `n_variant_unmeasured` rather than vanishing: a formula that cannot answer
+    is a property of the formula and belongs in the table.
+    """
+    groups: dict[tuple[str, str, str], dict] = {}
+    for setup in (setups or {}).values():
+        if not isinstance(setup, dict):
+            continue
+        champion, variant, template = _band_variant_paired_scenarios(setup)
+        if champion is None:
+            continue
+        key = (
+            _canonical_tracker_setup_family(setup),
+            normalize_side(setup.get("side")),
+            _tracker_priority_bucket(setup),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "exit_template_id": template,
+                "n": 0,
+                "n_variant_unmeasured": 0,
+                "champion": [],
+                "variant": [],
+            },
+        )
+        group["n"] += 1
+        group["champion"].append((setup, champion))
+        if variant is None:
+            variant_block = setup.get("current_anchor_variant")
+            stdev = (
+                _coerce_float(variant_block.get("stdev"))
+                if isinstance(variant_block, dict)
+                else None
+            )
+            if stdev is None:
+                group["n_variant_unmeasured"] += 1
+            continue
+        group["variant"].append((setup, variant))
+
+    rows: list[dict] = []
+    for (family, side, bucket), group in sorted(groups.items()):
+        row = {
+            "setup_family": family,
+            "side": side,
+            "priority_bucket": bucket,
+            "exit_template_id": group["exit_template_id"],
+            "n": group["n"],
+            "n_variant": len(group["variant"]),
+            "n_variant_unmeasured": group["n_variant_unmeasured"],
+        }
+        for label in ("champion", "variant"):
+            pairs = group[label]
+            closed = [
+                scenario
+                for _setup, scenario in pairs
+                if _scenario_is_closed(scenario.get("status"))
+            ]
+            r_values = [
+                clipped
+                for clipped in (
+                    _clip_tracker_r_value(scenario.get("total_r"), TRACKER_SCORING_R_CLIP)
+                    for _setup, scenario in pairs
+                )
+                if clipped is not None
+            ]
+            distances = [
+                distance
+                for distance in (
+                    _band_variant_stop_distance_atr(setup, scenario) for setup, scenario in pairs
+                )
+                if distance is not None
+            ]
+            stopped = sum(
+                1 for scenario in closed if str(scenario.get("status") or "").upper() == "STOPPED"
+            )
+            target = sum(
+                1
+                for scenario in closed
+                if str(scenario.get("status") or "").upper() == "TARGET_HIT"
+            )
+            row[f"n_closed_{label}"] = len(closed)
+            row[f"avg_total_r_{label}"] = _band_variant_mean(r_values)
+            row[f"stop_out_rate_{label}"] = _band_variant_rate(stopped, len(closed))
+            row[f"target_hit_rate_{label}"] = _band_variant_rate(target, len(closed))
+            row[f"mean_stop_distance_atr_{label}"] = _band_variant_mean(distances)
+        rows.append({column: row[column] for column in BAND_VARIANT_STATS_COLUMNS})
+    return rows
+
+
 def export_setup_tracker_views(payload: dict) -> None:
     setups = payload.get("setups", {}) if isinstance(payload, dict) else {}
     attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload, dict) else {}
@@ -10819,6 +11121,10 @@ def export_setup_tracker_views(payload: dict) -> None:
     pd.DataFrame(short_horizon_rows).to_csv(SETUP_SHORT_HORIZON_FILE, index=False)
     pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
     pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
+    # Shadow evidence, same pass, read by nothing that scores or alerts.
+    pd.DataFrame(
+        build_band_variant_stats_rows(setups), columns=list(BAND_VARIANT_STATS_COLUMNS)
+    ).to_csv(SETUP_BAND_VARIANT_STATS_FILE, index=False)
 
 
 def _infer_tracker_scan_date(

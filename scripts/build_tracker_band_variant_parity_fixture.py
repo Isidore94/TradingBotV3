@@ -175,7 +175,7 @@ def measure(bars: list[dict], row: dict) -> dict:
     Importable so the parity test measures with exactly this recipe rather than
     a paraphrase of it - a parity test whose SETUP drifts is not a parity test.
     """
-    from master_avwap_lib import legacy
+    from master_avwap_lib import legacy, runner
 
     frame = _frame(bars)
     scan_frame = frame.iloc[:BARS_AT_SCAN]
@@ -193,6 +193,15 @@ def measure(bars: list[dict], row: dict) -> dict:
             "bands": {key: float(value) for key, value in bands.items()},
         },
         "previous_anchor": {},
+        # The challenger's shadow blocks, computed the way the scanner computes
+        # them (Phase 0.10 B-2 item 1). Absent from the frozen expectations by
+        # construction: they did not exist when this fixture was frozen, and the
+        # parity test only demands that PRE-EXISTING keys are unchanged. There
+        # is no previous anchor on this fixture, so that block states its reason.
+        "current_anchor_variant": runner.build_anchor_band_variant_meta(
+            scan_frame, ANCHOR_INDEX, ANCHOR_DATE
+        ),
+        "previous_anchor_variant": runner.build_anchor_band_variant_meta(None, None, ""),
         "entry_feature_snapshot": {},
         "daily_ohlc": [],
     }
