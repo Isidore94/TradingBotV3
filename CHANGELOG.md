@@ -27,6 +27,76 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-27 - The Market Journal loads, carries the tape, and reaches the nightly AI
+
+**IMPLEMENTED / GREEN; live gate owed.** Trader, after a full session of
+in-session notes: "this is empty and feels very useless to me. this should
+capture more stuff, such as SPY charts, what they looked like when the auto
+mode flipped, my entries, what the charts looked like when i inputted entries,
+what the D1 looked like.. i also expect the AI to get access to these notes for
+the daily summary function."
+
+Five entries were on disk for 2026-08-27 and the page showed none of them. Two
+defects sat behind that, and the rest of the report was a missing feature.
+
+**The page never loaded.** `MarketJournalPanel.reload()` had no caller at all -
+not in `__init__`, not on show, and `_select_page` only special-cases the AWAY
+Recap. The page was blank until "Refresh" was pressed, which reads as an empty
+journal. It now loads the first time it is shown, and only then: the desk builds
+every left-nav panel at startup and most are never opened.
+
+**There were two services, not one.** `_build_journal_tab` constructed its own
+`MarketJournalService`, so the desk tab's `entryWritten` was emitted by an
+object the left-nav page had never heard of. Both wrote the same file correctly
+(the ledger append is atomic per line) - what was lost was the refresh. One
+process-wide `shared_journal_service()` now backs both surfaces, which is what
+the R10.H docstring had claimed since it was written.
+
+**Every entry now stores the tape it was written against** -
+`scripts/market_journal_capture.py`, new. Bars, never pictures: a PNG cannot be
+re-ranged, measured, or read by the nightly AI layer. A capture holds the
+symbol's M5 and D1 and SPY's M5 and D1 as they stood at the moment of the note,
+in two stores on purpose - a **sidecar** JSON per capture for the bar windows
+(tens of KB, only the page reads it) and a **ledger row**
+(`market_journal_chart_v1`, stream `market_journal_charts`) carrying a short
+text `digest`: where price sat against its session range, session VWAP, the
+prior session's extremes, the 20/50/200-day averages and RVOL. The raw window
+would starve every other source in an AI packet; the digest says the same thing
+in a few hundred characters.
+
+`market_journal_entry_v1` is **untouched** - a capture joins by `entry_id` from
+the outside, which is what lets it be written AFTER the entry, on a worker,
+without a note ever waiting on a chart. A capture that fails leaves an entry
+that is honestly chartless; an entry that was never written is a lost thought,
+and those are not the same cost. Every bar list is a CACHE read
+(`AlertCenterPanel.journal_chart_bars`, new and public) - nothing fetches.
+
+**Auto-mode flips write their own row.** `AutopilotService.autoModeChanged`
+(previous, current) fires only when `auto_mode` actually moves - a profile
+change while Auto is OFF is not a flip - and `MainWindow._record_auto_mode_flip`
+writes a Market Journal entry with SPY's M5 and D1 attached. The row carries
+`ORIGIN_AUTO_MODE_FLIP` and `market_journal.is_machine_entry` reads it back, so
+the page can mark it `[desk]`: the journal is one timeline, and a reader
+counting "what did you think?" must never count a sentence nobody thought.
+
+**The page draws the capture.** Selecting an entry loads its sidecar on a worker
+and draws up to four panes; a pane with nothing stored is HIDDEN rather than
+drawn empty, and a stored bar whose stamp will not parse is dropped, counted and
+named (the axis formats every stamp with `strftime`, so one string takes the
+chart down rather than degrading it).
+
+**The nightly AI reads the journal now.** `market_journal` joins
+`briefs.DEFAULT_SCOPES` on the trader's explicit instruction, reversing the
+R10.I opt-in - which was itself a recorded trader decision, and the same trader
+is the only thing that could reverse it. Its sources keep the funding rule
+(distilled first, free text last): evidence report, day context, **chart
+digests**, then the entries. `TICKER_BRIEF_SCOPES` stops being an alias for
+`DEFAULT_SCOPES` and keeps the original four - a session-level journal entry in
+a per-symbol packet is the TB-0/TB-5 failure mode.
+
+Two pinned tests changed rather than being worked around: both asserted the
+opt-in that the trader has now reversed, and they now pin the new decision.
+
 ### 2026-08-27 - Double-click on a claim commits the like, the way it does on a veto
 
 **IMPLEMENTED / GREEN.** Trader: "i want to be able to double click the like and

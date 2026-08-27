@@ -1510,10 +1510,33 @@ second scoreboard.
    overlay, entries, an environment timeline with the auto-vs-manual agreement
    rate, the calendar strip, and the day-context table). The existing "Journal"
    page remains the trade/tax journal; the label difference is deliberate.
+   **Extended 2026-08-27 on trader instruction (BUILT, three live gates owed).**
+   The page had no `reload()` caller and the desk tab held a second service, so
+   a day with five entries rendered empty; both fixed (show-once load, one
+   `shared_journal_service()`). Every entry now stores the tape it was written
+   against - `scripts/market_journal_capture.py`, the symbol's M5/D1 and SPY's
+   M5/D1 as bars in a per-capture sidecar plus a short text digest in a
+   `market_journal_chart_v1` ledger row. `market_journal_entry_v1` is untouched;
+   the capture joins by `entry_id` and is written AFTER the entry on a worker,
+   so a note never waits on a chart. `AutopilotService.autoModeChanged` writes a
+   machine-authored flip row (`ORIGIN_AUTO_MODE_FLIP`) with SPY attached. The
+   six-D1-chart note in the paragraph above was replaced by the captured panes:
+   what the trader was looking at, not what the symbol looks like now.
+   *Owed:* (a) a Desk-tab note appearing on the left-nav page with no Refresh,
+   with its charts; (b) one real auto-mode flip producing a `[desk]` row with
+   SPY's tape; (c) one nightly `ai_summary` packet naming `journal.chart_digests`
+   and `journal.entries`.
 10. **R10.I Scheduled report slot and opt-in AI scope** - **BUILT 2026-08-24, GREEN, under the trader's recorded SEQUENCING override (decision record §4). The evidence-quality CLAIMS GATE is NOT waived and remains binding**: until two weeks of R10.A/B collection exist every report states its n, labels everything `discovery`, and prints that the window is unmet. Originally specified as: after two weeks of
     R10.A collection. An `evidence_report` slot appended to the runner
     (deterministic, no model) and an opt-in `market_journal` scope absent from
-    `DEFAULT_SCOPES`. Nothing in this chain may reach a detector, score, alert,
+    `DEFAULT_SCOPES`. **The opt-in was REVERSED by the trader on 2026-08-27**
+    ("i also expect the AI to get access to these notes for the daily summary
+    function"): `market_journal` is now in `DEFAULT_SCOPES`, carrying the
+    evidence report, the day context, the chart digests and then the entries in
+    that funding order. `TICKER_BRIEF_SCOPES` stopped being an alias and keeps
+    the original four - a session-level entry in a per-symbol packet is the
+    TB-0/TB-5 failure mode. The recorded decision stands as history; only the
+    trader could reverse it, and did. Nothing in this chain may reach a detector, score, alert,
     watchlist, Focus, the review queue or `review_policy.json`.
 
 10a. **AWAY day recap and queue routing** - **BUILT 2026-08-24, GREEN offline;

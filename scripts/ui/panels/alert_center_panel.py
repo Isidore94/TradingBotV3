@@ -3983,9 +3983,14 @@ class AlertCenterPanel(QFrame):
         from PySide6.QtWidgets import QComboBox, QPlainTextEdit
 
         import market_journal
-        from ui.services.market_journal_service import MarketJournalService
+        from ui.services.market_journal_service import shared_journal_service
 
-        self.market_journal_service = MarketJournalService(self)
+        # The SHARED service, not a second instance. Both were writing the same
+        # file correctly, but a note typed here never told the left-nav Market
+        # Journal page to refresh - its `entryWritten` came from an object that
+        # page had never heard of. One writer is what the R10.H docstring
+        # always claimed; this is what makes it true.
+        self.market_journal_service = shared_journal_service()
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -4038,6 +4043,57 @@ class AlertCenterPanel(QFrame):
         )
         if result.get("ok"):
             self._journal_text.clear()
+            self._capture_journal_charts(result.get("entry") or {}, symbol)
+
+    def journal_chart_bars(self, symbol: str) -> tuple[list, list]:
+        """(M5, D1) cached bars for one symbol, for a Market Journal capture.
+
+        Public because the auto-mode flip capture lives in `ui.app` and must
+        not reach into this panel's private accessors. Cache reads only - the
+        same two the D1 watch poll already makes - so it never fetches and is
+        safe from the Qt thread.
+        """
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return [], []
+        return self._m5_bars_for(symbol, sessions=2), self._d1_bars_for(symbol)
+
+    def _capture_journal_charts(self, entry: dict, symbol: str) -> None:
+        """Store the tape this note was written against.
+
+        AFTER the entry is on disk, never before: a note must not wait on a
+        chart, and a capture that fails leaves an entry that is honestly
+        chartless rather than a thought that was lost.
+
+        Every bar list here is a CACHE read - `_m5_bars_for` reads
+        `latest_bars` and `_d1_bars_for` reads the chart service's memoized
+        dicts - so nothing fetches and nothing blocks. The trimming, the digest
+        and both file writes happen on the service's worker.
+
+        Capture-side only. No alert, tier, fold, digest, queue, score or
+        detector behaviour is touched by this method or its caller.
+        """
+        import market_journal_capture
+
+        entry_id = str(entry.get("entry_id") or "")
+        if not entry_id:
+            return
+        benchmark = market_journal_capture.BENCHMARK_SYMBOL
+        symbol_m5, symbol_d1 = self.journal_chart_bars(symbol)
+        benchmark_m5, benchmark_d1 = self.journal_chart_bars(benchmark)
+        try:
+            self.market_journal_service.capture_charts(
+                entry_id=entry_id,
+                symbol=symbol,
+                reason=market_journal_capture.REASON_ENTRY,
+                m5_bars=symbol_m5,
+                d1_bars=symbol_d1,
+                benchmark_m5=benchmark_m5,
+                benchmark_d1=benchmark_d1,
+            )
+        except Exception:
+            # The note is saved; the picture beside it is best-effort.
+            logging.exception("Market journal chart capture could not be started.")
 
     def _refresh_armed_list(self) -> None:
         self.armed_list.set_watches(

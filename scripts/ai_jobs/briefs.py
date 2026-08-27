@@ -27,8 +27,27 @@ from typing import Any, Mapping, Sequence
 #: The scopes a hands-off nightly review should cover. Journal review is
 #: deliberately included: it is the trader's own revealed preference and the
 #: whole point of the nightly read.
-DEFAULT_SCOPES = ("daily_report", "market_conditions", "setup_trackers", "journal_review")
-TICKER_BRIEF_SCOPES = DEFAULT_SCOPES
+#:
+#: ``market_journal`` was added 2026-08-27 on the trader's explicit instruction
+#: ("i also expect the AI to get access to these notes for the daily summary
+#: function"). R10.I had made it opt-in and absent from this tuple; that was a
+#: trader decision and this is the same trader reversing it, which is the only
+#: thing that could. It carries the trader's own free text about the session
+#: plus the machine-measured day context and the chart digests written beside
+#: each entry - the half of the day nothing else in this slate can see.
+DEFAULT_SCOPES = (
+    "daily_report",
+    "market_conditions",
+    "setup_trackers",
+    "journal_review",
+    "market_journal",
+)
+#: Per-symbol packets stay the ORIGINAL four. `market_journal` joined the daily
+#: summary, not this: a journal entry is about a session, and TB-0/TB-5 measured
+#: what happens when session-level text rides into a per-symbol packet - 96.2%
+#: of a brief was roster noise, starving the symbol-specific evidence it led.
+#: The trader asked for "the daily summary function", and this is not it.
+TICKER_BRIEF_SCOPES = ("daily_report", "market_conditions", "setup_trackers", "journal_review")
 MORNING_BRIEF_FILENAME = "ai_morning_brief.txt"
 MAX_TICKER_SOURCE_CHARS = 16_000
 MAX_MORNING_BRIEF_BYTES = 48 * 1024

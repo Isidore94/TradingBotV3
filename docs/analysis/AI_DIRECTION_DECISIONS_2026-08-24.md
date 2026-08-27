@@ -45,6 +45,26 @@ already registered in plan.md Phase 0.7:
   reach an AI scope **opt-in only** (recorded trader decision, plan.md
   L1118-1126 — unchanged).
 
+**Superseded in two places on 2026-08-27, by the trader, in as many words.**
+The record above stands as history; these two lines are what is true now.
+
+1. *"i also expect the AI to get access to these notes for the daily summary
+   function."* The R10.I opt-in is **reversed**: `market_journal` is in
+   `briefs.DEFAULT_SCOPES`. Only the trader could reverse a recorded trader
+   decision, and did. `TICKER_BRIEF_SCOPES` stopped being an alias for it and
+   keeps the original four — a session-level entry inside a per-symbol packet
+   is the TB-0/TB-5 failure mode named in §3 below.
+2. *"this should capture more stuff, such as SPY charts, what they looked like
+   when the auto mode flipped, my entries, what the charts looked like when i
+   inputted entries, what the D1 looked like."* The "six D1 charts" surface in
+   the R10.H line above is **replaced** by a per-entry capture: the symbol's
+   M5/D1 and SPY's M5/D1 as BARS at the moment the note was written
+   (`scripts/market_journal_capture.py`, sidecar + a `market_journal_chart_v1`
+   digest row), plus a machine-authored row for every auto-mode flip. Six live
+   charts answer "what does this symbol look like now"; the trader asked what
+   they were looking at when they wrote it, which is a different question and
+   the only one a journal can answer later.
+
 ## 3. Walk-away and setup-tracker AI reads: opt-in scopes over deterministic outputs
 
 Approved direction, on the `pick_feedback`/`trader_judgement` precedent

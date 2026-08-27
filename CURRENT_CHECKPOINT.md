@@ -8,6 +8,67 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 (evening) - Market Journal: it loads, it carries the tape, the AI reads it
+
+**Branch `claude/warehouse-build-memory`.** Trader, with a screenshot of an
+empty page after a full day of in-session notes: "this is empty and feels very
+useless to me. this should capture more stuff, such as SPY charts, what they
+looked like when the auto mode flipped, my entries, what the charts looked like
+when i inputted entries, what the D1 looked like.. i also expect the AI to get
+access to these notes for the daily summary function."
+
+Five entries were on disk for the session (`market_journal-202608.jsonl`, 13:36
+through 19:34) and the page rendered none of them.
+
+**The two defects.** `MarketJournalPanel.reload()` had NO caller - not
+`__init__`, not a show hook, and `_select_page` special-cases only the AWAY
+Recap - so the page was blank until "Refresh" was pressed. And the Desk tab
+built its own `MarketJournalService`, so its `entryWritten` came from an object
+the page had never heard of; both wrote the same file correctly and what was
+lost was the refresh. Now: `showEvent` loads once, and one process-wide
+`shared_journal_service()` backs both surfaces.
+
+**The feature.** `scripts/market_journal_capture.py` (new) stores the symbol's
+M5/D1 and SPY's M5/D1 as they stood at each note - bars, not pictures - in a
+sidecar per capture, with a short text digest in a `market_journal_chart_v1`
+ledger row. `market_journal_entry_v1` is untouched; a capture joins by
+`entry_id` from outside, written AFTER the entry on a worker so a note never
+waits on a chart. `AutopilotService.autoModeChanged` fires on a real mode move
+only, and `MainWindow._record_auto_mode_flip` writes the flip with SPY attached,
+marked `ORIGIN_AUTO_MODE_FLIP`. The page draws the panes that were captured and
+hides the ones that were not.
+
+**The AI.** `market_journal` joined `briefs.DEFAULT_SCOPES` on the trader's
+explicit instruction, reversing R10.I's opt-in (itself a trader decision).
+`TICKER_BRIEF_SCOPES` is no longer an alias and keeps the original four.
+Two pinned tests asserted the old decision and now pin the new one.
+
+**File-scoped ask-first rule:** `alert_center_panel.py` and
+`autopilot_service.py` were both edited; the trader was asked first and
+answered "Yes, build all of it". Every edit in both is capture/announce only -
+no detector, score, tier, fold, digest, queue or alert behaviour is touched.
+
+**Verification:** `pytest tests/ -q` -> **5240 passed, 19 subtests, exit 0**
+(307 s). `smoke_check.py` -> 7/7. `launch_gui.py --selftest` -> **72/72 passed**.
+New tests: `tests/test_market_journal_capture.py` (19),
+`tests/test_qt_market_journal_page.py` (14), three appended to
+`tests/test_auto_mode_semantics.py`. **Three pinned tests were UPDATED, not
+worked around** - `test_evidence_report_slot`, `test_opt_in_evidence_scopes` and
+`test_veto_cohort_grading` each asserted the R10.I opt-in the trader reversed;
+all three now pin the new decision and the last still guards
+`trader_judgement` staying out.
+**Packaging trigger 3 does NOT fire** - `market_journal_capture` is a top-level
+module, not a new package - but it is added to `selftest.LAZY_ENGINE_MODULES`
+because both journal surfaces and `ui.app` import it at call time.
+
+**Owed live gates:** (1) one desk session where a note written on the Desk tab
+appears on the left-nav page without a Refresh, with its four charts; (2) one
+real auto-mode flip producing a `[desk]` row with SPY's tape; (3) one nightly
+`ai_summary` run whose packet names `journal.chart_digests` and
+`journal.entries`.
+
+**Needs a restart to reach the desk.**
+
 ## 2026-08-27 (13:00) - capture rail: the like's double-click commits like the veto's
 
 **Branch `claude/warehouse-build-memory`.** Trader: "i want to be able to double

@@ -81,6 +81,10 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "focus_membership_events",
     "market_context_ledger",
     "market_journal",
+    # Imported at call time by both journal surfaces and by the auto-mode flip
+    # capture in ui.app - so a bundle missing it dies at the first note, which
+    # is exactly the failure mode this list exists for.
+    "market_journal_capture",
     "evidence_stats",
     "ui.services.market_journal_service",
     "ui.panels.market_journal_panel",

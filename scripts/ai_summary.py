@@ -482,6 +482,25 @@ def _market_journal_file() -> Path:
         return Path(RUNTIME_DATA_DIR) / "evidence_ledgers" / "market_journal.jsonl"
 
 
+def _market_journal_charts_file() -> Path:
+    """The DIGEST rows, never the bar sidecars.
+
+    Each row is a few hundred characters saying where price sat against its
+    session range, VWAP, the prior session's extremes, the daily averages and
+    RVOL - for the entry's symbol and for SPY. The bar windows themselves are
+    tens of KB each and would starve every other source in the packet; they
+    exist for the Market Journal page to redraw, not for a model to read.
+    """
+    try:
+        from market_journal_capture import STREAM_CHARTS
+
+        return _ledger_segment(STREAM_CHARTS)
+    except Exception:
+        from project_paths import RUNTIME_DATA_DIR
+
+        return Path(RUNTIME_DATA_DIR) / "evidence_ledgers" / "market_journal_charts.jsonl"
+
+
 def _walkaway_text_file() -> Path:
     try:
         from journal_walkaway import WALKAWAY_TEXT_FILE
@@ -641,6 +660,11 @@ def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
                 "journal.day_context",
                 "Daily market context rows (machine-measured)",
                 _daily_context_file(),
+            ),
+            (
+                "journal.chart_digests",
+                "What the charts looked like when each entry was written",
+                _market_journal_charts_file(),
             ),
             (
                 "journal.entries",

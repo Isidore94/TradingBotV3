@@ -145,6 +145,11 @@ class MainWindow(QMainWindow):
         )
         self.autopilot_panel.service.enabledChanged.connect(self._sync_scan_scheduler_owner)
         self._sync_scan_scheduler_owner(self.autopilot_panel.service.enabled)
+        # Every auto-mode flip becomes a Market Journal row with SPY's tape
+        # attached, so the journal reads as ONE timeline - what the trader
+        # thought and what the desk did, in order. Evidence only: nothing here
+        # reaches a detector, score, alert, watchlist, Focus or the queue.
+        self.autopilot_panel.service.autoModeChanged.connect(self._record_auto_mode_flip)
         self.settings_panel = SettingsPanel(
             self.state,
             bounce_service=self.trading_panel.bounce_panel.service,
@@ -499,6 +504,51 @@ class MainWindow(QMainWindow):
             # would attribute every later idle stall to the last page visited.
             interaction_trace.end()
 
+    def _record_auto_mode_flip(self, previous: str, current: str) -> None:
+        """Write the flip into the Market Journal, with SPY as it stood.
+
+        The trader asked for "what the charts looked like when the auto mode
+        flipped" (2026-08-27). The row is marked machine-written through its
+        ORIGIN, so a reader counting "what did you think?" never counts a
+        sentence nobody thought.
+
+        Quiet on every failure path: an evidence store must never cost the
+        thing it records, and the mode has already changed by the time this
+        runs.
+        """
+        try:
+            import market_journal
+            import market_journal_capture
+            from datetime import date
+
+            service = self.market_journal_panel.service
+            benchmark = market_journal_capture.BENCHMARK_SYMBOL
+            text = (
+                f"Auto mode {previous or 'UNKNOWN'} -> {current or 'UNKNOWN'}. "
+                "Written by the desk, not the trader."
+            )
+            result = service.write_entry(
+                text=text,
+                session_date=date.today().isoformat(),
+                timeframe=market_journal.TIMEFRAME_M5,
+                symbols=[benchmark],
+                origin=market_journal.ORIGIN_AUTO_MODE_FLIP,
+            )
+            entry_id = str((result.get("entry") or {}).get("entry_id") or "")
+            if not result.get("ok") or not entry_id:
+                return
+            m5_bars, d1_bars = self.trading_panel.alert_center.journal_chart_bars(benchmark)
+            service.capture_charts(
+                entry_id=entry_id,
+                symbol=benchmark,
+                reason=market_journal_capture.REASON_MODE_FLIP,
+                note=f"{previous} -> {current}",
+                m5_bars=m5_bars,
+                d1_bars=d1_bars,
+            )
+        except Exception:
+            logging.exception("The auto-mode flip could not be journalled.")
+
     def _feed_away_recap(self) -> None:
         """Hand the recap the Alert Center's own backing list, then reload.
 
@@ -674,6 +724,11 @@ class MainWindow(QMainWindow):
         for panel in (
             self.trading_panel,
             self.journal_panel,
+            # Added 2026-08-27: this page now owns two workers and the shared
+            # journal service's capture threads. It was absent from this list
+            # while it owned one, which cost nothing then and would cost a
+            # half-written capture now.
+            self.market_journal_panel,
             self.weekend_prep_panel,
             self.universe_panel,
             self.research_panel,

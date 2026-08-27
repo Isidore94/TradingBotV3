@@ -188,14 +188,16 @@ def test_a_failed_publish_is_reported_as_failed(tmp_path):
 # ==========================================================================
 # the opt-in scope
 # ==========================================================================
-def test_the_market_journal_scope_is_registered_but_not_nightly():
-    """Free-text journal entries reach an AI scope OPT-IN ONLY - a recorded
-    trader decision, unchanged."""
+def test_the_market_journal_scope_is_registered_and_now_nightly():
+    """R10.I made this scope opt-in on a recorded trader decision. On
+    2026-08-27 the same trader reversed it in as many words - "i also expect
+    the AI to get access to these notes for the daily summary function" - which
+    is the only thing that could. The per-ticker slate did NOT follow."""
     import ai_summary
     from ai_jobs import briefs
 
     assert "market_journal" in ai_summary.SCOPE_LABELS
-    assert "market_journal" not in briefs.DEFAULT_SCOPES
+    assert "market_journal" in briefs.DEFAULT_SCOPES
     assert "market_journal" not in briefs.TICKER_BRIEF_SCOPES
 
 
@@ -208,11 +210,17 @@ def test_the_scope_funds_the_distilled_half_before_the_free_text():
     assert [source_id for source_id, _label, _path in specs] == [
         "journal.evidence_report",
         "journal.day_context",
+        "journal.chart_digests",
         "journal.entries",
     ]
 
 
-def test_the_scope_resolves_all_three_sources():
+def test_the_scope_resolves_every_source_it_declares():
+    """Four since 2026-08-27: the chart digests joined the three originals.
+
+    Usable or excluded, every declared source must be ACCOUNTED for - a source
+    that resolves to nothing and is never mentioned is how a packet reads as
+    complete while missing half its evidence."""
     import ai_summary
 
     package = ai_summary.build_evidence_package(["market_journal"])
@@ -220,7 +228,12 @@ def test_the_scope_resolves_all_three_sources():
     seen = set(coverage["usable_source_ids"]) | {
         row["source_id"] for row in coverage["excluded"]
     }
-    assert seen == {"journal.evidence_report", "journal.day_context", "journal.entries"}
+    assert seen == {
+        "journal.evidence_report",
+        "journal.day_context",
+        "journal.chart_digests",
+        "journal.entries",
+    }
 
 
 # ==========================================================================
