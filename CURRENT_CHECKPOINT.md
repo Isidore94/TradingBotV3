@@ -8,6 +8,59 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-26 night - REVIEW of Phase 0.10 B-0..B-3 (Fable): GO with two fixes owed before B-4
+
+Reviewed `002f2a3..292e335` by reproduction on a detached worktree, not from the
+handoff: `pytest tests/ -q` **4968 passed / 19 subtests, exit 0** (234 s),
+matching the builder's number. Verified at source: the parity fixture
+`tracker_record_band_variant_parity_v1.json` was frozen in `5613eec` and is
+byte-unchanged by `603333b` (only its builder script gained the two shadow
+blocks), and its `numeric_tolerance` is 1e-9, so "every pre-existing key
+unchanged" is effectively exact; the runner's previous-anchor block uses the
+previous anchor's own index (`anchor_idx` is rebound at `runner.py:817`);
+`stop_source_type` is carried through the recompute path
+(`_extract_tracker_stop_candidates_from_setup`), so the fence holds after a
+rebuild; the overlay group is in `GROUPS_HIDDEN_BY_DEFAULT` and the prefs file
+keeps it off unless `shown_groups` names it. The branch base is
+`d30b732` (the `gui-p1-fluidity` tip), and `claude/gui-phase-0-9` was cut from
+`292e335`, so the two build branches are linear, not divergent.
+
+**Two fixes owed, both small, before B-4 starts:**
+
+1. **The shadow export can cost the tracker save.** `export_setup_tracker_views`
+   (`legacy.py:11099`) writes `master_avwap_band_variant_stats.csv` as its last
+   statement with no guard, and its caller (`:11541`) runs
+   `save_setup_tracker_payload` AFTER it (`:11552`). A raising
+   `build_band_variant_stats_rows` - one malformed setup dict is enough - would
+   abort the day's tracker save. R10's rule: an evidence store is never allowed
+   to cost the thing it records. Fix: `try/except Exception` +
+   `logging.warning` around the shadow write only, and a fail-before-fix test
+   that a raising builder still leaves the champion CSVs written and returns.
+2. **The fence is a hand-maintained list.** Seven readers filter on
+   `_is_band_variant_scenario`, three of them found by the fixture rather than
+   by reading - which is exactly why an eighth reader will not be found by
+   reading either. Fix: a source-level guard test in the shape of
+   `test_shutdown_waits_are_bounded.py`: every
+   `(setup.get("scenarios") or {}).values()` iteration site in `legacy.py`
+   either references `_is_band_variant_scenario` within its enclosing
+   function or is on a documented allowlist (the per-bar grader, the stop
+   rebuild at `:1414`, the sealed-record compaction at `:11237` - sites that
+   MUST see the shadow scenarios).
+
+**One trader decision, recorded here, not made here:** the tracker JSON grows
+9,982 bytes per new setup (~144 MB forward on the ~950 MB file) because six
+variant scenarios are built per setup while the stats table pairs on ONE exit
+template (`_band_variant_paired_scenarios`). Building the variant stop for the
+four non-experimental templates only is the builder's one-line cut (~96 MB);
+building it for the paired template only is ~24 MB. Recommendation: the
+four non-experimental templates - keeps a per-template comparison possible at a
+third less cost.
+
+**Carried into the B-4 prompt, not a fix:** the builder's fairness finding -
+"a wider band gets stopped out less often" is false when entry is outside the
+band (the fixture's short: challenger stop 0.16 vs champion 0.97 from entry) -
+so T1/T3 stop metrics condition on the entry's position relative to each band.
+
 ## 2026-08-26 - ACTIVE: Phase 0.10 AVWAP band challenger, packets B-0..B-3 BUILT
 
 **Branch `claude/avwap-band-challenger`, off `claude/gui-p1-fluidity` at
