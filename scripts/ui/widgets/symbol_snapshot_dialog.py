@@ -977,11 +977,30 @@ class SymbolSnapshotDialog(QDialog):
             "next chart in the setups table."
         )
         self.dislike_button.clicked.connect(self._review_dislike)
+        # Trader, 2026-08-27: "I'd like a next or previous button so I can
+        # continue cycling down the list." Space on the table already
+        # advanced; these put the same walk on the popup itself, so a pass
+        # over the setups never needs the table. No decision is recorded by
+        # either - they only move.
+        self.previous_button = QPushButton("◀ Prev")
+        self.previous_button.setToolTip(
+            "Open the previous visible row's chart in the setups table. "
+            "Records nothing."
+        )
+        self.previous_button.clicked.connect(self._review_previous)
+        self.next_button = QPushButton("Next ▶")
+        self.next_button.setToolTip(
+            "Open the next visible row's chart in the setups table. "
+            "Records nothing."
+        )
+        self.next_button.clicked.connect(self._review_next)
 
         self.action_row = QWidget()
         action_layout = QHBoxLayout(self.action_row)
         action_layout.setContentsMargins(10, 0, 10, 8)
         action_layout.setSpacing(6)
+        action_layout.addWidget(self.previous_button)
+        action_layout.addWidget(self.next_button)
         action_layout.addWidget(self.dislike_button)
         action_layout.addWidget(self.d1_focus_button)
         action_layout.addWidget(self.m5_focus_button)
@@ -1169,6 +1188,8 @@ class SymbolSnapshotDialog(QDialog):
         reviewing = self.review_host is not None
         self.action_row.setVisible(host is not None or reviewing)
         self.dislike_button.setVisible(reviewing)
+        self.previous_button.setVisible(reviewing)
+        self.next_button.setVisible(reviewing)
         # Watch/focus toggles need a watch host to act through; hide them
         # rather than showing dead buttons in a review-only popup.
         for button in (
@@ -1232,6 +1253,19 @@ class SymbolSnapshotDialog(QDialog):
         else:
             host.arm_d1_event_watch(self._symbol, kind)
         self._refresh_watch_actions()
+
+    def _review_next(self) -> None:
+        """Walk to the next visible row's chart. Moves only; records nothing."""
+        if self.review_host is None:
+            return
+        self.review_host.snapshot_review_advance()
+
+    def _review_previous(self) -> None:
+        """Walk back one row. An older host without the method is inert."""
+        host = self.review_host
+        if host is None or not hasattr(host, "snapshot_review_previous"):
+            return
+        host.snapshot_review_previous()
 
     def _review_dislike(self) -> None:
         """The review-flow ✕: the host prompts for the reason, logs it, and

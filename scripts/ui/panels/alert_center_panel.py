@@ -66,6 +66,7 @@ from chart_watch import (
 import focus_adoption_gate
 import regime_pause_hold
 from regime_pause_focus import day_bias, focus_side_for
+import sma_trend_gate
 from prev_day_gate import (
     CLOSED as PREV_DAY_CLOSED,
     OPEN as PREV_DAY_BREAK_OPEN,
@@ -629,6 +630,8 @@ class AlertCenterPanel(QFrame):
         self._mover_measure_cache: dict[tuple[str, str], tuple[tuple, str]] = {}
         #: Same shape for the session-VWAP leg (trader rule 2026-08-27).
         self._vwap_measure_cache: dict[tuple[str, str], tuple[tuple, str]] = {}
+        #: And for the D1 trend leg (trader rule 3, 2026-08-27).
+        self._sma_measure_cache: dict[tuple[str, str], tuple[tuple, str]] = {}
         self._focus_break_open_at: dict[str, datetime] = {}
         self._focus_gate_held = 0
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
@@ -1460,37 +1463,93 @@ class AlertCenterPanel(QFrame):
             logging.debug("Session VWAP state unavailable for %s.", symbol, exc_info=True)
             return PREV_DAY_UNKNOWN
 
-    def _review_chart_state(self, alert: BounceAlert) -> str:
-        """Should this chart show? Both legs, one answer.
+    @staticmethod
+    def _is_d1_review(alert: BounceAlert) -> bool:
+        """A chart the D1 side of the desk recommended - the swing scanner's
+        D1 rows and the Focus D1 interest flags. The trend leg applies to
+        these and to nothing intraday."""
+        return bool(alert.is_d1) or str(alert.tag or "") == FOCUS_D1_EVENT_TAG
 
-        CLOSED when EITHER leg is verified against the name - inside
-        yesterday's range, or on the wrong side of session VWAP. One measured
-        reason to hide is enough; that is deliberately not the adoption gate's
-        ordering, which reports "could not measure" before "measured and
-        failed" because it is explaining an eviction, not deciding a display.
-        UNKNOWN (nothing verified against it, something unmeasurable) SHOWS,
-        tagged; OPEN is a verified pass on both legs.
+    def sma_trend_state(self, symbol: str, side: str) -> str:
+        """OPEN / CLOSED / UNKNOWN for "a long above the SMA200, a short below the SMA50".
+
+        Trader rule 3, 2026-08-27, from MUFG: a D1 short recommended above
+        every SMA in a clean uptrend. The rule is `sma_trend_gate`; this only
+        feeds it numbers the desk already holds - the averages off completed
+        bars of the local daily store, the price off the last completed M5
+        bar when the bot has one and off the last daily bar otherwise. No
+        fetch, no IB traffic. Memoized on the identity of both series.
         """
-        mover = self.mover_state(alert.symbol, alert.side)
-        vwap = self.vwap_state(alert.symbol, alert.side)
-        if PREV_DAY_CLOSED in (mover, vwap):
+        symbol = str(symbol or "").strip().upper()
+        side_key = str(side or "").strip().lower()
+        if not symbol or side_key not in ("long", "short"):
+            return PREV_DAY_UNKNOWN
+        try:
+            moment = datetime.now()
+            d1_bars = self._d1_bars_for(symbol)
+            m5_bars = self._m5_bars_for(symbol)
+            stamp = (
+                moment.date(),
+                self._series_stamp(d1_bars),
+                self._series_stamp(m5_bars),
+            )
+            remembered = self._sma_measure_cache.get((symbol, side_key))
+            if remembered is not None and remembered[0] == stamp:
+                return remembered[1]
+            completed = completed_session_bars(m5_bars, now=moment)
+            price = _bar_close(completed[-1]) if completed else None
+            if price is None and d1_bars:
+                price = _bar_close(d1_bars[-1])
+            sma50, sma200 = sma_trend_gate.trend_levels(d1_bars, today=moment.date())
+            state, _reason = sma_trend_gate.sma_trend_state(side_key, price, sma50, sma200)
+            self._sma_measure_cache[(symbol, side_key)] = (stamp, state)
+            return state
+        except Exception:
+            logging.debug("SMA trend state unavailable for %s.", symbol, exc_info=True)
+            return PREV_DAY_UNKNOWN
+
+    def _review_chart_state(self, alert: BounceAlert) -> str:
+        """Should this chart show? Every leg, one answer.
+
+        CLOSED when ANY leg is verified against the name - inside yesterday's
+        range, on the wrong side of session VWAP, or (a D1 recommendation
+        only) a long under its SMA200 / a short over its SMA50. One measured
+        reason to hide is enough; that is deliberately not the adoption
+        gate's ordering, which reports "could not measure" before "measured
+        and failed" because it is explaining an eviction, not deciding a
+        display. UNKNOWN (nothing verified against it, something unmeasurable)
+        SHOWS, tagged; OPEN is a verified pass on every leg asked.
+        """
+        legs = [
+            self.mover_state(alert.symbol, alert.side),
+            self.vwap_state(alert.symbol, alert.side),
+        ]
+        if self._is_d1_review(alert):
+            legs.append(self.sma_trend_state(alert.symbol, alert.side))
+        if PREV_DAY_CLOSED in legs:
             return PREV_DAY_CLOSED
-        if PREV_DAY_UNKNOWN in (mover, vwap):
+        if PREV_DAY_UNKNOWN in legs:
             return PREV_DAY_UNKNOWN
         return PREV_DAY_BREAK_OPEN
 
     def _review_badge_state(self, alert: BounceAlert) -> str:
         """What the review chart's badge says about the name in front of you.
 
-        `open` (MOVING) needs the extreme leg verified and the VWAP leg not
+        `open` (MOVING) needs the extreme leg verified and no later leg
         verified against it; a name revealed after the VWAP leg hid it says
-        `wrong_side_vwap`; the extreme leg's own answers are unchanged.
+        `wrong_side_vwap`, after the trend leg `wrong_side_sma`; the extreme
+        leg's own answers are unchanged.
         """
         mover = self.mover_state(alert.symbol, alert.side)
         if mover != PREV_DAY_BREAK_OPEN:
             return mover
         if self.vwap_state(alert.symbol, alert.side) == PREV_DAY_CLOSED:
             return "wrong_side_vwap"
+        if (
+            self._is_d1_review(alert)
+            and self.sma_trend_state(alert.symbol, alert.side) == PREV_DAY_CLOSED
+        ):
+            return "wrong_side_sma"
         return mover
 
     @staticmethod

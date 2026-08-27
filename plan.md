@@ -838,6 +838,19 @@ are listed in `CURRENT_CHECKPOINT.md`.
    badged `wrong side of VWAP`, and a before/after count of charts shown per
    hour against the 124-in-46-minutes baseline of 2026-08-27.
 
+   **Trader rule 3, same morning - BUILT 2026-08-27:** a D1 recommendation
+   against its trend is hidden - a long under its SMA200, a short over its
+   SMA50 (MUFG: a "short" above every SMA in an uptrend). Third leg of the
+   same review verdict, D1 rows and Focus D1 flags only, presentation only
+   (`scripts/sma_trend_gate.py`). The setups popup also gained Prev/Next.
+   **Live gate owed:** with the other two, one DESK session. **Not built,
+   the trader's call:** the scanner still EMITS trend-contrary D1 shorts
+   (it has `directional_sma_stack_aligned` and does not gate on it) - a
+   detector change with golden fixtures first; and an IB fetch path for the
+   forming daily candle of names outside the M5 scan set, which would spend
+   the locked pacing budget per double-click (today those previews are Yahoo
+   rows, labelled).
+
 12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).** "I want this
    program to be very fluid to use." Measured first: 1843 stalls over 50 ms and
    1008 s blocked in 3h20m, plus the two GC freezes. The trader's own hypothesis

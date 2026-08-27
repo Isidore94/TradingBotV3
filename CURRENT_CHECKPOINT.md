@@ -8,7 +8,7 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## 2026-08-27 (morning) - two trader rules BUILT: regime-pause auto-Focus (`479c25c`) and the VWAP-side / show-time review filter; queue scan done
+## 2026-08-27 (morning) - three trader rules BUILT: regime-pause auto-Focus (`479c25c`), the VWAP-side / show-time review filter (`76e0b7b`), the D1 SMA trend leg + snapshot Prev/Next; queue scan done
 
 **Branch `claude/gui-phase-0-9`** (this session, on top of `fd76923`). Trader,
 07:20: "I've been doing nothing but managing the bot all morning. There are
@@ -55,6 +55,34 @@ show time (`AlertCenterPanel.vwap_state`, `_review_chart_state`,
 **Live gate owed:** the hidden count moving at show time on a real queue, the
 `wrong side of VWAP` badge on a revealed name, and charts-shown-per-hour
 against the 124-in-46-minutes baseline below.
+
+### Rule 3 - BUILT (trader: "longs above the 200 SMA, shorts below the 50 SMA at least - go ahead")
+
+MUFG, a swing-scanner D1 "short - zone-1 reject at AVWAPE" above every SMA in
+an uptrend. Third leg of the review verdict, D1 recommendations only, plus
+`◀ Prev` / `Next ▶` on the setups snapshot popup. Presentation only - see
+`CHANGELOG.md` 2026-08-27 (rule 3). Trader-directed in chat.
+
+| Measure | Value |
+|---|---|
+| Tests added | 29 (`test_sma_trend_gate.py` 11, `test_qt_review_sma_trend.py` 13, `test_qt_snapshot_prev_next.py` 5) |
+| Fail-before-fix | four source files stashed: 18 of 18 Qt tests fail (the pure gate tests stand alone) |
+| Full suite | **5096 passed / 19 subtests, exit 0** (308 s; 5067 after rule 2) |
+| `scripts/smoke_check.py` | 7/7 |
+| Packaging trigger | none (`sma_trend_gate.py` is a plain `scripts/*.py`) |
+
+**Investigated, not changed - Yahoo forming candles:** by design, not an IB
+fault. Today's forming daily candle is built from BounceBot's IB M5 cache,
+which exists only for names in the current M5 scan set; every other
+setups-table name gets a labelled Yahoo daily row for today (the history
+underneath is the durable D1 store). An IB fetch path for those previews
+would spend the locked pacing budget on every double-click - the trader's
+call, not built.
+
+**Live gate owed:** one DESK session covering all three rules - hidden count
+moving at show time, the three badges on revealed names, Prev/Next walking a
+real setups list, and charts-shown-per-hour against the 124-in-46-minutes
+baseline.
 
 ### Restart observation, 08:07-08:10 (trader asked for a safe restart to drop 112 waiting charts)
 

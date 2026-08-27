@@ -1,8 +1,9 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the two trader
-rules of that morning (regime-pause auto-Focus `479c25c`, then the VWAP-side /
-show-time review filter) after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
+Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the three trader
+rules of that morning (regime-pause auto-Focus `479c25c`, the VWAP-side /
+show-time review filter `76e0b7b`, then the D1 SMA trend leg + the snapshot
+Prev/Next walk) after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
 surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
 checkout on 2026-08-26; see `CURRENT_CHECKPOINT.md`).
@@ -22,6 +23,65 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - D1 recommendations against their trend are hidden; the setups popup walks with Prev/Next (trader rule 3)
+
+**IMPLEMENTED / GREEN.** The chart it came out of: MUFG, a swing-scanner D1
+row "(short) zone1 reject at AVWAPE", sitting above its SMA50, SMA100 and
+SMA200 in a clean uptrend. The scanner's own feature file called MUFG a LONG
+setup and carries a `directional_sma_stack_aligned` flag; the short alert
+never read it. Trader: "longs should be above the 200 SMA and shorts below
+the 50 SMA at least."
+
+**The rule:** a D1 long charts only above its SMA200, a D1 short only below
+its SMA50 - the D1 recommendations (`is_d1` rows and `focus_d1_event` flags)
+and nothing intraday. It is the THIRD leg of the one review verdict
+(`_review_chart_state`), so it is asked at queue time and again at show time,
+hides and counts on the same button ("N hidden (inside yesterday's range /
+wrong side of VWAP or SMA) - show"), and a revealed name is badged
+`wrong side of SMA`. UNKNOWN shows.
+
+- `scripts/sma_trend_gate.py` - the decision, pure: `sma_trend_state(side,
+  price, sma50, sma200)` (a long needs `> sma200`, a short `< sma50`, the
+  other average is not consulted - "at least"), and `trend_levels(d1_bars,
+  today=)` off COMPLETED daily closes: a bar marked `preview`, or dated today
+  while today trades, is left out, because an average that moves every tick
+  must never be the thing that hides a chart. Fewer than 200 closes is no
+  SMA200 (`strength_scan.sma` refuses "as many as we have").
+- `AlertCenterPanel.sma_trend_state(symbol, side)` - averages off the local
+  daily store (`_d1_bars_for`), price off the last completed M5 bar when the
+  bot has one and the last daily bar otherwise; memoized on both series'
+  identity; any failure is UNKNOWN. No fetch, no IB traffic.
+- Detector untouched: the scanner still writes the row and its evidence;
+  this decides only whether the chart occupies the pane.
+
+**Prev / Next on the snapshot popup** (same request): `SymbolSnapshotDialog`
+gains `◀ Prev` / `Next ▶` beside `✕ Dislike`, visible only in a review walk
+(a typed lookup has no list). They route through the setups panel
+(`snapshot_review_previous` / `snapshot_review_advance`, both on the existing
+`_open_next_symbol_snapshot`, now `step=±1`, wrapping at either edge) and
+record nothing - Space on the table is unchanged.
+
+**Investigated, not changed - "a lot of these candles are from Yahoo despite
+the API being up":** the daily HISTORY is the durable D1 store. Only today's
+FORMING candle is at issue, and it is built from BounceBot's cached IB M5
+bars - which exist only for names in the current M5 scan set (the
+watchlists, Focus, auto lists). For any setups-table name outside that set
+(FTRE: "No cached M5 bars - not in the current scan set") the popup fetches a
+Yahoo daily row for today as the preview and labels it exactly so
+(`SymbolSnapshotWidget._request_snapshots`: `ibkr-cache` when M5 bars exist,
+else `yfinance-fallback`). IB is up; there is simply no IB fetch path for a
+forming candle on a name the bot is not scanning, and adding one would spend
+the locked IB pacing budget on every double-click - a design decision for the
+trader, recorded in `CURRENT_CHECKPOINT.md`.
+
+Tests: `tests/test_sma_trend_gate.py` (11), `tests/test_qt_review_sma_trend.py`
+(13: D1 short over its 50 hidden, Focus D1 long under its 200 hidden, an M5
+alert is not asked, UNKNOWN shows, the button and badge, hides-never-deletes,
+show-time withholding, the measurement over real bars - MUFG's shape, the M5
+close as price, short history is UNKNOWN), `tests/test_qt_snapshot_prev_next.py`
+(5: visible only in a walk, next/previous wrap, records nothing, side travels).
+With the four source files stashed, the two Qt files fail together.
 
 ### 2026-08-27 - Chart review hides the wrong side of VWAP, and checks at show time (trader rule 2)
 
