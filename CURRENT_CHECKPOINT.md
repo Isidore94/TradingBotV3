@@ -86,7 +86,8 @@ baseline.
 
 ### Rule 4 - BUILT: the M5 alert bar (trader: "does this make sense?" - yes; "latest at the top, oldest at the bottom")
 
-Intraday alerts list in a slim bar between the chart and the setups; the
+Intraday alerts list in a slim bar at the LEFT of the desk (built between the
+chart and the setups, moved left on the trader's second pass 09:45); the
 review queue keeps D1 rows, Focus D1 flags, armed hits and the trader's own
 charts. `ui/widgets/m5_alert_bar.py`, routing in `_enqueue_review_alert`,
 desk splitter now three-way. Detail in `CHANGELOG.md` 2026-08-27 (rule 4).
@@ -99,8 +100,13 @@ desk splitter now three-way. Detail in `CHANGELOG.md` 2026-08-27 (rule 4).
 | `scripts/smoke_check.py` | 7/7 |
 | Packaging trigger | none (new widget is under `scripts/ui`, collected) |
 
+Second pass (trader, 09:45-10:00): the bar moved to the LEFT of the chart
+column (`DESK_SPLIT_KEY` v3) and a clicked line now leaves the bar. Full
+suite after it: **5115 passed / 19 subtests, exit 0** (288 s); smoke 7/7.
+
 **Live gate owed:** one DESK session - bar fills in alert order, Copy all
-pastes into TC2000, a click charts, the waiting count is D1-only. **Desk
+pastes into TC2000, a click charts and clears its line, the waiting count is
+D1-only. **Desk
 restart needed** to pick up rules 3 and 4 (the desk relaunched at 08:10 runs
 `76e0b7b`).
 

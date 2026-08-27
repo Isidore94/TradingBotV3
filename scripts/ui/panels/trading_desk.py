@@ -28,7 +28,9 @@ from ui.services.price_alert_service import PriceAlertService
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
 
-DESK_SPLIT_KEY = "qt_desk_split_sizes_v2"
+# v3 (2026-08-27): the M5 alert bar moved to the LEFT of the chart column, so a
+# v2 split saved with the bar in the middle must not be replayed onto it.
+DESK_SPLIT_KEY = "qt_desk_split_sizes_v3"
 
 
 class TradingDeskPanel(QWidget):
@@ -199,17 +201,18 @@ class TradingDeskPanel(QWidget):
         self.alert_center.set_embedded_detail_enabled(False)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self.alert_center)
-        # The M5 alert bar sits between the chart and the setups (trader,
-        # 2026-08-27). It takes no stretch: extra width still goes to the
-        # chart column first, then the setups.
+        # The M5 alert bar is the LEFT column (trader, 2026-08-27, second
+        # pass: "move it to the left of the visual chart"). It takes no
+        # stretch: extra width goes to the chart column first, then the
+        # setups.
         splitter.addWidget(self.m5_alert_bar)
+        splitter.addWidget(self.alert_center)
         splitter.addWidget(self.master_workspace)
-        # The chart column now leads. The old 1:2 stretch meant every pixel
+        # The chart column leads. The old 1:2 stretch meant every pixel
         # added to the window went 2:1 to the setups table, so the charts got
         # relatively SMALLER on a bigger monitor.
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 3)
         splitter.setStretchFactor(2, 2)
         splitter.setChildrenCollapsible(False)
         # Both columns aggregate large minimumSizeHints from their children

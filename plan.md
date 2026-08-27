@@ -852,8 +852,8 @@ are listed in `CURRENT_CHECKPOINT.md`.
    rows, labelled).
 
    **Trader rule 4, same morning - BUILT 2026-08-27: the M5 alert bar.**
-   Intraday alerts list in a slim bar between the chart column and the
-   setups (newest on top, Copy all / Clear all, click charts) and never enter
+   Intraday alerts list in a slim bar at the left of the desk, before the
+   chart column (newest on top, Copy all / Clear all, click charts) and never enter
    the review queue, which now holds D1 rows, Focus D1 flags, armed hits and
    the trader's own charts. Routing sits at the one door
    (`_enqueue_review_alert`), after the AWAY branch; nothing upstream

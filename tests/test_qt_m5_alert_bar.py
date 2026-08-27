@@ -9,7 +9,7 @@ What these defend: the bar's order and its two buttons; that the Alert Center
 routes intraday alerts to the bar and NOT the review queue while D1 rows,
 armed hits, Focus D1 flags and the trader's own charts still queue; that the
 routing withholds nothing from the feed or the evidence stream; and that the
-bar sits between the chart column and the setups on the desk.
+bar is the left column of the desk, before the chart.
 """
 
 from __future__ import annotations
@@ -113,14 +113,18 @@ class TestTheBar:
         assert bar.title_label.text() == "M5 alerts"
         assert not bar.copy_button.isEnabled()
 
-    def test_a_click_hands_back_the_alert(self):
+    def test_a_click_hands_back_the_alert_and_the_line_goes_away(self):
+        """Trader: "after I click on an alert it should go away." """
         bar = self._bar()
-        alert = _m5("AAA")
+        alert = _m5("AAA", at="07:00:00")
         bar.post(alert)
+        bar.post(_m5("BBB", at="07:05:00"))
         got = []
         bar.alertActivated.connect(got.append)
-        bar._on_item_clicked(bar.list.item(0))
+        bar._on_item_clicked(bar.list.item(1))  # AAA is the older, lower row
         assert got == [alert]
+        assert [a.symbol for a in bar.alerts()] == ["BBB"]
+        assert bar.title_label.text() == "M5 alerts (1)"
 
     def test_the_bar_is_bounded(self):
         from ui.widgets import m5_alert_bar
@@ -243,7 +247,9 @@ class TestTheRouting:
         assert rolled == [1]
 
 
-def test_the_bar_sits_between_the_chart_column_and_the_setups():
+def test_the_bar_is_the_left_column_before_the_chart():
+    """Trader, second pass the same morning: "move it to the left of the
+    visual chart." Bar, then the chart column, then the setups."""
     from ui.panels.trading_desk import TradingDeskPanel
 
     desk = TradingDeskPanel(workspace_mode="workspace")
@@ -251,8 +257,8 @@ def test_the_bar_sits_between_the_chart_column_and_the_setups():
         splitter = desk.desk_splitter
         assert splitter is not None
         assert splitter.count() == 3
-        assert splitter.widget(0) is desk.alert_center
-        assert splitter.widget(1) is desk.m5_alert_bar
+        assert splitter.widget(0) is desk.m5_alert_bar
+        assert splitter.widget(1) is desk.alert_center
         assert splitter.widget(2) is desk.master_workspace
         # Wired both ways: alerts flow in, a click flows back.
         alert = _m5("NVDA")

@@ -38,7 +38,9 @@ the bottom."
   (`07:09  ▲ SYMBOL  type`), newest on top, side-coloured through an item
   foreground role (no per-widget stylesheet, no rebuild). `Copy all` puts the
   tickers on the clipboard one per line, each once, in bar order - a TC2000
-  paste; `Clear all` empties the bar ON SCREEN. A click emits the alert.
+  paste; `Clear all` empties the bar ON SCREEN. A click charts the alert
+  and takes its line away (trader: "after I click on an alert it should go
+  away") - the feed and History still have it.
   Bounded at 400 rows (a session produced 72 in its first 46 minutes).
 - `AlertCenterPanel._is_m5_review_alert` + routing in `_enqueue_review_alert`
   - the one door into the queue, AFTER the AWAY-recap branch and the parked
@@ -50,12 +52,15 @@ the bottom."
   front still refreshes from its own symbol's new M5 alert. `chart_alert()`
   is the public click path (same as a feed-row click). `m5AlertsDayRolled`
   clears the bar with the other day-scoped state.
-- `TradingDeskPanel` - the bar is the middle child of the desk splitter
-  (`alert_center | m5_alert_bar | master_workspace`, stretch 3/0/2, floor
+- `TradingDeskPanel` - the bar is the LEFT column of the desk splitter
+  (`m5_alert_bar | alert_center | master_workspace`, stretch 0/3/2, floor
   `px(150)`), an "M5 alerts" tab in tabs mode, rescued across mode switches.
-  `desk_layout.DESK_SPLIT_*` are now three weights - the bar's share comes
-  out of the setups side, so the chart column keeps its lead; a 2-entry saved
-  split is rejected by `load_sizes` and the preset applies once.
+  It was built between the chart and the setups and moved to the left the
+  same morning at the trader's second pass ("move it to the left of the
+  visual chart"); `DESK_SPLIT_KEY` bumped to `..._v3` so the middle-bar split
+  saved that morning is not replayed onto the new order.
+  `desk_layout.DESK_SPLIT_*` are three weights - the bar's share comes out of
+  the setups side, so the chart column keeps its lead.
 - Consequences, stated: the regime-pause hold EXPIRY (2026-08-21) and the
   movers/VWAP/SMA legs now act on D1 rows and the trader's own charts; an
   intraday row never reaches them. A counter-trend regime-pause row lists in

@@ -10,8 +10,9 @@ One line per alert, newest on top, oldest at the bottom - the trader's own
 ordering rule, stated when asked. Clicking a line charts that alert in the
 Alert Center exactly as a feed-row click does. "Copy all" puts the tickers on
 the clipboard one per line (TC2000 paste), each ticker once, in bar order;
-"Clear all" empties the bar ON SCREEN. Nothing here deletes, mutes, records or
-withholds: the alert list, History, the feed and every evidence stream are
+"Clear all" empties the bar ON SCREEN, and a clicked line leaves the bar the
+moment it is charted - looked-at is done. Nothing here deletes, mutes, records
+or withholds: the alert list, History, the feed and every evidence stream are
 written before any alert reaches this bar, and none of them reads it.
 
 Rows are plain QListWidget items with a foreground role for the side - no
@@ -167,7 +168,14 @@ class M5AlertBar(QWidget):
         self._refresh_title()
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        """Chart it, then take the line away (trader, 2026-08-27: "after I
+        click on an alert it should go away"). Looked-at is done; the feed
+        and History still have it."""
         alert = item.data(_ALERT_ROLE)
+        row = self.list.row(item)
+        if row >= 0:
+            self.list.takeItem(row)
+            self._refresh_title()
         if alert is not None:
             self.alertActivated.emit(alert)
 

@@ -62,12 +62,13 @@ def test_chart_column_leads_and_widens_with_the_desk():
     """
     narrow = _desk(1640, 980)
     narrow_sizes = narrow.desk_splitter.sizes()
-    narrow_share = narrow_sizes[0] / sum(narrow_sizes)
+    # Index 1: the M5 alert bar is the left column since 2026-08-27.
+    narrow_share = narrow_sizes[1] / sum(narrow_sizes)
     narrow.close()
 
     wide = _desk(2560, 1440)
     wide_sizes = wide.desk_splitter.sizes()
-    wide_share = wide_sizes[0] / sum(wide_sizes)
+    wide_share = wide_sizes[1] / sum(wide_sizes)
     wide.close()
 
     assert narrow_share > 0.5, f"chart column should lead, got {narrow_share:.0%}"
