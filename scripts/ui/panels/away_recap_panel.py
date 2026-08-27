@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ui.widgets.data_table import apply_width_rule_to_table_widget
+
 
 class _RecapWorker(QThread):
     """Assembles the recap off the GUI thread."""
@@ -227,6 +229,7 @@ class AwayRecapPanel(QFrame):
                 (str(row["rank"]), row["symbol"], row["side"], row["text"])
                 for row in recap.get("best_swings") or []
             ],
+            text_columns=(3,),
         )
         self._fill(
             self.alerts,
@@ -244,10 +247,12 @@ class AwayRecapPanel(QFrame):
                 )
                 for row in recap.get("classified_alerts") or []
             ],
+            text_columns=(5,),
         )
         self._fill(
             self.staged,
             [(row["symbol"], row["side"], "") for row in recap.get("staged_picks") or []],
+            text_columns=(2,),
         )
         self._fill(
             self.focus_table,
@@ -255,11 +260,27 @@ class AwayRecapPanel(QFrame):
         )
 
     @staticmethod
-    def _fill(table: QTableWidget, rows: list[tuple]) -> None:
+    def _fill(
+        table: QTableWidget,
+        rows: list[tuple],
+        *,
+        text_columns=None,
+        elide_columns=(),
+    ) -> None:
+        """Write the rows, then apply the §12 width rule to the table.
+
+        Every table on this page was a §12 violation: header labels and nothing
+        else, so each column kept its default section width and the ranked-swing
+        `Line` truncated to `1. FROG …` with two thirds of a 4K window empty.
+        The rule is applied after the fill because it measures what is there.
+        """
         table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             for column, value in enumerate(row):
                 table.setItem(index, column, QTableWidgetItem(str(value)))
+        apply_width_rule_to_table_widget(
+            table, text_columns=text_columns, elide_columns=elide_columns
+        )
 
     # -- charting (delegated; this page owns no chart) ---------------------
     def _activate_alert(self, item) -> None:

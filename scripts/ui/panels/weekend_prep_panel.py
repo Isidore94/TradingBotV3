@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 import weekend_strength
 from ui.services import journal_feed
 from ui.read_worker import ReadWorker, join_worker
+from ui.widgets.data_table import apply_width_rule_to_table_widget
 from ui.services.weekend_prep_service import STEP_IDS, STEP_LABELS, WeekendPrepService
 
 #: How many folded RS/RW rows one bucket may show in the week review. A cap
@@ -425,6 +426,7 @@ class FocusReviewPage(_StepPage):
         for index, row in enumerate(rows):
             for column, key in enumerate(columns):
                 self.table.setItem(index, column, QTableWidgetItem(str(row.get(key) or "")))
+        apply_width_rule_to_table_widget(self.table, elide_columns=(3,))
         if not rows:
             self.note.setText(
                 "No focus picks recorded for this week, or the CSVs are not readable."
@@ -457,6 +459,10 @@ class FocusReviewPage(_StepPage):
                 self.performance_table.setItem(
                     index, column, QTableWidgetItem(str(row.get(key) or ""))
                 )
+        # §12: the cohort is the row's identity and it lives in the TAIL.
+        apply_width_rule_to_table_widget(
+            self.performance_table, text_columns=(0,), elide_columns=(0,)
+        )
         if not rows:
             self.performance_note.setText(
                 "No graded focus-pick rollup yet. It is written by the nightly "
@@ -494,6 +500,7 @@ class FocusReviewPage(_StepPage):
                 self.feedback_table.setItem(
                     index, column, QTableWidgetItem(str(row.get(key) or ""))
                 )
+        apply_width_rule_to_table_widget(self.feedback_table, text_columns=(6,))
         if not rows:
             self.feedback_note.setText(
                 "No like/dislike verdicts recorded in the reviewed week, or the "
@@ -523,6 +530,9 @@ class FocusReviewPage(_StepPage):
                 self.like_table.setItem(
                     index, column, QTableWidgetItem(str(row.get(key) or ""))
                 )
+        apply_width_rule_to_table_widget(
+            self.like_table, text_columns=(0,), elide_columns=(0,)
+        )
         if not rows:
             self.like_note.setText(
                 "No graded LIKE cohort yet. It is written by the overnight "
@@ -549,6 +559,9 @@ class FocusReviewPage(_StepPage):
                 self.cohort_table.setItem(
                     index, column, QTableWidgetItem(str(row.get(key) or ""))
                 )
+        apply_width_rule_to_table_widget(
+            self.cohort_table, text_columns=(0,), elide_columns=(0,)
+        )
         if not rows:
             self.cohort_caption.setText("")
             self.cohort_note.setText(
