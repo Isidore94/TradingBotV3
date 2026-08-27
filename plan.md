@@ -851,6 +851,18 @@ are listed in `CURRENT_CHECKPOINT.md`.
    the locked pacing budget per double-click (today those previews are Yahoo
    rows, labelled).
 
+   **Trader rule 4, same morning - BUILT 2026-08-27: the M5 alert bar.**
+   Intraday alerts list in a slim bar between the chart column and the
+   setups (newest on top, Copy all / Clear all, click charts) and never enter
+   the review queue, which now holds D1 rows, Focus D1 flags, armed hits and
+   the trader's own charts. Routing sits at the one door
+   (`_enqueue_review_alert`), after the AWAY branch; nothing upstream
+   changed. **Live gate owed:** one DESK session - the bar fills in alert
+   order, Copy all pastes into TC2000, a click charts, the waiting count is
+   D1-only. **Not built, the trader's call:** the 15-minute regime-pause
+   expiry does not reach the bar (rows carry their time; the queue rule was
+   "queue only"); and whether the bar should fold repeats per symbol.
+
 12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).** "I want this
    program to be very fluid to use." Measured first: 1843 stalls over 50 ms and
    1008 s blocked in 3h20m, plus the two GC freezes. The trader's own hypothesis

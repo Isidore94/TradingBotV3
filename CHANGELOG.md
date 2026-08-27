@@ -1,9 +1,9 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the three trader
+Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the four trader
 rules of that morning (regime-pause auto-Focus `479c25c`, the VWAP-side /
-show-time review filter `76e0b7b`, then the D1 SMA trend leg + the snapshot
-Prev/Next walk) after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
+show-time review filter `76e0b7b`, the D1 SMA trend leg + snapshot Prev/Next
+`f3abda7`, then the M5 alert bar) after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
 surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
 checkout on 2026-08-26; see `CURRENT_CHECKPOINT.md`).
@@ -23,6 +23,58 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - Intraday alerts are a list beside the chart, not a queue in front of it (trader rule 4: the M5 alert bar)
+
+**IMPLEMENTED / GREEN.** "A lot of my charts to review are M5 charts. If I can
+instead just get a list I can copy and paste into TC2000 that would be
+faster... a little sidebar in between the master AVWAP setups and the chart...
+the ticker and the alert type (new HOD, VWAP bounce etc) and I can choose what
+to look at. Then we can totally purge M5 alerts from the waiting list and keep
+those for D1 alerts." Ordering, when asked: "latest at the top, the oldest at
+the bottom."
+
+- `scripts/ui/widgets/m5_alert_bar.py` - `M5AlertBar`: one line per alert
+  (`07:09  ▲ SYMBOL  type`), newest on top, side-coloured through an item
+  foreground role (no per-widget stylesheet, no rebuild). `Copy all` puts the
+  tickers on the clipboard one per line, each once, in bar order - a TC2000
+  paste; `Clear all` empties the bar ON SCREEN. A click emits the alert.
+  Bounded at 400 rows (a session produced 72 in its first 46 minutes).
+- `AlertCenterPanel._is_m5_review_alert` + routing in `_enqueue_review_alert`
+  - the one door into the queue, AFTER the AWAY-recap branch and the parked
+  check, so everything upstream (the backing list, the feed, History, the
+  evidence streams, the AWAY recap) is untouched. An ordinary intraday alert
+  is emitted on `m5AlertPosted` and never queued; a D1 row, a Focus D1 flag,
+  a chart-watch hit, a price alert the trader armed, an auto-pick proposal, a
+  typed symbol and a deliberate Focus review keep their chart. The chart in
+  front still refreshes from its own symbol's new M5 alert. `chart_alert()`
+  is the public click path (same as a feed-row click). `m5AlertsDayRolled`
+  clears the bar with the other day-scoped state.
+- `TradingDeskPanel` - the bar is the middle child of the desk splitter
+  (`alert_center | m5_alert_bar | master_workspace`, stretch 3/0/2, floor
+  `px(150)`), an "M5 alerts" tab in tabs mode, rescued across mode switches.
+  `desk_layout.DESK_SPLIT_*` are now three weights - the bar's share comes
+  out of the setups side, so the chart column keeps its lead; a 2-entry saved
+  split is rejected by `load_sizes` and the preset applies once.
+- Consequences, stated: the regime-pause hold EXPIRY (2026-08-21) and the
+  movers/VWAP/SMA legs now act on D1 rows and the trader's own charts; an
+  intraday row never reaches them. A counter-trend regime-pause row lists in
+  the bar. EVENING's "queue the trader wakes up to" is now the bar plus the
+  D1 queue. AWAY is unchanged: recap, and nothing posted to the bar.
+
+Tests: `tests/test_qt_m5_alert_bar.py` (19: order, row text, copy dedupes
+newest-first, clear, click, bound; routing for every kind that stays and the
+kinds that go; nothing recorded; AWAY untouched; the chart in front refreshes;
+the day roll; the bar between the two columns and wired both ways). With the
+panel, desk and layout changes stashed, 13 of the 19 fail (the six pure-widget
+tests pass: the untracked widget file was not stashed). Seven queue-mechanics
+files (`test_qt_alert_center`, `test_movers_only_review`,
+`test_qt_review_vwap_side`, `test_qt_regime_pause_expiry`, `test_qt_arm_dock`,
+`test_review_events`, `test_review_guidance`) gained one autouse
+fixture that switches the routing off - they test what the QUEUE does with a
+row, and a D1 fixture would drag the D1 feed into every assertion; the
+routing itself is owned by the new file. `test_away_day_recap` (2) and
+`test_qt_regime_pause_auto_focus` (6) were rewritten to the new expectation.
 
 ### 2026-08-27 - D1 recommendations against their trend are hidden; the setups popup walks with Prev/Next (trader rule 3)
 

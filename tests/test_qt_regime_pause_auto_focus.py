@@ -56,6 +56,10 @@ def desk(tmp_path, monkeypatch):
     monkeypatch.setattr(panel, "_review_movers_only", False, raising=False)
     monkeypatch.setattr(panel, "_auto_mode_now", lambda: "DESK")
     monkeypatch.setattr(panel, "_regime_pause_day_env", lambda: "bullish_weak", raising=False)
+    # Since 2026-08-27 an intraday row the rule leaves alone lists in the M5
+    # alert bar rather than queueing a chart; the tests read that list.
+    panel._posted_to_bar = []
+    panel.m5AlertPosted.connect(panel._posted_to_bar.append)
     yield panel, store
     panel.deleteLater()
 
@@ -91,6 +95,11 @@ def _auto_focus_rows(panel) -> list[dict]:
     return [row for row in _events(panel) if row["action"] == "regime_pause_auto_focus"]
 
 
+def _posted_symbols(panel) -> list[str]:
+    """What reached the M5 alert bar - where a row the rule did not place goes."""
+    return [alert.symbol for alert in getattr(panel, "_posted_to_bar", [])]
+
+
 def _queued_symbols(panel) -> list[str]:
     current = panel._current_review_alert
     return ([current.symbol] if current is not None else []) + [
@@ -110,6 +119,7 @@ def test_a_long_holding_highs_on_a_bullish_day_lands_in_focus_and_skips_the_char
     assert marker["staged_at"] == "07:09:19"
     assert "bullish" in marker["reason"]
     assert _queued_symbols(panel) == [], "the decision is made; no chart to review"
+    assert _posted_symbols(panel) == [], "and no line in the M5 bar either"
     # Upstream is untouched: the feed row and the evidence row are both there.
     assert panel._alerts and panel._alerts[0] is alert
     rows = _auto_focus_rows(panel)
@@ -123,14 +133,16 @@ def test_a_long_holding_highs_on_a_bullish_day_lands_in_focus_and_skips_the_char
 
 
 def test_a_short_on_a_bullish_day_still_charts(desk):
-    """Counter-trend is not in the rule: the trader looks at it as before."""
+    """Counter-trend is not in the rule: it lists in the M5 bar for the
+    trader to look at, exactly like any other intraday row."""
     panel, store = desk
 
     panel.add_alert(_regime_alert("MRK", "SHORT"))
 
     assert store.focus_symbols("short", "m5") == []
     assert store.focus_symbols("long", "m5") == []
-    assert _queued_symbols(panel) == ["MRK"]
+    assert _posted_symbols(panel) == ["MRK"]
+    assert _queued_symbols(panel) == []
     assert _auto_focus_rows(panel) == []
 
 
@@ -154,7 +166,8 @@ def test_a_day_with_no_directional_read_admits_nothing(desk, monkeypatch, env):
     panel.add_alert(_regime_alert("FROG", "LONG"))
 
     assert store.focus_symbols("long", "m5") == []
-    assert _queued_symbols(panel) == ["FROG"]
+    assert _posted_symbols(panel) == ["FROG"]
+    assert _queued_symbols(panel) == []
 
 
 def test_the_traders_own_focus_name_keeps_its_owner_and_its_chart(desk):
@@ -165,7 +178,8 @@ def test_the_traders_own_focus_name_keeps_its_owner_and_its_chart(desk):
     panel.add_alert(_regime_alert("FROG", "LONG"))
 
     assert store.auto_pick_marker("FROG", "long", "m5") is None
-    assert _queued_symbols(panel) == ["FROG"], "a Focus name's chart shows as it always did"
+    assert _posted_symbols(panel) == ["FROG"], "it lists like any intraday row"
+    assert _queued_symbols(panel) == []
 
 
 def test_a_repeat_of_the_machines_own_placement_is_resolved_not_charted(desk):
@@ -207,7 +221,8 @@ def test_a_failed_placement_falls_open_onto_the_chart_queue(desk, monkeypatch):
 
     panel.add_alert(_regime_alert("FROG", "LONG"))
 
-    assert _queued_symbols(panel) == ["FROG"]
+    assert _posted_symbols(panel) == ["FROG"], "falls open onto the ordinary path"
+    assert _queued_symbols(panel) == []
     assert _auto_focus_rows(panel) == []
 
 
@@ -220,4 +235,5 @@ def test_an_ordinary_alert_is_not_touched_by_the_rule(desk):
     panel.add_alert(alert)
 
     assert store.focus_symbols("long", "m5") == []
-    assert _queued_symbols(panel) == ["NVDA"]
+    assert _posted_symbols(panel) == ["NVDA"]
+    assert _queued_symbols(panel) == []

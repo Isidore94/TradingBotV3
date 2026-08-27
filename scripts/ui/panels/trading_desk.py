@@ -19,6 +19,7 @@ from ui.panels.bounce_panel import BouncePanel
 from ui.panels.focus_picks_panel import FocusPicksPanel
 from ui.panels.industry_panel import IndustryPanel
 from ui.panels.master_avwap_panel import MasterAvwapPanel
+from ui.widgets.m5_alert_bar import M5AlertBar
 from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
@@ -110,6 +111,14 @@ class TradingDeskPanel(QWidget):
         )
         self.bounce_panel.statusChanged.connect(self.statusChanged)
         self.alert_center.statusChanged.connect(self.statusChanged)
+        # Trader, 2026-08-27: intraday alerts are a list beside the chart, not
+        # charts in the waiting list. The Alert Center posts them; the bar
+        # lists them newest first; a click charts one through the same path
+        # as a feed-row click. Day-scoped with the queue.
+        self.m5_alert_bar = M5AlertBar()
+        self.alert_center.m5AlertPosted.connect(self.m5_alert_bar.post)
+        self.alert_center.m5AlertsDayRolled.connect(self.m5_alert_bar.clear_all)
+        self.m5_alert_bar.alertActivated.connect(self.alert_center.chart_alert)
         self.bounce_panel.service.connectionChanged.connect(self.connectionChanged)
         self.bounce_panel.service.alertReceived.connect(self.focus_picks_panel.record_bounce_alert)
         self.bounce_panel.service.rrsSnapshotChanged.connect(self.focus_picks_panel.record_rrs_snapshot)
@@ -177,6 +186,7 @@ class TradingDeskPanel(QWidget):
             tabs = QTabWidget()
             tabs.addTab(self.master_workspace, "Master AVWAP")
             tabs.addTab(self.alert_center, "Alert Center")
+            tabs.addTab(self.m5_alert_bar, "M5 alerts")
             tabs.addTab(self.bounce_panel, "BounceBot")
             self._mode_widget = tabs
             self.center_layout.addWidget(tabs)
@@ -190,12 +200,17 @@ class TradingDeskPanel(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.alert_center)
+        # The M5 alert bar sits between the chart and the setups (trader,
+        # 2026-08-27). It takes no stretch: extra width still goes to the
+        # chart column first, then the setups.
+        splitter.addWidget(self.m5_alert_bar)
         splitter.addWidget(self.master_workspace)
         # The chart column now leads. The old 1:2 stretch meant every pixel
         # added to the window went 2:1 to the setups table, so the charts got
         # relatively SMALLER on a bigger monitor.
         splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 2)
         splitter.setChildrenCollapsible(False)
         # Both columns aggregate large minimumSizeHints from their children
         # (the setups workspace alone hinted 1372px wide). Their sum exceeded
@@ -256,6 +271,7 @@ class TradingDeskPanel(QWidget):
         rescued = (
             self.master_workspace,
             self.alert_center,
+            self.m5_alert_bar,
             self.bounce_panel,
             self.tape_host,
         )
@@ -284,6 +300,8 @@ class TradingDeskPanel(QWidget):
         laptop-sized desk cannot afford desktop-sized floors.
         """
         self.alert_center.setMinimumWidth(theme.px(360))
+        # Wide enough for "07:09  ▲ SYMBOL  VWAP reclaim" and the two buttons.
+        self.m5_alert_bar.setMinimumWidth(theme.px(150))
         self.master_workspace.setMinimumWidth(theme.px(420))
 
     def apply_scaled_metrics(self) -> None:

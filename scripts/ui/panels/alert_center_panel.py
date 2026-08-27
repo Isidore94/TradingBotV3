@@ -408,6 +408,11 @@ class AlertCenterPanel(QFrame):
     #: repaint on the cadence that already exists rather than polling
     #: themselves (trader rule 2026-08-19).
     focusBreakStatesChanged = Signal()
+    # Trader, 2026-08-27: intraday alerts are a LIST beside the chart, not a
+    # queue in front of it. Every M5 alert that would have queued a chart is
+    # posted here instead; the desk hangs the M5 alert bar on it.
+    m5AlertPosted = Signal(object)  # BounceAlert
+    m5AlertsDayRolled = Signal()  # the bar is day-scoped like the queue
     # One D1 level/event alert worth the hourly Away phone push, as the
     # {symbol, label, time_text} dict d1_push_event builds. Emitted for every
     # qualifying alert in every mode; Auto Pilot owns the AWAY-only gate.
@@ -1891,12 +1896,23 @@ class AlertCenterPanel(QFrame):
             and not self._alert_is_focus(alert)
         ):
             return
+        # Trader rule 2026-08-27: an intraday alert is a LINE in the M5 alert
+        # bar, never a chart in the waiting list - "purge M5 alerts from the
+        # waiting list and keep those for D1 alerts". Posted here, at the one
+        # door into the queue, so everything upstream (the backing list, the
+        # feed, History, the evidence streams, the AWAY recap above) is
+        # untouched. A click on the bar charts it through `chart_alert`.
+        is_m5 = self._is_m5_review_alert(alert)
+        if is_m5:
+            self.m5AlertPosted.emit(alert)
         if (
             self._current_review_alert is not None
             and self._current_review_alert.symbol == alert.symbol
         ):
             self._current_review_alert = alert
             self._render_current_review()
+            return
+        if is_m5:
             return
         # Movers only (trader rule 2026-08-19). Applied HERE because this is
         # the single door into the review queue - every caller, including the
@@ -1937,6 +1953,34 @@ class AlertCenterPanel(QFrame):
         else:
             self.chart_review.set_queued_count(len(self._review_queue))
             self._prefetch_review_queue()
+
+    @staticmethod
+    def _is_m5_review_alert(alert: BounceAlert) -> bool:
+        """An ordinary intraday alert - the kind the M5 bar lists instead of the queue.
+
+        Not one of these, which keep their chart: a D1 row, a Focus D1 flag, a
+        chart-watch hit or a price alert the trader armed themselves, the
+        auto-pick proposals, a typed symbol and a deliberate Focus review.
+        """
+        if alert.is_d1:
+            return False
+        if str(alert.tag or "") in (
+            CHART_WATCH_TAG,
+            AUTO_PICK_TAG,
+            MANUAL_CHART_TAG,
+            FOCUS_REVIEW_TAG,
+            FOCUS_D1_EVENT_TAG,
+        ):
+            return False
+        if str(alert.raw_text or "").lstrip().upper().startswith("PRICE ALERT"):
+            return False
+        return True
+
+    def chart_alert(self, alert: BounceAlert) -> None:
+        """Public: chart this alert now (the M5 bar's click). Same path as a
+        feed-row click, so the chart in front is kept at the head of the
+        queue rather than lost."""
+        self._select_review_alert(alert)
 
     def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
         """Cached per-symbol guidance; a failed lookup is neutral, never fatal."""
@@ -4579,6 +4623,8 @@ class AlertCenterPanel(QFrame):
         self._hidden_inside_range.clear()
         self.chart_review.set_hidden_count(0)
         self._refresh_ignored_button()
+        # The M5 alert bar is day-scoped like the queue it replaced.
+        self.m5AlertsDayRolled.emit()
 
     def _park_review_symbol(self, symbol: str) -> None:
         """Keep a symbol's chart out of the review queue for the day."""

@@ -119,10 +119,14 @@ class TestTheTrendLeg:
 
     def test_the_trend_leg_is_not_asked_of_an_intraday_alert(self, monkeypatch):
         """The trader's floor is for D1 recommendations. An M5 bounce on a
-        name under its 200 is a different trade and still charts."""
+        name under its 200 is a different trade: it lists in the M5 alert bar
+        (2026-08-27 routing) and is never hidden by this leg."""
         panel = _panel(monkeypatch, smas={"AAA": "closed"})
+        posted = []
+        panel.m5AlertPosted.connect(posted.append)
         panel.add_alert(_m5_alert("AAA", "LONG"))
-        assert _charted(panel) == ["AAA"]
+        assert [a.symbol for a in posted] == ["AAA"]
+        assert panel.hidden_inside_range_count() == 0
 
     def test_an_unmeasurable_average_still_shows(self, monkeypatch):
         """A name that just listed has no SMA200. Uncertainty shows."""

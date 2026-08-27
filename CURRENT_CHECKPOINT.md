@@ -8,7 +8,7 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
-## 2026-08-27 (morning) - three trader rules BUILT: regime-pause auto-Focus (`479c25c`), the VWAP-side / show-time review filter (`76e0b7b`), the D1 SMA trend leg + snapshot Prev/Next; queue scan done
+## 2026-08-27 (morning) - four trader rules BUILT: regime-pause auto-Focus (`479c25c`), the VWAP-side / show-time review filter (`76e0b7b`), the D1 SMA trend leg + snapshot Prev/Next (`f3abda7`), the M5 alert bar; queue scan done
 
 **Branch `claude/gui-phase-0-9`** (this session, on top of `fd76923`). Trader,
 07:20: "I've been doing nothing but managing the bot all morning. There are
@@ -83,6 +83,26 @@ call, not built.
 moving at show time, the three badges on revealed names, Prev/Next walking a
 real setups list, and charts-shown-per-hour against the 124-in-46-minutes
 baseline.
+
+### Rule 4 - BUILT: the M5 alert bar (trader: "does this make sense?" - yes; "latest at the top, oldest at the bottom")
+
+Intraday alerts list in a slim bar between the chart and the setups; the
+review queue keeps D1 rows, Focus D1 flags, armed hits and the trader's own
+charts. `ui/widgets/m5_alert_bar.py`, routing in `_enqueue_review_alert`,
+desk splitter now three-way. Detail in `CHANGELOG.md` 2026-08-27 (rule 4).
+
+| Measure | Value |
+|---|---|
+| Tests added / rewritten | 19 new (`test_qt_m5_alert_bar.py`); 8 rewritten to the new expectation; 7 queue-mechanics files gained one routing-off autouse fixture |
+| Fail-before-fix | panel + desk + layout stashed: 13 of 19 fail (the 6 pure-widget tests pass - the untracked widget file was not stashed) |
+| Full suite | **5115 passed / 19 subtests, exit 0** (299 s; 5096 after rule 3) |
+| `scripts/smoke_check.py` | 7/7 |
+| Packaging trigger | none (new widget is under `scripts/ui`, collected) |
+
+**Live gate owed:** one DESK session - bar fills in alert order, Copy all
+pastes into TC2000, a click charts, the waiting count is D1-only. **Desk
+restart needed** to pick up rules 3 and 4 (the desk relaunched at 08:10 runs
+`76e0b7b`).
 
 ### Restart observation, 08:07-08:10 (trader asked for a safe restart to drop 112 waiting charts)
 

@@ -76,27 +76,37 @@ def test_an_away_day_accumulates_no_review_queue(monkeypatch):
     assert panel._current_review_alert is None
 
 
-def test_the_desk_is_byte_identical(monkeypatch):
-    """Only auto desk should stream signals all day. DESK is untouched."""
+def test_the_desk_lists_intraday_alerts_in_the_m5_bar_and_queues_none(monkeypatch):
+    """DESK was untouched by the AWAY amendment. Since 2026-08-27 (trader
+    rule) an ordinary intraday alert lists in the M5 alert bar instead of
+    queueing a chart - in DESK and EVENING alike - while AWAY still assembles
+    the recap and never posts to the bar."""
     panel = _panel(monkeypatch, mode="DESK")
+    posted = []
+    panel.m5AlertPosted.connect(posted.append)
 
     for index in range(5):
         panel.add_alert(_alert(f"SYM{index}"))
 
-    assert panel._current_review_alert is not None
-    assert len(panel._review_queue) == 4
+    assert [alert.symbol for alert in posted] == [f"SYM{i}" for i in range(5)]
+    assert panel._current_review_alert is None
+    assert panel._review_queue == []
 
 
-def test_evening_keeps_its_existing_queue_silently_semantics(monkeypatch):
-    """The amendment changes AWAY only. EVENING is for sleeping through the
-    morning session, and its queue is what the trader wakes up to."""
+def test_evening_lists_intraday_alerts_in_the_m5_bar_too(monkeypatch):
+    """The amendment changed AWAY only; EVENING is for sleeping through the
+    morning, and what the trader wakes up to is now the M5 bar plus the D1
+    queue rather than a queue of M5 charts."""
     panel = _panel(monkeypatch, mode="EVENING")
+    posted = []
+    panel.m5AlertPosted.connect(posted.append)
 
     panel.add_alert(_alert("AAA"))
     panel.add_alert(_alert("BBB"))
 
-    assert panel._current_review_alert is not None
-    assert len(panel._review_queue) == 1
+    assert [alert.symbol for alert in posted] == ["AAA", "BBB"]
+    assert panel._current_review_alert is None
+    assert panel._review_queue == []
 
 
 # ==========================================================================
