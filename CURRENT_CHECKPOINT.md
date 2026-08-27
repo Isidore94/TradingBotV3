@@ -198,7 +198,26 @@ and a time-based cache could hide a live break.
 
 ---
 
-## 2026-08-26 evening - PROPOSAL recorded: AVWAP band variant study (no build authorized)
+## 2026-08-26 evening - AUTHORIZED: Phase 0.10 AVWAP band challenger; OneOption's band replicated
+
+**Replicated the same evening from three OKTA hover readings** (2026-05-29 and
+2026-06-02): `AVWAP(HLC/3) ± k · stdev(close, 20, population)` - a Bollinger
+width on an anchored HLC/3 centre, no anchor memory. The anchored sample-OHLC
+form predicted 138.09 on 06-02 and the reading was 144.60; the 20-bar
+population σ predicted 18.04 and the reading implies 18.035. Record in
+`docs/AVWAP_BAND_VARIANT_STUDY.md` §2b. The trader then authorized building it
+into the setup tracker: `plan.md` **Phase 0.10** (B-0 module + fixture, B-1 fit
+script, B-2 tracker shadow stops + stats + panel section, B-3 D1 overlay off by
+default; B-4 backfills after review). Build prompt for the Opus session:
+`docs/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`. **Nothing is built yet**;
+the champion σ stays frozen (decision 0008) and the parity fixture comes first.
+The Wave P1 live soak above is still owed and is unaffected. Verification
+baseline unchanged - docs only.
+
+(Earlier the same evening this entry read "PROPOSAL recorded"; the paragraph
+below is that record.)
+
+### The proposal as first recorded
 
 The trader compared the same earnings-anchored chart in TradingView (their own
 `AVWAPE` script) and a second program whose 1σ band is wide from the very first

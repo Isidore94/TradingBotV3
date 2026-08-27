@@ -1651,6 +1651,42 @@ its own fail-before-fix test and a soak between fluidity slices.
 Gates: the Phase 0.8 live soak still comes first; each G-P2.3 slice is
 followed by a soak against the archived 2026-08-26 baseline.
 
+### Phase 0.10 — AVWAP band challenger (authorized 2026-08-26)
+
+Source: `docs/AVWAP_BAND_VARIANT_STUDY.md` (§2b the replicated formula, §4 the
+harnesses, §4 T4 the pre-declared decision criteria). The trader replicated
+OneOption's band on 2026-08-26 — `AVWAP(HLC/3) ± k · stdev(close, 20,
+population)` — and authorized testing it in the setup tracker ("throw it into
+the setup tracker and begin testing it out"). Build prompt:
+`docs/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`.
+
+**Scope bound.** Shadow only. `calc_anchored_vwap_bands` stays frozen (decision
+0008); no detector, score, rank, tier, alert, zone arm, Focus, queue or
+`review_policy.json` behaviour changes; the champion's tracker outputs are
+byte-identical with the shadow block present (parity fixture frozen first).
+`legacy.py`/`runner.py` edits are limited to the additive ones the prompt
+pre-authorizes; anything else asks first.
+
+1. **B-0 Pure module + golden fixture.** `scripts/indicators/avwap_band_variants.py`
+   (`avwap_bands_oneoption_bb20_v1`), OKTA fixture from the three hover
+   readings, discriminator tests against the champion and the killed
+   sample-OHLC form, `None` below 20 closes. First importer of `indicators/`:
+   spec-drift test + frozen selftest stated.
+2. **B-1 Fit/print script.** `scripts/avwap_band_variant_fit.py` — champion vs
+   challenger per bar since an anchor, offline, for hover comparison on new names.
+3. **B-2 Tracker shadow.** `current_anchor_variant` / `previous_anchor_variant`
+   on the setup record; `VARIANT_LOWER_1` / `VARIANT_UPPER_1` shadow stop
+   candidates appended after every champion candidate; `master_avwap_band_variant_stats.csv`
+   and a "Band variant" section in the Setup Tracker panel; tracker JSON growth measured.
+4. **B-3 D1 chart overlay**, paint-lines group "AVWAP σ variant", default OFF,
+   built on the worker.
+5. **B-4 Backfill** (next packet, after B-0..B-3 review): the level-quality
+   study T1 and the playbook re-run T2, then the warehouse columns.
+
+Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
+promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
+inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
+
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
 1. **P1.1 Make the test suite hermetic.** Stop Qt app tests from starting live

@@ -179,6 +179,20 @@ very simply; `trading_desk.cmd`'s header matches; `plan.md` gained Phase 0.9
 fluidity slice in measured order, a GC MEASUREMENT packet with no scheduling
 change). Nothing in Phase 0.9 is built.
 
+**AVWAP band challenger planned, replicated and authorized (same evening, docs
+only).** The trader compared their anchored-VWAP bands with OneOption / Option
+Stalker Pro's, which are wide from the anchor bar. A one-evening study
+(`docs/AVWAP_BAND_VARIANT_STUDY.md`) replicated the vendor's band from three
+OKTA hover readings: `AVWAP(HLC/3) ± k · stdev(close, 20, population)` - the
+textbook Bollinger σ laid on an anchored HLC/3 centre, no anchor memory
+(the anchored sample-OHLC form predicted 138.09 on 2026-06-02; the reading was
+144.60). `plan.md` gained **Phase 0.10** (module + fixture, fit script, tracker
+shadow stops + stats + panel section, D1 overlay off by default; backfills
+after review) with the Opus build prompt at
+`docs/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`. Nothing is built; the
+champion σ stays frozen (decision 0008) and any promotion would be an
+additional level family, never a swap.
+
 Tests 4844 -> 4902, exit 0 (4897 at `49744a7`, 4902 at `e0f78ae`); smoke 7/7.
 No packaging trigger. **Owed:** the eight
 panels under G-P1.5, the bare-thread sweep under G-P1.6, the
