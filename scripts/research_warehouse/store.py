@@ -805,6 +805,65 @@ class ResearchStore:
             return empty.select(list(columns)) if columns else empty
         return self.open_dataset(dataset, partition).to_table(columns=list(columns) if columns else None)
 
+    def read_rows(
+        self,
+        dataset: str,
+        partition: str | None = None,
+        *,
+        columns=None,
+        symbols=None,
+        interval_start_range: tuple[datetime | None, datetime | None] | None = None,
+    ) -> list[dict]:
+        """Rows as dicts, with the narrowing done in Arrow BEFORE Python sees them.
+
+        `read_table(...).to_pylist()` materialises an entire partition as
+        Python objects and then lets the caller throw most of it away. Our
+        partitions are MONTH-keyed, so that cost grows all month: measured
+        2026-08-27, `bar_m5 month=2026-08` held 8,704,108 rows / 408 MB of
+        parquet, `to_pylist` cost 1,769 bytes per row = **15.4 GB**, and the
+        largest single session in it was 588,778 rows - 6.8% of the month.
+        That is why the desk climbed to 8-13 GB after every swing-scan slot
+        and fell back minutes later.
+
+        Pushing the same predicate into `Dataset.to_table(filter=...)` lets
+        Arrow drop row groups and rows before any Python object exists, so the
+        peak scales with the slice the caller actually needs.
+
+        The narrowing is deliberately NOT a free-form expression: only the two
+        predicates the readers actually use are offered, so a caller cannot
+        express a filter that silently means something other than the Python
+        one it replaced.
+
+        ``symbols`` matches EXACTLY, with no case folding or stripping,
+        because that is what the Python ``symbol in wanted`` checks it replaces
+        did; an empty sequence means "no symbol filter", which is what the
+        callers pass when no cohort was named. ``interval_start_range`` is
+        half-open ``[start, end)``, matching ``rth_open_at <= t < rth_close_at``.
+        """
+        paths = self.resolve_files(dataset, partition)
+        if not paths:
+            return []
+        predicate = None
+        if symbols:
+            wanted = sorted({str(symbol) for symbol in symbols})
+            predicate = pads.field("symbol").isin(wanted)
+        if interval_start_range is not None:
+            start, end = interval_start_range
+            for bound, operator in ((start, "ge"), (end, "lt")):
+                if bound is None:
+                    continue
+                # Compared as instants: the column is timestamp[us, tz=UTC], so
+                # an aware bound in any zone is normalized rather than stripped.
+                if isinstance(bound, datetime) and bound.tzinfo is not None:
+                    bound = bound.astimezone(timezone.utc)
+                field = pads.field("interval_start")
+                clause = field >= pc.scalar(bound) if operator == "ge" else field < pc.scalar(bound)
+                predicate = clause if predicate is None else (predicate & clause)
+        table = self.open_dataset(dataset, partition).to_table(
+            columns=list(columns) if columns else None, filter=predicate
+        )
+        return table.to_pylist()
+
     # -- health -------------------------------------------------------------
     def health_counts(self) -> dict:
         """Feeds the sec-18 Health tiles (quarantine count, manifest integrity)."""

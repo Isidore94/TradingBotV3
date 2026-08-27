@@ -1847,3 +1847,100 @@ real grace period, so production behaviour is unchanged.
 
 **Reopen if.** A platform is added whose filesystem timestamps are coarser than
 its clock, or a caller needs sub-50 ms grace semantics.
+
+
+## BD-73 — Very large SNAPSHOT payloads are stored whole but not `json.loads`-ed
+
+**Date:** 2026-08-27 (desk-memory packet, trader-authorised build prompt).
+
+**Decision.** `ingest_existing.SNAPSHOT_PARSE_MAX_BYTES = 64 MB`. Above it a
+`MODE_SNAPSHOT` payload is captured in full and published unchanged, but is not
+parsed; `parsed` becomes `{}` when `_looks_like_json` (first and last non-space
+characters form a `{}`/`[]` pair) holds, and `None` when it does not, which is
+what still drives `quality` to `COMPLETE` / `INVALID_DATA`.
+
+Separately and unconditionally, `ingest_artifact` now hashes the source with
+`_sha256_path` (chunked) and answers the watermark BEFORE `read_bytes`, so an
+UNCHANGED verdict costs no allocation at all.
+
+**Why.** `master_avwap_setup_tracker.json` measured **1,026,057,028 bytes** on
+2026-08-27. The old order read it whole and hashed the bytes *before* comparing
+the watermark, so every bronze ingest allocated 1.03 GB inside the desk process
+— including the ~90% that immediately concluded UNCHANGED. When the sha had
+changed, `json.loads` over the decoded text added several GB more, on top of
+the warehouse build's own peak, and the desk was measured at 8–13 GB.
+
+**Why the skip loses nothing here, stated precisely.** The parse feeds exactly
+three things: `_parse_event_at(parsed, artifact.event_keys)`,
+`_first_value(parsed, artifact.id_keys)`, and the `quality` flag. The
+`setup_tracker` artifact declares **neither** `event_keys` nor `id_keys`, so
+`_parse_event_at` returns `None` on its first line (`if not keys`) and
+`_first_value` returns `""` without inspecting the payload — parsed or not.
+For this artifact the parsed row and the skipped row are byte-identical, and a
+regression test asserts it rather than trusting the reasoning.
+
+**What was rejected.** (a) Marking an unparsed row `INVALID_DATA`: false, and
+it would poison any downstream quality filter. (b) Streaming the parse: the
+result would still be several GB of dicts, which is the cost being removed.
+(c) Not storing the payload above the threshold: that changes the bronze
+contract and loses the artifact, which is the one thing bronze exists to keep.
+(d) Widening `QUALITY_STATES` with a new "STORED_UNPARSED" state: it would be
+a schema-visible change for a distinction no reader currently makes.
+
+**Residual, not hidden.** A changed snapshot still costs roughly `size` bytes
+plus a same-size decoded `str`, because `payload_text` must be a Python string
+for the publish path. ~2 GB for the tracker, down from several. Removing that
+too means changing the bronze publish path, which this packet deliberately did
+not touch.
+
+**Reopen if.** (1) `setup_tracker` — or any artifact that can exceed 64 MB —
+gains `event_keys` or `id_keys`: the skip would then silently empty real
+columns and the threshold must be revisited, not merely raised. The test
+`test_bronze_snapshot_large_files.py::tracker_artifact` fails loudly in that
+case. (2) A reader starts depending on `quality == COMPLETE` meaning "fully
+parsed" rather than "captured whole and JSON-shaped". (3) The bronze publish
+path learns to stream, at which point the threshold can rise or disappear.
+
+## BD-74 — Session/symbol narrowing belongs in Arrow, in one store helper
+
+**Date:** 2026-08-27 (same packet).
+
+**Decision.** `ResearchStore.read_rows(dataset, partition, *, columns, symbols,
+interval_start_range)` filters through `Dataset.to_table(filter=...)` before
+`to_pylist()`, and the three build steps that read `bar_m5` use it:
+`aggregate.build_derived_bars`, `features.build_intraday_snapshots` and
+`cli._run_outcomes`.
+
+**Why.** Partitions are MONTH-keyed while these steps each want one session (or
+one symbol set). `read_table(partition).to_pylist()` therefore materialised the
+whole month as Python objects so that a few percent of it could be used, and
+the cost grew all month: `silver/bar_m5/month=2026-08` was **8,704,108 rows /
+408 MB parquet** on 2026-08-27, `to_pylist` cost **1,769 B/row = 15.4 GB**, and
+the largest single session in it was 588,778 rows — 6.8% of the month. Measured
+after: 0.53 GB for a full session, 0.31 GB for a 20-symbol outcome read.
+
+**Why a narrow helper and not a free-form filter argument.** Only the two
+predicates the callers actually replaced are offered, so a future caller cannot
+express something subtly different from the Python test it stands in for.
+`symbols` matches EXACTLY (no case folding, no stripping) because the
+`symbol in wanted` checks it replaces did; an empty sequence means no filter,
+which is what the callers pass when no cohort was named.
+
+**What was deliberately NOT narrowed.** `_run_outcomes` filters by symbol only,
+never by date: the outcome walk runs FORWARD over a horizon that can cross
+sessions, which is exactly why `_m5_partitions_for` already widens to the
+trigger's month plus the next (BD-66, BD-69). Narrowing it to a day would
+re-simulate against a truncated future — the same class of defect BD-69 fixed.
+`build_intraday_snapshots` applies the symbol filter only when the caller named
+symbols, because with none named its cohort is derived from the bars present in
+the session, so narrowing the read would change the answer and not just the
+cost.
+
+**Also deliberately not done.** Moving `run_build` into a child process. The
+in-process single-flight lock, the spool seal and the ledger's `_record_job`
+all assume one process, and the filtering removes the growth on its own. It
+stays a decision, not owed work; the trader decides if it is ever wanted.
+
+**Reopen if.** A build step needs a predicate these two cannot express, or the
+partition key changes from month to something finer (at which point the helper
+becomes redundant rather than wrong).

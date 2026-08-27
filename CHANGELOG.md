@@ -4,7 +4,8 @@ Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the four trader
 rules of that morning (regime-pause auto-Focus `479c25c`, the VWAP-side /
 show-time review filter `76e0b7b`, the D1 SMA trend leg + snapshot Prev/Next
 `f3abda7`, the M5 alert bar `41963de`/`39c3ef7` and its click-away skip, then
-the group tape removed and REBUILT on `claude/group-tape-rebuild`)
+the group tape removed and REBUILT, then the desk-memory packet, both on
+`claude/warehouse-build-memory`)
 after Phase 0.9's first three packets - the table width rule, the AWAY Recap return
 surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
@@ -25,6 +26,107 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - The desk's 8-13 GB memory jumps: three causes, all fixed
+
+**IMPLEMENTED / GREEN. One live gate owed.** plan.md Phase 0.9 item 6, built to
+`docs/analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md` on the 2026-08-27
+(10:00) investigation. The trader: "there are times the program jumps to 10gb
+of RAM usage."
+
+**Cause 1 - the post-scan warehouse build materialised a whole MONTH of M5 bars
+to use one session.** Three steps did
+`store.read_table("bar_m5", "month=YYYY-MM").to_pylist()` and then filtered in
+Python. Partitions are month-keyed, so the cost grew all month. Measured on the
+live lake this afternoon: `silver/bar_m5/month=2026-08` = **8,704,108 rows /
+408 MB parquet / 158 files**, and `to_pylist` costs **1,769 B/row = 15.4 GB**
+held whole - against a largest single session of 588,778 rows, 6.8% of it.
+(The 10:00 investigation measured 8,175,471 rows / 13.3 GB; the month has grown
+since, which is the point.)
+
+- New `ResearchStore.read_rows(dataset, partition, *, columns, symbols,
+  interval_start_range)` pushes the predicate into
+  `Dataset.to_table(filter=...)`, so Arrow drops rows before any Python object
+  exists. Deliberately NOT a free-form filter argument: only the two predicates
+  the callers replaced are offered, so nobody can express something subtly
+  different from the Python test it stands in for. `symbols` matches exactly,
+  no case folding, because `symbol in wanted` did.
+- `aggregate.build_derived_bars` and `features.build_intraday_snapshots` narrow
+  to the session window (and to named symbols); `cli._run_outcomes` narrows by
+  SYMBOL ONLY - deliberately no date filter, because the outcome walk runs
+  forward over a horizon that crosses sessions, which is why
+  `_m5_partitions_for` already widens to the trigger's month plus the next
+  (BD-66/BD-69). `build_intraday_snapshots` applies the symbol filter only when
+  symbols were named, because otherwise its cohort is derived from the bars
+  present in the session.
+- **Measured after, same lake:** a full session read **0.53 GB** (297,230
+  rows), a 20-symbol outcome read **0.31 GB** (175,235 rows). 15.4 GB -> 0.53
+  GB, ~29x.
+- Equivalence is asserted against a longhand REFERENCE implementation of the
+  old read (read the month, filter in Python) and compared as published ROWS,
+  not counts - a filter that shifted a session boundary by one bar would keep
+  the count and change the answer.
+
+**Cause 2 - the 1.03 GB tracker snapshot was read whole to decide it was
+unchanged.** `master_avwap_setup_tracker.json` measured **1,026,057,028 bytes**.
+`ingest_artifact` did `read_bytes()` and hashed the bytes BEFORE consulting the
+watermark, so every bronze ingest allocated 1.03 GB - including the ones that
+immediately answered UNCHANGED - and a changed file then ran `json.loads` over
+the decoded text, several GB more.
+
+- `_sha256_path` hashes in 1 MB chunks and the UNCHANGED check is hoisted above
+  `read_bytes`, so an unchanged snapshot now costs no allocation at all.
+- A SNAPSHOT over `SNAPSHOT_PARSE_MAX_BYTES` (64 MB) is stored in FULL but not
+  parsed; `_looks_like_json` (first/last non-space characters) drives the
+  quality flag instead. **This loses nothing measurable for the artifact that
+  triggers it:** `setup_tracker` declares neither `event_keys` nor `id_keys`,
+  so `_parse_event_at` returns None on its first line and `_first_value`
+  returns "" without reading the payload - parsed or not. The parse influenced
+  exactly one column, and a test asserts the parsed and skipped rows come out
+  identical. Residual stated rather than hidden: a CHANGED snapshot still costs
+  ~size bytes plus a same-size `str`, because `payload_text` must be a string
+  for the publish path, which this packet did not touch.
+- BD-73 records the threshold and its reopen trigger: if `setup_tracker` ever
+  gains those key tuples the skip WOULD empty real columns, and a fixture
+  assertion fails loudly rather than silently.
+
+**Cause 3 - BounceBot never freed its IB bar buffers.** `self.data[reqId]` held
+every historical reply; only the RRS and contract-bars paths popped it. Five
+others (`build_atr_cache`, `request_and_detect_bounce`, and the three
+`check_*vwap*_touches`) deleted the ready event and left the bars: **206 KB per
+390-bar request, ~400 requests a scan cycle, 1.5-2 GB over a session**, held
+until the process exits. That is why the desk settled at 2.5 GB rather than 1
+GB once a build released.
+
+- All five now free the buffer with the event, on the success AND timeout
+  branches. `request_and_detect_bounce` - the hottest path - pops at the read.
+- `historicalData` no longer auto-creates a buffer for an unknown reqId. Every
+  request path creates its buffer before issuing the request, so an unknown
+  reqId can only be a straggler; auto-creating one meant a timed-out request
+  leaked AFTER the fact, and a bar racing the requester's own pop appended to
+  the very list the caller was reading. Both are closed.
+- **The trader authorised this one `legacy.py` edit and nothing else in that
+  file.** It was verified LIKE a detector change even though it is not one: a
+  repo-wide sweep confirmed each reqId is read exactly once, by the function
+  that created it, with `self.data` never iterated, persisted or touched
+  outside the class - and the golden fixtures plus all 411 BounceBot tests pass
+  unchanged.
+
+**Premise corrected while building** (reproduce, do not inherit): the build
+prompt listed `cli._run_outcomes` as one of the three live costs. It is not one
+today - `setup_occurrence` holds **0 rows** on this lake, so `_run_outcomes`
+returns `NO_OCCURRENCES` before it ever reads `bar_m5`. It was fixed anyway,
+because it becomes a cost the moment the BD-44 detector adapter lands.
+
+**No packaging trigger** (no new dependency, asset, top-level package, dynamic
+import or `__file__` use).
+
+Tests: `tests/test_warehouse_session_scoped_reads.py` 10,
+`tests/test_bronze_snapshot_large_files.py` 9,
+`tests/test_bouncebot_reqid_buffers_are_freed.py` 12. Fail-before-fix per file:
+8/10 (two are the equivalence guards, which must pass on both sides), 9/9, and
+11/12 (the survivor guards that a live request still collects its bars). Full
+suite **5192 passed, 19 subtests passed, exit 0**; smoke 7/7.
 
 ### 2026-08-27 - Group RS/RW tape rebuilt: its own five-minute clock, 90 | 60 | 30 minutes, today's bars only
 

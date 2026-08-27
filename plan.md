@@ -1790,9 +1790,56 @@ its own fail-before-fix test and a soak between fluidity slices.
    produces the cyclic garbage, sweep cost per generation, growth per hour.
    **No scheduling change is authorized by this item** - a change to
    `_GuiGcController` needs its own ask with the measurement in hand.
+6. **G-P2.5 The desk's 8-13 GB memory jumps** *(BUILT 2026-08-27 on
+   `claude/warehouse-build-memory`; ONE live gate owed)*. Trader-authorised
+   through `docs/analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md`, which
+   rests on the 2026-08-27 (10:00) investigation entry in
+   `CURRENT_CHECKPOINT.md`. Three causes, all three fixed:
+   - **Session-scoped warehouse reads.** `ResearchStore.read_rows` filters in
+     Arrow before `to_pylist`, and the three `bar_m5` readers use it
+     (`aggregate.build_derived_bars`, `features.build_intraday_snapshots`,
+     `cli._run_outcomes`). Measured on the live lake: the month partition is
+     8,704,108 rows / 408 MB / **15.4 GB** as dicts, against **0.53 GB** for a
+     full session and **0.31 GB** for a 20-symbol outcome read. Equivalence is
+     asserted against a longhand reference implementation of the old read, not
+     assumed. BD-74.
+   - **The 1.03 GB tracker snapshot.** `ingest_artifact` hashes the file in
+     chunks and answers the watermark BEFORE `read_bytes`, and a SNAPSHOT over
+     64 MB is stored whole but not `json.loads`-ed. For `setup_tracker` that
+     loses nothing measurable - it declares neither `event_keys` nor `id_keys`,
+     so the parse fed only the `quality` flag, and a test asserts the parsed
+     and skipped rows are identical. BD-73.
+   - **The BounceBot `self.data[reqId]` leak.** Five request paths freed the
+     ready event and left the bar buffer (~206 KB each, ~400 a cycle, 1.5-2 GB
+     a session). They now free both, on the success AND timeout branches, and
+     `historicalData` drops bars for an unknown reqId instead of re-creating a
+     buffer nobody will free. The trader authorised this one `legacy.py` edit
+     and nothing else in that file; it was verified LIKE a detector change -
+     the golden fixtures and all 411 BounceBot tests pass unchanged.
+
+   **Live gate owed (one DESK session, after the trader restarts):** the first
+   swing-scan slot's build keeps the desk under **3 GB** working set
+   (`Get-Process -Id <pid> | select WorkingSet64`, sampled across the window
+   the lake manifest shows for that build); the manifest still gains the same
+   datasets for that session; and the desk's baseline stops creeping between
+   builds.
+
+   **Decisions, not owed work:** moving `run_build` into a child process was
+   considered and NOT done - the in-process single-flight lock, the spool seal
+   and the ledger's `_record_job` all assume one process, and the filtering
+   removes the growth on its own (BD-74). It remains available if the live gate
+   shows it is still wanted; that is the trader's call.
+
+   **Observed in the same session, unchanged, NOT authorised here:** the RRS
+   scan's O(n^2) intraday profile (CPU, not memory); the
+   `_poll_focus_d1_interest` -> `FocusSideEditor.refresh` GUI stalls
+   (`focus_picks_panel.py:441`, 392 s on 2026-08-27); and the RS-window
+   `_auto_tick` reading 1,412 daily parquet files on the GUI thread
+   (`rs_window_feed.py:745`, 92 s). Separate packets.
 
 Gates: the Phase 0.8 live soak still comes first; **SOAK 1 (after G-P2.2, before
-G-P2.3) is OWED and is the gate on item 4** - see `CURRENT_CHECKPOINT.md` for the
+G-P2.3) is OWED and is the gate on item 4** (item 6 is independent of it - it is
+warehouse and BounceBot memory, not GUI threading) - see `CURRENT_CHECKPOINT.md` for the
 command and the baseline numbers; each G-P2.3 slice is then followed by a soak
 against the archived 2026-08-26 baseline. Build prompt:
 `docs/prompts/GUI_PHASE_0_9_OPUS_PROMPT.md` (two soak stops inside it; run

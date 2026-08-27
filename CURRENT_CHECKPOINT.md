@@ -8,6 +8,95 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 (afternoon) - the desk's 8-13 GB memory jumps: BUILT, all three causes; one live gate owed
+
+**Branch `claude/warehouse-build-memory`**, cut from `claude/group-tape-rebuild`
+at `cd212bc` rather than from `claude/gui-phase-0-9` as the build prompt said -
+**deliberate deviation**, so that ONE desk restart picks up both the group tape
+rebuild and this packet, which is what the trader asked for ("before we restart,
+integrate this as well"). The branch therefore contains gui-phase-0-9's head,
+the tape rebuild, and this.
+
+Built to `docs/analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md` on the
+2026-08-27 (10:00) investigation below.
+
+### Measured before -> after (live lake, `\\MINI-PC\Trading Bot Data\research_lake`)
+
+| Step | Before | After |
+|---|---|---|
+| `bar_m5 month=2026-08` partition | 8,704,108 rows / 408 MB / 158 files | unchanged (it is the input) |
+| `read_table(...).to_pylist()` on it | **15.4 GB** (1,769 B/row, measured on a 20k slice) | not called any more |
+| `build_derived_bars` read (one full session) | 15.4 GB | **0.53 GB** (297,230 rows) |
+| `build_intraday_snapshots` read (one session) | 15.4 GB | **0.53 GB** |
+| `_run_outcomes` read (20 symbols, whole month) | 15.4 GB | **0.31 GB** (175,235 rows) |
+| tracker snapshot, UNCHANGED verdict | 1.03 GB read + hashed | **0 bytes read** (chunked hash) |
+| tracker snapshot, CHANGED | 1.03 GB + decode + `json.loads` (several GB) | 1.03 GB + decode, **no parse** |
+| BounceBot `self.data` after a sweep | one buffer per request, forever (~206 KB each) | **empty** |
+
+The 10:00 investigation measured 8,175,471 rows / 13.3 GB; by this afternoon the
+same partition was 8,704,108 rows / 15.4 GB. It grows all month - that is the
+shape of the bug, not a discrepancy.
+
+### What shipped
+
+1. `ResearchStore.read_rows(...)` - Arrow-side narrowing before `to_pylist`,
+   used by `aggregate.build_derived_bars`, `features.build_intraday_snapshots`
+   and `cli._run_outcomes`. Narrow by design (symbols + interval_start_range
+   only). BD-74.
+2. `ingest_existing`: chunked `_sha256_path`, the UNCHANGED check hoisted above
+   `read_bytes`, and `SNAPSHOT_PARSE_MAX_BYTES = 64 MB` above which a snapshot
+   is stored whole but not parsed. BD-73.
+3. `bounce_bot_lib/legacy.py` (the ONE authorised edit): the five leaking
+   request paths free `self.data[reqId]` with the ready event on both branches,
+   and `historicalData` drops bars for an unknown reqId instead of re-creating
+   a buffer nobody frees.
+
+### Verification
+
+`.venv\Scripts\python.exe -m pytest tests/ -q` -> **5192 passed, 19 subtests passed, exit 0**
+(329 s). `scripts/smoke_check.py` -> **7/7**. Golden fixtures and all 411
+BounceBot tests pass UNCHANGED, which is the check that matters for cause 3.
+
+**Fail-before-fix, per file** (production file stashed, suite re-run, restored):
+- `tests/test_warehouse_session_scoped_reads.py` (10) - **8/10 fail** without
+  `read_rows`. The two survivors are the equivalence guards, which must pass on
+  both sides of the change.
+- `tests/test_bronze_snapshot_large_files.py` (9) - **9/9 fail**.
+- `tests/test_bouncebot_reqid_buffers_are_freed.py` (12) - **11/12 fail**. The
+  survivor guards that a live request still collects its bars.
+
+**No packaging trigger** - no new dependency, asset, top-level package, dynamic
+import or `__file__` use.
+
+### Premise corrected while building
+
+The build prompt named `cli._run_outcomes` as one of the three live costs. **It
+is not one today:** `setup_occurrence` holds **0 rows** on this lake, so
+`_run_outcomes` returns `NO_OCCURRENCES` before it reads `bar_m5` at all. Fixed
+regardless, because it becomes a cost the moment the BD-44 detector adapter
+lands - but the 10:00 attribution of the 10.7 GB sample belongs to
+`build_derived_bars` and `build_intraday_snapshots` alone.
+
+### Owed / next
+
+- **Live gate (one DESK session, after the restart):** the first swing-scan
+  slot's build keeps the desk under **3 GB** working set
+  (`Get-Process -Id <pid> | select WorkingSet64`, sampled across the window the
+  lake manifest shows for that build); the manifest still gains the same
+  datasets for that session; the baseline stops creeping between builds.
+- **Decision, not owed work:** `run_build` was NOT moved into a child process.
+  The in-process single-flight lock, the spool seal and the ledger's
+  `_record_job` all assume one process, and the filtering removes the growth on
+  its own. Available if the live gate says otherwise - the trader decides.
+- **Observed in the same session, unchanged, not authorised:** the RRS scan's
+  O(n^2) intraday profile (CPU, not memory); the `_poll_focus_d1_interest` ->
+  `FocusSideEditor.refresh` GUI stalls (`focus_picks_panel.py:441`, 392 s); the
+  RS-window `_auto_tick` reading 1,412 daily parquet files on the GUI thread
+  (`rs_window_feed.py:745`, 92 s). Separate packets.
+- **Immediate next action:** the trader restarts the desk. The checkout is on
+  `claude/warehouse-build-memory`, which carries BOTH this packet and the group
+  tape rebuild. Neither is merged to `main`.
+
 ## 2026-08-27 (afternoon) - Group RS/RW tape REBUILT (plan.md Phase 0.5 item 11, packets T-1..T-4); live gate owed
 
 **Branch `claude/group-tape-rebuild`**, cut from `claude/gui-phase-0-9` at

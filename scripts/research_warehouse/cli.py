@@ -325,7 +325,16 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
 
     m5_by_symbol: dict[str, list] = {}
     for partition in _m5_partitions_for(known, day):
-        for row in store.read_table("bar_m5", partition).to_pylist():
+        # SYMBOL only, in Arrow - deliberately no date narrowing. The outcome
+        # walk runs FORWARD over a horizon that can cross sessions, which is
+        # why `_m5_partitions_for` already widens to the trigger's month and
+        # the next one (BD-66/BD-69); narrowing to a day here would silently
+        # re-simulate against a truncated future. The symbol predicate is
+        # exactly the `symbol in symbols` test it replaces, so the walk sees
+        # the same bars - it just never materialises everyone else's first.
+        for row in store.read_rows(
+            "bar_m5", partition, symbols=sorted(symbols) if symbols else None
+        ):
             symbol = str(row.get("symbol") or "")
             if symbol in symbols:
                 m5_by_symbol.setdefault(symbol, []).append(row)

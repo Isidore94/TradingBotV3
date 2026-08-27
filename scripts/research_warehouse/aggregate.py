@@ -274,18 +274,25 @@ def build_derived_bars(
             continue
         report.sessions += 1
         partition = f"month={session.rth_open_at:%Y-%m}"
-        m5 = store.read_table("bar_m5", partition).to_pylist()
+        # Both narrowings run in ARROW, not in Python. This used to be
+        # `read_table(partition).to_pylist()` followed by exactly the two
+        # filters below, which meant a whole month of M5 bars became Python
+        # dicts so that one session of them could be used: 8.7M rows / 15.4 GB
+        # on 2026-08-27, against a largest session of 588,778 rows. The
+        # predicates are unchanged - same half-open session window, same exact
+        # symbol match - so the derived rows are identical; only the peak moves.
+        m5 = store.read_rows(
+            "bar_m5",
+            partition,
+            symbols=sorted(wanted) if wanted else None,
+            interval_start_range=(session.rth_open_at, session.rth_close_at),
+        )
         by_symbol: dict[str, list[dict]] = {}
         for row in m5:
             symbol = str(row.get("symbol") or "")
-            if wanted and symbol not in wanted:
+            if row.get("interval_start") is None:
                 continue
-            start = row.get("interval_start")
-            if start is None:
-                continue
-            stamp_utc = start if start.tzinfo else start.replace(tzinfo=timezone.utc)
-            if session.rth_open_at <= stamp_utc < session.rth_close_at:
-                by_symbol.setdefault(symbol, []).append(row)
+            by_symbol.setdefault(symbol, []).append(row)
 
         for timeframe in timeframes:
             existing = _existing_keys(store, timeframe, session)

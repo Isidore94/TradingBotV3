@@ -805,22 +805,38 @@ def build_intraday_snapshots(
     stamp = now or utc_now()
     partition = f"month={session.rth_open_at:%Y-%m}"
 
+    # The session window runs in ARROW, not in Python: this used to read the
+    # whole MONTH partition into dicts (8.7M rows / 15.4 GB on 2026-08-27) to
+    # keep one session of it. The predicate is the same half-open window.
+    #
+    # The SYMBOL filter is applied only when the caller named symbols. With
+    # none named, `wanted` below is derived from the bars themselves - the
+    # cohort present in this session - so narrowing the read would change the
+    # answer rather than just its cost.
+    named = sorted({str(symbol).strip().upper() for symbol in (symbols or [])})
+    window = (session.rth_open_at, session.rth_close_at)
+
     m5_by_symbol: dict[str, list[dict]] = {}
-    for row in store.read_table("bar_m5", partition).to_pylist():
-        start = row.get("interval_start")
-        if start is None or not (session.rth_open_at <= start < session.rth_close_at):
+    for row in store.read_rows(
+        "bar_m5", partition, symbols=named or None, interval_start_range=window
+    ):
+        if row.get("interval_start") is None:
             continue
         m5_by_symbol.setdefault(str(row.get("symbol") or ""), []).append(row)
 
     derived_by_symbol: dict[str, dict[str, list[dict]]] = {}
     for timeframe in ("M15", "M30"):
-        for row in store.read_table("bar_derived", f"timeframe={timeframe}/month={session.rth_open_at:%Y-%m}").to_pylist():
-            start = row.get("interval_start")
-            if start is None or not (session.rth_open_at <= start < session.rth_close_at):
+        for row in store.read_rows(
+            "bar_derived",
+            f"timeframe={timeframe}/month={session.rth_open_at:%Y-%m}",
+            symbols=named or None,
+            interval_start_range=window,
+        ):
+            if row.get("interval_start") is None:
                 continue
             derived_by_symbol.setdefault(str(row.get("symbol") or ""), {}).setdefault(timeframe, []).append(row)
 
-    wanted = {str(symbol).strip().upper() for symbol in (symbols or [])} or set(m5_by_symbol)
+    wanted = set(named) or set(m5_by_symbol)
     existing = {
         (str(row["symbol"]), row["interval_start"])
         for row in store.read_table(
