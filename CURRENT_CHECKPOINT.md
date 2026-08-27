@@ -16,9 +16,10 @@ and the growth decision it recorded is taken.
 
 | Measure | Value |
 |---|---|
-| Full suite | **4995 passed / 19 subtests, exit 0** |
+| Full suite, tip `714f717` | **5010 passed / 19 subtests, exit 0** |
+| Full suite at `ac9a952`, before G-P2.1 landed under it | 4995 passed / 19 subtests, exit 0 |
 | `scripts/smoke_check.py` | 7/7 |
-| Tests added | 11, every one proved failing first |
+| Tests added here | 11, every one proved failing first |
 
 **1. The shadow export is guarded.** `export_setup_tracker_views` now wraps the
 band-variant CSV write in `try/except Exception` + `logging.warning`. Only the
@@ -69,13 +70,18 @@ for such a stop. The champion still crosses all six. Re-measured:
 All four baseline templates are still present, so the stats table's
 per-template pairing stays possible.
 
-**Note on this checkout's state.** The working tree carried uncommitted Phase
-0.9 AWAY-recap work (`away_recap_panel.py`, `test_away_day_recap.py`, an
-untracked `test_away_recap_return_surface.py`) that is not this session's. It
-was red on arrival - 14 failures / 18 errors, all in the AWAY-recap and Qt-page
-tests. It was stashed for the duration and restored afterwards; the 4995 green
-number is the tree at `ac9a952` with that WIP set aside, and nothing in these
-fixes touches it.
+**Note on this checkout's state, because it explains two numbers.** The working
+tree carried uncommitted Phase 0.9 G-P2.1 AWAY-recap work
+(`away_recap_panel.py`, `test_away_day_recap.py`, an untracked
+`test_away_recap_return_surface.py`) that was not this session's, and it was RED
+on arrival - 14 failures / 18 errors, all in the AWAY-recap and Qt-page tests,
+none of them in Phase 0.10. It was stashed so the review fixes could be measured
+against a green tree; that is the **4995** figure, taken at `1fd9e6e` plus the
+fixes. While this session worked, a concurrent one finished and committed that
+work as **`a5fa6a9` "Phase 0.9 G-P2.1: AWAY Recap as a return surface"**, which
+now sits directly under `ac9a952`. The suite was re-run on the combined tip:
+**5010 passed, exit 0** (the +15 are G-P2.1's own tests). Nothing in these fixes
+touches that panel, and nothing of the other session's work was lost.
 
 **Owed, unchanged:** T4's three criteria, >= 20 sessions of forward accrual with
 >= 40 finalized setups before T3 counts, and B-4 (the T1 level-quality backfill

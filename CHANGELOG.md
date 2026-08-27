@@ -1,6 +1,7 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-26** on `claude/gui-phase-0-9`, at Phase 0.10's
+Last reconciled: **2026-08-26** on `claude/gui-phase-0-9` (tip `714f717`, which
+also carries Phase 0.9 G-P2.0/G-P2.1), at Phase 0.10's
 review fixes - the AVWAP band challenger built, shadow-fenced, its fence guarded
 at source and its export guarded against costing the tracker save; its three
 forward gates owed.
@@ -74,10 +75,12 @@ variant scenarios), so **~144 MB -> ~89.5 MB, 15% -> 9.4%** at the live
 compaction strips the event logs. All four baseline templates remain, so the
 stats table's per-template pairing is still possible.
 
-Verification: **4995 passed / 19 subtests, exit 0**; smoke 7/7. Eleven tests
-added, every one proved failing first. **Owed, unchanged**: T4's three criteria,
->= 20 sessions of forward accrual before T3 counts, and B-4 - which these two
-fixes were the gate on.
+Verification: **4995 passed / 19 subtests, exit 0** at `ac9a952`, and **5010
+passed, exit 0** on the tip `714f717` once Phase 0.9's `a5fa6a9` (committed by a
+concurrent session while this work ran) landed beneath it; smoke 7/7. Eleven
+tests added, every one proved failing first. **Owed, unchanged**: T4's three
+criteria, >= 20 sessions of forward accrual before T3 counts, and B-4 - which
+these two fixes were the gate on.
 
 ### 2026-08-26 - AVWAP band challenger: a second formula, computed beside the champion and unable to reach it
 
