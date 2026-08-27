@@ -1,0 +1,423 @@
+{
+  "schema": "avwap_band_variant_oneoption_v1",
+  "feature_version": "avwap_bands_oneoption_bb20_v1",
+  "raw_input_keys": [
+    "bars",
+    "rules_under_test"
+  ],
+  "raw_input_sha256": "28e23dc53d0914d40c0f71e9f07f374efec5f0ea5dd940f126f4ef95293df429",
+  "acquired_at": "2026-08-26T21:30:00-04:00",
+  "universe_version": "durable_daily_bars_2026-08-26",
+  "provider_assumptions": "OKTA daily bars read once from the desk's durable store (data/daily_bars/OKTA.parquet) and passed through the champion's own _normalize_daily_bar_frame before freezing, never through an ad-hoc volume threshold. The store's OKTA volumes are mixed-unit - thousands before 2026-05-27 and again on 2026-06-04, shares otherwise, with volume_unit='unknown' throughout - and the frozen bars carry that splice exactly as the champion would receive it. Neither golden row is affected: the anchored centre sums only 2026-05-29 forward and the first mixed-unit bar after the anchor is 2026-06-04, while the sigma uses no volume at all. The expected values are the trader's hover readings off OneOption / Option Stalker Pro, not this repository's output.",
+  "as_of": "2026-06-05T16:00:00-04:00",
+  "expected_keys": [
+    "expected"
+  ],
+  "numeric_tolerance": 0.02,
+  "intentional_difference": "The centre is expected to differ from the vendor by up to 0.2%. OneOption prices its AVWAP on consolidated volume and this store carries IB volume, so the weights differ; on 2026-06-02 that is 126.78 here against 126.565 there. The anchor bar matches to the cent because a single bar's VWAP does not depend on volume at all. The sigma needs no volume and reproduces from any clean close series, so it is held to +/-0.02.",
+  "fixture": "avwap_band_variant_oneoption_v1",
+  "frozen_at": "2026-08-26",
+  "symbol": "OKTA",
+  "note": "Phase 0.10 B-0. Replication target for scripts/indicators/avwap_band_variants.py. The killed sample-OHLC form - sample stdev (n-1) of every O/H/L/C print since the anchor around the running AVWAP - predicts an upper band of 138.09 on 2026-06-02 against the 144.60 the trader read, and is asserted as a discriminator in tests/test_avwap_band_variants.py.",
+  "rules_under_test": {
+    "anchor_date": "2026-05-29",
+    "lookback": 20,
+    "ddof": 0,
+    "typical_price": "hlc3",
+    "centre": "anchored volume-weighted VWAP of HLC/3 from the anchor bar to t",
+    "sigma": "population standard deviation of the last 20 closes ending at t",
+    "sigma_window_crosses_the_anchor": true,
+    "zero_or_nan_volume_bars": "skipped in the centre; their closes still count in sigma",
+    "centre_relative_tolerance": 0.002,
+    "sigma_absolute_tolerance": 0.02
+  },
+  "bars": [
+    {
+      "date": "2026-04-01",
+      "open": 80.0,
+      "high": 80.4,
+      "low": 77.33,
+      "close": 79.14,
+      "volume": 16473.0
+    },
+    {
+      "date": "2026-04-02",
+      "open": 78.29,
+      "high": 81.1,
+      "low": 77.94,
+      "close": 80.19,
+      "volume": 17619.0
+    },
+    {
+      "date": "2026-04-06",
+      "open": 80.12,
+      "high": 81.17,
+      "low": 79.48,
+      "close": 80.56,
+      "volume": 17232.0
+    },
+    {
+      "date": "2026-04-07",
+      "open": 80.08,
+      "high": 81.21,
+      "low": 78.24,
+      "close": 79.34,
+      "volume": 23491.0
+    },
+    {
+      "date": "2026-04-08",
+      "open": 81.32,
+      "high": 82.05,
+      "low": 76.0,
+      "close": 76.04,
+      "volume": 28572.0
+    },
+    {
+      "date": "2026-04-09",
+      "open": 75.78,
+      "high": 76.05,
+      "low": 67.69,
+      "close": 67.76,
+      "volume": 34988.0
+    },
+    {
+      "date": "2026-04-10",
+      "open": 68.41,
+      "high": 68.5,
+      "low": 62.66,
+      "close": 62.93,
+      "volume": 47823.0
+    },
+    {
+      "date": "2026-04-13",
+      "open": 63.3,
+      "high": 65.62,
+      "low": 63.0,
+      "close": 65.46,
+      "volume": 25983.0
+    },
+    {
+      "date": "2026-04-14",
+      "open": 65.57,
+      "high": 67.38,
+      "low": 63.44,
+      "close": 64.09,
+      "volume": 22289.0
+    },
+    {
+      "date": "2026-04-15",
+      "open": 65.55,
+      "high": 67.65,
+      "low": 65.23,
+      "close": 67.35,
+      "volume": 26277.0
+    },
+    {
+      "date": "2026-04-16",
+      "open": 71.1,
+      "high": 72.9,
+      "low": 70.24,
+      "close": 72.01,
+      "volume": 32517.0
+    },
+    {
+      "date": "2026-04-17",
+      "open": 73.24,
+      "high": 73.48,
+      "low": 71.13,
+      "close": 72.25,
+      "volume": 41035.0
+    },
+    {
+      "date": "2026-04-20",
+      "open": 73.77,
+      "high": 76.89,
+      "low": 73.4,
+      "close": 75.76,
+      "volume": 26392.0
+    },
+    {
+      "date": "2026-04-21",
+      "open": 77.13,
+      "high": 79.87,
+      "low": 76.4,
+      "close": 77.64,
+      "volume": 20930.0
+    },
+    {
+      "date": "2026-04-22",
+      "open": 77.94,
+      "high": 79.02,
+      "low": 76.85,
+      "close": 78.7,
+      "volume": 18828.0
+    },
+    {
+      "date": "2026-04-23",
+      "open": 76.09,
+      "high": 76.6,
+      "low": 74.07,
+      "close": 76.04,
+      "volume": 18854.0
+    },
+    {
+      "date": "2026-04-24",
+      "open": 76.01,
+      "high": 76.67,
+      "low": 73.24,
+      "close": 75.98,
+      "volume": 16239.0
+    },
+    {
+      "date": "2026-04-27",
+      "open": 75.87,
+      "high": 76.56,
+      "low": 74.69,
+      "close": 76.14,
+      "volume": 12985.0
+    },
+    {
+      "date": "2026-04-28",
+      "open": 76.37,
+      "high": 78.52,
+      "low": 75.94,
+      "close": 76.2,
+      "volume": 12975.0
+    },
+    {
+      "date": "2026-04-29",
+      "open": 75.81,
+      "high": 76.41,
+      "low": 74.26,
+      "close": 76.16,
+      "volume": 10934.0
+    },
+    {
+      "date": "2026-04-30",
+      "open": 75.13,
+      "high": 75.33,
+      "low": 72.99,
+      "close": 73.65,
+      "volume": 13614.0
+    },
+    {
+      "date": "2026-05-01",
+      "open": 75.5,
+      "high": 77.46,
+      "low": 75.01,
+      "close": 75.78,
+      "volume": 16280.0
+    },
+    {
+      "date": "2026-05-04",
+      "open": 75.64,
+      "high": 78.0,
+      "low": 75.54,
+      "close": 77.24,
+      "volume": 10761.0
+    },
+    {
+      "date": "2026-05-05",
+      "open": 77.36,
+      "high": 78.47,
+      "low": 76.37,
+      "close": 77.75,
+      "volume": 10373.0
+    },
+    {
+      "date": "2026-05-06",
+      "open": 76.5,
+      "high": 78.15,
+      "low": 75.5,
+      "close": 77.44,
+      "volume": 16926.0
+    },
+    {
+      "date": "2026-05-07",
+      "open": 79.96,
+      "high": 83.0,
+      "low": 79.96,
+      "close": 80.88,
+      "volume": 17960.0
+    },
+    {
+      "date": "2026-05-08",
+      "open": 80.33,
+      "high": 83.97,
+      "low": 78.54,
+      "close": 83.9,
+      "volume": 20313.0
+    },
+    {
+      "date": "2026-05-11",
+      "open": 82.96,
+      "high": 84.7,
+      "low": 81.13,
+      "close": 81.69,
+      "volume": 11896.0
+    },
+    {
+      "date": "2026-05-12",
+      "open": 81.4,
+      "high": 81.65,
+      "low": 78.03,
+      "close": 79.06,
+      "volume": 9892.0
+    },
+    {
+      "date": "2026-05-13",
+      "open": 78.46,
+      "high": 80.09,
+      "low": 77.45,
+      "close": 78.2,
+      "volume": 11437.0
+    },
+    {
+      "date": "2026-05-14",
+      "open": 79.13,
+      "high": 82.5,
+      "low": 77.5,
+      "close": 81.05,
+      "volume": 11955.0
+    },
+    {
+      "date": "2026-05-15",
+      "open": 80.9,
+      "high": 83.84,
+      "low": 80.37,
+      "close": 82.77,
+      "volume": 14864.0
+    },
+    {
+      "date": "2026-05-18",
+      "open": 83.49,
+      "high": 87.24,
+      "low": 83.09,
+      "close": 87.04,
+      "volume": 23329.0
+    },
+    {
+      "date": "2026-05-19",
+      "open": 88.79,
+      "high": 90.0,
+      "low": 85.61,
+      "close": 85.7,
+      "volume": 18420.0
+    },
+    {
+      "date": "2026-05-20",
+      "open": 83.76,
+      "high": 89.21,
+      "low": 83.35,
+      "close": 89.04,
+      "volume": 16783.0
+    },
+    {
+      "date": "2026-05-21",
+      "open": 88.5,
+      "high": 90.95,
+      "low": 87.3,
+      "close": 89.44,
+      "volume": 15544.0
+    },
+    {
+      "date": "2026-05-22",
+      "open": 90.12,
+      "high": 92.38,
+      "low": 89.35,
+      "close": 92.24,
+      "volume": 15896.0
+    },
+    {
+      "date": "2026-05-26",
+      "open": 95.07,
+      "high": 96.39,
+      "low": 90.3,
+      "close": 93.81,
+      "volume": 24692.0
+    },
+    {
+      "date": "2026-05-27",
+      "open": 90.2300033569336,
+      "high": 91.36000061035156,
+      "low": 89.19999694824219,
+      "close": 89.5,
+      "volume": 3909900.0
+    },
+    {
+      "date": "2026-05-28",
+      "open": 91.73999786376952,
+      "high": 96.63999938964844,
+      "low": 90.13999938964844,
+      "close": 94.72000122070312,
+      "volume": 8969500.0
+    },
+    {
+      "date": "2026-05-29",
+      "open": 107.53500366210938,
+      "high": 124.79000091552734,
+      "low": 106.5009994506836,
+      "close": 123.2699966430664,
+      "volume": 17583900.0
+    },
+    {
+      "date": "2026-06-01",
+      "open": 128.30999755859375,
+      "high": 142.35000610351562,
+      "low": 128.2899932861328,
+      "close": 139.7899932861328,
+      "volume": 9806300.0
+    },
+    {
+      "date": "2026-06-02",
+      "open": 130.0,
+      "high": 137.0,
+      "low": 129.00999450683594,
+      "close": 135.32000732421875,
+      "volume": 7534600.0
+    },
+    {
+      "date": "2026-06-03",
+      "open": 132.47999572753906,
+      "high": 132.73500061035156,
+      "low": 124.1999969482422,
+      "close": 124.6500015258789,
+      "volume": 6149700.0
+    },
+    {
+      "date": "2026-06-04",
+      "open": 122.75,
+      "high": 125.3,
+      "low": 120.71,
+      "close": 123.48,
+      "volume": 22504.0
+    },
+    {
+      "date": "2026-06-05",
+      "open": 122.19000244140624,
+      "high": 123.99099731445312,
+      "low": 117.58000183105467,
+      "close": 118.72000122070312,
+      "volume": 4017700.0
+    }
+  ],
+  "expected": {
+    "vendor": "OneOption / Option Stalker Pro",
+    "readings": [
+      {
+        "date": "2026-05-29",
+        "centre": 118.19,
+        "upper_1": 128.47,
+        "lower_1": 107.9,
+        "note": "One-bar anchor. The centre is exactly that bar's HLC/3 (118.187), which is how the study killed OHLC/4 (115.52) and every anchor-offset candidate: a VWAP equal to one bar's typical price to the cent cannot contain an earlier bar. sigma = 10.28 here, where the champion's is 0.0 by construction."
+      },
+      {
+        "date": "2026-06-02",
+        "centre": 126.565,
+        "upper_1": 144.6,
+        "lower_1": 108.53,
+        "note": "Two hovers, upper then lower; the centre is their midpoint and the half-width is 18.035. This is the reading that killed the sample-OHLC form, which predicts 138.09 here. Our centre from the store's volumes is 126.78, a 0.17% gap that is a consolidated-vs-IB volume-feed difference and not a formula difference - hence the 0.2% centre tolerance."
+      }
+    ]
+  }
+}
