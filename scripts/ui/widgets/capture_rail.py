@@ -285,7 +285,9 @@ class CaptureRail(QFrame):
         is opened and costs a click to read, which is the opposite of the
         five-second contract the veto list is built to. Main swing holds nine
         claims, so the same 1-9 digits work here, and double-click and Enter
-        commit it exactly as they do a veto.
+        commit it exactly as they do a veto - meaning they ATTEMPT the commit
+        and fall back to asking for the why, the way a veto falls back to
+        asking for a `note_required` reason's note (trader, 2026-08-27).
 
         The nine main-swing claims keep digits 1-9 exactly as before; the
         claims added on 2026-08-21 (the three post-earnings families and the
@@ -308,8 +310,10 @@ class CaptureRail(QFrame):
             self.setup_list.addItem(item)
             if hotkey:
                 self._claim_hotkeys[hotkey] = claim.setup_id
-        # Double-click and the digit do the same thing: pick the claim and ask
-        # for the why. Neither commits on its own (R9.2).
+        # Double-click and the digit do the same thing, and it is the same
+        # thing the veto's reason list does: try to commit, and ask for the why
+        # when there is not one yet (R9.2's required why is enforced inside
+        # `commit_like`, not by refusing to call it).
         self.setup_list.itemActivated.connect(lambda item: self._claim_picked(item))
         rows = max(1, min(self.setup_list.count(), 14))
         self.setup_list.setMaximumHeight(rows * theme.px(21) + theme.px(10))
@@ -569,12 +573,21 @@ class CaptureRail(QFrame):
         return str(item.data(_CLAIM_ROLE) or "") if item is not None else ""
 
     def select_setup(self, setup_id: str) -> None:
-        """Select a claim by id, then ask for the why.
+        """Select a claim by id, then try to commit it.
 
-        The digit picks the claim; it no longer commits on its own. Trader,
-        2026-08-22: "if I like a chart I should always be prompted with why".
-        This is the veto vocabulary's ``note_required`` mechanic, applied to
-        every claim rather than to particular reasons - pick, type, Enter.
+        This is `select_reason`'s shape, deliberately - trader, 2026-08-27:
+        "i want to be able to double click the like and claim the same way i
+        can double click the veto." The veto's gesture does not bypass its note
+        rule; it ATTEMPTS the commit and `commit_veto` diverts to the note
+        field when that reason's ``note_required`` is unmet. So the like's
+        gesture now calls `commit_like`, which already carries the identical
+        guard for the why.
+
+        The 2026-08-22 rule is therefore untouched - "if I like a chart I
+        should always be prompted with why", and a like with no why still
+        writes nothing and still holds the chart. What changes is only the case
+        where the why is ALREADY typed: the gesture used to send the trader
+        back to a field they had just filled in.
         """
         for row in range(self.setup_list.count()):
             if self.setup_list.item(row).data(_CLAIM_ROLE) == setup_id:
@@ -582,13 +595,13 @@ class CaptureRail(QFrame):
                 break
         else:
             return
-        self._prompt_for_why()
+        self.commit_like()
 
     def _claim_picked(self, item) -> None:
         """Double-click lands here so it behaves exactly like the digit."""
         if item is not None:
             self.setup_list.setCurrentItem(item)
-        self._prompt_for_why()
+        self.commit_like()
 
     def _prompt_for_why(self) -> None:
         self.like_note_input.setFocus()

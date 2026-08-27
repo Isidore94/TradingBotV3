@@ -8,6 +8,30 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 (13:00) - capture rail: the like's double-click commits like the veto's
+
+**Branch `claude/warehouse-build-memory`.** Trader: "i want to be able to double
+click the like and claim the same way i can double click the veto."
+
+The veto's gesture attempts the commit (`select_reason` -> `commit_veto`, which
+diverts only for a `note_required` reason). The like's went straight to
+`_prompt_for_why` and could never commit, so a why that was already typed was
+ignored and re-requested. Both like gestures now call `commit_like`, where
+R9.2's required-why guard already lives.
+
+**The 2026-08-22 rule is deliberately unchanged** - a like with no why writes
+nothing and holds the chart; its two existing tests pass untouched. The digit
+moved with the double-click on purpose, because the veto's two gestures are
+identical to each other.
+
+**Verification:** `pytest tests/ -q` -> **5203 passed, 19 subtests, exit 0**
+(315 s). Fail-before-fix: 4 of the 5 new tests fail with `capture_rail.py`
+stashed; the fifth is the no-why regression guard and passes on both sides. No
+packaging trigger.
+
+**Needs a restart to reach the desk** - the desk has been running `a8eeb48`
+since 12:22, which predates this and the popup-height commit.
+
 ## 2026-08-27 (12:30) - ticker popup no longer edge to edge; desk RESTARTED on the new code
 
 **Branch `claude/warehouse-build-memory`.**

@@ -27,6 +27,46 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-27 - Double-click on a claim commits the like, the way it does on a veto
+
+**IMPLEMENTED / GREEN.** Trader: "i want to be able to double click the like and
+claim the same way i can double click the veto."
+
+The two gestures had drifted apart. `select_reason` (veto digit) and the reason
+list's `itemActivated` (veto double-click) both call `commit_veto`, which
+diverts to the note field only when that reason's `note_required` is unmet. The
+like's `select_setup` and `_claim_picked` went straight to `_prompt_for_why`
+and could never commit - so a trader who had ALREADY typed the why was sent
+back to a field they had just filled in.
+
+- Both like gestures now call `commit_like`, which is where R9.2's required-why
+  guard already lives. That is the veto's exact shape: the gesture ATTEMPTS the
+  commit; the rule enforces itself inside the commit rather than by refusing to
+  reach it.
+- **The 2026-08-22 rule is untouched** ("if I like a chart I should always be
+  prompted with why"). A like with no why still writes nothing, still holds the
+  chart, and still moves focus to the why with the same message - its two
+  existing tests pass unchanged, and a new one pins the double-click case of
+  it. The only new capability is: why typed, then the gesture commits.
+- The digit changed with the double-click deliberately. The veto's digit and
+  double-click are identical to each other, and leaving the like's digit
+  nagging while its double-click committed would make the rail internally
+  inconsistent in a way the veto is not.
+- The stale docstring that claimed "double-click and Enter commit it exactly as
+  they do a veto" is now true, and says what "exactly as a veto" means.
+
+Nothing else in the rail moves: the LIKE still retires the chart the way it
+did, still writes only `trader_annotations.jsonl` + the like cohort, and still
+adds nothing to Focus or any watchlist.
+
+Tests: `tests/test_qt_alert_capture.py` +5 (59 in the file) - the double-click
+committing with a why, the double-click still refusing without one, the digit
+committing with a why, the why field cleared after a commit so the next chart
+cannot silently inherit the previous chart's reasoning, and both lists'
+activation routed through their commit. Fail-before-fix: 4 of the 5 fail on the
+old wiring; the fifth is the no-why regression guard, which must pass on both
+sides. Full suite **5203 passed, 19 subtests, exit 0**.
+
 ### 2026-08-27 - The ticker popup opens 10% short of the screen, top and bottom
 
 **IMPLEMENTED / GREEN.** Trader: "make the charts that pop up when i click on a
