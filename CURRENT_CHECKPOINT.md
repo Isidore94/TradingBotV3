@@ -8,6 +8,55 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 - ASSESSMENT (Fable) of both overnight Opus runs: GO; G-P2.2 awaits the trader's yes; docs owed for G-P2.0/2.1
+
+Reproduced on a detached worktree at the committed tip `cc7dffa`:
+**5010 passed / 19 subtests, exit 0** (279 s) - the builder's number.
+
+**Phase 0.10 review fixes (`ac9a952`) - verified at source and by reproduction.**
+The shadow CSV write in `export_setup_tracker_views` is inside
+`try/except` + `logging.warning`, shadow write only. The fence guard
+(`tests/test_band_variant_fence_guard.py`) was pointed at `5613eec`'s
+`legacy.py` here, independently: **6 unfenced readers before the fence, 0 now**,
+9 readers seen, a two-entry documented allowlist (the stop rebuild on replay,
+sealed-record compaction). The four-template cut is in `_build_tracker_scenarios`
+via `_is_band_variant_stop`. B-4 is unblocked.
+
+**Phase 0.9 G-P2.0 (`1fd9e6e`) - built and pinned.** One shell
+(`data_table.apply_width_rule` + `MiddleElideDelegate`), applied to the six
+`DataTable` users and to the raw `QTableWidget`s on AWAY Recap and Weekend
+Prep; tests cover 1680 vs 2304 widths, tail-preserving deterministic elision,
+tooltips. **Caveat, not a defect:** `measure_column_widths` still calls
+`resizeColumnsToContents()` - the 7.9% / 115 s site - and G-P2.0 now reaches it
+from two more pages. That is G-P2.3 item 1, which is next; do not soak-judge
+table cost until it lands.
+
+**Phase 0.9 G-P2.1 (`a5fa6a9`) - built and pinned.** Hide-and-count of
+scanner-status rows, `Chart ▸` cell + `Enter`, symbol-less rows muted/italic
+through a theme token (`setForeground`, no stylesheet). The Alert Center's list
+untouched.
+
+**Phase 0.9 G-P2.2 - edited, UNCOMMITTED, correctly stopped at the fence.**
+`alert_center_panel.py` carries the Ctrl+J route exactly in the prompt's shape
+(panel scope, `WidgetWithChildrenShortcut`, label hint, no row) and
+`tests/test_desk_journal_route.py` is untracked beside it. It passes 6/6 -
+after one unexplained 6/6 failure on its first run here (4.3 s, then green three
+times at 1.3 s; likely a collision with the other session still finishing).
+Watch it in the first full-suite run after it is committed. **The trader's
+"yes" is the gate**: on it, commit both files; without it, revert both.
+
+**Owed by the GUI session, because it stopped at the ask before its handoff:**
+CHANGELOG entries for G-P2.0/G-P2.1 (the header mentions them; there is no
+entry), `plan.md` Phase 0.9 Built stamps, and the §13 build status in the
+redesign plan. Then **SOAK 1** (stall watchdog on, compare against
+`ui_stalls_prefix_baseline_2026-08-26.jsonl`), then G-P2.3.
+
+**Process finding, recorded so it is not repeated:** the two Opus sessions ran
+in ONE checkout at once; the Phase 0.10 fix session found the GUI session's
+in-flight G-P2.1 work red in the tree and stashed it to measure. Nothing was
+lost, but a stash of someone else's work is a coin toss. One build session per
+checkout; a second needs `git worktree`.
+
 ## 2026-08-26 night - Phase 0.10 review fixes APPLIED; B-4 is unblocked
 
 **Branch `claude/gui-phase-0-9`** (cut from `292e335`, so the Phase 0.10 build
