@@ -150,6 +150,47 @@ resolves it: the AVWAP and the lower band on 2026-06-02.** AVWAP 126.78 →
 the width is n≈22 pop / 25 sample; AVWAP 126.56 → n=20 pop, the textbook
 Bollinger σ, which is by far the likelier implementation.
 
+**Third hover: OKTA 2026-06-02 lower band = 108.53.** Centre = (144.6 + 108.53)/2
+= **126.565**, half-width = **18.035**. The store's 20-bar population stdev of
+closes on 06-02 is 18.04. **Replicated:**
+
+> `band_k = AVWAP_hlc3 ± k · stdev(close, 20, population)` — an anchored HLC/3
+> volume-weighted centre with the textbook Bollinger σ as the half-width.
+
+The centre differs from ours by 0.22 (126.565 vs 126.78, 0.17%) — a volume-feed
+difference (OneOption's consolidated volume vs IB's), not a formula difference;
+the anchor-bar centre matched to the cent because a single bar's VWAP does not
+depend on volume at all. R2's tolerance of 0.2% on the centre is therefore about
+right, and the σ needs no volume, so it reproduces exactly from any clean close
+series.
+
+**Merit or luck — the honest a-priori view, before T1 measures it.** Both
+screenshots showing the OneOption band as "the level" are two anecdotes and
+prove nothing; that is what the backfill is for. What can be said now:
+
+- The *shape* has a sound reason to work early: recent realised volatility is a
+  sensible scale for how far price can stray from an institutional cost basis,
+  and it is on scale from bar 1. The champion's anchored running deviation is an
+  *accumulated* dispersion — it starts at zero and fans out — so for the first
+  five to ten bars after a fresh anchor its ±1σ is too tight to mean anything.
+  The trader's screenshots are both early-anchor charts, which is exactly where
+  the champion is weakest and any vol-scaled band looks good. The same
+  principle already lives in this codebase as "distance is in ATR, never
+  percent" (regime-pause hold, 2026-08-21).
+- The *weaknesses* are structural: it is not a deviation from the AVWAP at
+  all (the closes are measured around their own 20-bar mean, not around the
+  anchored centre); on a gapping name the gap bar dominates the window for
+  exactly twenty sessions and then drops out, so the band **jumps inward on
+  bar 21** for no tape reason; and it has no anchor memory, so two anchors on
+  the same chart carry identical widths.
+- So the expected result of T1 is *not* "one formula wins": it is that the
+  OneOption band is better in the 1–5 and 6–20 bars-since-anchor buckets and
+  the champion is better later, with the crossover somewhere near the window
+  length. If that is what the numbers say, the useful product is neither
+  formula alone but a band whose width is vol-scaled early and
+  anchor-accumulated later — and that is a *new* level family, tested through
+  the same three harnesses, never a swap inside the champion.
+
 **Data hazard found on the way, for R2:** the store's OKTA volumes are
 mixed-unit — thousands before 2026-05-27 and again on 2026-06-04, shares
 otherwise (`volume_unit = unknown` on every row). The table above normalised
@@ -159,8 +200,8 @@ threshold.
 
 What this does to the rest of the plan: §2's C2/C3 rows are superseded by S1/S2;
 R1's hover list is now specific (the four dates above, on OKTA, then the same
-five-bar pattern on two more names); R4's module implements whichever of S1/S2
-survives, with the other pinned as the discriminator fixture. §4 is unchanged —
+five-bar pattern on two more names); R4's module implements the replicated S2 formula
+above, with S1 pinned as the discriminator fixture. §4 is unchanged —
 except that if S2 wins, the "variant" is not an anchored deviation at all but a
 volatility band on an anchored centre, and T1's bars-since-anchor buckets become
 the most interesting cut, because S2's width never fans out from the anchor.
@@ -371,7 +412,7 @@ Expected files (Phase A first; nothing exists yet):
 - Phase B: `scripts/avwap_band_level_study.py`, a `--band-formula` switch in `scripts/setup_playbook_study.py`, `docs/analysis/AVWAP_BAND_VARIANT_RESULTS_<date>.md`
 - Phase C: `scripts/master_avwap_lib/runner.py`, `legacy.py` (fenced), `scripts/ui/panels/setup_tracker_panel.py`, `scripts/research_warehouse/{features,schemas}.py`, tracker golden fixture + parity test
 
-## 6. Open questions for the trader (Phase A cannot start without 1–3)
+## 6. Open questions for the trader (Phase A's replication is done on OKTA; items 2–3 are now the extra names for the fixture)
 
 1. ~~Which program~~ — answered: OneOption / Option Stalker Pro.
 2. **Which symbols and anchor dates** for the sample (§3 R1), and the rule you
