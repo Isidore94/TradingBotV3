@@ -1,6 +1,7 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-27** on `claude/gui-phase-0-9` (tip `fd76923`), at
+Last reconciled: **2026-08-27** on `claude/gui-phase-0-9`, at the with-trend
+regime-pause auto-Focus rule (trader rule 2026-08-27, on top of `fd76923`) after
 Phase 0.9's first three packets - the table width rule, the AWAY Recap return
 surface and the Desk Journal keyboard route. The same branch also carries Phase
 0.10's AVWAP band challenger and its review fixes (two sessions shared one
@@ -21,6 +22,63 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-27 - With-trend regime-pause rows auto-join M5 Focus (trader rule, same morning)
+
+**IMPLEMENTED / GREEN.** "I've been doing nothing but managing the bot all
+morning. There are too many trades." Measured from `alert_review_events` for
+the session's first 46 minutes (06:33-07:19): **124 charts shown** - one every
+22 seconds - 40 skipped, 60 "Not today", and at 07:09 the pane read
+**23 hidden / 74 waiting**. Between 07:09 and 07:18 the trader reviewed all 21
+"holding highs" rows the regime-pause watch produced on a `bullish_weak` open
+and put **twelve of them on M5 Focus by hand**, one click each.
+
+**The rule (trader, 2026-08-27):** a swing LONG holding its highs on a bullish
+day, or a swing SHORT pressing its lows on a bearish day, is added to M5 Focus
+by the machine and never occupies the review chart - the decision is made. The
+mirror cases (counter-trend rows) and a day with no directional read stay on
+the queue exactly as before.
+
+- `scripts/regime_pause_focus.py` - the whole decision, pure: `day_bias(env)`
+  collapses `bullish_weak`/`bullish_strong` to one family, `focus_side_for(env,
+  side)` names the Focus side or `None`. Reads nothing, no clock.
+- `AlertCenterPanel._auto_focus_regime_pause` - called from `add_alert` AFTER
+  the backing list insert and AFTER `is_focus` is measured, so the feed row is
+  presented exactly as before (no new beep, no fold change); only the
+  `_enqueue_review_alert` call is skipped when the row is resolved. The day
+  label is `resolve_discovery_env(bot live env, load_opening_environment())` -
+  the ONE definition discovery already uses - via `_regime_pause_day_env`.
+- Writes through the STORE (not `FocusService.add`, which would log a "like"),
+  stamps the auto-pick marker only when `add()` actually added - a trader's
+  unmarked Focus entry keeps its owner AND its chart - and records a
+  `regime_pause_auto_focus` row (`env`, `focus_side`, `outcome` in
+  `adopted | already_auto | already_trader_owned`). "Not today" and the desync
+  repair can therefore reach what it placed (packet R2 provenance).
+- **DESK only**, like auto-pick adoption (R1 matrix). Any failure falls open
+  onto the old path: the row is queued, never lost.
+- Not built, on purpose: no eviction when the name stops holding (the queue's
+  15-minute rule is a queue rule; the Focus entry stays until the trader or the
+  desync repair says otherwise), and no change to the detector, the sweep, the
+  hold measurement or the counter-trend rows.
+
+Tests: `tests/test_regime_pause_focus.py` (18, the two-case rule and every
+refusal) and `tests/test_qt_regime_pause_auto_focus.py` (12, through
+`add_alert` on the real panel: placement + marker + skipped chart; counter-trend
+still charts; blank/neutral admits nothing; the trader's own entry is not
+relabelled; a repeat resolves as `already_auto`; AWAY/EVENING/OFF never place;
+a store failure queues the row; an ordinary alert is untouched). With the panel
+change stashed, 3 of the 12 fail on the assertion and 9 pass - the 9 are the
+"stays on the queue" cases, which hold either way.
+
+**Scan of what else fills the queue (same 46 minutes, 124 shown):** D1 rows
+67 (`d1_flag_long/short` 41 from the Master AVWAP D1 scanner, `focus_d1_event`
+26 - and the Focus list that feeds those had just received **69 machine-adopted
+auto picks** at 07:09: 20 "Bullish-day weakness", 13 "RS vs SPY", 36 PDH/PDL
+breaks - which raised 102 `focus_d1_flag` rows on 95 names); M5 `lrsi_cross_20`
+/`lrsi_cross_50` 25; regime-pause 21; armed chart watches 11. The other primary
+chart type is therefore the **D1 flag** (54% of everything shown), with the
+LRSI cross (20%) second. Nothing was changed for either - that is the trader's
+next call, recorded in `CURRENT_CHECKPOINT.md`.
 
 ### 2026-08-27 - Phase 0.9 G-P2.0..G-P2.2: the three presentation follow-ons from the 2026-08-26 live session
 

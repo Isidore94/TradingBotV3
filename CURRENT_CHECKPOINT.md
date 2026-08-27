@@ -8,6 +8,57 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 (morning) - trader rule BUILT: with-trend regime-pause rows auto-join M5 Focus; queue scan done
+
+**Branch `claude/gui-phase-0-9`** (this session, on top of `fd76923`). Trader,
+07:20: "I've been doing nothing but managing the bot all morning. There are
+too many trades. New rules. 1. M5 holding highs on bullish days and M5 holding
+lows on bearish days are auto added to the M5 focus lists. Then do a scan and
+see what is the other primary type of chart recommended."
+
+### Rule 1 - BUILT
+
+`scripts/regime_pause_focus.py` (pure rule) + `AlertCenterPanel._auto_focus_regime_pause`
+in `add_alert`. Detail and the exact behaviour boundary are in `CHANGELOG.md`
+2026-08-27 and plan.md Phase 0.5 item 11. Detector, sweep and hold measurement
+untouched. The alert-panel edit was trader-directed in chat (the ask-first
+rule's authorisation).
+
+| Measure | Value |
+|---|---|
+| Tests added | 30 (`test_regime_pause_focus.py` 18, `test_qt_regime_pause_auto_focus.py` 12) |
+| Fail-before-fix | panel change stashed: 3 of 12 fail on the assertion, 9 pass (the "stays on the queue" cases hold either way) |
+| Full suite | **5046 passed / 19 subtests, exit 0** (299 s; 5016 before this change) |
+| `scripts/smoke_check.py` | 7/7 |
+| Packaging trigger | none (new module is a plain `scripts/*.py`, collected by the existing rule; no dependency, asset or `__file__` change) |
+
+**Live gate owed:** one DESK session on a directional day - rows land in Focus
+with no chart, "Not today" from the Focus surfaces still removes them, and a
+count of charts saved.
+
+### The scan - what else fills the queue
+
+`alert_review_events`, 06:33-07:19 today (46 min): **124 charts shown**, one
+every 22 s; 40 skip, 60 "Not today"; 23 hidden / 74 waiting at 07:09.
+
+| Chart type | Shown | Share |
+|---|---:|---:|
+| D1 flags - `d1_flag_long/short` (Master AVWAP D1 scanner) 41 + `focus_d1_event` 26 | 67 | 54% |
+| M5 `lrsi_cross_20` / `lrsi_cross_50` | 25 | 20% |
+| Regime-pause "holding highs" (now auto-Focus with-trend) | 21 | 17% |
+| Armed chart watches | 11 | 9% |
+
+Behind the `focus_d1_event` count: the auto-populate slot adopted **69 auto
+picks into M5 Focus at 07:09** (20 "Bullish-day weakness", 13 "RS vs SPY", 36
+PDH/PDL breaks; 47 shorts / 25 longs on a `bullish_weak` day), and every Focus
+name is watched for every D1 event kind, which raised **102 `focus_d1_flag`
+rows on 95 names** in the same window. The other primary chart type is the D1
+flag; the LRSI cross is second. **Nothing changed for either** - the trader
+decides whether to gate, cap or fold them, and which of the three auto-pick
+families is worth 69 Focus names on a bullish morning.
+
+---
+
 ## 2026-08-27 - ACTIVE: Phase 0.9, G-P2.0..G-P2.2 BUILT and committed; **SOAK 1 is the gate on G-P2.3**
 
 **Branch `claude/gui-phase-0-9`, tip `fd76923`.** Governing document

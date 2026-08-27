@@ -65,6 +65,7 @@ from chart_watch import (
 )
 import focus_adoption_gate
 import regime_pause_hold
+from regime_pause_focus import day_bias, focus_side_for
 from prev_day_gate import (
     CLOSED as PREV_DAY_CLOSED,
     OPEN as PREV_DAY_BREAK_OPEN,
@@ -1039,10 +1040,18 @@ class AlertCenterPanel(QFrame):
         self._alerts.insert(0, alert)
         del self._alerts[MAX_FEED_ITEMS * 2 :]
         is_focus = self._alert_has_focus_privilege(alert)
+        # Trader rule 2026-08-27: a with-trend regime-pause row ("holding
+        # highs" on a bullish day, "pressing lows" on a bearish day) goes
+        # straight to M5 Focus and never occupies the review chart - the
+        # decision is made. Measured AFTER `is_focus` on purpose: the feed row
+        # is presented exactly as it was before the placement, so the rule
+        # changes where the name goes and not how the row looks or sounds.
+        auto_focused = self._auto_focus_regime_pause(alert)
         if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
             # The chart review queue is likewise decided before, and
             # independently of, how the row is presented.
-            self._enqueue_review_alert(alert)
+            if not auto_focused:
+                self._enqueue_review_alert(alert)
             decision = self._repetition_decision(alert, is_focus=is_focus)
             if decision.action == ACTION_FOLD and self._fold_into_existing_row(alert, decision):
                 pass
@@ -2808,6 +2817,105 @@ class AlertCenterPanel(QFrame):
             },
         )
         return True
+
+    def _regime_pause_day_env(self) -> str:
+        """The day's directional label, as discovery sees it.
+
+        `resolve_discovery_env` is the ONE definition of "which way is the
+        day": BounceBot's live label while it is directional, else the opening
+        read recorded at the auto-populate slot (first directional write wins
+        for the day). Blank when neither can answer - and blank admits
+        nothing, so a row seen before any read exists stays on the queue.
+        """
+        current = ""
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+                if bot is not None:
+                    current = str(bot.get_market_environment() or "")
+            except Exception:
+                current = ""
+        try:
+            from autopilot_core import load_opening_environment, resolve_discovery_env
+
+            return str(resolve_discovery_env(current, load_opening_environment()) or "")
+        except Exception:
+            return ""
+
+    def _auto_focus_regime_pause(self, alert: BounceAlert) -> bool:
+        """Place a with-trend regime-pause row on M5 Focus (trader rule 2026-08-27).
+
+        On 2026-08-27 the trader reviewed 21 "holding highs" charts in nine
+        minutes on a bullish open and put twelve on M5 Focus by hand while 74
+        more charts waited. The rule: a swing LONG holding highs on a bullish
+        day, or a swing SHORT pressing lows on a bearish day, is added to M5
+        Focus by the machine and skips the review chart. The mirror cases and
+        a non-directional day are untouched (`regime_pause_focus`).
+
+        Returns True when the row is RESOLVED - placed, or already the
+        machine's own entry - so `add_alert` knows not to queue it. False for
+        everything else, including a Focus name the TRADER owns (their chart
+        shows as it always did) and any failure: this must never be the
+        reason a chart went missing, so it fails open onto the old path.
+
+        DESK only, like auto-pick adoption (R1 matrix): AWAY and EVENING have
+        nobody present to prune what the machine adopted, and OFF adopts
+        nothing. Writes through the STORE, not `FocusService.add`, for the
+        same reason `_adopt_auto_pick_into_focus` does - a machine adding a
+        name is not the trader liking it - and stamps the auto-pick marker so
+        "Not today" and the desync repair can reach the entry. The marker is
+        written only when `add()` actually added: an existing unmarked entry
+        is the trader's and must not change owner.
+        """
+        if not is_regime_pause_alert(alert):
+            return False
+        if not alert.symbol or not SYMBOL_RE.fullmatch(alert.symbol):
+            return False
+        if self._auto_mode_now() != "DESK":
+            return False
+        store = getattr(self.focus_service, "store", None)
+        if store is None:
+            return False
+        env = self._regime_pause_day_env()
+        side = focus_side_for(env, alert.side)
+        if side is None:
+            return False
+        try:
+            added = bool(store.add(alert.symbol, side, "m5"))
+            if added:
+                marker_writer = getattr(store, "mark_auto_adopted", None)
+                if callable(marker_writer):
+                    marker_writer(
+                        alert.symbol,
+                        side,
+                        "m5",
+                        staged_at=str(alert.time_text or ""),
+                        reason=f"{alert.trigger} on a {day_bias(env)} day ({env})",
+                    )
+                outcome = "adopted"
+            else:
+                reader = getattr(store, "is_auto_adopted", None)
+                already_ours = bool(reader(alert.symbol, side, "m5")) if callable(reader) else False
+                outcome = "already_auto" if already_ours else "already_trader_owned"
+        except Exception:
+            logging.warning(
+                "Regime-pause row %s could not be placed on M5 Focus; queued instead.",
+                alert.symbol,
+                exc_info=True,
+            )
+            return False
+        self._record_review_event(
+            "regime_pause_auto_focus",
+            alert=alert,
+            queue_len=len(self._review_queue),
+            detail={"env": env, "focus_side": side, "outcome": outcome},
+        )
+        if outcome == "adopted":
+            self.statusChanged.emit(
+                f"★ {alert.symbol}: {alert.trigger} on a {day_bias(env)} day - "
+                f"added to M5 Focus {side}s, no chart to review."
+            )
+        return outcome in ("adopted", "already_auto")
 
     def _resolve_auto_pick(self, alert: BounceAlert, approved: bool) -> None:
         if (

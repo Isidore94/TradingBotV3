@@ -811,6 +811,23 @@ are listed in `CURRENT_CHECKPOINT.md`.
    BOTH directions, which is a different decision from this one and needs its
    own fixture and its own trader call.
 
+   **With-trend rows auto-join M5 Focus - BUILT 2026-08-27 (trader rule, same
+   morning).** 21 "holding highs" charts reviewed in nine minutes on a
+   `bullish_weak` open, twelve added to M5 Focus by hand, 74 charts waiting.
+   Now a LONG holding highs on a bullish day / a SHORT pressing lows on a
+   bearish day is placed on M5 Focus by `AlertCenterPanel` (DESK only, store
+   write + auto-pick marker, `regime_pause_auto_focus` evidence row) and skips
+   the review chart; counter-trend rows and a non-directional day are
+   untouched, and any failure queues the row. Rule in
+   `scripts/regime_pause_focus.py`; no detector file touched. **Live gate
+   owed:** one DESK session on a directional day confirming the rows land in
+   Focus without a chart, that "Not today" from the Focus surfaces still
+   removes them, and a count of how many charts the rule saved. **Not built,
+   the trader's call:** eviction when a placed name stops holding, and the
+   same treatment for the other two queue fillers measured that morning (D1
+   flags at 54% of charts shown, LRSI crosses at 20% - `CHANGELOG.md`
+   2026-08-27).
+
 12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).** "I want this
    program to be very fluid to use." Measured first: 1843 stalls over 50 ms and
    1008 s blocked in 3h20m, plus the two GC freezes. The trader's own hypothesis
