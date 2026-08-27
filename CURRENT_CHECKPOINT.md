@@ -56,6 +56,22 @@ show time (`AlertCenterPanel.vwap_state`, `_review_chart_state`,
 `wrong side of VWAP` badge on a revealed name, and charts-shown-per-hour
 against the 124-in-46-minutes baseline below.
 
+### Restart observation, 08:07-08:10 (trader asked for a safe restart to drop 112 waiting charts)
+
+`CloseMainWindow()` on the desk (pid 26336, launched 06:30 from a VS Code
+terminal, 8.3 GB working set): the window closed at 08:07:35, `closeEvent`
+ran to completion - scan children reaped 08:07:40, writer lease released
+08:07:40 and again by the backstop 08:07:51 - and then the PROCESS stayed
+alive for 2+ minutes at a full core with the log silent, threads=46. It was
+terminated at 08:10:25 after the shutdown lines were on disk, and the desk
+relaunched through `trading_desk.cmd` (pid 33336, window up, BounceBot
+warming ATRs by 08:11). Nothing was lost that the close had not already
+saved. Worth a look under G-P2.4: with `gc.disable()` process-wide, an 8 GB
+heap's interpreter teardown (or a non-daemon Theta quote-scan worker mid
+`846`-name loop - it was at 70/846 when IB dropped) is the likely hang, and
+the single-instance slot is held until the process dies, so a relaunch
+right after close is refused.
+
 ### The scan - what else fills the queue
 
 `alert_review_events`, 06:33-07:19 today (46 min): **124 charts shown**, one
