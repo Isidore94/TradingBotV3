@@ -70,6 +70,11 @@ GROUP_PREV_DAY = "prev_day"
 GROUP_TRENDLINE = "d1_trendline"
 #: R4 section 4: the trader's OWN armed alarms, drawn strictly read-only.
 GROUP_ALERTS = "armed_alerts"
+#: Phase 0.10: the AVWAP band challenger, drawn beside the champion's bands so
+#: the trader can see the difference on a real chart. DEFAULT OFF - it is a
+#: candidate under test, not a level the desk has decided anything with, and
+#: nothing reads it: no zone arm, no alert, no detector.
+GROUP_AVWAP_VARIANT = "avwap_variant"
 
 #: Display order, and the order the paint-lines control lists them in.
 LEVEL_GROUPS: tuple[tuple[str, str], ...] = (
@@ -80,8 +85,17 @@ LEVEL_GROUPS: tuple[tuple[str, str], ...] = (
     (GROUP_PREV_DAY, "Prev-day H/L"),
     (GROUP_TRENDLINE, "D1 trendline"),
     (GROUP_ALERTS, "Armed alerts"),
+    # Last on purpose: a challenger does not push the trader's own lines around
+    # in a menu they read by position.
+    (GROUP_AVWAP_VARIANT, "AVWAP σ variant"),
 )
 GROUP_NAMES: dict[str, str] = dict(LEVEL_GROUPS)
+
+#: Groups that are OFF until the trader switches them on. Every other group in
+#: `LEVEL_GROUPS` defaults ON, deliberately, so a group added by a later version
+#: appears switched on rather than silently missing. A formula under test is the
+#: opposite case: it must not appear on a chart nobody asked for it on.
+GROUPS_HIDDEN_BY_DEFAULT: frozenset[str] = frozenset({GROUP_AVWAP_VARIANT})
 
 #: A trendline projects along its slope and goes wrong fast, so the scan's
 #: view of it is only honest for a few sessions. Same budget ``d1_level_feed``
@@ -119,6 +133,10 @@ _ALERT_COLOR = "caution"
 MAX_ARMED_ALERT_LEVELS = 12
 #: Not chart_yellow: "AVWAPE prev" already owns yellow on this chart.
 _TRENDLINE_COLOR = "chart_purple"
+#: One colour for all six challenger lines, deliberately unlike the champion's
+#: three-colour band set: they read as one alternative reading of the same
+#: anchor, not as a second set of levels to trade off.
+_VARIANT_COLOR = "chart_pink"
 
 #: This module's key into ``d1_level_feed``'s shared ai_state parse.
 _TRENDLINE_PROJECTION = "chart_levels.trendline"
@@ -692,6 +710,73 @@ def horizontal_levels(
     return out
 
 
+def avwap_variant_levels(
+    bars: Sequence[Mapping[str, Any]],
+    anchor_index: int,
+) -> list[dict[str, Any]]:
+    """The AVWAP band challenger's +/-1/2/3, as six sloped paint-lines.
+
+    SHADOW ONLY (plan.md Phase 0.10 / `docs/AVWAP_BAND_VARIANT_STUDY.md`). An
+    anchored HLC/3 centre with a 20-close population Bollinger sigma as its
+    half-width, replicated from OneOption / Option Stalker Pro on 2026-08-26.
+    The champion's own bands (`calc_anchored_vwap_bands`, frozen by decision
+    0008) are drawn by `chart_snapshot` as overlays and are not touched here.
+
+    A bar the challenger cannot measure is `None` in the series, exactly like
+    every other sloped line in this module - a warm-up bar is unmeasurable,
+    never a band sitting on its centre.
+
+    Worker threads only, like everything else here. It is pure arithmetic over
+    the bars already in hand, so it costs no I/O at all - but it runs where the
+    rest of the payload is built, never on the paint path.
+    """
+    bars = list(bars or ())
+    if not bars:
+        return []
+    try:
+        anchor = int(anchor_index)
+    except (TypeError, ValueError):
+        return []
+    if not 0 <= anchor < len(bars):
+        return []
+
+    try:
+        from indicators.avwap_band_variants import oneoption_avwap_band_series
+
+        series = oneoption_avwap_band_series(bars, anchor)
+    except Exception:
+        _log.debug("AVWAP variant bands unavailable.", exc_info=True)
+        return []
+
+    anchor_stamp = _bar_date(bars[anchor])
+    anchor_key = anchor_stamp.isoformat() if anchor_stamp else str(anchor)
+
+    out: list[dict[str, Any]] = []
+    for multiple, width in ((1, 1.1), (2, 1.0), (3, 0.9)):
+        for sign, side in ((1, "upper"), (-1, "lower")):
+            values = list(series[f"{side}_{multiple}"])
+            last = next((value for value in reversed(values) if value is not None), None)
+            if last is None:
+                # Not one measurable bar in the whole window: draw nothing
+                # rather than an empty line the legend would still list.
+                continue
+            out.append(
+                {
+                    "id": f"{GROUP_AVWAP_VARIANT}:{anchor_key}:{sign * multiple:+d}",
+                    "family": GROUP_AVWAP_VARIANT,
+                    "group": GROUP_AVWAP_VARIANT,
+                    "price": float(last),
+                    "values": values,
+                    "label": f"{'+' if sign > 0 else '-'}{multiple}\u03c3 var",
+                    "color": _VARIANT_COLOR,
+                    "width": width,
+                    "dash": "dot",
+                    "conviction": None,
+                }
+            )
+    return out
+
+
 def _record_id(
     record: Mapping[str, Any], family: str, anchor: str, price: float
 ) -> str:
@@ -713,6 +798,7 @@ def build_d1_levels(
     trendline_feed: Mapping[str, Mapping[str, Any]] | None = None,
     price_alerts_path: Path | None = None,
     d1_level_watches_path: Path | None = None,
+    avwap_anchor: date | str | None = None,
 ) -> list[dict[str, Any]]:
     """Every paint-line for ``symbol``'s D1 chart. Worker threads only.
 
@@ -724,6 +810,12 @@ def build_d1_levels(
     ``price_alerts_path`` / ``d1_level_watches_path`` do the same for R4's
     armed-alert family. Both reads are strictly read-only; the single-writer
     rule on each store is untouched.
+
+    ``avwap_anchor`` is the current AVWAPE anchor date the snapshot already
+    resolved. Passing it in rather than resolving it again is the point: the
+    challenger's centre must be anchored on exactly the bar the champion's is,
+    or the two lines on the chart would differ for two reasons at once. Omitted
+    (or not a session in ``bars``), the challenger group is simply absent.
     """
     symbol = str(symbol or "").strip().upper()
     bars = list(bars or ())
@@ -791,5 +883,14 @@ def build_d1_levels(
         )
     except Exception:
         _log.debug("Armed alert levels unavailable for %s.", symbol, exc_info=True)
+
+    try:
+        anchor_day = _parse_date(avwap_anchor)
+        if anchor_day is not None:
+            index = _bar_index_by_date(bars).get(anchor_day)
+            if index is not None:
+                levels.extend(avwap_variant_levels(bars, index))
+    except Exception:
+        _log.debug("AVWAP variant levels unavailable for %s.", symbol, exc_info=True)
 
     return levels

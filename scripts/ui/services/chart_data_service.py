@@ -285,7 +285,11 @@ class ChartDataService(QObject):
             kwargs["sessions"] = sessions
         d1 = chart_snapshot.build_d1_snapshot(symbol, **kwargs)
         m5 = chart_snapshot.build_m5_snapshot(symbol, list(m5_bars or []))
-        d1["levels"] = self._build_levels(symbol, d1.get("bars") or [])
+        # The anchor comes from the snapshot that just resolved it, so the
+        # challenger's centre is anchored on exactly the bar the champion's is.
+        d1["levels"] = self._build_levels(
+            symbol, d1.get("bars") or [], avwap_anchor=d1.get("avwape_anchor")
+        )
         d1["earnings"] = self._build_earnings(symbol, d1.get("bars") or [])
         self._cache_earnings_anchor_from_source(symbol)
 
@@ -352,7 +356,11 @@ class ChartDataService(QObject):
             return {}
 
     @staticmethod
-    def _build_levels(symbol: str, bars: Sequence[Mapping[str, Any]]) -> list[dict]:
+    def _build_levels(
+        symbol: str,
+        bars: Sequence[Mapping[str, Any]],
+        avwap_anchor: str | None = None,
+    ) -> list[dict]:
         """The D1 paint-lines, built HERE because this is the worker (A4).
 
         The level store lives in the Drive-backed home folder and the ai_state
@@ -367,7 +375,9 @@ class ChartDataService(QObject):
         try:
             import chart_levels
 
-            return chart_levels.build_d1_levels(symbol, bars)
+            return chart_levels.build_d1_levels(
+                symbol, bars, avwap_anchor=avwap_anchor
+            )
         except Exception:
             _log.debug("D1 level build failed for %s.", symbol, exc_info=True)
             return []
