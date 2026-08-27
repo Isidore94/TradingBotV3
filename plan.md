@@ -1569,13 +1569,30 @@ nothing else.
    service signals, so `weekend_prep_panel.py` is fully off the Qt thread.
 
    **Still owed — eight panels with a click-reachable read and no worker at
-   all**, in rough order of measured IO surface: `setup_tracker_panel` (12 IO
-   call sites), `industry_panel` (6), `master_avwap_panel` (4),
-   `master_market_prep_panel` (3), `theta_panel` (2), `watchlists_panel` (2),
-   `rs_window_panel` (1), and `universe_panel` (has a worker, reload unaudited).
-   Each needs the same treatment and its own fail-before-fix test. None was
-   touched: a partial conversion of a page is worse than an honest list of
-   which pages still need one.
+   all:** `setup_tracker_panel` (12 IO call sites), `industry_panel` (6),
+   `master_avwap_panel` (4), `master_market_prep_panel` (3), `theta_panel` (2),
+   `watchlists_panel` (2), `rs_window_panel` (1), and `universe_panel` (has a
+   worker, reload unaudited). Each needs the same treatment and its own
+   fail-before-fix test. None was touched: a partial conversion of a page is
+   worse than an honest list of which pages still need one.
+
+   **Order them by MEASURED blocked time, not by that IO-call count.** The
+   2026-08-26 pre-fix session (`CURRENT_CHECKPOINT.md` carries the full table)
+   says the two costliest non-GC sites left are `widgets/data_table.py:35`
+   (7.9%, 115 s) and `models/theta_table_model.py:72` (5.4%, 79 s — and the
+   single worst stall of the day at 49.25 s), followed by
+   `watchlist_utils.py:33`'s `read_text` (3.9%) and `project_paths.py:165`
+   (2.1%). `theta_panel` is second-to-last on the IO-count list and near the
+   top on the one that matters.
+
+8. **G-P1.7 The cyclic GC is the largest addressed-by-nothing cost.** **NOT
+   STARTED, and not authorized here** — `_GuiGcController` is a live scheduling
+   component, not presentation. Recording it because the measurement is
+   unambiguous: `collector(2)` and `collector(0)` together took **17.1%
+   (248 s)** of the 2026-08-26 session's blocked time, and the desk was observed
+   at ~1 GB after ~8.5 hours the same day. Same subsystem as the 2026-08-21
+   incident (8 GB in 90 min, 298 s then 200 s sweeps). Any work here is a
+   trader decision and needs its own authorization.
 7. **G-P1.6 The HealthPanel audit thread outlived its panel.** *Fixed 2026-08-26
    (`49744a7`), found by the G-P1.5 audit and pre-dating this wave.*
    Constructing the panel starts a daemon thread that emits a Qt signal back

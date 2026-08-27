@@ -27,6 +27,49 @@ G-P1.5 that still read on the Qt thread** - `setup_tracker_panel` first. That
 is new work, not unfinished work: the audit is complete and says exactly which
 pages need it.
 
+### The measured PRE-FIX baseline, and how to compare against it
+
+The stall watchdog was **already enabled** on this machine - the setting did not
+need changing. Its log has been archived to
+`ui_stalls_prefix_baseline_2026-08-26.jsonl` in the machine-local diagnostics
+directory, so the next session writes a clean `ui_stalls.jsonl` that is entirely
+post-fix. Nothing was deleted (an earlier `ui_stalls_prefluidity_2026-08-21.jsonl`
+archive sits beside it).
+
+**This morning's real session (2026-08-26, 06:15-10:25, all pre-fix code)** is a
+far better baseline than the 45-minute sample in the proposal:
+
+| Measure | Pre-fix (2026-08-26 session) |
+|---|---|
+| Stalls >50 ms | **3350** |
+| Median blocked | 169.8 ms |
+| p90 | 617.9 ms |
+| p99 | 3771.5 ms |
+| Worst single stall | **49.25 s** |
+| Total blocked | **1457.5 s** - 24 minutes of frozen desk in ~4h15m |
+
+Where that time actually went - **by blocked time, not stall count**, which is
+the ranking that matters and is not the same list:
+
+| Share | Site | Status |
+|---:|---|---|
+| 42.6% (621 s) | `app.py:1029` = `app.exec()` | **Uninformative by construction.** Precisely the bucket G-P1.3 exists to resolve: from the next session these records carry an `interaction_id` naming the click behind them |
+| 12.6% + 4.5% (248 s) | `app.py:833/841` = `collector(2)` / `collector(0)` | The cyclic GC sweeps. **Not addressed by Wave P1** - and the same subsystem as the 1 GB overnight growth observed 2026-08-26 |
+| 12.5% (183 s) | `focus_picks_panel.py:419` = the mover chip update | **FIXED** (`0f04240` + `10a3008`) |
+| 7.9% (115 s) | `widgets/data_table.py:35` | Not addressed |
+| 5.4% (79 s) | `models/theta_table_model.py:72` | Not addressed - and it owns the single worst stall of the day, 49.25 s |
+| 3.9% (57 s) | `watchlist_utils.py:33` = `path.read_text()` | Not addressed |
+| 2.1% (30 s) | `project_paths.py:165` | Not addressed |
+
+`health_panel.py:147` (the `_fill` cell loop, **fixed** in `49744a7`) does not
+appear in today's top list but is the 4th most frequent culprit across the whole
+2026-08-21..26 log at 973 stalls - it costs whenever the Health page is open.
+
+**What this says about Wave P1's honest expected effect:** it removes one
+measured 12.5% item plus the Health page's churn, and makes the 42.6%
+`app.exec()` bucket legible for the first time. It does **not** touch the GC
+(17.1%) or the two table paths (13.3%). Do not expect the total to halve.
+
 ### Landed on this branch
 
 | Commit | What |
