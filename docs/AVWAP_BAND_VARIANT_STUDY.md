@@ -426,7 +426,46 @@ Expected files (Phase A first; nothing exists yet):
 5. Do you want the overlay (R5 item 2) at all, or is the printed table enough for
    the eyeball test?
 
-## 7. Authority and placement
+## 7. Authority, placement, and status
+
+**Status 2026-08-26: Phase A is BUILT** — packets B-0..B-3 on branch
+`claude/avwap-band-challenger` (`002f2a3`, `13505d1`, `5613eec`, `603333b`,
+`3abf61d`). The frozen module, its golden fixture, the fit script, the tracker
+shadow with its stats export and panel section, and the default-OFF D1 overlay
+all exist and are green. `calc_anchored_vwap_bands` is untouched.
+
+Three things learned in the build that this document did not predict:
+
+1. **T3's fence is load-bearing.** §4 T3 said "shadow stop scenarios ...
+   evaluated by the existing per-bar scenario machinery, so ...
+   `representative_total_r` stays the champion's primary-stop scenario, so no
+   score, rank, tier or alert moves." The first half is right and the
+   conclusion is not. `_summarize_tracker_setup_outcome` averages `total_r`
+   across every tradeable non-experimental scenario and that average reaches
+   `row["score"]`; on the frozen parity fixture `avg_total_r` moved -0.0790 →
+   -0.0755 and seven other values with it. Seven readers now filter on
+   `stop_source_type == "band_variant"` (trader-authorized 2026-08-26). Three of
+   the seven were found by the fixture rather than by reading the code, which is
+   the argument for freezing it first.
+2. **The fairness rule in §4 needs a condition.** "A wider band is touched less
+   often and blown through less often *by construction*" holds only while price
+   is inside the band. Entered outside it, the wider sigma moves the near band
+   TOWARD price: on the parity fixture's short the challenger's stop is 0.159
+   from entry where the champion's is 0.971. T1's touch/respect metrics and T3's
+   stop-out rates must both be cut by the entry's position relative to the band,
+   or they will report the opposite of what they mean.
+3. **The storage estimate was ~30× low.** §4 T3 said "a few hundred bytes per
+   setup"; the measured cost is **9,982 bytes** per new setup (474 for the two
+   anchor blocks, 9,508 for six variant scenarios and their event lists) —
+   ≈144 MB, ~15%, at the live 14,386-setup / 950.2 MB scale, accruing forward
+   only. Capping the shadow to the four non-experimental exit templates would
+   cut it by a third and is a one-line change.
+
+**Owed**: T4's three criteria in full, including ≥ 20 sessions of forward
+accrual with ≥ 40 finalized setups before T3 counts. B-4 (the T1 level-quality
+backfill and the T2 playbook re-run) is the next packet and is NOT started.
+
+### Placement
 
 - Not in `plan.md`. If promoted, the natural home is the next free Phase 0.x packet (0.9 is now the GUI follow-ons)
   ("AVWAP band challenger") ahead of Phase 1, because it is a bounded study with

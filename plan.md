@@ -1669,21 +1669,44 @@ byte-identical with the shadow block present (parity fixture frozen first).
 `legacy.py`/`runner.py` edits are limited to the additive ones the prompt
 pre-authorizes; anything else asks first.
 
-1. **B-0 Pure module + golden fixture.** `scripts/indicators/avwap_band_variants.py`
-   (`avwap_bands_oneoption_bb20_v1`), OKTA fixture from the three hover
-   readings, discriminator tests against the champion and the killed
-   sample-OHLC form, `None` below 20 closes. First importer of `indicators/`:
-   spec-drift test + frozen selftest stated.
-2. **B-1 Fit/print script.** `scripts/avwap_band_variant_fit.py` — champion vs
-   challenger per bar since an anchor, offline, for hover comparison on new names.
-3. **B-2 Tracker shadow.** `current_anchor_variant` / `previous_anchor_variant`
-   on the setup record; `VARIANT_LOWER_1` / `VARIANT_UPPER_1` shadow stop
-   candidates appended after every champion candidate; `master_avwap_band_variant_stats.csv`
-   and a "Band variant" section in the Setup Tracker panel; tracker JSON growth measured.
-4. **B-3 D1 chart overlay**, paint-lines group "AVWAP σ variant", default OFF,
-   built on the worker.
+1. **B-0 Pure module + golden fixture.** *BUILT 2026-08-26 (`002f2a3`).*
+   `scripts/indicators/avwap_band_variants.py` (`avwap_bands_oneoption_bb20_v1`),
+   OKTA fixture frozen through `_normalize_daily_bar_frame`, discriminator tests
+   against the champion (sigma 0.0 on a one-bar anchor vs the 10.28 read) and
+   the killed sample-OHLC form (138.09 vs the 144.60 read), `None` below 20
+   closes, AST fence against importing `master_avwap_lib`. First importer of
+   `indicators/`: spec-drift 17 passed with no spec edit, `--selftest` 71/71.
+2. **B-1 Fit/print script.** *BUILT 2026-08-26 (`13505d1`).*
+   `scripts/avwap_band_variant_fit.py` — champion vs challenger per bar since an
+   anchor, offline, writes nothing without `--csv`. Reproduces the study §2b S2
+   column on OKTA.
+3. **B-2 Tracker shadow.** *BUILT 2026-08-26 (`5613eec` fixture, `603333b`
+   code).* Parity fixture frozen FIRST, before either fenced file was touched.
+   The anchor-variant blocks, the appended `VARIANT_*` stop candidate,
+   `master_avwap_band_variant_stats.csv` and the panel's "Band Variant" tab all
+   landed. **Appending was not sufficient** — the champion's own averages moved
+   and they reach `row["score"]` — so a trader-authorized fence
+   (`_is_band_variant_scenario`, seven readers) keeps the shadow out of every
+   champion aggregate; the parity fixture proves the champion's record is
+   byte-identical. Tracker JSON growth measured: **9,982 bytes per new setup**,
+   ≈144 MB (~15%) at the live 14,386-setup / 950.2 MB scale, accruing forward
+   only. The study's "a few hundred bytes" estimate was ~30× low; capping the
+   shadow to the non-experimental exit templates would cut it by a third and is
+   a one-line change if the trader wants it.
+4. **B-3 D1 chart overlay.** *BUILT 2026-08-26 (`3abf61d`).* Paint-lines group
+   "AVWAP σ variant", built on the worker, anchored on the date the snapshot
+   already resolved. Default OFF required a new
+   `chart_levels.GROUPS_HIDDEN_BY_DEFAULT` + a `shown_groups` list in
+   `PaintLinesPrefs`, because every group previously defaulted ON by design.
 5. **B-4 Backfill** (next packet, after B-0..B-3 review): the level-quality
-   study T1 and the playbook re-run T2, then the warehouse columns.
+   study T1 and the playbook re-run T2, then the warehouse columns. NOT started.
+
+**Finding that changes T1/T3's design.** A wider band is NOT automatically a
+further stop: it is only stopped out less often when entry sits INSIDE it. On
+the parity fixture's short — entered above both upper bands — the wider sigma
+pushes the upper band toward entry and the challenger's stop lands 0.159 away
+where the champion's is 0.971, six times tighter. Any stop-out or respect-rate
+comparison must condition on the entry's position relative to the band.
 
 Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ

@@ -1,7 +1,8 @@
 # TradingBotV3 implemented history
 
-Last reconciled: **2026-08-26** on `claude/gui-p1-fluidity`, at GUI fluidity
-Wave P1 - every code item built, the live soak owed.
+Last reconciled: **2026-08-26** on `claude/avwap-band-challenger`, at Phase 0.10
+packets B-0..B-3 - the AVWAP band challenger built and shadow-fenced, its three
+forward gates owed.
 
 Authoritative for: **what exists and the historical sequence of revisions**
 
@@ -18,6 +19,115 @@ and `PROMOTED` requires an explicit champion decision. A feature can be implemen
 and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
+
+### 2026-08-26 - AVWAP band challenger: a second formula, computed beside the champion and unable to reach it
+
+**IMPLEMENTED / GREEN. Every T4 gate is OWED and no test discharges one.**
+`plan.md` Phase 0.10, governing spec `docs/AVWAP_BAND_VARIANT_STUDY.md`, build
+prompt `docs/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`. Branch
+`claude/avwap-band-challenger` off `claude/gui-p1-fluidity` at `88a34b7`.
+
+`calc_anchored_vwap_bands` is untouched and frozen (decision 0008). Nothing in
+this packet reaches a detector, score, rank, tier, alert, zone arm, Focus list,
+review queue or `review_policy.json`.
+
+**B-0 - the formula, replicated** (`002f2a3`).
+`scripts/indicators/avwap_band_variants.py`
+(`avwap_bands_oneoption_bb20_v1`): an anchored HLC/3 volume-weighted centre with
+a 20-close **population** Bollinger sigma as its half-width - the form the trader
+pinned on 2026-08-26 against OneOption / Option Stalker Pro. The two halves know
+nothing about each other, so the sigma window deliberately reaches back BEFORE
+the anchor; that is why the band is already wide on the anchor bar where the
+champion's is exactly zero. `indicators/` shape throughout: completed bars in,
+immutable aligned tuples out, no I/O, no pandas import, `None` below the
+lookback - never padded, never 0.0, never a shorter window.
+
+`tests/fixtures/avwap_band_variant_oneoption_v1.json` freezes OKTA
+2026-04-01..06-05 from the durable store **through
+`_normalize_daily_bar_frame`**, not an ad-hoc threshold, because that store's
+OKTA volumes are mixed-unit. Neither golden row is affected and the fixture says
+why. The expectations are the trader's hover readings, not this repo's output:
+centre to 0.2% relative (126.78 here against 126.565 there - a consolidated-vs-IB
+volume-feed gap), sigma to +/-0.02 absolute (18.039 vs 18.035).
+
+Two discriminators are pinned as arithmetic: the champion's sigma is 0.0 on a
+one-bar anchor where OneOption read 10.28, and the killed sample-OHLC form
+predicts an upper of 138.09 on 2026-06-02 where the trader read 144.60. The
+killed form lives in the TEST, not the module - no live code carries a formula
+the study already killed. An AST test forbids the module from importing
+`master_avwap_lib` at all.
+
+**B-1 - the hover-comparison table** (`13505d1`).
+`scripts/avwap_band_variant_fit.py SYMBOL ANCHOR_DATE [--lookback 20]` prints
+both formulas per session since an anchor. Offline; writes nothing without
+`--csv`, and then only into `OUTPUT_DIR/reports/`. The champion publishes only
+its final bar, so its column comes from calling the frozen function once per
+session on a truncated frame - a call, never an edit. An unmeasurable cell prints
+EMPTY, because the champion's sigma really is 0.00 on the anchor bar and the two
+must not look alike. Live read on OKTA reproduces the study's S2 column exactly.
+
+**B-2 - the tracker shadow** (`5613eec` fixture, `603333b` code).
+Golden fixture FIRST: `tracker_record_band_variant_parity_v1` was frozen on the
+champion's code BEFORE either fenced file was touched, and it earned its keep.
+`runner.build_anchor_band_variant_meta` computes the challenger from the same
+frame and anchor index; `current_anchor_variant` / `previous_anchor_variant`
+ride `symbol_entry` and the setup record; `_find_tracker_stop_candidates`
+appends one `VARIANT_<protective>` candidate LAST with the champion's own
+`close_failure_limit`; `master_avwap_band_variant_stats.csv` is written in the
+existing export pass and read by a "Band Variant" tab on the Setup Tracker page.
+
+**Appending after the champion's candidates was necessary and NOT sufficient**,
+and the prompt assumed it was. `representative_total_r` is picked by label and
+did not move - but `_summarize_tracker_setup_outcome` averages `total_r` across
+every tradeable non-experimental scenario, and that average reaches
+`build_tracker_setup_type_rows` -> `apply_tracker_setup_type_adjustments` ->
+`row["score"]`. Measured on the frozen fixture before the fence: `avg_total_r`
+-0.0790 -> -0.0755, `tradeable_scenario_count` 8 -> 12, eight summary values in
+all, plus `daily_marks[1].scenario_events` 10 -> 15, the short's `setup_status`
+CLOSED -> OPEN, and 12 -> 18 rows in the scenario and stats CSVs.
+**Trader-authorized 2026-08-26**, `_is_band_variant_scenario` now fences seven
+readers. The shadow is still graded - `_evaluate_tracker_scenario_bar` runs for
+it exactly as before - its events simply stay off the champion's mark. The last
+three fence sites were found by the fixture rather than by reading the code.
+
+Two findings worth more than the code. The challenger's sigma is 1.339 where the
+champion's is 0.586 seven sessions after an anchor (2.3x), which is why the
+trader's screenshots looked better early. And **"the wider band is stopped out
+less often by construction" is only true when entry sits INSIDE the band**: the
+fixture's short is entered above both upper bands, the wider sigma pushes the
+upper band UP toward entry, and the challenger's stop lands 0.159 away where the
+champion's is 0.971 - six times TIGHTER, from the wider formula. T1 and T3 may
+not assume a direction.
+
+**Tracker JSON growth, measured**: 9,982 bytes per NEW setup (474 for the two
+anchor blocks, 9,508 for six variant scenarios with their event lists) against a
+live file of 950.2 MB holding 14,386 setups - about 144 MB, ~15%, if every setup
+carried it. It accrues forward only; existing records do not grow until rebuilt.
+The study estimated "a few hundred bytes per setup" and was ~30x low.
+
+**B-3 - the D1 overlay, default OFF** (`3abf61d`).
+`chart_levels.avwap_variant_levels` builds six sloped lines in the
+`avwap_variant` group on the ChartDataService worker, never on the paint path,
+anchored on the date the snapshot already resolved so the two lines on one chart
+differ for one reason rather than two. **The paint-lines preference file had no
+way to express a default-OFF group** - every group defaults ON there on purpose -
+so `chart_levels.GROUPS_HIDDEN_BY_DEFAULT` names the exceptions and
+`PaintLinesPrefs` gained a `shown_groups` list, letting both defaults live in one
+file: an older preference file keeps the group off, the trader's own hidden
+groups survive a rewrite beside it, and an unreadable file falls back to the
+defaults rather than to "show everything". Four existing paint-lines tests now
+assert the amended rule instead of the blanket one.
+
+`indicators.avwap_band_variants` joined `selftest.LAZY_ENGINE_MODULES` - the
+first lazy import of it from a path a frozen run can reach. `indicators` was
+already in the spec's `collect_submodules`, so no spec edit was needed, verified
+rather than assumed.
+
+Verification across the packet: 4968 passed / 19 subtests, exit 0 (baseline
+4902); smoke 7/7; `launch_gui.py --selftest` 71/71; spec-drift 17 passed.
+**Owed**: T4's three criteria, including >= 20 sessions of forward accrual with
+>= 40 finalized setups before T3 counts, and the B-4 backfills (T1 level quality,
+T2 playbook re-run) which are the next packet and are NOT started.
 
 ### 2026-08-26 - GUI fluidity Wave P1: the desk stops reading its stores on the click
 

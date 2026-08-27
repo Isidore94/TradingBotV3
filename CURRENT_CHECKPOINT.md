@@ -8,6 +8,110 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-26 - ACTIVE: Phase 0.10 AVWAP band challenger, packets B-0..B-3 BUILT
+
+**Branch `claude/avwap-band-challenger`, off `claude/gui-p1-fluidity` at
+`88a34b7`.** Governing spec `docs/AVWAP_BAND_VARIANT_STUDY.md`; build prompt
+`docs/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`. Shadow only:
+`calc_anchored_vwap_bands` is untouched and frozen (decision 0008), and nothing
+in this packet reaches a detector, score, rank, tier, alert, zone arm, Focus
+list, review queue or `review_policy.json`.
+
+### Verification
+
+| Measure | Value |
+|---|---|
+| Baseline before the packet | 4902 passed / 19 subtests, exit 0 |
+| After B-0..B-3 | **4968 passed / 19 subtests, exit 0** |
+| `scripts/smoke_check.py` | 7/7 |
+| `launch_gui.py --selftest` | **71/71** (was 70/70; `indicators.avwap_band_variants` added) |
+| `test_packaging_spec_drift.py` | 17 passed, **no spec edit needed** |
+
+### Landed
+
+| Commit | What |
+|---|---|
+| `002f2a3` | B-0 - `scripts/indicators/avwap_band_variants.py` + the OKTA golden fixture + 21 tests |
+| `13505d1` | B-1 - `scripts/avwap_band_variant_fit.py`, the hover-comparison table |
+| `5613eec` | B-2 step 0 - the tracker parity fixture, frozen BEFORE either fenced file was touched |
+| `603333b` | B-2 - the tracker shadow, its fence, the stats CSV and the panel tab |
+| `3abf61d` | B-3 - the D1 overlay group, default OFF |
+
+### The one place the prompt was wrong, and what was authorized
+
+The prompt pre-authorized appending a `VARIANT_*` stop candidate after every
+champion candidate, on the reasoning that `representative_total_r` is picked by
+label and so nothing moves. `representative_total_r` did not move. Eight other
+values did, and they reach a live score:
+`_summarize_tracker_setup_outcome` averages `total_r` across every tradeable
+non-experimental scenario, and that average feeds
+`build_tracker_setup_type_rows` -> `apply_tracker_setup_type_adjustments` ->
+`row["score"]`.
+
+Measured on the frozen parity fixture before the fence existed:
+
+| Key | Before | With the naive append |
+|---|---:|---:|
+| `avg_total_r` | -0.0790 | -0.0755 |
+| `tradeable_scenario_count` | 8 | 12 |
+| `daily_marks[1].scenario_events` | 10 | 15 |
+| short `setup_status` | CLOSED | OPEN |
+| scenario + stats CSV rows | 12 | 18 |
+
+**The trader authorized the fence on 2026-08-26** ("Yes, add the filter").
+`_is_band_variant_scenario` now filters seven readers: the outcome summary, the
+scenario CSV flattener (which also feeds `master_avwap_setup_stats.csv`), the
+attribute flattener, the short-horizon risk pick, `setup_status` in the record
+builder AND in the forward replay's open/closed counts, and the per-bar daily
+mark's `scenario_events`. The shadow is still GRADED - the per-bar evaluator
+runs for it exactly as before. Three of the seven sites were found by the
+fixture rather than by reading the code.
+
+### Tracker JSON growth, measured
+
+**9,982 bytes per NEW setup** - 474 for the two anchor blocks, 9,508 for six
+variant scenarios and their event lists - against a live
+`master_avwap_setup_tracker.json` of **950.2 MB holding 14,386 setups**. That is
+about **144 MB, ~15%**, if every setup carried it; it accrues FORWARD only, so
+existing records do not grow until they are rebuilt. The study estimated "a few
+hundred bytes per setup" and was ~30x low. **Trader decision available:** capping
+the shadow to the four non-experimental exit templates would cut it by a third
+and is a one-line change. Not made unilaterally.
+
+### Two findings that change how B-4 must be designed
+
+1. The challenger's sigma is **1.339 where the champion's is 0.586** seven
+   sessions after an anchor - 2.3x. That is why the trader's OneOption
+   screenshots looked better early, and it is pinned as arithmetic in the parity
+   test.
+2. **"A wider band is stopped out less often by construction" is only true when
+   entry sits INSIDE the band.** On the parity fixture's short - entered above
+   both upper bands - the wider sigma pushes the upper band UP toward entry and
+   the challenger's stop lands 0.159 away where the champion's is 0.971. Six
+   times TIGHTER, from the wider formula. T1's touch/respect metrics and T3's
+   stop-out rates must both be cut by the entry's position relative to the band.
+
+### Owed
+
+- **T4's three criteria in full.** T3 needs >= 20 sessions of forward accrual
+  with >= 40 finalized setups before it counts; nothing has accrued yet.
+- **B-4 is the next packet and is NOT started**: the T1 level-quality backfill,
+  the T2 playbook re-run, then the warehouse columns.
+- A live desk session with the "Band Variant" tab and the "AVWAP sigma variant"
+  paint-lines group switched on, to confirm both render on real data. Neither is
+  exercised by anything but tests today.
+- The frozen-exe rebuild is **not** owed: the desk launches from source by
+  trader decision (2026-08-26) and the unfrozen selftest covers the new lazy
+  import. It becomes owed the moment the exe is production again.
+
+### Immediate next action
+
+The trader reviews this packet (the handoff was written for a Fable review pass).
+B-4 waits on that review by the prompt's own instruction. The Phase 0.8 live
+soak below is unchanged and still the trader's to run.
+
+---
+
 ## 2026-08-26 - ACTIVE: GUI fluidity Wave P1 (Phase 0.8), every code item built; the live soak is what remains
 
 **Branch `claude/gui-p1-fluidity`, off `main` at `53b9733`.** The trader
