@@ -576,3 +576,67 @@ value changed; legs, opportunity events and the summary are byte-identical.
 
 **Gates 1/3/6 are unchanged and still owed.** Building a conversion does not
 validate it against a broker statement.
+
+## Auto-tagging on imported history, and the adjust tools — BUILT 2026-08-28
+
+Trader-directed while deciding whether this journal replaces their TradesViz
+subscription: *"i want auto tagging then I can come back and adjust."* Nothing
+here touches the store's identity, the migration, coverage or reconciliation,
+and **the six live gates in §10 are unchanged and still owed.**
+
+**What the ask exposed.** §9's auto-tagger scores a trade by matching it
+against the scanner's own output files. Those files hold the current lookback,
+not last February, so a trade older than them scores no candidates at all and
+its summary is written empty. That is fine while every trade is one the desk
+watched happen, and it fails completely for the case the trader is about to
+create — a year imported from a broker statement, which is what §8's file
+import exists for. Auto-tagging was not broken; it had no inputs.
+
+**The second lane.** `scripts/journal_trade_shape.py` derives four facts from
+a trade's own row and legs: hold bucket (counted in SESSIONS via
+`market_calendar.is_session`, so a Friday-to-Monday hold is one night and not
+three), entry session bucket, execution shape from leg ROLES, and instrument.
+It imports no scanner code — the boundary the existing tagger's docstring set —
+so the five session-bucket names it shares with
+`bounce_bot_lib.learning.time_bucket_for` are restated to match exactly, with
+`premarket` and `after_hours` added because a broker fills extended-hours
+orders and that module would call an 08:00 fill an opening drive.
+
+Three rules, each with a regression:
+
+1. **No tag is ever derived from the outcome.** No win/loss, no R. A tag that
+   encodes the result makes every per-tag statistic circular — a `winners`
+   bucket posts a 100% win rate and explains nothing. The outcome is what is
+   being explained and may never also be the explanation.
+2. **Unmeasurable emits no tag.** An open trade has no hold yet; an
+   unparseable timestamp has no session; a `SYNTHETIC_OPEN` leg means the
+   opening fill was never imported, so the entry shape is unknown rather than
+   a clean single entry.
+3. **Naive timestamps attach market-local**, never strip an aware one. Note
+   what happens upstream: `parse_broker_datetime` attaches the DESK's zone to
+   a naive broker row, so a fixture written "09:45" is stored `09:45-07:00`
+   and buckets as 12:45 ET. Journal fixtures carry an explicit Eastern offset
+   for that reason.
+
+Setup tags lead. Candidates order by LANE and not confidence, because shape
+tags are facts carrying 1.0 and a plain confidence sort buries every setup
+match under `midday`. The stored summary gives setup tags the first two of
+four slots and lets either lane spread into the gap.
+
+**The adjust half.** A tag filter on the SHARED header — §9 gave Analytics the
+ability to group BY tag and nothing the ability to filter TO one, so one tag
+now narrows the calendar, the equity curve and the fee totals too.
+`distinct_tags` counts the trader's lane separately from the machine's.
+`rename_tag` renames or retires a tag across every trade carrying it, touching
+`setup_tags` only: a derived tag is re-computed on every refresh, so the
+Manage-tags dialog marks and refuses one rather than accept a rename the next
+rebuild would silently undo. Accepting a suggestion drops that SUGGESTION from
+the queue — the 2026-08-24 reasoning that a tagged trade may still deserve a
+second tag is unchanged, but a confirmed trade no longer re-proposes the tag it
+was confirmed with, which is why the backlog could not fall below the number of
+trades in it.
+
+**Owed:** one desk session in which the trader tags real trades, renames one,
+and filters on it. And, still unbuilt and still the trader's call, the §8
+statement-file import that makes the imported-history case real — see the
+"NOT BUILT - A TRADER DECISION" note on the 44 pre-retention Questrade days.

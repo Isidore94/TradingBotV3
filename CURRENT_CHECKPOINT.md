@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | `claude/warehouse-build-memory` |
+| Working branch | `claude/last-commit-main-dpouod` (journal auto-tagging, cut from `main`) |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5297 passed, 33 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
+| Active roadmap items | **R7 journal auto-tagging (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
+| Last verified baseline | `pytest tests/ -q` **5326 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -44,12 +44,52 @@ the dated entry named beside it.
 | 10 | **Narrated digest overnight** — one unattended 22:00 run producing a narration without being forced | 2026-08-28 narration entry |
 | 11 | **Narrated summary + ticker briefs overnight** — one unattended run at the raised context; tonight's briefs were 0 of a normal 53-62 | 2026-08-28 context entry |
 | 12 | **Sliced summary overnight** — one unattended 22:00 run: 46 slices, a synthesized summary, briefs still finishing in the window | 2026-08-28 slices entry |
+| 13 | **Journal auto-tagging** — one desk session: tag real trades, rename one, filter on it | R7 auto-tagging (2026-08-28 tagging entry) |
 
 ### Immediate next action
 
-Restart the desk, then run the owed live gates in the order above. The documentation
-work is committed (`fff07b8`) and its packaging gate is met; **the remaining gates are
-all live-session work that only the trader can run.**
+Restart the desk, then run the owed live gates in the order above. **The remaining
+gates are all live-session work that only the trader can run.** The one piece of
+build work waiting on an input rather than a session: the trader can produce yearly
+Questrade reports and has asked that we process them, which would close the 44
+pre-retention days and make the imported-history case the auto-tagger was just
+extended for real. **One sample file is what that needs.**
+
+---
+
+## 2026-08-28 - Auto-tagging that survives imported history, and the tools to adjust it
+
+**Branch `claude/last-commit-main-dpouod`, cut from `main` at `75880d6`.
+Trader-directed** while deciding whether this journal replaces their TradesViz
+subscription: *"i want auto tagging then I can come back and adjust."*
+
+**What the ask exposed.** `AutoTagger` scores a trade by matching it against the
+scanner's own output files. Those hold the current lookback, so any trade older
+than them scores nothing and its summary is written empty. Auto-tagging was not
+broken - it had no inputs for the case the trader is about to create, which is a
+year imported from a Questrade statement.
+
+**Built.** `scripts/journal_trade_shape.py`: hold bucket (counted in SESSIONS, so
+Friday-to-Monday is one night), entry session bucket, execution shape from leg
+ROLES, instrument. No files, no network, no scanner import. **No tag is ever
+derived from the outcome** - that would make every per-tag statistic circular -
+unmeasurable emits no tag, and naive timestamps ATTACH market-local. Candidates
+order by LANE not confidence, or shape facts at 1.0 bury every setup match.
+Alongside: a tag filter on the SHARED header (Analytics could group BY tag;
+nothing could filter TO one), `distinct_tags`, `rename_tag`, a Manage-tags
+dialog, Accept-all, and an accepted suggestion that stops re-proposing itself.
+
+**Verification**, reading pytest's own exit code: **5326 passed / 72 subtests / 6
+skipped**, up from 5268, 58 added. Smoke 7/7 exit 0, source selftest 72/72 exit 0,
+spec drift 17 passed. Two failures (`test_table_width_rule`,
+`test_qt_desk_layout`) are this Linux container's font metrics and were confirmed
+against a stashed clean checkout. No packaging trigger. Nothing in the packet
+reaches a detector, score, alert, watchlist, Focus or `review_policy.json`.
+
+**Owed:** gate 13. Also still open and still the trader's call - the Questrade
+statement-file import that makes the imported-history case real (the 44
+pre-retention days); the trader has said they can produce yearly reports, so the
+file format is the next input needed.
 
 ---
 

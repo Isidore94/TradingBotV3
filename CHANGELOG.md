@@ -188,6 +188,16 @@ which is evidence and must not be loaded as context.
   Journal (Trades, Calendar, Analytics, Health, Fees) over one shared
   tax-grouped header.
 
+- **Two-lane journal auto-tagging (2026-08-28).** `scripts/journal_trade_shape.py`
+  derives hold bucket, entry session bucket, execution shape and instrument from a
+  trade's own timestamps and legs, so history imported from outside the scanner's
+  lookback is tagged rather than blank; `AutoTagger`'s setup lane still leads both
+  the stored summary and the candidate list, ordered by lane rather than confidence.
+  No tag is ever derived from the outcome. Around it: a tag filter on the shared
+  Journal header, `distinct_tags` counting the trader's lane separately from the
+  machine's, `rename_tag` (rename or retire across every trade, trader-typed tags
+  only), a Manage-tags dialog, Accept-all, and an accepted suggestion that stops
+  re-proposing itself.
 - Journal schema v2 with append-only opportunity lifecycle events, idempotent broker
   Taken/Closed imports, structured reviews, free-form notes, tags, and analytics.
 - Deterministic novice explanations across Setup Tracker, Day Trade Tracker, and
@@ -293,6 +303,46 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-28 — Auto-tagging that works on imported history, and the tools to adjust it
+
+`IMPLEMENTED`, `GREEN`, **live gate owed** (one desk session tagging real trades).
+Trader-directed, evaluating whether this journal can replace their TradesViz
+subscription: *"i want auto tagging then I can come back and adjust."*
+
+**The defect the ask exposed.** `AutoTagger` scores a trade by matching it against
+the scanner's own output files. Those files hold the current lookback, so every
+trade older than them scores nothing — `suggest_for_trade` returns `[]`, the
+summary is written empty, and a year pulled from a broker statement arrives as one
+undifferentiated untagged block. Auto-tagging was not broken; it had no inputs for
+the case the trader was about to create.
+
+**`scripts/journal_trade_shape.py`** is the second lane: hold bucket (counted in
+SESSIONS, so a Friday-to-Monday hold is one night), entry session bucket, execution
+shape from leg ROLES, and instrument — all from the trade's own row, no files, no
+network, no scanner import. Three rules keep the tags safe to average: no tag is
+ever derived from the OUTCOME (a `winners` bucket would post a 100% win rate and
+explain nothing), anything unmeasurable emits NO tag, and a naive timestamp gets
+market-local ATTACHED rather than an aware one stripped. Candidates order by LANE,
+never confidence — shape tags carry 1.0 and would otherwise bury every setup match.
+
+**Adjusting, which is the other half of the ask.** A tag filter on the SHARED
+header, so one tag narrows the calendar, the equity curve and the fee totals too;
+Analytics could already group BY tag and nothing could filter TO one. `distinct_tags`
+counts the trader's lane apart from the machine's. `rename_tag` rewrites or retires
+a tag across every trade that carries it — `setup_tags` only, because a derived tag
+is re-computed on every refresh and the Manage-tags dialog refuses one rather than
+accept a rename the next rebuild would undo. Accepting a suggestion now drops that
+SUGGESTION from the queue: the 2026-08-24 reasoning that a tagged trade may still
+deserve a second tag is unchanged, but a confirmed trade no longer re-proposes what
+it was confirmed with — the mechanism behind 220 proposals against one annotation.
+
+Verification, reading pytest's own exit code: **5326 passed / 72 subtests / 6
+skipped**, 5268 → 5326, 58 added; two pre-existing failures are this Linux
+container's font metrics and reproduce on a clean checkout. Smoke 7/7 exit 0,
+source selftest 72/72 exit 0, spec drift 17 passed. No packaging trigger — the new
+file is a module under `scripts/`, not a package, reached by a static import. No
+detector, score, alert, watchlist, Focus or `review_policy.json` path is touched.
 
 ### 2026-08-28 — Reading the whole evidence pile in slices: 78,119 chars → 1,365,259
 

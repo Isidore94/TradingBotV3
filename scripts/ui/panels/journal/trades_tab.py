@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from journal_store import TRADE_SHAPE_SOURCE
 from ui.models.journal import JournalTrade
 from ui.services import journal_feed
 
@@ -243,6 +244,84 @@ class CorrectionsDialog(QDialog):
         }
 
 
+class TagManagerDialog(QDialog):
+    """Rename or retire one tag across every trade that carries it.
+
+    Fixing a typo used to mean retyping the tags field on each affected trade,
+    which is why a store ends up carrying "gap-and-go", "gap and go" and
+    "gapngo" as three separate setups with a third of the evidence each.
+
+    Only tags the trader typed are offered. A derived tag (``midday``,
+    ``swing``) is re-computed from the trade on every refresh, so renaming one
+    here would be silently undone by the next rebuild -- the list marks those
+    rows and the dialog refuses them, rather than accepting a rename that will
+    not survive.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Manage tags")
+        self._entries = journal_feed.tags_in_use()
+
+        self.tag_list = QListWidget()
+        for entry in self._entries:
+            tag = str(entry.get("tag") or "")
+            own = int(entry.get("own") or 0)
+            auto = int(entry.get("auto") or 0)
+            if entry.get("derived"):
+                label = f"{tag}  -  {auto} trade(s), automatic"
+            else:
+                label = f"{tag}  -  {own} trade(s)"
+                if auto:
+                    label += f", {auto} automatic"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, tag)
+            item.setData(Qt.UserRole + 1, bool(entry.get("derived")) or own == 0)
+            self.tag_list.addItem(item)
+        self.tag_list.currentItemChanged.connect(self._on_selection_changed)
+
+        self.new_name = QLineEdit()
+        self.new_name.setPlaceholderText("New name (leave blank to remove the tag)")
+
+        self.note = QLabel("")
+        self.note.setWordWrap(True)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.button(QDialogButtonBox.Ok).setText("Apply")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        self.buttons.button(QDialogButtonBox.Ok).setEnabled(False)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Your tags"))
+        layout.addWidget(self.tag_list)
+        layout.addWidget(self.new_name)
+        layout.addWidget(self.note)
+        layout.addWidget(self.buttons)
+        if not self._entries:
+            self.note.setText("No tags yet.")
+
+    def _on_selection_changed(self, current: QListWidgetItem | None, _previous=None) -> None:
+        derived = bool(current.data(Qt.UserRole + 1)) if current is not None else True
+        self.buttons.button(QDialogButtonBox.Ok).setEnabled(current is not None and not derived)
+        if current is None:
+            self.note.setText("")
+        elif derived:
+            self.note.setText(
+                "This tag is worked out from the trade itself, so renaming it here "
+                "would be undone the next time tags refresh. Accept it onto a trade "
+                "first if you want to keep your own wording."
+            )
+        else:
+            self.note.setText("")
+
+    def selection(self) -> tuple[str, str]:
+        """``(old, new)``. An empty ``new`` means remove the tag."""
+        item = self.tag_list.currentItem()
+        old = str(item.data(Qt.UserRole)) if item is not None else ""
+        return old, self.new_name.text().strip()
+
+
 class TradesTab(QFrame):
     """The trade table, its detail pane, and everything a human does to a trade."""
 
@@ -306,8 +385,26 @@ class TradesTab(QFrame):
         self.legs_table.setEditTriggers(QTableWidget.NoEditTriggers)
 
         self.auto_tags = QListWidget()
+        self.auto_tags.setSelectionMode(QListWidget.ExtendedSelection)
         self.accept_tags_button = QPushButton("Accept selected tags")
         self.accept_tags_button.clicked.connect(self._accept_tags)
+        self.accept_all_tags_button = QPushButton("Accept all")
+        self.accept_all_tags_button.setToolTip(
+            "Accept every suggestion listed for this trade."
+        )
+        self.accept_all_tags_button.clicked.connect(self._accept_all_tags)
+        self.manage_tags_button = QPushButton("Manage tags...")
+        self.manage_tags_button.setToolTip(
+            "Rename or remove one of your tags across every trade that carries it."
+        )
+        self.manage_tags_button.clicked.connect(self._open_tag_manager)
+
+        tag_buttons = QHBoxLayout()
+        tag_buttons.addWidget(self.accept_tags_button)
+        tag_buttons.addWidget(self.accept_all_tags_button)
+        tag_buttons.addStretch(1)
+        tag_buttons.addWidget(self.manage_tags_button)
+        self._tag_buttons_row = tag_buttons
 
         self.tags_input = QLineEdit()
         self.notes_input = QPlainTextEdit()
@@ -346,7 +443,7 @@ class TradesTab(QFrame):
         layout.addWidget(self.legs_table)
         layout.addWidget(QLabel("Suggested tags"))
         layout.addWidget(self.auto_tags)
-        layout.addWidget(self.accept_tags_button)
+        layout.addLayout(self._tag_buttons_row)
         layout.addWidget(QLabel("My tags"))
         layout.addWidget(self.tags_input)
         layout.addWidget(self.notes_input)
@@ -437,9 +534,22 @@ class TradesTab(QFrame):
             ):
                 self.legs_table.setItem(row, column, QTableWidgetItem(str(text if text is not None else "")))
 
+        # Suggestions this trade's own tags already carry are dropped, so
+        # accepting one removes it from the list instead of leaving it there
+        # to be accepted again forever.
         self.auto_tags.clear()
-        for candidate in journal_feed.auto_tag_candidates(trade.trade_id):
-            item = QListWidgetItem(f"{candidate.get('tag')}  ({float(candidate.get('confidence') or 0):.0%})")
+        for candidate in journal_feed.unaccepted_auto_tag_candidates(
+            trade.trade_id, raw.get("setup_tags")
+        ):
+            source = str(candidate.get("source") or "")
+            if source.startswith(f"{TRADE_SHAPE_SOURCE}:"):
+                # A derived tag is a measured fact, not a guess, and showing it
+                # as "100%" beside a scanner match reads as a stronger opinion
+                # about the setup than it is.
+                label = f"{candidate.get('tag')}  ({source.split(':', 1)[1]})"
+            else:
+                label = f"{candidate.get('tag')}  ({float(candidate.get('confidence') or 0):.0%})"
+            item = QListWidgetItem(label)
             item.setData(Qt.UserRole, candidate.get("tag"))
             item.setToolTip(str(candidate.get("rationale") or ""))
             self.auto_tags.addItem(item)
@@ -507,6 +617,7 @@ class TradesTab(QFrame):
             notes=self.notes_input.toPlainText().strip(),
         )
         self.statusChanged.emit("tags and notes saved")
+        self._refresh_header_tags()
         self.reload()
 
     def _save_review(self) -> None:
@@ -526,12 +637,68 @@ class TradesTab(QFrame):
         if self._current is None:
             return
         tags = [item.data(Qt.UserRole) for item in self.auto_tags.selectedItems()]
-        if not tags:
+        self._accept(tags)
+
+    def _accept_all_tags(self) -> None:
+        if self._current is None:
             return
-        combined = journal_feed.accept_auto_tags(self._current.trade_id, tags)
+        tags = [
+            self.auto_tags.item(row).data(Qt.UserRole)
+            for row in range(self.auto_tags.count())
+        ]
+        self._accept(tags)
+
+    def _accept(self, tags: list) -> None:
+        if self._current is None:
+            return
+        wanted = [str(tag).strip() for tag in tags if str(tag or "").strip()]
+        if not wanted:
+            return
+        combined = journal_feed.accept_auto_tags(self._current.trade_id, wanted)
         self.tags_input.setText(combined)
-        self.statusChanged.emit(f"accepted {len(tags)} suggestion(s)")
+        self.statusChanged.emit(f"accepted {len(wanted)} suggestion(s)")
+        self._refresh_header_tags()
         self.reload()
+
+    def _open_tag_manager(self) -> None:
+        dialog = TagManagerDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        old, new = dialog.selection()
+        if not old:
+            return
+        if new and new == old:
+            return
+        if not new:
+            confirm = QMessageBox.question(
+                self,
+                "Remove tag",
+                f"Remove '{old}' from every trade that carries it?",
+            )
+            if confirm != QMessageBox.Yes:
+                return
+        try:
+            changed = journal_feed.rename_tag(old, new)
+        except Exception as exc:  # noqa: BLE001
+            self.statusChanged.emit(f"tag rename failed: {exc}")
+            return
+        verb = "renamed" if new else "removed"
+        self.statusChanged.emit(f"{verb} '{old}' on {changed} trade(s)")
+        self._refresh_header_tags()
+        self.reload()
+        self.dataChanged.emit()
+
+    def _refresh_header_tags(self) -> None:
+        """Keep the shared header's tag picker honest after a tag edit.
+
+        The header owns the filter and this tab owns the writes, so nothing
+        else would notice a tag that just came into existence or stopped
+        existing. Guarded because the tab is constructed against a stub header
+        in tests.
+        """
+        refresh = getattr(self._header, "refresh_tags", None)
+        if callable(refresh):
+            refresh()
 
     def _open_corrections(self) -> None:
         if self._current is None:

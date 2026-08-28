@@ -499,6 +499,27 @@ def resolve_pnl_key(
     return "net_pnl_cad", "converted to CAD at each trade's booked rate"
 
 
+def split_tags(value: Any) -> list[str]:
+    """Split one stored tag string into its tags.
+
+    The first separator present wins, in the order ``;`` ``,`` ``|``, rather
+    than splitting on all three. That matters because ``_priority_tag`` builds
+    a setup tag as ``"family | bucket | zone"`` -- pipes are INSIDE a tag, and
+    only a string with no ``;`` or ``,`` at all is treated as pipe-separated.
+
+    Named and exported because the store, the tag list and the rename tool all
+    need this exact rule; a second copy anywhere would eventually disagree
+    about what one tag is.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return []
+    for separator in (";", ",", "|"):
+        if separator in text:
+            return [part.strip() for part in text.split(separator) if part.strip()]
+    return [text]
+
+
 def _tags_for_row(row: dict[str, Any], field: str = "setup_tags") -> list[str]:
     """Every setup tag on a trade, not just the first one.
 
@@ -507,13 +528,7 @@ def _tags_for_row(row: dict[str, Any], field: str = "setup_tags") -> list[str]:
     all towards the second - which quietly understated every setup that tends to
     be named second.
     """
-    text = str(row.get(field) or "").strip()
-    if not text:
-        return []
-    for separator in (";", ",", "|"):
-        if separator in text:
-            return [part.strip() for part in text.split(separator) if part.strip()]
-    return [text]
+    return split_tags(row.get(field))
 
 
 def build_analytics_summary(

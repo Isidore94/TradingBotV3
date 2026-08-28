@@ -92,6 +92,19 @@ class JournalHeader(QFrame):
         self.direction_input.addItems(["All", "LONG", "SHORT"])
         self.direction_input.currentTextChanged.connect(self._emit_changed)
 
+        # Tag lives on the SHARED header rather than on the Trades tab, so
+        # "show me only my gap-and-go trades" narrows the calendar, the equity
+        # curve and the fee totals too. Analytics could already group BY tag;
+        # nothing could filter TO one.
+        self.tag_input = QComboBox()
+        self.tag_input.setMinimumWidth(140)
+        self.tag_input.setToolTip(
+            "Filter to one tag. Lists tags you typed and, for trades you have "
+            "not tagged, the automatic ones."
+        )
+        self.tag_input.currentTextChanged.connect(self._emit_changed)
+        self.tag_input.addItem("All")
+
         self.date_from = QDateEdit()
         self.date_from.setCalendarPopup(True)
         self.date_to = QDateEdit()
@@ -112,6 +125,8 @@ class JournalHeader(QFrame):
         row.addWidget(self.status_input)
         row.addWidget(QLabel("Direction"))
         row.addWidget(self.direction_input)
+        row.addWidget(QLabel("Tag"))
+        row.addWidget(self.tag_input)
         row.addStretch(1)
         row.addWidget(QLabel("Currency"))
         row.addWidget(self.currency_input)
@@ -128,6 +143,7 @@ class JournalHeader(QFrame):
 
         if autoload:
             self.refresh_accounts()
+            self._reload_tags()
 
     # -- manual USD display rate -------------------------------------------
     def _load_usd_rate(self) -> None:
@@ -285,6 +301,33 @@ class JournalHeader(QFrame):
             )
         return journal_feed.date_range_bounds(preset)
 
+    def _reload_tags(self) -> None:
+        """Repopulate the tag picker, keeping the current choice if it survives.
+
+        A rename or a tag-refresh changes what exists, and a picker still
+        offering a tag nobody carries filters every tab to zero rows with no
+        explanation. Selection is restored by NAME, so renaming the selected
+        tag drops the filter rather than silently pointing at the old word.
+        """
+        previous = self.tag_input.currentText() if self.tag_input.count() else "All"
+        blocked = self.tag_input.blockSignals(True)
+        try:
+            self.tag_input.clear()
+            self.tag_input.addItem("All")
+            for name in journal_feed.tag_names():
+                self.tag_input.addItem(name)
+            index = self.tag_input.findText(previous)
+            self.tag_input.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            self.tag_input.blockSignals(blocked)
+
+    def refresh_tags(self) -> None:
+        """Reload the tag picker and re-run the tabs if the selection moved."""
+        before = self.tag_input.currentText()
+        self._reload_tags()
+        if self.tag_input.currentText() != before:
+            self._emit_changed()
+
     def query(self) -> dict:
         """The one dict every tab passes to ``journal_feed.load_trades``."""
         date_from, date_to = self.date_bounds()
@@ -295,4 +338,5 @@ class JournalHeader(QFrame):
             "symbol": self.symbol_input.text().strip(),
             "status": self.status_input.currentText(),
             "direction": self.direction_input.currentText(),
+            "tag": self.tag_input.currentText() or "All",
         }

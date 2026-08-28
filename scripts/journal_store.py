@@ -6,12 +6,14 @@ import json
 import math
 import sqlite3
 import uuid
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from journal_analytics import AutoTagger
+from journal_analytics import AutoTagger, split_tags
+from journal_trade_shape import is_shape_tag, shape_tags
 from journal_identity import (
     contract_multiplier as _contract_multiplier_shared,
     group_key,
@@ -29,6 +31,42 @@ from project_paths import JOURNAL_DB_FILE, JOURNAL_EXPORT_DIR
 
 JOURNAL_SCHEMA_VERSION = 3
 EPSILON = 0.0000001
+
+#: ``auto_tag_candidates.source`` prefix for the fact-derived lane. The stored
+#: value is ``trade_shape:<kind>``; the prefix is what orders the two lanes and
+#: what the UI reads to say where a suggestion came from.
+TRADE_SHAPE_SOURCE = "trade_shape"
+
+#: How many auto tags the stored summary carries. It is the Tags column for
+#: any trade the trader has not annotated, which is every row of an imported
+#: year, so it has to say more than one thing -- but it is a table cell, not a
+#: report, and a sixth tag makes the column unreadable.
+AUTO_TAG_SUMMARY_LIMIT = 4
+
+#: How many of those slots setup tags may take before shape tags get one. Both
+#: lanes reach the column on a trade that scored well: three setup tags used to
+#: fill it entirely, and a trade with no setup match used to leave it blank.
+AUTO_TAG_SUMMARY_SETUP_SLOTS = 2
+
+
+def _merge_auto_tag_summary(setup: Iterable[str], shape: Iterable[str]) -> list[str]:
+    """Setup tags first, then shape tags, deduplicated and capped.
+
+    Setup tags get the first ``AUTO_TAG_SUMMARY_SETUP_SLOTS`` slots and shape
+    tags fill what is left; if either lane is short the other spreads into the
+    gap, so a trade with no setup match still shows what kind of trade it was
+    rather than nothing at all.
+    """
+    ordered: list[str] = []
+    setup_list = [tag for tag in setup if str(tag or "").strip()]
+    shape_list = [tag for tag in shape if str(tag or "").strip()]
+    lead = setup_list[:AUTO_TAG_SUMMARY_SETUP_SLOTS]
+    for tag in list(lead) + shape_list + setup_list:
+        if tag not in ordered:
+            ordered.append(tag)
+        if len(ordered) >= AUTO_TAG_SUMMARY_LIMIT:
+            break
+    return ordered
 
 #: ``SOURCE_RANK`` as a SQL expression over the stored row, so the upsert can
 #: refuse to let a poorer source overwrite a richer one. Built from the map
@@ -1702,6 +1740,7 @@ class JournalStore:
         direction: str | None = None,
         date_from: str | date | None = None,
         date_to: str | date | None = None,
+        tag: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses = []
         params: list[Any] = []
@@ -1749,6 +1788,17 @@ class JournalStore:
             regime = self.get_regime_for_date(_date_text(trade.get("opened_at") or trade.get("trade_date")))
             trade.update(regime)
             trade["display_tags"] = trade.get("setup_tags") or trade.get("auto_tag_summary") or ""
+        # Tags are matched in Python, not SQL. They are free text in one
+        # column with three possible separators, so a LIKE would either match
+        # "swing" inside "swing_failed" or need a delimiter-wrapping expression
+        # that has to re-implement ``split_tags`` in SQLite -- a second copy of
+        # the rule that decides what one tag is. This runs over rows the WHERE
+        # clause already narrowed.
+        tag_text = str(tag or "").strip()
+        if tag_text and tag_text != "All":
+            trades = [
+                trade for trade in trades if tag_text in split_tags(trade.get("display_tags"))
+            ]
         return trades
 
     def save_risk_fields(
@@ -1958,6 +2008,87 @@ class JournalStore:
                     (symbol, tag, str(trade.get("trade_id") or ""), 0.12, _now_iso()),
                 )
 
+    def distinct_tags(self) -> list[dict[str, Any]]:
+        """Every tag in use, with how many trades carry it and which lane.
+
+        Both lanes are listed. ``own`` counts trades whose ``setup_tags``
+        carry the tag; ``auto`` counts trades where it only reached the row
+        through ``auto_tag_summary``. Keeping them apart is the point: a
+        rename may only touch what the trader typed, and a tag showing 0 own /
+        180 auto is a machine bucket, not a vocabulary the trader chose.
+
+        There is no tag table to read this from, and deliberately so -- tags
+        are free text and a registry would be a second place for them to
+        disagree. This derives the list from the rows every time.
+        """
+        counts: dict[str, dict[str, Any]] = {}
+
+        def bump(tag: str, lane: str) -> None:
+            entry = counts.setdefault(
+                tag, {"tag": tag, "own": 0, "auto": 0, "derived": is_shape_tag(tag)}
+            )
+            entry[lane] += 1
+
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT COALESCE(a.setup_tags, '') AS setup_tags, t.auto_tag_summary
+                FROM trades t
+                LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id
+                """
+            ).fetchall()
+        for raw in rows:
+            row = _row_to_dict(raw)
+            own = split_tags(row.get("setup_tags"))
+            for tag in own:
+                bump(tag, "own")
+            if not own:
+                for tag in split_tags(row.get("auto_tag_summary")):
+                    bump(tag, "auto")
+        return sorted(
+            counts.values(),
+            key=lambda entry: (-(entry["own"] + entry["auto"]), entry["tag"].lower()),
+        )
+
+    def rename_tag(self, old: str, new: str) -> int:
+        """Rewrite one tag across every annotation that carries it.
+
+        Returns the number of trades changed. Only ``setup_tags`` is touched:
+        the auto lane is re-derived from scratch on every ``refresh_auto_tags``
+        and a rename there would be undone by the next rebuild, so renaming a
+        machine tag has to mean renaming the rule that emits it.
+
+        An empty ``new`` REMOVES the tag rather than writing a blank one, which
+        is the other half of what "fix my tags" means and the only way to
+        retire a typo. Position is preserved, and a rename onto a tag the trade
+        already carries collapses to one rather than duplicating it.
+        """
+        old_text = str(old or "").strip()
+        if not old_text:
+            return 0
+        new_text = str(new or "").strip()
+        changed = 0
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT trade_id, setup_tags FROM trade_annotations WHERE setup_tags <> ''"
+            ).fetchall()
+            for raw in rows:
+                row = _row_to_dict(raw)
+                tags = split_tags(row.get("setup_tags"))
+                if old_text not in tags:
+                    continue
+                updated: list[str] = []
+                for tag in tags:
+                    replacement = new_text if tag == old_text else tag
+                    if replacement and replacement not in updated:
+                        updated.append(replacement)
+                conn.execute(
+                    "UPDATE trade_annotations SET setup_tags = ?, updated_at = ? WHERE trade_id = ?",
+                    ("; ".join(updated), _now_iso(), row["trade_id"]),
+                )
+                changed += 1
+        return changed
+
     def list_tag_corrections(self) -> list[dict[str, Any]]:
         with self.connection() as conn:
             rows = conn.execute(
@@ -1966,14 +2097,50 @@ class JournalStore:
         return [_row_to_dict(row) for row in rows]
 
     def refresh_auto_tags(self, tagger: AutoTagger | None = None) -> None:
+        """Re-derive both auto-tag lanes for every trade.
+
+        Two taggers, stacked rather than competing. ``AutoTagger`` answers
+        "which of my setups was this?" from the scanner's own output files and
+        is the tag the trader actually wants -- when it exists. It cannot
+        exist for imported history: those files hold the current lookback, not
+        last February, so a year pulled from a broker statement scores no
+        candidates at all and arrives as one untagged block.
+        ``journal_trade_shape`` is the floor under that, deriving facts (hold,
+        entry session, execution shape, instrument) from the trade's own
+        timestamps and legs.
+
+        Setup tags lead the stored summary and the candidate list even when a
+        shape tag is more certain, because a fact about the clock is not what
+        the trader is looking for when they open the tab. Ordering is by lane,
+        not by confidence, so a weak setup match still outranks a certain
+        ``midday`` -- see ``list_auto_tag_candidates``.
+        """
         tagger = tagger or AutoTagger()
         corrections = self.list_tag_corrections()
         with self.connection() as conn:
+            legs_by_trade: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for leg_row in conn.execute("SELECT trade_id, role FROM trade_legs").fetchall():
+                leg = _row_to_dict(leg_row)
+                legs_by_trade[str(leg.get("trade_id") or "")].append(leg)
             trade_rows = conn.execute("SELECT * FROM trades ORDER BY opened_at").fetchall()
             for row in trade_rows:
                 trade = _row_to_dict(row)
                 suggestions = tagger.suggest_for_trade(trade, corrections=corrections)
-                top_summary = "; ".join(item["tag"] for item in suggestions[:3])
+                setup_tags = [item["tag"] for item in suggestions]
+                shape = [
+                    {
+                        "tag": item.tag,
+                        "confidence": 1.0,
+                        "source": f"{TRADE_SHAPE_SOURCE}:{item.kind}",
+                        "rationale": item.rationale,
+                    }
+                    for item in shape_tags(trade, legs=legs_by_trade.get(trade["trade_id"]))
+                    if item.tag not in setup_tags
+                ]
+                suggestions = list(suggestions) + shape
+                top_summary = "; ".join(
+                    _merge_auto_tag_summary(setup_tags, [item["tag"] for item in shape])
+                )
                 top_confidence = suggestions[0]["confidence"] if suggestions else None
                 conn.execute("DELETE FROM auto_tag_candidates WHERE trade_id = ?", (trade["trade_id"],))
                 for item in suggestions:
@@ -2050,14 +2217,22 @@ class JournalStore:
         return [_row_to_dict(row) for row in rows]
 
     def list_auto_tag_candidates(self, trade_id: str) -> list[dict[str, Any]]:
+        """Suggestions for one trade: setup lane first, then the shape lane.
+
+        Ordering is by LANE before confidence. Shape tags are facts and carry
+        a confidence of 1.0, so a plain ``ORDER BY confidence DESC`` would put
+        ``midday`` above every setup match the scanner found -- and the setup
+        match is the answer the trader opened the pane for. Within a lane the
+        ranking is unchanged.
+        """
         with self.connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM auto_tag_candidates
                 WHERE trade_id = ?
-                ORDER BY confidence DESC, tag
+                ORDER BY (source LIKE ? ) ASC, confidence DESC, tag
                 """,
-                (trade_id,),
+                (trade_id, f"{TRADE_SHAPE_SOURCE}:%"),
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 

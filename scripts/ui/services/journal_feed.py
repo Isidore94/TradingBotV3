@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from journal_analytics import split_tags
 from ui.models.journal import JournalTrade
 
 
@@ -196,6 +197,7 @@ def load_trades(
     date_from: Any = None,
     date_to: Any = None,
     accounts_filter: Iterable[tuple[str, str]] | None = None,
+    tag: str = "All",
 ) -> list[JournalTrade]:
     rows = _store().list_trades(
         broker=broker or "All",
@@ -205,6 +207,7 @@ def load_trades(
         direction=direction,
         date_from=date_from,
         date_to=date_to,
+        tag=tag,
     )
     if accounts_filter is not None:
         wanted = {(str(b).upper(), str(a)) for b, a in accounts_filter}
@@ -431,6 +434,44 @@ def auto_tag_candidates(trade_id: str) -> list[dict[str, Any]]:
         return _store().list_auto_tag_candidates(trade_id)
     except Exception:
         return []
+
+
+def unaccepted_auto_tag_candidates(trade_id: str, current_tags: Any) -> list[dict[str, Any]]:
+    """Suggestions for a trade minus the ones its own tags already carry.
+
+    The backlog pane used to report ``already_tagged`` and list the row
+    anyway, on the stated reasoning that hiding a tagged trade would also hide
+    one that legitimately deserves a second tag. That reasoning is right and is
+    kept -- this drops the individual SUGGESTION the trader already accepted,
+    not the trade. A trade whose remaining suggestions are all accepted leaves
+    the queue; a trade with one accepted and one new stays, showing only the
+    new one. Without this a confirmed trade proposes the same tag forever,
+    which is how 220 proposals stood against one confirmed annotation.
+    """
+    accepted = {tag.lower() for tag in split_tags(current_tags)}
+    return [
+        candidate
+        for candidate in auto_tag_candidates(trade_id)
+        if str(candidate.get("tag") or "").strip().lower() not in accepted
+    ]
+
+
+def tags_in_use() -> list[dict[str, Any]]:
+    """Every tag the store holds, with counts and which lane it came from."""
+    try:
+        return _store().distinct_tags()
+    except Exception:
+        return []
+
+
+def tag_names() -> list[str]:
+    """Just the tag names, for a picker."""
+    return [str(entry.get("tag") or "") for entry in tags_in_use() if entry.get("tag")]
+
+
+def rename_tag(old: str, new: str) -> int:
+    """Rename or (with an empty ``new``) remove one tag across every trade."""
+    return _store().rename_tag(old, new)
 
 
 def accept_auto_tags(trade_id: str, tags: Iterable[str]) -> str:
@@ -753,7 +794,9 @@ def week_tag_candidates(monday: Any, friday: Any) -> list[dict[str, Any]]:
     """
     rows: list[dict[str, Any]] = []
     for trade in week_trades(monday, friday)["closed"]:
-        candidates = auto_tag_candidates(trade.trade_id)
+        candidates = unaccepted_auto_tag_candidates(
+            trade.trade_id, trade.raw.get("setup_tags")
+        )
         if not candidates:
             continue
         rows.append(
@@ -792,11 +835,15 @@ def pending_tag_candidates(limit: int = PENDING_TAG_LIMIT) -> list[dict[str, Any
     Newest first because a backlog is reviewed by memory: the trader can still
     say what they were thinking in March, and cannot for a trade from 2023.
 
-    ``already_tagged`` is reported, not filtered. Accepting a suggestion does
-    not delete the candidate row, so a confirmed trade keeps proposing; hiding
-    it would also hide a trade that legitimately deserves a second tag. The
-    pane shows the count instead, which is what makes a burn-down visibly
-    shrink.
+    ``already_tagged`` is still reported rather than used to drop a trade: a
+    tagged trade can legitimately deserve a second tag, and that reasoning is
+    unchanged. What IS now dropped is the individual suggestion the trader
+    already accepted (``unaccepted_auto_tag_candidates``). Before that, a
+    confirmed trade re-proposed the same tag forever and the queue could not
+    fall below the number of trades in it -- 220 proposals stood against one
+    confirmed annotation. A trade whose every suggestion is accepted now
+    leaves the queue; one with a new suggestion stays, showing only the new
+    one.
     """
     rows: list[dict[str, Any]] = []
     try:
@@ -806,10 +853,10 @@ def pending_tag_candidates(limit: int = PENDING_TAG_LIMIT) -> list[dict[str, Any
     for trade in trades:
         if str(trade.raw.get("status") or "").upper() != "CLOSED":
             continue
-        candidates = auto_tag_candidates(trade.trade_id)
+        current = str(trade.raw.get("setup_tags") or "")
+        candidates = unaccepted_auto_tag_candidates(trade.trade_id, current)
         if not candidates:
             continue
-        current = str(trade.raw.get("setup_tags") or "")
         rows.append(
             {
                 "trade_id": trade.trade_id,

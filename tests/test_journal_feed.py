@@ -482,3 +482,60 @@ def test_fx_coverage_is_reportable(feed):
     _round_trip(feed, "u", "2026-08-05", 100.0, 110.0)
     feed.rebuild_trades(refresh_tags=False)
     assert journal_feed.fx_coverage()["unconverted"] == [{"currency": "USD", "trades": 1}]
+
+
+# -- tag adjustment (auto-tagging follow-through) ----------------------------
+
+
+def test_accepting_a_suggestion_stops_it_being_proposed_again(feed):
+    """The backlog could not fall below the number of trades in it.
+
+    Accepting a tag never deleted the candidate row, so a confirmed trade
+    re-proposed the same tag every night - which is how 220 proposals came to
+    stand against one confirmed annotation. The TRADE is still listed if it
+    has a suggestion the trader has not taken; only the taken one drops.
+    """
+    feed.upsert_executions(
+        [
+            _execution("e1", "BUY", 10, 100.0, "2026-06-01"),
+            _execution("e2", "SELL", 10, 101.0, "2026-06-01"),
+        ]
+    )
+    feed.rebuild_trades(refresh_tags=False)
+    trade_id = feed.list_trades()[0]["trade_id"]
+    feed.save_trade_annotation(trade_id, setup_tags="", notes="")
+    with feed.connection() as conn:
+        for tag in ("gap and go", "runner"):
+            conn.execute(
+                "INSERT INTO auto_tag_candidates(trade_id, tag, confidence, source, rationale, created_at)"
+                " VALUES(?, ?, ?, ?, ?, ?)",
+                (trade_id, tag, 0.5, "setup_tracker", "", "2026-06-01T00:00:00"),
+            )
+
+    assert len(journal_feed.unaccepted_auto_tag_candidates(trade_id, "")) == 2
+
+    journal_feed.accept_auto_tags(trade_id, ["gap and go"])
+    remaining = journal_feed.unaccepted_auto_tag_candidates(trade_id, "gap and go")
+    assert [row["tag"] for row in remaining] == ["runner"]
+
+    journal_feed.accept_auto_tags(trade_id, ["runner"])
+    assert journal_feed.unaccepted_auto_tag_candidates(trade_id, "gap and go; runner") == []
+    assert journal_feed.pending_tag_candidates() == []
+
+
+def test_tags_in_use_and_rename_reach_the_ui_through_the_feed(feed):
+    feed.upsert_executions(
+        [
+            _execution("e1", "BUY", 10, 100.0, "2026-06-01"),
+            _execution("e2", "SELL", 10, 101.0, "2026-06-01"),
+        ]
+    )
+    feed.rebuild_trades(refresh_tags=False)
+    trade_id = feed.list_trades()[0]["trade_id"]
+    feed.save_trade_annotation(trade_id, setup_tags="gapngo", notes="")
+
+    assert "gapngo" in journal_feed.tag_names()
+    assert journal_feed.rename_tag("gapngo", "gap and go") == 1
+    assert journal_feed.tag_names() == ["gap and go"]
+    assert [t.trade_id for t in journal_feed.load_trades(tag="gap and go")] == [trade_id]
+    assert journal_feed.load_trades(tag="gapngo") == []
