@@ -578,3 +578,59 @@ def test_every_tab_survives_an_empty_journal(qapp, store):
     finally:
         widget.shutdown()
         widget.deleteLater()
+
+
+def test_health_routes_a_statement_file_to_the_importer(panel, monkeypatch, qapp, tmp_path):
+    """The fourth broker action: the only route to pre-retention days.
+
+    Questrade's executions endpoint stops at a horizon and no retry can pass
+    it; their portal export goes back years. The button carries the chosen
+    path through to the worker, and the summary it returns is rendered rather
+    than dropped.
+    """
+    seen = []
+    monkeypatch.setattr(
+        journal_feed,
+        "import_broker_statement",
+        lambda path: seen.append(path)
+        or {
+            "file": "Activities.xlsx",
+            "executions_written": 884,
+            "cash_written": 90,
+            "days_written": 170,
+            "days_skipped_richer_source": 3,
+            "unreadable_rows": 0,
+            "coverage_start": "2026-01-02",
+            "coverage_end": "2026-08-27",
+        },
+    )
+    statuses = []
+    panel.health_tab.statusChanged.connect(statuses.append)
+
+    target = tmp_path / "Activities.xlsx"
+    panel.health_tab._start_task("statement", path=str(target))
+    assert panel.health_tab._task.wait(5000)
+    qapp.processEvents()
+
+    assert seen == [str(target)]
+    assert any("884 executions" in text for text in statuses)
+    assert any("3 day(s) left to the API" in text for text in statuses)
+    assert panel.health_tab.statement_button.isEnabled()
+
+
+def test_the_tag_filter_reaches_every_tab_through_the_shared_header(panel, populated, qapp):
+    """One tag narrows the calendar and the analytics too, not just the table.
+
+    Analytics could already group BY tag; nothing could filter TO one.
+    """
+    trades = populated.list_trades()
+    populated.save_trade_annotation(trades[0]["trade_id"], setup_tags="gap and go", notes="")
+    panel.header.refresh_tags()
+
+    assert panel.header.tag_input.findText("gap and go") > 0
+    panel.header.tag_input.setCurrentText("gap and go")
+    qapp.processEvents()
+
+    assert panel.header.query()["tag"] == "gap and go"
+    panel.trades_tab.reload()
+    assert panel.trades_tab.table.rowCount() == 1

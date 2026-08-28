@@ -188,6 +188,15 @@ which is evidence and must not be loaded as context.
   Journal (Trades, Calendar, Analytics, Health, Fees) over one shared
   tax-grouped header.
 
+- **Broker statement import (2026-08-28).** `scripts/journal_statement_import.py`
+  reads a Questrade activity export (.xlsx via `zipfile`+`ElementTree`, no new
+  dependency; also .csv) and writes executions, cash rows and account tax status
+  for the days the executions endpoint's retention horizon can no longer reach.
+  One commission column taken as the whole cost; options resolved from the
+  Description into OCC symbols with a 100 multiplier; timestamps at midnight
+  market-local so a date-only row is never given a session; and a statement
+  never writes into a (broker, account, day) a richer source already covers.
+  Reachable from Journal > Health > "Import statement file...".
 - **Two-lane journal auto-tagging (2026-08-28).** `scripts/journal_trade_shape.py`
   derives hold bucket, entry session bucket, execution shape and instrument from a
   trade's own timestamps and legs, so history imported from outside the scanner's
@@ -303,6 +312,53 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-28 — Reading a Questrade statement, for the days the API cannot reach
+
+`IMPLEMENTED`, `GREEN`, **live gate owed** (the trader's own YTD file, imported
+on the desk against their real journal). Trader-supplied file and direction:
+*"i can easily get us yearly reports from questrade so long as we can process
+these files."*
+
+**Why.** The executions endpoint stops at a retention horizon — 2026-06-10 on
+this desk. That is why 44 of the 45 `activities report trades…` days can never
+be repaired by retrying, and it is the open trader decision R7 has carried since
+2026-08-25. The portal's activity export does not stop there.
+
+**What the real file measured**, and what every decision below follows from: 974
+rows, 884 trades, 133 trading days, 2026-01-02 → 2026-08-27, both accounts, zero
+unreadable rows, and `Net == Gross + Commission` on **every one of the 884 trade
+rows to the cent**. So the single Commission column is the complete cost; `fees`
+is written 0.0 rather than inventing a split the file does not contain.
+
+**What a statement cannot say** shapes the module. No time of day (every row is
+"12:00:00 AM"), so executions are written at midnight market-local and
+`journal_trade_shape.is_date_only` refuses to name a session — a date-only round
+trip is a `day_trade`, never a `scalp`. Fills are aggregated (some descriptions
+say "AVG PRICE"). No execution id and no intraday sequence, so the statement's
+own row order is preserved and carried into the surrogate uid; without it two
+identical fills on one day hash to one uid and half the position vanishes.
+Options carry a Questrade internal id in the Symbol column and the real contract
+in the Description — parsed into an OCC symbol, which is what keeps the 100
+multiplier and stops option P&L being understated a hundredfold.
+
+**The rule that prevents double counting:** a statement never writes into a
+(broker, account, day) that a richer source already covers. The two sources give
+one fill different uids, so the upsert cannot see the duplicate; the day is
+refused and the count reported. `.xlsx` is read with `zipfile` + `ElementTree`
+rather than adding `openpyxl`, which would be packaging trigger 1.
+
+**Measured drift, stated rather than found later.** `rebuild_trades` recomputes
+gross P&L from price × quantity while Questrade books Gross Amount to the cent:
+**−$0.1558 on $4,014.18 realised across 253 closed symbols**, worst symbol 1.2¢,
+and commission matching exactly at $291.38 both ways. Making the assembler prefer
+the broker's booked money is a change to the engine both brokers share and was
+deliberately not made here.
+
+Verification: **5349 passed / 72 subtests / 6 skipped**, 5326 → 5349, 23 added;
+the same two pre-existing font-metric failures. Smoke 7/7 exit 0, source selftest
+72/72 exit 0, spec drift 17 passed, ruff clean. No packaging trigger. No detector,
+score, alert, watchlist, Focus or `review_policy.json` path is touched.
 
 ### 2026-08-28 — Auto-tagging that works on imported history, and the tools to adjust it
 

@@ -86,6 +86,14 @@ SOURCE_RANK = {
     "MANUAL": 2,
     "CSV": 1,
     "IBKR_SOCKET": 1,
+    # A broker statement is authoritative for money and blind to time: no
+    # clock, no execution id, and fills its own header may call "AVG PRICE".
+    # It ranks below the API so that if the two ever land on one uid the row
+    # with a real timestamp wins. The primary defence is not this number - it
+    # is `journal_statement_import.days_covered_by_richer_sources`, because the
+    # two sources give the same fill different uids and a rank cannot compare
+    # rows it never sees together.
+    "QT_STATEMENT": 1,
     "": 0,
 }
 

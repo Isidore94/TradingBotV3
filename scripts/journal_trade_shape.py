@@ -134,16 +134,32 @@ def _coerce_datetime(value: Any) -> datetime | None:
     return moment.astimezone(MARKET_TZ)
 
 
+def is_date_only(moment: datetime | None) -> bool:
+    """True when a market-local timestamp carries no time of day.
+
+    A broker statement gives a DATE and no clock time -- Questrade's activity
+    export stamps every row "12:00:00 AM" -- and the statement importer stores
+    that as midnight market-local precisely so this can recognise it. Exactly
+    00:00:00 ET is not a time a fill can happen at: the market is shut, and
+    even extended hours never reach it. So midnight means "the time is not
+    known", and rule 2 says an unknown emits no tag rather than a confident
+    ``premarket`` on every imported row.
+    """
+    if moment is None:
+        return False
+    return (moment.hour, moment.minute, moment.second, moment.microsecond) == (0, 0, 0, 0)
+
+
 def session_bucket(when: Any) -> str | None:
     """Name the part of the session ``when`` falls in, or ``None``.
 
-    ``None`` for anything unparseable -- rule 2. Weekends and holidays are
-    bucketed by clock time like any other day; a fill cannot happen on one, so
-    the case does not arise from broker data, and refusing to name it would
-    only lose the tag on a manually entered row.
+    ``None`` for anything unparseable, and for a date-only timestamp -- rule 2.
+    Weekends and holidays are bucketed by clock time like any other day; a fill
+    cannot happen on one, so the case does not arise from broker data, and
+    refusing to name it would only lose the tag on a manually entered row.
     """
     moment = _coerce_datetime(when)
-    if moment is None:
+    if moment is None or is_date_only(moment):
         return None
     open_moment = datetime.combine(moment.date(), SESSION_OPEN, tzinfo=MARKET_TZ)
     minutes = (moment - open_moment).total_seconds() / 60.0
@@ -204,6 +220,13 @@ def hold_bucket(opened_at: Any, closed_at: Any) -> tuple[str, str] | None:
     if held is None:
         return None
     if held == 0:
+        if is_date_only(opened) or is_date_only(closed):
+            # A statement says the trade opened and closed on one date, which
+            # is a fact, and says nothing about how long it was held, which is
+            # not. ``day_trade`` is the whole of what was measured; calling a
+            # date-only round trip a ``scalp`` on a zero-minute subtraction
+            # would invent the one thing the statement does not carry.
+            return "day_trade", "opened and closed in one session; statement gives no time"
         minutes = (closed - opened).total_seconds() / 60.0
         if minutes < SCALP_MAX_MINUTES:
             return "scalp", f"closed {minutes:.1f} min after entry, same session"
@@ -328,6 +351,7 @@ __all__ = [
     "execution_shape",
     "hold_bucket",
     "instrument_tag",
+    "is_date_only",
     "is_shape_tag",
     "session_bucket",
     "shape_tags",

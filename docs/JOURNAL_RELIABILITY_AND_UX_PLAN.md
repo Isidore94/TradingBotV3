@@ -640,3 +640,59 @@ trades in it.
 and filters on it. And, still unbuilt and still the trader's call, the §8
 statement-file import that makes the imported-history case real — see the
 "NOT BUILT - A TRADER DECISION" note on the 44 pre-retention Questrade days.
+
+## The statement file import — BUILT 2026-08-28
+
+Trader-supplied file and direction: *"i can easily get us yearly reports from
+questrade so long as we can process these files."* This closes the **open
+trader decision** this spec has carried since 2026-08-25 — the 44
+pre-retention days — and it closes it with a statement file rather than with
+`/activities` or a new coverage status, so neither was built.
+
+**What the first real file measured.** 974 rows, 884 of them trades, 133
+trading days, 2026-01-02 to 2026-08-27, both accounts, **zero unreadable
+rows**, and `Net Amount == Gross Amount + Commission` on **every one of the 884
+trade rows, to the cent**. The single Commission column is therefore the whole
+cost of a trade; `fees` is written 0.0 rather than inventing a split the file
+does not contain.
+
+**What a statement cannot say**, which is what the module is shaped around:
+
+- **No time of day.** Every row is stamped "12:00:00 AM". Executions are
+  written at **midnight market-local**, which `journal_trade_shape.is_date_only`
+  reads as "time unknown" — exactly 00:00:00 ET is not a time a fill can happen
+  at. Writing them at 09:30 would have tagged an imported year `opening_drive`;
+  attaching the desk's Pacific zone would land at 03:00 ET and defeat the check.
+  A date-only same-session round trip is a `day_trade`, never a `scalp`.
+- **Fills are aggregated** — some descriptions say "AVG PRICE".
+- **No execution id and no intraday sequence.** The statement's own row order is
+  preserved and carried into the surrogate uid: it is the broker's own listing,
+  it is reproducible, and without it two identical fills on one day hash to one
+  uid and half the position vanishes. A same-day round trip's LONG/SHORT label
+  is that ordering's claim, not a measured fact — but the day's money cannot be
+  wrong either way, because a symbol flat at both ends realises the same total
+  whichever way the legs pair.
+- **Options carry an internal id in the Symbol column** and the contract in the
+  Description. Parsing the description into an OCC symbol is what keeps the
+  expiry, the strike and the 100 multiplier.
+
+**The rule that prevents double counting.** A statement never writes into a
+`(broker, account, day)` that a richer source already covers. The two sources
+give the same fill different `execution_uid`s, so the upsert cannot see the
+duplicate; the day is refused, at day granularity, and the count is reported.
+`SOURCE_RANK["QT_STATEMENT"] = 1` is only the belt.
+
+**Measured drift, stated rather than discovered later.** `rebuild_trades`
+recomputes gross P&L from price x quantity while Questrade books Gross Amount
+rounded to the cent: **-$0.1558 on $4,014.18 of realised P&L across 253 closed
+symbols**, worst symbol 1.17c, worst execution 0.5c, commission exact at
+$291.38 both ways. Making the assembler prefer the broker's own booked money
+would change the engine both brokers share and was deliberately not done here.
+
+`.xlsx` is read with `zipfile` + `xml.etree`, not `openpyxl` — a new dependency
+is packaging trigger 1 and would owe a frozen rebuild for a format that is a
+zip of XML.
+
+**Owed:** the trader importing their own YTD file on the desk against the live
+journal. That import is also what makes §10 gate 2 — commissions reconciling to
+a monthly statement to the cent — reachable for the first half of the year.

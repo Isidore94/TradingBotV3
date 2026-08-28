@@ -456,6 +456,18 @@ def unaccepted_auto_tag_candidates(trade_id: str, current_tags: Any) -> list[dic
     ]
 
 
+def import_broker_statement(path: Any) -> dict[str, Any]:
+    """Import a broker activity statement file into the shared store.
+
+    The Health tab's only route to the days the Questrade executions endpoint
+    can no longer reach. Runs on a worker; everything it decides - which days
+    it may write, what it could not read - is in the returned summary.
+    """
+    from journal_statement_import import import_questrade_statement
+
+    return import_questrade_statement(_store(), Path(path))
+
+
 def tags_in_use() -> list[dict[str, Any]]:
     """Every tag the store holds, with counts and which lane it came from."""
     try:

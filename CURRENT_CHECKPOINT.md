@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | `claude/last-commit-main-dpouod` (journal auto-tagging, cut from `main`) |
+| Working branch | `claude/last-commit-main-dpouod` (journal auto-tagging + statement import, cut from `main`) |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **R7 journal auto-tagging (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5326 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
+| Active roadmap items | **R7 journal auto-tagging + statement import (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
+| Last verified baseline | `pytest tests/ -q` **5349 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -45,15 +45,58 @@ the dated entry named beside it.
 | 11 | **Narrated summary + ticker briefs overnight** — one unattended run at the raised context; tonight's briefs were 0 of a normal 53-62 | 2026-08-28 context entry |
 | 12 | **Sliced summary overnight** — one unattended 22:00 run: 46 slices, a synthesized summary, briefs still finishing in the window | 2026-08-28 slices entry |
 | 13 | **Journal auto-tagging** — one desk session: tag real trades, rename one, filter on it | R7 auto-tagging (2026-08-28 tagging entry) |
+| 14 | **Statement import** — the trader imports their own Questrade YTD file on the desk, against the live journal | R7 statement import (2026-08-28 statement entry) |
 
 ### Immediate next action
 
 Restart the desk, then run the owed live gates in the order above. **The remaining
-gates are all live-session work that only the trader can run.** The one piece of
-build work waiting on an input rather than a session: the trader can produce yearly
-Questrade reports and has asked that we process them, which would close the 44
-pre-retention days and make the imported-history case the auto-tagger was just
-extended for real. **One sample file is what that needs.**
+gates are all live-session work that only the trader can run.** The statement importer that was
+waiting on a sample file is **built** — the trader's next move on it is to import
+their own YTD export on the desk (gate 14), which is also what makes the spec's
+commission-to-the-cent reconciliation reachable for the first half of the year.
+
+---
+
+## 2026-08-28 - Reading a Questrade statement, for the days the API cannot reach
+
+**Branch `claude/last-commit-main-dpouod`. Trader-supplied file and direction:**
+*"i can easily get us yearly reports from questrade so long as we can process
+these files."* This **resolves the open trader decision** R7 has carried since
+2026-08-25: the 44 pre-retention days are recovered from a statement file, not
+from `/activities`, so no new coverage status was needed.
+
+**What the real file measured** (their YTD export, read here, not committed):
+974 rows, 884 trades, 133 trading days, 2026-01-02 -> 2026-08-27, both
+accounts, **zero unreadable rows**, and `Net == Gross + Commission` on every one
+of the 884 trade rows to the cent. So the one Commission column is the whole
+cost; `fees` is 0.0 rather than a guessed split. End to end it assembled **414
+trades** (393 CLOSED, 14 OPEN, 7 CLOSED_PARTIAL) and seeded both account tax
+statuses.
+
+**What a statement cannot say** shaped the module: no time of day (midnight
+market-local, and `is_date_only` refuses a session bucket - a date-only round
+trip is a `day_trade`, never a `scalp`), aggregated fills, no execution id and
+no intraday sequence (the file's row order is preserved into the surrogate uid,
+or two identical fills collapse into one), and options whose real contract is in
+the Description rather than the Symbol column - 174 of the 884 rows.
+
+**The rule that prevents double counting:** a statement never writes into a
+(broker, account, day) a richer source already covers. `.xlsx` is read with
+`zipfile`+`ElementTree`; adding `openpyxl` would have been packaging trigger 1.
+
+**Measured drift, stated up front:** -$0.1558 on $4,014.18 realised across 253
+closed symbols, worst symbol 1.17c; **commission matched exactly, $291.38 both
+ways.** The cause is `rebuild_trades` recomputing price x qty against Questrade's
+cent-rounded Gross Amount. Fixing that means making the shared assembler prefer
+the broker's booked money - a change both brokers ride on, deliberately not made
+here.
+
+**Verification:** **5349 passed / 72 subtests / 6 skipped**, up from 5326.
+Smoke 7/7 exit 0, source selftest 72/72 exit 0, spec drift 17 passed, ruff clean
+on every new file. Same two pre-existing font-metric failures. No packaging
+trigger.
+
+**Owed:** gate 14.
 
 ---
 

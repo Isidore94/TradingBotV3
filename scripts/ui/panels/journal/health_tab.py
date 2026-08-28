@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from journal_statement_import import describe_summary as describe_statement_summary
 from journal_importers import (
     IBKR_FLEX_QUERY_ID_SETTING,
     IBKR_FLEX_TOKEN_SETTING,
@@ -52,13 +54,16 @@ class _JournalTask(QThread):
     finished_with = Signal(dict)
     failed = Signal(str)
 
-    def __init__(self, action: str, parent=None) -> None:
+    def __init__(self, action: str, parent=None, *, path: str = "") -> None:
         super().__init__(parent)
         self.action = action
+        self.path = path
 
     def run(self) -> None:  # pragma: no cover - exercised on the desk
         try:
-            if self.action == "pull":
+            if self.action == "statement":
+                result = journal_feed.import_broker_statement(self.path)
+            elif self.action == "pull":
                 result = journal_feed.pull_today()
             else:
                 failed_only = self.action == "failed"
@@ -108,6 +113,15 @@ class HealthTab(QFrame):
         self.backfill_button.clicked.connect(lambda: self._start_task("gaps"))
         self.retry_button = QPushButton("Retry failed Questrade days")
         self.retry_button.clicked.connect(lambda: self._start_task("failed"))
+        # The only route to the days the executions endpoint can no longer
+        # reach. Questrade's own portal export goes back years; the API does
+        # not, and no retry can change that.
+        self.statement_button = QPushButton("Import statement file...")
+        self.statement_button.setToolTip(
+            "Import a Questrade activity statement (.xlsx or .csv) downloaded from "
+            "their portal. Days the API already covers are left alone."
+        )
+        self.statement_button.clicked.connect(self._choose_statement)
 
         self.reconcile_label = QLabel("No reconciliation has run yet.")
         self.reconcile_label.setWordWrap(True)
@@ -137,6 +151,7 @@ class HealthTab(QFrame):
         heal_row.addWidget(self.pull_button)
         heal_row.addWidget(self.backfill_button)
         heal_row.addWidget(self.retry_button)
+        heal_row.addWidget(self.statement_button)
         heal_row.addStretch(1)
 
         sync_row = QHBoxLayout()
@@ -348,25 +363,43 @@ class HealthTab(QFrame):
         self.statusChanged.emit(f"saved {', '.join(saved)}" if saved else "nothing to save")
         self._load_credentials()
 
-    def _start_task(self, action: str) -> None:  # pragma: no cover - worker path
+    def _set_buttons_enabled(self, enabled: bool) -> None:
+        for button in (
+            self.pull_button,
+            self.backfill_button,
+            self.retry_button,
+            self.statement_button,
+        ):
+            button.setEnabled(enabled)
+
+    def _choose_statement(self) -> None:  # pragma: no cover - dialog path
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import a broker activity statement",
+            "",
+            "Statements (*.xlsx *.xlsm *.csv);;All files (*)",
+        )
+        if path:
+            self._start_task("statement", path=path)
+
+    def _start_task(self, action: str, *, path: str = "") -> None:  # pragma: no cover - worker path
         if self._task is not None and self._task.isRunning():
             return
-        self.pull_button.setEnabled(False)
-        self.backfill_button.setEnabled(False)
-        self.retry_button.setEnabled(False)
+        self._set_buttons_enabled(False)
         labels = {"pull": "pulling today...", "gaps": "backfilling Questrade gaps...",
-                  "failed": "retrying failed Questrade days..."}
+                  "failed": "retrying failed Questrade days...",
+                  "statement": "reading the statement file..."}
         self.statusChanged.emit(labels[action])
-        self._task = _JournalTask(action, self)
+        self._task = _JournalTask(action, self, path=path)
         self._task.finished_with.connect(self._on_heal_done)
         self._task.failed.connect(self._on_heal_failed)
         self._task.start()
 
     def _on_heal_done(self, summary: dict) -> None:  # pragma: no cover
-        self.pull_button.setEnabled(True)
-        self.backfill_button.setEnabled(True)
-        self.retry_button.setEnabled(True)
-        if "source_results" in summary:
+        self._set_buttons_enabled(True)
+        if "executions_written" in summary:
+            message = describe_statement_summary(summary)
+        elif "source_results" in summary:
             message = "; ".join(summary.get("messages") or []) or summary.get("status", "pull complete")
         else:
             message = (
@@ -383,9 +416,7 @@ class HealthTab(QFrame):
         self.reload()
 
     def _on_heal_failed(self, message: str) -> None:  # pragma: no cover
-        self.pull_button.setEnabled(True)
-        self.backfill_button.setEnabled(True)
-        self.retry_button.setEnabled(True)
+        self._set_buttons_enabled(True)
         self.statusChanged.emit(f"gap repair failed: {message}")
 
     def _confirm_suggestion(self) -> None:

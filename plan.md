@@ -346,8 +346,16 @@ are listed in `CURRENT_CHECKPOINT.md`.
 
 7. **R7 Journal reliability and UX. — BUILT 2026-08-15, live gates owed.**
    Spec: `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`. Build record: `CHANGELOG.md`.
-   **OWED:** one live paste that survives a backfill. **OPEN TRADER DECISION:** 44 of the 45 `activities report trades…` days predate 2026-06-10, the executions endpoint's retention horizon, so no retry can recover them; importing them from `/activities` (lower fidelity, feeds tax) or labelling them permanently uncovered needs a new coverage status and is not built. 2026-08-13 is the one such day inside the window.
+   **OWED:** one live paste that survives a backfill. **TRADER DECISION RESOLVED 2026-08-28** ("i can easily get us yearly reports from questrade so long as we can process these files"): the 44 pre-retention days are recovered from a **statement file**, not from `/activities`. `scripts/journal_statement_import.py` is BUILT and reachable from Journal > Health; a statement never writes into a day a richer source covers, so no new coverage status was needed. *Owed:* the trader importing their own YTD file on the desk against the live journal, then reconciling one monthly statement to the cent (spec gate 2).
    **Owed, and none of it can start before Monday's validation day:** **Owed, and none of it can start before Monday's validation day:** the trader-present finale — the live schema v2→v3 migration (dry-run report reviewed first, automatic file backup), the full backfill, account tax-status labeling applied to the live store, and reconciliation-week sign-off — then the spec's six live gates: coverage COVERED-or-NO_SESSION for every session day since inception, trade counts and commissions reconciling to one monthly statement per broker **to the cent**, one clean reconciliation week on both brokers, zero orphaned annotations (permanent SQL test), CAD totals spot-checked against published BoC rates for three dates, and ≥5 consecutive nightly `journal_import` ledger entries with coverage advancing and at least one observed self-heal.
+   **Questrade statement import (BUILT 2026-08-28, live gate owed).**
+   `scripts/journal_statement_import.py` + Journal > Health > "Import statement
+   file...". Reads .xlsx (stdlib, no new dependency) and .csv; one commission
+   column taken as the complete cost; options resolved from the Description;
+   midnight market-local timestamps so a date-only row is never given a session;
+   day-level refusal of anything a richer source already covers. Measured drift
+   against the trader's real YTD file: -$0.16 on $4,014 realised, commission
+   exact. *Owed:* the trader importing that file on the desk.
    **Two-lane auto-tagging + tag adjust tools (BUILT 2026-08-28, live gate owed).**
    Trader-directed while evaluating this journal against their TradesViz
    subscription. `scripts/journal_trade_shape.py` tags a trade from its own
