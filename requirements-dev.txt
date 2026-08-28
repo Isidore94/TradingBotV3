@@ -5,3 +5,8 @@ pytest-timeout
 # the read path answers every slice query through pyarrow without it.
 duckdb
 pyinstaller
+
+# The linter pyproject.toml configures. CLAUDE.md names ruff as part of the stack,
+# but it was never declared here, so `uv pip install -r requirements-dev.txt` produced
+# an environment that cannot run the configured lint.
+ruff

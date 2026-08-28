@@ -77,6 +77,10 @@ superseded by `plan.md`.
 
 | File | Historical value |
 |---|---|
+| [`DESK_INTERNALS.md`](DESK_INTERNALS.md) | **ACTIVE reference, not history.** The verbatim long form of every `Core loop / data flow` rule in `CLAUDE.md` — the incident, the measurements and the trader conversation that produced it. Split out 2026-08-28 because that section was 42 KB (~10,600 tokens), 65% of a file that loads into *every* session. `CLAUDE.md` keeps the rule and this keeps the reason; the rules bind from `CLAUDE.md` alone. **Read the matching entry before changing the behaviour a rule governs, and change both places when a rule changes.** |
+| [`ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](ROADMAP_ARCHIVE_PHASES_0.5-0.7.md) | The verbatim build narrative for `plan.md` Section 12's Phases 0.5, 0.6 and 0.7, moved out 2026-08-28. Those three completed refinement programs were 72% of the roadmap while describing work that is BUILT. **All 89 numbered items and every gate clause stayed in `plan.md`, unabridged** — only the implementation description moved, and it is also in `CHANGELOG.md` and each packet's spec. Evidence, not authority: an owed gate is owed because `plan.md` says so. If the two disagree, `plan.md` wins |
+| [`CHECKPOINT_ARCHIVE_2026-08.md`](CHECKPOINT_ARCHIVE_2026-08.md) | The dated working record from `CURRENT_CHECKPOINT.md` for **2026-08-25 and earlier** (95 entries, 379 KB), split out 2026-08-27. The active checkpoint had reached 7,901 lines and made the mandatory documentation read ~260k tokens, so it was no longer followable. Evidence for one specific past decision — **never load it as context**, and never treat an entry here as an open gate. Open gates live in the active checkpoint's "Active state at a glance" block |
+| [`CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](CHANGELOG_ARCHIVE_2025-11_2026-08-19.md) | `CHANGELOG.md`'s revision history from **2026-08-19 back to the initial system in 2025-11** (36 entries), split out 2026-08-27. What currently exists is the `Current implemented inventory` section of `CHANGELOG.md`; this is how it got there. Same rule — read it for one question, do not load it |
 | [`analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md`](analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md) | Paste-ready builder prompt for the desk's 8-13 GB memory jumps (investigation in the 2026-08-27 (10:00) checkpoint entry): session-scoped Arrow reads for the three warehouse readers that `to_pylist()` the whole month of `bar_m5` inside the desk, a chunked-sha / no-parse path for the 1 GB tracker snapshot ingest, and the trader-authorised `legacy.py` fix that frees `self.data[reqId]` on every IB request path. Fail-before-fix tests, equivalence proof, measured before/after, one live gate owed. **Authorises exactly that packet; the subprocess move and the GUI-stall items stay out of scope**. **BUILT 2026-08-27** on `claude/warehouse-build-memory` (`c6c0dc8`): 15.4 GB -> 0.53 GB per session read, the 1.03 GB tracker no longer read to answer UNCHANGED, and the five leaking BounceBot request paths freed (BD-73, BD-74). Kept as the record of what was authorised, what was deliberately left out, and the one live gate still owed |
 | [`analysis/SOL_ATTACK_2026-08-24.md`](analysis/SOL_ATTACK_2026-08-24.md) | Frozen adversarial reproduction pass over the 2026-08-24 build slate: exact commands, seven proven blocker classes, three surgical repairs, four report-only blockers, refuted attack claims, and the post-close AWAY/outcome-sweep evidence. It promotes nothing and marks no live gate met. **Frozen and never edited — one reading in it is superseded:** its C5 "second production sweep missed its own clock" was taken at 14:21 and the sweep ran at 14:27:36 (656/656, 0 failed). The correction is in `CHANGELOG.md`, `plan.md` R10.A and the 2026-08-25 evening (4) checkpoint entry |
 | [`CHECKPOINT_REVIEW_2026-08-08.md`](CHECKPOINT_REVIEW_2026-08-08.md) | Review and merge rulings for durability/local-AI branches |
@@ -104,21 +108,21 @@ superseded by `plan.md`.
 The files under [`decisions/`](decisions/) are accepted constraints, not progress
 trackers:
 
-1. decision-support only; no execution;
-2. champion/challenger shadow promotion ladder;
-3. IBKR primary with Yahoo fallback;
-4. PySide6 product UI with Tk retained during migration;
-5. plain-file operational home-folder storage (cloud-sync premise superseded by 15);
-6. writer-lease fencing for shared exports;
-7. completed bars for state transitions;
-8. frozen anchored-VWAP sigma formula;
-9. golden fixtures before detector changes;
-10. AI review policy is annotation/ranking only;
-11. one-way evidence-grounded AI advisory;
-12. layered requirements with pinned constraints;
-13. root-roadmap authority;
-14. separate DAS research lake;
-15. no cloud sync — the DAS file server is the durable storage tier.
+1. [decision-support only; no execution](decisions/0001-decision-support-only-no-order-execution.md);
+2. [champion/challenger shadow promotion ladder](decisions/0002-champion-challenger-shadow-promotion-ladder.md);
+3. [IBKR primary with Yahoo fallback](decisions/0003-ibkr-primary-yahoo-fallback-market-data.md);
+4. [PySide6 product UI with Tk retained during migration](decisions/0004-pyside6-consumer-ui-tk-legacy-during-migration.md);
+5. [plain-file operational home-folder storage (cloud-sync premise superseded by 15)](decisions/0005-cloud-synced-home-folder-file-storage.md);
+6. [writer-lease fencing for shared exports](decisions/0006-writer-lease-fencing-for-shared-exports.md);
+7. [completed bars for state transitions](decisions/0007-completed-bars-only-for-state-transitions.md);
+8. [frozen anchored-VWAP sigma formula](decisions/0008-frozen-anchored-vwap-sigma-formula.md);
+9. [golden fixtures before detector changes](decisions/0009-golden-fixtures-before-detector-changes.md);
+10. [AI review policy is annotation/ranking only](decisions/0010-ai-in-the-loop-review-policy-annotation-only.md);
+11. [one-way evidence-grounded AI advisory](decisions/0011-one-way-evidence-grounded-ai-advisory.md);
+12. [layered requirements with pinned constraints](decisions/0012-layered-requirements-with-constraints-pin.md);
+13. [root-roadmap authority](decisions/0013-plan-md-authority-hierarchy.md);
+14. [separate DAS research lake](decisions/0014-das-research-lake.md);
+15. [no cloud sync — the DAS file server is the durable storage tier](decisions/0015-no-cloud-sync-das-file-server-storage.md).
 
 ## Maintenance rule
 

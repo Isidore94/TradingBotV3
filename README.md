@@ -7,7 +7,7 @@ outcomes, and supports controlled research. It never places orders.
 
 ## Documentation
 
-The documentation now has four clear entry points:
+The documentation has five entry points:
 
 - [`CHANGELOG.md`](CHANGELOG.md) — what is implemented and the revision history;
 - [`plan.md`](plan.md) — what remains, in order, with validation/promotion gates;
@@ -19,9 +19,11 @@ The documentation now has four clear entry points:
 ## Current operating model
 
 - `launch_gui.py` starts the PySide6 Trading Desk.
-- Run the app as **Main** only. Desk Link/satellite mode and the separate mini-PC
-  scanner role were retired on 2026-08-08; their remaining code is unused pending a
-  cleanup packet.
+- There is one desk role and no flag to change it. Desk Link/satellite mode and the
+  separate mini-PC scanner role were retired on 2026-08-08 and their code was **removed
+  on 2026-08-24** (P1.5): no `desk_link` package, no `--satellite`/`--desk-role` flags.
+- One desk per machine: `launch_gui.py` takes a machine-local slot, and a second launch
+  exits 0 with a message. `--allow-second-instance` overrides it.
 - IBKR TWS/Gateway on `127.0.0.1:7496` is the primary market-data source; yfinance is
   the fallback.
 - The shared home folder `C:\TradingBotData` — a plain local folder on the desk SSD —
@@ -67,6 +69,11 @@ Start TWS/Gateway first, then:
 .venv\Scripts\python.exe launch_gui.py
 ```
 
+The `trading_desk.cmd` launcher wraps the same command. **The source launch is
+production** by trader decision (2026-08-26): a pushed commit is live at the next
+restart, and the frozen exe is a verification artifact only. If the desk ever returns
+to the frozen exe, a fix is not delivered until the exe is rebuilt.
+
 Optional theme override:
 
 ```powershell
@@ -79,8 +86,8 @@ The legacy Tk UI remains available only during migration:
 .venv\Scripts\python.exe scripts\gui.py --ui tk
 ```
 
-Do not operate `scripts/master_avwap_mini_pc.py` as a separate scanner host. It
-remains in the repository only as a scheduling/template reference.
+`scripts/master_avwap_mini_pc.py` was removed on 2026-08-24. The named-slot scheduling
+shape it established lives on in `scripts/ai_jobs/runner.py`.
 
 ## Required watchlists
 
@@ -131,7 +138,10 @@ The frozen application supports a no-window, no-network engine check:
 dist\TradingBotV3\TradingBotV3.exe --selftest
 ```
 
-The current expected frozen result is `selftest OK: 29/29 checks passed (frozen)`.
+The check count is a running total that grows as checks are added, not a fixed
+number: it was 29 on 2026-08-09 and the unfrozen tree measured 72 on 2026-08-27.
+Expect `selftest OK: N/N checks passed (frozen)` and exit 0, and compare N against a
+current unfrozen `launch_gui.py --selftest` run rather than a number quoted in a doc.
 Read [`packaging/README.md`](packaging/README.md) before rebuilding or changing the
 spec.
 
