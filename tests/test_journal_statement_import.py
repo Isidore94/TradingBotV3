@@ -410,3 +410,180 @@ def test_a_failed_import_records_its_own_failure(tmp_path, store):
     assert store.list_import_runs(limit=5) == [] or store.list_import_runs(limit=5)[0][
         "status"
     ] in {"FAILED", "OK"}
+
+
+# -- long vs short, and layering later exports -------------------------------
+
+#: Questrade names a short in the Description. Same shapes as the real file.
+SHORT_ROWS = [
+    ["2026-04-06 12:00:00 AM", "2026-04-07 12:00:00 AM", "Sell", "ZZZ",
+     "ZZZ INC COMMON STOCK SHORT. WE ACTED AS AGENT",
+     "-10.00000", "50.00000000", "500.00", "-0.02", "499.98", "USD", "11111111", "Trades", "Individual margin"],
+    ["2026-04-06 12:00:00 AM", "2026-04-07 12:00:00 AM", "Buy", "ZZZ",
+     "ZZZ INC COMMON STOCK COVER SHORT. WE ACTED AS AGENT",
+     "10.00000", "48.00000000", "-480.00", "0.00", "-480.00", "USD", "11111111", "Trades", "Individual margin"],
+]
+
+
+def test_a_short_round_trip_is_read_from_the_description_not_the_row_order(tmp_path, store):
+    """The file lists a same-day round trip SELL-first 227 times out of 227.
+
+    That makes row order a SORT, not a sequence, and the assembler's uid
+    tiebreak turned direction into a coin flip - 86 of 199 came out SHORT at
+    random. Questrade writes "SHORT." and "COVER SHORT." in the description,
+    which settles it per row.
+    """
+    statement.import_questrade_statement(store, _write_xlsx(tmp_path / "a.xlsx", SHORT_ROWS))
+    trade = store.list_trades()[0]
+    assert trade["direction"] == "SHORT"
+    # Sold at 50, covered at 48, on ten shares, less two cents of cost.
+    assert trade["gross_pnl"] == pytest.approx(20.0)
+    assert trade["net_pnl"] == pytest.approx(19.98)
+    assert trade["status"] == "CLOSED"
+
+
+def test_an_unmarked_round_trip_is_a_long(tmp_path, store):
+    """Absence of a marking is itself the answer: Questrade marks every short."""
+    statement.import_questrade_statement(store, _write_xlsx(tmp_path / "a.xlsx", ROWS[:2]))
+    trade = store.list_trades()[0]
+    assert trade["direction"] == "LONG"
+    assert trade["net_pnl"] == pytest.approx(19.95)
+
+
+def test_the_marking_is_read_per_row():
+    assert statement.short_marking("ZZZ INC COMMON STOCK SHORT. WE ACTED AS AGENT") == "SHORT"
+    assert statement.short_marking("VF CORPORATION COVER SHORT. WE ACTED AS AGENT") == "COVER"
+    assert statement.short_marking("APPLE INC WE ACTED AS AGENT") == ""
+    # "COVER" is tested first because a cover line contains the word SHORT too.
+    assert statement.short_marking("X COVER SHORT. WE ACTED AS AGENT") == "COVER"
+
+
+def test_leg_rank_puts_the_opening_side_first():
+    assert statement.leg_rank("SELL", "SHORT") == statement.OPENS_POSITION
+    assert statement.leg_rank("BUY", "") == statement.OPENS_POSITION
+    assert statement.leg_rank("BUY", "COVER") == statement.CLOSES_POSITION
+    assert statement.leg_rank("SELL", "") == statement.CLOSES_POSITION
+
+
+def test_a_later_longer_export_layers_instead_of_doubling(tmp_path, store):
+    """The whole point of being able to re-download through the year.
+
+    A January-to-December export lists the same January trades the
+    January-to-August one did, at different row positions. When the uid carried
+    the row index, a one-row shift made 884 of 884 real trades look new.
+    """
+    first = _write_xlsx(tmp_path / "first.xlsx", ROWS)
+    # The same rows, re-ordered and with later activity in front of them.
+    later = _write_xlsx(tmp_path / "later.xlsx", SHORT_ROWS + list(reversed(ROWS)))
+
+    statement.import_questrade_statement(store, first)
+    trades_after_first = len(store.list_trades())
+    summary = statement.import_questrade_statement(store, later)
+
+    with store.connection() as conn:
+        executions = conn.execute("SELECT COUNT(*) FROM raw_executions").fetchone()[0]
+    assert executions == 6  # 4 from the first file, 2 genuinely new
+    assert len(store.list_trades()) == trades_after_first + 1
+    assert summary["executions_written"] == 6
+
+
+def test_re_importing_either_file_in_any_order_adds_nothing(tmp_path, store):
+    first = _write_xlsx(tmp_path / "first.xlsx", ROWS)
+    later = _write_xlsx(tmp_path / "later.xlsx", SHORT_ROWS + list(reversed(ROWS)))
+    for path in (first, later, first, later, later, first):
+        statement.import_questrade_statement(store, path)
+    with store.connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM raw_executions").fetchone()[0] == 6
+        assert conn.execute("SELECT COUNT(*) FROM cash_transactions").fetchone()[0] == 2
+
+
+# -- checking the journal against the file it came from ----------------------
+
+
+def test_reconciliation_adds_the_file_up_by_hand_and_agrees_with_the_journal(tmp_path, store):
+    path = _write_xlsx(tmp_path / "a.xlsx", ROWS + SHORT_ROWS)
+    statement.import_questrade_statement(store, path)
+
+    report = statement.reconcile_statement(store, path)
+
+    # AAPL 19.95 + the option 53.98 + the short 19.98.
+    assert report["statement_pnl"] == pytest.approx(93.91, abs=0.01)
+    assert report["journal_pnl"] == pytest.approx(93.91, abs=0.01)
+    assert abs(report["difference"]) <= statement.ROUNDING_TOLERANCE
+    assert report["symbols_beyond_rounding"] == []
+    assert report["closed_symbols"] == 3
+    assert report["statement_commission"] == pytest.approx(report["journal_commission"])
+    # AAPL and the short are same-day; the option's legs are a day apart.
+    assert report["same_day_round_trips"] == 2
+    assert report["short_marked_rows"] == 2
+
+
+def test_reconciliation_excludes_an_open_position_rather_than_zeroing_it(tmp_path, store):
+    """Cash has left the account with no realised P&L against it yet."""
+    open_only = [ROWS[0]]  # a buy with no matching sell
+    path = _write_xlsx(tmp_path / "a.xlsx", open_only)
+    statement.import_questrade_statement(store, path)
+
+    report = statement.reconcile_statement(store, path)
+
+    assert report["closed_symbols"] == 0
+    assert report["open_symbols"] == 1
+    assert report["statement_pnl"] == 0.0
+    assert report["open_cash"] == pytest.approx(-2000.0)
+
+
+def test_reconciliation_names_the_symbol_when_the_two_disagree(tmp_path, store):
+    path = _write_xlsx(tmp_path / "a.xlsx", ROWS)
+    statement.import_questrade_statement(store, path)
+    # Void one leg through the sanctioned append-only route, so the journal and
+    # the file genuinely disagree about AAPL.
+    trade = [t for t in store.list_trades() if t["symbol"] == "AAPL"][0]
+    leg = store.list_trade_legs(trade["trade_id"])[0]
+    store.record_adjustment(
+        action="VOID_EXECUTION",
+        target_uid=leg["execution_uid"],
+        reason="test: prove the check notices",
+    )
+    store.rebuild_trades()
+
+    report = statement.reconcile_statement(store, path)
+
+    flagged = {row["symbol"] for row in report["symbols_beyond_rounding"]}
+    assert "AAPL" in flagged
+    assert abs(report["difference"]) > statement.ROUNDING_TOLERANCE
+
+
+def test_reconciliation_never_writes(tmp_path, store):
+    path = _write_xlsx(tmp_path / "a.xlsx", ROWS)
+    statement.import_questrade_statement(store, path)
+    before = len(store.list_import_runs(limit=50))
+
+    statement.reconcile_statement(store, path)
+
+    assert len(store.list_import_runs(limit=50)) == before
+
+
+def test_a_day_holding_both_a_short_and_a_long_in_one_symbol_is_named(tmp_path, store):
+    """Legal, and 3 days of 439 on the trader's own history.
+
+    The assembler groups a symbol into ONE position, so it blends what were
+    really two trades. The day's money is still exact; the split is not.
+    """
+    mixed = SHORT_ROWS + [
+        ["2026-04-06 12:00:00 AM", "2026-04-07 12:00:00 AM", "Buy", "ZZZ",
+         "ZZZ INC COMMON STOCK WE ACTED AS AGENT",
+         "5.00000", "49.00000000", "-245.00", "0.00", "-245.00", "USD", "11111111", "Trades", "Individual margin"],
+        ["2026-04-06 12:00:00 AM", "2026-04-07 12:00:00 AM", "Sell", "ZZZ",
+         "ZZZ INC COMMON STOCK WE ACTED AS AGENT",
+         "-5.00000", "49.50000000", "247.50", "-0.01", "247.49", "USD", "11111111", "Trades", "Individual margin"],
+    ]
+    path = _write_xlsx(tmp_path / "a.xlsx", mixed)
+    statement.import_questrade_statement(store, path)
+
+    report = statement.reconcile_statement(store, path)
+
+    assert [(row["symbol"], row["date"]) for row in report["mixed_direction_days"]] == [
+        ("ZZZ", "2026-04-06")
+    ]
+    # The money is still exact even though the two trades are blended.
+    assert abs(report["difference"]) <= statement.ROUNDING_TOLERANCE

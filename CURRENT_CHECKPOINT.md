@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | `claude/last-commit-main-dpouod` (journal auto-tagging + statement import, cut from `main`) |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **R7 journal auto-tagging + statement import (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5349 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
+| Last verified baseline | `pytest tests/ -q` **5361 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -46,14 +46,71 @@ the dated entry named beside it.
 | 12 | **Sliced summary overnight** — one unattended 22:00 run: 46 slices, a synthesized summary, briefs still finishing in the window | 2026-08-28 slices entry |
 | 13 | **Journal auto-tagging** — one desk session: tag real trades, rename one, filter on it | R7 auto-tagging (2026-08-28 tagging entry) |
 | 14 | **Statement import** — the trader imports their own Questrade YTD file on the desk, against the live journal | R7 statement import (2026-08-28 statement entry) |
+| 15 | **Statement layering + self-check** — the trader imports both real files on the desk and runs "Check a statement..." against the live journal | R7 statement layering (2026-08-28 layering entry) |
 
 ### Immediate next action
 
 Restart the desk, then run the owed live gates in the order above. **The remaining
-gates are all live-session work that only the trader can run.** The statement importer that was
-waiting on a sample file is **built** — the trader's next move on it is to import
-their own YTD export on the desk (gate 14), which is also what makes the spec's
-commission-to-the-cent reconciliation reachable for the first half of the year.
+gates are all live-session work that only the trader can run.** The statement importer is **built and
+layers correctly** — the trader's next move is to import both real files on the
+desk and run the self-check (gates 14-15). Two of his asks are scoped and
+NOT built, and one needs his answer first: statements as the source of truth over
+the API (it would cost the only intraday timestamps the journal has), and the
+IBKR transaction-file importer (masked account numbers are the open problem).
+
+---
+
+## 2026-08-28 - Statements that layer, a direction that is read, and the trader's own check
+
+**Trader direction:** *"lets add a function to be able to take these files, and
+new ones throughout the year that layer on top so that in the end I can totally
+manually calculate and demonstrate my pnl and then we can compare it to the auto
+generated stuff."* Both of his real files (2026 YTD and 2025-08/2026) were read
+here to build against; neither is committed.
+
+**Two defects the first build carried, both found by measuring.** (1) The uid
+hashed the file's ROW INDEX, so a longer export made **884 of 884** trades look
+new - exactly the layering he asked for would have doubled the year. Identity is
+now `fill_signature` + an ordinal within it. (2) Direction was a **coin flip**:
+the file lists a same-day round trip SELL-first **227 of 227** times (a sort,
+not a sequence), and the assembler's uid tiebreak sent **86 of 199** trades
+SHORT at random. Questrade marks shorts in the Description (`STOCK SHORT.`,
+`COVER SHORT.`), so `leg_rank` now orders by what each row does to the position.
+All 227 resolved: **169 long, 58 short**, every short corroborated by both legs.
+
+**`reconcile_statement`** is his "manually calculate and demonstrate" - it adds
+the file up by hand and compares, per symbol, writing a CSV. Reads only.
+Measured over both files: statement **$5,298.81** vs journal **$5,299.05**,
+diff **-$0.2386** across 428 closed symbols, every symbol inside 2c, commission
+**$713.68 both ways**. Importing 2025 dropped NEEDS_REVIEW from **23 to 5**.
+
+**Verification:** 5361 passed / 72 subtests / 6 skipped (5349 -> 5361). Smoke
+7/7, selftest 72/72, ruff clean on the new files. Same two pre-existing
+font-metric failures. No packaging trigger.
+
+**Owed:** gate 15.
+
+### Two trader asks scoped but NOT built (2026-08-28)
+
+1. **Statements as the source of truth over the API.** The trader's stated
+   preference: *"these should be sources of truth moreso than the auto input
+   IMO."* Today the opposite holds - a statement refuses any day a richer source
+   covers. The cost of reversing it is real and must be put to him first:
+   **neither statement file carries a time of day**, so letting a statement take
+   over an API day discards the only intraday timestamps the journal has, which
+   is what every session-bucket tag and every time-of-day question depends on.
+   The sanctioned mechanism if he confirms is append-only `VOID_EXECUTION`
+   adjustments against the API rows (invariant I3 forbids deleting a broker
+   row), not a delete.
+2. **IBKR transaction-file import.** File surveyed (`U*.TRANSACTIONS.*.csv`, 803
+   rows, 608 trades, 2025-01-03 -> 2026-08-27). It is a SECTIONED csv
+   (Statement / Transaction History / Summary), not a flat table, so it needs
+   its own reader. Three things differ from Questrade and each is a correctness
+   trap: **Gross/Net are in the BASE currency (CAD) while Price is USD**;
+   **account numbers are MASKED** (`U***2524`, `U***7396` - the file cannot say
+   which account is which, and the filename names only one); and the type
+   vocabulary is wider (`Assignment`, `Forex Trade Component`, `Sales Tax`,
+   `Other Fee`, `Debit/Credit Interest`). Options already arrive OCC-formatted.
 
 ---
 

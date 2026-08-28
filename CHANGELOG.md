@@ -188,6 +188,13 @@ which is evidence and must not be loaded as context.
   Journal (Trades, Calendar, Analytics, Health, Fees) over one shared
   tax-grouped header.
 
+- **Statement layering, direction and self-check (2026-08-28).** Statement
+  identity is `fill_signature` + an ordinal within it, so a later, longer export
+  layers instead of doubling; long vs short is read from Questrade's own
+  `STOCK SHORT.` / `COVER SHORT.` description marking rather than from row
+  order; and `reconcile_statement` adds a file up by hand and compares it to the
+  assembled trades, per symbol, writing a CSV. Journal > Health >
+  "Check a statement...".
 - **Broker statement import (2026-08-28).** `scripts/journal_statement_import.py`
   reads a Questrade activity export (.xlsx via `zipfile`+`ElementTree`, no new
   dependency; also .csv) and writes executions, cash rows and account tax status
@@ -312,6 +319,45 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-28 — Statements that layer, a direction that is read rather than guessed, and the trader's own check
+
+`IMPLEMENTED`, `GREEN`, **live gate owed**. Trader direction: *"lets add a
+function to be able to take these files, and new ones throughout the year that
+layer on top so that in the end I can totally manually calculate and demonstrate
+my pnl and then we can compare it to the auto generated stuff."*
+
+**Two defects the first statement build carried, both found by measuring rather
+than reviewing.**
+
+*The uid was positional.* It hashed the file's row index, so a January-to-December
+export — the same January trades at different row positions — made **884 of 884**
+real trades look new. Identity is now `fill_signature` plus an ordinal counted
+within that signature. Proven on the trader's two real files: all 884 of the 2026
+file recognised inside the 2025–26 file, and re-importing either in any order
+leaves 1,516 executions and 202 cash rows unchanged.
+
+*Direction was a coin flip.* A statement has no clock and lists a same-day round
+trip SELL-first **227 times out of 227** — a sort, not a sequence — so the
+assembler's uid tiebreak decided long vs short at random: **86 of 199**. Questrade
+says it in the Description instead (`STOCK SHORT.`, `COVER SHORT.`), so `leg_rank`
+orders each row by what it does to the position. That resolved all 227 — **169
+long, 58 short** — and all 58 carried both markings.
+
+**`reconcile_statement`** is the trader's own proof and writes nothing: for a
+symbol whose quantities net to zero across the file, the sum of its Net Amount
+column IS the realised P&L, and that is compared to what `rebuild_trades`
+assembled. Open positions are excluded, not zeroed. Measured across both files:
+statement **$5,298.81** vs journal **$5,299.05**, difference **−$0.2386** over 428
+closed symbols, every symbol inside two cents, **commission exact at $713.68 both
+ways**. It does not prove the parse — both sides read the same one.
+
+Importing the 2025 file dropped NEEDS_REVIEW trades from **23 to 5**. Three days
+hold both a short and a long in one symbol and are named rather than silently
+blended.
+
+Verification: **5361 passed / 72 subtests / 6 skipped**, 5349 → 5361. Smoke 7/7,
+selftest 72/72, ruff clean on the new files, same two pre-existing font failures.
 
 ### 2026-08-28 — Reading a Questrade statement, for the days the API cannot reach
 

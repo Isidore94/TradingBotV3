@@ -696,3 +696,32 @@ zip of XML.
 **Owed:** the trader importing their own YTD file on the desk against the live
 journal. That import is also what makes §10 gate 2 — commissions reconciling to
 a monthly statement to the cent — reachable for the first half of the year.
+
+### Layering, direction, and the trader's own check — BUILT 2026-08-28
+
+Trader direction: *"new ones throughout the year that layer on top so that in
+the end I can totally manually calculate and demonstrate my pnl and then we can
+compare it to the auto generated stuff."*
+
+**Identity may not be positional.** The first build hashed the file's row index
+into the uid, so a longer export re-imported its whole overlap — 884 of 884
+trades on the real file. Identity is `fill_signature` (account, date, symbol,
+side, quantity, price, commission, currency) plus an ordinal counted within
+that signature.
+
+**Direction is read, not guessed.** The file lists a same-day round trip
+SELL-first 227 times out of 227, so row order is a sort; the assembler's uid
+tiebreak was deciding direction at random (86 of 199). Questrade marks a short
+in the Description, so `leg_rank` orders each row by what it does to the
+position — and that rank is the uid's sort prefix, because every row on a date
+shares midnight. All 227 resolved: 169 long, 58 short, all 58 corroborated by
+both legs.
+
+**`reconcile_statement`** compares plain arithmetic on the file against the
+assembled trades, per symbol, excluding open positions. It writes nothing.
+Measured: −$0.2386 on $5,298.81 over 428 closed symbols, commission exact. It
+does not validate the parse; only the trader's Questrade year-end numbers can.
+
+**Still open:** the trader's stated preference (2026-08-28) that statement files
+be treated as MORE authoritative than the API feed, and an IBKR transaction-file
+importer. Both are scoped but unbuilt — see `CURRENT_CHECKPOINT.md`.

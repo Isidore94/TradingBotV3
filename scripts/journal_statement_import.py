@@ -29,14 +29,28 @@ shaped around:
   statement row can be several fills. Quantities and money still reconcile;
   individual fill prices do not survive.
 * **No execution id, and no intraday sequence.** Two rows for one symbol on one
-  day carry nothing that says which came first. We preserve the statement's own
-  row order (see ``sequence``) because it is the broker's own listing and it is
-  reproducible, but a same-day round trip's LONG/SHORT label is that ordering's
-  claim rather than a measured fact. What this cannot get wrong is the day's
-  money: a symbol that starts and ends a day flat realises the same total P&L
-  whichever way the legs are paired, because every leg is closed either way.
-  Per-trade attribution inside such a day is best-effort; the day total, which
-  is what a tax return adds up, is exact.
+  day carry nothing that says which came first: the file lists a same-day round
+  trip SELL-first 227 times out of 227, which makes that a SORT and not a
+  sequence. Left to the assembler's tiebreak - the execution uid, a hash - the
+  direction of a same-day round trip was a coin flip, and 86 of 199 came out
+  SHORT at random.
+  **The description settles it instead.** Questrade writes "... COMMON STOCK
+  SHORT." on a short sale and "... COVER SHORT." on the buy that closes one, so
+  :func:`leg_rank` orders each row by what it does to the position rather than
+  by where it sat in the file. That resolved all 227 - 169 long, 58 short - and
+  every one of the 58 carried BOTH markings, so the two halves agree with each
+  other rather than being read off one row.
+  The money was never at risk either way: a symbol that starts and ends a day
+  flat realises the same total P&L whichever way the legs are paired, because
+  every leg is closed either way.
+* **Nothing positional may reach an execution's identity.** The statement's row
+  order is kept in ``raw_json`` as a record of what the file said, and is
+  deliberately NOT part of the uid: a January-to-December export lists the same
+  January trades as a January-to-August one did, at different row positions.
+  When the uid carried the row index, a one-row shift made **884 of 884** real
+  trades look new, which is precisely how layering later exports onto earlier
+  ones would have doubled the year. Identity is
+  :func:`fill_signature` plus an ordinal counted within that signature.
 
 THE RULE THAT KEEPS IT SAFE
 
@@ -57,9 +71,11 @@ frozen rebuild for a file format we can already read in fifty lines.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 import zipfile
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
@@ -387,8 +403,83 @@ def parse_rows(table: Iterable[Mapping[str, Any]]) -> list[StatementRow]:
     return parsed
 
 
-def _execution_from_row(row: StatementRow) -> NormalizedExecution | None:
-    """One trade row as a normalized execution, or ``None`` if it is not one."""
+#: Questrade names a short in the Description, and this is the whole reason the
+#: long/short label survives an import. "SIMPLY GOOD FOODS COMPANY (THE) COMMON
+#: STOCK SHORT. WE ACTED AS AGENT" is a short sale; "VF CORPORATION COVER SHORT.
+#: WE ACTED AS AGENT" is the buy that closes one. ``COVER`` is tested first
+#: because a cover line contains the word SHORT too.
+_COVER_MARKING = re.compile(r"\bCOVER\s+SHORT\b", re.IGNORECASE)
+_SHORT_MARKING = re.compile(r"\bSHORT\b\.?(?:\s|$)", re.IGNORECASE)
+
+#: Rank inside one symbol-day: legs that OPEN a position sort before legs that
+#: CLOSE one. This is what makes a same-day round trip come out with the right
+#: direction, and it is derived from each row on its own rather than from the
+#: file, so it is identical in every export that lists the trade.
+OPENS_POSITION = 0
+CLOSES_POSITION = 1
+
+
+def short_marking(description: Any) -> str:
+    """``"COVER"``, ``"SHORT"`` or ``""`` for one statement description."""
+    text = str(description or "")
+    if _COVER_MARKING.search(text):
+        return "COVER"
+    if _SHORT_MARKING.search(text):
+        return "SHORT"
+    return ""
+
+
+def leg_rank(side: str, marking: str) -> int:
+    """Does this row open a position or close one?
+
+    A statement carries no time of day and lists every same-day round trip
+    SELL-first - 227 of 227 in the first real file, which makes that a SORT and
+    not a sequence, so the row order says nothing about what happened first.
+    Left to the assembler's tiebreak (a uid hash) the direction of a same-day
+    round trip was a coin flip: 86 of 199 came out SHORT at random.
+
+    The description settles it. A SELL marked SHORT opened a short; a BUY marked
+    COVER SHORT closed one; an unmarked BUY opened a long and an unmarked SELL
+    closed one. On the first real file this resolved every one of the 227
+    round trips - 169 long, 58 short - and all 58 carried BOTH markings, so the
+    two halves agree with each other rather than being read from one row.
+    """
+    if side == "SELL":
+        return OPENS_POSITION if marking == "SHORT" else CLOSES_POSITION
+    return CLOSES_POSITION if marking == "COVER" else OPENS_POSITION
+
+
+def fill_signature(row: StatementRow, symbol: str, side: str) -> tuple[Any, ...]:
+    """What makes two statement lines the SAME fill, across different files.
+
+    Everything the statement knows about the fill and nothing about where it sat
+    in the file. This is the load-bearing part of layering a later export on an
+    earlier one: a January-to-December file lists the same January trades as a
+    January-to-August file did, but at different row positions, so anything
+    positional in the identity re-imports the whole year as new executions and
+    doubles it. Measured on the real file before the fix: a one-row shift made
+    884 of 884 trades look new.
+    """
+    return (
+        row.account_number,
+        row.transaction_date.isoformat(),
+        symbol,
+        side,
+        f"{abs(row.quantity):.5f}",
+        f"{row.price:.8f}",
+        f"{row.commission:.2f}",
+        row.currency,
+    )
+
+
+def _execution_from_row(row: StatementRow, *, ordinal: int = 0) -> NormalizedExecution | None:
+    """One trade row as a normalized execution, or ``None`` if it is not one.
+
+    ``ordinal`` distinguishes genuinely repeated fills - the Nth line in this
+    file that is identical to another in every field the statement carries. It
+    counts within the fill signature rather than across the file, so it is the
+    same number in every export that contains this trade.
+    """
     side = normalize_side(row.action)
     if side not in {"BUY", "SELL"} or not row.quantity:
         return None
@@ -410,10 +501,15 @@ def _execution_from_row(row: StatementRow) -> NormalizedExecution | None:
     if not symbol:
         return None
 
+    signature = fill_signature(row, symbol, side)
     timestamp = statement_timestamp(row.transaction_date)
+    marking = short_marking(row.description)
+    rank = leg_rank(side, marking)
     payload = {
         "source": STATEMENT_SOURCE,
         "statement_sequence": row.sequence,
+        "short_marking": marking,
+        "opens_position": rank == OPENS_POSITION,
         "action": row.action,
         "questrade_symbol": row.symbol,
         "description": row.description,
@@ -430,23 +526,25 @@ def _execution_from_row(row: StatementRow) -> NormalizedExecution | None:
     if option is not None:
         payload["option"] = option
         payload["multiplier"] = 100.0
+    # The uid doubles as the assembler's intra-day tiebreak. Every statement row
+    # on one date shares a timestamp (midnight - a statement has no clock), and
+    # `_execution_assembly_sort_key` breaks that tie on the execution uid, so
+    # the uid is where the leg order has to live. `rank` first means a position
+    # is opened before it is closed; the digest is over the fill's own fields,
+    # so the id stays stable across exports while still sorting correctly.
+    digest = hashlib.sha256(
+        "|".join(str(part) for part in signature).encode("utf-8")
+    ).hexdigest()[:16]
     return NormalizedExecution(
         execution_uid=stable_execution_uid(
             "QUESTRADE",
             row.account_number,
-            "",
-            STATEMENT_SOURCE,
-            row.account_number,
-            row.transaction_date.isoformat(),
-            symbol,
-            side,
-            f"{abs(row.quantity):.5f}",
-            f"{row.price:.8f}",
-            f"{row.commission:.2f}",
-            # The file's own row order. Two identical fills on one day are two
-            # rows in the statement and must stay two executions; without this
-            # they would hash to one uid and half the position would vanish.
-            row.sequence,
+            # The Nth identical fill on this day, NOT the row's position in the
+            # file. Two identical fills are two real executions and must stay
+            # two, or half the position vanishes into one uid; but the count
+            # has to be the same in every export that lists this trade, or
+            # layering a longer file re-imports the whole overlap.
+            f"stmt-{rank}{ordinal:03d}-{digest}",
         ),
         source=STATEMENT_SOURCE,
         broker="QUESTRADE",
@@ -476,7 +574,7 @@ def _execution_from_row(row: StatementRow) -> NormalizedExecution | None:
     )
 
 
-def _cash_from_row(row: StatementRow) -> dict[str, Any] | None:
+def _cash_from_row(row: StatementRow, *, ordinal: int = 0) -> dict[str, Any] | None:
     """One non-trade row as a ``cash_transactions`` row, or ``None`` to skip."""
     if not row.account_number:
         return None
@@ -492,8 +590,9 @@ def _cash_from_row(row: StatementRow) -> dict[str, Any] | None:
             amount,
             row.description,
             # Same reasoning as the execution uid: two identical fee rows on
-            # one day are two real charges.
-            row.sequence,
+            # one day are two real charges, and the count must not depend on
+            # where they sat in the file.
+            ordinal,
         ),
         "broker": "QUESTRADE",
         "account_number": row.account_number,
@@ -521,6 +620,8 @@ def parse_statement(table: Iterable[Mapping[str, Any]]) -> StatementParse:
     """Everything a statement file yields, with what it could not read listed."""
     result = StatementParse()
     accounts: dict[str, dict[str, Any]] = {}
+    seen_fills: Counter[tuple[Any, ...]] = Counter()
+    seen_cash: Counter[tuple[Any, ...]] = Counter()
     for row in parse_rows(table):
         if row.account_number:
             account = accounts.setdefault(
@@ -532,7 +633,13 @@ def parse_statement(table: Iterable[Mapping[str, Any]]) -> StatementParse:
                 account["label"] = row.account_type
 
         if str(row.activity_type or "").strip().upper() in TRADE_ACTIVITY_TYPES:
-            execution = _execution_from_row(row)
+            probe = _execution_from_row(row)
+            if probe is not None:
+                key = fill_signature(row, probe.symbol, probe.side)
+                seen_fills[key] += 1
+                execution = _execution_from_row(row, ordinal=seen_fills[key] - 1)
+            else:
+                execution = None
             if execution is None:
                 result.skipped.append(
                     {
@@ -548,7 +655,16 @@ def parse_statement(table: Iterable[Mapping[str, Any]]) -> StatementParse:
             result.trade_days.add((row.account_number, row.transaction_date))
             continue
 
-        cash = _cash_from_row(row)
+        cash_signature = (
+            row.account_number,
+            row.transaction_date.isoformat(),
+            row.activity_type,
+            row.symbol,
+            row.net_amount,
+            row.description,
+        )
+        seen_cash[cash_signature] += 1
+        cash = _cash_from_row(row, ordinal=seen_cash[cash_signature] - 1)
         if cash is None:
             result.skipped.append(
                 {
@@ -742,6 +858,248 @@ def import_questrade_statement(
         raise
 
 
+# -- checking the import against the file it came from -----------------------
+
+#: A per-symbol difference at or below this is arithmetic, not a defect.
+#: Questrade books ``Gross Amount`` rounded to the cent while ``rebuild_trades``
+#: recomputes price x quantity at full precision, so the two disagree by
+#: fractions of a cent per fill. Measured on the first real file: worst symbol
+#: 1.17c over 253 closed symbols, total drift $0.42, NET $-0.16 on $4,014.18.
+ROUNDING_TOLERANCE = 0.02
+
+
+def reconcile_statement(store: Any, path: Path) -> dict[str, Any]:
+    """Add the statement up by hand and check the journal against it.
+
+    Two independent routes to the same number. The **statement** side is plain
+    arithmetic on the file: for a symbol whose quantities net to zero across the
+    file, the sum of its Net Amount column IS the realised P&L, because every
+    share bought was sold. The **journal** side is what ``rebuild_trades``
+    assembled - average-cost matching, leg pairing, multipliers, corrections.
+    They share only the file, so a disagreement is an assembly defect, and the
+    per-symbol rows say which symbol to look at.
+
+    What this DOES prove: that the position walk, the fill matching, the option
+    multipliers and the commission handling turned the file into the right
+    money. What it does NOT prove: that the file was parsed correctly in the
+    first place - both sides read the same parse. Only the trader's own
+    Questrade year-end numbers can close that, which is what makes this a
+    demonstration rather than a proof.
+
+    Symbols still holding a position are **excluded, not zeroed**: cash has left
+    the account with no realised P&L against it yet, so including them would
+    show a loss that is really an open trade. They are counted and their cash is
+    reported separately. A symbol carried in from before the file's window nets
+    to a non-zero quantity too, so the same exclusion covers it.
+
+    Nothing here writes. It reads the file and the store and returns numbers.
+    """
+    parse = parse_statement(read_statement_table(Path(path)))
+
+    statement_pnl: dict[tuple[str, str], float] = defaultdict(float)
+    statement_commission: dict[tuple[str, str], float] = defaultdict(float)
+    position: dict[tuple[str, str], float] = defaultdict(float)
+    currency: dict[tuple[str, str], set[str]] = defaultdict(set)
+    rows_per_key: dict[tuple[str, str], int] = defaultdict(int)
+    round_trip_days: dict[tuple[str, str], set[str]] = defaultdict(set)
+    sides_by_day: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    markings_by_day: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    short_rows = 0
+
+    for execution in parse.executions:
+        key = (execution.account_number, execution.symbol)
+        signed = execution.quantity if execution.side == "BUY" else -execution.quantity
+        position[key] += signed
+        raw = json.loads(execution.raw_json or "{}")
+        net = raw.get("net_amount")
+        statement_pnl[key] += float(net) if net is not None else 0.0
+        statement_commission[key] += abs(execution.commission)
+        currency[key].add(execution.currency)
+        rows_per_key[key] += 1
+        day_key = (execution.account_number, execution.symbol, execution.trade_date)
+        sides_by_day[day_key].add(execution.side)
+        marking = str(raw.get("short_marking") or "")
+        markings_by_day[day_key].add(marking)
+        if marking:
+            short_rows += 1
+
+    # A same-day round trip is a short exactly when its description says so, so
+    # direction is read rather than guessed. What is still worth surfacing is a
+    # day where the SAME symbol carried both a marked short round trip and an
+    # unmarked long one - a real and legal thing to do, and 3 days of 439 on the
+    # trader's own history. The assembler groups a symbol into ONE position, so
+    # on those days it blends what were really two trades: the day's money is
+    # still exact (everything closed), but the split between the long and the
+    # short is not. Naming them lets the trader split them by hand if they care.
+    mixed_direction_days: list[dict[str, Any]] = []
+    for (account_number, symbol, day), sides in sides_by_day.items():
+        if len(sides) < 2:
+            continue
+        round_trip_days[(account_number, symbol)].add(day)
+        markings = markings_by_day[(account_number, symbol, day)]
+        if markings & {"SHORT", "COVER"} and "" in markings:
+            mixed_direction_days.append(
+                {"account": account_number, "symbol": symbol, "date": day}
+            )
+
+    journal_pnl: dict[tuple[str, str], float] = defaultdict(float)
+    journal_commission: dict[tuple[str, str], float] = defaultdict(float)
+    journal_trades: dict[tuple[str, str], int] = defaultdict(int)
+    needs_review: dict[tuple[str, str], int] = defaultdict(int)
+    for trade in store.list_trades(broker="QUESTRADE"):
+        key = (str(trade.get("account_number") or ""), str(trade.get("symbol") or ""))
+        journal_pnl[key] += float(trade.get("net_pnl") or 0.0)
+        journal_commission[key] += float(trade.get("commission") or 0.0) + float(
+            trade.get("fees") or 0.0
+        )
+        journal_trades[key] += 1
+        if str(trade.get("reconcile_status") or "").upper() == "NEEDS_REVIEW":
+            needs_review[key] += 1
+
+    closed = {key for key, quantity in position.items() if abs(quantity) < 1e-9}
+    open_keys = set(position) - closed
+
+    symbols: list[dict[str, Any]] = []
+    for key in sorted(closed):
+        account_number, symbol = key
+        difference = statement_pnl[key] - journal_pnl.get(key, 0.0)
+        symbols.append(
+            {
+                "account": account_number,
+                "symbol": symbol,
+                "currency": "/".join(sorted(currency[key])),
+                "statement_rows": rows_per_key[key],
+                "statement_pnl": round(statement_pnl[key], 4),
+                "journal_pnl": round(journal_pnl.get(key, 0.0), 4),
+                "difference": round(difference, 4),
+                "statement_commission": round(statement_commission[key], 4),
+                "journal_commission": round(journal_commission.get(key, 0.0), 4),
+                "journal_trades": journal_trades.get(key, 0),
+                "needs_review": needs_review.get(key, 0),
+                "round_trip_days": sorted(round_trip_days.get(key, ())),
+                "beyond_rounding": abs(difference) > ROUNDING_TOLERANCE,
+            }
+        )
+    symbols.sort(key=lambda row: (-abs(row["difference"]), row["account"], row["symbol"]))
+
+    by_account: dict[str, dict[str, Any]] = {}
+    for account_number in sorted({key[0] for key in position}):
+        account_closed = [key for key in closed if key[0] == account_number]
+        account_open = [key for key in open_keys if key[0] == account_number]
+        by_account[account_number] = {
+            "closed_symbols": len(account_closed),
+            "open_symbols": len(account_open),
+            "statement_pnl": round(sum(statement_pnl[key] for key in account_closed), 4),
+            "journal_pnl": round(sum(journal_pnl.get(key, 0.0) for key in account_closed), 4),
+            "difference": round(
+                sum(statement_pnl[key] - journal_pnl.get(key, 0.0) for key in account_closed), 4
+            ),
+            "statement_commission": round(
+                sum(statement_commission[key] for key in account_closed + account_open), 4
+            ),
+            "journal_commission": round(
+                sum(journal_commission.get(key, 0.0) for key in account_closed + account_open), 4
+            ),
+            "open_cash": round(sum(statement_pnl[key] for key in account_open), 4),
+            "currencies": sorted({value for key in account_closed for value in currency[key]}),
+        }
+
+    start, end = parse.date_range
+    return {
+        "file": Path(path).name,
+        "coverage_start": start.isoformat() if start else "",
+        "coverage_end": end.isoformat() if end else "",
+        "statement_trade_rows": len(parse.executions),
+        "closed_symbols": len(closed),
+        "open_symbols": len(open_keys),
+        "statement_pnl": round(sum(statement_pnl[key] for key in closed), 4),
+        "journal_pnl": round(sum(journal_pnl.get(key, 0.0) for key in closed), 4),
+        "difference": round(
+            sum(statement_pnl[key] - journal_pnl.get(key, 0.0) for key in closed), 4
+        ),
+        "statement_commission": round(sum(statement_commission.values()), 4),
+        "journal_commission": round(
+            sum(journal_commission.get(key, 0.0) for key in position), 4
+        ),
+        "open_cash": round(sum(statement_pnl[key] for key in open_keys), 4),
+        "symbols_beyond_rounding": [row for row in symbols if row["beyond_rounding"]],
+        "symbols_missing_from_journal": [
+            {"account": key[0], "symbol": key[1]}
+            for key in sorted(closed)
+            if key not in journal_pnl
+        ],
+        "needs_review_trades": sum(needs_review.values()),
+        "same_day_round_trips": sum(len(days) for days in round_trip_days.values()),
+        "short_marked_rows": short_rows,
+        "mixed_direction_days": mixed_direction_days,
+        "by_account": by_account,
+        "symbols": symbols,
+        "tolerance": ROUNDING_TOLERANCE,
+    }
+
+
+def reconciliation_rows(report: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The per-symbol table, flattened for a CSV the trader can open."""
+    rows: list[dict[str, Any]] = []
+    for row in report.get("symbols") or []:
+        flat = dict(row)
+        flat["round_trip_days"] = ";".join(flat.get("round_trip_days") or [])
+        rows.append(flat)
+    return rows
+
+
+def describe_reconciliation(report: Mapping[str, Any]) -> str:
+    """The comparison as a few lines a person can read."""
+    lines = [
+        f"{report.get('file', 'statement')} "
+        f"{report.get('coverage_start', '')}..{report.get('coverage_end', '')}",
+        f"{report.get('statement_trade_rows', 0)} trade rows; "
+        f"{report.get('closed_symbols', 0)} symbols fully closed, "
+        f"{report.get('open_symbols', 0)} still open (excluded).",
+        f"Statement adds up to {report.get('statement_pnl', 0.0):,.2f}; "
+        f"the journal says {report.get('journal_pnl', 0.0):,.2f}; "
+        f"difference {report.get('difference', 0.0):+,.4f}.",
+        f"Commission: statement {report.get('statement_commission', 0.0):,.2f}, "
+        f"journal {report.get('journal_commission', 0.0):,.2f}.",
+    ]
+    beyond = report.get("symbols_beyond_rounding") or []
+    if beyond:
+        worst = ", ".join(f"{row['symbol']} {row['difference']:+.2f}" for row in beyond[:5])
+        lines.append(
+            f"{len(beyond)} symbol(s) differ by more than "
+            f"{report.get('tolerance', 0.02):.2f}: {worst}"
+        )
+    else:
+        lines.append(
+            f"Every symbol agrees within {report.get('tolerance', 0.02):.2f} "
+            "- the rest is Questrade rounding each row to the cent."
+        )
+    missing = report.get("symbols_missing_from_journal") or []
+    if missing:
+        lines.append(f"{len(missing)} closed symbol(s) are in the file but not the journal.")
+    if report.get("needs_review_trades"):
+        lines.append(
+            f"{report['needs_review_trades']} trade(s) are flagged NEEDS_REVIEW "
+            "- the journal had to invent an opening fill."
+        )
+    round_trips = int(report.get("same_day_round_trips") or 0)
+    if round_trips:
+        lines.append(
+            f"{round_trips} same-day round trip(s); long or short is read from the "
+            f"description, which marked {report.get('short_marked_rows', 0)} row(s) as "
+            "a short sale or a cover."
+        )
+    mixed = report.get("mixed_direction_days") or []
+    if mixed:
+        worst = ", ".join(f"{row['symbol']} {row['date']}" for row in mixed[:5])
+        lines.append(
+            f"{len(mixed)} day(s) held both a short and a long in the same symbol, so "
+            f"the journal blends them into one position - the day's money is still "
+            f"right, the split between the two is not: {worst}"
+        )
+    return "\n".join(lines)
+
+
 def describe_summary(summary: Mapping[str, Any]) -> str:
     """One line for the import-run ledger and the Health tab status."""
     parts = [
@@ -763,16 +1121,23 @@ def describe_summary(summary: Mapping[str, Any]) -> str:
 
 __all__ = [
     "RICHER_SOURCES",
+    "ROUNDING_TOLERANCE",
     "STATEMENT_SOURCE",
     "StatementParse",
     "StatementRow",
     "days_covered_by_richer_sources",
+    "describe_reconciliation",
+    "fill_signature",
+    "leg_rank",
     "describe_summary",
     "import_questrade_statement",
     "parse_option_description",
     "parse_rows",
     "parse_statement",
     "read_csv_table",
+    "reconciliation_rows",
+    "reconcile_statement",
+    "short_marking",
     "read_statement_table",
     "read_xlsx_table",
     "statement_timestamp",

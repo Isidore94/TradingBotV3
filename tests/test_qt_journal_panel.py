@@ -634,3 +634,43 @@ def test_the_tag_filter_reaches_every_tab_through_the_shared_header(panel, popul
     assert panel.header.query()["tag"] == "gap and go"
     panel.trades_tab.reload()
     assert panel.trades_tab.table.rowCount() == 1
+
+
+def test_health_checks_a_statement_without_importing_it(panel, monkeypatch, qapp, tmp_path):
+    """The trader's own proof: add the file up by hand, compare, write a CSV."""
+    seen = []
+    monkeypatch.setattr(
+        journal_feed,
+        "check_broker_statement",
+        lambda path: seen.append(path)
+        or {
+            "file": "Activities.xlsx",
+            "coverage_start": "2025-02-11",
+            "coverage_end": "2026-08-27",
+            "statement_trade_rows": 1516,
+            "closed_symbols": 428,
+            "open_symbols": 14,
+            "statement_pnl": 5298.81,
+            "journal_pnl": 5299.05,
+            "difference": -0.2386,
+            "statement_commission": 713.68,
+            "journal_commission": 713.68,
+            "symbols_beyond_rounding": [],
+            "tolerance": 0.02,
+        },
+    )
+    monkeypatch.setattr(
+        journal_feed, "export_statement_check_csv", lambda report: tmp_path / "check.csv"
+    )
+    statuses = []
+    panel.health_tab.statusChanged.connect(statuses.append)
+
+    panel.health_tab._start_task("statement_check", path=str(tmp_path / "a.xlsx"))
+    assert panel.health_tab._task.wait(5000)
+    qapp.processEvents()
+
+    assert seen == [str(tmp_path / "a.xlsx")]
+    joined = "\n".join(statuses)
+    assert "5,298.81" in joined and "5,299.05" in joined
+    assert "check.csv" in joined
+    assert panel.health_tab.statement_check_button.isEnabled()

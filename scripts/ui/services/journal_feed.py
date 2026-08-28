@@ -468,6 +468,45 @@ def import_broker_statement(path: Any) -> dict[str, Any]:
     return import_questrade_statement(_store(), Path(path))
 
 
+def check_broker_statement(path: Any) -> dict[str, Any]:
+    """Add a statement up by hand and compare it to what the journal assembled.
+
+    Reads only. Two independent routes to one number: plain arithmetic on the
+    file, and the trades ``rebuild_trades`` built from it. A disagreement is an
+    assembly defect and the per-symbol rows say where.
+    """
+    from journal_statement_import import reconcile_statement
+
+    return reconcile_statement(_store(), Path(path))
+
+
+def export_statement_check_csv(report: dict[str, Any], path: Any = None) -> Path:
+    """Write the per-symbol comparison where the trader can open it."""
+    import csv as _csv
+
+    from journal_statement_import import reconciliation_rows
+    from project_paths import JOURNAL_EXPORT_DIR
+
+    rows = reconciliation_rows(report)
+    if path is None:
+        from datetime import datetime
+
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = Path(JOURNAL_EXPORT_DIR) / f"statement_check_{stamp}.csv"
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "account", "symbol", "currency", "statement_rows", "statement_pnl",
+        "journal_pnl", "difference", "statement_commission", "journal_commission",
+        "journal_trades", "needs_review", "round_trip_days", "beyond_rounding",
+    ]
+    with target.open("w", newline="", encoding="utf-8") as handle:
+        writer = _csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    return target
+
+
 def tags_in_use() -> list[dict[str, Any]]:
     """Every tag the store holds, with counts and which lane it came from."""
     try:

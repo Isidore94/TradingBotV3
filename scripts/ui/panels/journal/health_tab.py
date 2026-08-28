@@ -30,7 +30,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from journal_statement_import import describe_summary as describe_statement_summary
+from journal_statement_import import (
+    describe_reconciliation,
+    describe_summary as describe_statement_summary,
+)
 from journal_importers import (
     IBKR_FLEX_QUERY_ID_SETTING,
     IBKR_FLEX_TOKEN_SETTING,
@@ -63,6 +66,9 @@ class _JournalTask(QThread):
         try:
             if self.action == "statement":
                 result = journal_feed.import_broker_statement(self.path)
+            elif self.action == "statement_check":
+                result = journal_feed.check_broker_statement(self.path)
+                result["export"] = str(journal_feed.export_statement_check_csv(result))
             elif self.action == "pull":
                 result = journal_feed.pull_today()
             else:
@@ -122,6 +128,15 @@ class HealthTab(QFrame):
             "their portal. Days the API already covers are left alone."
         )
         self.statement_button.clicked.connect(self._choose_statement)
+        # The trader's own check: add the file up by hand, compare it to what
+        # the journal assembled from it, and write the per-symbol difference
+        # somewhere they can open. Reads only - it imports nothing.
+        self.statement_check_button = QPushButton("Check a statement...")
+        self.statement_check_button.setToolTip(
+            "Compare a statement file against the journal without importing it. "
+            "Writes a per-symbol CSV you can open."
+        )
+        self.statement_check_button.clicked.connect(self._choose_statement_check)
 
         self.reconcile_label = QLabel("No reconciliation has run yet.")
         self.reconcile_label.setWordWrap(True)
@@ -152,6 +167,7 @@ class HealthTab(QFrame):
         heal_row.addWidget(self.backfill_button)
         heal_row.addWidget(self.retry_button)
         heal_row.addWidget(self.statement_button)
+        heal_row.addWidget(self.statement_check_button)
         heal_row.addStretch(1)
 
         sync_row = QHBoxLayout()
@@ -369,6 +385,7 @@ class HealthTab(QFrame):
             self.backfill_button,
             self.retry_button,
             self.statement_button,
+            self.statement_check_button,
         ):
             button.setEnabled(enabled)
 
@@ -382,13 +399,24 @@ class HealthTab(QFrame):
         if path:
             self._start_task("statement", path=path)
 
+    def _choose_statement_check(self) -> None:  # pragma: no cover - dialog path
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Check a statement against the journal",
+            "",
+            "Statements (*.xlsx *.xlsm *.csv);;All files (*)",
+        )
+        if path:
+            self._start_task("statement_check", path=path)
+
     def _start_task(self, action: str, *, path: str = "") -> None:  # pragma: no cover - worker path
         if self._task is not None and self._task.isRunning():
             return
         self._set_buttons_enabled(False)
         labels = {"pull": "pulling today...", "gaps": "backfilling Questrade gaps...",
                   "failed": "retrying failed Questrade days...",
-                  "statement": "reading the statement file..."}
+                  "statement": "reading the statement file...",
+                  "statement_check": "checking the statement against the journal..."}
         self.statusChanged.emit(labels[action])
         self._task = _JournalTask(action, self, path=path)
         self._task.finished_with.connect(self._on_heal_done)
@@ -397,7 +425,11 @@ class HealthTab(QFrame):
 
     def _on_heal_done(self, summary: dict) -> None:  # pragma: no cover
         self._set_buttons_enabled(True)
-        if "executions_written" in summary:
+        if "journal_pnl" in summary:
+            message = describe_reconciliation(summary)
+            if summary.get("export"):
+                message += f"\nWrote {summary['export']}"
+        elif "executions_written" in summary:
             message = describe_statement_summary(summary)
         elif "source_results" in summary:
             message = "; ".join(summary.get("messages") or []) or summary.get("status", "pull complete")
