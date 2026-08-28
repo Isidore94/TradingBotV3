@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from journal_ib_transactions import describe_ib_summary
 from journal_statement_import import (
     describe_reconciliation,
     describe_summary as describe_statement_summary,
@@ -124,8 +125,9 @@ class HealthTab(QFrame):
         # not, and no retry can change that.
         self.statement_button = QPushButton("Import statement file...")
         self.statement_button.setToolTip(
-            "Import a Questrade activity statement (.xlsx or .csv) downloaded from "
-            "their portal. Days the API already covers are left alone."
+            "Import a Questrade activity statement or an IBKR transaction file "
+            "(.xlsx or .csv). The broker is read from the file. Days the live "
+            "sync already covers are left alone."
         )
         self.statement_button.clicked.connect(self._choose_statement)
         # The trader's own check: add the file up by hand, compare it to what
@@ -392,9 +394,9 @@ class HealthTab(QFrame):
     def _choose_statement(self) -> None:  # pragma: no cover - dialog path
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Import a broker activity statement",
+            "Import a broker activity file (Questrade or IBKR)",
             "",
-            "Statements (*.xlsx *.xlsm *.csv);;All files (*)",
+            "Broker files (*.xlsx *.xlsm *.csv);;All files (*)",
         )
         if path:
             self._start_task("statement", path=path)
@@ -425,7 +427,9 @@ class HealthTab(QFrame):
 
     def _on_heal_done(self, summary: dict) -> None:  # pragma: no cover
         self._set_buttons_enabled(True)
-        if "journal_pnl" in summary:
+        if summary.get("broker") == "IBKR":
+            message = describe_ib_summary(summary)
+        elif "journal_pnl" in summary:
             message = describe_reconciliation(summary)
             if summary.get("export"):
                 message += f"\nWrote {summary['export']}"

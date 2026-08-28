@@ -457,15 +457,24 @@ def unaccepted_auto_tag_candidates(trade_id: str, current_tags: Any) -> list[dic
 
 
 def import_broker_statement(path: Any) -> dict[str, Any]:
-    """Import a broker activity statement file into the shared store.
+    """Import a broker activity file into the shared store.
 
-    The Health tab's only route to the days the Questrade executions endpoint
-    can no longer reach. Runs on a worker; everything it decides - which days
-    it may write, what it could not read - is in the returned summary.
+    The Health tab's only route to the days a broker's execution endpoint can
+    no longer reach. Both brokers arrive through here and the BROKER IS READ
+    FROM THE FILE, not from the trader: an IBKR export and a Questrade export
+    are both ``.csv`` and the file name is whatever it was saved as, so asking
+    the trader to pick would be asking them to get it right every time.
+
+    Runs on a worker; everything it decides - which days it may write, which
+    accounts it could not unmask, what it could not read - is in the summary.
     """
+    from journal_ib_transactions import import_ib_transaction_file, looks_like_ib_transactions
     from journal_statement_import import import_questrade_statement
 
-    return import_questrade_statement(_store(), Path(path))
+    target = Path(path)
+    if looks_like_ib_transactions(target):
+        return import_ib_transaction_file(_store(), target)
+    return import_questrade_statement(_store(), target)
 
 
 def check_broker_statement(path: Any) -> dict[str, Any]:

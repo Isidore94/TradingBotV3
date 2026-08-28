@@ -188,6 +188,13 @@ which is evidence and must not be loaded as context.
   Journal (Trades, Calendar, Analytics, Health, Fees) over one shared
   tax-grouped header.
 
+- **IBKR transaction-file import (2026-08-28).** `scripts/journal_ib_transactions.py`
+  reads IBKR's sectioned csv: per-section headers, costs converted from the base
+  currency by the rate each row implies, masked account numbers unmasked only
+  when exactly one known account fits, assignments treated as fills, options
+  already OCC. One Health-tab button serves both brokers and reads the broker
+  from the file's contents. Commission now carries a SIGN through the store and
+  the assembler, so a broker credit stays a credit.
 - **Statement layering, direction and self-check (2026-08-28).** Statement
   identity is `fill_signature` + an ordinal within it, so a later, longer export
   layers instead of doubling; long vs short is read from Questrade's own
@@ -319,6 +326,45 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-28 — IBKR's file, and the commission sign that was costing money
+
+`IMPLEMENTED`, `GREEN`, **live gate owed**. Trader direction: *"we need IB
+integration as well. the auto import works well but we would want to manually
+input a file as well."*
+
+**A separate reader, because three things differ and each produces a plausible
+wrong number.** IBKR ships a SECTIONED csv — a header per section — so a plain
+`DictReader` misaligns every table after the first. Its `Price` is USD while
+`Gross`/`Net` are CAD, so a passed-through row computes a USD gross and subtracts
+a CAD commission; costs are converted by the rate each row implies,
+`|Gross| / |qty × price × multiplier|`, which ran **1.35530–1.45270** across 608
+rows — the USD/CAD band, and the check that the reading is right. That rate is
+recorded as evidence and **never booked into `fx_rates`**, which is BoC-only: a
+broker's internal rate is not a tax rate. The option multiplier sits inside that
+denominator; without it the rate comes out 100× too large.
+
+**Account numbers arrive masked** (`U***2524`). A mask cannot be an identity —
+the same account through Flex carries its full number — so it is unmasked only
+when exactly one known account fits, the filename is another candidate rather
+than an override, and an unresolved mask is reported rather than guessed.
+
+**The commission sign.** `upsert_executions` and the assembly path used to
+`abs()` commission and fees. Every importer already normalises a charge to a
+positive cost, so removing it is a no-op for Questrade, Flex, the socket, CSV and
+manual rows — but **18 of 609** IBKR fills carry a commission CREDIT, and `abs()`
+turned each rebate into a charge, overstating cost by twice the credit. That one
+sign was the **entire** $2.17 by which the IB file and the journal disagreed.
+With it fixed IB reconciles to **−0.0000 across 150 closed symbols**, commission
+equal to four decimals — exact, where Questrade is off by cents, because IB
+writes full-precision amounts and Questrade rounds. Questrade's reconciliation
+was re-measured and is unmoved.
+
+One Health-tab button serves both brokers and reads the broker from the file's
+contents, never its name.
+
+Verification: **5385 passed / 72 subtests / 6 skipped**, 5361 → 5385. Smoke 7/7,
+selftest 72/72, spec drift 17, ruff clean on the new files.
 
 ### 2026-08-28 — Statements that layer, a direction that is read rather than guessed, and the trader's own check
 

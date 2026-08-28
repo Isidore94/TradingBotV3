@@ -586,8 +586,18 @@ class JournalStore:
                         _coerce_float(row.get("price")),
                         str(row.get("timestamp") or _now_iso()),
                         _date_text(row.get("trade_date") or row.get("timestamp")),
-                        abs(_coerce_float(row.get("commission"))),
-                        abs(_coerce_float(row.get("fees"))),
+                        # NOT abs(). The importer decides the sign, because only
+                        # it knows its broker's convention, and every one of them
+                        # already normalizes a charge to a positive cost before
+                        # calling here - so this is a no-op for Questrade, Flex,
+                        # the socket, CSV and manual rows. What it stops losing is
+                        # a commission CREDIT: IBKR's transaction file carries 18
+                        # of them across 609 fills, and abs() turned each rebate
+                        # into a charge, overstating the year's cost by twice the
+                        # credit ($2.17 on the trader's own file, which was the
+                        # whole of that file's disagreement with the journal).
+                        _coerce_float(row.get("commission")),
+                        _coerce_float(row.get("fees")),
                         row.get("gross_amount"),
                         row.get("net_amount"),
                         str(row.get("order_id") or ""),
@@ -806,8 +816,11 @@ class JournalStore:
                 if abs(signed_qty) <= EPSILON:
                     continue
                 remaining_signed = signed_qty
-                remaining_commission = abs(_coerce_float(row.get("commission")))
-                remaining_fees = abs(_coerce_float(row.get("fees")))
+                # Signed, for the same reason as the upsert above: the importer
+                # normalized a charge to a positive cost, and a broker CREDIT
+                # must stay a credit all the way through the pro-rata split.
+                remaining_commission = _coerce_float(row.get("commission"))
+                remaining_fees = _coerce_float(row.get("fees"))
                 # Set once this single execution has already closed a position.
                 # Anything left over after that is the B2 case: the journal was
                 # asked to close more than it knows was ever opened.
@@ -1519,12 +1532,14 @@ class JournalStore:
                 "quantity": qty,
                 "price": _coerce_float(row.get("price")),
                 "timestamp": str(row.get("timestamp") or ""),
-                "commission": abs(float(commission)),
-                "fees": abs(float(fees)),
+                # Signed throughout - see upsert_executions. A rebate that
+                # becomes a charge here is a charge in the year's fee total.
+                "commission": float(commission),
+                "fees": float(fees),
             }
         )
-        trade["commission"] = float(trade["commission"]) + abs(float(commission))
-        trade["fees"] = float(trade["fees"]) + abs(float(fees))
+        trade["commission"] = float(trade["commission"]) + float(commission)
+        trade["fees"] = float(trade["fees"]) + float(fees)
         trade["last_at"] = str(row.get("timestamp") or trade["last_at"])
 
     def _add_open_quantity(

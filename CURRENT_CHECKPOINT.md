@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | `claude/last-commit-main-dpouod` (journal auto-tagging + statement import, cut from `main`) |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **R7 journal auto-tagging + statement import (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5361 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
+| Last verified baseline | `pytest tests/ -q` **5385 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -47,6 +47,7 @@ the dated entry named beside it.
 | 13 | **Journal auto-tagging** — one desk session: tag real trades, rename one, filter on it | R7 auto-tagging (2026-08-28 tagging entry) |
 | 14 | **Statement import** — the trader imports their own Questrade YTD file on the desk, against the live journal | R7 statement import (2026-08-28 statement entry) |
 | 15 | **Statement layering + self-check** — the trader imports both real files on the desk and runs "Check a statement..." against the live journal | R7 statement layering (2026-08-28 layering entry) |
+| 16 | **IBKR file import** — the trader imports their IBKR transaction file on the desk; the second account's mask resolves once Flex has named it | R7 IBKR file (2026-08-28 IBKR entry) |
 
 ### Immediate next action
 
@@ -57,6 +58,39 @@ desk and run the self-check (gates 14-15). Two of his asks are scoped and
 NOT built, and one needs his answer first: statements as the source of truth over
 the API (it would cost the only intraday timestamps the journal has), and the
 IBKR transaction-file importer (masked account numbers are the open problem).
+
+---
+
+## 2026-08-28 - IBKR's file, and a commission sign that was costing money
+
+**Trader direction:** *"we need IB integration as well. the auto import works
+well but we would want to manually input a file as well."* Their real IBKR
+export (803 rows, 609 fills, 2025-01-03 -> 2026-08-27) was read here; it is not
+committed and the fixtures are synthetic.
+
+**A separate reader.** IBKR's file is SECTIONED (a header per section), its
+money is in the BASE currency while its prices are not, and its account numbers
+are MASKED. Costs convert by the rate each row implies
+(`|Gross| / |qty x price x multiplier|`, measured 1.35530-1.45270 - the USD/CAD
+band, which is the proof the reading is right). That rate is evidence only and
+is **never** booked into `fx_rates`, which is BoC-only. A mask resolves only
+when exactly one known account fits; the second account stays masked and is
+reported, which is correct until Flex names it.
+
+**The finding.** `abs()` on commission - in `upsert_executions` AND the
+assembly path - turned a broker CREDIT into a charge. **18 of 609** IBKR fills
+carry one, and that single sign was the ENTIRE $2.17 by which the file and the
+journal disagreed. Every importer already normalizes the sign itself, so
+removing the `abs()` is a no-op for Questrade, Flex, the socket, CSV and manual
+rows - verified by the full suite and by re-measuring Questrade's own
+reconciliation, which is unmoved. **IB now reconciles to -0.0000 across 150
+closed symbols**, commission equal to four decimals.
+
+**Verification:** 5385 passed / 72 subtests / 6 skipped (5361 -> 5385). Smoke
+7/7, selftest 72/72, spec drift 17, ruff clean. Same two pre-existing
+font-metric failures. No packaging trigger.
+
+**Owed:** gate 16.
 
 ---
 
@@ -102,15 +136,8 @@ font-metric failures. No packaging trigger.
    The sanctioned mechanism if he confirms is append-only `VOID_EXECUTION`
    adjustments against the API rows (invariant I3 forbids deleting a broker
    row), not a delete.
-2. **IBKR transaction-file import.** File surveyed (`U*.TRANSACTIONS.*.csv`, 803
-   rows, 608 trades, 2025-01-03 -> 2026-08-27). It is a SECTIONED csv
-   (Statement / Transaction History / Summary), not a flat table, so it needs
-   its own reader. Three things differ from Questrade and each is a correctness
-   trap: **Gross/Net are in the BASE currency (CAD) while Price is USD**;
-   **account numbers are MASKED** (`U***2524`, `U***7396` - the file cannot say
-   which account is which, and the filename names only one); and the type
-   vocabulary is wider (`Assignment`, `Forex Trade Component`, `Sales Tax`,
-   `Other Fee`, `Debit/Credit Interest`). Options already arrive OCC-formatted.
+2. ~~**IBKR transaction-file import.**~~ **BUILT 2026-08-28** - see the IBKR
+   entry above. Gate 16 is its live proof.
 
 ---
 
