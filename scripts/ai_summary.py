@@ -1731,14 +1731,32 @@ def build_evidence_package(
 
 
 def usable_source_ids(evidence: Mapping[str, Any]) -> set[str]:
-    """Source IDs a summary is allowed to cite."""
-    return {
+    """Source IDs a summary is allowed to cite.
+
+    ``citable_aliases`` extends the set with ids that the package's own CONTENT
+    prints as provenance. It exists for the daily digest, whose single source is
+    a deterministic fact pack in which every measured cell carries the store it
+    came from -- ``outcomes.intraday_finals``, ``review.alert_review_events``,
+    ``ops.ai_job_ledger``. A model told to cite exact source_id values, handed a
+    document full of source_id fields, cites them; that is the instruction
+    working, not a hallucination, and it cost the digest 2026-08-25 through -27.
+    An alias is only ever added by the package builder from ids actually present
+    in the content, so this admits nothing the reader was not shown.
+    """
+    ids = {
         str(source.get("source_id"))
         for source in evidence.get("sources") or []
         if isinstance(source, Mapping)
         and source.get("source_id")
         and str(source.get("status") or SOURCE_STATUS_AVAILABLE) in USABLE_SOURCE_STATUSES
     }
+    if ids:
+        ids.update(
+            str(alias).strip()
+            for alias in evidence.get("citable_aliases") or []
+            if str(alias).strip()
+        )
+    return ids
 
 
 def has_usable_sources(evidence: Mapping[str, Any]) -> bool:
@@ -1974,7 +1992,12 @@ def _parse_json_text(text: str) -> dict[str, Any]:
     return value
 
 
-def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any]) -> dict[str, Any]:
+def validate_ai_summary(
+    payload: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    *,
+    dropped: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Validate shape and reject unsupported/hallucinated source references.
 
     One validator, every provider. ``evidence_refs`` must resolve to a source
@@ -1987,7 +2010,26 @@ def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any])
     Every section other than ``executive_summary`` may legitimately be an empty
     array -- a thin evidence night with nothing to say about candidates is a
     correct answer, not a malformed one.
+
+    **An unsupported citation costs its own ROW, never the document** (trader
+    decision 2026-08-28). Until then a single bad ``evidence_refs`` entry raised,
+    which threw away every other supported statement in the same answer; with
+    the retry budget at two attempts and the per-session cap at three, one
+    predictable 12B slip cost a whole night. The daily digest lost 2026-08-25,
+    -26 and -27 that way while the model and every store were healthy. Nothing
+    is loosened about what may be PUBLISHED: an invalid ref is still struck out,
+    a row that ends up citing nothing is still discarded, and what was dropped is
+    recorded through ``dropped`` so the caller reports it rather than shipping a
+    quietly thinner document. If EVERY citing row is dropped the document still
+    raises -- a summary supported by nothing is not a degraded summary.
+
+    Shape and value errors keep raising. A malformed document is the provider
+    failing to answer at all, which is a different fault from a model that
+    answered and mis-attributed one line.
+
+    :param dropped: optional sink. Each entry is one struck-out ref or row.
     """
+    sink: list[dict[str, Any]] = []
 
     if not isinstance(payload, Mapping):
         raise ValueError("AI summary must be an object")
@@ -2014,6 +2056,8 @@ def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any])
         if isinstance(row, Mapping) and row.get("source_id")
     }
     normalized: dict[str, Any] = {"executive_summary": executive}
+    rows_needing_citation = 0
+    rows_kept_with_citation = 0
     for section in MODEL_SUMMARY_SECTIONS:
         rows = payload.get(section)
         if not isinstance(rows, list):
@@ -2028,6 +2072,9 @@ def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any])
             if not statement or not isinstance(refs, list) or confidence not in {"high", "medium", "low"}:
                 raise ValueError(f"{section}[{index}] has invalid values")
             clean_refs = list(dict.fromkeys(str(ref).strip() for ref in refs if str(ref).strip()))
+            must_cite = section not in {"data_quality", "risk_notes"}
+            if must_cite:
+                rows_needing_citation += 1
             invalid = sorted(set(clean_refs) - valid_refs)
             if invalid:
                 detail = ", ".join(
@@ -2036,13 +2083,49 @@ def validate_ai_summary(payload: Mapping[str, Any], evidence: Mapping[str, Any])
                     else ref
                     for ref in invalid
                 )
-                raise ValueError(f"{section}[{index}] cites unusable evidence: {detail}")
-            if section not in {"data_quality", "risk_notes"} and not clean_refs:
-                raise ValueError(f"{section}[{index}] must cite evidence")
+                clean_refs = [ref for ref in clean_refs if ref not in set(invalid)]
+                sink.append(
+                    {
+                        "section": section,
+                        "index": index,
+                        "statement": statement,
+                        "struck_refs": invalid,
+                        "detail": detail,
+                        "row_dropped": bool(must_cite and not clean_refs),
+                    }
+                )
+            if must_cite and not clean_refs:
+                # Either the model cited nothing at all, or everything it cited
+                # was struck out just above. Both mean an unsupported claim, and
+                # an unsupported claim is not published.
+                if not invalid:
+                    sink.append(
+                        {
+                            "section": section,
+                            "index": index,
+                            "statement": statement,
+                            "struck_refs": [],
+                            "detail": "cited no evidence",
+                            "row_dropped": True,
+                        }
+                    )
+                continue
+            if must_cite:
+                rows_kept_with_citation += 1
             normalized_rows.append(
                 {"statement": statement, "evidence_refs": clean_refs, "confidence": confidence}
             )
         normalized[section] = normalized_rows
+    if rows_needing_citation and not rows_kept_with_citation:
+        detail = "; ".join(
+            f"{entry['section']}[{entry['index']}]: {entry['detail']}" for entry in sink[:5]
+        )
+        raise ValueError(
+            "every citing statement was unsupported, so this document asserts "
+            f"nothing the evidence carries ({rows_needing_citation} row(s) dropped): {detail}"
+        )
+    if dropped is not None:
+        dropped.extend(sink)
     return normalized
 
 
@@ -2164,8 +2247,52 @@ def _coverage_statements(evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def citation_drop_statements(
+    citation_drops: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """The ``[system]`` rows disclosing what the validator struck out.
+
+    Since 2026-08-28 an unsupported citation costs its row rather than the whole
+    document (see :func:`validate_ai_summary`). That is only safe while the
+    reader is TOLD: a document quietly missing two of its four findings reads
+    exactly like a thin evidence night, and the two are not the same thing.
+    """
+    entries = [entry for entry in (citation_drops or []) if isinstance(entry, Mapping)]
+    if not entries:
+        return []
+    removed_rows = [entry for entry in entries if entry.get("row_dropped")]
+    struck = sorted({
+        str(ref)
+        for entry in entries
+        for ref in (entry.get("struck_refs") or [])
+        if str(ref).strip()
+    })
+    detail = ", ".join(
+        f"{entry.get('section')}[{entry.get('index')}]" for entry in entries[:8]
+    )
+    if len(entries) > 8:
+        detail += f", +{len(entries) - 8} more"
+    text = (
+        f"{len(entries)} model statement(s) cited evidence this package does not "
+        f"carry; {len(removed_rows)} statement(s) were removed from this document "
+        f"and the rest kept their remaining citations. Affected: {detail}."
+    )
+    if struck:
+        text += f" Source id(s) struck out: {', '.join(struck)}."
+    return [
+        {
+            "statement": f"{COVERAGE_STATEMENT_PREFIX} {text}",
+            "evidence_refs": [],
+            "confidence": "high",
+        }
+    ]
+
+
 def merge_coverage_into_summary(
-    summary: Mapping[str, Any], evidence: Mapping[str, Any]
+    summary: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    *,
+    citation_drops: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Append code-owned provenance rows to ``data_quality``.
 
@@ -2179,7 +2306,9 @@ def merge_coverage_into_summary(
     # not appended to. The model no longer has the section in its schema, so
     # anything present came from an older document or a retry, and a stale
     # count sitting above the real one is worse than no count at all.
-    merged["data_quality"] = _coverage_statements(evidence)
+    merged["data_quality"] = _coverage_statements(evidence) + citation_drop_statements(
+        citation_drops
+    )
     return merged
 
 
@@ -2257,7 +2386,7 @@ def _request_local_summary(
     timeout_seconds: int,
     post,
     previous_error: str = "",
-) -> tuple[Mapping[str, Any], dict[str, Any]]:
+) -> tuple[Mapping[str, Any], dict[str, Any], list[dict[str, Any]]]:
     """One local chat-completions call, validated the same way as the cloud.
 
     A local server is not assumed to honour ``response_format`` json-schema, so
@@ -2329,7 +2458,9 @@ def _request_local_summary(
         if not text:
             raise RuntimeError("local provider returned no text content")
         try:
-            return body, validate_ai_summary(_parse_json_text(text), evidence)
+            drops: list[dict[str, Any]] = []
+            summary = validate_ai_summary(_parse_json_text(text), evidence, dropped=drops)
+            return body, summary, drops
         except (ValueError, json.JSONDecodeError) as exc:
             # Only malformed output is worth retrying, and only once -- and the
             # retry now carries the exact rejection back to the model rather
@@ -2369,7 +2500,7 @@ def request_ai_summary(
         raise ValueError("provider API key is missing")
     started = datetime.now().astimezone()
     if normalized_provider == "local":
-        body, summary = _request_local_summary(
+        body, summary, drops = _request_local_summary(
             model=selected_model,
             api_key=key,
             evidence=evidence,
@@ -2393,6 +2524,10 @@ def request_ai_summary(
             # number, so "unknown" stays distinguishable from "zero".
             "usage": usage_from_body(body),
             "summary": summary,
+            # What the validator struck out to keep the rest of the document.
+            # Empty on a clean answer; never absent, so a reader can tell "no
+            # drops" from "this build did not measure drops".
+            "citation_drops": drops,
         }
     if normalized_provider == "openai":
         response = post(
@@ -2450,7 +2585,8 @@ def request_ai_summary(
     if not text:
         raise RuntimeError(f"{normalized_provider} returned no text content")
     parsed = _parse_json_text(text)
-    summary = validate_ai_summary(parsed, evidence)
+    drops: list[dict[str, Any]] = []
+    summary = validate_ai_summary(parsed, evidence, dropped=drops)
     finished = datetime.now().astimezone()
     return {
         "schema_version": "ai_summary_result_v1",
@@ -2464,6 +2600,7 @@ def request_ai_summary(
         "evidence_hash": evidence.get("evidence_hash"),
         "usage": usage_from_body(body),
         "summary": summary,
+        "citation_drops": drops,
     }
 
 
@@ -2559,7 +2696,11 @@ def export_ai_summary(
     # document can lack it -- and because the merge replaces the section
     # deterministically, a caller that already merged loses nothing by it.
     result = dict(result)
-    result["summary"] = merge_coverage_into_summary(result.get("summary") or {}, evidence)
+    result["summary"] = merge_coverage_into_summary(
+        result.get("summary") or {},
+        evidence,
+        citation_drops=result.get("citation_drops"),
+    )
     # The finished document, not the model's raw output: it carries the
     # machine-owned data_quality section the model is forbidden to write.
     validate_published_summary(result["summary"], evidence)

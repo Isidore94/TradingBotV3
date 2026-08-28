@@ -272,7 +272,37 @@ def test_an_unparseable_industry_map_is_sectors_only_rather_than_a_crash(tmp_pat
 # ----------------------------------------------------------------- the service
 
 
-def test_the_fetch_never_runs_on_the_qt_thread(service_factory):
+@pytest.fixture
+def frozen_session_clock(monkeypatch):
+    """Freeze the service's clock to the session `SESSION_OPEN` belongs to.
+
+    The tape drops everything outside TODAY's date - that same-date filter is
+    the whole point of the rebuild, because a window without it reaches over
+    the overnight gap. The fixture bars are pinned to 2026-08-27, so from
+    2026-08-28 onwards the service's real `datetime.now()` filtered every one
+    of them out and two tests began failing on the calendar rather than on the
+    code. Freezing the clock beside the bars is what makes them agree; letting
+    the bars float with the real clock cannot work, because near midnight there
+    is not yet a session long enough to hold a 30-minute window.
+
+    Patched on the service module only. `build_group_tape` resolves `datetime`
+    from its own globals and passes the moment down explicitly, so one seam
+    covers the whole path.
+    """
+    from ui.services import group_tape_service
+
+    frozen = SESSION_OPEN + timedelta(hours=5)  # midday, inside the scan window
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(group_tape_service, "datetime", _Clock)
+    return frozen
+
+
+def test_the_fetch_never_runs_on_the_qt_thread(service_factory, frozen_session_clock):
     """Hard rule 2. The download is a network read; on the GUI thread it is a
     multi-second freeze every five minutes."""
     downloader = _Downloader()
@@ -311,7 +341,9 @@ def test_a_second_refresh_while_one_is_running_is_refused_not_queued(service_fac
     assert len(downloader.calls) == 1
 
 
-def test_a_failed_download_keeps_the_last_good_tape_and_states_the_failure(service_factory):
+def test_a_failed_download_keeps_the_last_good_tape_and_states_the_failure(
+    service_factory, frozen_session_clock
+):
     """plan.md sec 5: a failed publish never destroys the last verified one -
     and a stale tape that looks current is worse than no tape."""
     good = _Downloader()

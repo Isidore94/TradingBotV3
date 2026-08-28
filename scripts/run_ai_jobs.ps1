@@ -63,6 +63,80 @@ if (-not (Test-Path $script))  { Write-Log "REFUSED: entry point not found at $s
 $argLine = if ($Passthrough) { $Passthrough -join ' ' } else { 'scheduled run: every due slot' }
 Write-Log "=== AI jobs starting === $argLine"
 
+# ---------------------------------------------------------------------------
+# Local inference preflight (2026-08-28)
+# ---------------------------------------------------------------------------
+# The local model server is the narration half of this layer. It is a
+# user-session tray app with NO autostart entry, so a desk restart silently
+# ends it: on 2026-08-27 its log stopped at 06:12, the desk restarted around
+# 13:00, and all three narrating jobs spent the whole 22:00-06:00 window
+# retrying against a refused connection. The deterministic jobs were fine, which
+# is exactly why nobody noticed until the summaries were read.
+#
+# An unattended nightly must not depend on a human having clicked something. So:
+# probe the port, start the server if it is down, and CARRY ON either way. This
+# never refuses the run - `degraded_no_narrative` is a designed state, the fact
+# packs and the counting jobs do not need a model, and a preflight that could
+# block the night would be worse than the problem it fixes.
+function Test-LocalEndpoint {
+    param([string]$EndpointHost, [int]$Port)
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $wait = $client.BeginConnect($EndpointHost, $Port, $null, $null)
+        if (-not $wait.AsyncWaitHandle.WaitOne(1500, $false)) { return $false }
+        $client.EndConnect($wait)
+        return $true
+    } catch { return $false } finally { $client.Close() }
+}
+
+try {
+    $settingsPath = Join-Path $env:LOCALAPPDATA 'TradingBotV3\local_settings.json'
+    $endpoint = ''
+    if (Test-Path $settingsPath) {
+        $endpoint = (Get-Content $settingsPath -Raw | ConvertFrom-Json).ai_local_endpoint_url
+    }
+    if ([string]::IsNullOrWhiteSpace($endpoint)) {
+        Write-Log "local inference: no endpoint configured; narration is off by design"
+    } else {
+        $uri = [System.Uri]$endpoint
+        # Only a LOCAL server is ours to start. A remote endpoint belongs to
+        # whoever runs it, and reaching for a process here would be wrong.
+        if ($uri.Host -notin @('127.0.0.1', 'localhost', '::1')) {
+            Write-Log "local inference: endpoint $($uri.Host) is remote; not starting anything"
+        } elseif (Test-LocalEndpoint -EndpointHost $uri.Host -Port $uri.Port) {
+            Write-Log "local inference: server already listening on $($uri.Host):$($uri.Port)"
+        } else {
+            $ollama = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+            if (-not (Test-Path $ollama)) {
+                $found = Get-Command ollama -ErrorAction SilentlyContinue
+                if ($found) { $ollama = $found.Source }
+            }
+            if (-not (Test-Path $ollama)) {
+                Write-Log "local inference: DOWN on $($uri.Host):$($uri.Port) and ollama.exe was not found; jobs will run degraded"
+            } else {
+                Write-Log "local inference: DOWN on $($uri.Host):$($uri.Port); starting $ollama serve"
+                Start-Process -FilePath $ollama -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+                # Model load happens on first request, not at listen, so this
+                # waits only for the socket. 60s is generous for that.
+                $deadline = (Get-Date).AddSeconds(60)
+                $up = $false
+                while ((Get-Date) -lt $deadline) {
+                    if (Test-LocalEndpoint -EndpointHost $uri.Host -Port $uri.Port) { $up = $true; break }
+                    Start-Sleep -Seconds 2
+                }
+                if ($up) {
+                    Write-Log "local inference: server came up; narration is available this run"
+                } else {
+                    Write-Log "local inference: server did NOT come up within 60s; jobs will run degraded"
+                }
+            }
+        }
+    }
+} catch {
+    # A preflight fault is never a job outcome. Say what happened and continue.
+    Write-Log "local inference: preflight error (continuing anyway): $($_.Exception.Message)"
+}
+
 # Redirect both streams into the log. `2>&1` on a native exe is avoided inside
 # PowerShell 5.1 (it wraps stderr lines in ErrorRecords and falsifies $?), so
 # the redirection is done by Start-Process at the OS level instead, and the two

@@ -119,9 +119,117 @@ def test_validation_rejects_hallucinated_evidence_reference(tmp_path):
     valid = validate_ai_summary(_valid_summary("daily.auto_report"), evidence)
     assert valid["what_is_working"][0]["confidence"] == "high"
 
+    # A hallucinated reference is still never published. Where it is the ONLY
+    # citation in the whole document, nothing survives and the document raises:
+    # a summary supported by nothing is not a degraded summary.
     bad = _valid_summary("not.a.real.source")
-    with pytest.raises(ValueError, match="unusable evidence"):
+    with pytest.raises(ValueError, match="every citing statement was unsupported"):
         validate_ai_summary(bad, evidence)
+
+
+def _two_finding_summary(first_refs: list[str], second_refs: list[str]) -> dict:
+    sections = {
+        name: []
+        for name in (
+            "what_is_working",
+            "what_is_not_working",
+            "best_candidates",
+            "lessons_for_tomorrow",
+            "risk_notes",
+        )
+    }
+    sections["what_is_working"] = [
+        {"statement": "First finding.", "evidence_refs": first_refs, "confidence": "high"},
+        {"statement": "Second finding.", "evidence_refs": second_refs, "confidence": "medium"},
+    ]
+    return {"executive_summary": "Two findings.", **sections}
+
+
+def test_one_bad_citation_costs_its_row_and_not_the_document(tmp_path):
+    """Trader decision 2026-08-28.
+
+    Before this, a single unsupported ref raised and threw away every supported
+    statement beside it. With two model attempts and a three-attempt session cap,
+    one predictable 12B slip cost a whole night - the daily digest lost
+    2026-08-25, -26 and -27 that way while every store and the model were healthy.
+    """
+    from ai_summary import build_evidence_package, validate_ai_summary
+
+    evidence = build_evidence_package(["daily_report"], source_overrides=_daily_overrides(tmp_path))
+    drops: list[dict] = []
+    result = validate_ai_summary(
+        _two_finding_summary(["daily.auto_report"], ["not.a.real.source"]),
+        evidence,
+        dropped=drops,
+    )
+
+    kept = result["what_is_working"]
+    assert [row["statement"] for row in kept] == ["First finding."]
+    assert kept[0]["evidence_refs"] == ["daily.auto_report"]
+    assert len(drops) == 1
+    assert drops[0]["struck_refs"] == ["not.a.real.source"]
+    assert drops[0]["row_dropped"] is True
+
+
+def test_a_row_keeps_its_good_citations_when_only_one_is_bad(tmp_path):
+    from ai_summary import build_evidence_package, validate_ai_summary
+
+    evidence = build_evidence_package(["daily_report"], source_overrides=_daily_overrides(tmp_path))
+    drops: list[dict] = []
+    result = validate_ai_summary(
+        _two_finding_summary(
+            ["daily.auto_report", "not.a.real.source"], ["daily.market_prep"]
+        ),
+        evidence,
+        dropped=drops,
+    )
+
+    # The statement stands on the evidence that IS there; only the bad ref goes.
+    assert [row["statement"] for row in result["what_is_working"]] == [
+        "First finding.",
+        "Second finding.",
+    ]
+    assert result["what_is_working"][0]["evidence_refs"] == ["daily.auto_report"]
+    assert drops[0]["row_dropped"] is False
+
+
+def test_a_dropped_citation_is_disclosed_in_the_published_document(tmp_path):
+    """A quietly thinner document reads exactly like a thin evidence night."""
+    from ai_summary import (
+        build_evidence_package,
+        merge_coverage_into_summary,
+        validate_ai_summary,
+    )
+
+    evidence = build_evidence_package(["daily_report"], source_overrides=_daily_overrides(tmp_path))
+    drops: list[dict] = []
+    summary = validate_ai_summary(
+        _two_finding_summary(["daily.auto_report"], ["not.a.real.source"]),
+        evidence,
+        dropped=drops,
+    )
+    merged = merge_coverage_into_summary(summary, evidence, citation_drops=drops)
+    disclosure = [
+        row["statement"] for row in merged["data_quality"] if "cited evidence" in row["statement"]
+    ]
+    assert len(disclosure) == 1
+    assert "not.a.real.source" in disclosure[0]
+    assert disclosure[0].startswith("[system]")
+
+
+def test_citable_aliases_extend_the_set_but_never_create_one(tmp_path):
+    """The digest's fact pack prints the stores its cells came from."""
+    from ai_summary import usable_source_ids
+
+    package = {
+        "sources": [{"source_id": "digest.facts", "status": "available"}],
+        "citable_aliases": ["outcomes.intraday_finals"],
+    }
+    assert usable_source_ids(package) == {"digest.facts", "outcomes.intraday_finals"}
+
+    # With nothing usable in the package, an alias cannot conjure citability -
+    # otherwise a package with no evidence would still accept a citation.
+    assert usable_source_ids({"sources": [], "citable_aliases": ["outcomes.intraday_finals"]}) == set()
 
 
 class _Response:
