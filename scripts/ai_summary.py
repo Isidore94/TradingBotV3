@@ -117,10 +117,12 @@ LOCAL_EVIDENCE_BUDGET_SETTING_KEY = "ai_local_evidence_budget_chars"
 #: own model to 65536 on 2026-08-28 and set this to match.
 LOCAL_CONTEXT_SETTING_KEY = "ai_local_context_tokens"
 DEFAULT_LOCAL_CONTEXT_TOKENS = 12_288
-#: `max_tokens` every local request sends, and the fixed scaffold around the
-#: evidence. Both come out of the same window as the prompt.
+#: `max_tokens` every local request sends. It comes out of the same window as
+#: the prompt, so it is subtracted before any of it is offered to evidence.
+#: (There was a `LOCAL_SCAFFOLD_TOKENS = 1000` here until 2026-08-28. It was a
+#: guess, and a 13x-too-small one: the real envelope is measured in
+#: `_BUDGET_PROMPT_OVERHEAD` and scales with the package instead.)
 LOCAL_GENERATION_TOKENS = 3_500
-LOCAL_SCAFFOLD_TOKENS = 1_000
 #: Chars per token used to size the BUDGET, and deliberately NOT the same
 #: constant as `_ESTIMATED_CHARS_PER_TOKEN`. The two are conservative in
 #: OPPOSITE directions and must never be merged: sizing a budget safely means
@@ -133,6 +135,22 @@ _BUDGET_CHARS_PER_TOKEN = 2.0
 #: rejection text. A budget that only fits the first attempt turns every retry
 #: into the truncation it exists to prevent.
 _BUDGET_RETRY_HEADROOM = 0.85
+#: What the prompt costs ON TOP of the evidence content the budget measures:
+#: the source envelopes, the per-source banners, the inventory, the schema dump
+#: and the instructions. MEASURED on the desk's real package (2026-08-28),
+#: prompt chars against budget chars:
+#:
+#:      24,000 -> 32,203  (x1.34)      96,000 -> 111,568  (x1.16)
+#:      48,000 -> 59,226  (x1.23)     159,466 -> 175,358  (x1.10)
+#:
+#: The overhead is heaviest at small budgets, so the WORST observed ratio is the
+#: one to size against. The first version of this derivation ignored the
+#: envelope entirely and allowed only 1,000 tokens of scaffold; at a 98,304
+#: context it would have produced a 175 KB prompt - 85,000 tokens against 94,804
+#: usable, a 10% margin resting on an estimated tokenization rate. Sizing a
+#: budget so that being slightly wrong shears the prompt is the whole bug this
+#: file has now been bitten by twice.
+_BUDGET_PROMPT_OVERHEAD = 1.35
 #: The budget a machine gets with nothing configured: the same derivation, run
 #: on the stock context. Computed rather than written down, so it cannot drift
 #: from the formula the way the old hand-carried 22000 did. Works out to ~13200
@@ -140,9 +158,10 @@ _BUDGET_RETRY_HEADROOM = 0.85
 DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS = max(
     1_000,
     int(
-        (DEFAULT_LOCAL_CONTEXT_TOKENS - LOCAL_GENERATION_TOKENS - LOCAL_SCAFFOLD_TOKENS)
+        (DEFAULT_LOCAL_CONTEXT_TOKENS - LOCAL_GENERATION_TOKENS)
         * _BUDGET_CHARS_PER_TOKEN
         * _BUDGET_RETRY_HEADROOM
+        / _BUDGET_PROMPT_OVERHEAD
     ),
 )
 
@@ -447,6 +466,39 @@ def local_context_tokens() -> int:
     return value if value > 0 else DEFAULT_LOCAL_CONTEXT_TOKENS
 
 
+#: A per-symbol brief is one of 50-120 model calls in one overnight window; the
+#: session summary is one. Sharing a budget between them means either the
+#: summary is starved or the brief job cannot finish, and on this desk it was
+#: the summary that was starved. 22,000 is the value every measured healthy
+#: brief night ran at (~60s per brief; 53 briefs in 55 min on 2026-08-26, 121
+#: in two hours on 2026-08-17), so it is kept rather than re-derived: the
+#: constraint here is the length of the night, not the size of the context.
+LOCAL_PER_ITEM_BUDGET_SETTING_KEY = "ai_local_per_item_evidence_budget_chars"
+DEFAULT_LOCAL_PER_ITEM_BUDGET_CHARS = 22_000
+
+
+def local_per_item_budget_chars() -> int:
+    """Evidence ceiling for ONE of many per-item calls (a per-ticker brief).
+
+    Still capped by the context ceiling: a per-item budget larger than the model
+    can read shears exactly like a session one, and this path runs it dozens of
+    times a night.
+    """
+    ceiling = local_evidence_budget_ceiling_chars()
+    raw = get_local_setting(
+        LOCAL_PER_ITEM_BUDGET_SETTING_KEY, DEFAULT_LOCAL_PER_ITEM_BUDGET_CHARS
+    )
+    if isinstance(raw, bool):
+        return min(DEFAULT_LOCAL_PER_ITEM_BUDGET_CHARS, ceiling)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return min(DEFAULT_LOCAL_PER_ITEM_BUDGET_CHARS, ceiling)
+    if value <= 0:
+        return min(DEFAULT_LOCAL_PER_ITEM_BUDGET_CHARS, ceiling)
+    return min(value, ceiling)
+
+
 def local_evidence_budget_ceiling_chars() -> int:
     """The most evidence that can fit the configured context, in characters.
 
@@ -456,19 +508,22 @@ def local_evidence_budget_ceiling_chars() -> int:
     a ceiling that funds nothing looks exactly like a day with no evidence,
     which is the failure this budget exists to make visible.
     """
-    usable = local_context_tokens() - LOCAL_GENERATION_TOKENS - LOCAL_SCAFFOLD_TOKENS
+    usable = local_context_tokens() - LOCAL_GENERATION_TOKENS
     if usable <= 0:
         return 1_000
-    return max(1_000, int(usable * _BUDGET_CHARS_PER_TOKEN * _BUDGET_RETRY_HEADROOM))
+    prompt_chars = usable * _BUDGET_CHARS_PER_TOKEN * _BUDGET_RETRY_HEADROOM
+    return max(1_000, int(prompt_chars / _BUDGET_PROMPT_OVERHEAD))
 
 
 def local_evidence_budget_chars() -> int:
     """Evidence ceiling for a local call: the configured value, capped to fit.
 
-    A non-positive or unparseable configured value falls back to the derived
-    ceiling rather than disabling the budget: ``0`` reaching
-    ``build_evidence_package`` would fund no sources at all, which looks exactly
-    like a day with no evidence.
+    **Setting it to 0 means "derive it"** and is the recommended configuration:
+    the ceiling then tracks the context automatically, so raising the model's
+    window is one setting rather than two numbers that can disagree. A negative
+    or unparseable value behaves the same way rather than disabling the budget,
+    because a 0 reaching ``build_evidence_package`` would fund no sources at
+    all -- which looks exactly like a day with no evidence.
 
     The cap is the part that matters. A configured budget larger than the model
     can read does not produce a bigger summary, it produces a **sheared** one,
@@ -493,7 +548,7 @@ def local_evidence_budget_chars() -> int:
     return min(value, ceiling)
 
 
-def evidence_budget_for(provider: str, tier: str = "medium") -> int:
+def evidence_budget_for(provider: str, tier: str = "medium", *, per_item: bool = False) -> int:
     """Character budget for one call site, resolved by provider.
 
     Per-call-site rather than a lowered global: ``MAX_TOTAL_EVIDENCE_CHARS``
@@ -501,9 +556,20 @@ def evidence_budget_for(provider: str, tier: str = "medium") -> int:
     and a local context limit never silently starves a metered model that has
     room for far more. ``tier`` is accepted now because the tiers have
     genuinely different context windows; only the local provider varies today.
+
+    ``per_item`` is the difference between ONE call a night and fifty to a
+    hundred and twenty of them, and it is a TIME limit rather than a context
+    one. Measured on the desk (2026-08-28): a per-ticker brief costs ~60s at the
+    historical 22,000-char budget, so a normal 53-121 brief night runs 55
+    minutes to two hours - and the job already refuses to start with less than
+    120 minutes of window left. The same package at the session budget of
+    78,119 chars is ~42,600 tokens instead of ~14,000, which is roughly 3x the
+    time per brief and would put a 53-brief night past three hours and a
+    121-brief night past seven. The session summary can spend the whole context
+    because it is spent once; a brief cannot.
     """
     if normalize_provider(provider) == "local":
-        return local_evidence_budget_chars()
+        return local_per_item_budget_chars() if per_item else local_evidence_budget_chars()
     return MAX_TOTAL_EVIDENCE_CHARS
 
 

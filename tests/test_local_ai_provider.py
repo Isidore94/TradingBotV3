@@ -663,6 +663,70 @@ class LocalEvidenceBudgetTests(unittest.TestCase):
             self.assertEqual(ai_summary.local_evidence_budget_chars(), ceiling)
             self.assertLess(ceiling, 500_000)
 
+    def test_the_derived_budget_produces_a_prompt_that_fits_the_context(self):
+        """The invariant this file got wrong twice, asserted end to end.
+
+        First the budget ignored the tokenization rate; then the corrected
+        formula ignored the prompt ENVELOPE and allowed 1,000 tokens of scaffold
+        against a measured 10-35%. Both produced a budget whose prompt did not
+        fit, and an over-long prompt is not an error - llama.cpp shears it to
+        half the window and answers anyway.
+        """
+        import ai_summary
+
+        for context in (12288, 32768, 65536):
+            with self.subTest(context=context):
+                with _settings(ai_local_context_tokens=context):
+                    budget = ai_summary.local_evidence_budget_chars()
+                # The measured relationship, applied in the pessimistic
+                # direction at every step.
+                prompt_chars = budget * ai_summary._BUDGET_PROMPT_OVERHEAD
+                prompt_tokens = prompt_chars / ai_summary._BUDGET_CHARS_PER_TOKEN
+                usable = context - ai_summary.LOCAL_GENERATION_TOKENS
+                self.assertLess(
+                    prompt_tokens,
+                    usable,
+                    f"a {context}-token context derives a {budget}-char budget whose prompt "
+                    f"estimates at {int(prompt_tokens)} tokens against {usable} usable",
+                )
+
+    def test_a_per_item_budget_is_smaller_than_the_session_one(self):
+        """One call a night can spend the window; 50-120 cannot.
+
+        Measured 2026-08-28: ~60s per brief at 22,000 chars, so a 121-brief
+        night already runs two hours. The same package at the session budget is
+        ~3x the tokens, which would put that night past seven.
+        """
+        import ai_summary
+
+        with _settings(ai_local_context_tokens=65536):
+            session = ai_summary.evidence_budget_for("local")
+            per_item = ai_summary.evidence_budget_for("local", per_item=True)
+        self.assertLess(per_item, session)
+        self.assertEqual(per_item, ai_summary.DEFAULT_LOCAL_PER_ITEM_BUDGET_CHARS)
+
+    def test_the_per_item_budget_is_capped_by_the_context_too(self):
+        """It runs dozens of times a night; a sheared brief is sheared 55 times."""
+        import ai_summary
+
+        with _settings(ai_local_context_tokens=4096,
+                       ai_local_per_item_evidence_budget_chars=500_000):
+            ceiling = ai_summary.local_evidence_budget_ceiling_chars()
+            self.assertEqual(ai_summary.evidence_budget_for("local", per_item=True), ceiling)
+
+    def test_the_cloud_budget_is_untouched_by_any_local_setting(self):
+        import ai_summary
+
+        with _settings(ai_local_context_tokens=65536,
+                       ai_local_evidence_budget_chars=0,
+                       ai_local_per_item_evidence_budget_chars=1_000):
+            for provider in ("openai", "anthropic"):
+                with self.subTest(provider=provider):
+                    self.assertEqual(
+                        ai_summary.evidence_budget_for(provider),
+                        ai_summary.MAX_TOTAL_EVIDENCE_CHARS,
+                    )
+
     def test_raising_the_context_raises_the_ceiling_proportionally(self):
         import ai_summary
 

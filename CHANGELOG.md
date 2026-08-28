@@ -349,19 +349,65 @@ zero unfunded** (it was 10 of 22 with 5 unfunded). The narrative now names real
 candidates (NET, OII, NESR), a setup family (`bounce_combo`) and the regime, where the
 2026-08-26 one managed "mixed results" and named nothing.
 
-**What is still thin, stated rather than glossed:** 15 of the 17 sources are now
-"shown in part" — `daily.auto_report` at 2,909 of 8,592 chars, `setups.scan_factors` at
-2 of 200 rows. That is no longer the total budget (0 unfunded) but the per-source share
-of it, and about half the model's findings are still about data quality rather than the
-market. The derived ceiling is 103,761 chars against the 48,000 configured, so there is
-room to roughly double again; the cost is runtime (~5.7 min per summary now, and the
-same setting sizes ~55 ticker briefs a night). Not spent without the trader deciding.
+**Then the budget was taken as far as the hardware actually allows** (trader:
+"let's take all the time we need... crank up the detail"). Four separate limiters
+stack on this path — `MAX_ROWS`, `MAX_SOURCE_CHARS`, the per-scope weights and the
+within-scope fair share — and the binding one for almost every source was the share of
+the total budget, so the budget is where the work went.
 
-Tests: 5 new/updated in `tests/test_local_ai_provider.py` — the budget cap, the ceiling
-scaling with context, a configured budget under the ceiling being honoured, the two
-constants leaning opposite ways, and the local timeout surviving where a cloud one
-would clamp. The existing derivation test now reads its inputs from the module instead
-of re-typing 12288 and 3.0, which is how it agreed with a wrong number for weeks.
+- **96k context loads and then CRASHES under load.** `ollama ps` reported 8.0 GB and
+  "100% GPU" at `num_ctx 98304`, and 128k refused outright — but a real 132 KB prompt
+  killed the runner with `wsarecv: An existing connection was forcibly closed`. The
+  reservation at load time says nothing about what happens when the KV cache actually
+  fills. **65,536 is the working ceiling on this iGPU**, established by completing
+  generations rather than by loading.
+- **An over-long prompt is not an error.** At 64k, a 150,000-char prompt returned
+  HTTP 200 and `prompt_tokens = 32,771` — exactly half the window plus three. It
+  answered confidently from a prompt it had silently cut in half. That is the whole
+  reason the tripwire exists, and it is why the budget is sized with a safety factor
+  rather than pushed to the last token.
+- **The ceiling formula was wrong a second time and is now measured.** The first
+  correction allowed 1,000 tokens for the prompt envelope; the real overhead is
+  **10–35%** on top of the evidence the budget counts (measured 24,000→32,203 chars,
+  48,000→59,226, 96,000→111,568, 159,466→175,358). `_BUDGET_PROMPT_OVERHEAD = 1.35`
+  takes the worst observed ratio. Setting the budget to `0` now means **derive it**,
+  so raising the model's window is one setting and not two that can disagree.
+- **Verified end to end, not calculated:** the derived 78,119-char budget produces a
+  91,262-char prompt that the server tokenized at **44,344 tokens — 71% of the 62,036
+  usable**, whole prompt read, no shear.
+- **A per-symbol brief no longer shares the session's budget.** It cannot: measured
+  ~60s per brief at 22,000 chars, so a normal night is 53 briefs in 55 minutes
+  (2026-08-26) or 121 in two hours (2026-08-17), and the job already refuses to start
+  with under 120 minutes left. The same package at the session budget is ~42,600 tokens
+  instead of ~14,000 — three times the time per brief, which would put a 53-brief night
+  past three hours and a 121-brief night past seven. `evidence_budget_for(...,
+  per_item=True)` keeps briefs at the value every healthy night ran at, capped by the
+  same context ceiling.
+
+**What the extra evidence actually bought.** The 2026-08-27 summary ran in 567s and,
+for the first time in any run on record, **"Strongest already-qualified candidates" is
+not "No supported finding"** — it reads *"NET, OII, and NESR are highlighted as top long
+candidates with high conviction and a 0.83R reward."* Per-source slices roughly doubled:
+`daily.auto_report` 2,909 → 4,735 of 8,592 chars, `setups.type_stats` 1 → 3 of 184 rows,
+`setups.current_tiers` 4 → 8 of 200, `setups.short_horizon` 5 → 8 of 26.
+
+**Still thin, and this is the honest limit rather than a dial left unturned:** 14 of 17
+sources are still shown in part, and the tabular ones are still 3-of-184-row slices. The
+prompt is at 71% of a context window that cannot go higher on this hardware, and the
+remaining share is divided between seven `setup_trackers` sources competing inside one
+scope. Getting whole tables in needs a different model or a narrower scope selection,
+not another number.
+
+Tests: 9 new/updated in `tests/test_local_ai_provider.py`. The load-bearing one is
+**`test_the_derived_budget_produces_a_prompt_that_fits_the_context`**, which asserts the
+invariant this file got wrong twice — across three context sizes, the derived budget's
+prompt must fit the window at the pessimistic tokenization rate. Beside it: the budget
+cap, the ceiling scaling with context, a configured budget being honoured under the
+ceiling, the per-item budget being smaller than the session one and capped by the same
+ceiling, the cloud budget being untouched by any local setting, the two chars-per-token
+constants leaning opposite ways, and the local timeout surviving where a cloud one would
+clamp. The pre-existing derivation test now reads its inputs from the module instead of
+re-typing `12288` and `3.0` — which is how it agreed with a wrong number for weeks.
 
 
 ### 2026-08-28 — Two scans wrote one CSV: the D1 feature-history corruption, fixed and repaired

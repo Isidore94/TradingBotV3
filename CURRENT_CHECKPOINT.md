@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | `claude/warehouse-build-memory` |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5271 passed, 22 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
+| Last verified baseline | `pytest tests/ -q` **5275 passed, 27 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -84,20 +84,44 @@ unfunded** (was 10 of 22 with 5 unfunded). It now names real candidates (NET, OI
 NESR), a setup family and the regime; the 08-26 summary managed "mixed results" and
 named nothing.
 
-**Still thin, and said plainly:** 15 of 17 sources are "shown in part" - that is the
-per-source SHARE of the budget now, not the total (0 unfunded) - and roughly half the
-model's findings are still about data quality rather than the market. The derived
-ceiling is 103,761 chars against 48,000 configured, so there is room to about double
-again; the cost is runtime (~5.7 min per summary, and the same setting sizes ~55 ticker
-briefs a night). **Not spent without a trader decision.**
+**Then it was taken as far as the hardware allows** (trader: "let's take all the time
+we need... crank up the detail"). Findings that are worth more than the numbers:
 
-**Rollback** is one settings change: `ai_local_model_medium` back to
-`gemma3:12b-tbv3ctx` and `ai_local_context_tokens` to 12288. The old model tag is
-untouched and its definition is saved at
-`C:\TradingBotData\_tools\ollama\gemma3-12b-tbv3ctx.BEFORE-2026-08-28.Modelfile`.
+- **96k context LOADS and then crashes under load.** `ollama ps` said 8.0 GB / 100% GPU
+  at `num_ctx 98304`; a real 132 KB prompt killed the runner. The load-time reservation
+  says nothing about what happens when the KV cache fills. **65,536 is the working
+  ceiling on this iGPU**, established by completed generations, not by loading.
+- **An over-long prompt is NOT an error.** At 64k a 150,000-char prompt returned HTTP
+  200 with `prompt_tokens = 32,771` - half the window plus three - and answered
+  confidently from a prompt it had silently halved. That is why the budget carries a
+  safety factor instead of being pushed to the last token.
+- **The ceiling formula was wrong a second time.** The first correction allowed 1,000
+  tokens for the prompt envelope; measured, the envelope is 10-35% ON TOP of the
+  evidence (24,000->32,203 chars, 48,000->59,226, 96,000->111,568, 159,466->175,358).
+  `_BUDGET_PROMPT_OVERHEAD = 1.35` now takes the worst observed ratio, and a budget of
+  `0` means DERIVE, so the window is one setting rather than two that can disagree.
+- **Per-symbol briefs no longer share the session budget** - they cannot. Measured ~60s
+  per brief at 22,000 chars: 53 briefs in 55 min (08-26), 121 in two hours (08-17), and
+  the job refuses to start with under 120 min left. At the session budget a brief is
+  ~42,600 tokens instead of ~14,000, which would put a 121-brief night past seven hours.
 
-**Verification:** `pytest tests/ -q` **5271 passed, 22 subtests, exit 0** · smoke
-**7/7**; and the real `ai_summary` job was run end to end and published `ok`.
+**Verified, not calculated:** the derived 78,119-char budget makes a 91,262-char prompt
+that the server tokenized at **44,344 tokens, 71% of the 62,036 usable**, whole prompt
+read. The 2026-08-27 summary then ran in **567s** and, for the first time on record,
+**"Strongest already-qualified candidates" is not "No supported finding"** - it reads
+"NET, OII, and NESR ... with high conviction and a 0.83R reward". Per-source slices
+roughly doubled (`daily.auto_report` 2,909 -> 4,735 of 8,592; `setups.type_stats` 1 -> 3
+of 184 rows; `current_tiers` 4 -> 8 of 200).
+
+**The honest remaining limit:** 14 of 17 sources are still shown in part and the tables
+are still 3-of-184-row slices. The prompt is at 71% of a window that cannot go higher on
+this hardware, and the rest is divided between seven `setup_trackers` sources inside one
+scope. Whole tables need a different model or a narrower scope selection - not another
+number.
+
+**Verification:** `pytest tests/ -q` **5275 passed, 27 subtests, exit 0** · smoke
+**7/7**; and the real `ai_summary` job was run end to end twice and published `ok` both
+times (343s at the first budget, 567s at the derived one).
 
 **Owed:** one unattended 22:00 run producing a narrated summary AND narrated ticker
 briefs (tonight's briefs were 0 of a normal 53-62, all lost to the dead endpoint).

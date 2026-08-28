@@ -899,7 +899,9 @@ def run_ticker_briefs(
         session_date=session_date,
         budget_chars=ai_summary.MAX_TOTAL_EVIDENCE_CHARS,
     )
-    ticker_budget = ai_summary.evidence_budget_for("local", tier="medium")
+    # per_item: one of 50-120 calls in one window, so it is sized by the length
+    # of the night rather than by the context. See evidence_budget_for.
+    ticker_budget = ai_summary.evidence_budget_for("local", tier="medium", per_item=True)
 
     manifest = brief_manifest_path(root, session_date)
     recorded = read_brief_manifest(manifest)
