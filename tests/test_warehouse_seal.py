@@ -347,8 +347,8 @@ def test_torn_manifest_tail_is_repaired_not_treated_as_corruption(store):
         json.loads(line)
 
 
-def test_dataset_registry_is_the_frozen_first_increment(store):
-    """Exactly the 13 tables of plan sec 7.1 - the slice schema set is frozen."""
+def test_dataset_registry_is_the_frozen_increment_plus_registered_context(store):
+    """The original 13 tables plus the Phase-6 setup-context addition."""
     assert sorted(schemas.DATASETS) == sorted(
         [
             "anchor_instance",
@@ -362,6 +362,7 @@ def test_dataset_registry_is_the_frozen_first_increment(store):
             "outcome_path",
             "scan_coverage",
             "setup_occurrence",
+            "setup_market_context",
             "trading_session",
             "universe_membership_daily",
         ]

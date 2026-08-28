@@ -27,6 +27,44 @@ and green while its live or promotion gate remains open in `plan.md`.
 
 ## Current implemented inventory
 
+### 2026-08-27 - Every tracker family enters bounded stop/target research
+
+**IMPLEMENTED / GREEN; shadow accumulation and live canary owed.** The trader
+authorized three linked research choices: evaluate every markable tracker
+family, treat the next regular session's first completed M5 close as the entry
+for a D1 setup found after close, and attach Auto Market Bias separately on
+M5/M30/H1/H4/D1.
+
+`research_warehouse/tracker_adapter.py` now streams the scenario CSV and reads
+the small transition ledger to create warehouse occurrences. It deliberately
+never opens the 1 GB tracker snapshot. Daily rescans collapse by
+symbol/side/family/anchor and keep first-seen geometry, preventing a later scan
+from leaking future information. A read-only real-data audit covered all 16
+registered families: 249,438 scenario rows plus 10,820 transition rows became
+6,663 deduplicated detections with zero unknown-family skips.
+
+`outcomes.M5_CLOSE_RECIPES` is a separate 54-recipe discovery grid, leaving the
+frozen slice recipes unchanged. Structural stop-source ranks 1–3 and ATR stops
+0.5/1.0/1.5 are each crossed with 1R/2R/3R targets. The engine uses M5 only,
+STOP_FIRST ambiguity and the existing fallback cost model; it needs no
+trader-planned stop/risk and reads no bid/ask or earnings fundamentals.
+
+`setup_market_context` stores five point-in-time champion bias readings for each
+entry. The complete live decision is now one pure helper, including its
+early-session day-percent fallback; the two live callers were refactored onto
+it with no behavior change, and research calls that same helper. M30/H1/H4
+derive from completed SPY M5 bars, D1 sees only prior complete daily bars, and
+truly absent input stays `unknown`. The outcome build uses stable symbol
+buckets plus Arrow-side occurrence/recipe filters so the expanded grid cannot
+rematerialize the whole research history inside the desk.
+
+The appended nightly `setup_research` slot always writes deterministic JSON and
+Markdown. Medium local AI may only explain the bounded facts after a cell has
+n>=30, five symbols and five entry sessions; below that floor it is not called.
+No output reaches a detector, score, alert, Focus, watchlist, stop, target or
+order. The durable M5 archive currently begins in August 2026, so older tracker
+episodes honestly remain uncovered until backfill exists.
+
 ### 2026-08-27 - The Market Journal loads, carries the tape, and reaches the nightly AI
 
 **IMPLEMENTED / GREEN; live gate owed.** Trader, after a full session of

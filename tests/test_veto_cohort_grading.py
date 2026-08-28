@@ -530,6 +530,7 @@ def test_the_scope_can_be_selected_on_demand():
         # and the policy draft writes only `review_policy_draft.json`.
         "journal_enrichment",
         "review_policy_draft",
+        "setup_research",
     ]
     # And the override is per-call: building again without it is untouched.
     assert default_slots()[1].run.__name__ == "run_daily_summary"

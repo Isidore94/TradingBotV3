@@ -812,6 +812,8 @@ class ResearchStore:
         *,
         columns=None,
         symbols=None,
+        occurrence_ids=None,
+        recipe_ids=None,
         interval_start_range: tuple[datetime | None, datetime | None] | None = None,
     ) -> list[dict]:
         """Rows as dicts, with the narrowing done in Arrow BEFORE Python sees them.
@@ -834,10 +836,12 @@ class ResearchStore:
         express a filter that silently means something other than the Python
         one it replaced.
 
-        ``symbols`` matches EXACTLY, with no case folding or stripping,
+        ``symbols`` and ``occurrence_ids`` match EXACTLY, with no case folding or stripping,
         because that is what the Python ``symbol in wanted`` checks it replaces
         did; an empty sequence means "no symbol filter", which is what the
-        callers pass when no cohort was named. ``interval_start_range`` is
+        callers pass when no cohort was named. ``occurrence_ids`` is the same
+        bounded seam for outcome/context rows, so a 32-bucket research run
+        never materialises every historical recipe result. ``interval_start_range`` is
         half-open ``[start, end)``, matching ``rth_open_at <= t < rth_close_at``.
         """
         paths = self.resolve_files(dataset, partition)
@@ -847,6 +851,14 @@ class ResearchStore:
         if symbols:
             wanted = sorted({str(symbol) for symbol in symbols})
             predicate = pads.field("symbol").isin(wanted)
+        if occurrence_ids:
+            wanted_occurrences = sorted({str(identity) for identity in occurrence_ids})
+            clause = pads.field("occurrence_id").isin(wanted_occurrences)
+            predicate = clause if predicate is None else (predicate & clause)
+        if recipe_ids:
+            wanted_recipes = sorted({str(identity) for identity in recipe_ids})
+            clause = pads.field("recipe_id").isin(wanted_recipes)
+            predicate = clause if predicate is None else (predicate & clause)
         if interval_start_range is not None:
             start, end = interval_start_range
             for bound, operator in ((start, "ge"), (end, "lt")):

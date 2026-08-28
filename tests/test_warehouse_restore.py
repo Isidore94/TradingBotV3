@@ -176,8 +176,8 @@ def test_the_build_job_runs_the_whole_step_list(store, tmp_path, monkeypatch):
 
     expected = [
         "reconcile", "spool", "bronze", "snapshots", "bar_d1", "sessions",
-        "derived", "weekly", "anchors", "features_daily", "features_intraday",
-        "outcomes", "backups", "retired",
+            "derived", "weekly", "anchors", "features_daily", "features_intraday",
+            "occurrences", "outcomes", "backups", "retired",
     ]
     assert list(report.steps) == expected, "the step list is a dependency order"
 
@@ -349,12 +349,23 @@ def test_outcome_simulation_reads_each_occurrences_own_month(store):
     partitions = cli._m5_partitions_for(known, build_day)
 
     assert "month=2026-05" in partitions, "the old occurrence's own month is read"
+    assert "month=2026-04" in partitions, "the ATR warm-up month is read"
+    assert "month=2026-06" in partitions, "the forward outcome month is read"
     assert "month=2026-08" in partitions
     assert "month=2026-12" in partitions
     assert "month=2027-01" in partitions, "the ETH tail month is read too"
     # Bounded: only months an occurrence can actually need, no full-range sweep.
-    assert "month=2026-06" not in partitions
+    assert "month=2026-03" not in partitions
     assert partitions == sorted(set(partitions))
+
+
+def test_outcome_bucket_covers_all_symbols_over_32_days():
+    start = date(2026, 8, 3)
+    buckets = {
+        cli._outcome_bucket(start + timedelta(days=offset), datetime(2026, 8, 3, 18, tzinfo=UTC))
+        for offset in range(cli.OUTCOME_BUCKETS)
+    }
+    assert buckets == set(range(cli.OUTCOME_BUCKETS))
 
 
 # --- the backfill entry point ---------------------------------------------

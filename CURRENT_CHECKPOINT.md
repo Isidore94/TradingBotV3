@@ -8,6 +8,70 @@ This file is the frequently refreshed active-work, branch, and verification stam
 
 ---
 
+## 2026-08-27 - tracker-wide stop/target research and five-timeframe context
+
+**Branch `claude/warehouse-build-memory`. Active roadmap: Phase 3.2 + Phase
+6.1.** Trader approved all three recommendations: test every tracker family;
+use the next regular session's first completed M5 close as entry for a D1 setup
+found after close; and measure Auto Market Bias separately on M5/M30/H1/H4/D1.
+
+**Built.** `tracker_adapter.py` reads the small transition ledger plus the
+scenario CSV, never the 1 GB snapshot, collapses daily rescans without future
+geometry, and sends every canonical family with valid geometry into
+`setup_occurrence`. The real-data read-only audit was 249,438 scenario rows,
+10,820 transition rows, 6,663 deduplicated detections, all 16 families, zero
+unknown-family skips.
+
+`outcomes.py` has a separate 54-recipe M5-close research grid: structural stop
+source ranks 1–3 and 0.5/1.0/1.5 ATR controls, each crossed with 1R/2R/3R
+targets. It needs no planned stop/risk, M1, bid/ask or earnings fundamentals.
+It uses STOP_FIRST and the existing deterministic fallback cost model. Frozen
+slice recipes are unchanged.
+
+`setup_market_context` stores five independent champion Auto Market Bias reads
+at entry. `legacy._auto_market_regime_stats` is now the one pure complete rule,
+including the early-session day-percent fallback; both existing live callers
+and research call it, with live behavior unchanged. This `legacy.py` edit is
+inside the trader's explicit approval of all three recommendations. Stable
+symbol buckets and Arrow-side occurrence/recipe filters bound the in-process
+build. The appended nightly `setup_research` slot always writes
+deterministic facts; medium local AI narrates only after n>=30, five symbols and
+five sessions and cannot write live policy.
+
+**Verification:** final focused setup/warehouse/bias tests -> **142 passed**.
+Full `pytest tests/ -q` -> **5249 passed, 22 subtests passed, exit 0** (278 s).
+`scripts/smoke_check.py` -> **7/7**. `launch_gui.py --selftest` -> **72/72**.
+
+**Live gates owed.** Run one post-scan warehouse canary and verify occurrence,
+context and outcome writes plus bounded memory; let all symbol buckets fill;
+then compare one overnight fact pack directly with warehouse counts. The M5
+lake currently begins in August 2026, so older tracker episodes remain an
+explicit coverage gap. Phase 3.2's explicit BounceBot occurrence link and the
+20-session pilot remain open. **Desk restart required.**
+
+## 2026-08-27 - post-earnings setup tracking and marking verified
+
+**Branch `claude/warehouse-build-memory`.** Trader: "Let's make sure the bot
+tracks these setups and that these setups are available for marking."
+
+The three defined post-earnings families already run end to end:
+`post_earnings_52w_break`, `post_earnings_candle_break`, and
+`post_earnings_avwap_bounce`. Each detector has its own signal, family
+derivation preserves the family, `build_tracker_setup_record` stores the
+canonical family, and the Capture rail offers all three from the shared setup
+registry. A Like stores `claimed_setup_id`; the deterministic like-cohort job
+then grades that exact family forward.
+
+Added one characterization test that passes each of the three detector signals
+through the real tracker-record builder and pins the saved family. No detector,
+score, ranking, alert, marking, or runtime behaviour changed; therefore the
+ask-first rule did not apply, `CHANGELOG.md` and `plan.md` are unchanged, and no
+restart is needed.
+
+**Verification:** eight focused tests -> **8 passed, 3 subtests passed**. They
+cover the three detectors, all three tracker-family mappings, the offered claim
+list, the post-earnings letter-key write, and exact-family like-cohort identity.
+
 ## 2026-08-27 (evening) - Market Journal: it loads, it carries the tape, the AI reads it
 
 **Branch `claude/warehouse-build-memory`.** Trader, with a screenshot of an

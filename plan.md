@@ -2030,6 +2030,12 @@ non-authoritative. Their analysis/cutover steps remain ordered here.
    transport, tee/tiles, gaps, pacing, storage growth, backups, and restore. Then build
    the tracker-to-detection adapter, explicit bounce linkage, and only the additional
    context/VWAP fields demanded by registered consumers. Keep it shadow-only.
+   *Narrowed 2026-08-27:* the tracker-to-detection adapter and the first demanded
+   context dataset are **BUILT / GREEN**. The adapter reads the small transition
+   ledger plus the scenario CSV, admits every canonical tracker family with usable
+   geometry, and never parses the 1 GB snapshot. Five point-in-time Auto Market Bias
+   views (M5/M30/H1/H4/D1) now attach to each studied occurrence. What remains here
+   is the live warehouse canary/pilot and BD-43's explicit BounceBot occurrence link.
 3. **P3.3 Complete Local-AI Phase 1, then redesign Phase 2.** After five clean
    unattended mornings, specify deterministic fact packs, evidence budgets, schema,
    failure behavior, and tests before writing the append-only digest format. Require
@@ -2136,6 +2142,13 @@ bounded, every surface agrees, and preference cannot change objective truth or s
 1. **P6.1 Complete the warehouse post-slice research tools.** Add the registered
    setup/style readouts, Level Edge/recipe comparisons, and evidence packages only
    after the pilot validates the corpus.
+   *Partial build 2026-08-27, shadow-only:* the first bounded stop/target comparison
+   is implemented for tracker D1 occurrences: next session's first completed M5 close
+   is entry; structural-stop ranks 1–3 and 0.5/1.0/1.5 ATR controls are crossed with
+   1R/2R/3R targets under STOP_FIRST and the existing cost model. A deterministic
+   nightly fact pack is always written; medium local AI may narrate only after n>=30,
+   five symbols and five sessions. Corpus accumulation, pilot validation, registered
+   holdout work and every promotion gate remain owed.
 2. **P6.2 Promote advanced setup families one at a time.** Each family requires a
    registered question, point-in-time corpus, replay, shadow, live evidence, bounded
    canary, approval, and rollback.

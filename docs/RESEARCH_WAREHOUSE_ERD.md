@@ -1,4 +1,4 @@
-# Research warehouse ERD — first-increment datasets
+# Research warehouse ERD — active datasets
 
 Document role: **active warehouse identity/read-contract reference**, subordinate to
 the locked warehouse plan and root roadmap.
@@ -28,7 +28,8 @@ symbol (natural key until the first real rename adds symbol_alias)
   └─1:N─ feature_snapshot_daily (symbol, session_date, feature_set_version)
                                                    │
 setup_occurrence (occurrence_id) ──────────────────┘ anchor_instance_id (nullable FK)
-  └─1:N─ outcome_path (occurrence_id, recipe_id, outcome_definition_id)
+  ├─1:N─ outcome_path (occurrence_id, recipe_id, outcome_definition_id)
+  └─1:5─ setup_market_context (occurrence_id, timeframe, bias_definition_id)
 
 collection_gap (symbol, timeframe, gap_start)   — absence is a first-class fact
 
@@ -41,6 +42,7 @@ Cardinalities that matter for evidence counting:
 | Relationship | Cardinality | Why it is stated |
 |---|---|---|
 | `setup_occurrence` → `outcome_path` | 1:N | Alternative recipes/horizons are correlated diagnostics of ONE episode; they are never summed as independent samples. |
+| `setup_occurrence` → `setup_market_context` | 1:5 per bias definition | M5/M30/H1/H4/D1 are five correlated point-in-time views of one entry, never five independent setup samples. |
 | `setup_occurrence` → `dependency_cluster_id` | N:1 | The episode unit for evidence floors: simultaneous EMA/AVWAP/level variants on one underlying move share one cluster. |
 | rescan of a live thesis → `setup_occurrence` | N:1 | Rescans update the same row (deterministic key below); they never append. |
 | `bar_m5` → `bar_derived` | N:1 | Derived bars record `constituent_count` / `constituent_expected`, so incompleteness is visible rather than implied. |
@@ -76,6 +78,11 @@ Consequences of the occurrence key, which are the identity rules of Section 7.3:
 - **Dedup.** The deterministic key above is the whole dedup rule. Repeated scans
   update `last_updated_run_id` and the mutable snapshot columns; they do not add
   rows, do not add attempts, and do not add episodes (risk R9).
+  The tracker adapter first collapses its daily scenario rescans by symbol,
+  side, canonical family and anchor date and freezes the first geometry; the
+  surviving detection then enters this normal deterministic occurrence rule.
+  Family variants on the same symbol/side/anchor keep separate occurrence IDs
+  but share one `dependency_cluster_id`.
 - **Corrections.** Every dataset is append-only. A corrected record is a new row
   carrying `revision_id` with `supersedes_revision_id` pointing at the row it
   replaces; the superseding row's `observed_at` is its knowledge time. Reference
@@ -116,6 +123,7 @@ coverage, gaps) → `silver/`, and the feature/setup/style/gold layers →
 | `feature_snapshot_intraday` | gold | month | `interval_start` |
 | `setup_occurrence` | gold | year | `event_at` |
 | `outcome_path` | gold | year | `computed_at` |
+| `setup_market_context` | gold | year | `entry_at` |
 | `scan_coverage` | silver | month | `scheduled_at` |
 | `collection_gap` | silver | month | `gap_start` |
 

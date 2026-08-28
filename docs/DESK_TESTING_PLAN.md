@@ -1,6 +1,6 @@
 # Desk testing plan — what to check, and when
 
-Document role: **active operator runbook.** Last reconciled: **2026-08-25**.
+Document role: **active operator runbook.** Last reconciled: **2026-08-27**.
 
 > **This file restates the owed live proofs from `CURRENT_CHECKPOINT.md` for a
 > human reader.** It is not a second source of truth. Whenever those proofs
@@ -38,8 +38,28 @@ lines at the bottom. That is where today's activity is.
 
 # 0. Where things stand — read this first
 
-**Last updated: 2026-08-25**, after the post-close AWAY and outcome-sweep
-checks.
+**Last updated: 2026-08-27**, after the tracker-wide stop/target research build.
+
+## New warehouse research check — next full scan and next overnight run
+
+**WHEN:** after restarting on the 2026-08-27 build, let one full swing scan end.
+
+**DO:** wait for `Research warehouse build ...` in `trading_bot.log`. Keep using
+the desk normally. The build uses one stable symbol bucket per run, so coverage
+fills over later runs instead of doing the whole history at once.
+
+**GOOD:** the line finishes without `failed`; System Health keeps the warehouse
+healthy; desk memory falls back after the build; no new chart, alert, Focus or
+watchlist behavior appears.
+
+**BAD:** copy the warehouse line and a screenshot of Task Manager if memory
+keeps growing or the desk freezes.
+
+**NEXT MORNING:** check the AI store's `retros/setup_research/<year>` folder.
+GOOD is a dated JSON and Markdown fact pack. It may truthfully say zero eligible
+cells and skip AI. Older setups may be absent because M5 history currently
+starts in August 2026. BAD is a failed `setup_research` nightly-ledger row or a
+report claiming older missing paths lost money.
 
 **One live check failed, one did not — that second reading was wrong, is
 corrected here, and you have since accepted it (2026-08-25 evening).**

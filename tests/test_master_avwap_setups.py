@@ -3725,6 +3725,40 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(setup["setup_tags"], ["POST_EARNINGS_52W_BREAK"])
         self.assertEqual(setup["setup_tag_roles"], {"POST_EARNINGS_52W_BREAK": "primary"})
 
+    def test_post_earnings_tracker_preserves_each_detector_family(self):
+        cases = (
+            (master_avwap.POST_EARNINGS_BREAK_SIGNAL, "post_earnings_52w_break"),
+            (master_avwap.POST_EARNINGS_CANDLE_BREAK_SIGNAL, "post_earnings_candle_break"),
+            (master_avwap.POST_EARNINGS_BOUNCE_SIGNAL, "post_earnings_avwap_bounce"),
+        )
+
+        for signal, expected_family in cases:
+            with self.subTest(signal=signal):
+                setup = master_avwap.build_tracker_setup_record(
+                    {
+                        "symbol": "PE",
+                        "side": "LONG",
+                        "priority_bucket": "favorite_setup",
+                        "setup_family": "general",
+                        "favorite_signals": [signal],
+                    },
+                    {
+                        "last_close": 100.0,
+                        "current_anchor": {
+                            "date": "2026-08-20",
+                            "vwap": 98.0,
+                            "bands": {"LOWER_1": 96.0, "UPPER_1": 102.0},
+                        },
+                    },
+                    feature_row=None,
+                    generated_at="2026-08-21T13:00:00",
+                    indicator_row=None,
+                    scan_date="2026-08-21",
+                )
+
+                self.assertIsNotNone(setup)
+                self.assertEqual(setup["tracker_setup_family"], expected_family)
+
     def test_post_earnings_tracker_targets_can_use_pre_earnings_anchor_overrides(self):
         scenario = {
             "tradeable": True,

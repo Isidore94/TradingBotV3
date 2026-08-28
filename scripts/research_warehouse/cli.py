@@ -18,6 +18,7 @@ steps that did not finish and rewrites nothing that did.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -27,7 +28,17 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 try:  # package import
-    from . import backup as backup_mod, config, features, occurrences, outcomes, queries, schemas
+    from . import (
+        backup as backup_mod,
+        config,
+        features,
+        market_bias_context,
+        occurrences,
+        outcomes,
+        queries,
+        schemas,
+        tracker_adapter,
+    )
     from .aggregate import build_derived_bars, build_trading_sessions, build_weekly_bars
     from .ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots
     from .manifest import utc_now
@@ -37,10 +48,12 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     import backup as backup_mod  # type: ignore
     import config  # type: ignore
     import features  # type: ignore
+    import market_bias_context  # type: ignore
     import occurrences  # type: ignore
     import outcomes  # type: ignore
     import queries  # type: ignore
     import schemas  # type: ignore
+    import tracker_adapter  # type: ignore
     from aggregate import build_derived_bars, build_trading_sessions, build_weekly_bars  # type: ignore
     from ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots  # type: ignore
     from manifest import utc_now  # type: ignore
@@ -49,10 +62,17 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
 
 LOCK_NAME = "research_build.lock"
 JOB_TYPE = "research_warehouse_build"
+OUTCOME_BUCKETS = 32
+OUTCOME_BUCKET_MIN_SYMBOLS = 64
 
 
 class SingleFlightError(RuntimeError):
     """Another build already holds the lock."""
+
+
+def _outcome_bucket(day: date, stamp: datetime) -> int:
+    """A same-slot retry is stable; consecutive days cover every bucket."""
+    return (day.toordinal() + int(stamp.hour)) % OUTCOME_BUCKETS
 
 
 def _lock_path() -> Path:
@@ -289,8 +309,9 @@ def _m5_partitions_for(known: dict, day: date) -> list[str]:
     month alone. An intraday occurrence triggered in any earlier month was
     therefore re-simulated against an empty archive every night, and drew
     conclusions from that absence rather than from its own session (BD-69).
-    The trigger's own month is read, plus the following one, because a winter
-    session's ETH tail lives there (BD-66).
+    The trigger's previous, own, and following months are read. The previous
+    month supplies ATR warm-up; the following month supplies the 18-session
+    path (and a winter session's ETH tail, BD-66).
     """
     months = {f"month={day:%Y-%m}"}
     for row in known.values():
@@ -298,8 +319,9 @@ def _m5_partitions_for(known: dict, day: date) -> list[str]:
         if not isinstance(trigger, datetime):
             continue
         entry = trigger.date()
+        months.add(f"month={entry - timedelta(days=31):%Y-%m}")
         months.add(f"month={entry:%Y-%m}")
-        months.add(f"month={entry + timedelta(days=1):%Y-%m}")
+        months.add(f"month={entry + timedelta(days=31):%Y-%m}")
     return sorted(months)
 
 
@@ -319,12 +341,33 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
             "message": "no setup_occurrence rows yet; the detector adapter is BD-44.",
         }
 
-    symbols = {str(row.get("symbol") or "") for row in known.values()}
+    all_symbols = sorted({str(row.get("symbol") or "") for row in known.values() if row.get("symbol")})
+    bucket = _outcome_bucket(day, stamp)
+    symbols = (
+        set(all_symbols)
+        if len(all_symbols) <= OUTCOME_BUCKET_MIN_SYMBOLS
+        else {
+            symbol for symbol in all_symbols
+            if int(hashlib.sha256(symbol.encode("utf-8")).hexdigest()[:8], 16) % OUTCOME_BUCKETS == bucket
+        }
+    )
+    selected = [row for row in known.values() if str(row.get("symbol") or "") in symbols]
+    if not selected:
+        return {
+            "status": "NOTHING_IN_BUCKET",
+            "bucket": bucket,
+            "bucket_count": OUTCOME_BUCKETS,
+            "symbols": 0,
+        }
     _partitions, d1_by_symbol = features.daily_history_window(store, day)
+    spy_d1 = list(d1_by_symbol.get("SPY") or [])
     d1_by_symbol = {symbol: rows for symbol, rows in d1_by_symbol.items() if symbol in symbols}
 
     m5_by_symbol: dict[str, list] = {}
-    for partition in _m5_partitions_for(known, day):
+    wanted_symbols = sorted(symbols | {"SPY"})
+    for partition in _m5_partitions_for(
+        {str(row.get("occurrence_id")): row for row in selected}, day
+    ):
         # SYMBOL only, in Arrow - deliberately no date narrowing. The outcome
         # walk runs FORWARD over a horizon that can cross sessions, which is
         # why `_m5_partitions_for` already widens to the trigger's month and
@@ -333,24 +376,60 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
         # exactly the `symbol in symbols` test it replaces, so the walk sees
         # the same bars - it just never materialises everyone else's first.
         for row in store.read_rows(
-            "bar_m5", partition, symbols=sorted(symbols) if symbols else None
+            "bar_m5", partition, symbols=wanted_symbols
         ):
             symbol = str(row.get("symbol") or "")
-            if symbol in symbols:
+            if symbol in symbols or symbol == "SPY":
                 m5_by_symbol.setdefault(symbol, []).append(row)
 
-    return vars(
-        outcomes.build_outcomes(
-            store,
-            list(known.values()),
-            d1_by_symbol=d1_by_symbol,
-            m5_by_symbol=m5_by_symbol,
-            bands_by_occurrence=_bands_by_occurrence(store, known),
-            as_of=stamp,
-            now=stamp,
-            run_id=run_id,
-        )
+    primary = outcomes.build_outcomes(
+        store,
+        selected,
+        d1_by_symbol=d1_by_symbol,
+        m5_by_symbol=m5_by_symbol,
+        bands_by_occurrence=_bands_by_occurrence(
+            store, {str(row.get("occurrence_id")): row for row in selected}
+        ),
+        recipes=outcomes.M5_CLOSE_RECIPES,
+        as_of=stamp,
+        now=stamp,
+        run_id=run_id,
+        job_id="m5_close_recipe_outcomes",
     )
+    slice_rows = [
+        row for row in selected
+        if str(row.get("canonical_setup_id") or "") in occurrences.SLICE_SETUPS
+    ]
+    legacy_slice = outcomes.build_outcomes(
+        store,
+        slice_rows,
+        d1_by_symbol=d1_by_symbol,
+        m5_by_symbol=m5_by_symbol,
+        bands_by_occurrence=_bands_by_occurrence(
+            store, {str(row.get("occurrence_id")): row for row in slice_rows}
+        ),
+        as_of=stamp,
+        now=stamp,
+        run_id=run_id,
+    ) if slice_rows else None
+    context = market_bias_context.record_context(
+        store,
+        selected,
+        spy_m5=list(m5_by_symbol.get("SPY") or []),
+        spy_d1=spy_d1,
+        now=stamp,
+        run_id=run_id,
+    )
+    return {
+        "status": primary.status,
+        "bucket": bucket,
+        "bucket_count": OUTCOME_BUCKETS,
+        "symbols": len(symbols),
+        "occurrences": len(selected),
+        "m5_close": vars(primary),
+        "legacy_slice": vars(legacy_slice) if legacy_slice is not None else None,
+        "market_context": vars(context),
+    }
 
 
 def _bands_by_occurrence(store: ResearchStore, known: dict) -> dict:
@@ -451,6 +530,11 @@ def run_build(
             )
             report.steps["features_intraday"] = vars(
                 features.build_intraday_snapshots(target, day, now=stamp, run_id=run_id)
+            )
+            report.steps["occurrences"] = vars(
+                tracker_adapter.record_tracker_occurrences(
+                    target, run_id=run_id, now=stamp
+                )
             )
             report.steps["outcomes"] = _run_outcomes(target, day, stamp, run_id)
             report.steps["backups"] = _run_backups(target, stamp)

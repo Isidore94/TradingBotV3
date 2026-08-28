@@ -1,6 +1,6 @@
 ﻿# TradingBotV3 documentation index
 
-Last reconciled: **2026-08-26**
+Last reconciled: **2026-08-27**
 
 Start here when a supporting detail is not in the four root documents. This index
 classifies every maintained Markdown document so a historical plan cannot be mistaken
@@ -49,7 +49,7 @@ status.
 | [`ULTIMATE_SETUP_DATABASE_PLAN.md`](ULTIMATE_SETUP_DATABASE_PLAN.md) | Locked warehouse architecture and Phase 0–8 contract; phases are implemented, live pilot remains |
 | [`RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`](RESEARCH_WAREHOUSE_BUILD_DECISIONS.md) | Builder decisions and current warehouse live/human open items |
 | [`RESEARCH_WAREHOUSE_ERD.md`](RESEARCH_WAREHOUSE_ERD.md) | Warehouse dataset identity and read contract |
-| [`LOCAL_AI_AUTOMATION_PLAN.md`](LOCAL_AI_AUTOMATION_PLAN.md) | Local-AI implementation specification; Phase 2 redesign and later phases remain. **Section 7 (2026-08-20)** owns the deterministic `veto_cohort_grading` slot and the opt-in `trader_judgement` scope, and states what is deliberately not built |
+| [`LOCAL_AI_AUTOMATION_PLAN.md`](LOCAL_AI_AUTOMATION_PLAN.md) | Local-AI implementation specification; Phase 2 redesign and later phases remain. **Section 7 (2026-08-20)** owns deterministic cohort grading and the opt-in judgement scope; **Section 8 (2026-08-27)** owns the deterministic nightly setup stop/target fact pack and gated medium-tier narration |
 | [`AUTO_MODES_AND_QUIET_HOURS_PLAN.md`](AUTO_MODES_AND_QUIET_HOURS_PLAN.md) | Phase 0.5 R1 — **BUILT 2026-08-15, live proof owed**: mode matrix, quiet hours, shared-scan removal, EVENING SPY wake alarm. §8 records the build-time decisions |
 | [`M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`](M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md) | Phase 0.5 R2 — **BUILT 2026-08-15, live proof owed**: the combined PDH+VWAP Focus adoption gate, queue eviction, provenance sidecar, scoped "Not today", the desync repair, and the M5 strength board. §10 records the measured fetch cost |
 | [`SWING_QUALITY_AND_FEEDBACK_PLAN.md`](SWING_QUALITY_AND_FEEDBACK_PLAN.md) | Phase 0.5 R3 — **DETERMINISTIC WORK COMPLETE 2026-08-16, live gates owed**: shadow-only `would_demote` quality classifier, relvol + daytrade annotation, reviewed-today badge, pre-close honesty bundle (12:45 preview slot, post-close tracker write, STABLE+PREVIEW, bar stamps), structured dislike reasons counted by the scoreboard. §4.3.5 volume-thrust normalization is **trader-deferred**; the shadow week, churn comparison and first curation cycle are owed |

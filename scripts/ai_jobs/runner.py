@@ -395,7 +395,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     night's trades are in it means they read yesterday's. It also costs seconds
     rather than the briefs' hours, so putting it first spends nothing.
     """
-    from ai_jobs import briefs, cohorts, digest, enrichment, evidence_report, policy_draft
+    from ai_jobs import briefs, cohorts, digest, enrichment, evidence_report, policy_draft, setup_research
     from journal_runner import run_nightly_journal_import
 
     return [
@@ -527,6 +527,16 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=policy_draft.run_review_policy_draft,
             reserve_minutes=10.0,
             description="Draft review policy (ranks and annotates only; never the live file)",
+            max_attempts=3,
+        ),
+        # SETUP DATABASE Phase 6.1, APPENDED last.  The deterministic layer
+        # computes every number.  The medium local model only narrates after
+        # the evidence floor is met and can never write a live policy.
+        JobSlot(
+            name="setup_research",
+            run=setup_research.run_setup_research,
+            reserve_minutes=20.0,
+            description="Stop/target recipe research with five-timeframe market context",
             max_attempts=3,
         ),
     ]
