@@ -653,6 +653,47 @@ class LocalEvidenceBudgetTests(unittest.TestCase):
             "but an unbounded wait is still refused",
         )
 
+    def test_the_tripwire_against_every_case_it_has_actually_seen(self):
+        """Four real measurements, two of each kind.
+
+        The estimate cannot be right for every content type - dense JSON
+        evidence measures 2.06-2.23 chars/token while the map-reduce synthesis
+        prompt, which is the model's own prose, measures 3.72 - so an estimate
+        alone will always cry wolf on one of them. The clip floor is the half
+        that needs no estimate: a shear pins at the context ceiling, so a prompt
+        evaluated at a small fraction of the window was not clipped.
+        """
+        import ai_summary
+
+        cases = [
+            # (name, context, chars sent, tokens the server reported, should fire)
+            ("2026-08-27 real shear", 12288, 31591, 6147, True),
+            ("150k prompt at a 64k window", 65536, 150000, 32771, True),
+            ("map-reduce findings package (prose)", 65536, 8325, 2235, False),
+            ("the healthy 44,344-token run", 65536, 91262, 44344, False),
+        ]
+        for name, context, chars, saw, should_fire in cases:
+            with self.subTest(case=name):
+                with _settings(ai_local_context_tokens=context):
+                    message = ai_summary._prompt_truncation_error(
+                        {"messages": [{"content": "x" * chars}]},
+                        {"usage": {"prompt_tokens": saw}},
+                    )
+                self.assertEqual(bool(message), should_fire, name)
+
+    def test_a_clip_pins_at_half_the_window_which_is_what_the_floor_tracks(self):
+        """Both observed shears landed within three tokens of context/2."""
+        import ai_summary
+
+        for context, pinned in ((12288, 6147), (65536, 32771)):
+            with self.subTest(context=context):
+                self.assertAlmostEqual(pinned / context, 0.5, places=3)
+                self.assertGreater(
+                    pinned / context,
+                    ai_summary.TRUNCATION_CLIP_FLOOR_RATIO,
+                    "the floor must sit UNDER the real clip point or it hides a shear",
+                )
+
     def test_the_budget_is_capped_by_the_context_however_it_is_configured(self):
         """A budget bigger than the model can read does not make a bigger
         summary. It makes a SHEARED one, and the shear is silent server-side."""
@@ -780,7 +821,15 @@ class PromptTruncationTripwireTests(unittest.TestCase):
             )
         self.summary_text = json.dumps(_valid_summary("daily.auto_report"))
 
-    def _run(self, usage):
+    #: The historical failure, faithfully: 80,000 chars into a 2048-token
+    #: context. A clip pins at the ceiling - about half the window - so that is
+    #: what a simulated shear has to report. The old fixtures used 12 and 5
+    #: tokens, which no clip of any context can produce, and would now be read
+    #: (correctly) as an estimation artefact rather than a shear.
+    SHEARED_CONTEXT = 2048
+    SHEARED_PROMPT_TOKENS = 1027
+
+    def _run(self, usage, context=SHEARED_CONTEXT):
         import ai_summary
 
         calls = []
@@ -789,7 +838,8 @@ class PromptTruncationTripwireTests(unittest.TestCase):
             calls.append(kwargs)
             return _chat_response(self.summary_text, usage=usage)
 
-        with _settings(ai_local_endpoint_url=ENDPOINT, ai_local_model_medium="gemma3:12b"):
+        with _settings(ai_local_endpoint_url=ENDPOINT, ai_local_model_medium="gemma3:12b",
+                       ai_local_context_tokens=context):
             result = ai_summary.request_ai_summary(
                 provider="local",
                 model="",
@@ -801,18 +851,20 @@ class PromptTruncationTripwireTests(unittest.TestCase):
 
     def test_a_sheared_prompt_raises_instead_of_being_parsed(self):
         with self.assertRaises(RuntimeError) as caught:
-            self._run({"prompt_tokens": 12, "completion_tokens": 100})
+            self._run(
+                {"prompt_tokens": self.SHEARED_PROMPT_TOKENS, "completion_tokens": 100}
+            )
         message = str(caught.exception)
         self.assertIn("truncated the prompt", message)
         # Both numbers named: a bare "truncated" tells the operator nothing
         # about which side to change.
-        self.assertIn("server reported seeing 12", message)
+        self.assertIn(f"server reported seeing {self.SHEARED_PROMPT_TOKENS}", message)
         self.assertIn("ai_local_evidence_budget_chars", message)
 
     def test_a_sheared_prompt_is_not_retried_into_a_valid_looking_answer(self):
         # The retry sends MORE text, so it would truncate harder. One call only.
         with self.assertRaises(RuntimeError):
-            _result, calls = self._run({"prompt_tokens": 5})
+            _result, calls = self._run({"prompt_tokens": self.SHEARED_PROMPT_TOKENS})
         # assertRaises swallowed the return, so re-run counting calls directly.
         import ai_summary
 
@@ -820,9 +872,12 @@ class PromptTruncationTripwireTests(unittest.TestCase):
 
         def fake_post(url, **kwargs):
             calls.append(kwargs)
-            return _chat_response(self.summary_text, usage={"prompt_tokens": 5})
+            return _chat_response(
+                self.summary_text, usage={"prompt_tokens": self.SHEARED_PROMPT_TOKENS}
+            )
 
-        with _settings(ai_local_endpoint_url=ENDPOINT):
+        with _settings(ai_local_endpoint_url=ENDPOINT,
+                       ai_local_context_tokens=self.SHEARED_CONTEXT):
             with self.assertRaises(RuntimeError):
                 ai_summary.request_ai_summary(
                     provider="local",

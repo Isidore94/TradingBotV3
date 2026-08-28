@@ -96,6 +96,28 @@ def _summary_dir(session_date: str) -> Path:
     return target
 
 
+#: What the summary slot reserves of the overnight window. Two numbers, because
+#: it is now two jobs: a single prompt, or the whole evidence pile read in
+#: slices. MEASURED 2026-08-28 - the single-shot summary at the full local
+#: budget ran 567s, and the chunked path plans 46 slices over 17 sources at
+#: ~220s each, so about 170 minutes. Reserving the single-shot figure for the
+#: chunked run is how a job that needs three hours gets launched with twenty
+#: minutes of window left and runs straight into the open.
+SUMMARY_RESERVE_MINUTES = 20.0
+SUMMARY_RESERVE_MINUTES_CHUNKED = 200.0
+
+
+def summary_reserve_minutes() -> float:
+    """Window minutes the summary slot should reserve, for the mode it is in."""
+    from ai_jobs import map_reduce
+
+    try:
+        chunked = map_reduce.map_reduce_enabled()
+    except Exception:  # a settings read must never decide the night by raising
+        chunked = False
+    return SUMMARY_RESERVE_MINUTES_CHUNKED if chunked else SUMMARY_RESERVE_MINUTES
+
+
 def run_daily_summary(
     *,
     session_date: str,
@@ -135,10 +157,22 @@ def run_daily_summary(
     # Budgeted for the local context window, not the metered-cloud ceiling: the
     # server truncates an over-long prompt silently, which defeats the
     # packager's own honest degradation (see ai_summary's budget derivation).
+    from ai_jobs import map_reduce
+
+    # Map-reduce reads EVERY row of every source in slices, so the package it
+    # starts from is deliberately unbudgeted: the context ceiling stops applying
+    # once no single prompt has to hold the whole thing (trader, 2026-08-28 -
+    # "spoon feed it slowly so we don't run out of context"). The single-shot
+    # path stays budgeted for the window, because there it is the whole prompt.
+    chunked = map_reduce.map_reduce_enabled()
     evidence = ai_summary.build_evidence_package(
         list(scopes),
         session_date=session_date,
-        budget_chars=ai_summary.evidence_budget_for("local", tier="medium"),
+        budget_chars=(
+            ai_summary.MAP_REDUCE_EVIDENCE_CEILING_CHARS
+            if chunked
+            else ai_summary.evidence_budget_for("local", tier="medium")
+        ),
     )
     coverage = evidence.get("coverage") or {}
     counts = coverage.get("counts") or {}
@@ -194,6 +228,50 @@ def run_daily_summary(
             ledger.STATUS_DEGRADED,
             reason,
         )
+
+    if chunked:
+        planned = map_reduce.plan_chunks(evidence, chars=map_reduce.chunk_chars())
+        logging.info(
+            "AI summary: reading %s source(s) as %s slice(s) of up to %s chars "
+            "-- every row is read, none is sampled",
+            counts.get("usable"),
+            len(planned),
+            map_reduce.chunk_chars(),
+        )
+
+        def _progress(position: int, total: int, name: str) -> None:
+            logging.info("AI summary slice %s/%s: %s", position, total, name)
+
+        try:
+            result = map_reduce.run_map_reduce(
+                evidence=evidence,
+                model=model,
+                timeout_seconds=900,
+                on_progress=_progress,
+            )
+        except (ValueError, RuntimeError) as exc:
+            reason = f"map-reduce failed for {session_date}: {exc}"
+            logging.warning("AI summary degraded: %s", reason)
+            return _publish(
+                ai_summary.degraded_result(evidence, reason=reason + ".", model=model),
+                ledger.STATUS_DEGRADED,
+                reason,
+            )
+        stats = result.get("map_reduce") or {}
+        result = dict(result)
+        result["summary"] = ai_summary.merge_coverage_into_summary(
+            result.get("summary") or {},
+            evidence,
+            citation_drops=result.get("citation_drops"),
+            extra_statements=[stats.get("coverage_statement", "")],
+        )
+        reason = (
+            f"summary for {session_date} from {counts.get('usable', 0)} usable source(s) "
+            f"read as {stats.get('slices_read')} of {stats.get('slices_planned')} slice(s)"
+            + ("" if stats.get("synthesized") else "; NOT synthesized")
+        )
+        logging.info("AI summary: %s", reason)
+        return _publish(result, ledger.STATUS_OK, reason)
 
     previous_error = ""
     for attempt in (1, 2):

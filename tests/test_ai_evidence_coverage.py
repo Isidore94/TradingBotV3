@@ -464,9 +464,15 @@ def test_the_brief_job_passes_its_session_into_packaging(monkeypatch, tmp_path):
             return "gemma3:12b"
 
         @staticmethod
-        def evidence_budget_for(provider, tier="medium"):
+        def evidence_budget_for(provider, tier="medium", *, per_item=False):
             seen["budget_provider"] = provider
             return 22000
+
+        # The summary asks which mode it is in before it packages anything.
+        # The double answers "single-shot", which is what this test is about.
+        @staticmethod
+        def get_local_setting(key, default=None):
+            return default
 
         @staticmethod
         def build_evidence_package(scopes, *, session_date=None, **kwargs):

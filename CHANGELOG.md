@@ -294,6 +294,74 @@ Dated entries for the two most recent build days, newest first. Older dated entr
 move to the archive; the durable statement of what they built is in the inventory above.
 
 
+### 2026-08-28 — Reading the whole evidence pile in slices: 78,119 chars → 1,365,259
+
+`IMPLEMENTED`, `GREEN`, **live gate owed** (tonight's 22:00 window is the first
+unattended run). Trader-authorized: *"Can we just give it more time? Like hours to
+complete its work then? And spoon feed it slowly so we don't run out of context?"*
+Advisory layer only.
+
+**The problem the budget work could not solve.** Raising the context to 64k and deriving
+the budget took the summary from 10 of 22 sources to 17 of 22 with none unfunded, and
+it still read **one tenth** of what exists: 1,365,259 characters of session evidence
+against a prompt that can hold ~91,000. The packager spends that tenth *fairly* rather
+than *well* — every source gets a share, so `setups.type_stats` contributed **3 of its
+184 rows** and `setups.playbooks` 2 of 200. No further tuning fixes that; 96k crashes
+the runner, so the ceiling is hardware.
+
+**The trade.** `scripts/ai_jobs/map_reduce.py` cuts the evidence into slices that fit
+comfortably, asks the model for findings from each, then hands back only the findings
+and asks it to synthesize. **Every row of every source is read** — 46 slices over 17
+sources, ~2.8 hours of a window that runs 22:00–06:00 and was using nine minutes of it.
+
+What the module is careful about, each of which is a test:
+
+- **A slice never passes for its whole source.** Every chunk carries `rows 41-80 of 184`
+  in the content the model reads, and the package note tells it to describe only what is
+  in front of it. Tables split by ROW (half a row is not evidence); text by window.
+- **Citations stay real.** A map call is handed a package containing exactly one source,
+  so the existing validator already forbids citing anything else. The synthesis gets
+  `citable_aliases` for the ids that actually appear in the findings — so it can name
+  the store a statement came from, and nothing that was not read.
+- **A failed slice is counted and named** in the published `data_quality`, because a
+  document synthesized from 44 of 46 slices is not the same document as one from 46.
+- **A failed synthesis does not throw away hours of map work.** The findings are already
+  validated and already cite real stores, so they are published *unsynthesized* — and
+  the executive line says `UNSYNTHESIZED` in capitals, because a raw pile presented as a
+  review would be the more dishonest of the two failures. Proven in the live validation
+  run, where the synthesis pass failed and the findings survived.
+- **Every slice failing raises** rather than publishing an empty review.
+
+**Two things this exposed, both fixed:**
+
+1. **The truncation tripwire fired on a healthy request.** The findings package is the
+   model's own prose and tokenizes at **3.72 chars/token**, where dense JSON evidence
+   measures 2.06–2.23 — so an estimate calibrated for one is wrong for the other, and an
+   8,325-char package estimated at 3,330 tokens against a truthful 2,235 was called
+   sheared. The fix is the half of the check that needs no estimate: **truncation means
+   the server clipped to its context, and a clip lands at the ceiling.** Both observed
+   shears pinned within three tokens of half the window (6,147 of 12,288; 32,771 of
+   65,536), so a prompt evaluated below `TRUNCATION_CLIP_FLOOR_RATIO = 0.45` of the
+   window was not clipped, whatever the estimate says. All four real measurements are
+   pinned as a regression test. The two pre-existing shear fixtures used 12 and 5
+   tokens — values no clip of any context can produce — and were made faithful to the
+   historical failure (2,048 context, 1,027 tokens) rather than the guard being loosened.
+2. **The scheduled task could start a second copy of a three-hour job.** It fires every
+   30 minutes for eight hours, and the ledger only records a row when a job *finishes* —
+   harmless while every slot took minutes. `run_slots` now takes a machine-local lock
+   (`local_writer_lock`, the same primitive the feature-history writer uses) and a second
+   firing stands down cleanly. `local_writer_lock` reports "someone holds it" and "this
+   box has no primitive" as the *same* exception and they want opposite answers, so they
+   are told apart by the module's own sentence — with a test asserting that sentence
+   still exists in `local_writer_lock.py`, so a rewording breaks a test rather than the
+   guard. And the summary slot's window reservation, **20 minutes**, was the reservation
+   for a job that now takes 170: `summary_reserve_minutes()` returns 200 in chunked mode,
+   because a three-hour job launched with twenty minutes left runs into the open.
+
+Off by default (`ai_local_map_reduce`), on for this desk. Tests: 20 in the new
+`tests/test_ai_map_reduce.py`, plus the tripwire regression cases.
+
+
 ### 2026-08-28 — The local model was reading a third of its evidence: context 12k → 64k, budget derived
 
 `IMPLEMENTED`, `GREEN`. Trader-authorized ("raise the context... use as much as you

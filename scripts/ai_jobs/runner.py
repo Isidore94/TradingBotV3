@@ -83,6 +83,14 @@ class RunReport:
         )
 
 
+#: One AI-jobs runner per machine. See `run_slots` for why this arrived only
+#: once the summary started taking hours.
+RUNNER_LOCK_KEY = "ai_jobs_runner"
+#: The phrase `local_writer_lock` uses when the box has no exclusion primitive
+#: at all, as opposed to another process holding one.
+NO_PRIMITIVE_MARKER = "no machine-local exclusion primitive is available"
+
+
 def session_date_for(now: datetime | None = None) -> str:
     """The NYSE session this overnight run belongs to.
 
@@ -142,6 +150,63 @@ def run_slots(
     ledger_path=None,
 ) -> RunReport:
     """Run every due slot once. Never raises: a crash here is a lost night."""
+    from market_calendar import SessionCalendarError
+
+    # ONE runner at a time on this machine (2026-08-28). The scheduled task
+    # fires every 30 minutes for eight hours, which was harmless while every
+    # slot finished in minutes. It stopped being harmless when the summary
+    # started reading the evidence in slices: that job runs for hours, the
+    # ledger only records a row when a job FINISHES, so the 22:30 firing would
+    # find no completion for a job still running at 22:00 and start a second
+    # copy of it. Two copies against a server with OLLAMA_NUM_PARALLEL=1 do not
+    # go twice as fast; they queue, and both take longer than one would have.
+    #
+    # A held lock means a run is already in progress, which is a normal state
+    # and not a failure - the caller exits cleanly and the next firing tries
+    # again. The lock is released by the kernel if the holder is killed, so a
+    # crashed run never wedges the night.
+    from local_writer_lock import LocalLockUnavailable, local_writer_lock
+
+    try:
+        with local_writer_lock(RUNNER_LOCK_KEY, timeout_seconds=0.0):
+            return _run_slots_locked(
+                slots, now=now, force=force, only=only, ledger_path=ledger_path
+            )
+    except LocalLockUnavailable as exc:
+        # The lock reports both "someone else holds it" and "this box has no
+        # exclusion primitive" as the same exception, and the two want opposite
+        # answers, so they are told apart by the sentence the module itself
+        # writes. `test_a_second_runner_stands_down_while_one_is_working` and
+        # `test_no_primitive_runs_unguarded_rather_than_skipping_the_night` pin
+        # both branches, so a reworded message breaks a test rather than the
+        # behaviour.
+        if NO_PRIMITIVE_MARKER in str(exc):
+            # Run anyway. The unguarded behaviour was correct for eight months
+            # of short jobs and is better than skipping the night outright --
+            # but say so, because it is the condition under which two runners
+            # can overlap.
+            logging.warning(
+                "AI jobs: no cross-process lock available (%s); running unguarded.", exc
+            )
+            return _run_slots_locked(
+                slots, now=now, force=force, only=only, ledger_path=ledger_path
+            )
+        logging.info(
+            "AI jobs: another run is already in progress on this machine; leaving it "
+            "to finish rather than starting a second copy."
+        )
+        return RunReport(session_date="", started_at=window.market_now(now))
+
+
+def _run_slots_locked(
+    slots: list[JobSlot],
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+    only: str = "",
+    ledger_path=None,
+) -> RunReport:
+    """The body of :func:`run_slots`, always under the machine-local lock."""
     from market_calendar import SessionCalendarError
 
     moment = window.market_now(now)
@@ -421,7 +486,9 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                     )
                 )
             ),
-            reserve_minutes=20.0,
+            # Resolved at slot-build time from the mode the summary is in:
+            # a chunked run is a ~170-minute job, not a 20-minute one.
+            reserve_minutes=briefs.summary_reserve_minutes(),
             description="Advisory evidence summary over the day's artifacts",
         ),
         JobSlot(

@@ -473,6 +473,15 @@ def local_context_tokens() -> int:
 #: brief night ran at (~60s per brief; 53 briefs in 55 min on 2026-08-26, 121
 #: in two hours on 2026-08-17), so it is kept rather than re-derived: the
 #: constraint here is the length of the night, not the size of the context.
+#: The bound on a map-reduce run. NOT a prompt limit - no single prompt in that
+#: path holds more than one chunk - but a bound on how much work one night is
+#: allowed to take on. Sized from the measured session: 1,365,259 chars of
+#: evidence is ~683,000 tokens, which at the desk's ~120 tok/s prompt-eval rate
+#: is about 95 minutes of reading plus generation per slice. Two million chars
+#: is therefore roughly a two-and-a-half-hour ceiling inside a 22:00-06:00
+#: window that also has to fit 50-120 ticker briefs. Past this the evidence is
+#: budgeted the ordinary way and the packager declares what it dropped.
+MAP_REDUCE_EVIDENCE_CEILING_CHARS = 2_000_000
 LOCAL_PER_ITEM_BUDGET_SETTING_KEY = "ai_local_per_item_evidence_budget_chars"
 DEFAULT_LOCAL_PER_ITEM_BUDGET_CHARS = 22_000
 
@@ -2026,6 +2035,13 @@ _ESTIMATED_CHARS_PER_TOKEN = 2.5
 #: minutes has failed. A local model has not failed, it is still working, and
 #: the wait scales with the prompt the caller chose to send.
 LOCAL_REQUEST_TIMEOUT_CAP_SECONDS = 1800
+#: A prompt the server evaluated at less than this fraction of the context
+#: window cannot have been clipped BY that window, so a low token count there is
+#: an estimation artefact rather than a shear. Every observed clip pinned at
+#: almost exactly half the window (6,147 of 12,288 on 2026-08-27; 32,771 of
+#: 65,536 the following night), so 0.45 sits just under the real clip point and
+#: still catches both. This is the half of the check that needs no estimate.
+TRUNCATION_CLIP_FLOOR_RATIO = 0.45
 #: Fraction of the estimate below which the prompt was demonstrably sheared.
 #: Well under 1.0 because the estimate is approximate in both directions; a
 #: server that truncates to its context window lands far below this, not near it.
@@ -2095,6 +2111,22 @@ def _prompt_truncation_error(payload: Mapping[str, Any], body: Mapping[str, Any]
         return ""
     estimated = sent_chars / _ESTIMATED_CHARS_PER_TOKEN
     if server_saw >= estimated * TRUNCATION_TRIPWIRE_RATIO:
+        return ""
+    # A chars-per-token estimate cannot be right for every kind of content, and
+    # being wrong here used to mean crying wolf. Dense JSON evidence measures
+    # 2.06-2.23 chars/token; the map-reduce synthesis prompt, which is the
+    # model's OWN prose, measures 3.72 - so an 8,325-char findings package
+    # estimated at 3,330 tokens, the server truthfully reported 2,235, and the
+    # tripwire called a perfectly healthy request truncated (2026-08-28).
+    #
+    # The second condition is the one that does not depend on an estimate at
+    # all: truncation means the server CLIPPED the prompt to its context, and a
+    # clip lands at the ceiling by definition. Every observed shear pinned at
+    # almost exactly half the window - 6,147 of 12,288, and 32,771 of 65,536 -
+    # so a prompt the server evaluated at well under half the window was not
+    # clipped, whatever the estimate says. Below this floor the low count is an
+    # artefact of the estimate, not evidence of a shear.
+    if server_saw < local_context_tokens() * TRUNCATION_CLIP_FLOOR_RATIO:
         return ""
     return (
         f"the local server truncated the prompt: sent ~{int(estimated)} token(s) "
@@ -2448,6 +2480,7 @@ def merge_coverage_into_summary(
     evidence: Mapping[str, Any],
     *,
     citation_drops: Sequence[Mapping[str, Any]] | None = None,
+    extra_statements: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Append code-owned provenance rows to ``data_quality``.
 
@@ -2461,9 +2494,21 @@ def merge_coverage_into_summary(
     # not appended to. The model no longer has the section in its schema, so
     # anything present came from an older document or a retry, and a stale
     # count sitting above the real one is worse than no count at all.
-    merged["data_quality"] = _coverage_statements(evidence) + citation_drop_statements(
-        citation_drops
-    )
+    rows = _coverage_statements(evidence) + citation_drop_statements(citation_drops)
+    # `extra_statements` is how a caller that knows something the package does
+    # not - map-reduce knows how many slices were actually read - gets it into
+    # the machine-owned section rather than asking the model to say it.
+    for text in extra_statements or []:
+        clean = str(text or "").strip()
+        if clean:
+            rows.append(
+                {
+                    "statement": f"{COVERAGE_STATEMENT_PREFIX} {clean}",
+                    "evidence_refs": [],
+                    "confidence": "high",
+                }
+            )
+    merged["data_quality"] = rows
     return merged
 
 

@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | `claude/warehouse-build-memory` |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5275 passed, 27 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
+| Last verified baseline | `pytest tests/ -q` **5297 passed, 33 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -43,12 +43,63 @@ the dated entry named beside it.
 | 9 | **Feature-history exports** — one 2026-08-28 scan producing `output/scan-factors` and `output/tier-tracker` files again instead of `ParserError` | 2026-08-28 corruption entry |
 | 10 | **Narrated digest overnight** — one unattended 22:00 run producing a narration without being forced | 2026-08-28 narration entry |
 | 11 | **Narrated summary + ticker briefs overnight** — one unattended run at the raised context; tonight's briefs were 0 of a normal 53-62 | 2026-08-28 context entry |
+| 12 | **Sliced summary overnight** — one unattended 22:00 run: 46 slices, a synthesized summary, briefs still finishing in the window | 2026-08-28 slices entry |
 
 ### Immediate next action
 
 Restart the desk, then run the owed live gates in the order above. The documentation
 work is committed (`fff07b8`) and its packaging gate is met; **the remaining gates are
 all live-session work that only the trader can run.**
+
+---
+
+## 2026-08-28 - Reading the whole evidence pile in slices (78,119 -> 1,365,259 chars)
+
+**Branch `claude/local-ai-context-64k`. Trader-authorized:** "Can we just give it more
+time? Like hours to complete its work then? And spoon feed it slowly so we don't run out
+of context?" Advisory layer only.
+
+**Why the budget work was not enough.** 64k context plus a derived budget got the
+summary to 17 of 22 sources with none unfunded, and it still read **a tenth** of what
+exists - 1,365,259 chars against a prompt that holds ~91,000. The packager spends that
+tenth FAIRLY rather than WELL, so `setups.type_stats` gave 3 of its 184 rows. No tuning
+fixes that: 96k crashes the runner, so the ceiling is hardware.
+
+**Built:** `scripts/ai_jobs/map_reduce.py`. Slice the evidence, ask for findings per
+slice, then synthesize from the findings. **46 slices over 17 sources, ~2.8 hours** of a
+window that runs 22:00-06:00 and was using nine minutes. Every row of every source is
+read. A slice can never pass for its whole source (`rows 41-80 of 184` travels inside
+the content); a map call sees exactly one source so the validator already forbids it
+citing anything else; a failed slice is counted and named in `data_quality`; a failed
+synthesis publishes the findings marked `UNSYNTHESIZED` rather than losing hours of work;
+every slice failing raises.
+
+**Two real defects it exposed, both fixed:**
+
+1. **The tripwire fired on a healthy request.** The findings package is the model's own
+   prose at **3.72 chars/token** where JSON evidence is 2.06-2.23, so one estimate cannot
+   serve both. The fix needs no estimate: a clip lands at the CEILING, and both observed
+   shears pinned within three tokens of half the window (6,147/12,288; 32,771/65,536), so
+   below 0.45 of the window nothing was clipped. All four real measurements are pinned.
+   The two pre-existing shear fixtures used 12 and 5 tokens - values no clip can produce
+   - and were made faithful (2,048 ctx, 1,027 tokens) rather than the guard loosened.
+2. **The scheduler could start a second copy of a three-hour job.** It fires every 30
+   minutes and the ledger only records a row when a job FINISHES. `run_slots` now takes
+   a machine-local lock and a second firing stands down. And the summary slot reserved
+   **20 minutes** for a job that now needs 170 - `summary_reserve_minutes()` returns 200
+   in chunked mode, because a three-hour job launched with twenty minutes left runs
+   straight into the open.
+
+**Validated against the real model, small** (2 slices, ~5 min): both slices read, real
+citations, and the synthesis failed - which proved the fallback, since the findings were
+published rather than lost. **The full 46-slice run was deliberately NOT started**: it
+was 06:00 PDT, the off-hours window had just closed and the open was 30 minutes away, and
+"no inference during market hours" is a hard rule.
+
+**Verification:** `pytest tests/ -q` **5297 passed, 33 subtests, exit 0** · smoke **7/7**.
+
+**Owed (the live gate):** tonight's unattended 22:00 run - 46 slices, a synthesized
+summary, and the ticker briefs still finishing inside the window afterwards.
 
 ---
 
