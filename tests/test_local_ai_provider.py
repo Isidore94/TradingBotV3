@@ -592,8 +592,11 @@ class LocalEvidenceBudgetTests(unittest.TestCase):
 
         import ai_summary
 
-        context_window = 12288  # the desk's gemma3:12b-tbv3ctx
-        generation = 3500  # the max_tokens every request sends
+        # Read from the module, never re-typed here. The 2026-08-27 shear
+        # happened because this arithmetic lived in a comment beside a
+        # hand-carried number, and both its inputs were wrong by the same sign.
+        context_window = ai_summary.DEFAULT_LOCAL_CONTEXT_TOKENS
+        generation = ai_summary.LOCAL_GENERATION_TOKENS
         with tempfile.TemporaryDirectory() as raw:
             with _settings():
                 evidence = ai_summary.build_evidence_package(
@@ -605,13 +608,91 @@ class LocalEvidenceBudgetTests(unittest.TestCase):
             prompt = ai_summary._local_user_prompt(evidence, "rejected: " + ("x" * 900))
             scaffold = ai_summary._system_instruction()
 
-        estimated_tokens = (len(prompt) + len(scaffold)) / 3.0
+        # At the WORST measured tokenization rate, not a flattering one: 2.06
+        # chars/token was measured against the desk's own model, so dividing by
+        # 3.0 here understated every real prompt by ~45%.
+        estimated_tokens = (len(prompt) + len(scaffold)) / ai_summary._BUDGET_CHARS_PER_TOKEN
         self.assertLess(
             estimated_tokens,
             context_window - generation,
             f"worst-case retry prompt estimates at {int(estimated_tokens)} tokens, which does "
             f"not fit {context_window - generation} tokens of context left after generation",
         )
+
+    def test_the_local_path_waits_longer_than_a_cloud_call_would(self):
+        """A hosted API that has not answered in five minutes has failed. A
+        local 12B has not failed, it is still working: measured 2026-08-28 at
+        ~118 tok/s evaluating the prompt, so the nightly summary's own 45,302
+        token package needs about six minutes before the first output token
+        exists. The old 300s clamp turned that into a timeout."""
+        import ai_summary
+
+        seen = {}
+
+        def fake_post(url, **kwargs):
+            seen["timeout"] = kwargs.get("timeout")
+            raise RuntimeError("stop here; the timeout is what is under test")
+
+        with _settings(ai_local_endpoint_url="http://127.0.0.1:11434/v1"):
+            with self.assertRaises(RuntimeError):
+                ai_summary._request_local_summary(
+                    model="m", api_key="k", evidence={"sources": []},
+                    timeout_seconds=900, post=fake_post,
+                )
+        self.assertEqual(seen["timeout"], 900, "the caller's timeout must survive")
+
+        with _settings(ai_local_endpoint_url="http://127.0.0.1:11434/v1"):
+            with self.assertRaises(RuntimeError):
+                ai_summary._request_local_summary(
+                    model="m", api_key="k", evidence={"sources": []},
+                    timeout_seconds=99_999, post=fake_post,
+                )
+        self.assertEqual(
+            seen["timeout"],
+            ai_summary.LOCAL_REQUEST_TIMEOUT_CAP_SECONDS,
+            "but an unbounded wait is still refused",
+        )
+
+    def test_the_budget_is_capped_by_the_context_however_it_is_configured(self):
+        """A budget bigger than the model can read does not make a bigger
+        summary. It makes a SHEARED one, and the shear is silent server-side."""
+        import ai_summary
+
+        with _settings(ai_local_context_tokens=12288, ai_local_evidence_budget_chars=500_000):
+            ceiling = ai_summary.local_evidence_budget_ceiling_chars()
+            self.assertEqual(ai_summary.local_evidence_budget_chars(), ceiling)
+            self.assertLess(ceiling, 500_000)
+
+    def test_raising_the_context_raises_the_ceiling_proportionally(self):
+        import ai_summary
+
+        with _settings(ai_local_context_tokens=12288):
+            small = ai_summary.local_evidence_budget_ceiling_chars()
+        with _settings(ai_local_context_tokens=65536):
+            large = ai_summary.local_evidence_budget_ceiling_chars()
+        self.assertGreater(large, small * 4, "a 5x context must buy far more evidence")
+
+    def test_a_configured_budget_under_the_ceiling_is_honoured(self):
+        import ai_summary
+
+        with _settings(ai_local_context_tokens=65536, ai_local_evidence_budget_chars=48_000):
+            self.assertEqual(ai_summary.local_evidence_budget_chars(), 48_000)
+
+    def test_the_two_chars_per_token_constants_lean_opposite_ways(self):
+        """They look interchangeable and are not; merging them reintroduces the
+        2026-08-27 shear. Sizing a budget safely assumes text tokenizes BADLY
+        (small ratio, small budget); estimating what was sent safely assumes it
+        tokenizes WELL (large ratio, small estimate, no false alarm)."""
+        import ai_summary
+
+        self.assertLess(
+            ai_summary._BUDGET_CHARS_PER_TOKEN,
+            ai_summary._ESTIMATED_CHARS_PER_TOKEN,
+            "the budget constant must be the pessimistic one",
+        )
+        # Both must stay anchored to what was actually measured (2.06-2.23).
+        self.assertLessEqual(ai_summary._BUDGET_CHARS_PER_TOKEN, 2.06)
+        self.assertLessEqual(ai_summary._ESTIMATED_CHARS_PER_TOKEN, 3.0)
 
 
 class PromptTruncationTripwireTests(unittest.TestCase):

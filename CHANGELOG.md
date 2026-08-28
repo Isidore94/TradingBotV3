@@ -294,6 +294,76 @@ Dated entries for the two most recent build days, newest first. Older dated entr
 move to the archive; the durable statement of what they built is in the inventory above.
 
 
+### 2026-08-28 — The local model was reading a third of its evidence: context 12k → 64k, budget derived
+
+`IMPLEMENTED`, `GREEN`. Trader-authorized ("raise the context... use as much as you
+want"). Advisory layer only; nothing here can reach a detector, score, alert, watchlist
+or the review queue.
+
+**What the review found.** With the endpoint back up, `ai_summary` stopped saying
+"unreachable" and started saying the prompt had been **sheared** — and it had.
+Measured against the desk's own model over prompts from 9 KB to 93 KB, the evidence
+package tokenizes at **2.06–2.23 chars/token**, not the 3.0–3.5 the code assumed
+in two separate places. The consequences compounded:
+
+- the 22,000-char budget was derived in a comment as `7800 tokens × 3.0 chars = 23400`;
+  at the real rate 7,800 tokens is ~16,400 chars, so **the default exceeded a
+  12,288-token window by about a third from the day it was written**. It survived only
+  while few sources were funded;
+- on 2026-08-27 the package reached 17 usable sources, the prompt reached ~14,400
+  tokens, and llama.cpp sheared it to half the window (6,147 tokens — the pin is
+  visible as a constant across prompts of 28 KB, 37 KB, 51 KB and 93 KB);
+- the tripwire caught it, but by a **2.7% margin**, because the same wrong constant
+  understates the estimate it compares against.
+
+**What changed.**
+
+1. **The desk's model context went 12,288 → 65,536** (`gemma3:12b-tbv3ctx-64k`, built
+   from the saved definition of the old tag with one parameter changed). Measured cost:
+   **none worth counting — 8.1 GB loaded, still 100% on the iGPU**, because gemma3's
+   sliding-window attention keeps the KV cache cheap. The rollback Modelfile is kept at
+   `C:\TradingBotData\_tools\ollama\gemma3-12b-tbv3ctx.BEFORE-2026-08-28.Modelfile`;
+   the old tag is untouched, so reverting is one settings change.
+2. **The budget is now DERIVED, not remembered.**
+   `local_evidence_budget_ceiling_chars()` subtracts generation and scaffold from the
+   configured context, converts at the worst measured rate, and leaves retry headroom;
+   `local_evidence_budget_chars()` can never return more than that however the setting
+   is configured. A budget bigger than the model can read does not produce a bigger
+   summary, it produces a silently sheared one — capping here means the packager
+   degrades the way it was designed to instead. New setting `ai_local_context_tokens`
+   (stock 12,288; the desk is set to 65,536) is what the ceiling is computed from.
+3. **Two chars-per-token constants, deliberately different and never to be merged.**
+   `_BUDGET_CHARS_PER_TOKEN = 2.0` sizes the budget and is pessimistic (small ratio →
+   small budget); `_ESTIMATED_CHARS_PER_TOKEN = 2.5` (was 3.5) estimates what was sent
+   and is conservative the other way (large ratio → small estimate → no false alarm).
+   A test asserts they lean opposite ways, because merging them reintroduces the shear.
+4. **The local request honours its caller's timeout** up to
+   `LOCAL_REQUEST_TIMEOUT_CAP_SECONDS = 1800`; the cloud paths keep their 300s clamp. A
+   hosted API silent for five minutes has failed; a local 12B is still working — at
+   ~118 tok/s evaluating the prompt, the nightly package needs minutes before the first
+   output token exists.
+
+**Result, measured on the 2026-08-27 session.** `ai_summary` went from four consecutive
+`degraded_no_narrative` runs to **`ok` in 343s**, with **17 of 22 sources usable and
+zero unfunded** (it was 10 of 22 with 5 unfunded). The narrative now names real
+candidates (NET, OII, NESR), a setup family (`bounce_combo`) and the regime, where the
+2026-08-26 one managed "mixed results" and named nothing.
+
+**What is still thin, stated rather than glossed:** 15 of the 17 sources are now
+"shown in part" — `daily.auto_report` at 2,909 of 8,592 chars, `setups.scan_factors` at
+2 of 200 rows. That is no longer the total budget (0 unfunded) but the per-source share
+of it, and about half the model's findings are still about data quality rather than the
+market. The derived ceiling is 103,761 chars against the 48,000 configured, so there is
+room to roughly double again; the cost is runtime (~5.7 min per summary now, and the
+same setting sizes ~55 ticker briefs a night). Not spent without the trader deciding.
+
+Tests: 5 new/updated in `tests/test_local_ai_provider.py` — the budget cap, the ceiling
+scaling with context, a configured budget under the ceiling being honoured, the two
+constants leaning opposite ways, and the local timeout surviving where a cloud one
+would clamp. The existing derivation test now reads its inputs from the module instead
+of re-typing 12288 and 3.0, which is how it agreed with a wrong number for weeks.
+
+
 ### 2026-08-28 — Two scans wrote one CSV: the D1 feature-history corruption, fixed and repaired
 
 `IMPLEMENTED`, `GREEN`. Trader-authorized (the file-scoped ask-first rule applied;

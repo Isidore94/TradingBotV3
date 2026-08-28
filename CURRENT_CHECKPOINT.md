@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | `claude/warehouse-build-memory` |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5266 passed, 22 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
+| Last verified baseline | `pytest tests/ -q` **5271 passed, 22 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -42,12 +42,65 @@ the dated entry named beside it.
 | 8 | **Phase 0.8 live soak** — the trader's to run | 2026-08-26 fluidity entry |
 | 9 | **Feature-history exports** — one 2026-08-28 scan producing `output/scan-factors` and `output/tier-tracker` files again instead of `ParserError` | 2026-08-28 corruption entry |
 | 10 | **Narrated digest overnight** — one unattended 22:00 run producing a narration without being forced | 2026-08-28 narration entry |
+| 11 | **Narrated summary + ticker briefs overnight** — one unattended run at the raised context; tonight's briefs were 0 of a normal 53-62 | 2026-08-28 context entry |
 
 ### Immediate next action
 
 Restart the desk, then run the owed live gates in the order above. The documentation
 work is committed (`fff07b8`) and its packaging gate is met; **the remaining gates are
 all live-session work that only the trader can run.**
+
+---
+
+## 2026-08-28 - The local model was reading a third of its evidence
+
+**Branch: `main` (the milestone was merged while this session was running).
+Trader-authorized**: "raise the context... use as much as you want." Advisory layer
+only - nothing here reaches a detector, score, alert, watchlist or the review queue.
+
+**The finding.** With the endpoint restored, `ai_summary` stopped reporting
+"unreachable" and started reporting a SHEARED prompt - correctly. The evidence package
+tokenizes at **2.06-2.23 chars/token** (measured against the desk's own model, 9 KB to
+93 KB of prompt), not the 3.0-3.5 assumed in two places. So the 22,000-char budget,
+derived in a comment as `7800 tokens x 3.0`, exceeded a 12,288-token window by a third
+**from the day it was written**; it only survived while few sources were funded. When
+the package reached 17 usable sources the prompt hit ~14,400 tokens and llama.cpp cut
+it to half the window - the pin at 6,147 tokens is identical across prompts of 28 KB,
+37 KB, 51 KB and 93 KB, which is what proved it.
+
+**Changed.** Model context **12,288 -> 65,536** (`gemma3:12b-tbv3ctx-64k`); measured
+cost is nothing that matters - **8.1 GB loaded, still 100% iGPU**, because gemma3's
+sliding-window attention keeps KV cheap. The budget is now DERIVED from the configured
+context (`local_evidence_budget_ceiling_chars`) and capped there however it is
+configured, with a new `ai_local_context_tokens` setting (stock 12,288; desk 65,536).
+Two chars-per-token constants now exist deliberately and lean OPPOSITE ways - 2.0 sizes
+the budget pessimistically, 2.5 estimates what was sent conservatively - with a test
+that fails if anyone merges them. The local request honours its caller's timeout to a
+1800s cap; cloud paths keep 300s.
+
+**Result on the 2026-08-27 session:** `ai_summary` went from four straight
+`degraded_no_narrative` runs to **`ok` in 343s**, **17 of 22 sources usable, 0
+unfunded** (was 10 of 22 with 5 unfunded). It now names real candidates (NET, OII,
+NESR), a setup family and the regime; the 08-26 summary managed "mixed results" and
+named nothing.
+
+**Still thin, and said plainly:** 15 of 17 sources are "shown in part" - that is the
+per-source SHARE of the budget now, not the total (0 unfunded) - and roughly half the
+model's findings are still about data quality rather than the market. The derived
+ceiling is 103,761 chars against 48,000 configured, so there is room to about double
+again; the cost is runtime (~5.7 min per summary, and the same setting sizes ~55 ticker
+briefs a night). **Not spent without a trader decision.**
+
+**Rollback** is one settings change: `ai_local_model_medium` back to
+`gemma3:12b-tbv3ctx` and `ai_local_context_tokens` to 12288. The old model tag is
+untouched and its definition is saved at
+`C:\TradingBotData\_tools\ollama\gemma3-12b-tbv3ctx.BEFORE-2026-08-28.Modelfile`.
+
+**Verification:** `pytest tests/ -q` **5271 passed, 22 subtests, exit 0** · smoke
+**7/7**; and the real `ai_summary` job was run end to end and published `ok`.
+
+**Owed:** one unattended 22:00 run producing a narrated summary AND narrated ticker
+briefs (tonight's briefs were 0 of a normal 53-62, all lost to the dead endpoint).
 
 ---
 

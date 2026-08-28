@@ -90,21 +90,61 @@ LOCAL_JSON_RETRIES = 1
 # block that says what was dropped) -- server-side truncation defeats all of
 # that invisibly, so the fix is to cap the evidence, not to raise the context.
 #
-# Derivation of the default, for the desk's `gemma3:12b-tbv3ctx` (num_ctx 12288):
+# The budget is now DERIVED from the configured context rather than written
+# down beside a comment describing how it was once derived (2026-08-28). The
+# comment here used to read:
 #
-#     12288 context
-#    -  3500 generation (the max_tokens every request sends)
-#    -  ~1000 scaffold (system instruction, schema dump, required-shape text)
-#    =  ~7800 tokens of evidence
-#    x  ~3.0 chars/token (dense JSON tokenizes worse than prose; measured
-#                         3.0-3.5, and the low end is the safe end here)
-#    =  ~23400 chars, rounded DOWN to 22000
+#     12288 context - 3500 generation - ~1000 scaffold = ~7800 tokens
+#     x ~3.0 chars/token = ~23400 chars, rounded DOWN to 22000
 #
-# The rounding is deliberate headroom for the retry, which re-sends the full
-# evidence *plus* the validator's rejection text. A budget that only fits the
-# first attempt would turn every retry into the very truncation this prevents.
+# Both inputs were wrong in the same direction. The real ratio for this evidence
+# is 2.06-2.23 chars/token, measured against the desk's own model over prompts
+# from 9 KB to 93 KB, so 7,800 tokens is ~16,400 chars and never 23,400. The
+# 22,000 default therefore exceeded a 12,288-token window by about a third from
+# the day it was written. It survived only while few sources were funded; when
+# the package grew to 17 usable sources on 2026-08-27 the prompt reached ~14,400
+# tokens, llama.cpp sheared it to half the window, and the tripwire below
+# correctly refused every summary for the night.
+#
+# A number that has to be re-derived by hand whenever the model changes will be
+# wrong again. `local_evidence_budget_ceiling_chars` computes it instead, and
+# `local_evidence_budget_chars` can never return more than that ceiling however
+# the setting is configured.
 LOCAL_EVIDENCE_BUDGET_SETTING_KEY = "ai_local_evidence_budget_chars"
-DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS = 22_000
+#: What the desk's local model is actually configured for. Not discoverable
+#: from the OpenAI-compatible endpoint, so it is stated here and kept beside the
+#: model tag. The stock value matches a plain `gemma3:12b`; the desk raised its
+#: own model to 65536 on 2026-08-28 and set this to match.
+LOCAL_CONTEXT_SETTING_KEY = "ai_local_context_tokens"
+DEFAULT_LOCAL_CONTEXT_TOKENS = 12_288
+#: `max_tokens` every local request sends, and the fixed scaffold around the
+#: evidence. Both come out of the same window as the prompt.
+LOCAL_GENERATION_TOKENS = 3_500
+LOCAL_SCAFFOLD_TOKENS = 1_000
+#: Chars per token used to size the BUDGET, and deliberately NOT the same
+#: constant as `_ESTIMATED_CHARS_PER_TOKEN`. The two are conservative in
+#: OPPOSITE directions and must never be merged: sizing a budget safely means
+#: assuming text tokenizes as badly as it ever has (a SMALL ratio, so a small
+#: budget), while estimating what was sent safely means assuming it tokenizes
+#: well (a LARGE ratio, so a small estimate and a tripwire that will not cry
+#: wolf). 2.0 is just under the measured floor of 2.06.
+_BUDGET_CHARS_PER_TOKEN = 2.0
+#: Headroom for the retry, which re-sends the full evidence PLUS the validator's
+#: rejection text. A budget that only fits the first attempt turns every retry
+#: into the truncation it exists to prevent.
+_BUDGET_RETRY_HEADROOM = 0.85
+#: The budget a machine gets with nothing configured: the same derivation, run
+#: on the stock context. Computed rather than written down, so it cannot drift
+#: from the formula the way the old hand-carried 22000 did. Works out to ~13200
+#: chars for a 12288-token window - which is what 22000 should always have been.
+DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS = max(
+    1_000,
+    int(
+        (DEFAULT_LOCAL_CONTEXT_TOKENS - LOCAL_GENERATION_TOKENS - LOCAL_SCAFFOLD_TOKENS)
+        * _BUDGET_CHARS_PER_TOKEN
+        * _BUDGET_RETRY_HEADROOM
+    ),
+)
 
 DEFAULT_MODELS = {
     "openai": "gpt-5.6",
@@ -395,27 +435,62 @@ def local_model(tier: str = "medium") -> str:
     return str(get_local_setting(key, fallback) or fallback).strip()
 
 
-def local_evidence_budget_chars() -> int:
-    """Evidence ceiling for a local call, from settings (never hardcoded).
+def local_context_tokens() -> int:
+    """Context window the desk's local model is configured for."""
+    raw = get_local_setting(LOCAL_CONTEXT_SETTING_KEY, DEFAULT_LOCAL_CONTEXT_TOKENS)
+    if isinstance(raw, bool):
+        return DEFAULT_LOCAL_CONTEXT_TOKENS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_LOCAL_CONTEXT_TOKENS
+    return value if value > 0 else DEFAULT_LOCAL_CONTEXT_TOKENS
 
-    A non-positive or unparseable configured value falls back to the default
-    rather than disabling the budget: ``0`` reaching ``build_evidence_package``
-    would fund no sources at all, which looks exactly like a day with no
-    evidence -- the failure this whole budget exists to make visible.
+
+def local_evidence_budget_ceiling_chars() -> int:
+    """The most evidence that can fit the configured context, in characters.
+
+    Derived, not remembered. Everything that shares the window is subtracted
+    first, what is left is converted at the worst measured tokenization rate,
+    and the retry's rejection text is left room. Never returns less than 1000:
+    a ceiling that funds nothing looks exactly like a day with no evidence,
+    which is the failure this budget exists to make visible.
     """
-    raw = get_local_setting(
-        LOCAL_EVIDENCE_BUDGET_SETTING_KEY, DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
-    )
+    usable = local_context_tokens() - LOCAL_GENERATION_TOKENS - LOCAL_SCAFFOLD_TOKENS
+    if usable <= 0:
+        return 1_000
+    return max(1_000, int(usable * _BUDGET_CHARS_PER_TOKEN * _BUDGET_RETRY_HEADROOM))
+
+
+def local_evidence_budget_chars() -> int:
+    """Evidence ceiling for a local call: the configured value, capped to fit.
+
+    A non-positive or unparseable configured value falls back to the derived
+    ceiling rather than disabling the budget: ``0`` reaching
+    ``build_evidence_package`` would fund no sources at all, which looks exactly
+    like a day with no evidence.
+
+    The cap is the part that matters. A configured budget larger than the model
+    can read does not produce a bigger summary, it produces a **sheared** one,
+    and the shear is silent on the server side. Capping here means the evidence
+    packager degrades the way it is designed to - unfunded statuses, a coverage
+    block naming what was dropped - instead of the server quietly discarding
+    half the prompt and the model answering confidently from the remainder.
+    """
+    ceiling = local_evidence_budget_ceiling_chars()
+    raw = get_local_setting(LOCAL_EVIDENCE_BUDGET_SETTING_KEY, ceiling)
     # bool is a subclass of int, so `True` would otherwise resolve to a
     # one-character budget -- a package that funds nothing, wearing the face of
     # a configured value.
     if isinstance(raw, bool):
-        return DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+        return ceiling
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        return DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
-    return value if value > 0 else DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS
+        return ceiling
+    if value <= 0:
+        return ceiling
+    return min(value, ceiling)
 
 
 def evidence_budget_for(provider: str, tier: str = "medium") -> int:
@@ -1866,11 +1941,25 @@ def _local_user_prompt(evidence: Mapping[str, Any], previous_error: str = "") ->
     )
 
 
-#: Chars per token used to estimate what was SENT. Dense JSON evidence
-#: tokenizes at roughly 3.0-3.5 chars/token; the high end is the conservative
-#: choice here because it makes the estimate SMALLER, so the tripwire only
-#: fires when the server really did see far less than was sent.
-_ESTIMATED_CHARS_PER_TOKEN = 3.5
+#: Chars per token used to estimate what was SENT. MEASURED, not assumed
+#: (2026-08-28): the same evidence prompt handed to `gemma3:12b` tokenizes at
+#: **2.06-2.23 chars/token** across sizes from 9 KB to 93 KB - not the 3.0-3.5
+#: this line used to claim. The old value understated a real prompt by ~60%,
+#: which mattered twice over: the tripwire below only fired on 2026-08-27 by a
+#: 2.7% margin when the prompt was genuinely sheared in half, and any budget
+#: sized off this number was optimistic by the same 60%.
+#:
+#: 2.5 rather than the measured 2.1 keeps the original intent - a conservative
+#: value makes the estimate SMALLER, so the tripwire fires only when the server
+#: really did see far less than was sent - while removing the bulk of the error.
+#: Prose tokenizes near 4.5 chars/token, but nothing prose-shaped reaches this
+#: path: `_local_user_prompt` always wraps the JSON evidence package.
+_ESTIMATED_CHARS_PER_TOKEN = 2.5
+#: Ceiling on how long the LOCAL path will wait for one response. The cloud
+#: paths keep their 300s clamp: a hosted API that has not answered in five
+#: minutes has failed. A local model has not failed, it is still working, and
+#: the wait scales with the prompt the caller chose to send.
+LOCAL_REQUEST_TIMEOUT_CAP_SECONDS = 1800
 #: Fraction of the estimate below which the prompt was demonstrably sheared.
 #: Well under 1.0 because the estimate is approximate in both directions; a
 #: server that truncates to its context window lands far below this, not near it.
@@ -2436,7 +2525,17 @@ def _request_local_summary(
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=max(10, min(300, int(timeout_seconds))),
+                # The LOCAL path honours the caller's timeout up to
+                # LOCAL_REQUEST_TIMEOUT_CAP_SECONDS, where the cloud paths keep
+                # the 300s clamp. A hosted API answers in seconds or has failed;
+                # a local 12B answers at the speed of this desk's iGPU. Measured
+                # 2026-08-28: ~118 tok/s evaluating the prompt and ~8 tok/s
+                # generating, so the nightly summary's own evidence package -
+                # 45,302 tokens once the context was raised to 64k - needs about
+                # six minutes before the first output token exists. Clamping
+                # that to 300s would have turned a working request into a
+                # timeout and read as "the model failed".
+                timeout=max(10, min(LOCAL_REQUEST_TIMEOUT_CAP_SECONDS, int(timeout_seconds))),
             )
         except Exception as exc:  # unreachable endpoint is a clean error
             raise RuntimeError(f"local AI endpoint at {url} is unreachable: {exc}") from exc
