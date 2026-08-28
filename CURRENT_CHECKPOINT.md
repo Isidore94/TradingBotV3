@@ -22,7 +22,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
 | Last verified baseline | `pytest tests/ -q` **5266 passed, 22 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
-| Frozen exe | **not rebuilt** — a packaging trigger is outstanding (see below) |
+| Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
 ### Open gates, newest first
@@ -32,7 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 1 | **Frozen rebuild + frozen selftest** — `packaging/tradingbotv3.spec` changed (sklearn/scipy collection removed) | before the next merge to `main` (2026-08-27 night entry) |
+| ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET 2026-08-28**: rebuilt at `fff07b8`, bundle 442 MB → 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0 | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
 | 4 | **Group RS/RW tape** — one DESK session with the four trader rules of that morning | 2026-08-27 afternoon (group tape) entry |
@@ -45,9 +45,9 @@ the dated entry named beside it.
 
 ### Immediate next action
 
-Commit and push the outstanding work, restart the desk, then run the owed live gates in
-the order above. Nothing new should be started before gate 1 if a merge to `main` is
-intended.
+Restart the desk, then run the owed live gates in the order above. The documentation
+work is committed (`fff07b8`) and its packaging gate is met; **the remaining gates are
+all live-session work that only the trader can run.**
 
 ---
 
@@ -363,6 +363,29 @@ Re-verified after this pass: **5261 passed, 22 subtests, exit 0**; smoke **7/7**
 (5,249 from this branch plus the other session's 12 new tests); smoke **7/7**;
 `--selftest` **72/72**; packaging spec-drift + selftest **24 passed**; **0 broken relative
 links** across all control and archive documents.
+
+### Rebuild record (2026-08-28) - the packaging gate is MET
+
+`pyinstaller packaging/tradingbotv3.spec --noconfirm` at `fff07b8`, then
+`dist\TradingBotV3\TradingBotV3.exe --selftest` -> **`selftest OK: 72/72 checks passed
+(frozen)`, exit 0.**
+
+- **The frozen count equals the unfrozen count (72).** That is the direct confirmation
+  that the old "29/29" expectation in `CLAUDE.md` and `README.md` was stale by 43 checks
+  and would have made a correct run look like a failure.
+- **Bundle 442 MB -> 419 MB.** `sklearn` (14 MB) is gone, as intended.
+- **`scipy` and `scipy.libs` (79 MB) are still bundled** - not by the removed
+  hiddenimports, but transitively. Two importers exist among bundled packages:
+  `yfinance/scrapers/history.py` line 1139, a **lazy** import inside
+  `_fix_unit_random_mixups` (its own comment: "Only import scipy if users actually want
+  function"), reachable only through yfinance's price-repair path; and `pandas`' sparse
+  arrays. **Neither is reachable from this codebase** - nothing passes `repair=` to
+  yfinance and nothing touches pandas sparse.
+  **Recommended, NOT done:** adding `scipy` to the spec's `excludes` would take the
+  bundle to roughly **340 MB**. It is left for a trader decision because it is a second
+  packaging change needing its own rebuild and frozen selftest, and because the frozen
+  selftest performs no network fetch - so it would not, on its own, prove the yfinance
+  bar path still works without scipy present. That proof is one live fetch.
 
 ## 2026-08-27 - tracker-wide stop/target research and five-timeframe context
 

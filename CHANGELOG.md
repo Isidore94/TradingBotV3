@@ -522,6 +522,15 @@ The mandatory documentation read across `CLAUDE.md`, `CURRENT_CHECKPOINT.md`,
 `CHANGELOG.md`, `plan.md` and `docs/README.md` is now **~83,607 tokens, down from
 ~259,878 — 68% smaller** — with no rule, gate, or inventory statement lost.
 
+Packaging gate MET 2026-08-28: rebuilt at `fff07b8` and the frozen self-test reports
+`selftest OK: 72/72 checks passed (frozen)`, exit 0 — the frozen count equals the
+unfrozen count, confirming the retired "29/29" expectation was stale by 43 checks. The
+bundle fell **442 MB → 419 MB** with `sklearn` gone. `scipy` (79 MB) remains, pulled
+transitively by a lazy import in `yfinance`'s price-repair path and by pandas sparse
+arrays; neither is reachable from this codebase, so excluding it would reach roughly
+340 MB — recorded as a recommendation, not done, because it needs its own rebuild plus a
+live bar fetch to prove the yfinance path.
+
 Verified after the changes: `pytest tests/ -q` **5261 passed, 22 subtests, exit 0**;
 `smoke_check.py` **7/7**; `launch_gui.py --selftest` **72/72**; packaging spec-drift and
 selftest suites **24 passed**. The spec edit is a packaging trigger, so a rebuild and a
