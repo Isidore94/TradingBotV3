@@ -133,6 +133,12 @@ class AutopilotService(QObject):
     logMessage = Signal(str)
     enabledChanged = Signal(bool)
     statusChanged = Signal(dict)
+    #: (previous, current) whenever `auto_mode` actually changes - OFF/DESK/
+    #: AWAY/EVENING. Announced rather than acted on: this service decides
+    #: nothing new here, and the one listener (the Market Journal capture in
+    #: `ui.app`) only writes evidence. A profile change while Auto is OFF is
+    #: NOT a flip and is not emitted, because `auto_mode` did not move.
+    autoModeChanged = Signal(str, str)
     _reportFinished = Signal(object, str)
 
     def __init__(self, bounce_service, parent=None) -> None:
@@ -238,6 +244,7 @@ class AutopilotService(QObject):
         enabled = bool(enabled)
         if enabled == self._enabled:
             return
+        previous_mode = self.auto_mode
         self._enabled = enabled
         self._state["enabled"] = enabled
         self._save_state()
@@ -254,6 +261,7 @@ class AutopilotService(QObject):
             self._save_state()
             self._log("AUTO PILOT OFF - automation paused for today (BounceBot keeps running; stop it from the desk if needed).")
         self.enabledChanged.emit(enabled)
+        self._emit_auto_mode_change(previous_mode)
         self._request_report_write()
 
     @property
@@ -270,6 +278,7 @@ class AutopilotService(QObject):
         profile = str(profile or "").strip().upper()
         if profile not in AUTO_PROFILES or profile == self._profile:
             return
+        previous_mode = self.auto_mode
         self._profile = profile
         self._state["profile"] = profile
         self._save_state()
@@ -281,7 +290,22 @@ class AutopilotService(QObject):
             )
         else:
             self._log(f"Auto profile -> {profile} (same decisions; presentation/cadence only).")
+        self._emit_auto_mode_change(previous_mode)
         self._request_report_write()
+
+    def _emit_auto_mode_change(self, previous_mode: str) -> None:
+        """Announce a real mode change. Never raises into the caller.
+
+        A listener that fails must not be able to leave the mode half-applied -
+        the state and the log line are already written by the time this runs.
+        """
+        current = self.auto_mode
+        if current == previous_mode:
+            return
+        try:
+            self.autoModeChanged.emit(str(previous_mode), str(current))
+        except Exception:  # noqa: BLE001
+            logging.exception("Auto mode change listeners failed.")
 
     def _shadow_research_allowed(self) -> bool:
         """OFF-mode suggestion scans may run only with explicit consent."""

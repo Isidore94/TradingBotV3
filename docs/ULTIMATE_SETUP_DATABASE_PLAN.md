@@ -906,6 +906,19 @@ interval_start × feature_set_version (cohort only)
 - `tags`: string — free text (the "banger" attachment point, LD-27).
 - `event_at` / `observed_at` / `computed_at` / revision chain: per convention.
 
+**`setup_market_context`** — partition: (year); grain: occurrence × timeframe ×
+bias definition
+
+- `occurrence_id`: string; `entry_at`: timestamp; `timeframe`: exactly M5, M30,
+  H1, H4, or D1.
+- `bias_definition_id`: versioned identity; `env_key`: the champion Auto Market
+  Bias result for that timeframe, or `unknown` when point-in-time inputs are thin.
+- `last_close` / `reference_close` / `vwap` / `stdev`: nullable numeric inputs to
+  the champion calculation; `above_fraction` / `below_fraction` / `bar_count`:
+  its bounded evidence summary.
+- `source`: exact bar/construction source; `computed_at` /
+  `input_capture_mode_worst` / revision chain: per convention.
+
 **`outcome_path`** — partition: (year); grain: occurrence × recipe ×
 outcome_definition
 
@@ -2108,6 +2121,14 @@ occurrence key in `schemas.py`.
 - **Registered diagnostic:** signal-bar-extreme + 0.25×ATR(M5,14) stop — a
   diagnostic, not the primary, so tracker parity and existing evidence carry
   over unchanged.
+- **Post-slice D1 M5-close grid (`m5_close_*`, built 2026-08-27):** all tracker
+  families with usable structural geometry enter at the next regular session's
+  first completed M5 close. Structural candidates select the nearest valid
+  tracker level of each source type at rank 1, 2, or 3; controls use 0.5, 1.0,
+  or 1.5 ATR. Each stop is crossed with fixed 1R, 2R, and 3R targets: 54 bounded
+  recipes in total. Missing geometry or M5 coverage yields no invented row.
+  This is discovery-only post-slice research and does not alter the frozen
+  slice recipes above.
 - **Cost/ambiguity:** `outcome_definition_id = house_default_v1` (Section 14.2).
 
 **Paths:** spool = `LOCAL_SETTINGS_DIR/research_spool` (i.e.
@@ -2506,6 +2527,28 @@ are pointed to, not repeated.
   and sleep/wake added; clock-skew/lease/two-machine-collision tests removed as
   unreachable. *Reopens if:* cross-machine import activates (re-adds exactly the
   importer idempotency tests already specified).
+- **LD-29 Tracker occurrence adapter** (Sections 7.3, 19.5). The small append-only
+  tracker transition ledger plus the scenario CSV are the operational source for
+  all canonical tracker families; the very large snapshot is never parsed. Daily
+  rescans collapse by symbol, side, family and anchor, while simultaneous family
+  variants share a dependency cluster. First-seen geometry is frozen so a later
+  rescan cannot leak future knowledge. *Reopens if:* the ledger stops carrying a
+  stable setup ID/family or the scenario CSV stops carrying structural geometry.
+- **LD-30 D1 M5-close stop/target study** (Sections 12, 14). For this bounded
+  research family only, a D1 setup becomes executable at the next regular
+  session's first completed M5 close. The grid is 54 predeclared recipes:
+  structural stop sources × nearest rank 1–3 × targets 1R/2R/3R, plus ATR
+  controls 0.5/1.0/1.5 × the same targets. It needs no trader-planned stop or
+  risk, uses no M1 or bid/ask rows, applies STOP_FIRST, and uses the existing
+  deterministic fallback cost model. *Reopens if:* a new registered study
+  changes entry timing or requires measured quotes under a new outcome identity.
+- **LD-31 Point-in-time market context** (Sections 9, 15). Store five independent
+  champion Auto Market Bias readings — M5, M30, H1, H4 and D1 — at the research
+  entry. M30/H1/H4 derive from completed M5 bars; D1 sees only prior completed
+  daily bars. Unknown stays unknown. Earnings fundamentals are excluded because
+  these are technical studies; earnings dates remain technical anchors only.
+  *Reopens if:* the champion bias definition changes (new definition ID), or a
+  registered study names another point-in-time context.
 
 ### Confirmation register for Aaron (non-blocking; confirm-or-amend; none blocks Phase 0-8 code)
 

@@ -109,6 +109,11 @@ class Recipe:
     target_r: float | None = None
     is_control: bool = False
     is_diagnostic: bool = False
+    #: For the approved next-session M5-close study.  A tracker source name
+    #: selects one recorded structural candidate; an ATR multiple is a bounded
+    #: control.  Neither field changes a champion detector.
+    stop_selector: str = ""
+    stop_atr_multiple: float | None = None
     note: str = ""
 
 
@@ -171,6 +176,62 @@ DIAGNOSTIC_ATR_STOP_V1 = Recipe(
     is_diagnostic=True,
     note="registered diagnostic, never the primary - tracker parity carries over unchanged",
 )
+
+
+M5_CLOSE_STOP_SOURCES = (
+    "current_anchor",
+    "sma",
+    "ema",
+    "post_earnings_anchor",
+    "post_earnings_candle",
+)
+M5_CLOSE_STOP_RANKS = (1, 2, 3)
+M5_CLOSE_TARGETS_R = (1.0, 2.0, 3.0)
+M5_CLOSE_ATR_MULTIPLES = (0.5, 1.0, 1.5)
+
+
+def _m5_close_recipes() -> tuple[Recipe, ...]:
+    """The bounded registered grid; never a free Cartesian search."""
+    recipes: list[Recipe] = []
+    for source in M5_CLOSE_STOP_SOURCES:
+        for rank in M5_CLOSE_STOP_RANKS:
+            for target in M5_CLOSE_TARGETS_R:
+                recipes.append(
+                    Recipe(
+                        recipe_id=f"m5close_{source}{rank}_{target:g}r_v1",
+                        timeframe="M5_OPPORTUNITY",
+                        analysis_unit=ANALYSIS_UNIT_OPPORTUNITY,
+                        entry="next_session_first_completed_m5_close",
+                        stop=f"tracker_{source}_nearest_{rank}_close_failure",
+                        management=f"fixed_{target:g}r_target",
+                        time_stop_sessions=SWING_TIME_STOP_SESSIONS,
+                        target_r=target,
+                        stop_selector=f"{source}:{rank}",
+                        note="ranked structural level and close count preserved from the tracker scenario",
+                    )
+                )
+    for multiple in M5_CLOSE_ATR_MULTIPLES:
+        for target in M5_CLOSE_TARGETS_R:
+            recipes.append(
+                Recipe(
+                    recipe_id=f"m5close_atr{multiple:g}_{target:g}r_v1",
+                    timeframe="M5_OPPORTUNITY",
+                    analysis_unit=ANALYSIS_UNIT_OPPORTUNITY,
+                    entry="next_session_first_completed_m5_close",
+                    stop=f"entry_minus_{multiple:g}_atr_m5_14",
+                    management=f"fixed_{target:g}r_target",
+                    time_stop_sessions=SWING_TIME_STOP_SESSIONS,
+                    target_r=target,
+                    stop_atr_multiple=multiple,
+                    close_failures=1,
+                    is_control=True,
+                    note="ATR placement control; hard intrabar stop; no M1 or bid/ask input",
+                )
+            )
+    return tuple(recipes)
+
+
+M5_CLOSE_RECIPES = _m5_close_recipes()
 
 RECIPES = {
     recipe.recipe_id: recipe
@@ -670,6 +731,295 @@ def _fill_intraday_checkpoints(
         row["r_at_eod"] = _r(ordered[-1].get("close"), entry_price, stop_distance, side)
 
 
+def _tracker_geometry(occurrence: dict) -> list[dict]:
+    """The bounded stop list recorded by the tracker adapter."""
+    raw = occurrence.get("tags")
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        payload = __import__("json").loads(raw)
+    except (TypeError, ValueError):
+        return []
+    candidates = payload.get("stop_candidates") if isinstance(payload, dict) else None
+    return [dict(item) for item in (candidates or []) if isinstance(item, dict)]
+
+
+def _entry_bar_after_d1_close(occurrence: dict, m5_bars) -> tuple[dict | None, object | None]:
+    """First completed RTH M5 bar after the D1 setup became known."""
+    trigger = occurrence.get("trigger_at")
+    if not isinstance(trigger, datetime):
+        return None, None
+    trigger = trigger if trigger.tzinfo else trigger.replace(tzinfo=timezone.utc)
+    ordered = sorted(
+        [
+            row
+            for row in (m5_bars or [])
+            if isinstance(row.get("interval_start"), datetime)
+            and isinstance(row.get("interval_end"), datetime)
+            and row.get("is_complete", True)
+            and row["interval_end"] > trigger
+        ],
+        key=lambda row: row["interval_start"],
+    )
+    for row in ordered:
+        session = xcal.session_for(row["interval_start"])
+        if session and session.rth_open_at <= row["interval_start"] < session.rth_close_at:
+            return row, session
+    return None, None
+
+
+def _atr14_at_entry(ordered, entry_index: int) -> float | None:
+    """Wilder ATR(14) through the completed entry bar, with no later bar."""
+    if entry_index < 14:
+        return None
+    true_ranges: list[float] = []
+    for index in range(1, entry_index + 1):
+        row = ordered[index]
+        previous = ordered[index - 1]
+        high = _number(row.get("high"))
+        low = _number(row.get("low"))
+        prev_close = _number(previous.get("close"))
+        if None in (high, low, prev_close):
+            continue
+        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    if len(true_ranges) < 14:
+        return None
+    atr = sum(true_ranges[:14]) / 14.0
+    for value in true_ranges[14:]:
+        atr = ((atr * 13.0) + value) / 14.0
+    return atr if atr > 0 else None
+
+
+def _project_session_close(start: date, count: int) -> datetime | None:
+    day = start + timedelta(days=1)
+    seen = 0
+    for _ in range(60):
+        session = xcal.trading_session(day)
+        if session is not None:
+            seen += 1
+            if seen >= count:
+                return session.rth_close_at
+        day += timedelta(days=1)
+    return None
+
+
+def _selected_tracker_stop(occurrence: dict, recipe: Recipe, entry_price: float, side: str) -> dict | None:
+    try:
+        source, rank_text = str(recipe.stop_selector).rsplit(":", 1)
+        rank = max(1, int(rank_text))
+    except (ValueError, TypeError):
+        return None
+    candidates = []
+    for item in _tracker_geometry(occurrence):
+        if str(item.get("source_type") or "") != source:
+            continue
+        level = _number(item.get("level"))
+        if level is None:
+            continue
+        if (side == "LONG" and level >= entry_price) or (side == "SHORT" and level <= entry_price):
+            continue
+        candidates.append({**item, "level": level})
+    candidates.sort(key=lambda item: abs(entry_price - float(item["level"])))
+    return candidates[rank - 1] if len(candidates) >= rank else None
+
+
+def simulate_m5_close_opportunity(
+    occurrence: dict,
+    m5_bars,
+    recipe: Recipe,
+    *,
+    as_of: datetime,
+    computed_at: datetime | None = None,
+    run_id: str = "",
+) -> dict | None:
+    """Approved research entry: next session's first completed M5 close.
+
+    M1 and NBBO are not inputs.  Structural candidates preserve the tracker's
+    own close-failure count.  ATR controls use a hard stop.  The primary read
+    is STOP_FIRST whenever one M5 range can contain both exits.
+    """
+    stamp = computed_at or utc_now()
+    cutoff = as_of if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
+    side = str(occurrence.get("side") or "").upper()
+    if side not in {"LONG", "SHORT"}:
+        return None
+    ordered = []
+    for row in m5_bars or []:
+        start = row.get("interval_start")
+        end = row.get("interval_end")
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            continue
+        end_aware = end if end.tzinfo else end.replace(tzinfo=timezone.utc)
+        session = xcal.session_for(start)
+        if (
+            row.get("is_complete", True)
+            and end_aware <= cutoff
+            and session is not None
+            and session.rth_open_at <= start < session.rth_close_at
+        ):
+            ordered.append(row)
+    ordered.sort(key=lambda row: row["interval_start"])
+    entry_bar, entry_session = _entry_bar_after_d1_close(occurrence, ordered)
+    if entry_bar is None or entry_session is None:
+        return None
+    entry_index = ordered.index(entry_bar)
+    entry_price = _number(entry_bar.get("close"))
+    if entry_price is None:
+        return None
+    hard_stop = recipe.stop_atr_multiple is not None
+    close_failures = max(1, int(recipe.close_failures or 1))
+    if hard_stop:
+        atr = _atr14_at_entry(ordered, entry_index)
+        if atr is None:
+            return None
+        distance = atr * float(recipe.stop_atr_multiple)
+        stop_price = entry_price - distance if side == "LONG" else entry_price + distance
+    else:
+        selected = _selected_tracker_stop(occurrence, recipe, entry_price, side)
+        if selected is None:
+            return None
+        stop_price = float(selected["level"])
+        distance = abs(entry_price - stop_price)
+        close_failures = max(1, int(_number(selected.get("close_failure_limit")) or 1))
+    if distance <= 0 or recipe.target_r is None:
+        return None
+    direction = 1.0 if side == "LONG" else -1.0
+    target_price = entry_price + direction * float(recipe.target_r) * distance
+    entry_at = entry_bar["interval_end"]
+
+    future: list[tuple[dict, object]] = []
+    session_days: list[date] = []
+    post_entry_days: list[date] = []
+    for bar in ordered[entry_index + 1 :]:
+        session = xcal.session_for(bar["interval_start"])
+        if session is None or not (session.rth_open_at <= bar["interval_start"] < session.rth_close_at):
+            continue
+        if session.session_date not in session_days:
+            if (
+                session.session_date != entry_session.session_date
+                and len(post_entry_days) >= int(recipe.time_stop_sessions or SWING_TIME_STOP_SESSIONS)
+            ):
+                break
+            session_days.append(session.session_date)
+            if session.session_date != entry_session.session_date:
+                post_entry_days.append(session.session_date)
+        future.append((bar, session))
+
+    result_state = STATE_OPEN
+    first_hit = None
+    first_hit_at = None
+    path_resolution = PATH_EXACT
+    lower = upper = gross = None
+    mfe = mae = 0.0
+    time_to_mfe = None
+    consecutive = 0
+    resolved_at = None
+    for bar, _session in future:
+        high_r = _r(bar.get("high"), entry_price, distance, side)
+        low_r = _r(bar.get("low"), entry_price, distance, side)
+        if None not in (high_r, low_r):
+            favourable, adverse = max(high_r, low_r), min(high_r, low_r)
+            if favourable > mfe:
+                mfe = favourable
+                time_to_mfe = int((bar["interval_end"] - entry_at).total_seconds() // 60)
+            mae = min(mae, adverse)
+        target_hit = _reached(bar, target_price, side, favourable=True)
+        if hard_stop:
+            stop_hit = _reached(bar, stop_price, side, favourable=False)
+            stop_exit = stop_price
+            open_price = _number(bar.get("open"))
+            if open_price is not None and _beyond_stop(open_price, stop_price, side):
+                stop_exit = open_price
+        else:
+            beyond = _beyond_stop(bar.get("close"), stop_price, side)
+            consecutive = consecutive + 1 if beyond else 0
+            stop_hit = consecutive >= close_failures
+            stop_exit = _number(bar.get("close")) or stop_price
+        if target_hit and stop_hit:
+            result_state = STATE_AMBIGUOUS_BAR
+            first_hit = "STOP"
+            first_hit_at = resolved_at = bar["interval_end"]
+            path_resolution = PATH_AMBIGUOUS
+            lower = _r(stop_exit, entry_price, distance, side)
+            upper = float(recipe.target_r)
+            gross = lower
+            break
+        if stop_hit:
+            result_state = STATE_STOPPED
+            first_hit = "STOP"
+            first_hit_at = resolved_at = bar["interval_end"]
+            gross = _r(stop_exit, entry_price, distance, side)
+            break
+        if target_hit:
+            result_state = STATE_TARGETED
+            first_hit = "TARGET"
+            first_hit_at = resolved_at = bar["interval_end"]
+            gross = float(recipe.target_r)
+            break
+
+    time_stop = int(recipe.time_stop_sessions or SWING_TIME_STOP_SESSIONS)
+    maturity = _project_session_close(entry_session.session_date, time_stop)
+    if result_state == STATE_OPEN and len(post_entry_days) >= time_stop and future:
+        result_state = STATE_EXPIRED
+        first_hit = "NEITHER"
+        resolved_at = future[-1][0]["interval_end"]
+        gross = _r(future[-1][0].get("close"), entry_price, distance, side)
+    elif result_state == STATE_OPEN and maturity is not None and is_matured({"maturity_at": maturity}, as_of):
+        result_state = STATE_TRUNCATED
+
+    row = {
+        "occurrence_id": occurrence.get("occurrence_id"),
+        "recipe_id": recipe.recipe_id,
+        "outcome_definition_id": OUTCOME_DEFINITION_ID,
+        "analysis_unit": recipe.analysis_unit,
+        "entry_at": entry_at,
+        "entry_price": entry_price,
+        "stop_price": stop_price,
+        "stop_distance": distance,
+        "mfe_r": mfe,
+        "mae_r": mae,
+        "time_to_mfe_min": time_to_mfe,
+        "first_hit": first_hit,
+        "first_hit_at": first_hit_at,
+        "path_resolution": path_resolution,
+        "r_lower_bound": lower,
+        "r_upper_bound": upper,
+        "gross_r": gross,
+        "net_r": None if gross is None else net_r(
+            gross,
+            distance,
+            entry_price,
+            observed_half_spread=None,
+            entry_slippage_half_spreads=ENTRY_SLIPPAGE_HALF_SPREADS,
+        ),
+        "cost_model_id": OUTCOME_DEFINITION_ID,
+        "result_state": result_state,
+        "maturity_at": resolved_at or maturity,
+        "censor_reason": None,
+        "computed_at": stamp,
+        "input_capture_mode_worst": _worst_capture_mode(bar.get("capture_mode") for bar in ordered),
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+    }
+    for column, minutes in INTRADAY_CHECKPOINTS:
+        eligible = [bar for bar, _session in future if bar["interval_end"] <= entry_at + timedelta(minutes=minutes)]
+        row[column] = _r(eligible[-1].get("close"), entry_price, distance, side) if eligible else None
+    entry_day_bars = [bar for bar, session in future if session.session_date == entry_session.session_date]
+    row["r_at_eod"] = (
+        _r(entry_day_bars[-1].get("close"), entry_price, distance, side) if entry_day_bars else None
+    )
+    by_day: dict[date, dict] = {}
+    for bar, session in future:
+        by_day[session.session_date] = bar
+    closes = [by_day[day] for day in sorted(by_day) if day != entry_session.session_date]
+    for column, sessions in SWING_CHECKPOINTS:
+        row[column] = (
+            _r(closes[sessions - 1].get("close"), entry_price, distance, side)
+            if len(closes) >= sessions else None
+        )
+    return row
+
+
 def simulate_intraday_bounce(
     occurrence: dict,
     bounce_event: dict,
@@ -928,7 +1278,7 @@ def outcome_key(row: dict) -> tuple[str, str, str]:
     )
 
 
-def latest_outcomes(store: ResearchStore) -> dict:
+def latest_outcomes(store: ResearchStore, occurrence_ids=None, recipe_ids=None) -> dict:
     """The current view: the latest ``computed_at`` per (occurrence, recipe,
     definition), across every year partition.
 
@@ -938,7 +1288,9 @@ def latest_outcomes(store: ResearchStore) -> dict:
     coexist with its replacement in anyone's arithmetic.
     """
     latest: dict[tuple[str, str, str], dict] = {}
-    for row in store.read_table("outcome_path").to_pylist():
+    for row in store.read_rows(
+        "outcome_path", occurrence_ids=occurrence_ids, recipe_ids=recipe_ids
+    ):
         key = outcome_key(row)
         current = latest.get(key)
         if current is None or _computed_stamp(row) >= _computed_stamp(current):
@@ -1004,11 +1356,12 @@ def build_outcomes(
     stamp = now or utc_now()
     cutoff = as_of or stamp
     selected = list(recipes or (SWING_HOUSE_V1, CONTROL_FIXED_1R2R_V1, CONTROL_TIME_ONLY_V1))
-
-    existing = latest_outcomes(store)
+    occurrence_list = list(occurrence_rows or [])
+    identities = [str(row.get("occurrence_id") or "") for row in occurrence_list]
+    existing = latest_outcomes(store, identities)
 
     rows = []
-    for occurrence in occurrence_rows or []:
+    for occurrence in occurrence_list:
         symbol = str(occurrence.get("symbol") or "")
         for recipe in selected:
             key = (str(occurrence.get("occurrence_id")), recipe.recipe_id, OUTCOME_DEFINITION_ID)
@@ -1025,6 +1378,15 @@ def build_outcomes(
                     as_of=cutoff,
                     computed_at=stamp,
                     intraday_bars=(m5_by_symbol or {}).get(symbol),
+                    run_id=run_id,
+                )
+            elif recipe.timeframe == "M5_OPPORTUNITY":
+                computed = simulate_m5_close_opportunity(
+                    occurrence,
+                    (m5_by_symbol or {}).get(symbol) or [],
+                    recipe,
+                    as_of=cutoff,
+                    computed_at=stamp,
                     run_id=run_id,
                 )
             else:
@@ -1077,6 +1439,10 @@ __all__ = [
     "ENTRY_SLIPPAGE_HALF_SPREADS",
     "HALF_SPREAD_BPS",
     "INTRADAY_BOUNCE_V1",
+    "M5_CLOSE_RECIPES",
+    "M5_CLOSE_STOP_RANKS",
+    "M5_CLOSE_STOP_SOURCES",
+    "M5_CLOSE_TARGETS_R",
     "MIN_HALF_SPREAD",
     "OUTCOME_DEFINITION_ID",
     "PATH_AMBIGUOUS",
@@ -1096,5 +1462,6 @@ __all__ = [
     "net_r",
     "outcome_key",
     "simulate_intraday_bounce",
+    "simulate_m5_close_opportunity",
     "simulate_swing",
 ]

@@ -879,6 +879,102 @@ def test_the_why_field_says_it_is_required(pane, monkeypatch):
     assert "required" in pane.capture_rail.like_note_input.placeholderText().lower()
 
 
+# --------------------------------------------------------------------------
+# Trader, 2026-08-27: "i want to be able to double click the like and claim the
+# same way i can double click the veto."
+#
+# The veto's gesture ATTEMPTS the commit - `select_reason` calls `commit_veto`
+# and only diverts to the note field when that reason's `note_required` is
+# unmet. The like's gesture went straight to the prompt and could never commit,
+# so a trader who had already typed the why was told to type it again.
+#
+# The fix is the veto's own wiring: the gesture calls `commit_like`, which
+# already carries the required-why guard. Nothing about the 2026-08-22 rule
+# moves - the two tests above still pass unchanged - and the new capability is
+# exactly "why typed, then the gesture commits".
+# --------------------------------------------------------------------------
+def test_double_clicking_a_claim_commits_the_like_once_the_why_is_there(
+    pane, monkeypatch, tmp_path
+):
+    _show(pane, monkeypatch, "AAPL")
+    rail = pane.capture_rail
+    rail.like_note_input.setText("held the 2nd dev and reclaimed")
+
+    rail.setup_list.itemActivated.emit(rail.setup_list.item(0))
+
+    path = tmp_path / "trader_annotations.jsonl"
+    assert path.exists(), "the double-click must commit, as it does on a veto"
+    written = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert written["event_type"] == "like_claim"
+    assert written["note"] == "held the 2nd dev and reclaimed"
+    from ui.widgets.capture_rail import _CLAIM_ROLE
+
+    assert written["claimed_setup_id"] == rail.setup_list.item(0).data(_CLAIM_ROLE)
+
+
+def test_double_clicking_a_claim_with_no_why_still_refuses_and_prompts(
+    pane, monkeypatch, tmp_path
+):
+    """The 2026-08-22 rule is untouched: the gesture attempts, it does not
+    override. A like without a why is still not a like."""
+    _show(pane, monkeypatch, "AAPL")
+    rail = pane.capture_rail
+    rail.like_note_input.setText("")
+
+    rail.setup_list.itemActivated.emit(rail.setup_list.item(0))
+
+    assert not (tmp_path / "trader_annotations.jsonl").exists()
+    assert "why" in rail.status_text().lower()
+
+
+def test_the_digit_commits_too_once_the_why_is_there(pane, monkeypatch, tmp_path):
+    """The veto's digit and double-click behave identically; the like's must
+    too, or the rail is internally inconsistent in a way the veto is not."""
+    _show(pane, monkeypatch, "AAPL")
+    rail = pane.capture_rail
+    rail.setup_list.setCurrentRow(0)
+    target = rail.selected_setup_id()
+    rail.setup_list.setCurrentRow(-1)
+    rail.like_note_input.setText("post-earnings drift, day 3")
+
+    rail.select_setup(target)
+
+    path = tmp_path / "trader_annotations.jsonl"
+    assert path.exists(), "digit + a typed why must commit"
+    written = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert written["claimed_setup_id"] == target
+    assert written["note"] == "post-earnings drift, day 3"
+
+
+def test_a_committed_like_clears_the_why_so_the_next_chart_starts_empty(
+    pane, monkeypatch, tmp_path
+):
+    """Otherwise the next double-click would silently reuse the previous
+    chart's reasoning - the worst possible failure for this dataset."""
+    _show(pane, monkeypatch, "AAPL")
+    rail = pane.capture_rail
+    rail.like_note_input.setText("first chart's why")
+    rail.setup_list.itemActivated.emit(rail.setup_list.item(0))
+    assert rail.like_note_input.text() == "", "the why must not carry over"
+
+
+def test_the_like_gesture_is_wired_the_same_shape_as_the_veto(pane, monkeypatch):
+    """Both lists' activation goes through the commit, not around it."""
+    _show(pane, monkeypatch, "AAPL")
+    rail = pane.capture_rail
+
+    liked, vetoed = [], []
+    monkeypatch.setattr(rail, "commit_like", lambda: liked.append(True))
+    monkeypatch.setattr(rail, "commit_veto", lambda: vetoed.append(True))
+
+    rail.setup_list.itemActivated.emit(rail.setup_list.item(0))
+    assert liked == [True], "the claim list must call commit_like"
+
+    if rail.reason_list.count():
+        rail.reason_list.itemActivated.emit(rail.reason_list.item(0))
+        assert vetoed == [True], "and the reason list still calls commit_veto"
+
+
 def test_a_like_advances_the_queue_and_does_not_retire_the_chart(pane, monkeypatch):
     """R9.2(b). The like is still a finished decision - it moves on - but it
     takes an advance-only path instead of the "Not today" verb's."""

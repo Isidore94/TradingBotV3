@@ -4,6 +4,10 @@ Two properties matter here and nothing else: the panel performs **no lake read
 on the render path** - constructing it touches no files, a read happens only
 when Refresh is pressed - and it is inert with a message rather than an error
 when the warehouse is not configured.
+
+Both still hold. Since G-P1.5 the read runs on a worker, because the lake is on
+the DAS and that share is known to drop - so these tests settle the worker
+before asserting. What they assert is unchanged.
 """
 
 import os
@@ -23,6 +27,15 @@ _app = QApplication.instance() or QApplication([])
 from ui.panels.warehouse_readout_panel import WarehouseReadoutPanel  # noqa: E402
 
 
+def _settle(panel, timeout_ms: int = 15000) -> None:
+    """Wait for the panel's reader, then deliver its queued signal."""
+    worker = getattr(panel, "_worker", None)
+    if worker is not None:
+        worker.wait(timeout_ms)
+    for _ in range(20):
+        _app.processEvents()
+
+
 def test_constructing_the_panel_reads_nothing(monkeypatch):
     import research_warehouse.store as store_module
 
@@ -37,6 +50,7 @@ def test_constructing_the_panel_reads_nothing(monkeypatch):
     assert "Refresh" in panel.refresh_button.text()
 
     panel.refresh()  # the explicit action, and only then
+    _settle(panel)
     assert opened == [1]
 
 
@@ -46,6 +60,7 @@ def test_a_disabled_warehouse_is_a_message_not_a_crash(monkeypatch):
     monkeypatch.setattr(store_module.ResearchStore, "open", classmethod(lambda cls, root=None: None))
     panel = WarehouseReadoutPanel()
     panel.refresh()
+    _settle(panel)
 
     assert panel.row_count() == 0
     assert "not configured" in panel.status_label.text()
@@ -60,6 +75,7 @@ def test_a_failing_read_is_reported_not_raised(monkeypatch):
     monkeypatch.setattr(store_module.ResearchStore, "open", classmethod(explode))
     panel = WarehouseReadoutPanel()
     panel.refresh()
+    _settle(panel)
 
     assert panel.row_count() == 0
     assert "DAS unmounted" in panel.status_label.text()

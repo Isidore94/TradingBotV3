@@ -52,5 +52,10 @@ class ResearchPanel(QFrame):
         layout.addWidget(tabs, 1)
 
     def shutdown(self) -> None:
+        # Named children, so this list has to be kept complete by hand - and it
+        # already fell behind once: the warehouse readout grew a worker in
+        # G-P1.5 and was not here. Anything below that owns a thread belongs in
+        # this list the same day it grows one.
         self.ticker_lookup_panel.shutdown()
         self.price_alerts_panel.shutdown()
+        self.warehouse_readout_panel.shutdown()

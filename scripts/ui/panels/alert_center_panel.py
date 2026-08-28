@@ -65,6 +65,8 @@ from chart_watch import (
 )
 import focus_adoption_gate
 import regime_pause_hold
+from regime_pause_focus import day_bias, focus_side_for
+import sma_trend_gate
 from prev_day_gate import (
     CLOSED as PREV_DAY_CLOSED,
     OPEN as PREV_DAY_BREAK_OPEN,
@@ -406,6 +408,11 @@ class AlertCenterPanel(QFrame):
     #: repaint on the cadence that already exists rather than polling
     #: themselves (trader rule 2026-08-19).
     focusBreakStatesChanged = Signal()
+    # Trader, 2026-08-27: intraday alerts are a LIST beside the chart, not a
+    # queue in front of it. Every M5 alert that would have queued a chart is
+    # posted here instead; the desk hangs the M5 alert bar on it.
+    m5AlertPosted = Signal(object)  # BounceAlert
+    m5AlertsDayRolled = Signal()  # the bar is day-scoped like the queue
     # One D1 level/event alert worth the hourly Away phone push, as the
     # {symbol, label, time_text} dict d1_push_event builds. Emitted for every
     # qualifying alert in every mode; Auto Pilot owns the AWAY-only gate.
@@ -433,6 +440,10 @@ class AlertCenterPanel(QFrame):
         self._alerts: list[BounceAlert] = []
         self._d1_alerts: list[BounceAlert] = []
         self._review_queue: list[BounceAlert] = []
+        # Whether the chart in front belongs to the waiting list (dequeued, or
+        # a clicked D1 row) or was merely clicked off the M5 alert bar. Decides
+        # what a click elsewhere does with it: re-queue, or skip for now.
+        self._current_review_holds_place: bool = True
         #: Trader rule 2026-08-19 (evening): "a long inside yesterday's range is
         #: probably chop. Chart review should only show me longs above the
         #: previous day's high and shorts below the previous day's low."
@@ -623,6 +634,13 @@ class AlertCenterPanel(QFrame):
         # THERE and never replays what the name did while still inside
         # yesterday's range. Both are day-scoped.
         self._focus_break_state: dict[str, str] = {}
+        #: (symbol, side) -> (bar-identity stamp, state). One entry per pair,
+        #: replaced when its bars change - see `_measure_mover_state`.
+        self._mover_measure_cache: dict[tuple[str, str], tuple[tuple, str]] = {}
+        #: Same shape for the session-VWAP leg (trader rule 2026-08-27).
+        self._vwap_measure_cache: dict[tuple[str, str], tuple[tuple, str]] = {}
+        #: And for the D1 trend leg (trader rule 3, 2026-08-27).
+        self._sma_measure_cache: dict[tuple[str, str], tuple[tuple, str]] = {}
         self._focus_break_open_at: dict[str, datetime] = {}
         self._focus_gate_held = 0
         # Phase 2 guidance: scoreboard + AI policy -> queue ordering and
@@ -791,13 +809,14 @@ class AlertCenterPanel(QFrame):
         # save button. No alert, tier, fold, digest or queue behaviour is
         # touched.
         self._journal_tab_index = self.tabs.addTab(
-            self._build_journal_tab(), "Journal"
+            self._build_journal_tab(), "Journal  Ctrl+J"
         )
 
         self._refresh_armed_list()
         self.chart_review.armedSummaryChanged.connect(self._refresh_armed_tab_label)
         self._refresh_armed_tab_label(self.chart_review.armed_count())
         self._bind_capture_shortcuts()
+        self._bind_journal_shortcut()
         self._d1_unread = 0
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self._refresh_d1_tab_label()
@@ -1035,10 +1054,18 @@ class AlertCenterPanel(QFrame):
         self._alerts.insert(0, alert)
         del self._alerts[MAX_FEED_ITEMS * 2 :]
         is_focus = self._alert_has_focus_privilege(alert)
+        # Trader rule 2026-08-27: a with-trend regime-pause row ("holding
+        # highs" on a bullish day, "pressing lows" on a bearish day) goes
+        # straight to M5 Focus and never occupies the review chart - the
+        # decision is made. Measured AFTER `is_focus` on purpose: the feed row
+        # is presented exactly as it was before the placement, so the rule
+        # changes where the name goes and not how the row looks or sounds.
+        auto_focused = self._auto_focus_regime_pause(alert)
         if alert_passes_feed_gate(alert, self._min_tier_mode(), is_focus=is_focus):
             # The chart review queue is likewise decided before, and
             # independently of, how the row is presented.
-            self._enqueue_review_alert(alert)
+            if not auto_focused:
+                self._enqueue_review_alert(alert)
             decision = self._repetition_decision(alert, is_focus=is_focus)
             if decision.action == ACTION_FOLD and self._fold_into_existing_row(alert, decision):
                 pass
@@ -1252,6 +1279,30 @@ class AlertCenterPanel(QFrame):
         self.tabs.setCurrentIndex(self._capture_tab_index)
         handler()
 
+    def _bind_journal_shortcut(self) -> None:
+        """Ctrl+J: select the Journal tab and focus the composer.
+
+        §5.3 option (a), decision 10. The trader could not find this tab on
+        2026-08-26; it is the sixth of the lower strip and reachable only by
+        clicking it. A keyboard route costs no row, so the 2026-08-20 rule -
+        at most ONE slim row between the charts and the tab strip - is intact.
+        No verb-row verb: that is a mouse route and needs its own ask.
+
+        Panel scope with WidgetWithChildrenShortcut, exactly like the capture
+        keys: a QShortcut bound inside a hidden tab page never fires. Ctrl+J is
+        unbound everywhere else in scripts/ui (Ctrl+R, Ctrl+F, F9, Ctrl+Return
+        and Alt+V/K/S/N are the whole inventory) - two live bindings for one
+        sequence is an ambiguous shortcut and Qt fires NEITHER.
+        """
+        shortcut = QShortcut(QKeySequence("Ctrl+J"), self)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(self._focus_journal_composer)
+        self._journal_route_shortcut = shortcut
+
+    def _focus_journal_composer(self) -> None:
+        self.tabs.setCurrentIndex(self._journal_tab_index)
+        self._journal_text.setFocus()
+
     def _emit_feed_status(self) -> None:
         loud = sum(
             1
@@ -1389,18 +1440,183 @@ class AlertCenterPanel(QFrame):
             return PREV_DAY_UNKNOWN
         return PREV_DAY_CLOSED
 
-    def _measure_mover_state(self, symbol: str, side: str) -> str:
-        """One side, measured now from cached bars. Never raises."""
+    def vwap_state(self, symbol: str, side: str) -> str:
+        """OPEN / CLOSED / UNKNOWN for "on the right side of session VWAP".
+
+        Trader rule 2026-08-27: "it's below VWAP trending lower on the M5 -
+        what a waste of my time." The predicate is the adoption gate's own
+        VWAP leg, `focus_adoption_gate.session_vwap_state`, fed by
+        `regime_pause_hold.session_levels` over the cached M5 series - session
+        VWAP from `chart_snapshot.session_vwap_series` on completed bars, never
+        BounceBot's dynamic/EOD VWAP (CLAUDE.md, packet R2). A sideless row has
+        no right side and is UNKNOWN, which shows.
+        """
+        symbol = str(symbol or "").strip().upper()
+        side_key = str(side or "").strip().lower()
+        if not symbol or side_key not in ("long", "short"):
+            return PREV_DAY_UNKNOWN
         try:
             moment = datetime.now()
-            prev_high, prev_low = prev_session_extremes(
-                self._d1_bars_for(symbol), session=moment.date()
+            m5_bars = self._m5_bars_for(symbol)
+            stamp = (moment.date(), self._series_stamp(m5_bars))
+            remembered = self._vwap_measure_cache.get((symbol, side_key))
+            if remembered is not None and remembered[0] == stamp:
+                return remembered[1]
+            levels = regime_pause_hold.session_levels(m5_bars, now=moment)
+            state = focus_adoption_gate.session_vwap_state(
+                side_key, levels.price, levels.vwap
             )
-            completed = completed_session_bars(self._m5_bars_for(symbol), now=moment)
+            self._vwap_measure_cache[(symbol, side_key)] = (stamp, state)
+            return state
+        except Exception:
+            logging.debug("Session VWAP state unavailable for %s.", symbol, exc_info=True)
+            return PREV_DAY_UNKNOWN
+
+    @staticmethod
+    def _is_d1_review(alert: BounceAlert) -> bool:
+        """A chart the D1 side of the desk recommended - the swing scanner's
+        D1 rows and the Focus D1 interest flags. The trend leg applies to
+        these and to nothing intraday."""
+        return bool(alert.is_d1) or str(alert.tag or "") == FOCUS_D1_EVENT_TAG
+
+    def sma_trend_state(self, symbol: str, side: str) -> str:
+        """OPEN / CLOSED / UNKNOWN for "a long above the SMA200, a short below the SMA50".
+
+        Trader rule 3, 2026-08-27, from MUFG: a D1 short recommended above
+        every SMA in a clean uptrend. The rule is `sma_trend_gate`; this only
+        feeds it numbers the desk already holds - the averages off completed
+        bars of the local daily store, the price off the last completed M5
+        bar when the bot has one and off the last daily bar otherwise. No
+        fetch, no IB traffic. Memoized on the identity of both series.
+        """
+        symbol = str(symbol or "").strip().upper()
+        side_key = str(side or "").strip().lower()
+        if not symbol or side_key not in ("long", "short"):
+            return PREV_DAY_UNKNOWN
+        try:
+            moment = datetime.now()
+            d1_bars = self._d1_bars_for(symbol)
+            m5_bars = self._m5_bars_for(symbol)
+            stamp = (
+                moment.date(),
+                self._series_stamp(d1_bars),
+                self._series_stamp(m5_bars),
+            )
+            remembered = self._sma_measure_cache.get((symbol, side_key))
+            if remembered is not None and remembered[0] == stamp:
+                return remembered[1]
+            completed = completed_session_bars(m5_bars, now=moment)
+            price = _bar_close(completed[-1]) if completed else None
+            if price is None and d1_bars:
+                price = _bar_close(d1_bars[-1])
+            sma50, sma200 = sma_trend_gate.trend_levels(d1_bars, today=moment.date())
+            state, _reason = sma_trend_gate.sma_trend_state(side_key, price, sma50, sma200)
+            self._sma_measure_cache[(symbol, side_key)] = (stamp, state)
+            return state
+        except Exception:
+            logging.debug("SMA trend state unavailable for %s.", symbol, exc_info=True)
+            return PREV_DAY_UNKNOWN
+
+    def _review_chart_state(self, alert: BounceAlert) -> str:
+        """Should this chart show? Every leg, one answer.
+
+        CLOSED when ANY leg is verified against the name - inside yesterday's
+        range, on the wrong side of session VWAP, or (a D1 recommendation
+        only) a long under its SMA200 / a short over its SMA50. One measured
+        reason to hide is enough; that is deliberately not the adoption
+        gate's ordering, which reports "could not measure" before "measured
+        and failed" because it is explaining an eviction, not deciding a
+        display. UNKNOWN (nothing verified against it, something unmeasurable)
+        SHOWS, tagged; OPEN is a verified pass on every leg asked.
+        """
+        legs = [
+            self.mover_state(alert.symbol, alert.side),
+            self.vwap_state(alert.symbol, alert.side),
+        ]
+        if self._is_d1_review(alert):
+            legs.append(self.sma_trend_state(alert.symbol, alert.side))
+        if PREV_DAY_CLOSED in legs:
+            return PREV_DAY_CLOSED
+        if PREV_DAY_UNKNOWN in legs:
+            return PREV_DAY_UNKNOWN
+        return PREV_DAY_BREAK_OPEN
+
+    def _review_badge_state(self, alert: BounceAlert) -> str:
+        """What the review chart's badge says about the name in front of you.
+
+        `open` (MOVING) needs the extreme leg verified and no later leg
+        verified against it; a name revealed after the VWAP leg hid it says
+        `wrong_side_vwap`, after the trend leg `wrong_side_sma`; the extreme
+        leg's own answers are unchanged.
+        """
+        mover = self.mover_state(alert.symbol, alert.side)
+        if mover != PREV_DAY_BREAK_OPEN:
+            return mover
+        if self.vwap_state(alert.symbol, alert.side) == PREV_DAY_CLOSED:
+            return "wrong_side_vwap"
+        if (
+            self._is_d1_review(alert)
+            and self.sma_trend_state(alert.symbol, alert.side) == PREV_DAY_CLOSED
+        ):
+            return "wrong_side_sma"
+        return mover
+
+    @staticmethod
+    def _series_stamp(bars) -> tuple:
+        """Cheap identity for a bar series: how many, and when the last one is.
+
+        Enough to decide "these are the same bars I measured last time", and
+        O(1) - the point is to avoid re-deriving from them, so the check must
+        not cost what it saves.
+        """
+        if not bars:
+            return (0, None)
+        try:
+            return (len(bars), bars[-1].get("dt"))
+        except Exception:
+            return (len(bars), None)
+
+    def _measure_mover_state(self, symbol: str, side: str) -> str:
+        """One side, measured now from cached bars. Never raises.
+
+        Memoized per (symbol, side) on the IDENTITY of the bars the answer came
+        from - session date plus the length and last timestamp of both series -
+        so a reused answer is one that provably could not have changed. It is a
+        memo, deliberately not a cache with an expiry: `mover_state` feeds the
+        movers-only review filter, which decides what the trader SEES, and a
+        time-based cache would let a name that has just broken yesterday's high
+        stay hidden until it lapsed. A new bar is a new key.
+
+        Only the newest stamp per (symbol, side) is kept, so this cannot grow a
+        row per five-minute bucket across a session.
+
+        Measured before it was written (synthetic series at realistic sizes):
+        0.234 ms per (symbol, side), of which 79% is what this skips - the
+        materialization above it is paid either way.
+        """
+        try:
+            moment = datetime.now()
+            d1_bars = self._d1_bars_for(symbol)
+            m5_bars = self._m5_bars_for(symbol)
+            stamp = (
+                moment.date(),
+                self._series_stamp(d1_bars),
+                self._series_stamp(m5_bars),
+            )
+            remembered = self._mover_measure_cache.get((symbol, side))
+            if remembered is not None and remembered[0] == stamp:
+                return remembered[1]
+            prev_high, prev_low = prev_session_extremes(
+                d1_bars, session=moment.date()
+            )
+            completed = completed_session_bars(m5_bars, now=moment)
             price = _bar_close(completed[-1]) if completed else None
             state, _reason = focus_adoption_gate.mover_state(
                 side, price, prev_high, prev_low
             )
+            # A failure never reaches here, so UNKNOWN-from-a-broken-read is
+            # never remembered: it is the absence of an answer, not one.
+            self._mover_measure_cache[(symbol, side)] = (stamp, state)
             return state
         except Exception:
             # An unreadable measurement is UNKNOWN, which SHOWS. A filter that
@@ -1684,6 +1900,15 @@ class AlertCenterPanel(QFrame):
             and not self._alert_is_focus(alert)
         ):
             return
+        # Trader rule 2026-08-27: an intraday alert is a LINE in the M5 alert
+        # bar, never a chart in the waiting list - "purge M5 alerts from the
+        # waiting list and keep those for D1 alerts". Posted here, at the one
+        # door into the queue, so everything upstream (the backing list, the
+        # feed, History, the evidence streams, the AWAY recap above) is
+        # untouched. A click on the bar charts it through `chart_alert`.
+        is_m5 = self._is_m5_review_alert(alert)
+        if is_m5:
+            self.m5AlertPosted.emit(alert)
         if (
             self._current_review_alert is not None
             and self._current_review_alert.symbol == alert.symbol
@@ -1691,13 +1916,15 @@ class AlertCenterPanel(QFrame):
             self._current_review_alert = alert
             self._render_current_review()
             return
+        if is_m5:
+            return
         # Movers only (trader rule 2026-08-19). Applied HERE because this is
         # the single door into the review queue - every caller, including the
         # auto-pick drain and the D1 feed, arrives through it. It hides and
         # counts; it deletes nothing, mutes nothing and records nothing to the
         # review-learning stream.
         if self._review_movers_only and not self._review_shows_regardless(alert):
-            if self.mover_state(alert.symbol, alert.side) == PREV_DAY_CLOSED:
+            if self._review_chart_state(alert) == PREV_DAY_CLOSED:
                 self._hidden_inside_range[alert.symbol] = alert
                 self.chart_review.set_hidden_count(len(self._hidden_inside_range))
                 return
@@ -1731,6 +1958,35 @@ class AlertCenterPanel(QFrame):
             self.chart_review.set_queued_count(len(self._review_queue))
             self._prefetch_review_queue()
 
+    @staticmethod
+    def _is_m5_review_alert(alert: BounceAlert) -> bool:
+        """An ordinary intraday alert - the kind the M5 bar lists instead of the queue.
+
+        Not one of these, which keep their chart: a D1 row, a Focus D1 flag, a
+        chart-watch hit or a price alert the trader armed themselves, the
+        auto-pick proposals, a typed symbol and a deliberate Focus review.
+        """
+        if alert.is_d1:
+            return False
+        if str(alert.tag or "") in (
+            CHART_WATCH_TAG,
+            AUTO_PICK_TAG,
+            MANUAL_CHART_TAG,
+            FOCUS_REVIEW_TAG,
+            FOCUS_D1_EVENT_TAG,
+        ):
+            return False
+        if str(alert.raw_text or "").lstrip().upper().startswith("PRICE ALERT"):
+            return False
+        return True
+
+    def chart_alert(self, alert: BounceAlert) -> None:
+        """Public: chart this alert now (the M5 bar's click). Same path as a
+        feed-row click. A D1 chart in front keeps its place at the head of
+        the queue; an M5 chart in front is skipped (trader rule 2026-08-27,
+        second pass - see `_select_review_alert`)."""
+        self._select_review_alert(alert)
+
     def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
         """Cached per-symbol guidance; a failed lookup is neutral, never fatal."""
         guidance = self._review_guidance.get(alert.symbol)
@@ -1750,7 +2006,19 @@ class AlertCenterPanel(QFrame):
             return 0.0
 
     def _select_review_alert(self, alert: BounceAlert) -> None:
-        """A feed-row click makes that alert the active visual review."""
+        """A feed-row or M5-bar click makes that alert the active visual review.
+
+        What happens to the chart it replaces depends on where that chart
+        came from. A chart that HOLDS A PLACE in the waiting list (it was
+        dequeued, or it is a D1 row / armed hit the trader clicked) goes back
+        to the head of the queue, so a look-elsewhere never loses it. An M5
+        chart clicked off the alert bar holds no place - the bar is a list,
+        not a queue (trader rule 2026-08-27) - so clicking away from it is a
+        "skip for now": a `skip` review event is written and it is NOT put in
+        the waiting list (trader, same day, second pass: "it shouldn't queue
+        the old m5 alert in the waiting list"). Its line already left the bar
+        when it was clicked; the feed and History keep it.
+        """
         if not alert.symbol or alert.symbol in self._ignored_symbols:
             return
         current = self._current_review_alert
@@ -1760,18 +2028,56 @@ class AlertCenterPanel(QFrame):
                 for queued in self._review_queue
                 if queued.symbol not in {current.symbol, alert.symbol}
             ]
-            self._review_queue.insert(0, current)
+            if self._current_review_holds_place:
+                self._review_queue.insert(0, current)
+            else:
+                self._record_review_event(
+                    "skip",
+                    alert=current,
+                    dwell_ms=self._review_dwell_ms(current.symbol),
+                    queue_len=len(self._review_queue),
+                    detail={"reason": "clicked_away_from_m5_alert"},
+                )
         else:
             self._review_queue = [
                 queued for queued in self._review_queue if queued.symbol != alert.symbol
             ]
         self._current_review_alert = alert
+        self._current_review_holds_place = not self._is_m5_review_alert(alert)
         self._render_current_review()
 
     def _advance_review_queue(self) -> None:
-        self._current_review_alert = (
-            self._review_queue.pop(0) if self._review_queue else None
-        )
+        """Show the next chart - measured NOW, not when it was queued.
+
+        Trader rule 2026-08-27: EPD was flagged on the 06:30 bar and reached
+        the pane at 07:30, by which time it sat under VWAP and was fading -
+        the queue-time answer was an hour stale. So the filter is asked again
+        at the moment a chart is about to show, and a name that has since
+        fallen inside yesterday's range or onto the wrong side of session VWAP
+        is withheld (counted, one click reveals) instead of shown. Same
+        exemptions as at queue time: a deliberate Focus review and an armed
+        chart-watch hit always show, and once the trader has revealed the
+        hidden names for the session nothing is re-checked.
+        """
+        hidden_before = len(self._hidden_inside_range)
+        next_alert = None
+        while self._review_queue:
+            candidate = self._review_queue.pop(0)
+            if (
+                self._review_movers_only
+                and not self._review_shows_regardless(candidate)
+                and self._review_chart_state(candidate) == PREV_DAY_CLOSED
+            ):
+                self._hidden_inside_range[candidate.symbol] = candidate
+                continue
+            next_alert = candidate
+            break
+        self._current_review_alert = next_alert
+        # Popped from the waiting list, so it keeps a place there if the
+        # trader clicks elsewhere for a moment (see `_select_review_alert`).
+        self._current_review_holds_place = True
+        if len(self._hidden_inside_range) != hidden_before:
+            self.chart_review.set_hidden_count(len(self._hidden_inside_range))
         self._render_current_review()
         self._prefetch_review_queue()
 
@@ -2052,7 +2358,7 @@ class AlertCenterPanel(QFrame):
             armed_levels=self.armed_levels_for(alert.symbol),
             armed_d1_events=self.armed_d1_event_kinds(alert.symbol),
             any_bounce_armed=self.any_bounce_armed_for(alert.symbol),
-            mover_state=self.mover_state(alert.symbol, alert.side),
+            mover_state=self._review_badge_state(alert),
             guidance_text=guidance.summary_text(),
             in_focus=self._alert_is_focus(alert),
             auto_adopted=self._alert_is_auto_adopted(alert),
@@ -2736,6 +3042,105 @@ class AlertCenterPanel(QFrame):
             },
         )
         return True
+
+    def _regime_pause_day_env(self) -> str:
+        """The day's directional label, as discovery sees it.
+
+        `resolve_discovery_env` is the ONE definition of "which way is the
+        day": BounceBot's live label while it is directional, else the opening
+        read recorded at the auto-populate slot (first directional write wins
+        for the day). Blank when neither can answer - and blank admits
+        nothing, so a row seen before any read exists stays on the queue.
+        """
+        current = ""
+        if self._bounce_service is not None:
+            try:
+                bot = self._bounce_service.current_bot()
+                if bot is not None:
+                    current = str(bot.get_market_environment() or "")
+            except Exception:
+                current = ""
+        try:
+            from autopilot_core import load_opening_environment, resolve_discovery_env
+
+            return str(resolve_discovery_env(current, load_opening_environment()) or "")
+        except Exception:
+            return ""
+
+    def _auto_focus_regime_pause(self, alert: BounceAlert) -> bool:
+        """Place a with-trend regime-pause row on M5 Focus (trader rule 2026-08-27).
+
+        On 2026-08-27 the trader reviewed 21 "holding highs" charts in nine
+        minutes on a bullish open and put twelve on M5 Focus by hand while 74
+        more charts waited. The rule: a swing LONG holding highs on a bullish
+        day, or a swing SHORT pressing lows on a bearish day, is added to M5
+        Focus by the machine and skips the review chart. The mirror cases and
+        a non-directional day are untouched (`regime_pause_focus`).
+
+        Returns True when the row is RESOLVED - placed, or already the
+        machine's own entry - so `add_alert` knows not to queue it. False for
+        everything else, including a Focus name the TRADER owns (their chart
+        shows as it always did) and any failure: this must never be the
+        reason a chart went missing, so it fails open onto the old path.
+
+        DESK only, like auto-pick adoption (R1 matrix): AWAY and EVENING have
+        nobody present to prune what the machine adopted, and OFF adopts
+        nothing. Writes through the STORE, not `FocusService.add`, for the
+        same reason `_adopt_auto_pick_into_focus` does - a machine adding a
+        name is not the trader liking it - and stamps the auto-pick marker so
+        "Not today" and the desync repair can reach the entry. The marker is
+        written only when `add()` actually added: an existing unmarked entry
+        is the trader's and must not change owner.
+        """
+        if not is_regime_pause_alert(alert):
+            return False
+        if not alert.symbol or not SYMBOL_RE.fullmatch(alert.symbol):
+            return False
+        if self._auto_mode_now() != "DESK":
+            return False
+        store = getattr(self.focus_service, "store", None)
+        if store is None:
+            return False
+        env = self._regime_pause_day_env()
+        side = focus_side_for(env, alert.side)
+        if side is None:
+            return False
+        try:
+            added = bool(store.add(alert.symbol, side, "m5"))
+            if added:
+                marker_writer = getattr(store, "mark_auto_adopted", None)
+                if callable(marker_writer):
+                    marker_writer(
+                        alert.symbol,
+                        side,
+                        "m5",
+                        staged_at=str(alert.time_text or ""),
+                        reason=f"{alert.trigger} on a {day_bias(env)} day ({env})",
+                    )
+                outcome = "adopted"
+            else:
+                reader = getattr(store, "is_auto_adopted", None)
+                already_ours = bool(reader(alert.symbol, side, "m5")) if callable(reader) else False
+                outcome = "already_auto" if already_ours else "already_trader_owned"
+        except Exception:
+            logging.warning(
+                "Regime-pause row %s could not be placed on M5 Focus; queued instead.",
+                alert.symbol,
+                exc_info=True,
+            )
+            return False
+        self._record_review_event(
+            "regime_pause_auto_focus",
+            alert=alert,
+            queue_len=len(self._review_queue),
+            detail={"env": env, "focus_side": side, "outcome": outcome},
+        )
+        if outcome == "adopted":
+            self.statusChanged.emit(
+                f"★ {alert.symbol}: {alert.trigger} on a {day_bias(env)} day - "
+                f"added to M5 Focus {side}s, no chart to review."
+            )
+        return outcome in ("adopted", "already_auto")
 
     def _resolve_auto_pick(self, alert: BounceAlert, approved: bool) -> None:
         if (
@@ -3578,9 +3983,14 @@ class AlertCenterPanel(QFrame):
         from PySide6.QtWidgets import QComboBox, QPlainTextEdit
 
         import market_journal
-        from ui.services.market_journal_service import MarketJournalService
+        from ui.services.market_journal_service import shared_journal_service
 
-        self.market_journal_service = MarketJournalService(self)
+        # The SHARED service, not a second instance. Both were writing the same
+        # file correctly, but a note typed here never told the left-nav Market
+        # Journal page to refresh - its `entryWritten` came from an object that
+        # page had never heard of. One writer is what the R10.H docstring
+        # always claimed; this is what makes it true.
+        self.market_journal_service = shared_journal_service()
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -3619,14 +4029,71 @@ class AlertCenterPanel(QFrame):
 
         import market_journal
 
+        # The chart in front of the trader, when there is one. A stale symbol
+        # would be worse than none: it would assert a link they never made.
+        current = getattr(self, "_current_review_alert", None)
+        symbol = str(getattr(current, "symbol", "") or "").strip().upper()
+
         result = self.market_journal_service.write_entry(
             text=self._journal_text.toPlainText(),
             session_date=date.today().isoformat(),
             timeframe=self._journal_timeframe.currentText(),
+            symbols=[symbol] if symbol else [],
             origin=market_journal.ORIGIN_DESK_TAB,
         )
         if result.get("ok"):
             self._journal_text.clear()
+            self._capture_journal_charts(result.get("entry") or {}, symbol)
+
+    def journal_chart_bars(self, symbol: str) -> tuple[list, list]:
+        """(M5, D1) cached bars for one symbol, for a Market Journal capture.
+
+        Public because the auto-mode flip capture lives in `ui.app` and must
+        not reach into this panel's private accessors. Cache reads only - the
+        same two the D1 watch poll already makes - so it never fetches and is
+        safe from the Qt thread.
+        """
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return [], []
+        return self._m5_bars_for(symbol, sessions=2), self._d1_bars_for(symbol)
+
+    def _capture_journal_charts(self, entry: dict, symbol: str) -> None:
+        """Store the tape this note was written against.
+
+        AFTER the entry is on disk, never before: a note must not wait on a
+        chart, and a capture that fails leaves an entry that is honestly
+        chartless rather than a thought that was lost.
+
+        Every bar list here is a CACHE read - `_m5_bars_for` reads
+        `latest_bars` and `_d1_bars_for` reads the chart service's memoized
+        dicts - so nothing fetches and nothing blocks. The trimming, the digest
+        and both file writes happen on the service's worker.
+
+        Capture-side only. No alert, tier, fold, digest, queue, score or
+        detector behaviour is touched by this method or its caller.
+        """
+        import market_journal_capture
+
+        entry_id = str(entry.get("entry_id") or "")
+        if not entry_id:
+            return
+        benchmark = market_journal_capture.BENCHMARK_SYMBOL
+        symbol_m5, symbol_d1 = self.journal_chart_bars(symbol)
+        benchmark_m5, benchmark_d1 = self.journal_chart_bars(benchmark)
+        try:
+            self.market_journal_service.capture_charts(
+                entry_id=entry_id,
+                symbol=symbol,
+                reason=market_journal_capture.REASON_ENTRY,
+                m5_bars=symbol_m5,
+                d1_bars=symbol_d1,
+                benchmark_m5=benchmark_m5,
+                benchmark_d1=benchmark_d1,
+            )
+        except Exception:
+            # The note is saved; the picture beside it is best-effort.
+            logging.exception("Market journal chart capture could not be started.")
 
     def _refresh_armed_list(self) -> None:
         self.armed_list.set_watches(
@@ -4242,6 +4709,8 @@ class AlertCenterPanel(QFrame):
         self._hidden_inside_range.clear()
         self.chart_review.set_hidden_count(0)
         self._refresh_ignored_button()
+        # The M5 alert bar is day-scoped like the queue it replaced.
+        self.m5AlertsDayRolled.emit()
 
     def _park_review_symbol(self, symbol: str) -> None:
         """Keep a symbol's chart out of the review queue for the day."""

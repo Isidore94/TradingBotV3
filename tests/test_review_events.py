@@ -2,6 +2,8 @@
 
 import json
 import sys
+
+import pytest
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +12,23 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+@pytest.fixture(autouse=True)
+def _queue_mechanics_only(monkeypatch):
+    """Routing off: these tests are about what the QUEUE does with a row.
+
+    Since 2026-08-27 an ordinary intraday alert lists in the M5 alert bar
+    instead of queueing a chart (trader rule; `test_qt_m5_alert_bar.py` owns
+    that routing and its exemptions). The mechanics below are the same for
+    any row the queue holds, so they are exercised with the routing switched
+    off rather than rewritten around D1 fixtures.
+    """
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    monkeypatch.setattr(
+        AlertCenterPanel, "_is_m5_review_alert", staticmethod(lambda alert: False)
+    )
 
 from review_events import (
     REVIEW_EVENTS_SCHEMA,

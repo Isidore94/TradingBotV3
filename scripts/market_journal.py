@@ -47,6 +47,13 @@ TIMEFRAMES = (TIMEFRAME_M5, "M15", "H1", TIMEFRAME_D1, "W1")
 ORIGIN_DESK_TAB = "desk_tab"
 ORIGIN_JOURNAL_PAGE = "journal_page"
 ORIGIN_AWAY_RECAP = "away_recap"
+#: The desk's own hand. An auto-mode flip writes a row so the journal reads as
+#: one timeline - what the trader thought AND what the machine did, in order -
+#: rather than requiring two stores to be merged by eye. It is marked as
+#: machine-written because a reader weighing "what did you think?" must never
+#: count a row nobody thought.
+ORIGIN_AUTO_MODE_FLIP = "auto_mode_flip"
+MACHINE_ORIGINS = (ORIGIN_AUTO_MODE_FLIP,)
 
 #: The journal-only RVOL floor. It is an OVERLAY on this page's charts and
 #: never touches the canonical D1 level store (trader decision, plan.md L1118).
@@ -143,6 +150,15 @@ def supersede(entry: Mapping[str, Any], *, text: str, now: datetime | None = Non
         now=now,
         supersedes=str(entry.get("entry_id") or ""),
     )
+
+
+def is_machine_entry(entry: Mapping[str, Any]) -> bool:
+    """Did the desk write this row, rather than the trader?
+
+    Asked at READ time off ``origin``, so no row needs a second field that
+    could disagree with the first.
+    """
+    return str(entry.get("origin") or "") in MACHINE_ORIGINS
 
 
 def resolve_entries(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:

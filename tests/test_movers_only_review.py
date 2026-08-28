@@ -129,6 +129,24 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from ui.models.bounce import BounceAlert  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _queue_mechanics_only(monkeypatch):
+    """Routing off: these tests are about what the QUEUE does with a row.
+
+    Since 2026-08-27 an ordinary intraday alert lists in the M5 alert bar
+    instead of queueing a chart (trader rule; `test_qt_m5_alert_bar.py` owns
+    that routing and its exemptions). The mechanics below - filters, expiry,
+    verbs, badges - are the same for any row the queue holds, so they are
+    exercised with the routing switched off rather than rewritten around D1
+    fixtures that would drag the D1 feed into every assertion.
+    """
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    monkeypatch.setattr(
+        AlertCenterPanel, "_is_m5_review_alert", staticmethod(lambda alert: False)
+    )
+
+
 def _alert(symbol, side="LONG", *, tag="", trigger="[S-TIER] VWAP reclaim"):
     return BounceAlert(
         time_text="11:30:00",

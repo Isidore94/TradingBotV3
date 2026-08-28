@@ -21,8 +21,12 @@ from project_paths import get_local_setting, save_local_setting
 # is the larger share and widens further on a big monitor: the setups table
 # needs a bounded width to stay readable, while a candle chart uses every pixel
 # it is given.
-DESK_SPLIT_NARROW = (52, 48)
-DESK_SPLIT_WIDE = (58, 42)
+# Left to right: the M5 alert bar (trader, 2026-08-27 - a list of intraday
+# alerts, moved to the left of the chart on the second pass), the chart
+# column, the setups. The bar's share comes out of the setups' side so the
+# chart column keeps its lead.
+DESK_SPLIT_NARROW = (7, 52, 41)
+DESK_SPLIT_WIDE = (6, 58, 36)
 # Above this desk content width the wide preset applies.
 WIDE_DESK_THRESHOLD = 2000
 

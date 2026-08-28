@@ -76,27 +76,37 @@ def test_an_away_day_accumulates_no_review_queue(monkeypatch):
     assert panel._current_review_alert is None
 
 
-def test_the_desk_is_byte_identical(monkeypatch):
-    """Only auto desk should stream signals all day. DESK is untouched."""
+def test_the_desk_lists_intraday_alerts_in_the_m5_bar_and_queues_none(monkeypatch):
+    """DESK was untouched by the AWAY amendment. Since 2026-08-27 (trader
+    rule) an ordinary intraday alert lists in the M5 alert bar instead of
+    queueing a chart - in DESK and EVENING alike - while AWAY still assembles
+    the recap and never posts to the bar."""
     panel = _panel(monkeypatch, mode="DESK")
+    posted = []
+    panel.m5AlertPosted.connect(posted.append)
 
     for index in range(5):
         panel.add_alert(_alert(f"SYM{index}"))
 
-    assert panel._current_review_alert is not None
-    assert len(panel._review_queue) == 4
+    assert [alert.symbol for alert in posted] == [f"SYM{i}" for i in range(5)]
+    assert panel._current_review_alert is None
+    assert panel._review_queue == []
 
 
-def test_evening_keeps_its_existing_queue_silently_semantics(monkeypatch):
-    """The amendment changes AWAY only. EVENING is for sleeping through the
-    morning session, and its queue is what the trader wakes up to."""
+def test_evening_lists_intraday_alerts_in_the_m5_bar_too(monkeypatch):
+    """The amendment changed AWAY only; EVENING is for sleeping through the
+    morning, and what the trader wakes up to is now the M5 bar plus the D1
+    queue rather than a queue of M5 charts."""
     panel = _panel(monkeypatch, mode="EVENING")
+    posted = []
+    panel.m5AlertPosted.connect(posted.append)
 
     panel.add_alert(_alert("AAA"))
     panel.add_alert(_alert("BBB"))
 
-    assert panel._current_review_alert is not None
-    assert len(panel._review_queue) == 1
+    assert [alert.symbol for alert in posted] == ["AAA", "BBB"]
+    assert panel._current_review_alert is None
+    assert panel._review_queue == []
 
 
 # ==========================================================================
@@ -434,9 +444,17 @@ def test_activating_a_swing_row_charts_it_too():
 
 
 def test_a_blank_symbol_asks_for_no_chart():
-    """Missing data is uncertainty: an empty row must not open a chart for ""."""
+    """Missing data is uncertainty: an empty row must not open a chart for "".
+
+    Since G-P2.1 a blank-symbol row is a SCANNER STATUS row and is hidden and
+    counted, so it is revealed here first - otherwise this would pass because
+    the row is absent rather than because a blank symbol charts nothing, which
+    is a different claim.
+    """
     panel = _recap_panel()
     panel._render({"classified_alerts": [{"symbol": "", "time_text": "09:00:00"}]})
+    panel._reveal_status_rows()
+    assert panel.alerts.rowCount() == 1
     seen: list[str] = []
     panel.symbolActivated.connect(seen.append)
 

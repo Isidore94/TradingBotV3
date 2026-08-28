@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ui.read_worker import ReadWorker, join_worker
+
 from ui.widgets.section_header import SectionHeader
 
 COLUMNS = (
@@ -81,6 +83,8 @@ class WarehouseReadoutPanel(QFrame):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.table, stretch=1)
 
+        self._worker: ReadWorker | None = None
+
         self.caveat_label = QLabel(CAVEAT_TEXT)
         self.caveat_label.setWordWrap(True)
         self.caveat_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -88,34 +92,82 @@ class WarehouseReadoutPanel(QFrame):
 
     # -- data ---------------------------------------------------------------
     def refresh(self) -> None:
-        """Read the lake once, on demand. Never called from a paint path."""
-        try:
-            from research_warehouse import queries
-            from research_warehouse.store import ResearchStore
+        """Read the lake once, on demand, OFF the Qt thread. Single-flight.
 
-            store = ResearchStore.open()
-        except Exception as exc:  # a misconfigured lake is a message, not a crash
-            self._set_rows([])
-            self.status_label.setText(f"Research warehouse unavailable: {exc}")
+        G-P1.5. This ran `ResearchStore.open()` and `queries.slice_readout()`
+        inline. The lake lives on the DAS, and that share is known to drop and
+        re-establish; an SMB read against a dropped share does not fail fast,
+        it blocks until it times out - and every one of those seconds was a
+        frozen desk with nothing on screen to explain it. This is the only
+        panel in the audit whose read leaves the machine.
+        """
+        if self._worker is not None and self._worker.isRunning():
+            self.status_label.setText("Still reading the lake...")
             return
-        if store is None:
-            self._set_rows([])
-            self.status_label.setText(DISABLED_TEXT)
-            return
+        self.refresh_button.setEnabled(False)
+        self.status_label.setText("Reading the lake...")
+        worker = ReadWorker(self._read_lake, self)
+        worker.finished_with.connect(self._on_read)
+        worker.failed.connect(self._on_read_failed)
+        self._worker = worker
+        worker.start()
+
+    @staticmethod
+    def _read_lake():
+        """Everything that touches the share. Runs on the worker.
+
+        Returns the snapshot, or a ``(reason, message)`` pair for the two
+        outcomes that are not failures: a lake that is switched off, and one
+        that is misconfigured. Those are messages, not crashes.
+        """
+        from research_warehouse import queries
+        from research_warehouse.store import ResearchStore
+
         try:
-            snapshot = queries.slice_readout(store)
-        except Exception as exc:
-            self._set_rows([])
-            self.status_label.setText(f"Read failed: {exc}")
+            store = ResearchStore.open()
+        except Exception as exc:  # a misconfigured lake is a message
+            return ("unavailable", f"Research warehouse unavailable: {exc}")
+        if store is None:
+            return ("disabled", DISABLED_TEXT)
+        return queries.slice_readout(store)
+
+    def _on_read(self, payload: object) -> None:  # pragma: no cover - signal seam
+        self.refresh_button.setEnabled(True)
+        self._worker = None
+        if isinstance(payload, tuple) and len(payload) == 2:
+            # Switched off or misconfigured: say so, and keep whatever is shown.
+            self.status_label.setText(str(payload[1]))
             return
-        self._set_rows(snapshot.rows)
-        if snapshot.rows:
+        # A SUCCESSFUL read is authoritative even when it found nothing - that
+        # is a real answer about the lake, unlike a failure.
+        self._set_rows(payload.rows)
+        if payload.rows:
             self.status_label.setText(
-                f"{len(snapshot.rows)} row(s) from {snapshot.files} sealed file(s), "
-                f"manifest position {snapshot.manifest_seq}."
+                f"{len(payload.rows)} row(s) from {payload.files} sealed file(s), "
+                f"manifest position {payload.manifest_seq}."
             )
         else:
             self.status_label.setText(EMPTY_TEXT)
+
+    def _on_read_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        """State the failure and keep every row already on screen.
+
+        Every failure path here used to call `_set_rows([])`. An unreadable
+        lake is not an empty lake, and blanking the table replaces "here is
+        what we last saw" with a silent claim that there is nothing there.
+        """
+        self.refresh_button.setEnabled(True)
+        self._worker = None
+        self.status_label.setText(
+            f"Read failed: {message}. The rows below are the last good read, "
+            "not the lake as it is now."
+        )
+
+    def shutdown(self) -> None:
+        # Bounded: this reader waits on the DAS, which is precisely the read
+        # that can take minutes when the share is unwell.
+        join_worker(self._worker)
+        self._worker = None
 
     def _set_rows(self, rows) -> None:
         self.table.setRowCount(len(rows))

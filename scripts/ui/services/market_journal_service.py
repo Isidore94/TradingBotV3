@@ -17,7 +17,33 @@ import logging
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QThread, Signal
+
+
+class _CaptureWorker(QThread):
+    """Builds and stores one chart capture off the GUI thread.
+
+    The bars are already trimmed and copied by the caller, so this thread
+    touches nothing another thread owns. It writes two files and emits what
+    happened; it never raises into Qt.
+    """
+
+    done = Signal(dict)
+
+    def __init__(self, payload: dict, parent=None) -> None:
+        super().__init__(parent)
+        self._payload = payload
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        import market_journal_capture
+
+        try:
+            capture = market_journal_capture.build_capture(**self._payload)
+            result = market_journal_capture.record_capture(capture)
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "reason": str(exc)}
+        result.setdefault("entry_id", str(self._payload.get("entry_id") or ""))
+        self.done.emit(result)
 
 
 class MarketJournalService(QObject):
@@ -27,10 +53,14 @@ class MarketJournalService(QObject):
     #: store rather than from each other.
     entryWritten = Signal(dict)
     statusChanged = Signal(str)
+    #: Emitted after a chart capture is stored (or refused), so a page showing
+    #: an entry can start drawing the tape it was written against.
+    chartCaptured = Signal(dict)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._ledger = None
+        self._capture_workers: list[_CaptureWorker] = []
 
     # -- store ------------------------------------------------------------
     def _stream(self):
@@ -108,6 +138,85 @@ class MarketJournalService(QObject):
             rows = [row for row in rows if str(row.get("session_date") or "") == session_date]
         return rows
 
+    # -- chart captures ---------------------------------------------------
+    def capture_charts(
+        self,
+        *,
+        entry_id: str,
+        symbol: str = "",
+        m5_bars=None,
+        d1_bars=None,
+        benchmark_m5=None,
+        benchmark_d1=None,
+        reason: str = "",
+        note: str = "",
+    ) -> bool:
+        """Store what the charts looked like, for an entry already on disk.
+
+        Called AFTER the entry is written, never before: a note must never wait
+        on a chart, and an entry with no capture is honestly chartless while an
+        entry that was never saved is a lost thought.
+
+        The bars are trimmed and copied HERE, on the caller's thread, because
+        they come from caches other threads keep writing to; the digest and the
+        two file writes go to a worker (ground rule 9).
+        """
+        import market_journal_capture as capture_mod
+
+        entry_id = str(entry_id or "").strip()
+        if not entry_id:
+            return False
+        payload = {
+            "entry_id": entry_id,
+            "symbol": str(symbol or "").strip().upper(),
+            "reason": reason or capture_mod.REASON_ENTRY,
+            "note": str(note or ""),
+            "m5_bars": capture_mod.trim_bars(m5_bars, capture_mod.M5_BAR_LIMIT),
+            "d1_bars": capture_mod.trim_bars(d1_bars, capture_mod.D1_BAR_LIMIT),
+            "benchmark_m5": capture_mod.trim_bars(benchmark_m5, capture_mod.M5_BAR_LIMIT),
+            "benchmark_d1": capture_mod.trim_bars(benchmark_d1, capture_mod.D1_BAR_LIMIT),
+        }
+        worker = _CaptureWorker(payload, self)
+        worker.done.connect(self._on_capture_done)
+        worker.finished.connect(lambda w=worker: self._release_capture_worker(w))
+        self._capture_workers.append(worker)
+        worker.start()
+        return True
+
+    def _on_capture_done(self, result: dict) -> None:
+        if not result.get("ok"):
+            # Said, but never as an error the trader has to act on: the note
+            # itself is safe on disk and this is the picture beside it.
+            logging.info("Journal chart capture skipped: %s", result.get("reason"))
+        self.chartCaptured.emit(dict(result))
+
+    def _release_capture_worker(self, worker) -> None:
+        try:
+            self._capture_workers.remove(worker)
+        except ValueError:
+            pass
+        worker.deleteLater()
+
+    def chart_capture(self, entry_id: str) -> dict[str, Any] | None:
+        """The stored bars for one entry. Worker-thread call - it reads a file."""
+        import market_journal_capture
+
+        return market_journal_capture.load_capture(entry_id)
+
+    def chart_digests(self) -> dict[str, dict[str, Any]]:
+        """Every capture's short text digest, keyed by entry id."""
+        import market_journal_capture
+
+        return market_journal_capture.digests_by_entry()
+
+    def wait_for_captures(self, msecs: int = 4000) -> None:
+        """Let in-flight captures finish. Called on shutdown, never in a loop."""
+        for worker in list(self._capture_workers):
+            try:
+                worker.wait(int(msecs))
+            except RuntimeError:
+                pass
+
     def sessions_with_entries(self) -> list[str]:
         return sorted({str(row.get("session_date") or "") for row in self.entries_for() if row.get("session_date")})
 
@@ -164,3 +273,23 @@ class MarketJournalService(QObject):
                 "reason": f"no daily context row exists for {session_date}; the desk did not measure it",
             }
         return {"measured": True, "row": rows[-1]}
+
+
+_SHARED: MarketJournalService | None = None
+
+
+def shared_journal_service() -> MarketJournalService:
+    """The process's one journal service.
+
+    Ground rule 8 says one component owns each mutable shared export, and the
+    docstring at the top of this file has claimed "one writer" since R10.H -
+    but the Desk tab built its own instance, so there were two. Writes still
+    landed in the same file (the ledger append is atomic per line), and what
+    was actually lost was the SIGNAL: a note typed on the desk never told the
+    left-nav page to refresh. One instance, created on first use from the GUI
+    thread, fixes both the claim and the symptom.
+    """
+    global _SHARED
+    if _SHARED is None:
+        _SHARED = MarketJournalService()
+    return _SHARED

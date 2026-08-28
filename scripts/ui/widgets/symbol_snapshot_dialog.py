@@ -199,6 +199,35 @@ def _legend_html(
 # at most every 5 minutes, so this bounds display staleness the same way.
 REFRESH_INTERVAL_MS = 30_000
 
+#: Fraction of the anchor's height left free at the TOP and again at the
+#: BOTTOM when the ticker popup opens (trader rule 2026-08-27: "i dont want
+#: them edge to edge on the screen just reduce by 10% top and bottom"). The
+#: popup therefore opens at 80% of whatever it is anchored to.
+POPUP_VERTICAL_INSET = 0.10
+#: The popup will not shrink below this whatever the inset says. Both charts
+#: carry a 120px minimum, and a squeezed popup is exactly what the 2026-08-11
+#: sizing change was made to fix; on a short monitor that floor wins.
+POPUP_MIN_HEIGHT = 760
+
+
+def inset_vertical_bounds(
+    anchor_top: int, anchor_height: int, *, minimum: int = POPUP_MIN_HEIGHT
+) -> tuple[int, int]:
+    """(top, height) for a popup inset by `POPUP_VERTICAL_INSET` at each end.
+
+    Pure, so the proportion and the equal gaps can be pinned without depending
+    on what `availableGeometry()` reports on a headless runner.
+
+    The gaps are produced by CENTRING the final height inside the anchor rather
+    than by adding the inset to the top, so they stay equal even when the
+    floor below has overridden the inset - and the popup is never pushed off
+    the top of the screen to honour that floor.
+    """
+    inset = int(round(anchor_height * POPUP_VERTICAL_INSET))
+    height = max(int(minimum), anchor_height - 2 * inset)
+    top = anchor_top + max(0, (anchor_height - height) // 2)
+    return top, height
+
 
 def _bars_fingerprint(bars: list) -> tuple | None:
     """Cheap change detector for a rendered bar series.
@@ -977,11 +1006,30 @@ class SymbolSnapshotDialog(QDialog):
             "next chart in the setups table."
         )
         self.dislike_button.clicked.connect(self._review_dislike)
+        # Trader, 2026-08-27: "I'd like a next or previous button so I can
+        # continue cycling down the list." Space on the table already
+        # advanced; these put the same walk on the popup itself, so a pass
+        # over the setups never needs the table. No decision is recorded by
+        # either - they only move.
+        self.previous_button = QPushButton("◀ Prev")
+        self.previous_button.setToolTip(
+            "Open the previous visible row's chart in the setups table. "
+            "Records nothing."
+        )
+        self.previous_button.clicked.connect(self._review_previous)
+        self.next_button = QPushButton("Next ▶")
+        self.next_button.setToolTip(
+            "Open the next visible row's chart in the setups table. "
+            "Records nothing."
+        )
+        self.next_button.clicked.connect(self._review_next)
 
         self.action_row = QWidget()
         action_layout = QHBoxLayout(self.action_row)
         action_layout.setContentsMargins(10, 0, 10, 8)
         action_layout.setSpacing(6)
+        action_layout.addWidget(self.previous_button)
+        action_layout.addWidget(self.next_button)
         action_layout.addWidget(self.dislike_button)
         action_layout.addWidget(self.d1_focus_button)
         action_layout.addWidget(self.m5_focus_button)
@@ -1017,20 +1065,27 @@ class SymbolSnapshotDialog(QDialog):
         start_staggered(self._refresh_timer, 57_000)
 
     def _resize_to_desk_height(self) -> None:
-        """Open as tall as the desk window itself (trader ask 2026-08-11).
+        """Open tall, but NOT edge to edge (trader asks 2026-08-11, 2026-08-27).
 
-        The popup used to open at a fixed 1180x760 regardless of the monitor,
-        which on the desk's screen left the two charts squeezed into roughly
-        half the vertical space the rest of the program was using. Take the
-        height from the hosting window when there is one (so the popup matches
-        whatever the desk is currently sized to) and from the screen's
-        available area otherwise, minus a small allowance for this window's own
-        title bar - the frame is not measurable before the first show. This
-        only sets the *opening* size: a trader resize afterwards is kept,
+        2026-08-11: the popup opened at a fixed 1180x760 regardless of the
+        monitor, which on the desk's screen left the two charts squeezed into
+        roughly half the vertical space the rest of the program was using. So
+        the height came to be taken from the hosting window when there is one
+        (matching whatever the desk is currently sized to) and from the
+        screen's available area otherwise.
+
+        2026-08-27: that went too far the other way - "i dont want them edge to
+        edge on the screen just reduce by 10% top and bottom". The anchor is
+        chosen exactly as before; `inset_vertical_bounds` then leaves a tenth
+        of it free at each end, which also replaces the old 60px/40px
+        title-bar allowances (a tenth is far larger, and the frame is not
+        measurable before the first show anyway).
+
+        This only sets the *opening* size: a trader resize afterwards is kept,
         because the dialog is constructed once per panel and reused.
         """
         width = 1180
-        height = 760
+        height = POPUP_MIN_HEIGHT
         try:
             parent = self.parent()
             window = parent.window() if parent is not None else None
@@ -1046,17 +1101,17 @@ class SymbolSnapshotDialog(QDialog):
             area = None
         anchor = None
         if area is not None:
-            height = max(height, area.height() - 60)
             anchor = area
         if window is not None and window.isVisible():
             frame = window.frameGeometry()
             if frame.height() > 200:
-                height = frame.height() - 40
                 anchor = frame
+        top = None
+        if anchor is not None:
+            top, height = inset_vertical_bounds(anchor.top(), anchor.height())
         self.resize(width, height)
         if anchor is not None:
             left = anchor.center().x() - width // 2
-            top = anchor.top() + 20
             if area is not None:
                 left = min(max(left, area.left()), max(area.left(), area.right() - width))
                 top = min(max(top, area.top()), max(area.top(), area.bottom() - height))
@@ -1169,6 +1224,8 @@ class SymbolSnapshotDialog(QDialog):
         reviewing = self.review_host is not None
         self.action_row.setVisible(host is not None or reviewing)
         self.dislike_button.setVisible(reviewing)
+        self.previous_button.setVisible(reviewing)
+        self.next_button.setVisible(reviewing)
         # Watch/focus toggles need a watch host to act through; hide them
         # rather than showing dead buttons in a review-only popup.
         for button in (
@@ -1232,6 +1289,19 @@ class SymbolSnapshotDialog(QDialog):
         else:
             host.arm_d1_event_watch(self._symbol, kind)
         self._refresh_watch_actions()
+
+    def _review_next(self) -> None:
+        """Walk to the next visible row's chart. Moves only; records nothing."""
+        if self.review_host is None:
+            return
+        self.review_host.snapshot_review_advance()
+
+    def _review_previous(self) -> None:
+        """Walk back one row. An older host without the method is inert."""
+        host = self.review_host
+        if host is None or not hasattr(host, "snapshot_review_previous"):
+            return
+        host.snapshot_review_previous()
 
     def _review_dislike(self) -> None:
         """The review-flow ✕: the host prompts for the reason, logs it, and

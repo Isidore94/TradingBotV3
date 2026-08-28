@@ -44,6 +44,11 @@ from ui.widgets.setup_detail_view import SetupDetailView
 
 SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
 RECENT_SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_type_recent_stats.csv")
+# Phase 0.10 shadow evidence: the AVWAP band challenger beside the champion.
+# Read-only, like every other export on this page. Nothing here scores, ranks,
+# alerts or gates - `calc_anchored_vwap_bands` is frozen (decision 0008) and the
+# challenger is a candidate ADDITIONAL level family, never a swap.
+BAND_VARIANT_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_band_variant_stats.csv")
 SETUP_PLAYBOOKS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
 SHORT_HORIZON_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_short_horizon.csv")
 SHORT_TERM_MIN_SAMPLES = 6
@@ -166,6 +171,24 @@ CATCH_RATE_COLUMNS = (
     ("sample_missed_winners", "Missed Samples"),
 )
 
+BAND_VARIANT_COLUMNS = (
+    ("setup_family", "Family"),
+    ("side", "Side"),
+    ("priority_bucket", "Bucket"),
+    ("n", "n"),
+    ("n_variant", "n Variant"),
+    ("n_variant_unmeasured", "n Unmeasured"),
+    ("avg_total_r_champion", "Champ R"),
+    ("avg_total_r_variant", "Variant R"),
+    ("stop_out_rate_champion", "Champ Stop%"),
+    ("stop_out_rate_variant", "Variant Stop%"),
+    ("target_hit_rate_champion", "Champ Target%"),
+    ("target_hit_rate_variant", "Variant Target%"),
+    ("mean_stop_distance_atr_champion", "Champ Stop ATR"),
+    ("mean_stop_distance_atr_variant", "Variant Stop ATR"),
+    ("exit_template_id", "Exit Template"),
+)
+
 HUMAN_PICK_COLUMNS = (
     ("cohort", "Cohort"),
     ("side", "Side"),
@@ -190,8 +213,14 @@ PERCENT_KEYS = {
     "caught_winner_rate",
     "caught_opportunity_rate",
     "bot_sa_win_rate",
+    "stop_out_rate_champion",
+    "stop_out_rate_variant",
+    "target_hit_rate_champion",
+    "target_hit_rate_variant",
 }
 SIGNED_KEYS = {
+    "avg_total_r_champion",
+    "avg_total_r_variant",
     "avg_closed_r",
     "avg_closed_r_edge",
     "representative_closed_r",
@@ -237,6 +266,7 @@ class SetupTrackerPanel(QFrame):
         self.tier_performance_rows: list[dict[str, Any]] = []
         self.catch_rate_rows: list[dict[str, Any]] = []
         self.human_pick_rows: list[dict[str, Any]] = []
+        self.band_variant_rows: list[dict[str, Any]] = []
 
         self.min_closed_input = QSpinBox()
         self.min_closed_input.setRange(1, 100)
@@ -269,6 +299,7 @@ class SetupTrackerPanel(QFrame):
         self.tier_performance_table, self.tier_performance_model = self._make_table(TIER_PERFORMANCE_COLUMNS)
         self.catch_rate_table, self.catch_rate_model = self._make_table(CATCH_RATE_COLUMNS)
         self.human_pick_table, self.human_pick_model = self._make_table(HUMAN_PICK_COLUMNS)
+        self.band_variant_table, self.band_variant_model = self._make_table(BAND_VARIANT_COLUMNS)
 
         self.tabs.addTab(self.current_table, "Current Picks")
         self.tabs.addTab(
@@ -319,6 +350,18 @@ class SetupTrackerPanel(QFrame):
                 self.catch_rate_table,
             ),
             "Catch Rate",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "SHADOW EVIDENCE, plan.md Phase 0.10. The AVWAP band challenger - an anchored HLC/3 centre "
+                "with a 20-close Bollinger sigma, replicated from OneOption - graded beside the champion's "
+                "own protective stop on the SAME exit template. Nothing here scores, ranks or alerts. "
+                "A blank cell means nothing was measured for it, never zero; n Unmeasured counts the setups "
+                "whose challenger sigma could not be computed. A wider band is stopped out less often BY "
+                "CONSTRUCTION when entry sits inside it, so read the stop-distance columns before the rates.",
+                self.band_variant_table,
+            ),
+            "Band Variant",
         )
 
         # Right-hand setup detail: appears when a row is clicked; for symbol
@@ -429,6 +472,10 @@ class SetupTrackerPanel(QFrame):
             load_human_focus_performance_rows(),
             tier_performance_export_rows,
         )
+        # Shadow section. Same inline read as every other export on this page
+        # (plan.md Phase 0.9 G-P2.3 owns moving this panel off the Qt thread as
+        # a whole; doing it for one section would leave the page half on each).
+        self.band_variant_rows = _rank_band_variants(_load_csv_rows(BAND_VARIANT_STATS_FILE))
 
         self.current_model.set_rows(self.current_pick_rows[:300])
         self.human_pick_model.set_rows(self.human_pick_rows)
@@ -439,6 +486,7 @@ class SetupTrackerPanel(QFrame):
         self.scan_factor_model.set_rows(self.scan_factor_rows[:300])
         self.tier_performance_model.set_rows(self.tier_performance_rows)
         self.catch_rate_model.set_rows(self.catch_rate_rows)
+        self.band_variant_model.set_rows(self.band_variant_rows[:300])
         for table in (
             self.current_table,
             self.human_pick_table,
@@ -449,6 +497,7 @@ class SetupTrackerPanel(QFrame):
             self.scan_factor_table,
             self.tier_performance_table,
             self.catch_rate_table,
+            self.band_variant_table,
         ):
             table.fit_columns()
 
@@ -509,6 +558,36 @@ def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
         return []
     with Path(path).open(newline="", encoding="utf-8-sig") as handle:
         return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _rank_band_variants(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Largest challenger-minus-champion R edge first, biggest n breaking ties.
+
+    A row whose variant R is blank has no edge to rank on and sorts last rather
+    than being treated as an edge of zero - the same rule the export itself uses
+    when it refuses to print 0.0 for a cell nothing measured. Presentation only:
+    this never re-reads the file and never writes one.
+    """
+
+    def _edge(row: dict[str, Any]):
+        variant = str(row.get("avg_total_r_variant") or "").strip()
+        if not variant:
+            return None
+        try:
+            return float(variant) - float(row.get("avg_total_r_champion") or 0.0)
+        except (TypeError, ValueError):
+            return None
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            _edge(row) is None,
+            -(_edge(row) or 0.0),
+            -_float(row.get("n"), 0.0),
+            str(row.get("setup_family") or ""),
+            str(row.get("side") or ""),
+        ),
+    )
 
 
 def _rank_current_picks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -810,6 +889,7 @@ def _export_files() -> list[Path]:
     return [
         SETUP_TYPE_STATS_FILE,
         RECENT_SETUP_TYPE_STATS_FILE,
+        BAND_VARIANT_STATS_FILE,
         SETUP_PLAYBOOKS_FILE,
         SHORT_HORIZON_FILE,
         MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,

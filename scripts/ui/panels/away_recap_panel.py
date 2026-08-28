@@ -22,7 +22,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QEvent, QThread, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -34,6 +35,38 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+
+from ui import theme
+from ui.widgets.data_table import apply_width_rule_to_table_widget
+
+#: The text in the chart cell of a row that CAN be charted. A row that cannot is
+#: blank there, so the affordance itself says which rows are openable.
+CHART_CELL = "Chart ▸"
+
+#: What the page says above the two chartable tables. §3.4 B: charting was wired
+#: the whole time and nothing on the page said so, which read as "charting is
+#: broken".
+CHART_HINT = (
+    "Select a row and press Enter, or click its Chart cell, to open it in the "
+    "desk's one chart."
+)
+
+
+def is_scanner_status_row(row) -> bool:
+    """True for a row that is about the SCANNER rather than about a symbol.
+
+    `Scanning ...`, `Learning ...` and the entry-assist notes arrive on the Alert
+    Center's backing list with no symbol and side `WATCH`. They belong to the
+    day's record and are not deleted anywhere - but in a table of symbols they
+    are indistinguishable from a symbol row whose chart is broken, which is
+    exactly what the trader reported on 2026-08-26.
+
+    The test is the blank symbol, not the side: a row with no symbol cannot be
+    charted whatever its side says, and that is the property the page acts on.
+    """
+    if not isinstance(row, dict):
+        return False
+    return not str(row.get("symbol") or "").strip()
 
 
 class _RecapWorker(QThread):
@@ -72,10 +105,15 @@ class _RecapWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             unavailable["staged picks"] = str(exc)
         try:
-            from focus_picks import load_focus_map
+            import focus_picks
 
+            # Keyword-only, and deliberately read ONCE: the no-argument form
+            # unions the swing and m5 lists, which is what "what Focus held
+            # today" means. Calling it per side both re-read the store and -
+            # because it takes no positional argument - could only ever raise.
+            by_side = focus_picks.load_focus_map()
             focus = {
-                side: sorted(load_focus_map(side) or [])
+                side: sorted(by_side.get(side) or [])
                 for side in ("long", "short")
             }
         except Exception as exc:  # noqa: BLE001
@@ -127,8 +165,11 @@ class AwayRecapPanel(QFrame):
 
         self.summary = QLabel("")
         self.summary.setWordWrap(True)
-        self.swings = QTableWidget(0, 4)
-        self.swings.setHorizontalHeaderLabels(["#", "Symbol", "Side", "Line"])
+        self.chart_hint = QLabel(CHART_HINT)
+        self.chart_hint.setObjectName("SectionSubtitle")
+        self.chart_hint.setWordWrap(True)
+        self.swings = QTableWidget(0, 5)
+        self.swings.setHorizontalHeaderLabels(["#", "Symbol", "Side", "Line", ""])
         self.swings.setEditTriggers(QTableWidget.NoEditTriggers)
         self.swings.itemActivated.connect(self._activate_swing)
         self.swings.itemDoubleClicked.connect(self._activate_swing)
@@ -136,13 +177,32 @@ class AwayRecapPanel(QFrame):
         # never drew them, so a whole AWAY day's alerts left one trace: the word
         # "alert(s)" in the summary line. A recap that drops the thing it was
         # opened for is not a recap.
-        self.alerts = QTableWidget(0, 6)
+        self.alerts = QTableWidget(0, 7)
         self.alerts.setHorizontalHeaderLabels(
-            ["Time", "Symbol", "Side", "Tier", "", "Trigger"]
+            ["Time", "Symbol", "Side", "Tier", "", "Trigger", ""]
         )
         self.alerts.setEditTriggers(QTableWidget.NoEditTriggers)
         self.alerts.itemActivated.connect(self._activate_alert)
         self.alerts.itemDoubleClicked.connect(self._activate_alert)
+        self.alerts.cellClicked.connect(self._alert_cell_clicked)
+        self.swings.cellClicked.connect(self._swing_cell_clicked)
+        # Enter on the selected row. `itemActivated` covers it on most
+        # platforms and a return key that does nothing on one of them is the
+        # kind of "it is wired, nothing says so" defect this packet exists to
+        # remove, so the key is handled explicitly as well.
+        self.alerts.installEventFilter(self)
+        self.swings.installEventFilter(self)
+
+        # §8.3 decision 1: scanner status rows are hidden and COUNTED, never
+        # deleted. One click reveals them for the session - the same
+        # hide-and-count idiom as the movers-only review filter.
+        self._show_status_rows = False
+        self._status_rows: list[dict[str, Any]] = []
+        self.status_rows_toggle = QPushButton("")
+        self.status_rows_toggle.setObjectName("StatusRowsToggle")
+        self.status_rows_toggle.setFlat(True)
+        self.status_rows_toggle.clicked.connect(self._reveal_status_rows)
+        self.status_rows_toggle.setVisible(False)
         self.staged = QTableWidget(0, 3)
         self.staged.setHorizontalHeaderLabels(["Symbol", "Side", "Gate at click time"])
         self.staged.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -176,12 +236,14 @@ class AwayRecapPanel(QFrame):
         layout.addWidget(self.subtitle)
         layout.addLayout(header)
         layout.addWidget(self.summary)
+        layout.addWidget(self.chart_hint)
         layout.addWidget(QLabel("Best swing trades (as the day ranked them)"))
         layout.addWidget(self.swings, 2)
         layout.addWidget(
             QLabel("Alerts, in the order the day produced them - open one to chart it")
         )
         layout.addWidget(self.alerts, 3)
+        layout.addWidget(self.status_rows_toggle)
         layout.addWidget(QLabel("Staged picks - never adopted while AWAY"))
         layout.addWidget(self.staged, 2)
         layout.addWidget(self.add_button)
@@ -219,10 +281,95 @@ class AwayRecapPanel(QFrame):
         self._fill(
             self.swings,
             [
-                (str(row["rank"]), row["symbol"], row["side"], row["text"])
+                (str(row["rank"]), row["symbol"], row["side"], row["text"], "")
                 for row in recap.get("best_swings") or []
             ],
+            text_columns=(3,),
+            chart_column=4,
+            symbol_column=1,
         )
+        self._render_alerts(recap.get("classified_alerts") or [])
+        self._fill(
+            self.staged,
+            [(row["symbol"], row["side"], "") for row in recap.get("staged_picks") or []],
+            text_columns=(2,),
+        )
+        self._fill(
+            self.focus_table,
+            [(row["symbol"], row["side"]) for row in recap.get("focus_to_manage") or []],
+        )
+
+    @staticmethod
+    def _fill(
+        table: QTableWidget,
+        rows: list[tuple],
+        *,
+        text_columns=None,
+        elide_columns=(),
+        chart_column: int | None = None,
+        symbol_column: int | None = None,
+    ) -> None:
+        """Write the rows, then apply the §12 width rule to the table.
+
+        Every table on this page was a §12 violation: header labels and nothing
+        else, so each column kept its default section width and the ranked-swing
+        `Line` truncated to `1. FROG …` with two thirds of a 4K window empty.
+        The rule is applied after the fill because it measures what is there.
+
+        `chart_column` turns the last column into the per-row chart affordance
+        (§8.3 decision 2). It is a plain item, not a cell widget: a widget per
+        row is the shape the 2026-08-21 fluidity pass spent a day removing, and
+        an AWAY day can produce hundreds of alert rows.
+        """
+        table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            for column, value in enumerate(row):
+                table.setItem(index, column, QTableWidgetItem(str(value)))
+            if chart_column is None or symbol_column is None:
+                continue
+            symbol = str(row[symbol_column] or "").strip()
+            cell = table.item(index, chart_column)
+            if cell is None:
+                cell = QTableWidgetItem("")
+                table.setItem(index, chart_column, cell)
+            cell.setText(CHART_CELL if symbol else "")
+            if not symbol:
+                AwayRecapPanel._mark_symbol_less(table, index)
+        apply_width_rule_to_table_widget(
+            table, text_columns=text_columns, elide_columns=elide_columns
+        )
+
+    @staticmethod
+    def _mark_symbol_less(table: QTableWidget, row: int) -> None:
+        """Render a symbol-less row distinctly, with no chart affordance.
+
+        §8.3 decision 3: a blank `Symbol` cell must never read as a broken
+        chart. The style is a theme TOKEN read through `ui.theme`, not a
+        per-widget stylesheet - Qt style sheets do not reach view items at all,
+        and the rule the fluidity pass established is about never making Qt
+        parse CSS per widget, which this does not.
+        """
+        muted = QColor(theme.color("text_muted"))
+        for column in range(table.columnCount()):
+            item = table.item(row, column)
+            if item is None:
+                continue
+            item.setForeground(muted)
+            font = item.font()
+            font.setItalic(True)
+            item.setFont(font)
+            item.setData(Qt.ItemDataRole.UserRole + 1, "status")
+
+    def _render_alerts(self, rows: list[dict]) -> None:
+        """The day's alerts, with the scanner's own chatter hidden and counted.
+
+        Nothing is deleted and nothing is muted: the Alert Center's backing list
+        is untouched, `set_alerts` remains its one reader here, and one click
+        puts the status rows back for the session.
+        """
+        symbol_rows = [row for row in rows if not is_scanner_status_row(row)]
+        self._status_rows = [row for row in rows if is_scanner_status_row(row)]
+        shown = symbol_rows + (self._status_rows if self._show_status_rows else [])
         self._fill(
             self.alerts,
             [
@@ -236,27 +383,66 @@ class AwayRecapPanel(QFrame):
                     # page has to be able to tell the two apart.
                     "D1" if row.get("is_d1") else "",
                     str(row.get("trigger") or ""),
+                    "",
                 )
-                for row in recap.get("classified_alerts") or []
+                for row in shown
             ],
+            text_columns=(5,),
+            chart_column=6,
+            symbol_column=1,
         )
-        self._fill(
-            self.staged,
-            [(row["symbol"], row["side"], "") for row in recap.get("staged_picks") or []],
-        )
-        self._fill(
-            self.focus_table,
-            [(row["symbol"], row["side"]) for row in recap.get("focus_to_manage") or []],
-        )
+        self._update_status_toggle()
 
-    @staticmethod
-    def _fill(table: QTableWidget, rows: list[tuple]) -> None:
-        table.setRowCount(len(rows))
-        for index, row in enumerate(rows):
-            for column, value in enumerate(row):
-                table.setItem(index, column, QTableWidgetItem(str(value)))
+    def _update_status_toggle(self) -> None:
+        count = len(self._status_rows)
+        if not count:
+            self.status_rows_toggle.setVisible(False)
+            self.status_rows_toggle.setText("")
+            return
+        self.status_rows_toggle.setVisible(True)
+        noun = "message" if count == 1 else "messages"
+        if self._show_status_rows:
+            self.status_rows_toggle.setText(
+                f"{count} scanner status {noun} shown - they are about the "
+                "scanner, not a symbol, so they cannot be charted"
+            )
+            self.status_rows_toggle.setEnabled(False)
+            return
+        self.status_rows_toggle.setText(f"{count} scanner status {noun} - show")
+        self.status_rows_toggle.setEnabled(True)
+
+    def _reveal_status_rows(self) -> None:
+        """Show them for the rest of the session. No re-read: the recap is held."""
+        if self._show_status_rows:
+            return
+        self._show_status_rows = True
+        self._render_alerts(list(self._recap.get("classified_alerts") or []))
 
     # -- charting (delegated; this page owns no chart) ---------------------
+    def _alert_cell_clicked(self, row: int, column: int) -> None:
+        if column == self.alerts.columnCount() - 1:
+            self._ask_for_chart(self.alerts, self.alerts.item(row, 1))
+
+    def _swing_cell_clicked(self, row: int, column: int) -> None:
+        if column == self.swings.columnCount() - 1:
+            self._ask_for_chart(self.swings, self.swings.item(row, 1))
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt override
+        """Enter on the selected row charts it.
+
+        The page's charting was wired through `itemActivated` and nothing said
+        so; the trader's verdict was "i also cant even check charts from here".
+        The hint line says it now, and this makes the key work the same way on
+        every platform rather than relying on Qt's per-platform activation.
+        """
+        if event is not None and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                for table in (self.alerts, self.swings):
+                    if watched is table:
+                        self._ask_for_chart(table, table.item(table.currentRow(), 1))
+                        return True
+        return super().eventFilter(watched, event)
+
     def _activate_alert(self, item) -> None:
         """Ask the host to chart the alert's symbol. Column 1 is the symbol."""
         self._ask_for_chart(self.alerts, item)
@@ -323,15 +509,28 @@ class AwayRecapPanel(QFrame):
         )
 
     def _gate_text(self, symbol: str, side: str) -> str:
-        try:
-            from focus_adoption_gate import mover_state
+        """Say plainly that the gate was not measured here, and why.
 
-            state, reason = mover_state(side, None, None, None)
-        except Exception as exc:  # noqa: BLE001
-            return f"adoption gate unavailable ({exc}); your action is unaffected"
+        This used to call `mover_state(side, None, None, None)`. That signature
+        is `(side, price, prev_high, prev_low)`, so with no price and no
+        previous-day extremes it could only ever return UNKNOWN - and the page
+        rendered that as a gate verdict for the symbol. A measurement that was
+        never taken must not read like one that came back inconclusive.
+
+        The recap has no bar source: it is an end-of-day page assembled from
+        stores, and fetching the last completed M5 bar plus yesterday's extremes
+        at click time would put a network/disk read on the Qt thread in a click
+        handler - the exact defect this pass exists to remove. UNKNOWN stays
+        UNKNOWN rather than being invented into a pass, and the trader is
+        pointed at the surfaces that DO measure it, where the bars are already
+        in hand.
+        """
         return (
-            f"R2 adoption gate for {symbol}: {state} ({reason}). "
-            "Shown for context - it governs the machine's adoptions, not yours."
+            f"R2 adoption gate: not measured on this page for {symbol} - the recap "
+            "reads stores, not bars, so it has no completed M5 bar or previous-day "
+            "extreme to measure against. The Strength Board and Focus surfaces "
+            "re-check it at click time. It governs the machine's adoptions, never "
+            "yours, so your action is unaffected."
         )
 
     def _write_journal(self) -> None:

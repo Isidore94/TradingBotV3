@@ -1197,9 +1197,34 @@ def test_trading_desk_shutdown_continues_after_one_component_raises(caplog):
         master_panel=SimpleNamespace(
             scan_service=SimpleNamespace(shutdown=lambda: calls.append("scan"))
         ),
+        group_tape_service=SimpleNamespace(shutdown=lambda: calls.append("tape")),
     )
 
     TradingDeskPanel.shutdown(fake_desk)
 
-    assert calls == ["bounce", "industry", "scan"]
+    assert calls == ["bounce", "industry", "scan", "tape"]
     assert "continuing app cleanup" in caplog.text
+
+
+def test_trading_desk_shutdown_still_runs_when_a_service_was_never_built(caplog):
+    """A desk whose __init__ died partway must still release what it DID build.
+
+    The components are resolved before the loop runs, so naming a missing
+    attribute inline would raise while the list was being assembled and
+    NOTHING would be cleaned up - the opposite of this method's contract.
+    """
+    from ui.panels.trading_desk import TradingDeskPanel
+
+    calls: list[str] = []
+    partial_desk = SimpleNamespace(
+        bounce_panel=SimpleNamespace(on_close=lambda: calls.append("bounce")),
+        industry_panel=SimpleNamespace(shutdown=lambda: calls.append("industry")),
+        master_panel=SimpleNamespace(
+            scan_service=SimpleNamespace(shutdown=lambda: calls.append("scan"))
+        ),
+        # no group_tape_service at all
+    )
+
+    TradingDeskPanel.shutdown(partial_desk)
+
+    assert calls == ["bounce", "industry", "scan"]

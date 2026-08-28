@@ -372,6 +372,28 @@ SETUP_OCCURRENCE = _schema(
     _provenance_columns(),
 )
 
+SETUP_MARKET_CONTEXT = _schema(
+    [
+        pa.field("occurrence_id", pa.string()),
+        pa.field("symbol", pa.string()),
+        pa.field("entry_at", _TS),
+        pa.field("timeframe", pa.string()),
+        pa.field("bias_definition_id", pa.string()),
+        pa.field("env_key", pa.string()),
+        pa.field("source", pa.string()),
+        pa.field("last_close", pa.float64()),
+        pa.field("reference_close", pa.float64()),
+        pa.field("vwap", pa.float64()),
+        pa.field("stdev", pa.float64()),
+        pa.field("above_band_frac", pa.float64()),
+        pa.field("below_band_frac", pa.float64()),
+        pa.field("bar_count", pa.int32()),
+        pa.field("computed_at", _TS),
+        pa.field("input_capture_mode_worst", pa.string()),
+    ],
+    _provenance_columns(),
+)
+
 OUTCOME_PATH = _schema(
     [
         pa.field("occurrence_id", pa.string()),
@@ -589,6 +611,14 @@ DATASETS: dict[str, DatasetSpec] = {
             "event_at",
             ("year",),
             ("occurrence_id", "revision_id"),
+        ),
+        _spec(
+            "setup_market_context",
+            LAYER_GOLD,
+            SETUP_MARKET_CONTEXT,
+            "entry_at",
+            ("year",),
+            ("occurrence_id", "timeframe", "bias_definition_id"),
         ),
         _spec(
             "outcome_path",

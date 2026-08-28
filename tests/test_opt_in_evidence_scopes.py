@@ -49,10 +49,34 @@ def test_the_scope_is_absent_from_the_unattended_slate(scope):
     assert scope not in briefs.TICKER_BRIEF_SCOPES
 
 
-def test_the_nightly_slate_is_still_exactly_four_scopes():
+def test_the_nightly_slate_is_exactly_the_five_the_trader_asked_for():
+    """Four, plus `market_journal` on the trader's 2026-08-27 instruction.
+
+    Pinned as a LIST so a scope can never join the unattended slate by
+    accident; the two opt-in scopes above are what this guards.
+    """
     from ai_jobs import briefs
 
     assert briefs.DEFAULT_SCOPES == (
+        "daily_report",
+        "market_conditions",
+        "setup_trackers",
+        "journal_review",
+        "market_journal",
+    )
+
+
+def test_the_per_ticker_slate_did_not_follow_the_daily_summary():
+    """`TICKER_BRIEF_SCOPES` was an alias and is now its own tuple.
+
+    The trader asked for the daily summary. A session-level journal entry in a
+    per-symbol packet is the TB-0/TB-5 failure mode - text that starves the
+    symbol-specific evidence it leads.
+    """
+    from ai_jobs import briefs
+
+    assert "market_journal" not in briefs.TICKER_BRIEF_SCOPES
+    assert briefs.TICKER_BRIEF_SCOPES == (
         "daily_report",
         "market_conditions",
         "setup_trackers",

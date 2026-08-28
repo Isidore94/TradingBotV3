@@ -25,6 +25,24 @@ pytestmark = pytest.mark.qt
 
 _QT = pytest.importorskip("PySide6.QtWidgets", reason="PySide6 not installed")
 
+
+@pytest.fixture(autouse=True)
+def _queue_mechanics_only(monkeypatch):
+    """Routing off: these tests are about what the QUEUE does with a row.
+
+    Since 2026-08-27 an ordinary intraday alert lists in the M5 alert bar
+    instead of queueing a chart (trader rule; `test_qt_m5_alert_bar.py` owns
+    that routing and its exemptions). The mechanics below - filters, expiry,
+    verbs, badges - are the same for any row the queue holds, so they are
+    exercised with the routing switched off rather than rewritten around D1
+    fixtures that would drag the D1 feed into every assertion.
+    """
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    monkeypatch.setattr(
+        AlertCenterPanel, "_is_m5_review_alert", staticmethod(lambda alert: False)
+    )
+
 OPEN = datetime(2026, 8, 21, 6, 30)
 
 

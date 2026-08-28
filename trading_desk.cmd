@@ -2,9 +2,11 @@
 rem ---------------------------------------------------------------------------
 rem  TradingBotV3 Trading Desk - production launcher (source launch).
 rem
-rem  The desk runs from SOURCE, not from dist\TradingBotV3\TradingBotV3.exe:
-rem  Windows Smart App Control is enforced on this machine and refuses the
-rem  unsigned local build. See "Frozen exe rebuild policy" in CLAUDE.md.
+rem  The desk runs from SOURCE, not from dist\TradingBotV3\TradingBotV3.exe,
+rem  by trader decision (2026-08-26). It started because Windows Smart App
+rem  Control refused the unsigned local build; SAC read OFF on 2026-08-26 and
+rem  the source launch stays production anyway. See "Frozen exe rebuild
+rem  policy" in CLAUDE.md.
 rem
 rem  The console window is started minimized on purpose - it holds the desk's
 rem  stdout/stderr, which is what you read when something misbehaves. Closing

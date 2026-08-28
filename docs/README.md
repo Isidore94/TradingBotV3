@@ -1,6 +1,6 @@
-# TradingBotV3 documentation index
+﻿# TradingBotV3 documentation index
 
-Last reconciled: **2026-08-26**
+Last reconciled: **2026-08-27**
 
 Start here when a supporting detail is not in the four root documents. This index
 classifies every maintained Markdown document so a historical plan cannot be mistaken
@@ -27,6 +27,9 @@ These describe actions an operator may perform now.
 
 | File | Use |
 |---|---|
+| [`prompts/GUI_PHASE_0_9_OPUS_PROMPT.md`](prompts/GUI_PHASE_0_9_OPUS_PROMPT.md) | Paste-ready Opus build prompt for `plan.md` Phase 0.9 (G-P2.0 table width rule through one shell, G-P2.1 AWAY Recap return surface, G-P2.2 Desk Journal route with the fenced-file ask, G-P2.3 fluidity slice in measured order with two soak stops, G-P2.4 GC measurement only). Waves U1–U3/S1/P2 stay unauthorized; run after the AVWAP challenger session in the same checkout |
+| [`prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md`](prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md) | Paste-ready Opus build prompt for the group RS/RW tape rebuild (plan.md Phase 0.5 item 11): a pure `group_rrs` module with a parity test against `legacy.real_relative_strength`, a 5-minute Yahoo-batched zero-IB service in the Strength Board's shape, a 30/60/90 strip face, hidden -> shown. Forbids `legacy.py`, IB and RS Window changes. **BUILT 2026-08-27** on `claude/group-tape-rebuild` (`c4fa8c3`, `3dbff23`), all ten hard rules held; kept as the record of what was authorized and what was deliberately left out |
+| [`prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`](prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md) | Paste-ready Opus build prompt for Phase 0.10 packets B-0..B-3 (module + fixture, fit script, tracker shadow stops + stats + panel section, D1 overlay), with the pre-authorized `legacy.py`/`runner.py` edits enumerated |
 | [`AWAY_SCANNER_RUNBOOK.md`](AWAY_SCANNER_RUNBOOK.md) | Single-main Auto/Away operation and report recovery |
 | [`EVENING_MODE_RUNBOOK.md`](EVENING_MODE_RUNBOOK.md) | Sleep-in EVENING mode and ntfy setup |
 | [`DESK_TESTING_PLAN.md`](DESK_TESTING_PLAN.md) | Plain-language testing sequence the trader follows step by step; rendered read-only in the desk at Settings ▸ Testing Plan. Restates `CURRENT_CHECKPOINT.md`'s owed live proofs for a human reader and must be updated in the same pass whenever those change |
@@ -46,7 +49,7 @@ status.
 | [`ULTIMATE_SETUP_DATABASE_PLAN.md`](ULTIMATE_SETUP_DATABASE_PLAN.md) | Locked warehouse architecture and Phase 0–8 contract; phases are implemented, live pilot remains |
 | [`RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`](RESEARCH_WAREHOUSE_BUILD_DECISIONS.md) | Builder decisions and current warehouse live/human open items |
 | [`RESEARCH_WAREHOUSE_ERD.md`](RESEARCH_WAREHOUSE_ERD.md) | Warehouse dataset identity and read contract |
-| [`LOCAL_AI_AUTOMATION_PLAN.md`](LOCAL_AI_AUTOMATION_PLAN.md) | Local-AI implementation specification; Phase 2 redesign and later phases remain. **Section 7 (2026-08-20)** owns the deterministic `veto_cohort_grading` slot and the opt-in `trader_judgement` scope, and states what is deliberately not built |
+| [`LOCAL_AI_AUTOMATION_PLAN.md`](LOCAL_AI_AUTOMATION_PLAN.md) | Local-AI implementation specification; Phase 2 redesign and later phases remain. **Section 7 (2026-08-20)** owns deterministic cohort grading and the opt-in judgement scope; **Section 8 (2026-08-27)** owns the deterministic nightly setup stop/target fact pack and gated medium-tier narration |
 | [`AUTO_MODES_AND_QUIET_HOURS_PLAN.md`](AUTO_MODES_AND_QUIET_HOURS_PLAN.md) | Phase 0.5 R1 — **BUILT 2026-08-15, live proof owed**: mode matrix, quiet hours, shared-scan removal, EVENING SPY wake alarm. §8 records the build-time decisions |
 | [`M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`](M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md) | Phase 0.5 R2 — **BUILT 2026-08-15, live proof owed**: the combined PDH+VWAP Focus adoption gate, queue eviction, provenance sidecar, scoped "Not today", the desync repair, and the M5 strength board. §10 records the measured fetch cost |
 | [`SWING_QUALITY_AND_FEEDBACK_PLAN.md`](SWING_QUALITY_AND_FEEDBACK_PLAN.md) | Phase 0.5 R3 — **DETERMINISTIC WORK COMPLETE 2026-08-16, live gates owed**: shadow-only `would_demote` quality classifier, relvol + daytrade annotation, reviewed-today badge, pre-close honesty bundle (12:45 preview slot, post-close tracker write, STABLE+PREVIEW, bar stamps), structured dislike reasons counted by the scoreboard. §4.3.5 volume-thrust normalization is **trader-deferred**; the shadow week, churn comparison and first curation cycle are owed |
@@ -56,6 +59,8 @@ status.
 | [`WEEKEND_PREP_PLAN.md`](WEEKEND_PREP_PLAN.md) | ACTIVE spec for Phase 0.5 R8 — **BUILT 2026-08-15**, deterministic gates green, one live gate owed (a real weekend run): the guided five-step weekend routine, the H1/D1/Monthly strength boards on the fenced M5 formula, and adds-only adoption into swing Focus. §5's filter table is trader-approved as proposed; §11 carries the measured yfinance probe |
 | [`WISHLIST_OPEN_QUESTIONS.md`](WISHLIST_OPEN_QUESTIONS.md) | ACTIVE reference from the 2026-08-18 wishlist triage — one blocking trader question per unbuilt wishlist item, written down instead of guessed at. Read beside `WISHLIST.md`; nothing in it is authorized work, and an item leaves it by the trader answering its question |
 | [`CHART_REVIEW_WORKSPACE_PLAN.md`](CHART_REVIEW_WORKSPACE_PLAN.md) | Chart Review schema, capture boundaries, and implementation record |
+| [`GUI_REDESIGN_PLAN_2026-08-25.md`](GUI_REDESIGN_PLAN_2026-08-25.md) | **PARTLY AUTHORIZED 2026-08-26 — §11.1 Wave P1 (built, `plan.md` Phase 0.8) and §15 decisions 9–14 (`plan.md` Phase 0.9)**; revised the same evening to the measured baseline and the live-session findings. Waves U1–U3, S1 and the experimental Snappy mode (P2) remain PROPOSAL and must not be built from. Originally: tested 4K/90%-width professional-desk redesign covering every page and nested tab, Veto-first chart layout, Market Journal workflow, Settings offloads, measured fluidity defects, and an experimental bounded-cache Snappy mode. It changes no runtime behavior and enters the build sequence only if the trader promotes it into `plan.md` |
+| [`AVWAP_BAND_VARIANT_STUDY.md`](AVWAP_BAND_VARIANT_STUDY.md) | **Governing spec for `plan.md` Phase 0.10 (authorized 2026-08-26)**: OneOption's anchored-VWAP band replicated the same evening from three OKTA hover readings — `AVWAP(HLC/3) ± k·stdev(close, 20, population)`, a Bollinger width on an anchored centre (§2b, with the kill record) — then graded against the frozen champion in three shadow harnesses (level-quality backfill, playbook re-run, setup-tracker shadow stops) under pre-declared criteria. Never a swap of `calc_anchored_vwap_bands` (decision 0008) |
 | [`DURABILITY_CATCHUP_PLAN.md`](DURABILITY_CATCHUP_PLAN.md) | Built durability design and remaining live restart gate |
 | [`REVIEW_LEARNING_LOOP.md`](REVIEW_LEARNING_LOOP.md) | Review evidence, scoreboard, and annotation-only AI policy contract |
 | [`SETUPS_MAJOR.md`](SETUPS_MAJOR.md) | AI-stated production setup doctrine for trader correction |
@@ -72,6 +77,11 @@ superseded by `plan.md`.
 
 | File | Historical value |
 |---|---|
+| [`DESK_INTERNALS.md`](DESK_INTERNALS.md) | **ACTIVE reference, not history.** The verbatim long form of every `Core loop / data flow` rule in `CLAUDE.md` — the incident, the measurements and the trader conversation that produced it. Split out 2026-08-28 because that section was 42 KB (~10,600 tokens), 65% of a file that loads into *every* session. `CLAUDE.md` keeps the rule and this keeps the reason; the rules bind from `CLAUDE.md` alone. **Read the matching entry before changing the behaviour a rule governs, and change both places when a rule changes.** |
+| [`ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](ROADMAP_ARCHIVE_PHASES_0.5-0.7.md) | The verbatim build narrative for `plan.md` Section 12's Phases 0.5, 0.6 and 0.7, moved out 2026-08-28. Those three completed refinement programs were 72% of the roadmap while describing work that is BUILT. **All 89 numbered items and every gate clause stayed in `plan.md`, unabridged** — only the implementation description moved, and it is also in `CHANGELOG.md` and each packet's spec. Evidence, not authority: an owed gate is owed because `plan.md` says so. If the two disagree, `plan.md` wins |
+| [`CHECKPOINT_ARCHIVE_2026-08.md`](CHECKPOINT_ARCHIVE_2026-08.md) | The dated working record from `CURRENT_CHECKPOINT.md` for **2026-08-25 and earlier** (95 entries, 379 KB), split out 2026-08-27. The active checkpoint had reached 7,901 lines and made the mandatory documentation read ~260k tokens, so it was no longer followable. Evidence for one specific past decision — **never load it as context**, and never treat an entry here as an open gate. Open gates live in the active checkpoint's "Active state at a glance" block |
+| [`CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](CHANGELOG_ARCHIVE_2025-11_2026-08-19.md) | `CHANGELOG.md`'s revision history from **2026-08-19 back to the initial system in 2025-11** (36 entries), split out 2026-08-27. What currently exists is the `Current implemented inventory` section of `CHANGELOG.md`; this is how it got there. Same rule — read it for one question, do not load it |
+| [`analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md`](analysis/OPUS_BUILD_PROMPT_DESK_MEMORY_2026-08-27.md) | Paste-ready builder prompt for the desk's 8-13 GB memory jumps (investigation in the 2026-08-27 (10:00) checkpoint entry): session-scoped Arrow reads for the three warehouse readers that `to_pylist()` the whole month of `bar_m5` inside the desk, a chunked-sha / no-parse path for the 1 GB tracker snapshot ingest, and the trader-authorised `legacy.py` fix that frees `self.data[reqId]` on every IB request path. Fail-before-fix tests, equivalence proof, measured before/after, one live gate owed. **Authorises exactly that packet; the subprocess move and the GUI-stall items stay out of scope**. **BUILT 2026-08-27** on `claude/warehouse-build-memory` (`c6c0dc8`): 15.4 GB -> 0.53 GB per session read, the 1.03 GB tracker no longer read to answer UNCHANGED, and the five leaking BounceBot request paths freed (BD-73, BD-74). Kept as the record of what was authorised, what was deliberately left out, and the one live gate still owed |
 | [`analysis/SOL_ATTACK_2026-08-24.md`](analysis/SOL_ATTACK_2026-08-24.md) | Frozen adversarial reproduction pass over the 2026-08-24 build slate: exact commands, seven proven blocker classes, three surgical repairs, four report-only blockers, refuted attack claims, and the post-close AWAY/outcome-sweep evidence. It promotes nothing and marks no live gate met. **Frozen and never edited — one reading in it is superseded:** its C5 "second production sweep missed its own clock" was taken at 14:21 and the sweep ran at 14:27:36 (656/656, 0 failed). The correction is in `CHANGELOG.md`, `plan.md` R10.A and the 2026-08-25 evening (4) checkpoint entry |
 | [`CHECKPOINT_REVIEW_2026-08-08.md`](CHECKPOINT_REVIEW_2026-08-08.md) | Review and merge rulings for durability/local-AI branches |
 | [`HANDOFF_A4_PACKAGING_2026-08-09.md`](HANDOFF_A4_PACKAGING_2026-08-09.md) | A4/A5 and packaging handoff/desk verification record |
@@ -98,21 +108,21 @@ superseded by `plan.md`.
 The files under [`decisions/`](decisions/) are accepted constraints, not progress
 trackers:
 
-1. decision-support only; no execution;
-2. champion/challenger shadow promotion ladder;
-3. IBKR primary with Yahoo fallback;
-4. PySide6 product UI with Tk retained during migration;
-5. plain-file operational home-folder storage (cloud-sync premise superseded by 15);
-6. writer-lease fencing for shared exports;
-7. completed bars for state transitions;
-8. frozen anchored-VWAP sigma formula;
-9. golden fixtures before detector changes;
-10. AI review policy is annotation/ranking only;
-11. one-way evidence-grounded AI advisory;
-12. layered requirements with pinned constraints;
-13. root-roadmap authority;
-14. separate DAS research lake;
-15. no cloud sync — the DAS file server is the durable storage tier.
+1. [decision-support only; no execution](decisions/0001-decision-support-only-no-order-execution.md);
+2. [champion/challenger shadow promotion ladder](decisions/0002-champion-challenger-shadow-promotion-ladder.md);
+3. [IBKR primary with Yahoo fallback](decisions/0003-ibkr-primary-yahoo-fallback-market-data.md);
+4. [PySide6 product UI with Tk retained during migration](decisions/0004-pyside6-consumer-ui-tk-legacy-during-migration.md);
+5. [plain-file operational home-folder storage (cloud-sync premise superseded by 15)](decisions/0005-cloud-synced-home-folder-file-storage.md);
+6. [writer-lease fencing for shared exports](decisions/0006-writer-lease-fencing-for-shared-exports.md);
+7. [completed bars for state transitions](decisions/0007-completed-bars-only-for-state-transitions.md);
+8. [frozen anchored-VWAP sigma formula](decisions/0008-frozen-anchored-vwap-sigma-formula.md);
+9. [golden fixtures before detector changes](decisions/0009-golden-fixtures-before-detector-changes.md);
+10. [AI review policy is annotation/ranking only](decisions/0010-ai-in-the-loop-review-policy-annotation-only.md);
+11. [one-way evidence-grounded AI advisory](decisions/0011-one-way-evidence-grounded-ai-advisory.md);
+12. [layered requirements with pinned constraints](decisions/0012-layered-requirements-with-constraints-pin.md);
+13. [root-roadmap authority](decisions/0013-plan-md-authority-hierarchy.md);
+14. [separate DAS research lake](decisions/0014-das-research-lake.md);
+15. [no cloud sync — the DAS file server is the durable storage tier](decisions/0015-no-cloud-sync-das-file-server-storage.md).
 
 ## Maintenance rule
 

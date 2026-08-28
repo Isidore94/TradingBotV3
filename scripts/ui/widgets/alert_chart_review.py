@@ -762,6 +762,12 @@ class AlertChartReview(QWidget):
             "open": ("MOVING", theme.color("favorite")),
             "unknown": ("unmeasured", theme.color("text_muted")),
             "closed": ("inside range", theme.color("text_muted")),
+            # Trader rule 2026-08-27: a long under session VWAP (a short over
+            # it) is hidden the same way, and says so once revealed.
+            "wrong_side_vwap": ("wrong side of VWAP", theme.color("text_muted")),
+            # Trader rule 3, same day: a D1 long under its SMA200 or a D1
+            # short over its SMA50 is hidden too.
+            "wrong_side_sma": ("wrong side of SMA", theme.color("text_muted")),
         }.get(str(state or "").strip().lower(), ("", ""))
         self.mover_badge.setText(text)
         self.mover_badge.setVisible(bool(text))
@@ -775,7 +781,7 @@ class AlertChartReview(QWidget):
         self.hidden_button.setVisible(count > 0)
         if count:
             self.hidden_button.setText(
-                f"{count} hidden (inside yesterday's range) - show"
+                f"{count} hidden (inside yesterday's range / wrong side of VWAP or SMA) - show"
             )
 
     def set_any_bounce_armed(self, armed: bool = False) -> None:

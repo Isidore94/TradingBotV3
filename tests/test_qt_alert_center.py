@@ -1,10 +1,30 @@
 import sys
+
+import pytest
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+@pytest.fixture(autouse=True)
+def _queue_mechanics_only(monkeypatch):
+    """Routing off: these tests are about what the QUEUE does with a row.
+
+    Since 2026-08-27 an ordinary intraday alert lists in the M5 alert bar
+    instead of queueing a chart (trader rule; `test_qt_m5_alert_bar.py` owns
+    that routing and its exemptions). The mechanics below - filters, expiry,
+    verbs, badges - are the same for any row the queue holds, so they are
+    exercised with the routing switched off rather than rewritten around D1
+    fixtures that would drag the D1 feed into every assertion.
+    """
+    from ui.panels.alert_center_panel import AlertCenterPanel
+
+    monkeypatch.setattr(
+        AlertCenterPanel, "_is_m5_review_alert", staticmethod(lambda alert: False)
+    )
 
 
 def _alert(text, tag="green"):
@@ -1227,6 +1247,15 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
     bot = _Bot()
     bot.bars = [bar(20, 110.0, 99.0), bar(25, 108.0, 100.0)]
     panel = AlertCenterPanel()
+    # The show-time filter is off here for the same reason the routing is:
+    # this test is about the WATCH BUTTONS, not about which rows reach the
+    # pane. Leaving it on made the test a clock bomb - the fixture's last bar
+    # starts at 11:25, so before 11:30 local it was still forming and the VWAP
+    # side read UNKNOWN (which shows), while after 11:30 both bars complete,
+    # the fixture's long sits under its own session VWAP, and the 2026-08-27
+    # rule correctly hid the chart. The bars' comment above claims the timing
+    # is deterministic; with the filter on it was not.
+    panel._review_movers_only = False
     panel._bounce_service = _Service(bot)
     alert = BounceAlert(
         time_text="11:30:00",

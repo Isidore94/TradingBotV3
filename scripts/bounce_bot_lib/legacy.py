@@ -2657,6 +2657,33 @@ def _classify_spy_vwap_regime(today_bars, prev_close):
     return stats["classification"] if stats else None
 
 
+def _auto_market_regime_stats(today_bars, prev_close):
+    """The complete pure Auto Market Bias decision, including its fallback."""
+    if not today_bars or not prev_close:
+        return None
+    last_close = today_bars[-1].close
+    day_pct = (last_close - prev_close) / prev_close * 100.0
+    vwap_stats = _spy_vwap_regime_stats(today_bars, prev_close)
+    source = "vwap"
+    if vwap_stats is None:
+        direction = "bullish" if day_pct >= 0 else "bearish"
+        strength = "strong" if abs(day_pct) >= MARKET_REGIME_STRONG_ABS_PCT else "weak"
+        env_key = f"{direction}_{strength}"
+        source = "day_pct"
+    elif vwap_stats["classification"] is not None:
+        env_key = vwap_stats["classification"]
+    else:
+        env_key = "neutral_chop"
+    return {
+        "env_key": env_key,
+        "source": source,
+        "day_pct": day_pct,
+        "last_close": last_close,
+        "reference_close": prev_close,
+        "vwap_stats": vwap_stats,
+    }
+
+
 def _session_structure_report(today_df, direction, ref_atr):
     """(ok, reason) for the trend-then-simple-retest session gate.
 
@@ -6932,19 +6959,11 @@ class BounceBot(EWrapper, EClient):
         today_bars, prev_close = self._spy_session_bars()
         if not today_bars or not prev_close:
             return None
-        day_pct = (today_bars[-1].close - prev_close) / prev_close * 100.0
-        stats = _spy_vwap_regime_stats(today_bars, prev_close)
-        if stats is None:
-            # Session too young / no volume: the day% rule decides.
-            direction = "bullish" if day_pct >= 0 else "bearish"
-            strength = "strong" if abs(day_pct) >= MARKET_REGIME_STRONG_ABS_PCT else "weak"
-            env_key = f"{direction}_{strength}"
-        elif stats["classification"] is not None:
-            env_key = stats["classification"]
-        else:
-            # Mature session, no band hold, and VWAP position disagrees with
-            # the day color: that's chop, not a trend to lean on.
-            env_key = "neutral_chop"
+        reading = _auto_market_regime_stats(today_bars, prev_close)
+        if reading is None:
+            return None
+        day_pct = reading["day_pct"]
+        env_key = reading["env_key"]
         if env_key != self.get_market_environment():
             logging.info("Auto market regime: SPY %+.2f%% on the day -> %s", day_pct, env_key)
             self.set_market_environment(env_key, source="auto")
@@ -6963,19 +6982,14 @@ class BounceBot(EWrapper, EClient):
         today_bars, prev_close = self._spy_session_bars(cached_only=True)
         if not today_bars or not prev_close:
             return None
-        last_close = today_bars[-1].close
-        day_pct = (last_close - prev_close) / prev_close * 100.0
-        stats = _spy_vwap_regime_stats(today_bars, prev_close)
-        source = "vwap"
-        if stats is None:
-            direction = "bullish" if day_pct >= 0 else "bearish"
-            strength = "strong" if abs(day_pct) >= MARKET_REGIME_STRONG_ABS_PCT else "weak"
-            env_key = f"{direction}_{strength}"
-            source = "day_pct"
-        elif stats["classification"] is not None:
-            env_key = stats["classification"]
-        else:
-            env_key = "neutral_chop"  # mature mixed tape (see update_auto_market_environment)
+        regime = _auto_market_regime_stats(today_bars, prev_close)
+        if regime is None:
+            return None
+        last_close = regime["last_close"]
+        day_pct = regime["day_pct"]
+        stats = regime["vwap_stats"]
+        source = regime["source"]
+        env_key = regime["env_key"]
         active_env = self.get_market_environment()
         reading = {
             "env_key": env_key,
@@ -11084,7 +11098,16 @@ class BounceBot(EWrapper, EClient):
     def historicalData(self, reqId, bar):
         with self.data_lock:
             if reqId not in self.data:
-                self.data[reqId] = []
+                # A bar nobody is waiting for. Every request path creates its
+                # buffer BEFORE issuing the request, so an unknown reqId here
+                # can only be a straggler arriving after its requester timed
+                # out or finished. Auto-creating a buffer for it (what this
+                # did until 2026-08-27) meant that straggler allocated a list
+                # nothing would ever free, and - worse - a bar racing the
+                # requester's own pop would append to the very list the caller
+                # was already reading. Dropping it changes nothing a consumer
+                # can observe: no second reader of self.data[reqId] exists.
+                return
             self.data[reqId].append({
                 "time": bar.date,
                 "open": bar.open,
@@ -11453,6 +11476,10 @@ class BounceBot(EWrapper, EClient):
                 self.atr_cache[sym] = None
                 logging.warning(f"{sym}: ATR data request timed out.")
             del self.data_ready_events[reqId]
+            # Free the bar buffer with the event, on BOTH branches. Held, it
+            # was ~206 KB per request forever (2026-08-27 measurement); the
+            # ATR above is already computed off `df_daily`.
+            self.data.pop(reqId, None)
 
     # Helper function for color coded logging (non-ATR messages)
     # Option 1: Update the method definition to accept a tag parameter with a default value
@@ -12484,9 +12511,15 @@ class BounceBot(EWrapper, EClient):
         if not self.data_ready_events[five_day_reqId].wait(timeout=15):
             logging.warning(f"{symbol}: Timeout waiting for historical data.")
             del self.data_ready_events[five_day_reqId]
+            self.data.pop(five_day_reqId, None)
             return
 
-        all_bars = self.data.get(five_day_reqId, [])
+        # `pop`, not `get`: this is the only reader of this buffer, and the
+        # hottest request path in the bot (one per symbol per scan cycle,
+        # ~206 KB each). Popping here frees it on the short-data return below
+        # AND on the success path, and it is the same list object `get`
+        # returned, so nothing downstream reads differently.
+        all_bars = self.data.pop(five_day_reqId, [])
         if len(all_bars) < 10:
             logging.warning(f"{symbol}: Insufficient historical data, only {len(all_bars)} bars received")
             del self.data_ready_events[five_day_reqId]
@@ -13723,6 +13756,9 @@ class BounceBot(EWrapper, EClient):
                         if touched:
                             results.append(f"{symbol} touched DVWAP")
             del self.data_ready_events[reqId]
+            # Free the buffer with the event, on both branches: `df` above
+            # already holds a copy of the bars.
+            self.data.pop(reqId, None)
         return results
 
     def check_dynamic_vwap2_touches(self):
@@ -13757,6 +13793,9 @@ class BounceBot(EWrapper, EClient):
                         if touched:
                             results.append(f"{symbol} touched DVWAP2")
             del self.data_ready_events[reqId]
+            # Free the buffer with the event, on both branches: `df` above
+            # already holds a copy of the bars.
+            self.data.pop(reqId, None)
         return results
 
     def check_eod_vwap_touches(self):
@@ -13791,6 +13830,9 @@ class BounceBot(EWrapper, EClient):
                         if touched:
                             results.append(f"{symbol} touched EOD VWAP")
             del self.data_ready_events[reqId]
+            # Free the buffer with the event, on both branches: `df` above
+            # already holds a copy of the bars.
+            self.data.pop(reqId, None)
         return results
 
     def log_bounce_to_file(self, symbol, direction, levels, bounce_candle, current_candle, threshold, quality=None):

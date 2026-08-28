@@ -19,15 +19,19 @@ from ui.panels.bounce_panel import BouncePanel
 from ui.panels.focus_picks_panel import FocusPicksPanel
 from ui.panels.industry_panel import IndustryPanel
 from ui.panels.master_avwap_panel import MasterAvwapPanel
+from ui.widgets.m5_alert_bar import M5AlertBar
 from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
+from ui.services.group_tape_service import GroupTapeService
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
 
-DESK_SPLIT_KEY = "qt_desk_split_sizes_v2"
+# v3 (2026-08-27): the M5 alert bar moved to the LEFT of the chart column, so a
+# v2 split saved with the bar in the middle must not be replayed onto it.
+DESK_SPLIT_KEY = "qt_desk_split_sizes_v3"
 
 
 class TradingDeskPanel(QWidget):
@@ -110,6 +114,14 @@ class TradingDeskPanel(QWidget):
         )
         self.bounce_panel.statusChanged.connect(self.statusChanged)
         self.alert_center.statusChanged.connect(self.statusChanged)
+        # Trader, 2026-08-27: intraday alerts are a list beside the chart, not
+        # charts in the waiting list. The Alert Center posts them; the bar
+        # lists them newest first; a click charts one through the same path
+        # as a feed-row click. Day-scoped with the queue.
+        self.m5_alert_bar = M5AlertBar()
+        self.alert_center.m5AlertPosted.connect(self.m5_alert_bar.post)
+        self.alert_center.m5AlertsDayRolled.connect(self.m5_alert_bar.clear_all)
+        self.m5_alert_bar.alertActivated.connect(self.alert_center.chart_alert)
         self.bounce_panel.service.connectionChanged.connect(self.connectionChanged)
         self.bounce_panel.service.alertReceived.connect(self.focus_picks_panel.record_bounce_alert)
         self.bounce_panel.service.rrsSnapshotChanged.connect(self.focus_picks_panel.record_rrs_snapshot)
@@ -126,12 +138,26 @@ class TradingDeskPanel(QWidget):
         tape_layout = QHBoxLayout(self.tape_host)
         tape_layout.setContentsMargins(0, 0, 0, 0)
         tape_layout.setSpacing(6)
-        # Sector/industry strength, always visible across the desk. Fed off the
-        # SAME rrsSnapshotChanged payload the Alert Center already receives -
-        # no new service, thread, timer, or IB request.
+        # Sector/industry strength, always visible across the desk. Since the
+        # 2026-08-27 rebuild (plan.md Phase 0.5 item 11) it is fed by its OWN
+        # service - one batched yfinance read of today's completed bars every
+        # five minutes, zero IB traffic - and no longer by BounceBot's
+        # rrsSnapshotChanged, which only moved when a scan cycle's RRS pass
+        # finished: 10-30 minutes apart, once 31 minutes late on a flip, and
+        # its one intraday number reached across the overnight gap for the
+        # first hour. The trader had it hidden between that finding and this
+        # rebuild.
+        #
+        # The RS Window tab still reads rrsSnapshotChanged, deliberately: it
+        # answers a different question (who led over the selected window at
+        # scan time), so both wirings coexist and neither is a copy of the
+        # other.
         self.group_tape = GroupTapeStrip()
         self.group_tape.symbolActivated.connect(self.alert_center.chart_symbol)
-        self.bounce_panel.service.rrsSnapshotChanged.connect(self.group_tape.update_groups)
+        self.group_tape_service = GroupTapeService(self)
+        self.group_tape_service.tapeChanged.connect(self.group_tape.update_groups)
+        self.group_tape_service.statusChanged.connect(self.group_tape.set_status)
+        self.group_tape.set_status(self.group_tape_service.status_text())
         tape_layout.addWidget(self.group_tape, 1)
         # The setups column opens hidden, so the way back has to live somewhere
         # that is always on screen and independent of it. The tape row is the
@@ -177,6 +203,7 @@ class TradingDeskPanel(QWidget):
             tabs = QTabWidget()
             tabs.addTab(self.master_workspace, "Master AVWAP")
             tabs.addTab(self.alert_center, "Alert Center")
+            tabs.addTab(self.m5_alert_bar, "M5 alerts")
             tabs.addTab(self.bounce_panel, "BounceBot")
             self._mode_widget = tabs
             self.center_layout.addWidget(tabs)
@@ -189,13 +216,19 @@ class TradingDeskPanel(QWidget):
         self.alert_center.set_embedded_detail_enabled(False)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        # The M5 alert bar is the LEFT column (trader, 2026-08-27, second
+        # pass: "move it to the left of the visual chart"). It takes no
+        # stretch: extra width goes to the chart column first, then the
+        # setups.
+        splitter.addWidget(self.m5_alert_bar)
         splitter.addWidget(self.alert_center)
         splitter.addWidget(self.master_workspace)
-        # The chart column now leads. The old 1:2 stretch meant every pixel
+        # The chart column leads. The old 1:2 stretch meant every pixel
         # added to the window went 2:1 to the setups table, so the charts got
         # relatively SMALLER on a bigger monitor.
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(2, 2)
         splitter.setChildrenCollapsible(False)
         # Both columns aggregate large minimumSizeHints from their children
         # (the setups workspace alone hinted 1372px wide). Their sum exceeded
@@ -240,6 +273,15 @@ class TradingDeskPanel(QWidget):
             ("industry board", self.industry_panel.shutdown),
             ("master scan service", self.master_panel.scan_service.shutdown),
         ))
+        # Resolved the way `price_alert_service` above is, and for the same
+        # reason: a desk whose __init__ died partway must still hand every
+        # service it DID build its bounded cleanup. Naming the attribute
+        # inline would make a missing one raise while the tuple is being
+        # built - before the loop below runs at all - so nothing would be
+        # released rather than one thing.
+        group_tape_service = getattr(self, "group_tape_service", None)
+        if group_tape_service is not None:
+            components.append(("group tape", group_tape_service.shutdown))
         for label, close in components:
             try:
                 close()
@@ -256,6 +298,7 @@ class TradingDeskPanel(QWidget):
         rescued = (
             self.master_workspace,
             self.alert_center,
+            self.m5_alert_bar,
             self.bounce_panel,
             self.tape_host,
         )
@@ -284,6 +327,8 @@ class TradingDeskPanel(QWidget):
         laptop-sized desk cannot afford desktop-sized floors.
         """
         self.alert_center.setMinimumWidth(theme.px(360))
+        # Wide enough for "07:09  ▲ SYMBOL  VWAP reclaim" and the two buttons.
+        self.m5_alert_bar.setMinimumWidth(theme.px(150))
         self.master_workspace.setMinimumWidth(theme.px(420))
 
     def apply_scaled_metrics(self) -> None:

@@ -258,8 +258,24 @@ class StallWatchdog(QObject):
         modal = counted.most_common(1)[0][0] if counted else _culprit(stack)
         # The stack shown is the one that produced the frame being named.
         stack = (stacks or {}).get(modal, stack)
+        # Which click this belongs to, if the desk was doing anything. Read
+        # from the sampler thread, so it must never block and must never be
+        # allowed to cost the record it annotates - the measurement outranks
+        # the annotation.
+        try:
+            from ui import interaction_trace
+
+            live = interaction_trace.current() or {}
+        except Exception:
+            live = {}
         record: dict[str, Any] = {
             "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            # Empty means no interaction was open - an idle-desk stall. That is
+            # a fact about the stall, not a missing measurement.
+            "interaction_id": str(live.get("interaction_id") or ""),
+            "interaction_kind": str(live.get("kind") or ""),
+            "interaction_detail": str(live.get("detail") or ""),
+            "interaction_stage": str(live.get("stage") or ""),
             "gap_ms": round(gap_ms, 1),
             # What the main thread was actually held for, net of the cadence.
             "blocked_ms": round(max(0.0, gap_ms - self._heartbeat_s * 1000.0), 1),

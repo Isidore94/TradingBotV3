@@ -178,3 +178,58 @@ def test_status_snapshot_does_not_advertise_the_active_slot_as_next(monkeypatch)
     snapshot = service.status_snapshot()
 
     assert snapshot["next_slot"] == "12:00"
+
+
+# ==========================================================================
+# the mode flip is announced (2026-08-27) - Market Journal capture
+# ==========================================================================
+def _quiet(service):
+    service._save_state = lambda: None
+    service._log = lambda *args, **kwargs: None
+    service._request_report_write = lambda: None
+    return service
+
+
+def test_a_profile_change_reports_the_mode_it_left():
+    """The previous mode is read BEFORE the mutation, or the row would say
+    "AWAY -> AWAY" and record nothing."""
+    service = _quiet(_bare_service(enabled=True, profile=AUTO_PROFILE_DESK))
+    seen = []
+    service._emit_auto_mode_change = lambda previous: seen.append((previous, service.auto_mode))
+
+    service.set_profile(AUTO_PROFILE_AWAY)
+
+    assert seen == [(AUTO_PROFILE_DESK, AUTO_PROFILE_AWAY)]
+
+
+def test_a_profile_change_while_auto_is_off_is_not_a_flip():
+    """`auto_mode` did not move, so nothing is announced - the journal must not
+    fill with rows for a mode nobody was in."""
+
+    class _Recorder:
+        def __init__(self):
+            self.emitted = []
+            self.autoModeChanged = self
+
+        def emit(self, previous, current):
+            self.emitted.append((previous, current))
+
+    recorder = _Recorder()
+    recorder.auto_mode = AUTO_MODE_OFF
+    AutopilotService._emit_auto_mode_change(recorder, AUTO_MODE_OFF)
+
+    assert recorder.emitted == []
+
+
+def test_a_listener_that_fails_cannot_leave_the_mode_half_applied():
+    """The state and the log line are already written when this runs."""
+
+    class _Exploding:
+        auto_mode = AUTO_PROFILE_AWAY
+
+        class autoModeChanged:  # noqa: N801 - mimics the Signal attribute
+            @staticmethod
+            def emit(*_args):
+                raise RuntimeError("a listener blew up")
+
+    AutopilotService._emit_auto_mode_change(_Exploding(), AUTO_MODE_OFF)

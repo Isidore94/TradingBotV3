@@ -1,16 +1,27 @@
-"""The left-nav Market Journal page — R10.H.
+"""The left-nav Market Journal page — R10.H, plus the chart capture follow-on.
 
-The sit-down review: six D1 charts, the entries, the environment timeline with
-its auto-vs-manual agreement rate, the calendar strip, and the machine's own
-day-context row beside the trader's words.
+The sit-down review: the entries, the tape each one was written against, the
+environment timeline with its auto-vs-manual agreement rate, the calendar strip,
+and the machine's own day-context row beside the trader's words.
 
 Two labels that look like a collision and are not: the existing left-nav
 **"Journal"** is the trade/tax journal — what you traded. This is **"Market
 Journal"** — what you thought. Merging them would turn the tax record into a
 diary, so the difference is deliberate and stays.
 
-Everything expensive is off the Qt thread (ground rule 9): entries and charts
-load on a worker, and the page renders what it is handed.
+**What changed after the first live day** (2026-08-27). The trader wrote five
+entries through the Desk tab and this page showed nothing, because it loaded
+only when "Refresh" was clicked — nothing called `reload()` at construction or
+on show, and the desk tab held a *second* service instance, so its
+`entryWritten` never reached here. Both are fixed: one shared service, and the
+page loads the first time it is shown. The other half of the same report was
+that words alone were not worth re-reading — so every entry now carries the M5
+and D1 of its symbol and of SPY as they stood when it was written, and this
+page draws them (`market_journal_capture`).
+
+Everything expensive is off the Qt thread (ground rule 9): entries, digests and
+the stored bar windows all load on workers, and the page renders what it is
+handed.
 """
 
 from __future__ import annotations
@@ -22,9 +33,11 @@ from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
@@ -34,12 +47,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui.widgets.candle_chart import CandleChart
+
 #: How many D1 charts the page shows. Six is the trader's own number.
 CHART_COUNT = 6
 
+#: The four panes of a capture, in reading order: what you were watching first,
+#: then the market it was moving inside.
+CAPTURE_PANES = (
+    ("symbol_m5", "{symbol} M5", "m5"),
+    ("symbol_d1", "{symbol} D1", "d1"),
+    ("benchmark_m5", "{benchmark} M5", "m5"),
+    ("benchmark_d1", "{benchmark} D1", "d1"),
+)
+
 
 class _EntriesWorker(QThread):
-    """Loads entries, the regime timeline and the day context off the GUI thread."""
+    """Loads entries, digests, the regime timeline and the day context."""
 
     loaded = Signal(dict)
 
@@ -57,7 +81,31 @@ class _EntriesWorker(QThread):
             payload["context"] = self._service.day_context(self._session)
         except Exception as exc:  # noqa: BLE001
             payload["error"] = str(exc)
+        try:
+            payload["digests"] = self._service.chart_digests()
+        except Exception:  # noqa: BLE001
+            # A missing capture store is a quieter page, never a failed one:
+            # the entries are the record and they loaded.
+            payload["digests"] = {}
         self.loaded.emit(payload)
+
+
+class _CaptureWorker(QThread):
+    """Reads one entry's stored bar window off the GUI thread."""
+
+    loaded = Signal(str, dict)
+
+    def __init__(self, service, entry_id: str, parent=None) -> None:
+        super().__init__(parent)
+        self._service = service
+        self._entry_id = entry_id
+
+    def run(self) -> None:  # pragma: no cover - exercised through its signal seam
+        try:
+            capture = self._service.chart_capture(self._entry_id) or {}
+        except Exception:  # noqa: BLE001
+            capture = {}
+        self.loaded.emit(self._entry_id, capture)
 
 
 class MarketJournalPanel(QFrame):
@@ -69,11 +117,15 @@ class MarketJournalPanel(QFrame):
     def __init__(self, service=None, parent=None) -> None:
         super().__init__(parent)
         if service is None:
-            from ui.services.market_journal_service import MarketJournalService
+            from ui.services.market_journal_service import shared_journal_service
 
-            service = MarketJournalService(self)
+            service = shared_journal_service()
         self.service = service
         self._worker: _EntriesWorker | None = None
+        self._capture_worker: _CaptureWorker | None = None
+        self._entries: list[dict] = []
+        self._digests: dict[str, dict] = {}
+        self._loaded_once = False
 
         self.heading = QLabel("Market Journal")
         self.heading.setObjectName("SectionTitle")
@@ -102,6 +154,7 @@ class MarketJournalPanel(QFrame):
         self.after_the_fact.setWordWrap(True)
 
         self.entries = QListWidget()
+        self.entries.currentRowChanged.connect(self._on_entry_selected)
         self.timeline = QListWidget()
         self.agreement = QLabel("")
         self.agreement.setWordWrap(True)
@@ -112,6 +165,9 @@ class MarketJournalPanel(QFrame):
         self.calendar_strip.setWordWrap(True)
         self.charts_note = QLabel("")
         self.charts_note.setWordWrap(True)
+        self.digest_label = QLabel("")
+        self.digest_label.setWordWrap(True)
+        self.digest_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.status = QLabel("")
         self.status.setWordWrap(True)
 
@@ -150,23 +206,68 @@ class MarketJournalPanel(QFrame):
         review_widget = QWidget()
         review_widget.setLayout(review)
 
+        # The right half: the tape the selected entry was written against.
+        # Charts, not a note about charts - the whole point of the capture.
+        self.charts: dict[str, CandleChart] = {}
+        self.chart_titles: dict[str, QLabel] = {}
+        self.chart_holders: dict[str, QWidget] = {}
+        charts_layout = QGridLayout()
+        charts_layout.setContentsMargins(0, 0, 0, 0)
+        for index, (key, _template, _timeframe) in enumerate(CAPTURE_PANES):
+            title = QLabel("")
+            title.setObjectName("SectionSubtitle")
+            chart = CandleChart()
+            chart.setMinimumHeight(160)
+            self.chart_titles[key] = title
+            self.charts[key] = chart
+            pane = QVBoxLayout()
+            pane.setContentsMargins(0, 0, 0, 0)
+            pane.addWidget(title)
+            pane.addWidget(chart, 1)
+            holder = QWidget()
+            holder.setLayout(pane)
+            self.chart_holders[key] = holder
+            charts_layout.addWidget(holder, index // 2, index % 2)
+        charts_widget = QWidget()
+        charts_body = QVBoxLayout(charts_widget)
+        charts_body.setContentsMargins(0, 0, 0, 0)
+        charts_body.addWidget(QLabel("What you were looking at"))
+        charts_body.addWidget(self.charts_note)
+        charts_body.addWidget(self.digest_label)
+        charts_body.addLayout(charts_layout, 1)
+
+        lower = QSplitter(Qt.Horizontal)
+        lower.addWidget(review_widget)
+        lower.addWidget(charts_widget)
+        lower.setStretchFactor(0, 2)
+        lower.setStretchFactor(1, 3)
+
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(compose_widget)
-        splitter.addWidget(review_widget)
-        splitter.setStretchFactor(1, 2)
+        splitter.addWidget(lower)
+        splitter.setStretchFactor(1, 3)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.heading)
         layout.addWidget(self.subtitle)
         layout.addLayout(header)
-        layout.addWidget(self.charts_note)
         layout.addWidget(splitter, 1)
         layout.addWidget(self.status)
 
         self.service.statusChanged.connect(self.status.setText)
-        self.service.entryWritten.connect(lambda _row: self.reload())
+        # Both refreshes are gated on the page having been opened at least
+        # once. A note typed on the Desk tab must reach this page - that is the
+        # wiring the second service instance was breaking - but a page nobody
+        # has looked at yet has nothing to refresh, and `showEvent` will load
+        # it in full when they do. Otherwise every note would cost a worker
+        # thread reading the ledger for a hidden widget.
+        self.service.entryWritten.connect(lambda _row: self._refresh_if_loaded())
+        capture_signal = getattr(self.service, "chartCaptured", None)
+        if capture_signal is not None:
+            capture_signal.connect(lambda _result: self._refresh_if_loaded())
         self._sync_after_the_fact()
+        self._clear_charts("Select an entry to see the charts it was written against.")
 
     # -- session ----------------------------------------------------------
     def session_date(self) -> str:
@@ -192,6 +293,24 @@ class MarketJournalPanel(QFrame):
             self.after_the_fact.setText("")
 
     # -- loading ----------------------------------------------------------
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        """Load the first time the page is actually looked at.
+
+        The page shipped with no caller for `reload()` at all, so it was empty
+        until "Refresh" was pressed - which read as an empty journal on a day
+        with five entries in it. Loading here rather than in `__init__` keeps
+        the cost with the page that asked for it: the desk builds every left-nav
+        panel at startup and most are never opened.
+        """
+        super().showEvent(event)
+        if not self._loaded_once:
+            self._loaded_once = True
+            self.reload()
+
+    def _refresh_if_loaded(self) -> None:
+        if self._loaded_once:
+            self.reload()
+
     def reload(self) -> None:
         self._sync_after_the_fact()
         if self._worker is not None and self._worker.isRunning():
@@ -204,33 +323,82 @@ class MarketJournalPanel(QFrame):
         if payload.get("error"):
             self.status.setText(f"Market journal unavailable: {payload['error']}")
             return
+        self._digests = dict(payload.get("digests") or {})
         self._render_sessions(payload.get("sessions") or [])
         self._render_entries(payload.get("entries") or [])
         self._render_timeline(payload.get("timeline") or {})
         self._render_context(payload.get("context") or {})
         self._render_calendar()
-        self._render_charts_note(payload.get("entries") or [])
 
     def _render_sessions(self, sessions: list[str]) -> None:
         current = self.session_picker.currentText()
         known = {self.session_picker.itemText(i) for i in range(self.session_picker.count())}
-        for session in sessions:
-            if session not in known:
-                self.session_picker.addItem(session)
-        if current:
-            self.session_picker.setCurrentText(current)
+        blocked = self.session_picker.blockSignals(True)
+        try:
+            for session in sessions:
+                if session not in known:
+                    self.session_picker.addItem(session)
+            # An empty box means "today" everywhere else in this class, so it
+            # is filled in rather than left to whatever addItem selected -
+            # otherwise adding the first session silently changes which one is
+            # being read.
+            self.session_picker.setCurrentText(current or self.session_date())
+        finally:
+            self.session_picker.blockSignals(blocked)
 
     def _render_entries(self, entries: list[dict]) -> None:
-        self.entries.clear()
+        import market_journal
+
+        previous = self._selected_entry_id()
+        self._entries = list(entries)
+        blocked = self.entries.blockSignals(True)
+        try:
+            self.entries.clear()
+            if not entries:
+                self.entries.addItem("No entries for this session yet.")
+            for entry in entries:
+                marker = (
+                    " [written after the session]"
+                    if entry.get("written_after_the_session")
+                    else ""
+                )
+                hand = " [desk]" if market_journal.is_machine_entry(entry) else ""
+                symbols = ", ".join(entry.get("symbols") or ())
+                camera = " 📈" if str(entry.get("entry_id") or "") in self._digests else ""
+                stamp = str(entry.get("created_at") or "")[:19]
+                label = (
+                    f"{entry.get('timeframe', '')} {stamp}{hand}{marker}{camera} "
+                    f"{('[' + symbols + '] ') if symbols else ''}{entry.get('text', '')}"
+                )
+                item = QListWidgetItem(label)
+                item.setData(Qt.UserRole, str(entry.get("entry_id") or ""))
+                self.entries.addItem(item)
+        finally:
+            self.entries.blockSignals(blocked)
         if not entries:
-            self.entries.addItem("No entries for this session yet.")
+            # Cleared under blocked signals, so the charts would otherwise keep
+            # drawing the previous session's tape under this session's silence.
+            self._clear_charts("No entries for this session, so there is nothing to chart.")
             return
-        for entry in entries:
-            marker = " [written after the session]" if entry.get("written_after_the_session") else ""
-            stamp = str(entry.get("created_at") or "")[:19]
-            self.entries.addItem(
-                f"{entry.get('timeframe', '')} {stamp}{marker}: {entry.get('text', '')}"
-            )
+        row = self._row_for_entry(previous)
+        self.entries.setCurrentRow(row if row is not None else len(entries) - 1)
+        # setCurrentRow is a no-op when the row is already current (a reload
+        # that changed nothing), and the charts must still be right.
+        self._on_entry_selected(self.entries.currentRow())
+
+    def _row_for_entry(self, entry_id: str) -> int | None:
+        if not entry_id:
+            return None
+        for index, entry in enumerate(self._entries):
+            if str(entry.get("entry_id") or "") == entry_id:
+                return index
+        return None
+
+    def _selected_entry_id(self) -> str:
+        item = self.entries.currentItem()
+        if item is None:
+            return ""
+        return str(item.data(Qt.UserRole) or "")
 
     def _render_timeline(self, timeline: dict) -> None:
         self.timeline.clear()
@@ -283,39 +451,86 @@ class MarketJournalPanel(QFrame):
             return
         self.calendar_strip.setText(f"Calendar: {coverage.get('note', '')}")
 
-    def _render_charts_note(self, entries: list[dict]) -> None:
-        """The six D1 charts.
-
-        Deliberately a note rather than six live chart widgets in this build:
-        the charts go through the existing `ChartDataService` worker, and
-        wiring them is a separate, chart-owning change. What is here now is the
-        symbol set the charts will draw, so the page is honest about what it is
-        showing rather than presenting an empty grid as a rendered one.
-        """
-        import market_journal
-
-        symbols: list[str] = []
-        for entry in entries:
-            for symbol in entry.get("symbols") or []:
-                if symbol not in symbols:
-                    symbols.append(symbol)
-        shown = symbols[:CHART_COUNT]
-        if shown:
-            self.charts_note.setText(
-                f"D1 charts for {', '.join(shown)} "
-                f"(RVOL ≥ {market_journal.RVOL_OVERLAY_FLOOR} overlay is "
-                "journal-only and never touches the canonical D1 level store)."
+    # -- the captured charts ----------------------------------------------
+    def _on_entry_selected(self, _row: int) -> None:
+        entry_id = self._selected_entry_id()
+        if not entry_id:
+            self._clear_charts("Select an entry to see the charts it was written against.")
+            return
+        digest = self._digests.get(entry_id)
+        if digest is None:
+            self._clear_charts(
+                "No charts were captured with this entry. Entries written "
+                "before the capture was built, and entries written when no "
+                "bars were cached, have none - it is not a chart that was lost."
             )
-        else:
-            self.charts_note.setText(
-                "No symbols named in this session's entries yet, so there is "
-                "nothing to chart."
+            return
+        self.digest_label.setText(str(digest.get("digest") or ""))
+        self.charts_note.setText("Loading the captured charts…")
+        if self._capture_worker is not None and self._capture_worker.isRunning():
+            return
+        self._capture_worker = _CaptureWorker(self.service, entry_id, self)
+        self._capture_worker.loaded.connect(self._render_capture)
+        self._capture_worker.start()
+
+    def _clear_charts(self, note: str) -> None:
+        self.charts_note.setText(note)
+        self.digest_label.setText("")
+        for key, chart in self.charts.items():
+            chart.set_data([])
+            self.chart_titles[key].setText("")
+            self.chart_holders[key].setVisible(False)
+
+    def _render_capture(self, entry_id: str, capture: dict) -> None:
+        if entry_id != self._selected_entry_id():
+            # The trader moved on while the file was being read. Drawing it now
+            # would put one entry's tape under another entry's words.
+            return
+        if not capture:
+            self._clear_charts(
+                "This entry has a capture row but its stored bars could not be "
+                "read. The row is on disk; the bar file is not."
             )
+            return
+        import market_journal_capture
+
+        symbol = str(capture.get("symbol") or "").strip().upper() or "(no symbol)"
+        benchmark = str(capture.get("benchmark") or market_journal_capture.BENCHMARK_SYMBOL)
+        series = capture.get("series") or {}
+        missing = 0
+        for key, template, timeframe in CAPTURE_PANES:
+            stored = series.get(key) or []
+            bars = market_journal_capture.revive_bars(stored)
+            missing += len(stored) - len(bars)
+            # A pane with nothing stored is HIDDEN, not drawn empty: an
+            # auto-mode flip captures SPY alone, and four axes where two of
+            # them never had a chart reads as two failed charts.
+            self.chart_holders[key].setVisible(bool(bars))
+            if not bars:
+                continue
+            self.chart_titles[key].setText(
+                f"{template.format(symbol=symbol, benchmark=benchmark)} — {len(bars)} bars"
+            )
+            self.charts[key].set_data(bars, timeframe=timeframe)
+        reason = str(capture.get("reason") or "")
+        note = str(capture.get("note") or "")
+        stamp = str(capture.get("captured_at") or "")[:19]
+        gap = f" {missing} stored bar(s) had no readable stamp and are not drawn." if missing else ""
+        self.charts_note.setText(
+            f"Captured {stamp} ({reason}){(' — ' + note) if note else ''}.{gap}"
+        )
 
     def shutdown(self) -> None:
-        worker = self._worker
-        if worker is not None and worker.isRunning():
-            worker.wait(2000)
+        for worker in (self._worker, self._capture_worker):
+            if worker is not None and worker.isRunning():
+                worker.wait(2000)
+        # A capture killed mid-write leaves a `.tmp` and never a torn sidecar
+        # (temp file + replace), so this is politeness rather than correctness -
+        # but a note the trader typed seconds before closing the desk should
+        # keep its charts.
+        waiter = getattr(self.service, "wait_for_captures", None)
+        if callable(waiter):
+            waiter(2000)
 
     # -- writing ----------------------------------------------------------
     def _save(self) -> None:

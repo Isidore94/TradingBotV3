@@ -367,8 +367,13 @@ def test_the_scope_is_registered_but_opt_in():
     assert "trader_judgement" not in briefs.TICKER_BRIEF_SCOPES
 
 
-def test_the_nightly_slate_is_unchanged():
-    """The whole point of opt-in: the unattended run must not pick this up."""
+def test_the_nightly_slate_never_grows_by_accident():
+    """The whole point of opt-in: the unattended run must not pick this up.
+
+    Pinned as the exact tuple so a scope can only join the slate deliberately.
+    `market_journal` joined on 2026-08-27 - the trader reversed R10.I's opt-in
+    in as many words - and `trader_judgement` did not, which is what this
+    guards."""
     from ai_jobs import briefs
 
     assert briefs.DEFAULT_SCOPES == (
@@ -376,7 +381,9 @@ def test_the_nightly_slate_is_unchanged():
         "market_conditions",
         "setup_trackers",
         "journal_review",
+        "market_journal",
     )
+    assert "trader_judgement" not in briefs.DEFAULT_SCOPES
 
 
 def test_the_scope_funds_the_distilled_answers_before_the_raw_log():
@@ -523,6 +530,7 @@ def test_the_scope_can_be_selected_on_demand():
         # and the policy draft writes only `review_policy_draft.json`.
         "journal_enrichment",
         "review_policy_draft",
+        "setup_research",
     ]
     # And the override is per-call: building again without it is untouched.
     assert default_slots()[1].run.__name__ == "run_daily_summary"

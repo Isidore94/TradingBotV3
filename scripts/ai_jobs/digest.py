@@ -69,7 +69,13 @@ from typing import Any, Mapping, Sequence
 _log = logging.getLogger(__name__)
 
 #: Schema NAMES (R10 ground rule 5). A changed meaning is a new name.
-FACTS_SCHEMA = "daily_digest_facts_v1"
+#: v2 (2026-08-28) hoisted the per-cell/per-row provenance pointer to its block
+#: (`_hoist_block_pointer`). Same facts, same provenance, ~30% fewer bytes. It is
+#: a NEW NAME because the SHAPE changed: a v1 reader looking for `source_id` on a
+#: cell must not silently find nothing. Every v1 pack on disk stays a v1 pack and
+#: stays readable, and `clean_digest_sessions` counts by session, not by schema,
+#: so the Phase 2 collection window is unaffected by the bump.
+FACTS_SCHEMA = "daily_digest_facts_v2"
 NARRATION_SCHEMA = "daily_digest_narration_v1"
 
 #: D5. Target and hard cap. 90 packs at the target is well under 1.5 MB, which
@@ -81,11 +87,18 @@ FACT_PACK_HARD_CAP_BYTES = 16_384
 #: drops is COUNTED and PRINTED, because a silent top-N reads as "that was all".
 #:
 #: Sixteen is chosen so the pack fits its cap BY CONSTRUCTION (D5) rather than
-#: by truncation: a compact slice row is roughly 400 bytes, so sixteen of them
-#: plus the overall block and the coverage sections lands near the 8 KB target
-#: and well inside the 16 KB cap on the busiest measured day. A larger cap here
-#: would mean a busy session failing the job and losing its facts entirely,
-#: which is the opposite of what over-cap-fails is protecting.
+#: by truncation, and well inside the 16 KB cap on the busiest measured day. A
+#: larger cap here would mean a busy session failing the job and losing its
+#: facts entirely, which is the opposite of what over-cap-fails is protecting.
+#:
+#: MEASURED, not estimated (2026-08-27, 14 slices): this line used to claim the
+#: pack lands "near the 8 KB target" and it did not - it rendered at 14,070
+#: bytes, 72% of it the outcomes block. The v2 pointer hoist took that down
+#: without dropping a single figure. The target is still worth aiming at, but
+#: the number that actually matters is the one the target exists to protect:
+#: ninety packs as a trivial context load for a frontier reducer, which holds
+#: comfortably at the post-hoist size. Cutting real slices to reach 8,192
+#: exactly would trade evidence for a round number.
 MAX_SLICES = 16
 
 #: Phase 2's exit gate: ten consecutive session days of digests plus a trader
@@ -267,8 +280,15 @@ def build_fact_pack(
     missing = {str(name): str(reason) for name, reason in (unavailable or {}).items()}
     as_of = moment.isoformat(timespec="seconds")
 
-    overall = _overall_block(rows, session_date, as_of)
+    overall, overall_pointer = _hoist_block_pointer(_overall_block(rows, session_date, as_of))
     slices, dropped = _slice_blocks(rows, session_date, as_of)
+    slices, slice_pointer = _hoist_slice_pointer(slices, session_date)
+    behaviour, behaviour_pointer = _hoist_block_pointer(
+        _behaviour_block(review_rows, session_date, as_of)
+    )
+    operations, operations_pointer = _hoist_block_pointer(
+        _operations_block(job_rows, session_date, as_of)
+    )
 
     pack: dict[str, Any] = {
         "schema": FACTS_SCHEMA,
@@ -289,25 +309,110 @@ def build_fact_pack(
         "evidence_label": _discovery_label(),
         "sampling_note": ONE_SESSION_NOTE,
         "outcomes": {
+            "pointer": overall_pointer,
             "overall": overall,
+            "slice_pointer": slice_pointer,
             "slices": slices,
             "slices_dropped": dropped,
             "slice_pointer_note": (
-                "Each slice row carries ONE pointer - source_id, selector, as_of "
-                "- and every metric cell under it carries its own value and n. "
-                "The metric name is the key. Repeating the pointer per cell "
-                "would spend a third of the size cap restating a query that "
-                "does not change within the row."
+                "Provenance is carried ONCE per block, not per cell and not per "
+                "row: 'pointer' covers every cell under 'overall', and "
+                "'slice_pointer' covers every row under 'slices' - its "
+                "selector_template rebuilds any row's exact selector from that "
+                "row's own env_key and side. Every metric cell still carries its "
+                "own value and n, and the metric name is the key. Restating a "
+                "query that does not change would spend a fifth of the size cap "
+                "on two constants."
             ),
         },
-        "behaviour": _behaviour_block(review_rows, session_date, as_of),
-        "operations": _operations_block(job_rows, session_date, as_of),
+        "behaviour": {"pointer": behaviour_pointer, **behaviour},
+        "operations": {"pointer": operations_pointer, **operations},
         "coverage": dict(coverage or {}),
         "unavailable": missing,
         "supersedes": str(supersedes or ""),
     }
     pack["summary"] = _summary(pack)
     return pack
+
+
+#: Lifted out of every measured cell in a block when they are constant across
+#: it (D5 sizing). This is the same argument `slice_pointer_note` already makes
+#: one level down -- a query that does not change should not be restated - and
+#: the 2026-08-27 pack showed it applies across ROWS too: one `source_id` and
+#: one `as_of` were printed 21 times for 21 cells that all shared them, which is
+#: a fifth of the pack spent on two constants. Nothing is lost: the pointer is
+#: still attached to every number, one level up, and D2's rule that a measured
+#: value never travels without its provenance and its n is unchanged.
+POINTER_KEYS = ("source_id", "as_of")
+
+
+def _is_measured_cell(value: Any) -> bool:
+    return isinstance(value, Mapping) and all(key in value for key in POINTER_KEYS)
+
+
+def _hoist_block_pointer(cells: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """Lift the constant pointer fields out of a block's measured cells.
+
+    A field is only lifted when EVERY measured cell in the block agrees on it.
+    A block that ever mixes two stores or two clocks keeps the field per cell,
+    because then it is not a constant and hoisting it would state something
+    false.
+    """
+    measured_cells = [value for value in cells.values() if _is_measured_cell(value)]
+    if not measured_cells:
+        return dict(cells), {}
+    pointer = {}
+    for key in POINTER_KEYS:
+        values = {str(cell.get(key)) for cell in measured_cells}
+        if len(values) == 1:
+            pointer[key] = values.pop()
+    if not pointer:
+        return dict(cells), {}
+    trimmed = {
+        name: (
+            {key: value for key, value in cell.items() if key not in pointer}
+            if _is_measured_cell(cell)
+            else cell
+        )
+        for name, cell in cells.items()
+    }
+    return trimmed, pointer
+
+
+def _hoist_slice_pointer(
+    slices: Sequence[Mapping[str, Any]], session_date: Any
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Lift source_id, as_of and the selector SHAPE off the slice rows.
+
+    A row's selector differs only in the two fields the row already prints, so
+    the template plus the row rebuilds it exactly. Fourteen rows on 2026-08-27
+    spent roughly 1.2 KB restating that shape.
+    """
+    rows = [dict(row) for row in slices]
+    if not rows:
+        return rows, {}
+    pointer: dict[str, str] = {}
+    for key in POINTER_KEYS:
+        values = {str(row.get(key)) for row in rows if key in row}
+        if len(values) == 1 and len([row for row in rows if key in row]) == len(rows):
+            pointer[key] = values.pop()
+    template = (
+        f"trade_date={session_date}&env_key={{env_key}}&side={{side}}&usable=true"
+    )
+    rebuilt_everywhere = all(
+        str(row.get("selector") or "")
+        == template.format(env_key=row.get("env_key"), side=row.get("side"))
+        for row in rows
+    )
+    if rebuilt_everywhere:
+        pointer["selector_template"] = template
+    for row in rows:
+        for key in pointer:
+            if key == "selector_template":
+                row.pop("selector", None)
+            else:
+                row.pop(key, None)
+    return rows, pointer
 
 
 def _discovery_label() -> str:
@@ -609,6 +714,30 @@ def _now(value: datetime | None = None) -> datetime:
 # ---------------------------------------------------------------------------
 
 
+def provenance_ids(pack: Mapping[str, Any]) -> list[str]:
+    """Every ``source_id`` the pack prints anywhere inside itself, sorted.
+
+    Walks the built pack rather than listing the ids by hand, so a block added
+    later cannot introduce a provenance id the narrator is shown but forbidden
+    to name -- which is the exact shape of the 2026-08-25..27 digest failure.
+    """
+    found: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, Mapping):
+            for key, value in node.items():
+                if key == "source_id" and isinstance(value, str) and value.strip():
+                    found.add(value.strip())
+                else:
+                    walk(value)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item)
+
+    walk(pack)
+    return sorted(found)
+
+
 def narration_evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
     """An evidence package holding the fact pack and NOTHING else.
 
@@ -620,6 +749,7 @@ def narration_evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
     """
     import hashlib
 
+    aliases = provenance_ids(pack)
     encoded = json.dumps(pack, sort_keys=True, default=str).encode("utf-8")
     source = {
         "source_id": FACT_PACK_SOURCE_ID,
@@ -641,12 +771,25 @@ def narration_evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
         "scope_labels": ["Deterministic daily digest fact pack"],
         "source_count": 1,
         "sources": [source],
+        # The provenance ids the pack PRINTS on its own cells. The narrator is
+        # told to cite exact source_id values and is handed a document full of
+        # them, so it cites them; before 2026-08-28 that was rejected as
+        # unusable evidence and threw the whole narration away three nights
+        # running. They name real stores, they are visible in the one document
+        # the narrator was given, and citing one is more informative than
+        # citing the pack as a whole -- so they are citable, and nothing that
+        # is not in the pack is.
+        "citable_aliases": aliases,
         "coverage": {
             "counts": {"requested": 1, "usable": 1, "stale": 0, "truncated": 0},
             "note": (
                 "The narrator reads this fact pack and nothing else. Every "
                 "number in it was computed by code; do not compute new ones, "
-                "and do not cite any source that is not listed here."
+                "and do not cite any source that is not listed here. You may "
+                f"cite '{FACT_PACK_SOURCE_ID}' for anything in the pack, or the "
+                "exact source_id printed on the cell you are describing "
+                + (f"({', '.join(aliases)})" if aliases else "(none present)")
+                + ". Cite nothing else."
             ),
         },
         "safety_contract": {

@@ -973,6 +973,10 @@ class MasterAvwapPanel(QWidget):
         """Popup follow-through (e.g. after Add to D1 Focus): next chart."""
         self._open_next_symbol_snapshot()
 
+    def snapshot_review_previous(self) -> None:
+        """Popup ◀ Prev: the previous visible row's chart. Records nothing."""
+        self._open_next_symbol_snapshot(step=-1)
+
     def _visible_row_for_symbol(self, symbol: str) -> SetupRow | None:
         symbol = str(symbol or "").strip().upper()
         if not symbol:
@@ -984,13 +988,18 @@ class MasterAvwapPanel(QWidget):
                 return row
         return None
 
-    def _open_next_symbol_snapshot(self) -> None:
-        """Advance through visible setup rows and open the next snapshot."""
+    def _open_next_symbol_snapshot(self, step: int = 1) -> None:
+        """Step through visible setup rows and open that snapshot.
+
+        ``step`` is +1 for the next row and -1 for the previous one; both
+        wrap, so the walk never dead-ends at either edge of the table.
+        """
         row_count = self.proxy.rowCount()
         if row_count <= 0:
             return
         current = self.table.currentIndex()
-        next_row = (current.row() + 1) % row_count if current.isValid() else 0
+        step = -1 if int(step) < 0 else 1
+        next_row = (current.row() + step) % row_count if current.isValid() else 0
         symbol_column = next(
             column
             for column, (key, _label) in enumerate(self.model.COLUMNS)

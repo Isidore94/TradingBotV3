@@ -53,6 +53,12 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     # the chart path (built on worker threads, imported there)
     "chart_snapshot",
     "chart_levels",
+    # Phase 0.10: chart_levels imports this lazily to draw the AVWAP band
+    # challenger, so a frozen bundle missing it would die when the trader
+    # switches the group on rather than at launch. `indicators` is already in
+    # the spec's collect_submodules list; this is the reach check, not the
+    # collection one.
+    "indicators.avwap_band_variants",
     "chart_watch",
     "ui.services.chart_data_service",
     "ui.services.bar_cache",
@@ -75,6 +81,10 @@ LAZY_ENGINE_MODULES: tuple[str, ...] = (
     "focus_membership_events",
     "market_context_ledger",
     "market_journal",
+    # Imported at call time by both journal surfaces and by the auto-mode flip
+    # capture in ui.app - so a bundle missing it dies at the first note, which
+    # is exactly the failure mode this list exists for.
+    "market_journal_capture",
     "evidence_stats",
     "ui.services.market_journal_service",
     "ui.panels.market_journal_panel",

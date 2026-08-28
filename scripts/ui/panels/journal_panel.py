@@ -17,6 +17,7 @@ from __future__ import annotations
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QTabWidget, QVBoxLayout
 
+from ui.read_worker import join_worker
 from ui.panels.journal.analytics_tab import AnalyticsTab
 from ui.panels.journal.calendar_tab import CalendarTab
 from ui.panels.journal.fees_tab import FeesTab
@@ -71,7 +72,7 @@ class JournalPanel(QFrame):
         # Only the visible tab reloads. Analytics and Health are the expensive
         # ones, and rebuilding all five on every click of the account tree is
         # work nobody is looking at.
-        self.tabs.currentChanged.connect(lambda _index: self._reload_current())
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         for tab in self._tabs():
             tab.statusChanged.connect(self._set_status)
@@ -106,6 +107,23 @@ class JournalPanel(QFrame):
         )
 
     # -- routing -----------------------------------------------------------
+
+    def _on_tab_changed(self, index: int) -> None:
+        """Reload the newly shown tab, under a named interaction span.
+
+        Diagnostics only (P1 item 3): the reload below is the expensive half,
+        and a stall inside it used to be indistinguishable from any other
+        event-loop sample.
+        """
+        from ui import interaction_trace
+
+        label = self.tabs.tabText(index) if hasattr(self, "tabs") else str(index)
+        interaction_trace.begin("tab_select", f"Journal / {label}")
+        try:
+            self._reload_current()
+            interaction_trace.mark("model_apply")
+        finally:
+            interaction_trace.end()
 
     def _reload_current(self) -> None:
         current = self.tabs.currentWidget()
@@ -163,7 +181,7 @@ class JournalPanel(QFrame):
     def shutdown(self) -> None:
         worker = self._migration_worker
         if worker is not None and worker.isRunning():
-            worker.wait()
+            join_worker(worker)
         for tab in self._tabs():
             if hasattr(tab, "shutdown"):
                 tab.shutdown()

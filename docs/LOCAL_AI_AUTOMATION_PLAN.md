@@ -1588,3 +1588,29 @@ Tests walk the module's AST rather than trusting that sentence.
 graded cohort and confirms the reasons ranked against forward returns are the
 ones they recognise. Building the rollup never marks that met.
 
+## 8. Addendum, 2026-08-27 — nightly setup stop/target research
+
+`setup_research` is appended last in `default_slots()` with a 20-minute reserve
+and its own failure isolation. It reads only the warehouse's deterministic
+tracker-occurrence, M5-close outcome and five-timeframe market-context rows.
+It never reads the 1 GB tracker snapshot and never computes an outcome with a
+model.
+
+Every run first publishes `setup_stop_target_research_facts_v1` as JSON and
+Markdown. Each family/side/recipe cell routes through `evidence_stats` and is
+eligible only at n>=30, at least five symbols and at least five entry sessions.
+That floor permits narration, never confirmation or promotion. When no cell is
+eligible, facts still publish and **no model is called**.
+
+Above the floor, the medium local tier receives only the bounded fact pack. It
+may explain the deterministic numbers and suggest at most three future
+registered tests. It cannot change a scanner, score, alert, Focus, watchlist,
+review queue, stop, target, bot state or order. Facts state the study contract:
+next-session first completed M5-close entry, no planned stop/risk dependency,
+no M1, no bid/ask input, no earnings fundamentals, and STOP_FIRST ambiguity.
+
+Owed live gate: one completed bucket cycle with healthy warehouse writes, then
+one overnight artifact whose coverage and eligibility counts match a direct
+warehouse read. The current M5 lake begins in August 2026, so older tracker
+episodes must remain absent/unknown rather than being narrated as losses.
+

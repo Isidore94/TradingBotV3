@@ -151,9 +151,12 @@ else:
     binaries += _dd_binaries
     hiddenimports += _dd_hidden
     print(f"[spec] duckdb: {len(_dd_binaries)} binaries, {len(_dd_hidden)} submodules")
-# scikit-learn and scipy reach for submodules dynamically at predict time.
-hiddenimports += collect_submodules("sklearn")
-hiddenimports += ["scipy._lib.array_api_compat.numpy.fft", "scipy.special._special_ufuncs"]
+# scikit-learn/scipy were force-collected here for a trade-quality model that was
+# removed in a73f072. Nothing in the tree has imported sklearn or scipy since, so the
+# collection was pulling ~93 MB (scipy 59 + scipy.libs 20 + sklearn 14) of dead weight
+# into every bundle - and the unguarded collect_submodules("sklearn") would have failed
+# the build outright once the dependency was dropped. If a model ever returns, restore
+# the collection with it and say which module imports it.
 
 a = Analysis(
     [str(ROOT / "launch_gui.py")],

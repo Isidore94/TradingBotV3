@@ -265,32 +265,48 @@ def test_selecting_thickens_the_line_without_recoloring_it():
 # preferences
 # --------------------------------------------------------------------------
 def test_paint_lines_prefs_default_to_everything_on(tmp_path):
+    """Everything ON, with one named exception (Phase 0.10).
+
+    The rule was "every group defaults ON", so a group added by a later version
+    appears switched on rather than silently missing. A formula under TEST is
+    the opposite case and must not appear on a chart nobody asked for it on, so
+    `chart_levels.GROUPS_HIDDEN_BY_DEFAULT` names the exceptions explicitly -
+    and this test still holds every other group to the original rule.
+    """
     from ui.services.paint_lines_prefs import PaintLinesPrefs
 
     prefs = PaintLinesPrefs(tmp_path / "paint.json")
-    assert prefs.hidden_groups() == []
-    assert all(prefs.is_visible(group) for group, _label in chart_levels.LEVEL_GROUPS)
+    assert prefs.hidden_groups() == sorted(chart_levels.GROUPS_HIDDEN_BY_DEFAULT)
+    for group, _label in chart_levels.LEVEL_GROUPS:
+        expected = group not in chart_levels.GROUPS_HIDDEN_BY_DEFAULT
+        assert prefs.is_visible(group) is expected, group
 
 
 def test_paint_lines_prefs_round_trip_and_survive_a_reload(tmp_path):
     from ui.services.paint_lines_prefs import PaintLinesPrefs
 
     path = tmp_path / "paint.json"
+    default_hidden = sorted(chart_levels.GROUPS_HIDDEN_BY_DEFAULT)
     prefs = PaintLinesPrefs(path)
     prefs.set_visible(chart_levels.GROUP_HORIZONTAL, False)
-    assert PaintLinesPrefs(path).hidden_groups() == [chart_levels.GROUP_HORIZONTAL]
+    assert PaintLinesPrefs(path).hidden_groups() == sorted(
+        default_hidden + [chart_levels.GROUP_HORIZONTAL]
+    )
     prefs.set_visible(chart_levels.GROUP_HORIZONTAL, True)
-    assert PaintLinesPrefs(path).hidden_groups() == []
+    assert PaintLinesPrefs(path).hidden_groups() == default_hidden
 
 
 def test_paint_lines_prefs_ignore_junk_and_unknown_groups(tmp_path):
     from ui.services.paint_lines_prefs import PaintLinesPrefs
 
     path = tmp_path / "paint.json"
+    default_hidden = sorted(chart_levels.GROUPS_HIDDEN_BY_DEFAULT)
     path.write_text('{"hidden_groups": ["nope", "sma"]}', encoding="utf-8")
-    assert PaintLinesPrefs(path).hidden_groups() == ["sma"]
+    assert PaintLinesPrefs(path).hidden_groups() == sorted(default_hidden + ["sma"])
     path.write_text("not json", encoding="utf-8")
-    assert PaintLinesPrefs(path).hidden_groups() == []
+    # An unreadable file falls back to the DEFAULTS, which is not the same as
+    # "show everything" once a group defaults off.
+    assert PaintLinesPrefs(path).hidden_groups() == default_hidden
 
 
 def test_paint_lines_prefs_are_machine_local(tmp_path):
@@ -307,18 +323,22 @@ def test_paint_lines_button_reports_and_persists_the_hidden_set(tmp_path):
     from ui.widgets.paint_lines_button import PaintLinesButton
 
     path = tmp_path / "paint.json"
+    default_hidden = sorted(chart_levels.GROUPS_HIDDEN_BY_DEFAULT)
     button = PaintLinesButton(prefs=PaintLinesPrefs(path))
     emitted: list[list] = []
     button.groupsChanged.connect(lambda groups: emitted.append(list(groups)))
-    assert button.hidden_groups() == []
-    assert "off" not in button.text()
+    assert button.hidden_groups() == default_hidden
+    # The count in the button text is the truth, including the default-off
+    # group: a trader must be able to see that something IS switched off.
+    assert f"{len(default_hidden)} off" in button.text()
 
     action = button._actions[chart_levels.GROUP_HORIZONTAL]
     action.setChecked(False)
-    assert emitted[-1] == [chart_levels.GROUP_HORIZONTAL]
-    assert button.hidden_groups() == [chart_levels.GROUP_HORIZONTAL]
-    assert "1 off" in button.text()
-    assert PaintLinesPrefs(path).hidden_groups() == [chart_levels.GROUP_HORIZONTAL]
+    expected = sorted(default_hidden + [chart_levels.GROUP_HORIZONTAL])
+    assert emitted[-1] == expected
+    assert button.hidden_groups() == expected
+    assert f"{len(expected)} off" in button.text()
+    assert PaintLinesPrefs(path).hidden_groups() == expected
 
 
 @pytest.mark.parametrize("compact_density", [False, True])

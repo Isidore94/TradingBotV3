@@ -401,3 +401,109 @@ def test_coverage_names_a_source_it_could_not_read_rather_than_omitting_it():
     pack = _pack(unavailable={"alert review events": "file is locked"})
     assert pack["unavailable"]["alert review events"] == "file is locked"
     assert "INCOMPLETE" in pack["summary"]
+
+
+# ---------------------------------------------------------------------------
+# v2 - the pointer hoist, and the provenance ids the narrator may cite
+# ---------------------------------------------------------------------------
+
+
+def test_the_narrator_may_cite_the_provenance_ids_the_pack_prints():
+    """The 2026-08-25..27 digest failure, pinned.
+
+    The narrator is instructed to cite exact source_id values and is handed a
+    document whose every measured cell prints one. It cited
+    `outcomes.intraday_finals` and `review.alert_review_events`; the validator
+    knew only `digest.facts` and rejected the whole narration, twice a night,
+    for three consecutive nights, with the model and every store healthy.
+    """
+    import ai_summary
+
+    pack = _pack()
+    package = digest.narration_evidence_package(pack)
+
+    aliases = set(package["citable_aliases"])
+    assert "outcomes.intraday_finals" in aliases
+    citable = ai_summary.usable_source_ids(package)
+    assert {digest.FACT_PACK_SOURCE_ID, "outcomes.intraday_finals"} <= citable
+    # And the instruction the model reads names them, so citing one is the
+    # documented answer rather than a lucky guess.
+    assert "outcomes.intraday_finals" in package["coverage"]["note"]
+
+
+def test_a_provenance_id_is_only_citable_when_the_pack_actually_prints_it():
+    pack = _pack()
+    package = digest.narration_evidence_package(pack)
+    assert "setups.current_tracker" not in set(package["citable_aliases"])
+    import ai_summary
+
+    assert "setups.current_tracker" not in ai_summary.usable_source_ids(package)
+
+
+def test_provenance_ids_are_discovered_by_walking_the_pack():
+    """Listed by hand, a block added later would be shown and yet forbidden."""
+    found = digest.provenance_ids(
+        {"a": {"source_id": "x.one"}, "b": [{"c": {"source_id": "x.two"}}], "d": "x.three"}
+    )
+    assert found == ["x.one", "x.two"]
+
+
+def test_the_block_pointer_is_hoisted_and_every_number_keeps_its_n():
+    pack = _pack()
+    outcomes = pack["outcomes"]
+
+    assert outcomes["pointer"]["source_id"] == "outcomes.intraday_finals"
+    # Hoisted OUT of the cells, not duplicated into the block beside them.
+    assert "source_id" not in outcomes["overall"]["close_r"]
+    assert "as_of" not in outcomes["overall"]["close_r"]
+    # D2 is untouched: a measured value still never travels without its n.
+    assert outcomes["overall"]["close_r"]["n"] is not None
+    for row in outcomes["slices"]:
+        assert row["close_r"]["n"] is not None
+        assert "source_id" not in row
+
+
+def test_a_slice_row_rebuilds_its_exact_selector_from_the_template():
+    pack = _pack()
+    pointer = pack["outcomes"]["slice_pointer"]
+    for row in pack["outcomes"]["slices"]:
+        rebuilt = pointer["selector_template"].format(
+            env_key=row["env_key"], side=row["side"]
+        )
+        assert f"env_key={row['env_key']}" in rebuilt
+        assert f"side={row['side']}" in rebuilt
+        assert rebuilt.startswith(f"trade_date={pack['session_date']}&")
+
+
+def test_a_block_that_mixes_two_stores_keeps_the_pointer_per_cell():
+    """Hoisting a field that is not constant would state something false."""
+    mixed = {
+        "one": {"value": 1.0, "n": 1, "source_id": "a.one", "selector": "s", "as_of": "T"},
+        "two": {"value": 2.0, "n": 1, "source_id": "b.two", "selector": "s", "as_of": "T"},
+    }
+    cells, pointer = digest._hoist_block_pointer(mixed)
+    assert "source_id" not in pointer
+    assert cells["one"]["source_id"] == "a.one"
+    assert cells["two"]["source_id"] == "b.two"
+    # as_of DOES agree, so that one is still lifted.
+    assert pointer["as_of"] == "T"
+
+
+def test_the_hoist_shrinks_the_pack_without_dropping_a_figure():
+    pack = _pack(
+        finals=[
+            _final(f"SYM{index}", env=f"env{index}", close_r=index / 10, mfe_r=1.0, mae_r=-0.5)
+            for index in range(14)
+        ]
+    )
+    assert digest.fact_pack_bytes(pack) < digest.FACT_PACK_HARD_CAP_BYTES
+    # Every slice still carries its own four metrics and their sample sizes.
+    for row in pack["outcomes"]["slices"]:
+        for metric in ("close_r", "win_rate_close_r", "mfe_r", "mae_r"):
+            assert "n" in row[metric]
+
+
+def test_the_schema_name_changed_with_the_shape():
+    """R10 ground rule 5: a v1 reader must not silently find nothing."""
+    assert digest.FACTS_SCHEMA == "daily_digest_facts_v2"
+    assert _pack()["schema"] == "daily_digest_facts_v2"

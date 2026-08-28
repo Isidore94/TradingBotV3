@@ -838,23 +838,31 @@ block and are absent when the occurrence has no anchor.
 **Where.** `outcomes.py::_house_management_r`; two arithmetic tests
 (run-to-band-3 and trail-to-band-1).
 
-## BD-44 — OPEN: no detector adapter yet
+## BD-44 — BUILT: tracker transition/scenario adapter
 
-**Not a decision — a declared gap.**
+**Decision.** `tracker_adapter.py` streams the scenario CSV for first-seen
+geometry and reads the small append-only setup-tracker transition ledger for
+current lifecycle state. It never opens or parses the 1 GB tracker snapshot.
+All canonical families in `setup_tagging._FAMILY_TAGS` are admitted when their
+scenario row is tradeable and has valid stop geometry. Daily rescans collapse
+by symbol, side, canonical family and anchor date; first-seen trigger/geometry
+is frozen, while the latest ledger state supplies status. Simultaneous family
+variants share one symbol/side/anchor dependency cluster.
 
-`record_occurrences` accepts a documented detection dict (symbol, canonical
-setup id, side, timeframes, status, trigger, geometry, detector version).
-Nothing yet reads the champion's tracker or scan output and produces those
-dicts, so Phase 6 proves the identity rules, the recipes, and the outcome
-arithmetic against constructed detections rather than live detector output.
+**Why.** The transition ledger is the point-in-time record and the scenario CSV
+already owns the exact structural stop source that the tracker measured. The
+snapshot is current state, too large for the in-process build, and unnecessary.
+Freezing first geometry prevents a later daily rescan from leaking future data.
 
-Phase 2 already wraps the setup tracker into bronze, which is the intended
-source. The adapter is deliberately not guessed at here: mapping tracker fields
-onto detection fields is a decision about what the champion *means*, and
-getting it wrong would silently mislabel every occurrence.
+**Measured audit, 2026-08-27.** 249,438 scenario rows + 10,820 transition rows
+produced 6,663 deduplicated detections across all 16 registered families, with
+zero unknown-family skips. This is an adapter audit, not outcome evidence.
 
-**Where.** `occurrences.py` (input contract in the module docstring and
-`build_occurrence_row`).
+**Reopens if.** Either source loses stable setup/family identity or structural
+geometry, or the tracker changes from daily-rescan lifecycle semantics.
+
+**Where.** `tracker_adapter.py`; `occurrences.py`; pinned in
+`tests/test_setup_research_pipeline.py`.
 
 ## BD-43 — `intraday_bounce_v1` requires a linked bounce event
 
@@ -1320,9 +1328,9 @@ Three sub-decisions inside that list:
   setting to fill in. A backup written to a guessed destination is not a
   backup, and Class B must be a second physical disk, never Drive (sec 8.5).
 
-Occurrence *ingestion* stays blocked on the BD-44 detector adapter, so the
-outcomes step reads whatever `setup_occurrence` rows exist and reports
-`NO_OCCURRENCES` — naming BD-44 — when there are none. Its
+Occurrence ingestion now runs immediately before outcomes through BD-44's
+tracker adapter. When no eligible tracker rows exist, the outcomes step still
+reports `NO_OCCURRENCES` honestly. Its
 `bands_by_occurrence` is pinned to each occurrence's own trigger-session
 `feature_snapshot_daily` row, which is the review's point-in-time requirement:
 bands computed later than the trigger would be look-ahead.
@@ -1341,9 +1349,8 @@ the TWS restart) and belong to their own invocation with its own time budget
 multi-hour fetch. Guessing backup destinations from the Drive home folder —
 Class B explicitly must not live there.
 
-**Reopens if.** The detector adapter lands (occurrence ingestion joins the list
-before outcomes), or the pilot shows the EOD build's wall time needs the
-feature pass split from the seal.
+**Reopens if.** The pilot shows the EOD build's wall time needs the feature pass
+split from the seal.
 
 **Where.** `cli.py::run_build` / `cohort_for` / `anchors_from_bronze` /
 `anchor_dates_by_symbol` / `_run_outcomes` / `_bands_by_occurrence` /
@@ -1796,7 +1803,7 @@ Each is already stated in its own BD entry; this is the short list.
 | 5 | **Production context columns are null until Phase 6** wires the bounce-ledger join. | BD-33 | Nothing now; noted so the gap is not mistaken for "no signal" |
 | 6 | **DYNAMIC and EOD session VWAP are not yet captured** — only STANDARD. | BD-34 | Wrap the other two champion paths when their consumers need them |
 | 7 | **Unscheduled exchange closures** cannot come from calendar rules; they appear as sessions with no bars. | BD-26 | Add a dated override list if one ever occurs |
-| 8 | **No detector adapter yet** — `record_occurrences` takes a documented detection dict, but nothing reads the tracker/scan output and produces those dicts. Phase 6 proves the identity and outcome logic; the adapter is the remaining wiring. | BD-44 | Build the tracker→detection adapter (with Phase 2's bronze tracker wrap as the source) |
+| 8 | ~~No detector adapter yet.~~ **Closed 2026-08-27:** the transition-ledger/scenario adapter covers all 16 canonical tracker families without parsing the giant snapshot. | BD-44 | Live canary only; explicit BounceBot linkage remains separately under BD-43 |
 | 10 | ~~DuckDB desktop verification.~~ **Closed 2026-08-09:** `duckdb==1.5.5` was installed in the uv-managed Windows Python 3.12 environment and the full desk suite passed. | BD-45 | None; DuckDB remains optional and read-only |
 | 9 | **Bounce link is a time window** (symbol + session + ±60 min), not an explicit key. | BD-43 | Confirm the window, or add an occurrence link to the bounce ledger |
 
@@ -1847,3 +1854,170 @@ real grace period, so production behaviour is unchanged.
 
 **Reopen if.** A platform is added whose filesystem timestamps are coarser than
 its clock, or a caller needs sub-50 ms grace semantics.
+
+
+## BD-73 — Very large SNAPSHOT payloads are stored whole but not `json.loads`-ed
+
+**Date:** 2026-08-27 (desk-memory packet, trader-authorised build prompt).
+
+**Decision.** `ingest_existing.SNAPSHOT_PARSE_MAX_BYTES = 64 MB`. Above it a
+`MODE_SNAPSHOT` payload is captured in full and published unchanged, but is not
+parsed; `parsed` becomes `{}` when `_looks_like_json` (first and last non-space
+characters form a `{}`/`[]` pair) holds, and `None` when it does not, which is
+what still drives `quality` to `COMPLETE` / `INVALID_DATA`.
+
+Separately and unconditionally, `ingest_artifact` now hashes the source with
+`_sha256_path` (chunked) and answers the watermark BEFORE `read_bytes`, so an
+UNCHANGED verdict costs no allocation at all.
+
+**Why.** `master_avwap_setup_tracker.json` measured **1,026,057,028 bytes** on
+2026-08-27. The old order read it whole and hashed the bytes *before* comparing
+the watermark, so every bronze ingest allocated 1.03 GB inside the desk process
+— including the ~90% that immediately concluded UNCHANGED. When the sha had
+changed, `json.loads` over the decoded text added several GB more, on top of
+the warehouse build's own peak, and the desk was measured at 8–13 GB.
+
+**Why the skip loses nothing here, stated precisely.** The parse feeds exactly
+three things: `_parse_event_at(parsed, artifact.event_keys)`,
+`_first_value(parsed, artifact.id_keys)`, and the `quality` flag. The
+`setup_tracker` artifact declares **neither** `event_keys` nor `id_keys`, so
+`_parse_event_at` returns `None` on its first line (`if not keys`) and
+`_first_value` returns `""` without inspecting the payload — parsed or not.
+For this artifact the parsed row and the skipped row are byte-identical, and a
+regression test asserts it rather than trusting the reasoning.
+
+**What was rejected.** (a) Marking an unparsed row `INVALID_DATA`: false, and
+it would poison any downstream quality filter. (b) Streaming the parse: the
+result would still be several GB of dicts, which is the cost being removed.
+(c) Not storing the payload above the threshold: that changes the bronze
+contract and loses the artifact, which is the one thing bronze exists to keep.
+(d) Widening `QUALITY_STATES` with a new "STORED_UNPARSED" state: it would be
+a schema-visible change for a distinction no reader currently makes.
+
+**Residual, not hidden.** A changed snapshot still costs roughly `size` bytes
+plus a same-size decoded `str`, because `payload_text` must be a Python string
+for the publish path. ~2 GB for the tracker, down from several. Removing that
+too means changing the bronze publish path, which this packet deliberately did
+not touch.
+
+**Reopen if.** (1) `setup_tracker` — or any artifact that can exceed 64 MB —
+gains `event_keys` or `id_keys`: the skip would then silently empty real
+columns and the threshold must be revisited, not merely raised. The test
+`test_bronze_snapshot_large_files.py::tracker_artifact` fails loudly in that
+case. (2) A reader starts depending on `quality == COMPLETE` meaning "fully
+parsed" rather than "captured whole and JSON-shaped". (3) The bronze publish
+path learns to stream, at which point the threshold can rise or disappear.
+
+## BD-74 — Session/symbol narrowing belongs in Arrow, in one store helper
+
+**Date:** 2026-08-27 (same packet).
+
+**Decision.** `ResearchStore.read_rows(dataset, partition, *, columns, symbols,
+interval_start_range, occurrence_ids, recipe_ids)` filters through
+`Dataset.to_table(filter=...)` before
+`to_pylist()`, and the three build steps that read `bar_m5` use it:
+`aggregate.build_derived_bars`, `features.build_intraday_snapshots` and
+`cli._run_outcomes`.
+
+**Why.** Partitions are MONTH-keyed while these steps each want one session (or
+one symbol set). `read_table(partition).to_pylist()` therefore materialised the
+whole month as Python objects so that a few percent of it could be used, and
+the cost grew all month: `silver/bar_m5/month=2026-08` was **8,704,108 rows /
+408 MB parquet** on 2026-08-27, `to_pylist` cost **1,769 B/row = 15.4 GB**, and
+the largest single session in it was 588,778 rows — 6.8% of the month. Measured
+after: 0.53 GB for a full session, 0.31 GB for a 20-symbol outcome read.
+
+**Why a narrow helper and not a free-form filter argument.** Only the two
+predicates the callers actually replaced are offered, so a future caller cannot
+express something subtly different from the Python test it stands in for.
+`symbols` matches EXACTLY (no case folding, no stripping) because the
+`symbol in wanted` checks it replaces did; an empty sequence means no filter,
+which is what the callers pass when no cohort was named.
+
+**What was deliberately NOT narrowed.** `_run_outcomes` filters by symbol only,
+never by date: the outcome walk needs ATR warm-up and runs FORWARD over a
+horizon that can cross sessions, which is exactly why `_m5_partitions_for`
+widens to the trigger's previous, own and following months (BD-66, BD-69,
+BD-75). Narrowing it to a day would
+re-simulate against a truncated future — the same class of defect BD-69 fixed.
+`build_intraday_snapshots` applies the symbol filter only when the caller named
+symbols, because with none named its cohort is derived from the bars present in
+the session, so narrowing the read would change the answer and not just the
+cost.
+
+**Also deliberately not done.** Moving `run_build` into a child process. The
+in-process single-flight lock, the spool seal and the ledger's `_record_job`
+all assume one process, and the filtering removes the growth on its own. It
+stays a decision, not owed work; the trader decides if it is ever wanted.
+
+**Reopen if.** A build step needs a predicate these two cannot express, or the
+partition key changes from month to something finer (at which point the helper
+becomes redundant rather than wrong).
+
+## BD-75 — D1 tracker studies enter on the next session's first completed M5 close
+
+**Date:** 2026-08-27 (trader-directed stop/target research packet).
+
+**Decision.** `M5_CLOSE_RECIPES` is a separate bounded research grid and does
+not alter frozen `RECIPES`. Every eligible D1 tracker occurrence enters at the
+next regular session's first completed M5 close. Structural stops select the
+nearest valid tracker level of each source type at rank 1, 2, or 3; ATR controls
+use 0.5, 1.0, or 1.5 ATR. Each is crossed with 1R, 2R, and 3R targets: 54
+recipes. Same-bar ambiguity is STOP_FIRST. The existing deterministic fallback
+cost model is used without reading bid/ask. No M1 data and no trader-planned
+stop/risk are inputs.
+
+**Why.** The trader asked the warehouse to discover useful stop and profit
+locations, so requiring their planned stop would condition the answer on the
+thing being studied. A D1 fact is known after close; the next completed M5
+close is a reproducible executable proxy at the requested granularity.
+
+**Missingness.** No next-session M5 bar, ATR, or valid stop geometry means no
+invented result. At build time the durable M5 archive begins in August 2026, so
+older tracker occurrences remain a visible coverage gap until backfill exists.
+
+**Where.** `outcomes.py::simulate_m5_close_opportunity` /
+`M5_CLOSE_RECIPES`; `tests/test_setup_research_pipeline.py`.
+
+## BD-76 — Market bias is five point-in-time readings, not one daily label
+
+**Date:** 2026-08-27 (same packet).
+
+**Decision.** `setup_market_context` stores one row per occurrence for M5, M30,
+H1, H4 and D1 under `auto_market_bias_multiframe_v1`. The live VWAP decision
+and its early-session day-percent fallback now live together in the pure
+champion `_auto_market_regime_stats`; both live callers and research call it,
+so no threshold or fallback is copied. M30/H1/H4 are derived from completed SPY
+M5 bars with the existing aggregate helper; D1 uses only prior completed daily
+bars. Truly absent input writes `unknown`.
+
+**Why.** One daily regime hides the exact cross-timeframe condition the study
+is meant to measure. A versioned additive context table lets the nightly report
+compare those cells without teaching any scanner a new rule. Earnings reports
+and fundamentals remain out; technical earnings anchors remain ordinary setup
+geometry.
+
+**Where.** `market_bias_context.py`; `schemas.py::SETUP_MARKET_CONTEXT`;
+`tests/test_setup_research_pipeline.py`.
+
+## BD-77 — Outcome work is bucketed; the nightly model never computes evidence
+
+**Date:** 2026-08-27 (same packet).
+
+**Decision.** The in-process outcome step uses 32 stable symbol-hash buckets
+(small cohorts of at most 64 symbols run whole), and `read_rows` now supports
+Arrow-side exact occurrence/recipe filters. Each bucket publishes outcomes and
+five-timeframe context. The final nightly `setup_research` slot always writes a
+deterministic JSON/Markdown fact pack. A medium local model may narrate only if
+at least one family/side/recipe cell has n>=30, five symbols and five entry
+sessions; below that floor no model is called.
+
+**Why.** The 54-recipe grid multiplies rows and must not recreate BD-74's
+whole-dataset materialization inside the desk. The evidence floor prevents a
+nightly AI from making sparse cells sound important. All arithmetic routes
+through `evidence_stats`; the model sees a bounded fact pack and may explain or
+name at most three next tests. It cannot write live policy.
+
+**Where.** `cli.py::_run_outcomes`; `store.py::read_rows`;
+`ai_jobs/setup_research.py`; `ai_jobs/runner.py`; AST and behavior guards in
+`tests/test_setup_research_pipeline.py`.

@@ -65,6 +65,17 @@ BRONZE_CAPTURE_MODE = "BACKFILL"
 QUALITY_COMPLETE = "COMPLETE"
 QUALITY_INVALID = "INVALID_DATA"
 
+#: Above this size a SNAPSHOT payload is stored WITHOUT being `json.loads`-ed
+#: (BD-73 in docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md). The payload is still
+#: captured in full and its format is still declared; what is skipped is only
+#: the in-memory parse, which for a gigabyte file costs several GB inside the
+#: desk process. `master_avwap_setup_tracker.json` measured 1,026,057,028 bytes
+#: on 2026-08-27; every other bronze snapshot on the desk is orders of
+#: magnitude smaller, so 64 MB separates them with a wide margin.
+SNAPSHOT_PARSE_MAX_BYTES = 64 * 1024 * 1024
+#: Read the file in chunks rather than whole when only its hash is wanted.
+_HASH_CHUNK_BYTES = 1024 * 1024
+
 MODE_APPEND_LOG = "APPEND_LOG"
 MODE_SNAPSHOT = "SNAPSHOT"
 MODE_CSV_ROWS = "CSV_ROWS"
@@ -247,6 +258,36 @@ def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _sha256_path(path: Path) -> str:
+    """The same digest `_sha256_bytes(path.read_bytes())` gives, in chunks.
+
+    Identical by construction - sha256 is a streaming hash - which matters
+    because the watermarks already on disk were written by the whole-file
+    spelling. A different digest here would make every artifact look changed
+    forever and re-publish the lot.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _looks_like_json(text: str) -> bool:
+    """Cheap structural check for a payload too large to parse.
+
+    Deliberately weak and deliberately honest: it establishes that the text
+    OPENS and CLOSES like a JSON container, which is what lets the row claim
+    `payload_format=json`. It cannot prove the middle parses, so it is used
+    only above the size threshold, where the alternative is several GB of
+    dicts that this artifact derives nothing from.
+    """
+    stripped = text.strip()
+    if len(stripped) < 2:
+        return False
+    return (stripped[0], stripped[-1]) in (("{", "}"), ("[", "]"))
+
+
 def _record_hash(source_path: str, offset: int, payload: str, *, include_offset: bool) -> str:
     material = f"{source_path}|{offset}|{payload}" if include_offset else payload
     return _sha256_bytes(material.encode("utf-8"))
@@ -359,23 +400,27 @@ def ingest_artifact(
     if artifact.mode == MODE_SNAPSHOT and source.is_dir():
         return _ingest_snapshot_dir(store, artifact, source, report, run_id, job_id, observed_at)
 
-    raw = source.read_bytes()
-    source_sha = _sha256_bytes(raw)
+    # Hash the file WITHOUT holding it. The watermark comparison below only
+    # ever needed the digest, but this read the whole file first - which for
+    # `master_avwap_setup_tracker.json` (1.03 GB on 2026-08-27) meant every
+    # ingest allocated a gigabyte inside the desk process, including the ones
+    # that immediately concluded UNCHANGED.
+    source_sha = _sha256_path(source)
     report.source_sha256 = source_sha
     state = _watermark(store, artifact.dataset)
 
+    # Compared against the LAST version, not every version ever seen: a
+    # document that reverts to earlier content is a real new version of a
+    # trader-owned file, not a duplicate to swallow. Hoisted above the mode
+    # split because both branches asked exactly this question.
+    if source_sha == state["last_source_sha"]:
+        report.status = "UNCHANGED"
+        return report
+
+    raw = source.read_bytes()
     if artifact.mode == MODE_SNAPSHOT:
-        # Compared against the LAST version, not every version ever seen: a
-        # document that reverts to earlier content is a real new version of a
-        # trader-owned file, not a duplicate to swallow.
-        if source_sha == state["last_source_sha"]:
-            report.status = "UNCHANGED"
-            return report
         rows = [_snapshot_row(artifact, source, raw, source_sha, observed_at, run_id, offset=0)]
     else:
-        if source_sha == state["last_source_sha"]:
-            report.status = "UNCHANGED"
-            return report
         rows = _log_rows(artifact, source, raw, source_sha, observed_at, run_id, after_offset=state["max_offset"])
         if not rows:
             report.status = "UNCHANGED"
@@ -411,7 +456,37 @@ def _source_extras(artifact: BronzeArtifact, source_path: str, source_sha: str, 
 
 
 def _snapshot_row(artifact, source: Path, raw: bytes, source_sha: str, observed_at, run_id, offset: int) -> dict:
+    """One bronze row for a whole-file snapshot.
+
+    Above `SNAPSHOT_PARSE_MAX_BYTES` the payload is stored in full but NOT
+    parsed. What the parse feeds is narrow: `_parse_event_at` and
+    `_first_value`, both keyed on the artifact's `event_keys`/`id_keys`, plus
+    the `quality` flag. `setup_tracker` - the only artifact anywhere near the
+    threshold - declares NEITHER key tuple, so for it the parse influences
+    exactly one column and the skip costs nothing measurable; a regression test
+    asserts the parsed and skipped rows come out identical.
+
+    For a large artifact that DID declare those keys the skip would empty them,
+    so this is a documented decision (BD-73) with that as its reopen trigger,
+    not an invisible optimisation.
+    """
     text = raw.decode("utf-8", errors="replace")
+    if len(raw) > SNAPSHOT_PARSE_MAX_BYTES:
+        # `parsed = {}` means "nothing derivable", which `_parse_event_at` and
+        # `_first_value` both already treat as empty; the quality flag comes
+        # from the structural check instead of from a parse we did not run.
+        return _bronze_row(
+            artifact,
+            source_path=str(source),
+            source_sha=source_sha,
+            offset=offset,
+            payload_text=text,
+            payload_format=BRONZE_FORMAT_JSON,
+            parsed={} if _looks_like_json(text) else None,
+            observed_at=observed_at,
+            run_id=run_id,
+            include_offset_in_hash=False,
+        )
     try:
         parsed = json.loads(text)
     except ValueError:
