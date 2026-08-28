@@ -5580,6 +5580,130 @@ class MasterAvwapSetupTests(unittest.TestCase):
             self.assertEqual(written.loc[0, "watchlist_label"], "test-watchlist")
             self.assertEqual(written.loc[0, "symbol"], "AAPL")
 
+    # ------------------------------------------------------------------
+    # The 2026-08-27 feature-history corruption. Two scans overlapped (the
+    # 12:45 run was declared stale at 12:48 and replaced at 12:49 while its
+    # worker was still alive), one appended and one rewrote in place, and the
+    # result was a 498 MB CSV with a 204-column header over a 255-column body,
+    # 15 shredded lines and 372 rows destroyed. Every scan afterwards raised
+    # ParserError inside the scan-factor and tier-tracker exports.
+    # ------------------------------------------------------------------
+
+    _HISTORY_METADATA = {
+        "run_id": "run-1",
+        "run_timestamp": "2026-04-24T13:00:00",
+        "run_date": "2026-04-24",
+        "watchlist_label": "test-watchlist",
+        "scoring_config_hash": "abc123",
+        "scoring_config_updated_at": "2026-04-24T12:00:00",
+    }
+
+    def test_an_unreadable_header_refuses_the_append_rather_than_corrupting(self):
+        """The old code caught every read failure into `existing_columns = []`,
+        which then failed the truthiness test and fell through to a blind
+        append. That is how a read failure became permanent corruption."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "d1_features_history.csv"
+            history_path.write_text("a,b,c" + chr(10) + "1,2,3" + chr(10), encoding="utf-8")
+            before = history_path.read_bytes()
+            frame = pd.DataFrame([{"symbol": "AAPL", "side": "LONG"}])
+
+            with patch.object(master_avwap, "D1_FEATURE_HISTORY_FILE", history_path),                  patch.object(master_avwap.pd, "read_csv", side_effect=ValueError("boom")),                  patch.object(master_avwap.logging, "error") as log_error:
+                append_d1_feature_history(frame, dict(self._HISTORY_METADATA))
+
+            self.assertEqual(history_path.read_bytes(), before, "the file must be untouched")
+            log_error.assert_called()
+
+    def test_a_schema_change_rewrites_atomically_and_leaves_no_temp_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "d1_features_history.csv"
+            with patch.object(master_avwap, "D1_FEATURE_HISTORY_FILE", history_path):
+                append_d1_feature_history(
+                    pd.DataFrame([{"symbol": "AAPL", "side": "LONG"}]),
+                    dict(self._HISTORY_METADATA),
+                )
+                # A wider frame: the file has to be rewritten, not appended to.
+                append_d1_feature_history(
+                    pd.DataFrame([{"symbol": "MSFT", "side": "SHORT", "new_feature": 1.5}]),
+                    dict(self._HISTORY_METADATA, run_id="run-2"),
+                )
+
+            written = pd.read_csv(history_path)
+            self.assertEqual(sorted(written["symbol"]), ["AAPL", "MSFT"])
+            self.assertIn("new_feature", written.columns)
+            self.assertEqual(len(list(Path(temp_dir).glob("*.tmp-*"))), 0, "no temp left behind")
+
+    def test_every_written_row_has_exactly_the_header_width(self):
+        """The corruption's signature: rows that do not line up with the header.
+        Whatever path ran, the file must always read back rectangular."""
+        import csv as _csv
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "d1_features_history.csv"
+            with patch.object(master_avwap, "D1_FEATURE_HISTORY_FILE", history_path):
+                append_d1_feature_history(
+                    pd.DataFrame([{"symbol": "AAPL", "side": "LONG"}]),
+                    dict(self._HISTORY_METADATA),
+                )
+                append_d1_feature_history(  # same schema -> append path
+                    pd.DataFrame([{"symbol": "NVDA", "side": "LONG"}]),
+                    dict(self._HISTORY_METADATA, run_id="run-2"),
+                )
+                append_d1_feature_history(  # wider -> rewrite path
+                    pd.DataFrame([{"symbol": "MSFT", "side": "SHORT", "extra": 2.0}]),
+                    dict(self._HISTORY_METADATA, run_id="run-3"),
+                )
+
+            with open(history_path, newline="", encoding="utf-8") as handle:
+                rows = list(_csv.reader(handle))
+            widths = {len(row) for row in rows}
+            self.assertEqual(len(widths), 1, f"ragged file: widths {sorted(widths)}")
+            self.assertEqual(len(rows), 4, "header plus three rows")
+
+    def test_the_write_is_taken_under_the_cross_process_writer_lock(self):
+        """Two scans on one machine is a designed state here, not an exotic one:
+        the stale-runner replacement path starts a second scan while the first
+        may still be alive. Hope is not exclusion."""
+        import local_writer_lock
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "d1_features_history.csv"
+            seen = []
+            real = local_writer_lock.local_writer_lock
+
+            def _spy(key, **kwargs):
+                seen.append(key)
+                return real(key, **kwargs)
+
+            with patch.object(master_avwap, "D1_FEATURE_HISTORY_FILE", history_path),                  patch.object(local_writer_lock, "local_writer_lock", _spy):
+                append_d1_feature_history(
+                    pd.DataFrame([{"symbol": "AAPL", "side": "LONG"}]),
+                    dict(self._HISTORY_METADATA),
+                )
+
+            self.assertEqual(len(seen), 1, "exactly one lock acquisition per write")
+            self.assertTrue(history_path.exists())
+
+    def test_no_lock_means_no_write_at_all(self):
+        """Fails CLOSED. Without exclusion this is precisely the write that
+        corrupted the file, and one run's features cost less than the record."""
+        import local_writer_lock
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "d1_features_history.csv"
+
+            def _refuse(key, **kwargs):
+                raise local_writer_lock.LocalLockUnavailable("no primitive")
+
+            with patch.object(master_avwap, "D1_FEATURE_HISTORY_FILE", history_path),                  patch.object(local_writer_lock, "local_writer_lock", _refuse),                  patch.object(master_avwap.logging, "error") as log_error:
+                append_d1_feature_history(
+                    pd.DataFrame([{"symbol": "AAPL", "side": "LONG"}]),
+                    dict(self._HISTORY_METADATA),
+                )
+
+            self.assertFalse(history_path.exists(), "nothing may be written without the lock")
+            log_error.assert_called()
+
     def test_scan_factor_observations_compute_side_and_spy_relative_returns(self):
         history = pd.DataFrame(
             [

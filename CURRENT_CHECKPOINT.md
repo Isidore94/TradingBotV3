@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | `claude/warehouse-build-memory` |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5261 passed, 22 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
+| Last verified baseline | `pytest tests/ -q` **5266 passed, 22 subtests, exit 0** (2026-08-28) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **not rebuilt** — a packaging trigger is outstanding (see below) |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -40,12 +40,62 @@ the dated entry named beside it.
 | 6 | **Market Journal** — one desk session where a Desk-tab note reaches the left-nav page | 2026-08-27 evening entry |
 | 7 | **SOAK 1** — the gate on Phase 0.9 G-P2.3; not yet run | 2026-08-27 Phase 0.9 entry |
 | 8 | **Phase 0.8 live soak** — the trader's to run | 2026-08-26 fluidity entry |
+| 9 | **Feature-history exports** — one 2026-08-28 scan producing `output/scan-factors` and `output/tier-tracker` files again instead of `ParserError` | 2026-08-28 corruption entry |
+| 10 | **Narrated digest overnight** — one unattended 22:00 run producing a narration without being forced | 2026-08-28 narration entry |
 
 ### Immediate next action
 
 Commit and push the outstanding work, restart the desk, then run the owed live gates in
 the order above. Nothing new should be started before gate 1 if a merge to `main` is
 intended.
+
+---
+
+## 2026-08-28 - Two scans wrote one CSV: the D1 feature-history corruption, fixed and repaired
+
+**Branch `claude/warehouse-build-memory`. No roadmap item. Trader-authorized** - the
+file-scoped ask-first rule applied because `master_avwap_lib/legacy.py` houses
+detector/scoring code. **No detector, score, signal or alert behaviour changed**: this
+is the evidence writer for `d1_features_history.csv` plus the repair of the file it
+damaged, so plan.md sec 5's golden-fixture rule is not engaged.
+
+**Root cause, measured not guessed.** The 12:45 swing scan was declared stale at 12:48
+(`runner did not survive restart`) and replaced at 12:49 while the first worker was
+still alive. Both wrote the file - one appending, one rewriting in place from byte 0.
+The signature is unmistakable in the bytes: rows whose leading fields are one
+alphabetical symbol stream (AMBP, AMGN, AMLX, AMPX...) and whose trailing JSON blob is
+the next one along (AMD, AMH, AMPL, AMRX...), and 2026-04-24 rows sitting at line 61
+where the short rewrite stopped. 204-column header over a 97.3%-255-column body, 15
+shredded lines, 372 rows destroyed.
+
+**Fixed** with four rules in `append_d1_feature_history`: the write is taken under
+`local_writer_lock` and **fails closed** without it; a rewrite goes through a temp
+sibling and `os.replace`; an unreadable header **refuses** the write instead of
+falling through to a blind append (the old bare `except` set `existing_columns = []`,
+which then failed its own truthiness test - that is the whole mechanism); and the
+append path only writes the header's own columns.
+
+**Repaired, with a net gain.** Rebuilt from the 2026-08-26 evidence snapshot (119,107
+rows, uniformly 255 columns, verified clean) plus every recoverable 08-27 row from the
+live file, mapped by NAME onto the wide header - the 204-column schema is a strict
+subset of the 255, so narrow rows keep their 204 values and take 51 blanks rather than
+being dropped. **129,081 rows, uniformly 255 wide, `pd.read_csv` clean**, versus
+128,720 in the corrupt file: **+361 rows**, because the snapshot restores what the
+overwrite destroyed. All ten of 08-27's runs are present; the 12:49 run keeps 200 of
+its ~1,086. **15 rows unrecoverable**, written with line/width/run_id/symbol to
+`d1_features_history.quarantine-2026-08-28.jsonl` beside the file. The corrupt original
+is kept as `d1_features_history.csv.corrupt-2026-08-28` (522 MB - delete it once a
+scan has run clean).
+
+**Verification:** `pytest tests/ -q` **5266 passed, 22 subtests, exit 0** · smoke
+**7/7**. 5 new tests; the three that are true reproductions were confirmed to FAIL
+against the old writer by reverting it. The exact line that raised
+(`pd.read_csv(history_path, low_memory=False)`, `legacy.py:10089` and `:10726`) now
+returns `(129081, 255)`.
+
+**Owed:** one scan on 2026-08-28 confirming `output/scan-factors` and
+`output/tier-tracker` produce files again rather than logging `ParserError`. That is
+the live gate on this item.
 
 ---
 
@@ -223,6 +273,96 @@ What changed:
 
 No code changed in this addendum. Re-verified after it: **5249 passed, 22 subtests,
 exit 0**; smoke **7/7**; `--selftest` **72/72**.
+
+### Second pass (2026-08-28) - the read is now 97k tokens, not 260k
+
+Trader: "Anyway we can summarize things to be even briefer? Long context uses more AI
+usage and makes me less efficient." Two structural cuts, no code touched:
+
+- **`CHANGELOG.md`'s `Current implemented inventory` was 94% narrative** - 3,808 of its
+  4,061 lines were 91 dated entries wrapped around a **253-line thematic inventory that
+  already states what exists**. The inventory is the contract, so it was promoted to the
+  top of the file; the 73 dated entries older than 2026-08-26 moved verbatim to the
+  changelog archive, and the 18 from the last two build days stayed under a new
+  `Recent changes` heading. Entry check: 18 kept + 73 moved + 36 already archived = 109
+  archived, 18 live. 260 KB -> 98 KB. One stale inventory line was corrected while there
+  (Desk Link code "remains only pending cleanup" - it was removed 2026-08-24).
+- **`CLAUDE.md`'s `Core loop / data flow` was 42 KB - 65% of a file that loads into
+  EVERY session.** Each rule carried the incident, the numbers and the trader
+  conversation that produced it. Those moved verbatim to
+  **`docs/DESK_INTERNALS.md`**; `CLAUDE.md` keeps every rule as a binding imperative
+  with a pointer. The section is 71% smaller and the file went 65 KB -> 35 KB.
+  **Nothing was dropped**: a check for 45 critical guardrail tokens (`read_rows`,
+  `_run_outcomes`, `1.0 ATR`, `passes_focus_adoption_gate`, `replace(tzinfo=None)`,
+  `suppression field`, `r_eod_hold`, `local_writer_lock`, ...) found all 45 still
+  present in `CLAUDE.md` itself. The rule binds from `CLAUDE.md` alone; the internals
+  doc is the reason, and both change together.
+
+| | before | after |
+|---|---|---|
+| `CLAUDE.md` (every session) | ~15,907 tok | **~8,943 tok** |
+| `CURRENT_CHECKPOINT.md` | ~114,987 tok | **~20,639 tok** |
+| `CHANGELOG.md` | ~86,141 tok | **~24,522 tok** |
+| `plan.md` | ~37,305 tok | ~37,305 tok (untouched) |
+| **mandatory read** | **~259,878 tok** | **~97,541 tok (63% smaller)** |
+
+`plan.md` is deliberately untouched - it is the roadmap and its Section 12 work queue is
+live. It is the obvious next candidate if the trader wants to go further.
+
+**Concurrency hazard observed, not a defect:** a second Claude session was editing this
+same checkout during this pass (`scripts/ai_summary.py`, `scripts/ai_jobs/digest.py`,
+`scripts/run_ai_jobs.ps1`, +12 tests at 00:21; HEAD moved to `e22e8e8`). A full-suite run
+during its activity reported 2 failures in `tests/test_group_tape_service.py`. They were
+**not caused by this work and are not a real defect**: the same two failed at `b6700b6`
+in a clean worktree, then passed 16/16 twice and in two later full runs once the other
+session was quiet. Two pytest runs sharing one working tree cross-talk through on-disk
+fixtures (`.test_tmp/`, `data/runtime`). **Do not run the suite while another session is
+building in this checkout** - the result is not trustworthy either way.
+
+### Third pass (2026-08-28) - `plan.md` narrowed; the read is 84k tokens
+
+Trader: "shrink plan.md and ensure those files stay deleted."
+
+**Deletions confirmed permanent.** `info_dot.py`, `symbol_chip.py` and
+`journal_table_model.py` are gone from disk AND from HEAD - the other session's commit
+`84b1a36` swept up the staged deletions, so they are committed rather than merely
+staged. Their stale `.pyc` files were removed. The only surviving mentions in the repo
+are the entries here and in `CHANGELOG.md` that record the removal.
+
+**`plan.md` 149 KB -> 76 KB (37,305 -> 19,141 tokens, 49% smaller).** Section 12 was
+93% of the file, and Phases 0.5/0.6/0.7 were 72% of Section 12 (97,886 B) while
+describing work that is BUILT. Each of their 89 numbered items now keeps its bold
+title/status line, a `Spec:` + build-record pointer, and **every gate paragraph reduced
+to its bold lead plus the sentences that carry the gate - verbatim, never paraphrased**.
+The build narrative moved to `docs/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`.
+
+**One real defect was caught before it shipped, in the first attempt.** Splitting
+sentences on `;` truncated multi-part gate lists: R1's "Still owed: the drain on return;
+an EVENING day...; and one SPY-alarm firing" lost its second and third parts. The pass
+was reverted with `git checkout -- plan.md` and redone splitting only on `.` followed by
+a capital, so a semicolon-separated gate list stays one sentence. **Never split a gate
+list on a semicolon.**
+
+Verification of the narrowing itself: gate clauses before **89**, after **90**; the 5
+flagged as missing are item title lines whose gate status is preserved in the bold title
+(`R1 ... — BUILT 2026-08-15, live proof owed`), each confirmed present by name. Structure
+after: **10 sections, 89 numbered items**, unchanged.
+
+| | before | after |
+|---|---|---|
+| `CLAUDE.md` (every session) | ~15,907 tok | **~8,943 tok** |
+| `CURRENT_CHECKPOINT.md` | ~114,987 tok | **~22,850 tok** |
+| `CHANGELOG.md` | ~86,141 tok | **~26,397 tok** |
+| `plan.md` | ~37,305 tok | **~19,141 tok** |
+| **mandatory read** | **~259,878 tok** | **~83,607 tok (68% smaller)** |
+
+Re-verified after this pass: **5261 passed, 22 subtests, exit 0**; smoke **7/7**;
+`--selftest` **72/72**; packaging **24 passed**; **149 doc links, 0 broken**.
+
+**Final verification (quiet tree): `pytest tests/ -q` -> 5261 passed, 22 subtests, exit 0**
+(5,249 from this branch plus the other session's 12 new tests); smoke **7/7**;
+`--selftest` **72/72**; packaging spec-drift + selftest **24 passed**; **0 broken relative
+links** across all control and archive documents.
 
 ## 2026-08-27 - tracker-wide stop/target research and five-timeframe context
 

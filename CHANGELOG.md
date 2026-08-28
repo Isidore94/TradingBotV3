@@ -294,6 +294,64 @@ Dated entries for the two most recent build days, newest first. Older dated entr
 move to the archive; the durable statement of what they built is in the inventory above.
 
 
+### 2026-08-28 — Two scans wrote one CSV: the D1 feature-history corruption, fixed and repaired
+
+`IMPLEMENTED`, `GREEN`. Trader-authorized (the file-scoped ask-first rule applied;
+`master_avwap_lib/legacy.py` houses detector/scoring code). No detector, score, signal
+or alert behaviour changed — this is the evidence WRITER for `d1_features_history.csv`
+and the repair of the file it damaged, so plan.md sec 5's golden-fixture rule is not
+engaged.
+
+**What happened.** On 2026-08-27 the 12:45 swing scan was declared stale at 12:48
+(`runner did not survive restart`) and a replacement started at **12:49** while the
+first worker was demonstrably still alive. Both wrote the feature history. One
+appended at the end; one rewrote it in place from byte 0. The result was a 498 MB CSV
+with a **204-column header over a body that is 97.3% 255 columns**, **15 shredded
+lines** — two alphabetical symbol streams interleaved into single rows, the leading
+fields from one record and the trailing JSON blob from the next — and **372 rows of
+real history destroyed** where the short rewrite overwrote the top of the file. From
+that moment `export_scan_factor_views` and `export_bot_tier_tracker_views` raised
+`ParserError` on **every scan**; both are caught and logged, so the scan went on
+reporting success while two of its outputs silently stopped.
+
+**Four rules, now enforced in `append_d1_feature_history`:**
+
+1. **One writer at a time**, through `local_writer_lock` (the machine's real
+   cross-process primitive — named mutex plus byte-range lock, released by the kernel
+   on a hard kill) keyed by `lock_key_for_path`. Two overlapping scans is not an
+   exotic state here: the stale-runner replacement path produces it by design. If no
+   lock primitive is available the write is **skipped**, not attempted — without
+   exclusion this is exactly the write that caused the damage.
+2. **A rewrite is atomic** — temp sibling plus `os.replace`, never an in-place
+   `to_csv` over a 498 MB file. That long half-written window is what the other
+   process appended into.
+3. **An unreadable header refuses the write.** The old `except: existing_columns = []`
+   then failed its own truthiness test and fell through to a **blind append**, turning
+   a transient read failure into permanent corruption. Losing one run's rows is
+   recoverable; an unparseable record is not. The schema-change branch refuses the
+   same way and leaves the file exactly as it was.
+4. **The append path only ever appends the header's own columns**, so rows cannot
+   stop lining up with their header.
+
+**The file was repaired, and the repair recovered more than it lost.** Rebuilt from
+the 2026-08-26 evidence snapshot (119,107 rows, uniformly 255 columns, verified clean)
+plus every recoverable 2026-08-27 row from the live file, mapped onto the wide header
+**by name** — the 204-column schema is a strict subset of the 255, so the narrow rows
+carry their 204 real values and 51 blanks rather than being dropped. Result:
+**129,081 rows, uniformly 255 columns, `pd.read_csv` clean**, against 128,720 in the
+corrupt file — a **net gain of 361 rows**, because the snapshot restores what the
+overwrite destroyed. All ten of 2026-08-27's runs are present; the 12:49 run survives
+with 200 of its ~1,086 rows. **15 rows were unrecoverable** and are written to
+`d1_features_history.quarantine-2026-08-28.jsonl` beside the file with their line
+number, width, run_id and symbol — counted and named, never silently dropped. The
+corrupt original is kept as `d1_features_history.csv.corrupt-2026-08-28`.
+
+Tests: 5 new in `tests/test_master_avwap_setups.py`. Three are true reproductions and
+**fail against the old writer** (proven by reverting it): the unreadable-header refusal,
+the lock acquisition, and no-lock-means-no-write. Two are standing guards — the atomic
+rewrite leaves no temp file, and every written row matches the header width.
+
+
 ### 2026-08-28 — The nightly narration: one bad citation no longer costs the night
 
 `IMPLEMENTED`, `GREEN`. Three fixes to the local-AI layer, from a trader question
@@ -432,7 +490,39 @@ of the changelog inventory rather than a full read — plus a standing rule to r
 glance block, keep entries short, and archive past ~1,500 lines. `CHANGELOG.md` is
 unchanged as the authority on what exists; only its closed history moved.
 
-Verified after the changes: `pytest tests/ -q` **5249 passed, 22 subtests, exit 0**;
+Second pass, 2026-08-28 (trader: "can we summarize things to be even briefer?"):
+`CHANGELOG.md`'s `Current implemented inventory` was 94% narrative — 3,808 of 4,061 lines
+were dated entries wrapped around a **253-line thematic inventory that already states
+what exists**. That inventory is the contract and was promoted to the top of the file;
+the 73 dated entries older than 2026-08-26 moved verbatim to the archive and the 18 from
+the last two build days remain under `Recent changes` (260 KB → 98 KB). `CLAUDE.md`'s
+`Core loop / data flow` section — 42 KB, 65% of a file that loads into *every* session —
+had each rule carrying the incident, measurements and trader conversation that produced
+it; those moved verbatim to **[`docs/DESK_INTERNALS.md`](docs/DESK_INTERNALS.md)** while
+`CLAUDE.md` keeps every rule as a binding imperative with a pointer (section 71% smaller,
+file 65 KB → 35 KB). A check for 45 critical guardrail tokens confirmed all 45 survive in
+`CLAUDE.md` itself; the rules bind from `CLAUDE.md` alone and both files change together.
+The mandatory documentation read fell from **~260k tokens to ~97.5k (63% smaller)**.
+`plan.md` was deliberately left untouched.
+
+Third pass, 2026-08-28: `plan.md` narrowed **149 KB → 76 KB** (37,305 → 19,141 tokens).
+Section 12 was 93% of the file and its Phases 0.5/0.6/0.7 were 72% of that section while
+describing work already BUILT. Each of their 89 numbered items keeps its title/status
+line, a spec and build-record pointer, and every gate reduced to its bold lead plus the
+sentences carrying the gate — **verbatim, never paraphrased**; the build narrative moved
+to [`docs/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](docs/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md).
+A first attempt was reverted because splitting sentences on `;` truncated multi-part gate
+lists (R1 lost two of its three owed proofs); the redone pass splits only on a period
+before a capital, and a clause-level check reports 89 gate clauses before and 90 after,
+with the 5 flagged items confirmed present by name in their bold titles. Structure is
+unchanged at 10 sections and 89 items. The three dead UI modules removed in the first
+pass are confirmed gone from disk and from HEAD, their stale bytecode deleted.
+
+The mandatory documentation read across `CLAUDE.md`, `CURRENT_CHECKPOINT.md`,
+`CHANGELOG.md`, `plan.md` and `docs/README.md` is now **~83,607 tokens, down from
+~259,878 — 68% smaller** — with no rule, gate, or inventory statement lost.
+
+Verified after the changes: `pytest tests/ -q` **5261 passed, 22 subtests, exit 0**;
 `smoke_check.py` **7/7**; `launch_gui.py --selftest` **72/72**; packaging spec-drift and
 selftest suites **24 passed**. The spec edit is a packaging trigger, so a rebuild and a
 frozen selftest are owed before the next merge to `main`.

@@ -2378,7 +2378,44 @@ def get_scoring_config_metadata() -> dict:
     }
 
 
+#: How long a scan will wait for another process to finish writing the feature
+#: history before giving up. Generous, because the loser waits only for the
+#: winner's write - not for a scan - and losing the row is worse than the wait.
+D1_FEATURE_HISTORY_LOCK_TIMEOUT_SECONDS = 300.0
+
+
 def append_d1_feature_history(df_features: pd.DataFrame, metadata: dict) -> None:
+    """Append one run's D1 features, or widen the file's schema to fit them.
+
+    THE 2026-08-27 CORRUPTION, AND THE FOUR RULES THAT COME OUT OF IT
+    -----------------------------------------------------------------
+    On 2026-08-27 the 12:45 scan was declared stale at 12:48 ("runner did not
+    survive restart") and a replacement started at 12:49 while the first worker
+    was demonstrably still alive. Both wrote this file. One appended at the end
+    and one rewrote it from byte 0, and the result was a 498 MB CSV with a
+    204-column header over a body that is 97.3% 255 columns, 15 lines shredded
+    at the write boundaries (two alphabetical symbol streams interleaved into
+    single rows), and 372 rows of real history destroyed outright. Every scan
+    afterwards raised `ParserError` inside `export_scan_factor_views` and
+    `export_bot_tier_tracker_views`, so both outputs stopped silently while the
+    scan itself went on reporting success.
+
+    1. **One writer at a time**, through the machine's real cross-process lock
+       rather than hope. Two scans overlapping is not an exotic state here - the
+       stale-runner replacement path produces it by design.
+    2. **A rewrite is atomic**: temp file plus `os.replace`. An in-place
+       `to_csv` over a 498 MB file is a long window in which the file on disk is
+       neither the old one nor the new one, and that window is what another
+       process appended into.
+    3. **A header that cannot be read REFUSES the write.** The previous code
+       caught every exception into `existing_columns = []`, which then failed
+       the `if existing_columns` test and fell through to a blind append -
+       turning a read failure into permanent corruption. Losing one run's rows
+       is recoverable; making the file unparseable is not.
+    4. **The append path checks the width it is about to write.** Appending a
+       frame whose columns are not exactly the file's columns is how rows stop
+       lining up with their header, so it is refused rather than attempted.
+    """
     if df_features is None or df_features.empty:
         return
     history_frame = df_features.copy()
@@ -2390,22 +2427,83 @@ def append_d1_feature_history(df_features: pd.DataFrame, metadata: dict) -> None
     history_frame.insert(5, "scoring_config_hash", metadata.get("scoring_config_hash", ""))
     history_frame.insert(6, "scoring_config_updated_at", metadata.get("scoring_config_updated_at", ""))
     D1_FEATURE_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
+
+    try:
+        with local_writer_lock(
+            lock_key_for_path(D1_FEATURE_HISTORY_FILE),
+            timeout_seconds=D1_FEATURE_HISTORY_LOCK_TIMEOUT_SECONDS,
+        ):
+            _write_d1_feature_history_locked(history_frame)
+    except LocalLockUnavailable as exc:
+        # Fails CLOSED. Without real exclusion this is precisely the write that
+        # corrupted the file, and an unparseable 498 MB record costs more than
+        # one run's features.
+        logging.error(
+            "D1 feature history: no cross-process lock available (%s); "
+            "skipping this run's append rather than risking the file.",
+            exc,
+        )
+
+
+def _write_d1_feature_history_locked(history_frame: pd.DataFrame) -> None:
+    """The read-modify-write itself. Only ever called holding the writer lock."""
     if not D1_FEATURE_HISTORY_FILE.exists() or D1_FEATURE_HISTORY_FILE.stat().st_size == 0:
-        history_frame.to_csv(D1_FEATURE_HISTORY_FILE, index=False)
+        _replace_d1_feature_history(history_frame)
         return
     try:
         existing_columns = list(pd.read_csv(D1_FEATURE_HISTORY_FILE, nrows=0).columns)
-    except Exception:
-        existing_columns = []
-    new_columns = list(history_frame.columns)
-    if existing_columns and existing_columns != new_columns:
-        existing_frame = pd.read_csv(D1_FEATURE_HISTORY_FILE, low_memory=False)
-        merged_columns = existing_columns + [column for column in new_columns if column not in existing_columns]
-        existing_frame = existing_frame.reindex(columns=merged_columns)
-        history_frame = history_frame.reindex(columns=merged_columns)
-        pd.concat([existing_frame, history_frame], ignore_index=True).to_csv(D1_FEATURE_HISTORY_FILE, index=False)
+    except Exception as exc:
+        # Rule 3. Never a blind append.
+        logging.error(
+            "D1 feature history: header unreadable (%s); refusing to append to "
+            "a file whose shape is unknown. The run's features are not written.",
+            exc,
+        )
         return
-    history_frame.to_csv(D1_FEATURE_HISTORY_FILE, mode="a", header=False, index=False)
+    new_columns = list(history_frame.columns)
+    if existing_columns == new_columns:
+        history_frame.to_csv(D1_FEATURE_HISTORY_FILE, mode="a", header=False, index=False)
+        return
+    # A schema change. Read the whole file, widen both sides onto one column
+    # list, and put the result down in one atomic step (rules 2 and 4).
+    try:
+        existing_frame = pd.read_csv(D1_FEATURE_HISTORY_FILE, low_memory=False)
+    except Exception as exc:
+        logging.error(
+            "D1 feature history: the schema changed but the existing file could "
+            "not be read (%s); refusing to rewrite it. The run's features are "
+            "not written, and the file is left exactly as it was.",
+            exc,
+        )
+        return
+    merged_columns = existing_columns + [
+        column for column in new_columns if column not in existing_columns
+    ]
+    combined = pd.concat(
+        [
+            existing_frame.reindex(columns=merged_columns),
+            history_frame.reindex(columns=merged_columns),
+        ],
+        ignore_index=True,
+    )
+    _replace_d1_feature_history(combined)
+
+
+def _replace_d1_feature_history(frame: pd.DataFrame) -> None:
+    """Write the whole file through a temp sibling and one `os.replace`."""
+    target = D1_FEATURE_HISTORY_FILE
+    temp = target.with_name(target.name + f".tmp-{os.getpid()}")
+    try:
+        frame.to_csv(temp, index=False)
+        os.replace(temp, target)
+    finally:
+        try:
+            if temp.exists():
+                temp.unlink()
+        except OSError:
+            pass
 
 
 _EARNINGS_CALENDAR_ROWS_CACHE: dict | None = None
