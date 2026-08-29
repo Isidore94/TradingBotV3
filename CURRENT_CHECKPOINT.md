@@ -18,12 +18,12 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | `claude/last-commit-main-dpouod` (journal auto-tagging + statement import, cut from `main`) |
+| Working branch | **`main`** — the journal packet was merged 2026-08-28 by trader instruction ("ok push to main"), fast-forward, no divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **R7 journal auto-tagging + statement import (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
 | Last verified baseline | `pytest tests/ -q` **5419 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
-| Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
-| Desk restart | **required** — the warehouse packet is not on the running desk until then |
+| Frozen exe | **STALE** — last built at `fff07b8`, six journal commits behind. The desk runs from SOURCE by trader decision, so this is a verification artifact only and the source launch is live; a rebuild + frozen selftest is owed before the exe is trusted again |
+| Desk restart | **required** — neither the warehouse packet nor the journal packet is on the running desk until then |
 
 ### Open gates, newest first
 
@@ -50,6 +50,19 @@ the dated entry named beside it.
 | 16 | **IBKR file import** — the trader imports their IBKR transaction file on the desk; the second account's mask resolves once Flex has named it | R7 IBKR file (2026-08-28 IBKR entry) |
 | 17 | **File authority** — one desk import where a shared day agrees (sync keeps its times) and, if one ever disagrees, the file takes it | R7 file authority (2026-08-28 authority entry) |
 | 18 | **Tax report** — one desk run of "Realised P&L for tax..." against the live journal, with the BoC rates booked so the CAD total is complete | R7 tax report (2026-08-28 tax entry) |
+
+### Merged to main without a live-validation day — stated, not hidden
+
+`plan.md` sec 6 normally asks for a live-session validation day before a merge to
+`main`, and the frozen-exe policy asks for a rebuild at the same point. The trader
+merged on 2026-08-28 anyway, in as many words, and the reasoning is sound rather
+than a shortcut: **gates 13-18 are all live proofs that can only be run once the
+code is on the desk**, and the desk runs from SOURCE, so merging is the
+prerequisite for validating rather than something validation should precede.
+What was actually verified before the merge: 5419 passed / 72 subtests / 6
+skipped, smoke 7/7, source selftest 72/72, spec-drift 17, ruff clean, fast-forward
+with no divergence. What is NOT verified: any of it on a live desk against the
+live journal database, and the frozen exe, which is six commits stale.
 
 ### Immediate next action
 
