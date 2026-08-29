@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | `claude/last-commit-main-dpouod` (journal auto-tagging + statement import, cut from `main`) |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **R7 journal auto-tagging + statement import (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5402 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
+| Last verified baseline | `pytest tests/ -q` **5419 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -49,6 +49,7 @@ the dated entry named beside it.
 | 15 | **Statement layering + self-check** — the trader imports both real files on the desk and runs "Check a statement..." against the live journal | R7 statement layering (2026-08-28 layering entry) |
 | 16 | **IBKR file import** — the trader imports their IBKR transaction file on the desk; the second account's mask resolves once Flex has named it | R7 IBKR file (2026-08-28 IBKR entry) |
 | 17 | **File authority** — one desk import where a shared day agrees (sync keeps its times) and, if one ever disagrees, the file takes it | R7 file authority (2026-08-28 authority entry) |
+| 18 | **Tax report** — one desk run of "Realised P&L for tax..." against the live journal, with the BoC rates booked so the CAD total is complete | R7 tax report (2026-08-28 tax entry) |
 
 ### Immediate next action
 
@@ -59,6 +60,43 @@ desk and run the self-check (gates 14-15). Two of his asks are scoped and
 NOT built, and one needs his answer first: statements as the source of truth over
 the API (it would cost the only intraday timestamps the journal has), and the
 IBKR transaction-file importer (masked account numbers are the open problem).
+
+---
+
+## 2026-08-28 - The tax number is the broker's, never ours
+
+**Trader decision:** *"Statement is source of truth for final pnl/tax
+purposes."* Stronger than the day-level authority landed earlier that morning,
+and it needed its own answer: that rule decided WHICH ROWS win, this one decides
+what the reported NUMBER is.
+
+**The gap it closes.** Every other P&L in the journal is recomputed - which is
+what makes per-setup statistics possible, and is also our arithmetic, drifting
+from Questrade's cent-rounded figures by -$0.2386 on $5,298.81 across the year.
+`scripts/journal_tax_report.py` recomputes nothing: it sums the broker's own
+`net_amount` per fill, and **for a FLAT position that sum IS the realised P&L**,
+so no cost-basis model is needed or used. One normalization first - the IBKR
+file states that figure in the BASE currency, so its importer now divides by the
+row's implied rate before storing and keeps the base figure as evidence.
+
+**It refuses rather than estimates.** Open positions, positions whose opening
+fill was invented, and any position with a fill lacking a stated amount are
+EXCLUDED and named with the reason. Voided rows never reach a total. CAD
+converts per fill at the booked BoC rate and an unbooked date withholds that
+position's CAD rather than guessing. Accounts stay separate with their tax
+status; currencies are never added together.
+
+**Cross-check on the real data, both brokers:** broker **$8,219.81** vs the
+journal's recomputed **$8,220.05**, difference **-$0.2385** - exactly the known
+Questrade rounding, IBKR exact. Journal > Fees > "Realised P&L for tax...".
+
+**Verification:** 5419 passed / 72 subtests / 6 skipped (5402 -> 5419). Smoke
+7/7, selftest 72/72, spec drift 17, ruff clean. Same two pre-existing
+font-metric failures. No packaging trigger.
+
+**Owed:** gate 18. Note the CAD total needs the BoC rates booked for every fill
+date - the Health tab's FX coverage is where that happens, and on a fresh store
+228 dates were unbooked.
 
 ---
 

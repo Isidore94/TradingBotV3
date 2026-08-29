@@ -399,8 +399,20 @@ def _execution_from_row(row: IBRow, account_number: str, *, ordinal: int = 0) ->
         trade_date=row.trade_date.isoformat(),
         commission=round(commission_native, 6),
         fees=0.0,
-        gross_amount=row.gross_amount,
-        net_amount=row.net_amount,
+        # Stored in the trade's OWN currency, not IB's base. `net_amount` is
+        # the broker's own statement of what the fill did to cash, and the tax
+        # report adds those up rather than recomputing price x quantity - so it
+        # has to mean the same thing for every broker in the store. Questrade
+        # and Flex already report natively; only this file does not, and the
+        # base figures stay in raw_json as evidence.
+        gross_amount=(
+            row.gross_amount / rate
+            if rate and row.gross_amount is not None
+            else row.gross_amount
+        ),
+        net_amount=(
+            row.net_amount / rate if rate and row.net_amount is not None else row.net_amount
+        ),
         order_id="",
         exchange_exec_id="",
         raw_json=json.dumps(payload, sort_keys=True, default=str),

@@ -727,3 +727,23 @@ importer is `scripts/journal_ib_transactions.py`; the trader's preference that
 files outrank the live sync was resolved to **money only** and is
 `scripts/journal_file_authority.py` — the sync keeps a day the two agree on so
 its trade times survive, the file takes a day they do not, append-only.
+
+### The tax number is the broker's — BUILT 2026-08-28
+
+Trader decision: *"Statement is source of truth for final pnl/tax purposes."*
+This is stronger than the day-level file authority above — that decides which
+ROWS win, this decides what the reported NUMBER is.
+
+`scripts/journal_tax_report.py` sums `raw_executions.net_amount`, the broker's
+own statement of each fill's cash. For a flat position that sum IS the realised
+P&L, so no cost-basis model is used. It excludes and NAMES what it cannot
+answer for: open positions, positions with an invented opening fill, and any
+position with a fill carrying no stated amount. CAD converts per fill at the
+booked BoC rate (§5), withholding rather than guessing when a date is unbooked.
+
+The recomputed figure stays where it is and is shown beside this one as a
+cross-check, never blended — the same rule ground rule 10 applies to exit
+policies. Measured across both brokers: broker $8,219.81, recomputed $8,220.05,
+difference −$0.2385.
+
+**Owed:** one desk run with the BoC rates booked so the CAD total completes.

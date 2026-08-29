@@ -674,3 +674,26 @@ def test_health_checks_a_statement_without_importing_it(panel, monkeypatch, qapp
     assert "5,298.81" in joined and "5,299.05" in joined
     assert "check.csv" in joined
     assert panel.health_tab.statement_check_button.isEnabled()
+
+
+def test_fees_tab_builds_the_broker_stated_tax_report(panel, populated, qapp, tmp_path, monkeypatch):
+    """The one number in the journal that is not recomputed.
+
+    Trader decision 2026-08-28: "Statement is source of truth for final pnl/tax
+    purposes." The tab renders what the report says, including what it refused
+    to count, and writes the CSV beside it.
+    """
+    monkeypatch.setattr(
+        journal_feed, "export_tax_csv", lambda report, path=None: tmp_path / "tax.csv"
+    )
+    statuses = []
+    panel.fees_tab.statusChanged.connect(statuses.append)
+
+    panel.fees_tab.tax_year.setCurrentIndex(0)  # All years
+    panel.fees_tab._build_tax_report()
+    qapp.processEvents()
+
+    text = panel.fees_tab.tax_output.text()
+    assert "from the broker's own amounts" in text
+    assert "tax.csv" in text
+    assert any("tax report written" in status for status in statuses)

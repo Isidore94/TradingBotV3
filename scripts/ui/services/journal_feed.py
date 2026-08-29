@@ -516,6 +516,29 @@ def export_statement_check_csv(report: dict[str, Any], path: Any = None) -> Path
     return target
 
 
+def tax_report(year: Any = None, *, accounts_filter: Iterable[tuple[str, str]] | None = None) -> dict[str, Any]:
+    """Realised P&L for a tax year, from the broker's own stated amounts.
+
+    Separate from every other number in the journal on purpose: this one is not
+    recomputed. Trader decision 2026-08-28 - "Statement is source of truth for
+    final pnl/tax purposes."
+    """
+    from journal_tax_report import build_tax_report, cross_check_against_journal
+
+    numbers = [str(number) for _, number in (accounts_filter or ())]
+    report = build_tax_report(
+        _store(), year=int(year) if year else None, accounts=numbers
+    )
+    report["cross_check"] = cross_check_against_journal(_store(), report)
+    return report
+
+
+def export_tax_csv(report: dict[str, Any], path: Any = None) -> Path:
+    from journal_tax_report import export_tax_csv as _export
+
+    return _export(report, path)
+
+
 def tags_in_use() -> list[dict[str, Any]]:
     """Every tag the store holds, with counts and which lane it came from."""
     try:

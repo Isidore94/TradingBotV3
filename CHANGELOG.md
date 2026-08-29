@@ -188,6 +188,11 @@ which is evidence and must not be loaded as context.
   Journal (Trades, Calendar, Analytics, Health, Fees) over one shared
   tax-grouped header.
 
+- **Broker-stated tax report (2026-08-28).** `scripts/journal_tax_report.py`
+  reports realised P&L for a year by summing the broker's own `net_amount` per
+  fill — never recomputed. Open positions, positions with an invented opening
+  fill, and fills with no stated amount are excluded and named. CAD per fill at
+  the booked BoC rate. Journal > Fees > "Realised P&L for tax...", with a CSV.
 - **File authority over the live sync (2026-08-28).** `scripts/journal_file_authority.py`
   compares a broker file against the sync per `(account, day)` on computed signed
   cash. The sync keeps a day they agree on, so its trade times survive; the file
@@ -331,6 +336,42 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-28 — The tax number is the broker's, never ours
+
+`IMPLEMENTED`, `GREEN`, **live gate owed**. Trader decision: *"Statement is
+source of truth for final pnl/tax purposes"* — a stronger rule than the day-level
+authority landed earlier, and one that needed its own answer.
+
+Every other P&L in the journal is **recomputed** (average-cost matching, price ×
+quantity), which is what makes per-setup statistics possible and is also
+arithmetic of our own: it drifts from Questrade's cent-rounded figures by
+**−$0.2386 on $5,298.81** across the trader's year. Immaterial for deciding what
+to trade; not the number for a return.
+
+`journal_tax_report` recomputes nothing. It sums `raw_executions.net_amount` —
+the broker's own statement of each fill's cash — and for a **flat** position that
+sum *is* the realised P&L, so no cost-basis model is needed or used. One
+normalisation was required first: the IBKR file states that figure in the base
+currency, so the importer now divides by the row's implied rate before storing,
+keeping the base figure as evidence. `net_amount` means one thing store-wide or
+the sum is meaningless.
+
+**What it refuses to report is the point.** Open positions, positions whose
+opening fill was invented (`SYNTHETIC_OPEN`), and any position with a fill
+lacking a stated amount are excluded — and named, with the reason, so the trader
+knows which file would fix them. Voided executions never reach a total. CAD
+converts per fill at the booked BoC rate; an unbooked date withholds that
+position's CAD rather than guessing. Accounts stay separate with their tax
+status, currencies are never added, and a position spanning the year end is
+reported whole.
+
+Cross-check on the trader's real data across both brokers: broker **$8,219.81**
+vs the journal's recomputed **$8,220.05**, difference **−$0.2385** — precisely the
+known Questrade rounding, with IBKR exact.
+
+Verification: **5419 passed / 72 subtests / 6 skipped**, 5402 → 5419. Smoke 7/7,
+selftest 72/72, spec drift 17, ruff clean.
 
 ### 2026-08-28 — The file wins on money, the sync keeps the clock
 

@@ -9,7 +9,9 @@ expenses on a tax return.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+import datetime as _dt
+
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from journal_tax_report import describe_tax_report
 from ui.services import journal_feed
 
 ACTIVITY_FILTERS = ("All", "FEE", "INTEREST", "DIVIDEND", "FX", "OTHER")
@@ -52,6 +55,26 @@ class FeesTab(QFrame):
 
         self.export_button = QPushButton("Export fees CSV")
         self.export_button.clicked.connect(self._export)
+
+        # The tax number, and the only one in the journal that is NOT
+        # recomputed: it adds up what the broker itself said each fill did to
+        # cash. Trader decision 2026-08-28.
+        self.tax_year = QComboBox()
+        self.tax_year.addItem("All years", None)
+        current = _dt.date.today().year
+        for offset in range(0, 5):
+            year = current - offset
+            self.tax_year.addItem(str(year), year)
+        self.tax_button = QPushButton("Realised P&L for tax...")
+        self.tax_button.setToolTip(
+            "Realised profit and loss added up from the broker's own amounts, "
+            "never recomputed. Writes a CSV listing every closed position and "
+            "every position it could not count, with the reason."
+        )
+        self.tax_button.clicked.connect(self._build_tax_report)
+        self.tax_output = QLabel("")
+        self.tax_output.setWordWrap(True)
+        self.tax_output.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.note = QLabel(
             "Commissions and trade fees are already inside each trade's net P&L. "
             "Cash fees and dividends are not - they are shown here and never added to the "
@@ -65,6 +88,12 @@ class FeesTab(QFrame):
         controls.addStretch(1)
         controls.addWidget(self.export_button)
 
+        tax_row = QHBoxLayout()
+        tax_row.addWidget(QLabel("Tax year"))
+        tax_row.addWidget(self.tax_year)
+        tax_row.addWidget(self.tax_button)
+        tax_row.addStretch(1)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(QLabel("Totals"))
@@ -72,6 +101,8 @@ class FeesTab(QFrame):
         layout.addWidget(self.note)
         layout.addLayout(controls)
         layout.addWidget(self.cash_table, 3)
+        layout.addLayout(tax_row)
+        layout.addWidget(self.tax_output)
 
     def reload(self, *_args) -> None:
         query = self._header.query()
@@ -121,3 +152,19 @@ class FeesTab(QFrame):
             self.statusChanged.emit(f"fee export failed: {exc}")
             return
         self.statusChanged.emit(f"exported {path}")
+
+    def _build_tax_report(self) -> None:
+        query = self._header.query()
+        try:
+            report = journal_feed.tax_report(
+                self.tax_year.currentData(), accounts_filter=query.get("accounts_filter")
+            )
+            path = journal_feed.export_tax_csv(report)
+        except Exception as exc:  # noqa: BLE001
+            self.tax_output.setText(f"tax report unavailable: {exc}")
+            self.statusChanged.emit(f"tax report failed: {exc}")
+            return
+        self.tax_output.setText(
+            describe_tax_report(report, report.get("cross_check")) + f"\nWrote {path}"
+        )
+        self.statusChanged.emit(f"tax report written to {path}")
