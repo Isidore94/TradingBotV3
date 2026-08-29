@@ -89,6 +89,7 @@ from journal_identity import (
     normalize_security_type,
     stable_execution_uid,
 )
+from journal_file_authority import apply_file_authority, describe_authority
 from journal_importers import (
     NormalizedExecution,
     _cash_txn_uid,
@@ -728,6 +729,7 @@ def import_questrade_statement(
     *,
     rebuild: bool = True,
     mark_coverage: bool = True,
+    file_authority: bool = True,
 ) -> dict[str, Any]:
     """Read a statement file and apply everything it may safely write.
 
@@ -802,7 +804,20 @@ def import_questrade_statement(
 
         written_executions = store.upsert_executions(executions) if executions else 0
         written_cash = store.upsert_cash_transactions(cash) if cash else 0
-        if rebuild and written_executions:
+
+        # Trader decision 2026-08-28: the broker's own file outranks the live
+        # sync on MONEY, and the sync keeps the day when the two agree so its
+        # trade times survive. A day the sync never reached was already written
+        # above; this only revisits the days both cover.
+        authority = apply_file_authority(
+            store,
+            broker="QUESTRADE",
+            file_executions=parse.executions,
+            sources=RICHER_SOURCES,
+            label=Path(path).name,
+            dry_run=not file_authority,
+        )
+        if rebuild and (written_executions or authority.get("days_taken_over")):
             store.rebuild_trades()
 
         written_days = sorted(
@@ -838,6 +853,7 @@ def import_questrade_statement(
             "cash_written": int(written_cash),
             "days_written": len(written_days),
             "days_skipped_richer_source": len(skipped_days),
+            "authority": authority,
             "skipped_days": [(account, day.isoformat()) for account, day in skipped_days],
             "unreadable_rows": len(parse.skipped),
             "accounts": sorted(account_numbers),
@@ -895,6 +911,19 @@ def reconcile_statement(store: Any, path: Path) -> dict[str, Any]:
     Nothing here writes. It reads the file and the store and returns numbers.
     """
     parse = parse_statement(read_statement_table(Path(path)))
+
+    # What WOULD move if this file were imported now, measured without writing.
+    # The trader asked to be able to demonstrate their P&L before trusting it,
+    # and "which days would the file take over from the live sync" is part of
+    # that answer.
+    authority = apply_file_authority(
+        store,
+        broker="QUESTRADE",
+        file_executions=parse.executions,
+        sources=RICHER_SOURCES,
+        label=Path(path).name,
+        dry_run=True,
+    )
 
     statement_pnl: dict[tuple[str, str], float] = defaultdict(float)
     statement_commission: dict[tuple[str, str], float] = defaultdict(float)
@@ -1035,6 +1064,7 @@ def reconcile_statement(store: Any, path: Path) -> dict[str, Any]:
         "by_account": by_account,
         "symbols": symbols,
         "tolerance": ROUNDING_TOLERANCE,
+        "authority": authority,
     }
 
 
@@ -1089,6 +1119,9 @@ def describe_reconciliation(report: Mapping[str, Any]) -> str:
             f"description, which marked {report.get('short_marked_rows', 0)} row(s) as "
             "a short sale or a cover."
         )
+    authority = report.get("authority") or {}
+    if authority.get("days_compared"):
+        lines.append(describe_authority(authority))
     mixed = report.get("mixed_direction_days") or []
     if mixed:
         worst = ", ".join(f"{row['symbol']} {row['date']}" for row in mixed[:5])
@@ -1109,7 +1142,12 @@ def describe_summary(summary: Mapping[str, Any]) -> str:
     ]
     skipped = int(summary.get("days_skipped_richer_source") or 0)
     if skipped:
-        parts.append(f"{skipped} day(s) left to the API")
+        parts.append(f"{skipped} day(s) already covered by the live sync")
+    authority = summary.get("authority") or {}
+    if authority.get("days_taken_over"):
+        parts.append(f"{authority['days_taken_over']} day(s) taken over on a money difference")
+    elif authority.get("days_compared"):
+        parts.append(f"{authority['days_compared']} shared day(s) agree")
     unreadable = int(summary.get("unreadable_rows") or 0)
     if unreadable:
         parts.append(f"{unreadable} row(s) unreadable")

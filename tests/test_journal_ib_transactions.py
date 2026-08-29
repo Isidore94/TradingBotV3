@@ -276,24 +276,32 @@ def test_re_importing_the_same_file_adds_nothing(ib_file, store):
         assert conn.execute("SELECT COUNT(*) FROM cash_transactions").fetchone()[0] == 2
 
 
-def test_a_file_never_writes_into_a_day_flex_already_covers(ib_file, store):
+def _flex_execution(uid, side, quantity, price, commission, *, day="2026-03-02", symbol="ZZZ"):
+    """A Flex row: a real execution id and a real TIME."""
+    return {
+        "execution_uid": f"IBKR:U9992524:{uid}", "broker": "IBKR",
+        "account_number": "U9992524", "account_label": "", "account_type": "",
+        "symbol": symbol, "security_type": "STK", "currency": "USD", "side": side,
+        "quantity": quantity, "price": price, "timestamp": f"{day}T09:45:00-05:00",
+        "trade_date": day, "commission": commission, "fees": 0.0,
+        "gross_amount": None, "net_amount": None, "order_id": "",
+        "exchange_exec_id": "", "raw_json": "{}", "source": "IBKR_FLEX",
+    }
+
+
+def test_a_day_flex_agrees_on_stays_with_flex(ib_file, store):
+    """Flex knows WHEN each fill happened; the file does not. Agreement keeps it."""
     store.upsert_executions(
         [
-            {
-                "execution_uid": "IBKR:U9992524:flex-1", "broker": "IBKR",
-                "account_number": "U9992524", "account_label": "", "account_type": "",
-                "symbol": "ZZZ", "security_type": "STK", "currency": "USD", "side": "BUY",
-                "quantity": 10.0, "price": 100.0, "timestamp": "2026-03-02T09:45:00-05:00",
-                "trade_date": "2026-03-02", "commission": 1.0, "fees": 0.0,
-                "gross_amount": None, "net_amount": None, "order_id": "",
-                "exchange_exec_id": "", "raw_json": "{}", "source": "IBKR_FLEX",
-            }
+            _flex_execution("flex-1", "BUY", 10.0, 100.0, 1.0),
+            _flex_execution("flex-2", "SELL", 10.0, 110.0, 1.0),
         ]
     )
 
     summary = ib.import_ib_transaction_file(store, ib_file)
 
-    assert summary["days_skipped_richer_source"] == 1
+    assert summary["authority"]["days_taken_over"] == 0
+    assert summary["authority"]["days_in_agreement"] == 1
     with store.connection() as conn:
         sources = {
             row[0]
@@ -302,6 +310,20 @@ def test_a_file_never_writes_into_a_day_flex_already_covers(ib_file, store):
             ).fetchall()
         }
     assert sources == {"IBKR_FLEX"}
+
+
+def test_a_day_whose_money_disagrees_is_taken_over_by_the_file(ib_file, store):
+    """Flex saw only the opening fill, so its day's cash is wrong."""
+    store.upsert_executions([_flex_execution("flex-1", "BUY", 10.0, 100.0, 1.0)])
+
+    summary = ib.import_ib_transaction_file(store, ib_file)
+
+    assert summary["authority"]["days_taken_over"] == 1
+    voids = [row for row in store.list_adjustments(limit=50) if row["action"] == "VOID_EXECUTION"]
+    assert len(voids) == 1
+    trade = [t for t in store.list_trades() if t["symbol"] == "ZZZ"][0]
+    assert trade["status"] == "CLOSED"
+    assert trade["net_pnl"] == pytest.approx(98.0)
 
 
 def test_the_import_run_records_what_it_did(ib_file, store):

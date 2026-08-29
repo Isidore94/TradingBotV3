@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | `claude/last-commit-main-dpouod` (journal auto-tagging + statement import, cut from `main`) |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **R7 journal auto-tagging + statement import (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5385 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
+| Last verified baseline | `pytest tests/ -q` **5402 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
 | Frozen exe | **rebuilt 2026-08-28 at `fff07b8`** — frozen selftest 72/72, exit 0. The desk still runs from source by trader decision |
 | Desk restart | **required** — the warehouse packet is not on the running desk until then |
 
@@ -48,6 +48,7 @@ the dated entry named beside it.
 | 14 | **Statement import** — the trader imports their own Questrade YTD file on the desk, against the live journal | R7 statement import (2026-08-28 statement entry) |
 | 15 | **Statement layering + self-check** — the trader imports both real files on the desk and runs "Check a statement..." against the live journal | R7 statement layering (2026-08-28 layering entry) |
 | 16 | **IBKR file import** — the trader imports their IBKR transaction file on the desk; the second account's mask resolves once Flex has named it | R7 IBKR file (2026-08-28 IBKR entry) |
+| 17 | **File authority** — one desk import where a shared day agrees (sync keeps its times) and, if one ever disagrees, the file takes it | R7 file authority (2026-08-28 authority entry) |
 
 ### Immediate next action
 
@@ -58,6 +59,42 @@ desk and run the self-check (gates 14-15). Two of his asks are scoped and
 NOT built, and one needs his answer first: statements as the source of truth over
 the API (it would cost the only intraday timestamps the journal has), and the
 IBKR transaction-file importer (masked account numbers are the open problem).
+
+---
+
+## 2026-08-28 - The file wins on money, the sync keeps the clock
+
+**Trader decision**, taken after the cost of the blunt reading was measured and
+put to them: *"these should be sources of truth moreso than the auto input
+IMO"* -> **money only**. Neither broker's file carries a time of day, so a
+blanket override would have thrown away every intraday timestamp the journal
+has, and with it every session bucket and entry-time tag.
+
+**The rule.** The sync KEEPS a day the two agree on (it alone knows when each
+fill happened); the file TAKES a day they do not (it is the broker's own
+statement of the money). Agreement is measured in **cash per (account, day)** -
+a trade can span days so a day's P&L is undefined, while its cash impact is -
+and that cash is COMPUTED, never read off a Gross/Net column, because Questrade
+reports in the trade's currency and IBKR in the base currency. Tolerance is per
+FILL, since Questrade rounds each row to the cent.
+
+**Append-only.** I3 forbids deleting a broker row, so the sync's rows are
+retired with `VOID_EXECUTION` adjustments naming the day and both cash figures.
+They stay on disk; a superseding record undoes it. A day the file does not
+mention is a gap, not a disagreement, and is never touched.
+
+**Proven end to end** against the trader's real 2025-26 Questrade export with a
+simulated August sync, one day deliberately given only half its fills: **18
+shared days, 17 agreed and kept their real 09:45 timestamps, the crippled day
+taken over on a $3,116.49 difference** (3 voided, 5 written). 15 August trades
+still carry a real entry time afterwards. "Check a statement..." runs the same
+comparison as a DRY RUN, so the trader sees which days would move first.
+
+**Verification:** 5402 passed / 72 subtests / 6 skipped (5385 -> 5402). Smoke
+7/7, selftest 72/72, spec drift 17, ruff clean. Same two pre-existing
+font-metric failures. No packaging trigger.
+
+**Owed:** gate 17.
 
 ---
 
@@ -126,16 +163,9 @@ font-metric failures. No packaging trigger.
 
 ### Two trader asks scoped but NOT built (2026-08-28)
 
-1. **Statements as the source of truth over the API.** The trader's stated
-   preference: *"these should be sources of truth moreso than the auto input
-   IMO."* Today the opposite holds - a statement refuses any day a richer source
-   covers. The cost of reversing it is real and must be put to him first:
-   **neither statement file carries a time of day**, so letting a statement take
-   over an API day discards the only intraday timestamps the journal has, which
-   is what every session-bucket tag and every time-of-day question depends on.
-   The sanctioned mechanism if he confirms is append-only `VOID_EXECUTION`
-   adjustments against the API rows (invariant I3 forbids deleting a broker
-   row), not a delete.
+1. ~~**Statements as the source of truth over the API.**~~ **DECIDED AND BUILT
+   2026-08-28** - money only, the sync keeps the clock. See the authority entry
+   above; gate 17 is its live proof.
 2. ~~**IBKR transaction-file import.**~~ **BUILT 2026-08-28** - see the IBKR
    entry above. Gate 16 is its live proof.
 

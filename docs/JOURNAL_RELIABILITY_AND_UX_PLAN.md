@@ -722,6 +722,8 @@ assembled trades, per symbol, excluding open positions. It writes nothing.
 Measured: −$0.2386 on $5,298.81 over 428 closed symbols, commission exact. It
 does not validate the parse; only the trader's Questrade year-end numbers can.
 
-**Still open:** the trader's stated preference (2026-08-28) that statement files
-be treated as MORE authoritative than the API feed, and an IBKR transaction-file
-importer. Both are scoped but unbuilt — see `CURRENT_CHECKPOINT.md`.
+**Both follow-ups are now built (2026-08-28).** The IBKR transaction-file
+importer is `scripts/journal_ib_transactions.py`; the trader's preference that
+files outrank the live sync was resolved to **money only** and is
+`scripts/journal_file_authority.py` — the sync keeps a day the two agree on so
+its trade times survive, the file takes a day they do not, append-only.

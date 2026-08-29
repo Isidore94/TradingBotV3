@@ -188,6 +188,11 @@ which is evidence and must not be loaded as context.
   Journal (Trades, Calendar, Analytics, Health, Fees) over one shared
   tax-grouped header.
 
+- **File authority over the live sync (2026-08-28).** `scripts/journal_file_authority.py`
+  compares a broker file against the sync per `(account, day)` on computed signed
+  cash. The sync keeps a day they agree on, so its trade times survive; the file
+  takes a day they do not, retiring the sync's rows with append-only
+  `VOID_EXECUTION` adjustments. Runs as a dry run behind "Check a statement...".
 - **IBKR transaction-file import (2026-08-28).** `scripts/journal_ib_transactions.py`
   reads IBKR's sectioned csv: per-section headers, costs converted from the base
   currency by the rate each row implies, masked account numbers unmasked only
@@ -326,6 +331,40 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-28 — The file wins on money, the sync keeps the clock
+
+`IMPLEMENTED`, `GREEN`, **live gate owed**. Trader decision, taken after the cost
+of the blunt version was measured: *"these should be sources of truth moreso than
+the auto input IMO"* → **money only**.
+
+Neither broker's downloadable file carries a time of day. Letting a file take over
+every day it covers would have discarded the only intraday timestamps the journal
+has — every session bucket and every entry-time tag built on them. So the rule is
+split by what each source is actually good for: the **sync keeps** a day the two
+agree on, the **file takes** a day they do not.
+
+Agreement is measured in **cash, per (account, day)** — a trade can span days, so
+a day's P&L is not even defined, while its cash impact is. That cash is COMPUTED
+(`sign × qty × price × multiplier − commission − fees`) rather than read off the
+file's Gross/Net column, because Questrade reports those in the trade's currency
+and IBKR in the base currency, so the columns are not comparable to each other.
+Tolerance is **per fill**, not flat: Questrade rounds each row to the cent, so a
+busy day drifts more than a quiet one.
+
+Taking a day over is **append-only** — I3 forbids deleting a broker row, so the
+sync's executions are retired with `VOID_EXECUTION` adjustments naming the day,
+both cash figures and the difference. They stay on disk and a superseding record
+undoes it. A day the file does not mention is a gap, not a disagreement, and is
+never touched.
+
+Proven against the trader's real 2025–26 export with a simulated August sync, one
+day deliberately given half its fills: **18 shared days, 17 agreed and kept their
+real timestamps, the crippled day taken over on a $3,116.49 difference** (3 voided,
+5 written), 15 August trades still carrying a real entry time.
+
+Verification: **5402 passed / 72 subtests / 6 skipped**, 5385 → 5402. Smoke 7/7,
+selftest 72/72, spec drift 17, ruff clean.
 
 ### 2026-08-28 — IBKR's file, and the commission sign that was costing money
 

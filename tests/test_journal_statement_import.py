@@ -124,6 +124,33 @@ def store(tmp_path):
     return JournalStore(tmp_path / "trade_journal.sqlite3")
 
 
+def _api_execution(uid, side, quantity, price, commission, *, day="2026-03-02", symbol="AAPL"):
+    """A live-sync row: a real execution id and, crucially, a real TIME."""
+    return {
+        "execution_uid": f"QUESTRADE:11111111:{uid}",
+        "broker": "QUESTRADE",
+        "account_number": "11111111",
+        "account_label": "Individual margin",
+        "account_type": "Individual margin",
+        "symbol": symbol,
+        "security_type": "STK",
+        "currency": "USD",
+        "side": side,
+        "quantity": quantity,
+        "price": price,
+        "timestamp": f"{day}T09:45:00-05:00",
+        "trade_date": day,
+        "commission": commission,
+        "fees": 0.0,
+        "gross_amount": None,
+        "net_amount": None,
+        "order_id": "",
+        "exchange_exec_id": "",
+        "raw_json": "{}",
+        "source": "QT_API",
+    }
+
+
 # -- reading the file --------------------------------------------------------
 
 
@@ -288,55 +315,81 @@ def test_cash_rows_are_imported_beside_the_trades(tmp_path, store):
 # -- the rule that prevents double counting ----------------------------------
 
 
-def test_a_statement_never_writes_into_a_day_the_api_already_covers(tmp_path, store):
-    """The two sources give the same fill different uids.
+def test_a_day_both_sources_agree_on_stays_with_the_live_sync(tmp_path, store):
+    """Trader decision 2026-08-28: the file wins on MONEY, not on everything.
 
-    Nothing in the execution upsert can see they are duplicates, so importing
-    both would silently double the position. The day is refused instead, and
-    the refusal is counted rather than swallowed.
+    A statement carries no time of day, so taking over a day the API already
+    has would discard the only intraday timestamps the journal owns. When the
+    two agree on the day's cash there is nothing to gain by it, so the API rows
+    stay - times and all.
     """
-    store.upsert_executions(
-        [
-            {
-                "execution_uid": "QUESTRADE:11111111:real-exec-1",
-                "broker": "QUESTRADE",
-                "account_number": "11111111",
-                "account_label": "Individual margin",
-                "account_type": "Individual margin",
-                "symbol": "AAPL",
-                "security_type": "STK",
-                "currency": "USD",
-                "side": "BUY",
-                "quantity": 20.0,
-                "price": 100.0,
-                "timestamp": "2026-03-02T09:45:00-05:00",
-                "trade_date": "2026-03-02",
-                "commission": 0.0,
-                "fees": 0.0,
-                "gross_amount": None,
-                "net_amount": None,
-                "order_id": "",
-                "exchange_exec_id": "",
-                "raw_json": "{}",
-                "source": "QT_API",
-            }
-        ]
-    )
+    for uid, side, quantity, price, commission in (
+        ("api-1", "BUY", 20.0, 100.0, 0.0),
+        ("api-2", "SELL", 20.0, 101.0, 0.05),
+    ):
+        store.upsert_executions([_api_execution(uid, side, quantity, price, commission)])
 
     summary = statement.import_questrade_statement(store, _write_xlsx(tmp_path / "a.xlsx", ROWS))
 
-    assert summary["days_skipped_richer_source"] == 1
-    assert ("11111111", "2026-03-02") in [tuple(item) for item in summary["skipped_days"]]
+    assert summary["authority"]["days_taken_over"] == 0
+    assert summary["authority"]["days_in_agreement"] == 1
     with store.connection() as conn:
-        aapl_sources = {
+        sources = {
             row[0]
             for row in conn.execute(
                 "SELECT DISTINCT source FROM raw_executions WHERE symbol = 'AAPL'"
             ).fetchall()
         }
-    assert aapl_sources == {"QT_API"}
-    # The days the API does not own are still imported.
-    assert summary["executions_written"] == 2
+    assert sources == {"QT_API"}
+    # The API's real timestamp survived, so the trade still has a session.
+    trade = [t for t in store.list_trades() if t["symbol"] == "AAPL"][0]
+    assert trade["opened_at"].endswith("09:45:00-05:00")
+
+
+def test_a_day_whose_money_disagrees_is_taken_over_by_the_file(tmp_path, store):
+    """The other half of the rule: the broker's own file is the money.
+
+    Here the API only ever saw the opening fill, so the day's cash is wrong.
+    The file's version replaces it and the API rows are VOIDED - append-only
+    (I3), so they stay in raw_executions and the change is undoable.
+    """
+    store.upsert_executions([_api_execution("api-1", "BUY", 20.0, 100.0, 0.0)])
+
+    summary = statement.import_questrade_statement(store, _write_xlsx(tmp_path / "a.xlsx", ROWS))
+
+    authority = summary["authority"]
+    assert authority["days_taken_over"] == 1
+    assert authority["taken"][0]["voided"] == 1
+    assert authority["taken"][0]["written"] == 2
+
+    # Nothing was deleted - the API row is still on disk, and voided.
+    with store.connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM raw_executions WHERE execution_uid = 'QUESTRADE:11111111:api-1'"
+        ).fetchone()[0] == 1
+    voids = [row for row in store.list_adjustments(limit=50) if row["action"] == "VOID_EXECUTION"]
+    assert len(voids) == 1
+    assert "authoritative for money" in voids[0]["reason"]
+
+    # And the assembled trade is now the file's: a complete round trip.
+    trade = [t for t in store.list_trades() if t["symbol"] == "AAPL"][0]
+    assert trade["status"] == "CLOSED"
+    assert trade["net_pnl"] == pytest.approx(19.95)
+
+
+def test_the_file_never_touches_a_day_it_does_not_mention(tmp_path, store):
+    """A day the sync has and the file does not is a gap, not a disagreement.
+
+    Taking it over would delete real fills for no reason.
+    """
+    store.upsert_executions(
+        [_api_execution("api-9", "BUY", 5.0, 50.0, 0.0, day="2026-05-20", symbol="MSFT")]
+    )
+
+    summary = statement.import_questrade_statement(store, _write_xlsx(tmp_path / "a.xlsx", ROWS))
+
+    assert summary["authority"]["days_compared"] == 0
+    assert store.list_adjustments(limit=50) == []
 
 
 def test_a_statement_ranks_below_the_api_if_the_two_ever_share_a_uid():

@@ -62,6 +62,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from journal_file_authority import apply_file_authority
 from journal_identity import canonical_option_symbol, normalize_security_type, stable_execution_uid
 from journal_importers import NormalizedExecution, _cash_txn_uid, classify_activity_type
 from journal_statement_import import (
@@ -538,7 +539,9 @@ def read_ib_file(path: Path, *, known_accounts: Iterable[str] = ()) -> IBParse:
 # -- applying it to the store ------------------------------------------------
 
 
-def import_ib_transaction_file(store: Any, path: Path, *, rebuild: bool = True) -> dict[str, Any]:
+def import_ib_transaction_file(
+    store: Any, path: Path, *, rebuild: bool = True, file_authority: bool = True
+) -> dict[str, Any]:
     """Read an IBKR transaction file and write what it may safely write.
 
     Same day-level rule as the Questrade importer: a file never writes into a
@@ -584,7 +587,19 @@ def import_ib_transaction_file(store: Any, path: Path, *, rebuild: bool = True) 
 
         written_executions = store.upsert_executions(executions) if executions else 0
         written_cash = store.upsert_cash_transactions(cash) if cash else 0
-        if rebuild and written_executions:
+
+        # Same rule as the Questrade importer: the file outranks Flex and the
+        # socket on money, and they keep the day when the two agree so their
+        # trade times survive.
+        authority = apply_file_authority(
+            store,
+            broker="IBKR",
+            file_executions=parse.executions,
+            sources=RICHER_SOURCES,
+            label=Path(path).name,
+            dry_run=not file_authority,
+        )
+        if rebuild and (written_executions or authority.get("days_taken_over")):
             store.rebuild_trades()
 
         written_days = sorted(
@@ -620,6 +635,7 @@ def import_ib_transaction_file(store: Any, path: Path, *, rebuild: bool = True) 
             "cash_written": int(written_cash),
             "days_written": len(written_days),
             "days_skipped_richer_source": len(skipped_days),
+            "authority": authority,
             "skipped_days": [(account, day.isoformat()) for account, day in skipped_days],
             "unreadable_rows": len(parse.skipped),
             "unresolved_accounts": parse.unresolved_accounts,
@@ -672,7 +688,12 @@ def describe_ib_summary(summary: Mapping[str, Any]) -> str:
         f"{summary.get('days_written', 0)} days",
     ]
     if summary.get("days_skipped_richer_source"):
-        parts.append(f"{summary['days_skipped_richer_source']} day(s) left to Flex")
+        parts.append(f"{summary['days_skipped_richer_source']} day(s) already covered by Flex")
+    authority = summary.get("authority") or {}
+    if authority.get("days_taken_over"):
+        parts.append(f"{authority['days_taken_over']} day(s) taken over on a money difference")
+    elif authority.get("days_compared"):
+        parts.append(f"{authority['days_compared']} shared day(s) agree")
     if summary.get("unreadable_rows"):
         parts.append(f"{summary['unreadable_rows']} row(s) unreadable")
     unresolved = summary.get("unresolved_accounts") or []

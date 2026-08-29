@@ -614,7 +614,7 @@ def test_health_routes_a_statement_file_to_the_importer(panel, monkeypatch, qapp
 
     assert seen == [str(target)]
     assert any("884 executions" in text for text in statuses)
-    assert any("3 day(s) left to the API" in text for text in statuses)
+    assert any("3 day(s) already covered by the live sync" in text for text in statuses)
     assert panel.health_tab.statement_button.isEnabled()
 
 
