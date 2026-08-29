@@ -460,9 +460,20 @@ class UniverseWriteFloorTests(unittest.TestCase):
         self.assertEqual(JobLedger(self.ledger_file).jobs_for_date(""), [])
 
     def test_a_ledger_outage_never_blocks_the_rebuild(self):
-        """The audit row is best effort; it can never cost the desk its universe."""
+        """The audit row is best effort; it can never cost the desk its universe.
+
+        The outage is simulated by making the WRITE raise, not by naming a path
+        that happens to be unwritable. ``Q:/nope/...`` was a Windows drive that
+        does not exist - and on macOS or Linux ``Q:`` is a perfectly legal
+        directory name, so the ledger wrote successfully into the repository
+        root and this test passed without ever exercising an outage.
+        """
         self._seed_previous(1487)
-        with patch.object(ub, "_universe_ledger_path", lambda: Path("Q:/nope/job_ledger.jsonl")):
+
+        def _refuse(*args, **kwargs):
+            raise OSError("ledger unavailable")
+
+        with patch.object(ub, "_universe_ledger_path", _refuse):
             result = self._build(1450)
         self.assertEqual(len(result["all"]), 1450)
 
