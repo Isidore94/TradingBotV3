@@ -285,8 +285,16 @@ class HealthPanel(QFrame):
         #: panel that is going away.
         self._closing = False
         self._audit_ready.connect(self.set_payload)
+        #: The 15 s cadence is for a trader LOOKING at this page. Hidden, the
+        #: page still audits - the shell's status chip reads statusChanged and
+        #: must keep updating - but at 120 s: on 2026-08-31 the audit re-parsed
+        #: a 269 MB outcome CSV and re-streamed both shadow logs every 15 s
+        #: with the page closed. The timer never stops; only its interval
+        #: moves, and never below the caller's own interval.
+        self._visible_interval_ms = max(5_000, int(refresh_interval_ms))
+        self._hidden_interval_ms = max(120_000, self._visible_interval_ms)
         self._timer = QTimer(self)
-        self._timer.setInterval(max(5_000, int(refresh_interval_ms)))
+        self._timer.setInterval(self._hidden_interval_ms)
         self._timer.timeout.connect(self.refresh)
         start_staggered(self._timer, 81_000)
         QTimer.singleShot(0, self.refresh)
@@ -343,6 +351,20 @@ class HealthPanel(QFrame):
             # The panel's C++ half was deleted while the audit ran (app
             # shutdown). Nothing to update, nothing to leak.
             pass
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        if self._timer.interval() != self._visible_interval_ms:
+            self._timer.setInterval(self._visible_interval_ms)
+            # Coming back to the page must not wait out a hidden-cadence tick
+            # that may be minutes away. refresh() is single-flight, so this
+            # never stacks audits.
+            self.refresh()
+
+    def hideEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().hideEvent(event)
+        if self._timer.interval() != self._hidden_interval_ms:
+            self._timer.setInterval(self._hidden_interval_ms)
 
     def wait_for_audit(self, timeout: float = 10.0) -> None:
         """Test/shutdown helper: join the in-flight audit thread, if any."""

@@ -44,7 +44,9 @@ depends on it.
 
 from __future__ import annotations
 
+import copy
 import json
+import threading
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -289,6 +291,21 @@ def _latest_summary(row: dict, line_number: int) -> dict[str, Any]:
     return summary
 
 
+#: (profile, path) -> ((st_mtime_ns, st_size, local_tz, market_date,
+#: reconcile_session_date), scan result). The logs are append-only, so a stamp
+#: that has not moved cannot describe different rows; both stamps are needed
+#: because an append inside one filesystem timestamp tick still moves the byte
+#: count (same template as review_events.load_review_events, and the same
+#: (st_mtime_ns, st_size) key shadow_session_rollup._cached_scan already uses
+#: for the archived sessions). ``now`` is deliberately NOT part of the key:
+#: its only reach into the scan is the future-timestamp tolerance, so a
+#: future-stamped row in an unchanged file stays counted until the file next
+#: moves - a clock defect frozen for a few minutes, in exchange for not
+#: re-streaming a multi-megabyte log every 15 s Health pass.
+_scan_cache: dict[tuple[str, str], tuple[tuple, dict[str, Any]]] = {}
+_scan_cache_lock = threading.Lock()
+
+
 def scan_shadow_log(
     path: Path | str,
     profile: ShadowLogProfile,
@@ -303,6 +320,10 @@ def scan_shadow_log(
     Never raises on a damaged file: unreadable bytes, undecodable text and
     unparseable JSON are all *results*, because "the audit crashed" is the one
     outcome that would put the operator back where they started.
+
+    Streamed at most once per change to the log: an unchanged
+    (st_mtime_ns, st_size) stamp returns the cached scan byte-identically
+    (see ``_scan_cache``).
     """
     path = Path(path)
     result: dict[str, Any] = {
@@ -365,14 +386,30 @@ def scan_shadow_log(
     if not path.exists():
         return result
     result["exists"] = True
+    slot = (profile.name, str(path))
+    cache_key: tuple | None = None
     try:
         stat = path.stat()
         result["bytes"] = int(stat.st_size)
         result["modified_at"] = datetime.fromtimestamp(
             stat.st_mtime, tz=local_tz
         ).isoformat(timespec="seconds")
+        cache_key = (
+            stat.st_mtime_ns,
+            stat.st_size,
+            str(local_tz),
+            market_date,
+            reconcile_session_date,
+        )
     except OSError as exc:
         result["read_error"] = f"{type(exc).__name__}: {exc}"
+    if cache_key is not None:
+        with _scan_cache_lock:
+            cached = _scan_cache.get(slot)
+        if cached is not None and cached[0] == cache_key:
+            # Copied out: audit_shadow_log embeds the scan in its payload and
+            # consumers annotate what they are handed.
+            return copy.deepcopy(cached[1])
 
     schemas: Counter[str] = Counter()
     unknown: Counter[str] = Counter()
@@ -570,6 +607,13 @@ def scan_shadow_log(
     result["session_date_count"] = len(sessions)
     result["first_timestamp"] = first_ts.isoformat(timespec="seconds") if first_ts else ""
     result["last_timestamp"] = last_ts.isoformat(timespec="seconds") if last_ts else ""
+    # A scan that hit a read error partway through is transient evidence and is
+    # never cached - the next pass must re-measure it.
+    if cache_key is not None and result["readable"] is True and not result["read_error"]:
+        with _scan_cache_lock:
+            if len(_scan_cache) > 32:
+                _scan_cache.clear()
+            _scan_cache[slot] = (cache_key, copy.deepcopy(result))
     return result
 
 

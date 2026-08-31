@@ -47,6 +47,7 @@ evidence floors cannot be claimed over a damaged log.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import logging
@@ -54,6 +55,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -445,6 +447,17 @@ def _market_calendar_check(today: datetime) -> dict[str, Any]:
     )
 
 
+#: (path, st_mtime_ns, st_size) -> the finished check dict. The outcome store
+#: is append-only, so a stamp that has not moved cannot describe different
+#: rows; both stamps are needed because an append inside one filesystem
+#: timestamp tick still moves the byte count (same template as
+#: review_events.load_review_events). On 2026-08-31 this check re-parsed a
+#: 269 MB, 294k-row CSV on every 15 s audit pass - 2.29 s each - for a file
+#: that changes a handful of times a day.
+_outcome_claim_cache: tuple[tuple[str, int, int], dict[str, Any]] | None = None
+_outcome_claim_cache_lock = threading.Lock()
+
+
 def _outcome_claim_coverage_check(outcomes_path: Path) -> dict[str, Any]:
     """How much of the outcome store is measured as a trade WITHOUT claiming to be?
 
@@ -459,7 +472,13 @@ def _outcome_claim_coverage_check(outcomes_path: Path) -> dict[str, Any]:
     broken - a statistic is simply not entitled to include them until someone
     declares what they claim. The families are NAMED, because a count is not a
     to-do list.
+
+    Parsed at most once per change to the store: the result is a pure function
+    of the CSV's rows, so an unchanged (mtime_ns, size) stamp returns the
+    cached check byte-identically. Error results are never cached - a
+    transient read failure must not outlive its cause.
     """
+    global _outcome_claim_cache
     path = Path(outcomes_path)
     if not path.exists():
         return _check(
@@ -470,6 +489,17 @@ def _outcome_claim_coverage_check(outcomes_path: Path) -> dict[str, Any]:
             "claim is unmeasured - which is not the same as nothing to declare.",
             source=path,
         )
+    stamp: tuple[str, int, int] | None
+    try:
+        stat = path.stat()
+        stamp = (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        stamp = None
+    if stamp is not None:
+        with _outcome_claim_cache_lock:
+            cached = _outcome_claim_cache
+        if cached is not None and cached[0] == stamp:
+            return copy.deepcopy(cached[1])
     try:
         import csv as _csv
 
@@ -490,7 +520,7 @@ def _outcome_claim_coverage_check(outcomes_path: Path) -> dict[str, Any]:
         )
     coverage = outcome_semantics.coverage(families)
     status = STATUS_DEGRADED if coverage["unconfigured_families"] else STATUS_HEALTHY
-    return _check(
+    result = _check(
         "outcome_claim_kinds",
         "Outcome claim semantics",
         status,
@@ -498,6 +528,10 @@ def _outcome_claim_coverage_check(outcomes_path: Path) -> dict[str, Any]:
         source=path,
         details=coverage,
     )
+    if stamp is not None:
+        with _outcome_claim_cache_lock:
+            _outcome_claim_cache = (stamp, copy.deepcopy(result))
+    return result
 
 
 def _questrade_chain_check(now: datetime, db_path: Path) -> dict[str, Any]:

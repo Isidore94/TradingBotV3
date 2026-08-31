@@ -228,6 +228,30 @@ def test_a_status_the_panel_does_not_recognize_renders_as_unknown():
     panel.shutdown()
 
 
+def test_hidden_page_audits_slowly_and_visible_page_audits_fast(monkeypatch):
+    """Desk snappiness packet 1 item 1b: the 15 s cadence is for a trader
+    LOOKING at the page. Hidden, the audit keeps running - the shell's status
+    chip must keep updating - but at 120 s. The timer itself never stops."""
+    import ui.panels.health_panel as hp
+
+    monkeypatch.setattr(hp, "build_operations_audit", lambda: _payload())
+    panel = hp.HealthPanel(refresh_interval_ms=15_000)
+    try:
+        # Construction is hidden: the shell decides when the page shows.
+        assert panel._timer.interval() == 120_000
+        panel.show()
+        _app.processEvents()
+        assert panel._timer.interval() == 15_000
+        panel.hide()
+        _app.processEvents()
+        assert panel._timer.interval() == 120_000
+        panel.wait_for_audit()
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+        _app.processEvents()
+
+
 def test_refresh_never_blocks_the_gui_thread_even_when_the_audit_is_slow(monkeypatch):
     """The live regression: build_operations_audit streams multi-MB shadow logs
     (~0.4s measured on the real machine, worse mid-scan) and ran synchronously
@@ -259,5 +283,12 @@ def test_refresh_never_blocks_the_gui_thread_even_when_the_audit_is_slow(monkeyp
         _app.processEvents()
         assert panel.overall_tile.value_label.text() == "DEGRADED"
     finally:
+        # shutdown, not just deleteLater: the construction-time
+        # singleShot(0, refresh) fires during processEvents here and, without
+        # _closing set, starts one more 0.5 s slow-audit thread that outlives
+        # this test - which is exactly what
+        # test_shutdown_joins_the_audit_thread's process-wide sweep then
+        # catches in any file order where it runs next.
+        panel.shutdown()
         panel.deleteLater()
         _app.processEvents()
