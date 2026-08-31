@@ -55,6 +55,40 @@ PUSH_D1_EVENTS_SETTING = "push_away_d1_events"
 _MAX_PENDING_D1_EVENTS = 200
 
 
+#: path -> ((st_mtime_ns, st_size), parsed value) for status_snapshot's
+#: file-backed pieces. status_snapshot ran on the GUI thread from a 5 s panel
+#: timer plus twice per 30 s tick, re-reading 2 watchlists, 2 auto-watchlists
+#: and 2 state JSONs every call - most of the 10 minutes the 2026-08-31 stall
+#: log charged to watchlist_utils.py:33 and 3.9 minutes to
+#: project_paths.py:165. An unchanged stamp returns the same parsed value;
+#: both stamps are needed because an append inside one filesystem timestamp
+#: tick still moves the byte count (the review_events template). Caching only:
+#: the snapshot's content is unchanged for unchanged files.
+_status_file_memo: dict[str, tuple[tuple[int, int], Any]] = {}
+
+
+def _memoized_file_read(path: Path, reader):
+    """``reader(path)``, memoized on the file's ``(st_mtime_ns, st_size)``.
+
+    An unstatable (missing) file is read through uncached - both readers here
+    return a cheap default for it, and a stamp that does not exist cannot be
+    a cache key.
+    """
+    path = Path(path)
+    try:
+        stat = path.stat()
+        key = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return reader(path)
+    slot = str(path)
+    cached = _status_file_memo.get(slot)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    value = reader(path)
+    _status_file_memo[slot] = (key, value)
+    return value
+
+
 def _enter_background_thread_mode() -> None:
     """Drop the CALLING thread to Windows background mode (CPU and I/O).
 
@@ -423,12 +457,17 @@ class AutopilotService(QObject):
 
     @staticmethod
     def _industry_line() -> str:
-        def read_payload(path: Path) -> dict:
+        def parse(path: Path) -> dict:
             try:
                 value = json.loads(Path(path).read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 return {}
             return value if isinstance(value, dict) else {}
+
+        def read_payload(path: Path) -> dict:
+            payload = _memoized_file_read(Path(path), parse)
+            # Copied out of the memo before it is handed to the formatter.
+            return dict(payload) if isinstance(payload, dict) else {}
 
         return core.format_industry_snapshot_line(
             read_payload(INDUSTRY_BOARD_STATE_FILE),
@@ -492,12 +531,15 @@ class AutopilotService(QObject):
             self._maybe_hourly_away_report(now)
             self._maybe_push_d1_events(now)
             self._maybe_push_spy_alarm(now)
+            # One snapshot per tick: it reads files, and the heartbeat and the
+            # emit want the same moment anyway.
+            snapshot = self.status_snapshot()
             core.write_heartbeat(
                 current_job=self._active_scan_slot or active_scan_label(),
-                next_job=str(self.status_snapshot().get("next_slot") or ""),
+                next_job=str(snapshot.get("next_slot") or ""),
                 last_success=self._last_report_write.isoformat(timespec="seconds") if self._last_report_write else "",
             )
-            self.statusChanged.emit(self.status_snapshot())
+            self.statusChanged.emit(snapshot)
         except Exception:
             logging.exception("Auto Pilot tick failed")
 
@@ -1896,18 +1938,19 @@ class AutopilotService(QObject):
 
     @staticmethod
     def _read_auto_watchlist(path) -> list[str]:
+        # Copied out of the memo: callers hand these lists on.
         try:
-            return list(read_watchlist_symbols(Path(path)))
+            return list(_memoized_file_read(Path(path), read_watchlist_symbols))
         except Exception:
             return []
 
     def _read_watchlists(self) -> tuple[list[str], list[str]]:
         try:
-            longs = list(read_watchlist_symbols(Path(LONGS_FILE)))
+            longs = list(_memoized_file_read(Path(LONGS_FILE), read_watchlist_symbols))
         except Exception:
             longs = []
         try:
-            shorts = list(read_watchlist_symbols(Path(SHORTS_FILE)))
+            shorts = list(_memoized_file_read(Path(SHORTS_FILE), read_watchlist_symbols))
         except Exception:
             shorts = []
         return longs, shorts

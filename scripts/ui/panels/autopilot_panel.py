@@ -26,6 +26,10 @@ class AutopilotPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("Panel")
         self.service = AutopilotService(bounce_service, parent=self)
+        #: widget id -> (text, style) last applied. A setStyleSheet is a Qt
+        #: style recalculation, and five of them ran unconditionally on every
+        #: 5 s refresh whether or not anything had changed.
+        self._status_signatures: dict[int, tuple[str, str]] = {}
 
         title = QLabel("Auto Pilot - Mini PC Mode")
         title.setObjectName("SectionTitle")
@@ -156,14 +160,32 @@ class AutopilotPanel(QFrame):
 
     @Slot()
     def _refresh_status(self) -> None:
+        # Hidden, the 5 s poll does no work - the timer keeps running so the
+        # first visible tick is at most 5 s away (the chart_review_panel
+        # pattern). The service's own 30 s tick still emits statusChanged
+        # into _apply_status, so nothing is lost while the page is closed.
+        if not self.isVisible():
+            return
         self._apply_status(self.service.status_snapshot())
+
+    def _apply_styled(self, widget: QLabel, text: str, style: str) -> None:
+        """setText/setStyleSheet only when the text or tone actually changed."""
+        key = id(widget)
+        previous = self._status_signatures.get(key)
+        if previous == (text, style):
+            return
+        widget.setText(text)
+        if previous is None or previous[1] != style:
+            widget.setStyleSheet(style)
+        self._status_signatures[key] = (text, style)
 
     @Slot(dict)
     def _apply_status(self, snapshot: dict) -> None:
         ib_text = str(snapshot.get("ib_status", "unknown"))
-        self.ib_value.setText(ib_text)
-        self.ib_value.setStyleSheet(
-            "color: #58C777;" if ib_text.startswith("connected") else "color: #E06C75;"
+        self._apply_styled(
+            self.ib_value,
+            ib_text,
+            "color: #58C777;" if ib_text.startswith("connected") else "color: #E06C75;",
         )
         self.regime_value.setText(str(snapshot.get("regime", "unknown")))
         scan_note = " (scan running)" if snapshot.get("scan_running") else ""
@@ -177,16 +199,18 @@ class AutopilotPanel(QFrame):
             f"(auto-build: {built})"
         )
         universe_text = str(snapshot.get("universe_line", "-")).replace("Universe: ", "")
-        self.universe_value.setText(universe_text)
-        self.universe_value.setStyleSheet(
-            "color: #E06C75;" if "stale" in universe_text or "MISSING" in universe_text else ""
+        self._apply_styled(
+            self.universe_value,
+            universe_text,
+            "color: #E06C75;" if "stale" in universe_text or "MISSING" in universe_text else "",
         )
         industry_text = str(snapshot.get("industry_line") or "Industry Board: unavailable")
-        self.industry_value.setText(industry_text)
-        self.industry_value.setStyleSheet(
+        self._apply_styled(
+            self.industry_value,
+            industry_text,
             "color: #E06C75;"
             if "unavailable" in industry_text.lower() or "mismatch" in industry_text.lower()
-            else ""
+            else "",
         )
         if snapshot.get("wrapup_running"):
             self.wrapup_value.setText("running...")
@@ -199,16 +223,17 @@ class AutopilotPanel(QFrame):
         report_verified = str(snapshot.get("report_last_verified") or "")
         if report_error:
             verified_note = f"; last verified {report_verified}" if report_verified else "; no verified write this run"
-            self.report_value.setText(
+            report_text = (
                 f"{report_path}\nFAILED at {report_attempt or 'unknown'}: {report_error}{verified_note}"
             )
-            self.report_value.setStyleSheet("color: #E06C75;")
+            report_style = "color: #E06C75;"
         elif report_verified:
-            self.report_value.setText(f"{report_path}\nverified {report_verified}")
-            self.report_value.setStyleSheet("color: #58C777;")
+            report_text = f"{report_path}\nverified {report_verified}"
+            report_style = "color: #58C777;"
         else:
-            self.report_value.setText(f"{report_path}\nnot verified in this app run")
-            self.report_value.setStyleSheet("color: #E5C07B;")
+            report_text = f"{report_path}\nnot verified in this app run"
+            report_style = "color: #E5C07B;"
+        self._apply_styled(self.report_value, report_text, report_style)
 
     def shutdown(self) -> None:
         self._refresh_timer.stop()
