@@ -67,6 +67,22 @@ which is evidence and must not be loaded as context.
 - Master AVWAP D1 swing scanning with earnings anchors, current/previous AVWAP
   families, running-deviation bands, focus buckets, Expected-R ranking, study tags,
   theta candidates, tracker history, and durable daily-bar storage.
+- **Theta premium rules, 2026-08-31 (Phase 0.11, trader-directed).** Sold-put credit
+  is judged as a PERCENT OF THE STRIKE - recommended at >= 1.0%, cusp at >= 0.5%,
+  with a $0.40/contract absolute floor - and a quote under both floors leaves the
+  report instead of showing as `below_target`. The old bar was literally $0.25
+  ($100 / 4 contracts), which is 0.125% of a $200 strike and 1.25% of a $20 one.
+  Ranking priority is support (major SMAs above the strike, 2+ a large boost, then
+  the covered stack) -> yield per market day -> spread; the strike-ascending sort
+  key that always preferred the cheapest qualifying option is gone, and the spread
+  penalty is monotonic and uncapped but never a block. Credit spreads reach 15
+  market days (sold puts stay at 10). The IB quote budget - unchanged at 240
+  quotes / 360 s - is spent `thetalongs.txt` first, then estimated premium
+  capacity (ATR%-based, no new network call), then `base_score`; nothing is
+  dropped and the support-only fallback still covers the tail. The report and the
+  Qt theta panel carry credit % of strike, yield per week, spread %, credit source
+  and the SMA-above-strike count. PCS tiering stays on credit/width by design -
+  see `plan.md` Phase 0.11 for the arithmetic and the one open trader decision.
 - BounceBot completed-M5 detection with session VWAP/bands, EMA and prior-day
   levels, relative strength/weakness, regime-aware candidate discovery, tiering,
   alerts, outcome tracking, and the day-scoped M5 Focus path.
@@ -518,6 +534,50 @@ after. You get both behaviors without a new rule."*
 
 Verified: `pytest tests/ -q` 5554 passed / 72 subtests; source `--selftest`
 73/73 (the pass vocabulary is its own bundled-asset check).
+
+### 2026-08-31 — Theta: the floor is a percent of the strike, and support ranks first
+
+**Trader-directed, Phase 0.11**, built from `docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`
+on `claude/theta-premium`. The report was handing over ~$0.25 credits with
+untradeable spreads. Four causes, all fixed:
+
+- **The target WAS $0.25.** `THETA_PUT_TARGET_TOTAL_CREDIT` (100) / 100 /
+  `THETA_PUT_MAX_CONTRACTS` (4). Flat dollars: 0.125% of a $200 strike, 1.25% of a
+  $20 one. Now `theta_put_credit_floors(strike)` is the single decider - 1.0% of
+  the strike recommended, 0.5% cusp, $0.40/contract absolute floor underneath - and
+  a quote under both LEAVES the report. Trader: *"on a 200 dollar stock I'd want at
+  least 1 dollar, ideally 2."* The $100/4-contract framing survives as display info.
+- **The final sort preferred the cheapest option.** Its key was
+  `(status, strike ASCENDING, ...)`, so the deepest-OTM qualifying strike won every
+  time. Now: tier -> major SMAs above the strike -> support quality -> yield per
+  market day -> spread. Trader: *"#1 priority is still areas of support."* Premium
+  is a percent per market day, which replaces the flat DTE penalty on this path
+  (PCS keeps it) and stops punishing a longer expiry that pays for the wait.
+- **A wide spread was a soft penalty capped at 18 points**, so past ~150% every
+  market cost the same and a catastrophic spread stopped sinking. The penalty is
+  now monotonic and uncapped - and still never a block, because *"spreads are a
+  spectrum ... within reason"*. An unmeasurable spread is treated as wide, not free.
+- **The quote budget was spent in `base_score` order**, a trend ranking that says
+  nothing about premium, so dead-vol names burned quotes rich ones never got. Now
+  `thetalongs.txt` first (the trader's own list, R9.4), then estimated premium
+  capacity from ATR% - no new network call, never a filter, unmeasurable sorts last
+  rather than out - then `base_score`. IB pacing constants are untouched.
+
+Also: credit spreads reach **15 market days** (*"3 weeks for credit spread"*);
+sold puts stay at 10. The report emits one machine-readable `premium=` line per
+quoted sold put (credit %, yield/week, spread %, source, SMA-above-strike with the
+2+ boost marked), the extractor reads every field back, and the Qt theta table
+gained the four matching columns - blank, never zero, for a row with no quote.
+
+**26 tests**, 14 new plus rewrites, each proven to fail against the un-fixed code;
+four of them are documentation of preserved behaviour and say so. Two existing
+tests were deliberately reversed - their old rule (a sub-floor quote kept as
+`below_target`, the deepest viable strike winning) is exactly what this packet
+removes. Eligibility (>= 3 supports, >= 1 major SMA, earnings buffer) and R9.4
+`theta_side` semantics are unchanged, and nothing here executes anything.
+
+**Open trader decision, not taken:** whether the percent floor should also apply to
+the PCS short leg. Arithmetic and reasoning in `plan.md` Phase 0.11.
 
 ### 2026-08-31 — The linter was configured but never installed, and it was hiding four bugs
 

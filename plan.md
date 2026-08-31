@@ -789,7 +789,7 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
-### Phase 0.11 — Theta premium optimization (authorized 2026-08-31)
+### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads
 because the target is literally $0.25 (`$100 / 4 contracts`), the final sort
@@ -818,6 +818,28 @@ Build prompt: [`docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`](docs/prompts/THETA_P
 Eligibility rules (≥3 supports, ≥1 major SMA, earnings buffer) and R9.4
 `theta_side` semantics are unchanged. Universe coverage already holds at
 evaluation time (universe longs join full scans); T4 is allocation, not reach.
+
+**Status 2026-08-31: T1-T6 BUILT and GREEN on `claude/theta-premium`.** Sold-put
+credit is judged at >= 1.0% of the strike (recommended) / >= 0.5% (cusp) with a
+$0.40 absolute floor, and a quote under both leaves the report. The final sort is
+tier -> major SMAs above the strike -> support quality -> yield per market day ->
+spread, with the strike-ascending key removed and the spread penalty uncapped.
+PCS reaches 15 market days. The quote budget is ordered thetalongs -> estimated
+premium capacity (ATR%-based, no new network call) -> base_score. The report and
+the Qt panel carry credit %, yield/week, spread % and the SMA-above-strike count.
+
+**One decision left to the trader, deliberately not taken.** T1 asked for the
+percent floor on the PCS short leg *only if* the credit/width ratios do not
+already imply a stricter bar. Measured, they mostly do but not always - expressed
+as a percent of the short strike, the 20% credit/width target is 1.36% at a $40
+close, 0.72% at $150, and falls to 0.45% at $240 and 0.31% at $700. So a
+high-priced spread can pass on a ratio that a naked put of the same strike would
+fail. PCS tiering was left ALONE anyway, because a spread's capital at risk is
+the WIDTH, not the strike: demanding 0.5% of a $600 strike would mean a $3.00
+credit on a $10-wide spread, a 30% credit/width bar far above the 20% target,
+which is a different rule rather than the same one. The cusp ratio can also
+produce a $0.30 credit on a 2.5-wide spread, under the $0.40 "no pennies" floor.
+Both are one-line changes if the trader wants them.
 
 Gate: one desk scan whose theta report shows percent-floored, support-first
 rows, with `via thetalongs.txt` labelling intact.

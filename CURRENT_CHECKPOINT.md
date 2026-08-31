@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** at the ruff commit - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
+| Working branch | **`claude/theta-premium`** - cut from `main` for Phase 0.11 (theta premium optimization), two commits, pushed, not merged. `main` itself is at the ruff commit - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **Phase 0.11 theta premium optimization (2026-08-31 — prompt ready, NOT built: `docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Phase 0.11 theta premium optimization (2026-08-31 — BUILT and GREEN on `claude/theta-premium`, live gate owed; one trader decision open)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5614 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/theta-premium`; Phase 0.11 adds 24 net over `main`'s 5590) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | Rebuilt 2026-08-31 at `534e0e0`, `selftest OK: 73/73 checks passed (frozen)`, exit 0. **Two commits behind since**, both lint-only (an annotation-resolving `TYPE_CHECKING` import and the unused-import sweep) - no packaging trigger fires, and the unfrozen selftest, which imports every lazy engine, passes 73/73 after them. Rebuild at the next real change rather than for these. Also built and verified at the merge point. Previously rebuilt at `d0a2ae6`, 72/72. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
 
@@ -52,8 +52,73 @@ the dated entry named beside it.
 | 18 | **Tax report** — one desk run of "Realised P&L for tax..." against the live journal, with the BoC rates booked so the CAD total is complete | R7 tax report (2026-08-28 tax entry) |
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
+| 23 | **Theta premium (Phase 0.11)** - one desk scan whose theta report shows percent-floored, support-first rows: no quarter-dollar credits on expensive names, the richer of two equally defended strikes on top, a `premium=` line on every quoted sold put, and DRAM still labelled `via thetalongs.txt` | 2026-08-31 theta entry |
 | 22 | **Strength Board in the Desk** - one desk session: the trader opens the section under the Strength window, reads the board in the column, clicks a row onto the Visual Alert Review chart, adds a name from it, and says whether the vertical stack is right | 2026-08-31 Strength Board entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+
+## 2026-08-31 (evening) - Theta: the floor is a percent of the strike, and support ranks first
+
+**Phase 0.11, trader-directed.** Built from
+`docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md` on `claude/theta-premium` (`82c998a`
+then `5442619`). Green; live gate 23 owed. **Supersedes the "planned, prompt
+written, NOT built" entry below.**
+
+### What was wrong, and what each fix was
+
+- **The target WAS $0.25** - `THETA_PUT_TARGET_TOTAL_CREDIT` (100) / 100 /
+  `THETA_PUT_MAX_CONTRACTS` (4) - judged in flat dollars, so the same number meant
+  0.125% of a $200 strike and 1.25% of a $20 one. Now
+  `theta_put_credit_floors(strike)` decides once: 1.0% of the strike recommended,
+  0.5% cusp, $0.40/contract absolute floor underneath. A quote under both LEAVES
+  the report rather than lingering as `below_target`.
+- **The final sort preferred the cheapest qualifying option** - its key was
+  `(status, strike ASCENDING, ...)`, so the deepest-OTM strike won every time.
+  Now: tier, major SMAs above the strike, support quality, yield per market day,
+  spread. Premium is a percent PER MARKET DAY, which replaces the flat DTE penalty
+  on the sold-put path (PCS keeps it).
+- **A wide spread was capped at 18 penalty points**, so past ~150% every market
+  cost the same. Uncapped and monotonic now - and still never a block.
+- **The quote budget was spent in `base_score` order**, which says nothing about
+  premium. Now `thetalongs.txt` first, then estimated premium capacity from ATR%
+  (no new network call, never a filter - unmeasurable sorts LAST, not out), then
+  `base_score`. IB pacing constants untouched.
+- Credit spreads reach **15 market days**; sold puts stay at 10.
+- The report emits one `premium=` line per quoted sold put and the extractor reads
+  every field back; the Qt theta table gained four columns, blank rather than zero
+  for a row with no quote.
+
+### The one decision left to the trader
+
+T1 asked for the percent floor on the PCS short leg *only if* the credit/width
+ratios do not already imply a stricter bar. **Measured, they mostly do but not
+always.** As a percent of the short strike, the 20% credit/width target is 1.36%
+at a $40 close, 0.72% at $150, **0.54% at $200, 0.45% at $240**, 0.72% at $300 and
+**0.31% at $700**. So a high-priced spread can pass on a ratio a naked put of the
+same strike would fail.
+
+**PCS tiering was left alone anyway**, and this is a judgement call rather than an
+oversight: a spread's capital at risk is the WIDTH, not the strike. Demanding 0.5%
+of a $600 strike means a $3.00 credit on a $10-wide spread - a 30% credit/width
+bar, half again the 20% target - which is a different rule, not the same one. The
+cusp ratio can also produce a $0.30 credit on a 2.5-wide spread, under the $0.40
+"no pennies" floor. Either is a one-line change; both are the trader's call.
+
+### Verification
+
+`pytest tests/ -q` **5614 passed, 72 subtests**, exit 0; `ruff check .` clean;
+smoke 7/7; source `--selftest` 73/73. **26 theta tests**, each new or rewritten one
+proven to fail against the un-fixed code (the file copied aside, reverted with
+`git checkout`, run, restored). Four pass on the un-fixed code and are
+documentation of preserved behaviour rather than proof - named in the commit
+messages. Two existing tests were deliberately REVERSED: their old rule (a
+sub-floor quote kept as `below_target`; the deepest viable strike winning) is
+exactly what this packet removes.
+
+Eligibility (>= 3 supports, >= 1 major SMA, earnings buffer) is unchanged, R9.4
+`theta_side` semantics are unchanged, the IB pacing budget is unchanged, and
+nothing in this chain executes anything.
+
+---
 
 ### 2026-08-31 (evening) — Phase 0.11 theta premium optimization: planned, prompt written, NOT built
 
