@@ -78,6 +78,16 @@ which is evidence and must not be loaded as context.
 - Industry Board with one single-flight owner, hourly refresh, atomic last-good
   snapshot, numeric sorting, freshness/Health integration, and advisory aligned
   industry-vs-SPY plus stock-vs-primary-industry fields.
+- M5 Strength Board (`strength_scan` + one `StrengthBoardService` owner, 15-minute
+  single-flight refresh on the quiet-hours window, last-good on failure): batched
+  yfinance over `universe_all.txt`, **zero IB traffic**, every column click-to-sort
+  with blanks last, a row select charting through the desk's one snapshot popup, and
+  every add re-running the M5 Focus adoption gate at click time with the refusal
+  reason named. **Since 2026-08-31 it is a collapsible section under the Desk's
+  Strength window rather than a left-nav page** (trader request): starting closed so
+  it costs the charts nothing, sides stacked vertically for the column, and its own
+  RS/RW half retired to the Alert Center's RS/RW Board tab, which is now one
+  tab-click away in the same column.
 - Auto-populate rules for both regimes, previous-day-extreme gating, DESK adoption
   into M5 Focus, and one extension notification per Focus name/day while pullback
   notifications stay active.
@@ -361,6 +371,54 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-31 — The Strength Board moves into the Desk's Strength window
+
+Trader: *"The Strength Board tab is good but it really should be modified to fit in
+the 'strength' window in the trading desk — either integrated directly or be
+positioned below it."* Positioned below it, and the left-nav page is removed.
+
+**Where it is.** A `CollapsibleSection` (new, `ui/widgets/collapsible_section.py`)
+under `FocusStrengthBoard` in the Alert Center's alert column, hosted through
+`AlertCenterPanel.attach_strength_board`. `MainWindow` still builds and owns the one
+`StrengthBoardService` — one timer, one single-flight fetch, one 15-minute cadence —
+and now also shuts it down, which nothing did before: the service was parented to the
+window but absent from the panel shutdown loop, so its timer outlived the close.
+
+**What did not change**, pinned by `tests/test_qt_strength_board_in_the_desk.py`
+rather than by prose: zero IB traffic (asserted over the AST of all three
+strength-path modules, so an `ibapi` import or an `EClient`/`reqHistoricalData` name
+fails it); the adoption gate re-run at click time on the row's own numbers; and one
+service with one timer, measured by driving that timer and counting fetch attempts.
+
+**Width was the constraint.** The alert column has a 360 px floor and everything left
+of it is chart, so the section must never be why the charts get narrower. Four
+measurements shaped it: the section header demanded 315 px (a `QToolButton` asks for
+its whole label) and is now Ignored horizontally with elided text; the board demands
+270 px and is hosted in a `QScrollArea` so that minimum stops there instead of
+reaching the desk splitter; the status label demanded 434 px and now wraps, because
+it carries failure reasons and can be long; and "Add all shown" (208 px) became "Add
+all" (124 px) with the tooltip unchanged. The section also **starts closed**, so by
+default it costs one header row. The two sides stack **vertically** — side by side
+was right for a full-width page and unreadable in a column.
+
+**The RS/RW half retired with the page.** It was added 2026-08-21 so the two reads
+could be compared without flipping **pages**; the Alert Center's own RS/RW Board tab
+is now one tab-click away in the **same column**, so keeping it would have been two
+views of one payload six inches apart. The tape, its owner, the `rrsSnapshotChanged`
+signal and that tab are untouched — one listener retired, nothing else moved. The arm
+bar did not move either, and a test asserts it stays put when the section opens.
+
+Page removal touched every site that tracks pages: the single `PAGE_SPECS` list (the
+structure the 2026-08 nav bug forced into existence, which is why this is one line
+rather than three) and the two test files that enumerate nav labels. The module stays
+in the tree inside an already-collected package, so `packaging/tradingbotv3.spec`
+needed no change and the spec-drift test stays green at 17.
+
+Verified: `pytest tests/ -q` **5565 passed, 72 subtests** (was 5554) · smoke **7/7** ·
+source `--selftest` **73/73** · spec-drift **17**. Live gate owed: one desk session
+where the trader opens the section, reads the board in the column and adds a name
+from it — plus a judgement on the vertical stack.
 
 ### 2026-08-31 - "I liked it and passed": the day-trade pass, under the note
 

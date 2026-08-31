@@ -554,3 +554,58 @@ already answered.
 
 One review session where the trader confirms the queue shows only movers and the
 hidden-count line is honest — recorded as `DESK_TESTING_PLAN.md` §2.10.
+
+## Addendum — 2026-08-31: the board moves into the Desk's Strength window
+
+*"The Strength Board tab is good but it really should be modified to fit in the
+'strength' window in the trading desk — either integrated directly or be
+positioned below it."* (trader). Positioned below it, and the left-nav page is
+removed.
+
+**Where it is now.** A `CollapsibleSection` under `FocusStrengthBoard` in the
+Alert Center's alert column, hosted by `AlertCenterPanel.attach_strength_board`.
+`MainWindow` still builds and owns the one `StrengthBoardService` — one timer,
+one single-flight fetch, one 15-minute cadence — and now also shuts it down,
+which nothing did before: the service was parented to the window but absent from
+the panel shutdown loop, so its timer outlived the close. Only the wiring moved.
+
+**What did not change**, and is pinned by
+`tests/test_qt_strength_board_in_the_desk.py`:
+
+- **Zero IB traffic.** Batched yfinance over `universe_all.txt`, unchanged. The
+  test walks the AST of all three strength-path modules, so an `ibapi` import or
+  an `EClient`/`reqHistoricalData` name fails it rather than a comment drifting.
+- **The adoption gate runs at click time**, on the row's own numbers, exactly as
+  Part A defines it — the board is up to 15 minutes stale wherever it is drawn.
+- **One service, one timer**, measured by driving that timer and counting the
+  fetch attempts rather than asserting single ownership in prose.
+
+**Width was the constraint**, because the alert column has a 360 px floor and
+everything left of it is chart. The section must never be the reason the charts
+get narrower, and four measurements shaped the build:
+
+| Demand | Measured | What was done |
+|---|---|---|
+| Section header | 315 px | `QToolButton` demands its whole label; Ignored horizontally + elided text |
+| The board | 270 px | hosted in a `QScrollArea`, so the minimum stops there rather than reaching the desk splitter |
+| Status label | 434 px | word-wrapped — it carries failure reasons, so it can be long |
+| "Add all shown" | 208 px | relabelled "Add all" (124 px); the tooltip still says the whole thing |
+
+The section also **starts closed**, so by default it costs one header row. The
+two sides stack **vertically** now: side by side was right for a full-width page
+and is unreadable in a column.
+
+**The RS/RW half retired with the page.** The 2026-08-21 addendum above added it
+so the two reads could be compared without flipping **pages**; the Alert Center's
+own RS/RW Board tab is now one tab-click away in the **same column**, so keeping
+it would have meant two views of one payload six inches apart. The tape, its
+owner, the `rrsSnapshotChanged` signal and that tab are untouched — one listener
+retired, nothing else moved. If the trader wants that second view back, it is a
+section, not a page.
+
+### Owed, live
+
+One desk session where the trader opens the section, reads the board in the
+column, and adds a name from it — plus a judgement on whether the vertical
+stack is right or the sides want their old side-by-side shape back with the
+column dragged wider.

@@ -326,6 +326,7 @@ are listed in `CURRENT_CHECKPOINT.md`.
 2. **R2 M5 Focus adoption discipline and the M5 strength board. — BUILT 2026-08-15, live proof owed.**
    Spec: `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`. Build record: `CHANGELOG.md`.
    **Remaining — the spec §8 live proofs, narrowed 2026-08-18.** The **eviction proof PASSED** on 2026-08-18 (four logged evictions with per-symbol reasons; lines quoted in `CURRENT_CHECKPOINT.md`). Still owed, all three needing a DESK day because AWAY never adopts: one adoption-time refusal, one clean "Not today" scoped removal that leaves the trader's other entries intact, and a board session the trader confirms matches the TC2000 scan's character (~20–40/side). RVOL-for-survivors is specified but deliberately not built; decide it on that session.
+   **Amended 2026-08-31 (trader): the board moved into the Desk's Strength window.** It is a collapsible section under `FocusStrengthBoard` in the alert column, starting closed, and the left-nav page is removed - so the board session owed above is now read from the Desk rather than from a page. Nothing about the gate, the fetch or the data changed; see the spec's 2026-08-31 addendum.
 
 3. **R3 Swing-quality demotion, pre-close honesty, and the dislike-feedback loop.**
    Spec: `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md`. Build record: `CHANGELOG.md`.

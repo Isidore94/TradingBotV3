@@ -600,11 +600,20 @@ serious failure on this page.
 ### WHEN
 Mid-session, once the market has been open at least an hour or so.
 
+**Changed 2026-08-31: it is not a page any more.** You asked for it in the
+Strength window, so it is a closed section under **Strength** on the right of the
+Trading Desk. There is no left-hand menu button for it.
+
 ### DO
-1. Click **Strength Board** in the left-hand menu.
-2. Look at the status line at the top and the two lists.
-3. Click **Refresh** and watch the status line.
-4. Compare the names against your TC2000 scan.
+1. On the **Trading Desk**, find **Strength** on the right of the alert column.
+2. Click the **M5 Strength Board** header under it. The section opens.
+3. Look at the status line at the top and the two lists (longs on top, shorts
+   under them).
+4. Click **Refresh** and watch the status line.
+5. Compare the names against your TC2000 scan.
+6. Add one name and check it lands in M5 Focus.
+7. Tell us whether the two lists stacked one above the other read well in that
+   column, or whether you want them side by side with the column dragged wider.
 
 ### GOOD
 - **Roughly 20–40 names per side.** That is the number to expect. Wildly more or
