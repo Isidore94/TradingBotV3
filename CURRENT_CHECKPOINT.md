@@ -20,7 +20,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 |---|---|
 | Working branch | **`main`** at the ruff commit - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Active roadmap items | **Phase 0.11 theta premium optimization (2026-08-31 — prompt ready, NOT built: `docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
 | Last verified baseline | `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | Rebuilt 2026-08-31 at `534e0e0`, `selftest OK: 73/73 checks passed (frozen)`, exit 0. **Two commits behind since**, both lint-only (an annotation-resolving `TYPE_CHECKING` import and the unused-import sweep) - no packaging trigger fires, and the unfrozen selftest, which imports every lazy engine, passes 73/73 after them. Rebuild at the next real change rather than for these. Also built and verified at the merge point. Previously rebuilt at `d0a2ae6`, 72/72. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
@@ -54,6 +54,24 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 22 | **Strength Board in the Desk** - one desk session: the trader opens the section under the Strength window, reads the board in the column, clicks a row onto the Visual Alert Review chart, adds a name from it, and says whether the vertical stack is right | 2026-08-31 Strength Board entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+
+### 2026-08-31 (evening) — Phase 0.11 theta premium optimization: planned, prompt written, NOT built
+
+The trader asked to fix the theta section: the report hands him ~$0.25 credits
+with untradeable spreads. Code-level causes verified this session: the target IS
+$0.25 (`THETA_PUT_TARGET_TOTAL_CREDIT 100 / 4 contracts`, `legacy.py:487-491`);
+the final sold-put sort prefers the LOWEST qualifying strike — the cheapest
+option — every time (`legacy.py:19096-19105`); spread is a soft penalty capped
+at 18 points; the quote budget is spent in `base_score` order with no
+premium-richness ordering. Trader decisions locked in chat: credit floor 0.5% of
+the strike / ideal 1% / $0.40 absolute; sold puts stay ≤ 2 weeks, PCS goes to 3;
+spread is a SPECTRUM ranked heavily, never a new hard block; ranking priority is
+support ≻ premium ≻ spread with 2 major SMAs above the strike a big boost; whole
+universe already reaches theta evaluation, so the budget gets richness-ordered
+with `thetalongs.txt` pinned first. Spec: `plan.md` Phase 0.11. Build prompt:
+`docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md` (Opus builds on branch
+`claude/theta-premium`, Fable reviews). No code changed this session — docs
+only, baseline unchanged.
 
 ### Cross-packet compatibility check before the 2026-08-31 merge
 

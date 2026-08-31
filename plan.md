@@ -789,6 +789,39 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+### Phase 0.11 — Theta premium optimization (authorized 2026-08-31)
+
+The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads
+because the target is literally $0.25 (`$100 / 4 contracts`), the final sort
+prefers the lowest qualifying strike (the cheapest option), spreads are only a
+soft capped penalty, and the quote budget is spent in `base_score` order with no
+premium-richness thinking. Trader decisions (2026-08-31 chat) lock the fix:
+
+1. **T1 Relative floor.** Minimum credit 0.5% of the strike ($1 on a $200
+   stock), ideal tier 1.0% ($2), absolute floor $0.40/contract. Below-floor rows
+   leave the report. The $100/4-contract framing becomes display-only.
+2. **T2 Ranking.** Support first (major SMAs above the strike: 1 required
+   unchanged, 2 a big boost, then the covered stack), then yield per market day,
+   then spread as a heavy monotonic spectrum (no new hard block — trader:
+   "spreads are a spectrum … #1 priority is still areas of support"). The
+   strike-ascending sort key is removed.
+3. **T3 PCS time.** Credit spreads extend to 15 market days (3 weeks); sold
+   puts stay at 10.
+4. **T4 Budget allocation.** Enrichment work list orders `thetalongs.txt` names
+   first, then estimated premium capacity (ATR%-based, no new network calls),
+   then `base_score`. Nothing is dropped; the support-only fallback stays.
+5. **T5 Surfaces.** Report + Qt panel carry credit % of strike, yield/week,
+   spread %, and the SMA-above-strike count.
+
+Build prompt: [`docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`](docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md)
+(scope fence for `legacy.py`, fail-before-fix tests, IB pacing untouched).
+Eligibility rules (≥3 supports, ≥1 major SMA, earnings buffer) and R9.4
+`theta_side` semantics are unchanged. Universe coverage already holds at
+evaluation time (universe longs join full scans); T4 is allocation, not reach.
+
+Gate: one desk scan whose theta report shows percent-floored, support-first
+rows, with `via thetalongs.txt` labelling intact.
+
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
 1. **P1.1 Make the test suite hermetic.** Stop Qt app tests from starting live
