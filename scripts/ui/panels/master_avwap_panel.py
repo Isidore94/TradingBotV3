@@ -41,7 +41,7 @@ from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
 from ui.services.data_feed import copy_symbols, load_latest_setup_rows_with_meta
 from ui.services.scan_service import ScanService
-from ui.timer_utils import start_staggered
+from ui.timer_utils import SignalCoalescer, start_staggered
 from ui.widgets.data_table import DataTable
 from ui.widgets.setup_delegate import SetupTableDelegate
 from ui.widgets.empty_state import EmptyState
@@ -227,7 +227,19 @@ class MasterAvwapPanel(QWidget):
                 "Add to M5 Focus Picks",
                 lambda proxy_index: self._add_row_to_focus(proxy_index, "m5"),
             )
-            self.focus_service.focusChanged.connect(lambda: self.table.viewport().update())
+            # COALESCED (2026-08-31). The star column is painted from the
+            # focus lookup, so a membership change does have to repaint the
+            # table - but a repaint here is a full viewport pass through
+            # `SetupTableDelegate` for every visible cell, and the DESK drain
+            # that morning adopted 45 picks one at a time. `setup_delegate.py`
+            # paint lines were the single hottest stack in the stall log.
+            # One repaint per burst says exactly as much as 45 did.
+            self._focus_repaint_coalescer = SignalCoalescer(
+                lambda: self._repaint_focus_stars(), parent=self
+            )
+            self.focus_service.focusChanged.connect(
+                self._focus_repaint_coalescer.request
+            )
 
         self.empty_state = EmptyState(
             "Run a scan to see setups",
@@ -427,6 +439,16 @@ class MasterAvwapPanel(QWidget):
             button.setChecked(True)
         save_local_setting("qt_setups_bucket_filter", selection)
         self._apply_filters()
+
+    def _repaint_focus_stars(self) -> None:
+        """Repaint the table because Focus membership moved. Presentation only."""
+        self.table.viewport().update()
+
+    def flush_pending_refresh(self) -> None:
+        """Run an owed coalesced repaint now. The seam the tests drive."""
+        coalescer = getattr(self, "_focus_repaint_coalescer", None)
+        if coalescer is not None:
+            coalescer.flush()
 
     def _active_bucket_keys(self) -> set[str]:
         """The raw bucket keys the current selection allows.

@@ -17,6 +17,20 @@ class FlowLayout(QLayout):
     def addItem(self, item) -> None:  # noqa: N802 (Qt override)
         self._items.append(item)
 
+    def insertWidget(self, index: int, widget) -> None:  # noqa: N802
+        """Place ``widget`` at ``index`` instead of at the end.
+
+        `QLayout` has no generic insert, which is why the Focus board used to
+        empty itself and re-add every chip just to put one arrival in the right
+        place. Built on `addWidget` so the reparenting and ownership are Qt's
+        own; only the item's position in the list is ours.
+        """
+        self.addWidget(widget)
+        item = self._items.pop()
+        position = max(0, min(int(index), len(self._items)))
+        self._items.insert(position, item)
+        self.invalidate()
+
     def count(self) -> int:
         return len(self._items)
 

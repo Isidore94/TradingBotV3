@@ -28,6 +28,14 @@ def _service(tmp_path):
     return FocusService(store)
 
 
+#: The panel coalesces its reaction to `focusChanged` over a 200 ms window
+#: (2026-08-31: a DESK drain adopting 45 picks one at a time repainted the
+#: board 45 times and froze the desk). These tests assert on the RENDERED
+#: board, so they close the window by hand rather than sleeping;
+#: `test_focus_refresh_coalescing.py` is where the un-flushed catch-up is
+#: proved against a real event loop.
+
+
 def test_focus_panel_add_renders_chips(tmp_path):
     from ui.panels.focus_picks_panel import FocusPicksPanel
 
@@ -35,6 +43,7 @@ def test_focus_panel_add_renders_chips(tmp_path):
     editor = panel.swing_long_editor
     editor.add_input.setText("nvda, aapl")
     editor.add_from_input()
+    panel.flush_pending_refresh()
 
     assert panel.service.focus_symbols("long") == ["NVDA", "AAPL"]
     assert panel.service.focus_symbols("long", "swing") == ["NVDA", "AAPL"]
@@ -51,6 +60,7 @@ def test_focus_panel_chip_remove_updates_store(tmp_path):
     panel.swing_long_editor.add_from_input()
 
     panel.swing_long_editor._remove("NVDA")  # simulates a chip's × button
+    panel.flush_pending_refresh()
 
     assert panel.service.focus_symbols("long") == ["AAPL"]
     assert panel.swing_long_editor.chip_flow.count() == 1
@@ -64,6 +74,7 @@ def test_focus_panel_sides_are_independent(tmp_path):
     panel.swing_long_editor.add_from_input()
     panel.swing_short_editor.add_input.setText("TSLA")
     panel.swing_short_editor.add_from_input()
+    panel.flush_pending_refresh()
 
     assert panel.service.focus_symbols("long") == ["NVDA"]
     assert panel.service.focus_symbols("short") == ["TSLA"]
@@ -99,6 +110,7 @@ def test_focus_panel_marks_live_bounce_alert(tmp_path):
     panel = FocusPicksPanel(_service(tmp_path))
     panel.swing_long_editor.add_input.setText("NVDA")
     panel.swing_long_editor.add_from_input()
+    panel.flush_pending_refresh()
 
     panel.record_bounce_alert(
         BounceAlert(time_text="09:30:00", symbol="NVDA", side="LONG", trigger="VWAP reclaim", timeframe="5m")

@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
+from ui.timer_utils import SignalCoalescer
 
 _COLUMNS = ("Symbol", "Cross up", "Cross down", "▲ armed", "▼ armed", "Last trigger")
 _SOFT_SYMBOL_LIMIT = 25
@@ -118,9 +119,19 @@ class PriceAlertBoard(QFrame):
 
         self.service.entriesChanged.connect(self.refresh)
         self.service.alertTriggered.connect(lambda _payload: self.refresh())
-        self.focus_service.focusChanged.connect(self._refresh_symbol_choices)
+        # COALESCED (2026-08-31): clearing and refilling the combo per add
+        # was 45 rebuilds during that morning's drain, and a combo box rebuild
+        # is not free. One refill per burst reads the same list.
+        self._symbols_coalescer = SignalCoalescer(
+            lambda: self._refresh_symbol_choices(), parent=self
+        )
+        self.focus_service.focusChanged.connect(self._symbols_coalescer.request)
         self._refresh_symbol_choices()
         self.refresh()
+
+    def flush_pending_refresh(self) -> None:
+        """Run an owed coalesced refill now. The seam the tests drive."""
+        self._symbols_coalescer.flush()
 
     def _refresh_symbol_choices(self) -> None:
         current = self.symbol_input.currentText().strip()

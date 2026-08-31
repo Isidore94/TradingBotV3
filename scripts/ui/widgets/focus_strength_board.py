@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from ui import theme
 from ui.models.focus_strength import StrengthBoard, StrengthRow, build_strength_board
+from ui.timer_utils import SignalCoalescer
 
 # Narrow enough that the tab stack and this board still both fit inside the
 # alert column's 360px floor, wide enough for "SYMBOL +1.23 #4 IND · m5"
@@ -47,6 +48,7 @@ class FocusStrengthBoard(QWidget):
         super().__init__(parent)
         self._payload: dict[str, Any] = {}
         self._focus_service = None
+        self._render_coalescer = SignalCoalescer(lambda: self._render(), parent=self)
 
         self.title_label = QLabel("Strength")
         self.title_label.setObjectName("SectionTitle")
@@ -94,11 +96,21 @@ class FocusStrengthBoard(QWidget):
 
     # ------------------------------------------------------------------
     def set_focus_service(self, service) -> None:
-        """Attach the Focus store and re-render on every membership change."""
+        """Attach the Focus store and re-render on every membership change.
+
+        COALESCED (2026-08-31): `_render` rebuilds the whole board as an HTML
+        document and hands it to `setHtml`, which re-parses and re-lays it out.
+        One membership change is worth that; the 45 the DESK drain made that
+        morning are one board, not 45.
+        """
         self._focus_service = service
         if service is not None:
-            service.focusChanged.connect(self._render)
+            service.focusChanged.connect(self._render_coalescer.request)
         self._render()
+
+    def flush_pending_refresh(self) -> None:
+        """Run an owed coalesced render now. The seam the tests drive."""
+        self._render_coalescer.flush()
 
     def update_snapshot(self, payload: Any) -> None:
         self._payload = payload if isinstance(payload, dict) else {}

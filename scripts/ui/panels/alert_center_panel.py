@@ -92,7 +92,7 @@ from review_events import record_review_event
 from review_guidance import ORDERING_ANNOTATION_ONLY, AlertGuidance, ReviewGuide
 from ui import theme
 from ui.panels import desk_layout
-from ui.timer_utils import start_staggered
+from ui.timer_utils import SignalCoalescer, start_staggered
 from ui.models.bounce import (
     AUTO_PICK_TAG,
     BounceAlert,
@@ -143,6 +143,23 @@ FLIP_REVERIFY_RETRY_SECONDS = 60
 #: re-stamps the queue with post-flip verdicts that drain normally. Five
 #: attempts is five minutes of trying before falling back to that slower path.
 FLIP_REVERIFY_MAX_ATTEMPTS = 5
+
+#: How many staged picks one DESK drain cycle may adopt (trader-approved
+#: 2026-08-31: "cap the auto-adopt batch and slow the redraws").
+#:
+#: PACING, never policy. Nothing here decides differently about a pick - the
+#: freshness gate, the flip barrier, the ownership marker and AWAY/EVENING's
+#: refusal are all upstream of it and untouched. What is left over stays
+#: STAGED and is adopted by the next cycle of the same 30-second timer, so a
+#: 45-pick morning finishes inside ~2.5 minutes instead of freezing the desk
+#: for 13 seconds. **No pick is ever dropped**; a cap that withheld one would
+#: be the suppression field this chain deliberately does not have.
+#:
+#: The measurement behind the number (2026-08-31 ui_stalls.jsonl): 45 adoptions
+#: at ~300 ms apart cost 13.5 s of solid GUI-thread work, and the 15.2 s stall
+#: charged to the Focus board landed at the end of it. Ten is what fits inside
+#: one 30-second tick with the coalesced redraws and room to spare.
+AUTO_ADOPT_BATCH_LIMIT = 10
 
 # D1 focus alerts that mark a stock TURNING INTO a favorite / high-conviction
 # name: the scan confirmed a genuine bucket upgrade. An armed-level crossing
@@ -655,7 +672,24 @@ class AlertCenterPanel(QFrame):
         if self.focus_service is not None:
             # Liking a pick (here or on the setups table) re-renders both feeds
             # so every alert for that name immediately shows the gold flag.
-            self.focus_service.focusChanged.connect(self._rebuild_feed)
+            #
+            # COALESCED (2026-08-31, trader-approved under the file-scoped
+            # ask-first rule). `_rebuild_feed` destroys and reconstructs every
+            # row widget in both feeds - up to MAX_FEED_ITEMS + MAX_D1_FEED_ITEMS
+            # = 350 widget trees, each with its own stylesheet - and the DESK
+            # drain that morning fired it 45 times in 13 seconds. Only the
+            # TRIGGER is coalesced: which alerts pass the feed gate, their
+            # order, the repetition fold and the digest are all decided inside
+            # `_rebuild_feed` and are untouched. Nothing is withheld - the
+            # rebuild still happens, once, within 200 ms of the last change.
+            # Late-bound so the coalescer calls whatever `_rebuild_feed` is at
+            # fire time - the seam a test spies on is the one that runs.
+            self._focus_feed_coalescer = SignalCoalescer(
+                lambda: self._rebuild_feed(), parent=self
+            )
+            self.focus_service.focusChanged.connect(
+                self._focus_feed_coalescer.request
+            )
 
         self.min_tier_input = QComboBox()
         for label, mode in MIN_TIER_CHOICES:
@@ -1805,6 +1839,12 @@ class AlertCenterPanel(QFrame):
             if widget is not None:
                 widget.deleteLater()
 
+    def flush_pending_focus_refresh(self) -> None:
+        """Run an owed coalesced feed rebuild now. The seam the tests drive."""
+        coalescer = getattr(self, "_focus_feed_coalescer", None)
+        if coalescer is not None:
+            coalescer.flush()
+
     def _rebuild_feed(self) -> None:
         # Every row widget is about to be destroyed, so the fold registry and
         # the digest row must go with them - a registry pointing at deleted
@@ -2669,6 +2709,9 @@ class AlertCenterPanel(QFrame):
         day = str(payload.get("date") or "")
         adopted: list[str] = []
         refused: list[str] = []
+        #: Picks this cycle left staged because the batch filled up. They are
+        #: still pending, so the next tick adopts them.
+        deferred = 0
         # One cycle, one traceback (see `_pending_pick_gate_ok`).
         self._gate_check_errors = 0
         self._gate_check_error_reason = ""
@@ -2697,6 +2740,15 @@ class AlertCenterPanel(QFrame):
                 )
                 if not ok:
                     refused.append(f"{symbol} ({gate_reason})")
+                    continue
+                if len(adopted) >= AUTO_ADOPT_BATCH_LIMIT:
+                    # The batch is full. Leave this pick STAGED and unseen so
+                    # the next cycle finds it exactly as this one did - it is
+                    # deferred by a few seconds, never refused and never lost.
+                    # Counted against adoptions rather than iterations, so a
+                    # day the gate refuses most of the queue still adopts a
+                    # full batch of the ones that qualify.
+                    deferred += 1
                     continue
                 self._auto_picks_enqueued.add(key)
                 reason = str(entry.get("reason") or "auto-populate pick")
@@ -2744,10 +2796,18 @@ class AlertCenterPanel(QFrame):
                 len(refused),
                 ", ".join(refused[:8]),
             )
+        if deferred:
+            logging.info(
+                "Focus adoption batch full (%d); %d staged pick(s) deferred to a "
+                "later cycle. Nothing was dropped.",
+                AUTO_ADOPT_BATCH_LIMIT,
+                deferred,
+            )
         if adopted:
+            more = f" ({deferred} more still queued)" if deferred else ""
             self.statusChanged.emit(
                 f"{len(adopted)} auto pick(s) added to M5 Focus for today "
-                f"({', '.join(adopted[:8])}{'...' if len(adopted) > 8 else ''}) - "
+                f"({', '.join(adopted[:8])}{'...' if len(adopted) > 8 else ''}){more} - "
                 "prune with Review ▶ on the Focus board."
             )
 

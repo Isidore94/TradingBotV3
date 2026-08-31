@@ -24,6 +24,7 @@ from ui.models.bounce import BounceAlert
 from ui.models.rrs import rrs_rows
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
+from ui.timer_utils import SignalCoalescer
 from ui.widgets.flow_layout import FlowLayout
 from ui.widgets.price_alert_board import PriceAlertBoard
 from ui.widgets.section_header import SectionHeader
@@ -132,6 +133,12 @@ class FocusPicksPanel(QFrame):
         # One signal rebuilds all editors (covers edits from anywhere, incl. the
         # like buttons on the Alert Center / setups table), and force-merges the
         # day's snapshot so a mid-day like still lands in today's cohort.
+        #
+        # COALESCED (2026-08-31): a burst of adds is one refresh, not one per
+        # add. See `_on_focus_changed` for the incident this closes.
+        self._refresh_coalescer = SignalCoalescer(
+            lambda: self._apply_focus_change(), parent=self
+        )
         self.service.focusChanged.connect(self._on_focus_changed)
         self.snapshot_today(force=False, emit_status=False)
 
@@ -211,10 +218,32 @@ class FocusPicksPanel(QFrame):
         return section
 
     def _on_focus_changed(self) -> None:
+        """One reaction per BURST of focus changes, not one per change.
+
+        The store notifies on every add - it has to, several surfaces depend on
+        it - but 2026-08-31's DESK drain adopted 45 staged picks one at a time,
+        so this ran 45 times in 13 seconds: 180 editor rebuilds, 45 reads of the
+        feedback file and 45 forced snapshot writes, all on the Qt thread. The
+        desk was Not Responding and the trader killed it twice.
+
+        The drain loop is synchronous, so every one of those emissions lands
+        inside a single event-loop slot and the coalescer's window cannot close
+        between them: the whole burst becomes one refresh and one snapshot,
+        taken AFTER the last add. The snapshot's merge semantics are unchanged
+        (it only ever adds rows for the date), so seeing the burst whole is
+        strictly better than seeing it 45 times in pieces.
+        """
+        self._refresh_coalescer.request()
+
+    def _apply_focus_change(self) -> None:
         self._refresh_all()
         # Merge new names into today's cohort immediately (no-op on removals;
         # snapshots only ever add rows for the date).
         self.snapshot_today(force=True, emit_status=False)
+
+    def flush_pending_refresh(self) -> None:
+        """Run an owed coalesced refresh now. The seam the tests drive."""
+        self._refresh_coalescer.flush()
 
     def _refresh_all(self) -> None:
         for editor in self.editors:
@@ -222,7 +251,19 @@ class FocusPicksPanel(QFrame):
         self.refresh_reviewed_today()
 
     def record_bounce_alert(self, alert: BounceAlert) -> None:
-        """Surface BounceBot alerts directly on matching Focus Picks chips."""
+        """Surface BounceBot alerts directly on matching Focus Picks chips.
+
+        ONE chip's badge, not four boards. This used to call `_refresh_all`,
+        which walks every editor and re-reads `pick_feedback` for the
+        reviewed-today line - a file read and four board passes to light a badge
+        on a single name. On a directional day with 45 focus names the alerts
+        arrive constantly, so that was a steady drip of GUI-thread work for a
+        two-word label.
+
+        `_bounce_state` is still the record and is written first; the chips are
+        a view of it, so a name that joins Focus after its alert picks the badge
+        up when its chip is built.
+        """
         if alert.is_d1 or not alert.symbol or not self.service.is_focus(alert.symbol):
             return
         symbol = alert.symbol.upper()
@@ -231,7 +272,16 @@ class FocusPicksPanel(QFrame):
             "tone": "long" if alert.side == "LONG" else "short" if alert.side == "SHORT" else "favorite",
             "text": f"{alert.time_text} bounce" + (f" - {detail}" if detail else ""),
         }
-        self._refresh_all()
+        self._update_chips_for(symbol)
+
+    def _update_chips_for(self, symbol: str) -> None:
+        """Re-point every chip carrying `symbol` at its current live state.
+
+        A name can sit on more than one board (M5 and Swing, long and short), so
+        this asks each editor rather than assuming one home for it.
+        """
+        for editor in self.editors:
+            editor.update_symbol(symbol)
 
     def record_rrs_snapshot(self, payload: Any) -> None:
         """Mark focus longs that are RS and focus shorts that are RW."""
@@ -403,49 +453,116 @@ class FocusSideEditor(QFrame):
         layout.addWidget(chip_scroll, 1)
         layout.addWidget(self.status_label)
 
+    def _current_chips(self) -> list:
+        """The chips the flow layout holds, in the order it holds them."""
+        chips = []
+        for index in range(self.chip_flow.count()):
+            item = self.chip_flow.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, FocusStatusChip):
+                chips.append(widget)
+        return chips
+
     def refresh(self) -> None:
         """Bring the board in line with the service. Diffed, not rebuilt.
 
         This used to empty the flow layout and construct a chip per symbol every
         time - 105 widget trees plus 105 stylesheet parses on the GUI thread,
-        and 105 teardowns for the collector to walk afterwards. Refreshes are
-        frequent (every focus edit, every mover-flag pass, the live-state
-        timer), and the symbol list usually has not changed at all.
+        and 105 teardowns for the collector to walk afterwards. That was fixed
+        by keeping the chips; what stayed broken until 2026-08-31 is that the
+        method still *emptied the layout* and re-added every chip on every call,
+        even when the list had not changed at all. A `takeAt` + `addWidget` pair
+        per chip is a Qt relayout per chip, and refreshes are frequent - every
+        focus edit, every mover pass, every matching bounce alert. On the 45-name
+        board of 2026-08-31 that was 90 layout operations to change nothing.
 
-        So: keep the chips that are still on the list, drop the ones that left,
-        build only genuine arrivals, and hand everyone their current state.
-        Order still follows the service, because the trader reads the board as a
-        list rather than a set.
+        So the unchanged case - overwhelmingly the common one - now does **zero**
+        layout work and only hands each chip its current state. The layout is
+        touched only for a genuine arrival, departure, or order change. Order
+        still follows the service, because the trader reads the board as a list
+        rather than a set.
         """
         symbols = self.service.focus_symbols(self.side, self.category)
         wanted = list(dict.fromkeys(symbols))
+        current = self._current_chips()
 
-        existing: dict[str, FocusStatusChip] = {}
-        while self.chip_flow.count():
-            item = self.chip_flow.takeAt(0)
+        if [chip.symbol for chip in current] == wanted:
+            # Same names, same order: nothing to lay out. This is the path a
+            # bounce alert, a mover pass and an unchanged focusChanged all take.
+            for chip in current:
+                chip.update_state(self.live_state_for(chip.symbol, self.side))
+            self.count_label.setText(str(len(wanted)))
+            return
+
+        self._apply_symbol_diff(wanted)
+        for chip in self._current_chips():
+            chip.update_state(self.live_state_for(chip.symbol, self.side))
+        self.count_label.setText(str(len(wanted)))
+
+    def _apply_symbol_diff(self, wanted: list[str]) -> None:
+        """Move the layout from what it holds to `wanted`, minimally.
+
+        Two passes, both index-precise: drop what left, then walk the wanted
+        order placing anything that is not already in position. An append - the
+        shape of an auto-adoption - costs exactly one insert, and a removal
+        exactly one take, instead of a full teardown and rebuild.
+        """
+        wanted_set = set(wanted)
+        seen: set[str] = set()
+        departures: list[int] = []
+        for index in range(self.chip_flow.count()):
+            item = self.chip_flow.itemAt(index)
             widget = item.widget() if item is not None else None
-            if isinstance(widget, FocusStatusChip):
-                existing[widget.symbol] = widget
-            elif widget is not None:
+            if not isinstance(widget, FocusStatusChip):
+                departures.append(index)
+                continue
+            if widget.symbol not in wanted_set or widget.symbol in seen:
+                departures.append(index)
+                continue
+            seen.add(widget.symbol)
+        # Highest index first, so the ones still owed keep their positions.
+        for index in reversed(departures):
+            item = self.chip_flow.takeAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.setParent(None)
                 widget.deleteLater()
 
-        for symbol in wanted:
-            chip = existing.pop(symbol, None)
+        for position, symbol in enumerate(wanted):
+            item = self.chip_flow.itemAt(position)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, FocusStatusChip) and widget.symbol == symbol:
+                continue
+            chip = self._take_chip(symbol)
             if chip is None:
                 chip = FocusStatusChip(
                     symbol, tone=self.tone, state=self.live_state_for(symbol, self.side)
                 )
                 chip.removed.connect(self._remove)
-            else:
+            self.chip_flow.insertWidget(position, chip)
+        self.chip_flow.invalidate()
+
+    def _take_chip(self, symbol: str):
+        """Lift an existing chip out of the layout so it can be re-placed."""
+        for index in range(self.chip_flow.count()):
+            item = self.chip_flow.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, FocusStatusChip) and widget.symbol == symbol:
+                self.chip_flow.takeAt(index)
+                return widget
+        return None
+
+    def update_symbol(self, symbol: str) -> None:
+        """Re-point one chip at its current live state, if this board holds it.
+
+        The narrow path behind a bounce badge: no service read, no layout work,
+        and nothing at all when the name is not on this board.
+        """
+        symbol = str(symbol or "").upper()
+        for chip in self._current_chips():
+            if chip.symbol == symbol:
                 chip.update_state(self.live_state_for(symbol, self.side))
-            self.chip_flow.addWidget(chip)
-
-        # Whatever the service no longer lists is genuinely gone.
-        for chip in existing.values():
-            chip.setParent(None)
-            chip.deleteLater()
-
-        self.count_label.setText(str(len(wanted)))
+                return
 
     def add_from_input(self) -> None:
         added = self.service.add_many(self.add_input.text(), self.side, self.category, origin="manual")
