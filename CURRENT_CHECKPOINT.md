@@ -18,12 +18,12 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/focus-refresh-storm`** — the 2026-08-31 desk-lockup fix, pushed, NOT merged. `main` last moved 2026-08-28 (journal packet, fast-forward) |
+| Working branch | **`main`** — the 2026-08-31 desk-lockup fix was merged by trader instruction ("go ahead and merge to main"), fast-forward from `claude/focus-refresh-storm`, no divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5456 passed, 72 subtests** (2026-08-31, desk `.venv`, branch `claude/focus-refresh-storm`; +29 new tests over the 5427 that checkout collects) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Last verified baseline | `pytest tests/ -q` **5456 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main`; +29 new tests over the 5427 the pre-merge checkout collects) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **STALE** — last built at `fff07b8`, six journal commits behind. The desk runs from SOURCE by trader decision, so this is a verification artifact only and the source launch is live; a rebuild + frozen selftest is owed before the exe is trusted again |
-| Desk restart | **required** — neither the warehouse packet nor the journal packet is on the running desk until then, and the lockup fix is on a branch the desk is not running at all |
+| Desk restart | **required, and it is now the only thing between the trader and the lockup fix** — the fix is on `main`, the desk runs from source, so the next launch has it. The warehouse and journal packets are still owed the same restart |
 
 ### Open gates, newest first
 
@@ -67,10 +67,10 @@ live journal database, and the frozen exe, which is six commits stale.
 
 ### Immediate next action
 
-**Merge `claude/focus-refresh-storm` and restart the desk.** The 2026-08-31 freeze
-made the desk unusable for a whole morning, and the fix cannot help until the desk
-is launched from a tree that has it. Then run the owed live gates in the order
-above. **The remaining
+**Restart the desk.** The lockup fix is on `main` as of 2026-08-31, and the desk
+runs from source, so the next launch picks it up — nothing else is between the
+trader and it. Then run the owed live gates in the order above, gate 19 first
+because it is the one that says this morning cannot repeat. **The remaining
 gates are all live-session work that only the trader can run.** The statement importer is **built and
 layers correctly** — the trader's next move is to import both real files on the
 desk and run the self-check (gates 14-15). Two of his asks are scoped and
@@ -82,7 +82,9 @@ IBKR transaction-file importer (masked account numbers are the open problem).
 
 ## 2026-08-31 - The desk froze because one Focus add repainted five surfaces
 
-**Branch `claude/focus-refresh-storm`. Built, green, live gate 19 owed. Not merged.**
+**Merged to `main` 2026-08-31 by trader instruction ("go ahead and merge to main"),
+fast-forward from `claude/focus-refresh-storm`, no divergence. Green; live gate 19
+still owed.**
 
 ### What happened
 
@@ -175,9 +177,20 @@ newer ruff is not comparable to the pinned one and was not chased.
 ### What is NOT verified
 
 Any of it on a live desk. Gate 19 is a directional morning with a large staged
-batch. **The desk runs from source on `main`, so this fix reaches the trader only
-when the branch is merged and the desk is restarted** - until then this morning
-can repeat.
+batch. **The desk runs from source on `main`, so the fix is live at the trader's
+next restart** - which is now the only step left between them and it.
+
+### Merged without a live-validation day - stated, not hidden
+
+`plan.md` sec 6 asks for a live-session validation day before a merge to `main`.
+The trader merged anyway, in as many words, and the reasoning holds: gate 19 is a
+directional MORNING with a large staged batch, which can only be observed on a
+desk running this code, and the desk runs from source. Merging is the
+prerequisite for validating rather than something validation precedes - the same
+call made on 2026-08-28 for the journal packet. What was verified before the
+merge: 5456 passed / 72 subtests, smoke 7/7, source selftest 72/72, spec-drift
+clean, fast-forward with no divergence, and no desk process running when the
+branch was switched. What is NOT verified: any of it on a live desk.
 
 
 ## 2026-08-28 - The tax number is the broker's, never ours
