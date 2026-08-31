@@ -22,7 +22,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
 | Last verified baseline | `pytest tests/ -q` **5456 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main`; +29 new tests over the 5427 the pre-merge checkout collects) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
-| Frozen exe | **STALE** — last built at `fff07b8`, six journal commits behind. The desk runs from SOURCE by trader decision, so this is a verification artifact only and the source launch is live; a rebuild + frozen selftest is owed before the exe is trusted again |
+| Frozen exe | **CURRENT** — rebuilt 2026-08-31 at `d0a2ae6` (419 MB onedir), `selftest OK: 72/72 checks passed (frozen)`, exit 0. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required, and it is now the only thing between the trader and the lockup fix** — the fix is on `main`, the desk runs from source, so the next launch has it. The warehouse and journal packets are still owed the same restart |
 
 ### Open gates, newest first
@@ -32,7 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET 2026-08-28**: rebuilt at `fff07b8`, bundle 442 MB → 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0 | done |
+| ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-08-31** at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
 | 4 | **Group RS/RW tape** — one DESK session with the four trader rules of that morning | 2026-08-27 afternoon (group tape) entry |
@@ -179,6 +179,21 @@ newer ruff is not comparable to the pinned one and was not chased.
 Any of it on a live desk. Gate 19 is a directional morning with a large staged
 batch. **The desk runs from source on `main`, so the fix is live at the trader's
 next restart** - which is now the only step left between them and it.
+
+### The frozen rebuild that goes with the merge
+
+Policy asks for a rebuild at every merge to `main`, and the frozen `--selftest`
+replaces the trader's click-through, so it ran unattended straight after the
+merge. `pyinstaller .\packaging\tradingbotv3.spec --noconfirm` at `d0a2ae6`:
+exit 0, 419 MB onedir, then `dist\TradingBotV3\TradingBotV3.exe --selftest`
+returned **`selftest OK: 72/72 checks passed (frozen)`**, exit 0 - matching the
+unfrozen count exactly. Smart App Control was READ, not recalled:
+`VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`,
+`SAC_EnforcementReason = 6`), so it is off and the build would start. **SAC
+verdicts are per file hash, so this says nothing about the next build.**
+
+None of that changes what is live: the desk launches from source, so the exe is
+a verification artifact and the merge is what delivers the fix.
 
 ### Merged without a live-validation day - stated, not hidden
 
