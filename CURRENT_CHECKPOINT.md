@@ -18,7 +18,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/strength-board-into-desk`** - cut from `main` at `f36ab59` for the trader-directed Strength Board move (2026-08-31). One commit, `be35fb6`, pushed, not merged. `main` already carries the day-trade pass, today's swing picks (both landed together in `ed3c73c`, which resolved the shared-checkout collision recorded below) and the desk-lockup fix; no divergence |
+| Working branch | **`main`** at `bded98d` - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
 | Last verified baseline | `pytest tests/ -q` **5583 passed, 72 subtests** (2026-08-31, desk `.venv`, at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. **`ruff` is NOT installed in this `.venv`** (`No module named ruff`), so no lint run backs this baseline. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
@@ -94,17 +94,15 @@ live journal database, and the frozen exe, which is six commits stale.
 
 ### Immediate next action
 
-**Merge or review `claude/strength-board-into-desk` (`be35fb6`), then run gate 22 on the desk.** The one judgement call inside it that the trader may want reversed: the board's own RS/RW half retired with the page, on the reasoning that the Alert Center's RS/RW Board tab is now one tab-click away in the same column. Say the word and it comes back as a second section.
+**Restart the desk.** Everything is on `main` at `bded98d` and the desk runs from source, so the next launch has all of it. Then run the owed live gates - 22, 21 and 20 are the three from this afternoon.
+
+The one judgement call the trader may want reversed: the Strength Board's own RS/RW half retired with its page, on the reasoning that the Alert Center's RS/RW Board tab is now one tab-click away in the same column. Say the word and it comes back as a second section.
 
 Then run the owed live gates in the order above, gate 19 first, because it is
 the one that says this morning cannot repeat. The `ed3c73c` shared-checkout
 collision recorded earlier is **resolved**: both packets landed on `main`
 together, and `claude/swing-favorites` no longer exists - do not go looking for
-the swing-picks work on the branch named for it. **One piece of it is still
-off `main`:** the swing-picks SECOND PASS (the draggable split, Copy/Paste, and
-the `vetted` cohort) is inside `edc7999` on
-`claude/strength-board-into-desk`, so it reaches the desk when that branch
-merges. **The remaining
+the swing-picks work on the branch named for it. **The remaining
 gates are all live-session work that only the trader can run.** The statement importer is **built and
 layers correctly** — the trader's next move is to import both real files on the
 desk and run the self-check (gates 14-15). Two of his asks are scoped and
@@ -298,9 +296,10 @@ verified.
 
 ### Second pass the same day: it drags, it copies, and it grades
 
-The trader came back with three things. **The code for all three is in `edc7999`
-on `claude/strength-board-into-desk`, not on `main`** - the shared checkout had
-moved to that branch by the time they landed, the same collision recorded above.
+The trader came back with three things. The code for all three landed inside
+`edc7999` - the shared checkout had moved to another agent's branch by the time
+they were written, the same collision recorded above - and reached `main` with
+that branch at `bded98d`.
 
 - **"The tab needs to be resizable relative to the M5 alerts tab, I should be
   able to drag it up to see more."** `m5_column` is now a vertical `QSplitter`
