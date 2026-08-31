@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | **`claude/daytrade-pass-reasons`** — cut from `main` at `ab2423b` for the trader-directed day-trade "passed on it" capture (2026-08-31). **It also carries "Today's swing picks":** two agents shared this checkout, and commit `ed3c73c` ("today's swing picks") was made while HEAD sat on this branch, so it swept both packets into one commit. `claude/swing-favorites` is still at `ab2423b` and holds none of it. Nothing is lost - both features are green here - but the split has to be done deliberately or not at all. `main` itself carries the desk-lockup fix, merged by trader instruction ("go ahead and merge to main"), fast-forward from `claude/focus-refresh-storm`, no divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5553 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 38. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Last verified baseline | `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** — rebuilt 2026-08-31 at `d0a2ae6` (419 MB onedir), `selftest OK: 72/72 checks passed (frozen)`, exit 0. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required, and it is now the only thing between the trader and the lockup fix** — the fix is on `main`, the desk runs from source, so the next launch has it. The warehouse and journal packets are still owed the same restart |
 
@@ -72,7 +72,7 @@ live journal database, and the frozen exe, which is six commits stale.
 **Decide what to do with `ed3c73c` first.** Two agents shared this checkout on
 2026-08-31 and that commit swept both packets - "Today's swing picks" and the
 day-trade pass - onto `claude/daytrade-pass-reasons`. Both are built and green
-together (5553 / 73-73); `claude/swing-favorites` holds neither. Either merge
+together (5554 / 73-73); `claude/swing-favorites` holds neither. Either merge
 the one branch as it stands, or split it deliberately - but do not assume the
 swing-picks work is on the branch named for it. Their live proofs are gates 20
 and 21. The lockup fix is on `main` as of 2026-08-31, and the desk
@@ -125,16 +125,12 @@ three capture hosts.
    own fallback was *"just store the exact timestamp"*, and every row carries a
    zoned one.
 
-**Verification.** `pytest tests/ -q` 5553 passed / 72 subtests (this packet adds
-38, including fail-before-fix proofs that a pass retires the chart if the host
+**Verification.** `pytest tests/ -q` 5554 passed / 72 subtests (this packet adds
+39, including fail-before-fix proofs that a pass retires the chart if the host
 rule is broken and that the sidecar keeps only the newest session); source
 `--selftest` 73/73.
 
-**Not built, deliberately, and both are trader decisions:** whether a pass
-should mark the symbol "Reviewed today" (`pick_feedback._ANNOTATION_DECISIONS`
-- that set is also read by the scan runner and four panels, so widening it is
-not a capture-packet side effect), and whether a pass should ever retire the
-chart.
+**Both open questions are DECIDED (trader, 2026-08-31), so neither is pending work.** *"Reviewed today" stays OFF for a pass:* the trader's words - *"that flag feeds the scanner report and several badges. Making a pass count as reviewed touches scanner-side code, so it should be its own small job if you want it."* `pick_feedback._ANNOTATION_DECISIONS` therefore still lists `veto`/`like_claim`/`note` only, and a test pins that a pass does not mark a symbol reviewed. *A pass never closes the chart, and no option is needed:* *"if you pass AND want the chart gone, just hit veto after. You get both behaviors without a new rule."*
 
 **Shared-checkout warning.** This branch's commit `ed3c73c` also contains the
 "Today's swing picks" packet: a second agent was working the same checkout and

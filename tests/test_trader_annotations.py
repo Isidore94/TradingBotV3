@@ -725,6 +725,41 @@ class PassBarSidecarTests(unittest.TestCase):
             )
         )
 
+    def test_a_pass_does_not_mark_the_symbol_reviewed_today(self) -> None:
+        """Trader decision, 2026-08-31, asked and answered: leave it OFF.
+
+        *"That flag feeds the scanner report and several badges. Making a pass
+        count as reviewed touches scanner-side code, so it should be its own
+        small job if you want it."* `reviewed_symbols_today` is read by
+        `master_avwap_lib.runner` and four panels, so widening
+        `_ANNOTATION_DECISIONS` is not something a capture packet may do as a
+        side effect. This pins that it did not: a veto in the same file still
+        counts, so the test would catch the set going empty as easily as it
+        catches `pass` being added to it.
+        """
+        import pick_feedback
+
+        pick_feedback.clear_reviewed_today_cache()
+        self.addCleanup(pick_feedback.clear_reviewed_today_cache)
+        passed = record_pass_annotation(
+            symbol="AAPL", reason_codes=[self.code], m5_bars=[], path=self.path
+        )
+        vetoed = record_annotation(
+            EVENT_VETO,
+            symbol="NVDA",
+            reason_code=load_veto_vocabulary().codes[0],
+            path=self.path,
+        )
+        reviewed = pick_feedback.reviewed_symbols_today(
+            market_date=passed["session_date"],
+            pick_feedback_path=self.directory / "missing_picks.jsonl",
+            review_events_path=self.directory / "missing_events.jsonl",
+            annotations_path=self.path,
+        )
+        self.assertEqual(vetoed["session_date"], passed["session_date"])
+        self.assertIn("NVDA", reviewed, "a veto still marks the symbol reviewed")
+        self.assertNotIn("AAPL", reviewed, "a pass must not, until asked for")
+
     def test_a_pass_row_never_carries_a_suppression_field(self) -> None:
         """plan.md sec 5: this stream annotates, and has no way to mute."""
         row = record_pass_annotation(

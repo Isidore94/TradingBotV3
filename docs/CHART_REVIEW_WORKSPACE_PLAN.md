@@ -211,8 +211,14 @@ are written in vocabulary order, not click order, so two passes citing the same
 two reasons compare equal a year from now. None of them requires a note; the
 free-text note in that section rides along and stays optional.
 
-**A pass never retires the chart.** It is note-shaped: written about the chart
-still in front of the trader. Only a veto and a like move the review on.
+**A pass never retires the chart**, and that is settled rather than provisional.
+It is note-shaped: written about the chart still in front of the trader, and
+only a veto and a like move the review on. No "pass and close" option is
+wanted - trader, 2026-08-31: *"if you pass AND want the chart gone, just hit
+veto after. You get both behaviors without a new rule."* A pass also does not
+mark the symbol "Reviewed today": that flag feeds the scanner report and
+several badges, so `pick_feedback._ANNOTATION_DECISIONS` stays
+`veto`/`like_claim`/`note` until it is asked for as its own job.
 
 Never assert a literal `vocab_version` in a test - assert against the loaded
 vocabulary.

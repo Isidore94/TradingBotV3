@@ -415,11 +415,16 @@ host owns.
 
 **Boundaries held.** Analysis-only evidence: no mute, no suppression field, no
 score, no gate, no alert, no watchlist or Focus write. Deliberately NOT
-changed: `pick_feedback._ANNOTATION_DECISIONS`, so a pass does not yet mark a
-symbol "Reviewed today" - that set feeds the scan runner and four panels, and
-widening it is the trader's call.
+changed, and DECIDED rather than pending (trader, 2026-08-31):
+`pick_feedback._ANNOTATION_DECISIONS` still lists `veto`/`like_claim`/`note`,
+so a pass does NOT mark a symbol "Reviewed today" - *"that flag feeds the
+scanner report and several badges. Making a pass count as reviewed touches
+scanner-side code, so it should be its own small job if you want it."* A test
+pins it. The other question closed the same way: a pass never retires the chart
+and needs no option - *"if you pass AND want the chart gone, just hit veto
+after. You get both behaviors without a new rule."*
 
-Verified: `pytest tests/ -q` 5553 passed / 72 subtests; source `--selftest`
+Verified: `pytest tests/ -q` 5554 passed / 72 subtests; source `--selftest`
 73/73 (the pass vocabulary is its own bundled-asset check).
 
 ### 2026-08-31 — Today's swing picks: the trader's own list, under the alert bar
