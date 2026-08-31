@@ -31,7 +31,6 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from ui.annotations import store  # noqa: E402
-from ui.annotations import vocabulary  # noqa: E402
 from ui.annotations.setup_claims import (  # noqa: E402
     all_setup_claims,
     is_valid_setup_claim,

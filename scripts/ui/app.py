@@ -9,12 +9,11 @@ import logging
 import re
 import sys
 import time
-from pathlib import Path
 
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, QObject, QProcess, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,

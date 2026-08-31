@@ -581,7 +581,12 @@ class JournalTab(ttk.Frame):
                 QuestradeImporter().refresh_access_token()
             except Exception as exc:
                 self.store.finish_import_run(run_id, status="FAILED", imported_executions=0, message=str(exc))
-                self.after(0, lambda: messagebox.showerror("Questrade", f"Token refresh failed:\n\n{exc}"))
+                # Bound now, not read later: Python deletes `exc` at the end of
+                # the except block, and this lambda runs afterwards on the Tk
+                # loop - so the error dialog raised NameError instead of
+                # showing the error.
+                message = str(exc)
+                self.after(0, lambda message=message: messagebox.showerror("Questrade", f"Token refresh failed:\n\n{message}"))
             else:
                 self.store.finish_import_run(run_id, status="OK", imported_executions=0, message="Token refreshed.")
             self.after(0, self.refresh_import_status)

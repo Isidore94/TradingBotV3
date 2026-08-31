@@ -1043,6 +1043,24 @@ Everything else stays in `WISHLIST.md` until explicitly promoted into this seque
 description of work already built moved. That file is evidence — if it disagrees with
 this section, this section wins.
 
+### Lint backlog (2026-08-31, trader-directed)
+
+`ruff` is installed and pinned; the repo reports **75** findings, down from 1,703.
+Two things are deliberately left, and neither blocks anything:
+
+1. **74 unused imports across ~40 files** (`F401`, all auto-fixable, none of them
+   behaviour). Several sit in shadow/scoring files (`greatness_shadow.py`,
+   `technical_integrity.py`, `human_focus_tracking.py`), where the file-scoped
+   ask-first rule binds even for an import removal. Sweep them as one packet when
+   no other agent is writing the tree.
+2. **One `F821`** at `ui/panels/alert_center_panel.py:883`: the annotation
+   `"StrengthBoardPanel | None"` names a class imported only inside the method
+   that builds the board. The fix is a one-line `TYPE_CHECKING` import and cannot
+   change behaviour, but the file houses alert code, so it is asked about first.
+
+Neither is a defect in shipped behaviour. Closing both is what makes "ruff clean"
+a claim this repo can make honestly.
+
 ## 13. Definition of done
 
 The roadmap is complete when:

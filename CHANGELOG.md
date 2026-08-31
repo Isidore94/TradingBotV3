@@ -350,6 +350,18 @@ which is evidence and must not be loaded as context.
 
 ### Testing, packaging, and platform
 
+- **`ruff` is installed and actually runs** (2026-08-31, trader-directed). It was
+  declared in `requirements-dev.txt` and configured in `pyproject.toml`, but was
+  absent from the `.venv` and unpinned in `constraints.txt`, so the configured
+  lint had never been executed against this tree - every "ruff clean" claim in the
+  history predates an installed linter. Pinned `ruff==0.16.5`. `extend-exclude`
+  now also covers the legacy Tk shims (`master_avwap_lib/gui.py` + `runner.py`,
+  `bounce_bot_lib/gui.py`, `gui_app/`), which re-export their names out of
+  `legacy` at import time and so report 1,591 "undefined" names a static reader
+  cannot resolve - noise that buried five real ones. Repo-wide: **1703 → 75**.
+  Of the five real undefined names, four were fixed (below) and one is an
+  annotation-only finding inside an alert file, left for the trader.
+
 - Broad pytest suite, deterministic smoke check, pytest markers, narrow Ruff gates,
   layered requirements with constraints, and Windows/macOS path handling.
 - Provider telemetry at IBKR/Yahoo/Nasdaq boundaries with completeness contracts and
@@ -507,7 +519,41 @@ after. You get both behaviors without a new rule."*
 Verified: `pytest tests/ -q` 5554 passed / 72 subtests; source `--selftest`
 73/73 (the pass vocabulary is its own bundled-asset check).
 
-### 2026-08-31 — Today's swing picks: the trader's own list, under the alert bar
+### 2026-08-31 — The linter was configured but never installed, and it was hiding four bugs
+
+**Trader-directed** ("ok install ruff then if you need it"), after the merge.
+
+`ruff` was named in `CLAUDE.md`'s stack, declared in `requirements-dev.txt` and
+configured in `pyproject.toml` with a deliberately narrow defect-class select
+(`E9`, `F63`, `F7`, `F82`, `F401`) - and was **not installed in the desk `.venv`**
+and not pinned in `constraints.txt`. The first run it has ever had here returned
+1,703 findings.
+
+- **1,591 of them are noise from four legacy Tk shims.** `master_avwap_lib/gui.py`,
+  `master_avwap_lib/runner.py`, `bounce_bot_lib/gui.py` and the `gui_app/` package
+  pull their names out of `legacy` at import time, so a static reader cannot see a
+  single one. They join the two `legacy.py` files already in `extend-exclude`,
+  with the reason written down. That leaves **75**.
+- **Four real defects, all fixed, all with fail-before-fix proofs where testable:**
+  - `operations_audit.py` called `logging.exception(...)` in **three**
+    `except Exception:` handlers whose comment reads *"health must never take the
+    audit down"* — and never imported `logging`, so each one raised `NameError`
+    out of System Health at exactly the moment its guard was supposed to hold.
+    All three carry `# pragma: no cover`, which is why nothing noticed.
+    `tests/test_operations_audit_never_raises.py` drives each into an exception
+    and asserts UNKNOWN or an empty note; 4 of its 7 fail without the import.
+  - `journal_tab.py` built its Questrade token-failure dialog as
+    `lambda: ...f"{exc}"`. Python deletes `exc` at the end of the except block and
+    the lambda runs later on the Tk loop, so the **error dialog itself** raised
+    `NameError`. The message is now bound at raise time.
+  - Two imports nothing had used in `ui/app.py` (`pathlib.Path`, `QtCore.QProcess`)
+    and one in `tests/test_trader_annotations.py`.
+- **Left, and named rather than swept:** 74 unused imports across ~40 files,
+  auto-fixable, none of them behaviour; and one `F821` on a string annotation in
+  `ui/panels/alert_center_panel.py` (`"StrengthBoardPanel | None"`). That file
+  houses alert code, so the file-scoped ask-first rule binds and the one-line
+  `TYPE_CHECKING` import was **not** made.
+
 
 **Trader-directed, authorized in chat 2026-08-31.** Branch `claude/swing-favorites`.
 

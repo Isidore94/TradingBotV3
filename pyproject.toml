@@ -23,7 +23,22 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["scripts/master_avwap_lib/legacy.py", "scripts/bounce_bot_lib/legacy.py"]
+# The legacy cores, plus the shims that re-export them. Those shims pull their
+# names out of `legacy` at import time (`importlib.import_module` + a globals
+# update), so every one of the 1,591 names they use is "undefined" to a static
+# reader - noise that buried the five REAL undefined names in the live tree when
+# ruff was first actually run here on 2026-08-31. `gui_app/` is the legacy Tk
+# app, unreachable from `launch_gui.py` and deliberately outside the frozen
+# bundle. Narrow this back as the legacy cores shrink, exactly as the note below
+# says.
+extend-exclude = [
+    "scripts/master_avwap_lib/legacy.py",
+    "scripts/bounce_bot_lib/legacy.py",
+    "scripts/master_avwap_lib/gui.py",
+    "scripts/master_avwap_lib/runner.py",
+    "scripts/bounce_bot_lib/gui.py",
+    "scripts/gui_app/",
+]
 
 [tool.ruff.lint]
 # Start narrow on real defect classes; widen as the legacy cores shrink.

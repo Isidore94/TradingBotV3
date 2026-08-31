@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** at `bded98d` - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
+| Working branch | **`main`** at the ruff commit - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5583 passed, 72 subtests** (2026-08-31, desk `.venv`, at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. **`ruff` is NOT installed in this `.venv`** (`No module named ruff`), so no lint run backs this baseline. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Last verified baseline | `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is now installed and pinned** (trader-directed, same day) and the repo reports **75** findings, down from 1,703 - see the entry below for what that number is made of. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge point, `selftest OK: 73/73 checks passed (frozen)`, exit 0. Previously rebuilt at `d0a2ae6`, 72/72. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
 
@@ -230,6 +230,48 @@ rule is broken and that the sidecar keeps only the newest session); source
 **Shared-checkout warning.** This branch's commit `ed3c73c` also contains the
 "Today's swing picks" packet: a second agent was working the same checkout and
 committed while HEAD sat here. See the glance block.
+
+---
+
+## 2026-08-31 - The linter was configured but never installed, and it was hiding four bugs
+
+**Trader-directed** ("ok install ruff then if you need it"), after the merge.
+
+`ruff` is named in `CLAUDE.md`'s stack, declared in `requirements-dev.txt` and
+configured in `pyproject.toml` with a narrow defect-class select - and was **not
+installed in the desk `.venv`** and not pinned in `constraints.txt`. Every "ruff
+clean" claim in this file's history predates an installed linter. Now
+`ruff==0.16.5`, pinned.
+
+**1,703 findings on the first run. 1,591 were noise** from four legacy Tk shims
+(`master_avwap_lib/gui.py` + `runner.py`, `bounce_bot_lib/gui.py`, `gui_app/`)
+that re-export their names out of `legacy` at import time, so a static reader
+cannot resolve one of them. They join the two `legacy.py` files already excluded,
+with the reason recorded in `pyproject.toml`. **Repo-wide: 1703 -> 75.**
+
+**Four real defects, fixed:**
+
+- `operations_audit.py` called `logging.exception(...)` in **three** handlers
+  whose comment reads *"health must never take the audit down"* - and never
+  imported `logging`. Each raised `NameError` out of System Health at exactly the
+  moment its guard was supposed to hold. All three carry `# pragma: no cover`,
+  which is why nothing noticed. `tests/test_operations_audit_never_raises.py` is
+  the fail-before-fix proof: 4 of its 7 fail with the import removed.
+- `journal_tab.py` built the Questrade token-failure dialog as
+  `lambda: ...f"{exc}"`. Python deletes `exc` at the end of the except block and
+  the lambda runs later on the Tk loop, so **the error dialog itself** raised
+  `NameError`. Bound at raise time now.
+- Two imports nothing had used in `ui/app.py`, one in
+  `tests/test_trader_annotations.py`.
+
+**Left, and named rather than swept:** 74 unused imports across ~40 files -
+auto-fixable, none of them behaviour, and a 40-file sweep in a checkout two other
+agents were writing to is the riskier act. Plus **one `F821` deliberately not
+fixed**: `ui/panels/alert_center_panel.py:883` annotates
+`self.strength_board: "StrengthBoardPanel | None"` with a name that is only
+imported inside the method that builds the board. The fix is a one-line
+`TYPE_CHECKING` import and cannot change behaviour - but that file houses alert
+code, so the file-scoped ask-first rule binds and it is the trader's call.
 
 ---
 
