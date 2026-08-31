@@ -181,6 +181,7 @@ before changing the behaviour a rule governs.**
 
 ## Commands
 - Test (before every commit): `.venv\Scripts\python.exe -m pytest tests/ -q` — must be fully green; current baseline lives in `CURRENT_CHECKPOINT.md`. Check pytest's own exit code, not a piped tail's. macOS/Linux: `QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ -q` (Qt tests need the offscreen platform when headless).
+- Lint (before every commit): `.venv\Scripts\python.exe -m ruff check .` — must be `All checks passed`. Clean since 2026-08-31; it was 1,703 findings the first time it was ever run here, four of them real bugs. Narrow select by design (`E9`, `F63`, `F7`, `F82`, `F401`) — widen as the legacy cores shrink. **Fix the code, not the config**; a `# noqa` needs the reason beside it (the two in `test_qt_alert_center.py` are availability probes, and `technical_integrity.row_capture_mode` is a re-export).
 - Smoke (offline, deterministic): `.venv\Scripts\python.exe scripts/smoke_check.py` — 7/7.
 - Run: `.venv\Scripts\python.exe launch_gui.py` (Windows; also the `trading_desk.cmd` launcher — **this is the production launch**, see Frozen exe rebuild policy) or `.venv/bin/python launch_gui.py` (macOS/Linux; `./setup_macos.command` once first). There is no desk-role choice any more — the Desk Link tab and its flags were removed 2026-08-24. IB TWS/Gateway runs on the main desk.
 - **One desk per machine** (R10.A, 2026-08-23): `launch_gui.py` takes a

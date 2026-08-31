@@ -1043,23 +1043,17 @@ Everything else stays in `WISHLIST.md` until explicitly promoted into this seque
 description of work already built moved. That file is evidence — if it disagrees with
 this section, this section wins.
 
-### Lint backlog (2026-08-31, trader-directed)
+### Lint (2026-08-31, trader-directed) - CLOSED
 
-`ruff` is installed and pinned; the repo reports **75** findings, down from 1,703.
-Two things are deliberately left, and neither blocks anything:
+`ruff` 0.16.5 is installed and pinned, and `ruff check .` reports **All checks
+passed**, down from 1,703 findings on its first run. The backlog that stood here -
+74 unused imports and one `F821` in an alert file - is closed; both were swept on
+the trader's explicit yes. "ruff clean" is now a claim this repo can make.
 
-1. **74 unused imports across ~40 files** (`F401`, all auto-fixable, none of them
-   behaviour). Several sit in shadow/scoring files (`greatness_shadow.py`,
-   `technical_integrity.py`, `human_focus_tracking.py`), where the file-scoped
-   ask-first rule binds even for an import removal. Sweep them as one packet when
-   no other agent is writing the tree.
-2. ~~One `F821` in `ui/panels/alert_center_panel.py`~~ - **CLOSED 2026-08-31**:
-   asked about under the file-scoped ask-first rule, the trader said yes, and the
-   annotation now resolves through a `TYPE_CHECKING` import that is never
-   evaluated at runtime.
-
-Item 1 is not a defect in shipped behaviour. Closing it is what makes "ruff clean"
-a claim this repo can make honestly.
+Keep it that way: run `.venv\Scripts\python.exe -m ruff check .` before a commit,
+alongside the test suite. The narrow select in `pyproject.toml` (`E9`, `F63`,
+`F7`, `F82`, `F401`) is deliberate - widen it as the legacy cores shrink, not
+before.
 
 ## 13. Definition of done
 

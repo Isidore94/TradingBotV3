@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, datetime
 from pathlib import Path
 
 import pytest

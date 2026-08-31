@@ -14,8 +14,8 @@ a worker in both hosts, never from a paint path (ground rule 9).
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
-from typing import Any, Iterable, Mapping
+from datetime import datetime
+from typing import Any, Iterable
 
 from PySide6.QtCore import QObject, QThread, Signal
 

@@ -9,7 +9,7 @@ only; it cannot reach a detector, score or alert.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any
 

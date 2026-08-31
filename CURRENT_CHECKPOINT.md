@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | **`main`** at the ruff commit - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is now installed and pinned** (trader-directed, same day) and the repo reports **75** findings, down from 1,703 - see the entry below for what that number is made of. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Last verified baseline | `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at `534e0e0` (the ruff packet, `main` tip), `selftest OK: 73/73 checks passed (frozen)`, exit 0. Also built and verified at the merge point. Previously rebuilt at `d0a2ae6`, 72/72. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
 
@@ -264,7 +264,19 @@ with the reason recorded in `pyproject.toml`. **Repo-wide: 1703 -> 75.**
 - Two imports nothing had used in `ui/app.py`, one in
   `tests/test_trader_annotations.py`.
 
-**Left, and named rather than swept:** 74 unused imports across ~40 files -
+**Then the 74 were swept too** (trader: "yes clean that up"), across 52 files.
+Two guarded availability probes in `test_qt_alert_center.py` kept their imports
+under `# noqa: F401` - removing them would have removed the probe. **The sweep
+broke one thing and the suite caught it:** `technical_integrity` imports
+`row_capture_mode` and **re-exports** it to `regime_collection_audit` and
+`test_ti_chain_backfill`, so removing it failed 8 tests. It is back, marked
+`# noqa: F401` and commented as a re-export. A multi-line-aware scan over all 105
+removed names found no other re-export (the first scan was single-line, which is
+exactly how it missed a parenthesised import block), and an import sweep over all
+331 modules passes. `ruff check .` now reports **All checks passed**.
+
+The paragraph below is the state *before* that sweep, kept because it is the
+reasoning that produced it: 74 unused imports across ~40 files -
 auto-fixable, none of them behaviour, and a 40-file sweep in a checkout two other
 agents were writing to is the riskier act. The one `F821` was **asked about and then
 fixed** (trader: "yes"): `ui/panels/alert_center_panel.py` annotated

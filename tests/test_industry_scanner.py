@@ -1,7 +1,6 @@
 """Tests for the sector/industry RS index board (pure computation, no network)."""
 
 import json
-import os
 import sys
 import tempfile
 import unittest

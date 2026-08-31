@@ -20,7 +20,6 @@ focus row.
 from __future__ import annotations
 
 import csv
-import json
 import sys
 import unittest
 from datetime import datetime

@@ -639,7 +639,7 @@ def _with_prior_session(bars, level, *, candles=20):
 
 
 def test_auto_market_regime_tracks_spy_and_respects_override():
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     # Yesterday's close 100; today SPY trades down ~0.9% -> bearish_strong.
     prev = [_make_bar(datetime(2026, 7, 1, 15, 55), 100.0, 100.1, 99.9, 100.0)]

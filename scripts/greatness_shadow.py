@@ -46,20 +46,16 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from diagnostics.artifact_io import append_jsonl_rows, atomic_write_json, config_hash
+from diagnostics.artifact_io import append_jsonl_rows, atomic_write_json
 from diagnostics.shadow_session_rollup import (
     GREATNESS_ENGINE,
     RETENTION_POLICY as SESSION_RETENTION_POLICY,
     finalize_session,
 )
-from diagnostics.run_manifest import ManifestRecorder, get_active_recorder
 from greatness_monitor import (
-    ConfirmationStep,
     DevelopmentCandidate,
     ENGINE_VERSION,
     GreatnessEngine,
-    Stage,
-    TERMINAL_STAGES,
     candidate_from_d1_trigger_levels,
 )
 from market_state import M5Bar

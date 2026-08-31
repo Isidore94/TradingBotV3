@@ -150,7 +150,6 @@ def run_slots(
     ledger_path=None,
 ) -> RunReport:
     """Run every due slot once. Never raises: a crash here is a lost night."""
-    from market_calendar import SessionCalendarError
 
     # ONE runner at a time on this machine (2026-08-28). The scheduled task
     # fires every 30 minutes for eight hours, which was harmless while every

@@ -1199,7 +1199,9 @@ def test_review_watch_buttons_arm_trigger_and_flag_red(monkeypatch):
         from PySide6.QtWidgets import QApplication
 
         QApplication.instance() or QApplication([])
-        from ui import theme
+        # Probe, not a use: this whole block exists so a missing PySide6 skips
+        # the test instead of erroring. Dropping the import would drop the probe.
+        from ui import theme  # noqa: F401
         from ui.models.bounce import BounceAlert
         from ui.panels.alert_center_panel import AlertCenterPanel
         from ui.widgets.alert_feed_item import AlertFeedItem
@@ -1573,7 +1575,6 @@ def test_dock_d1_event_buttons_arm_poll_and_fire_red(monkeypatch):
     import dataclasses
     from datetime import datetime, timedelta
 
-    import chart_snapshot
 
     monkeypatch.setattr(SymbolSnapshotWidget, "set_symbol", lambda *_args, **_kwargs: None)
 
@@ -1879,7 +1880,8 @@ def test_d1_candle_click_arms_persistent_level_alert_and_flags(tmp_path, monkeyp
         from PySide6.QtWidgets import QApplication
 
         QApplication.instance() or QApplication([])
-        import chart_snapshot
+        # Probe, not a use - see the note on the other guarded import above.
+        import chart_snapshot  # noqa: F401
         from ui.panels.alert_center_panel import AlertCenterPanel
         from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
     except ModuleNotFoundError as exc:

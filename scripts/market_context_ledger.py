@@ -30,7 +30,7 @@ deciding it.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Mapping
 

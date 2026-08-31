@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from project_paths import DATA_DIR, EARNINGS_CALENDAR_HISTORY_FILE
+    from project_paths import EARNINGS_CALENDAR_HISTORY_FILE
 except ImportError:  # pragma: no cover - used when imported as scripts.earnings_history
-    from scripts.project_paths import DATA_DIR, EARNINGS_CALENDAR_HISTORY_FILE
+    from scripts.project_paths import EARNINGS_CALENDAR_HISTORY_FILE
 
 
 SCHEMA_VERSION = 1

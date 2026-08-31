@@ -16,7 +16,6 @@ a bar window that only the page can use.
 
 from __future__ import annotations
 
-import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path

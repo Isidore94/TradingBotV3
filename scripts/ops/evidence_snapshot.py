@@ -41,7 +41,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]

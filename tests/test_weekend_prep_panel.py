@@ -9,7 +9,7 @@ from __future__ import annotations
 import ast
 import os
 import sys
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 import pytest

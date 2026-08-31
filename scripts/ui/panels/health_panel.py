@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QTextBrowser,
     QVBoxLayout,
-    QWidget,
 )
 
 from operations_audit import build_operations_audit

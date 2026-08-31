@@ -364,7 +364,7 @@ def test_adoption_refuses_a_verdict_measured_too_many_bars_ago():
     to complete, fail and reverse - so the binding limit is which BAR was
     measured, not when the clock was read.
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime
 
     from autopilot_core import FOCUS_GATE_MAX_BAR_LAG, pending_pick_gate_ok
 

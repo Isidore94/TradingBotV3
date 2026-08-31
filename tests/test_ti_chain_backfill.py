@@ -777,7 +777,6 @@ def test_one_symbol_cannot_spend_another_symbols_entitlement(tmp_path):
     gap. Entitlement is per symbol now, so a hopeless symbol costs its
     neighbours nothing.
     """
-    from technical_integrity import _followup_tracking_event
 
     monitor, _paths = _monitor_with_pending_chain(tmp_path)
     second = _resolution(event_id="resolved-2")

@@ -22,7 +22,6 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import journal_fx as fx  # noqa: E402
 from journal_store import JournalStore  # noqa: E402
-from ui.models.journal import JournalTrade  # noqa: E402
 from ui.services import journal_feed  # noqa: E402
 
 

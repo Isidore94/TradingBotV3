@@ -4,7 +4,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QHBoxLayout, QToolButton, QVBoxLayout, QWidget
 
 from chart_watch import D1_EVENT_KINDS, D1_LEVEL_KINDS, WATCH_KINDS
-from ui import theme
 from ui.models.bounce import BounceAlert, is_chart_watch_alert
 from ui.widgets.badge import Badge
 

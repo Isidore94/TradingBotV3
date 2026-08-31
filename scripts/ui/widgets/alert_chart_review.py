@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from chart_watch import WATCH_KINDS
 from ui.models.bounce import (
     FOCUS_REVIEW_TAG,
     MANUAL_CHART_TAG,

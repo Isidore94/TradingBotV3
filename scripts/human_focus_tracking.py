@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 
-from focus_picks import load_focus_map, load_focus_maps_by_category
+from focus_picks import load_focus_maps_by_category
 from market_session import get_market_session_window
 from project_paths import (
     HUMAN_FOCUS_DAILY_PICKS_FILE,

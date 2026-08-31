@@ -470,7 +470,7 @@ def test_entry_point_reports_store_failure_as_exit_2():
 
 def test_entry_point_reports_job_failure_as_exit_1(tmp_path):
     import run_ai_jobs
-    from ai_jobs import runner, window
+    from ai_jobs import runner
 
     def boom(*, session_date, now):
         raise RuntimeError("nope")

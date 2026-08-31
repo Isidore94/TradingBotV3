@@ -359,8 +359,8 @@ which is evidence and must not be loaded as context.
   `bounce_bot_lib/gui.py`, `gui_app/`), which re-export their names out of
   `legacy` at import time and so report 1,591 "undefined" names a static reader
   cannot resolve - noise that buried five real ones. Repo-wide: **1703 → 75**.
-  Of the five real undefined names, four were fixed (below) and one is an
-  annotation-only finding inside an alert file, left for the trader.
+  All five real undefined names were fixed, and the 74 remaining unused imports
+  were swept the same day: **`ruff check .` reports `All checks passed`.**
 
 - Broad pytest suite, deterministic smoke check, pytest markers, narrow Ruff gates,
   layered requirements with constraints, and Windows/macOS path handling.
@@ -554,9 +554,16 @@ and not pinned in `constraints.txt`. The first run it has ever had here returned
   inside `attach_strength_board`; it now carries a `TYPE_CHECKING` import, which
   is never evaluated at runtime. The lazy import that keeps the board's module
   out of the panel's import graph is untouched, and so is every alert path.
-- **Left, and named rather than swept:** 74 unused imports across ~40 files -
-  auto-fixable, none of them behaviour, several in shadow/scoring files where the
-  ask-first rule binds even for an import removal.
+- **The 74 unused imports were then swept too** (trader: "yes clean that up"),
+  across 52 files. Two guarded availability probes in `test_qt_alert_center.py`
+  kept their imports under `# noqa: F401` with the reason - removing them would
+  have removed the probe. The sweep broke one thing and the suite caught it:
+  `technical_integrity` imports `row_capture_mode` and **re-exports** it to
+  `regime_collection_audit` and `test_ti_chain_backfill`, so removing it failed 8
+  tests; it is back, marked `# noqa: F401` and commented as a re-export. A
+  multi-line-aware scan over all 105 removed names found no other re-export, and
+  an import sweep over all 331 modules passes. **`ruff check .` now reports
+  `All checks passed`.**
 
 
 **Trader-directed, authorized in chat 2026-08-31.** Branch `claude/swing-favorites`.

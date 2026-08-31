@@ -27,7 +27,10 @@ from typing import Any, Callable, Iterable, Mapping
 from diagnostics.artifact_io import (
     CAPTURE_MODE_BACKFILL,
     CAPTURE_MODE_LIVE,
-    row_capture_mode,
+    # Re-exported, not used here: `regime_collection_audit` reads it as
+    # `from technical_integrity import row_capture_mode`, which is why the
+    # 2026-08-31 unused-import sweep put it back after removing it.
+    row_capture_mode,  # noqa: F401
 )
 from durability_retry import fetch_with_bounded_retry
 from market_session import get_market_session_window, normalize_market_local_datetime

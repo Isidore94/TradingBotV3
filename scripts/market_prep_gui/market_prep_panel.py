@@ -21,7 +21,6 @@ from market_prep.config_loader import (
 )
 from market_prep.orchestrator import MarketPrepOrchestrator
 from market_prep.report_builder import build_catalyst_clock
-from market_prep.services.ticker_lookup_service import lookup_ticker_context
 
 
 MARKET_PREP_PLACEHOLDER_TEXT = "Market Prep tab loaded. Phase 1 skeleton ready."

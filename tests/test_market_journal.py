@@ -13,7 +13,7 @@ when it was actually written, tz-aware, **never backdated**. A reader weighing
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest

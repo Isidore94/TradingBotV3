@@ -45,7 +45,6 @@ from ui.timer_utils import SignalCoalescer, start_staggered
 from ui.widgets.data_table import DataTable
 from ui.widgets.setup_delegate import SetupTableDelegate
 from ui.widgets.empty_state import EmptyState
-from ui.widgets.section_header import SectionHeader
 from ui.widgets.setup_detail_view import SetupDetailView
 
 

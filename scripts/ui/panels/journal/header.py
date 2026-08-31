@@ -12,7 +12,7 @@ look at everything at once, and is not allowed to do it by accident.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
 )
 
 from ui.services import journal_feed
