@@ -529,7 +529,10 @@ THETA_SPREAD_PENALTY_PER_PCT = 1.5
 THETA_SPREAD_UNKNOWN_PCT = 25.0
 THETA_PCS_MIN_SUPPORT_LEVELS = 2
 THETA_PCS_MIN_EXPIRATION_MARKET_DAYS = 4
-THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 10
+# Trader, 2026-08-31: "2 weeks max for put sells, 3 weeks for credit spread."
+# A credit spread is defined-risk, so it can afford the longer wait that a
+# naked short put cannot. The sold-put maximum above stays at 10.
+THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 15
 THETA_PCS_TARGET_CREDIT_WIDTH_RATIO = 0.20
 THETA_PCS_CUSP_CREDIT_WIDTH_RATIO = 0.12
 THETA_PCS_MAX_EXPIRATIONS = 3
@@ -15887,6 +15890,62 @@ def _apply_support_only_theta_fallback(row: dict, kind: str, chain: dict, refere
     return True
 
 
+def _theta_premium_capacity_estimate(row: dict) -> float:
+    """How plausibly this symbol can pay the percent floor. Ordering only.
+
+    The quote budget (240 quotes / 360 s) is finite, so who gets asked FIRST
+    decides who gets a live credit at all. It used to be spent in `base_score`
+    order, which is a trend-quality ranking and says nothing about whether the
+    name's options carry premium - so dead-vol names burned quotes that rich
+    ones never got.
+
+    ATR20 as a percent of the close is the only volatility number already on
+    every theta row, and no new network call is allowed here. An option's
+    expected move over N market days scales with sqrt(N), and the premium a
+    support-defended OTM strike can carry scales with that move, so:
+
+        capacity = atr_pct * sqrt(max sold-put market days) / the 0.5% floor
+
+    A value >= 1 means the name plausibly pays the floor inside the window;
+    below 1 it probably cannot. It is an ESTIMATE and never a filter: a low
+    score sorts last, it does not drop the row, and the budget-exhaustion path
+    still writes every tail row its support-only strike zone. A row with no
+    usable ATR or close returns 0.0 - unmeasurable goes to the back of the
+    queue, never out of it.
+    """
+    close_value = _coerce_float(row.get("last_close")) if isinstance(row, dict) else None
+    atr_value = _coerce_float(row.get("atr20")) if isinstance(row, dict) else None
+    if close_value is None or close_value <= 0 or atr_value is None or atr_value <= 0:
+        return 0.0
+    atr_pct = atr_value / close_value * 100.0
+    horizon = math.sqrt(max(1, int(THETA_PUT_MAX_EXPIRATION_MARKET_DAYS)))
+    floor_pct = max(THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE, 0.01)
+    return atr_pct * horizon / floor_pct
+
+
+def _theta_enrichment_work_order(work: list) -> list:
+    """Order the quote-budget work list: the trader's own names, then the ones
+    most able to pay, then trend conviction.
+
+    `thetalongs.txt` rows are pinned first because that file IS the trader
+    saying "evaluate this one for premium" (R9.4); nothing the machine
+    estimates outranks it. `base_score` stays as the last key, so two names of
+    equal estimated capacity still resolve the way they always did.
+    """
+    ordered = list(work or [])
+    for row, _kind in ordered:
+        if isinstance(row, dict):
+            row["theta_premium_capacity"] = round(_theta_premium_capacity_estimate(row), 3)
+    ordered.sort(
+        key=lambda item: (
+            0 if str(item[0].get("theta_list_source") or "").strip().lower() == "thetalongs" else 1,
+            -float(item[0].get("theta_premium_capacity", 0.0) or 0.0),
+            -float(item[0].get("base_score", item[0].get("score", 0)) or 0.0),
+        )
+    )
+    return ordered
+
+
 def enrich_theta_rows_with_ib_option_premiums(
     ib: IBApi | None,
     theta_rows: list[dict],
@@ -15918,10 +15977,11 @@ def enrich_theta_rows_with_ib_option_premiums(
         logging.info("Theta option enrichment skipped because the IBKR option client is unavailable.")
         return
 
-    # Highest-conviction rows first (sold-put and PCS interleaved) so the
-    # shared quote budget is always spent on the best picks, never on
-    # whichever symbols happened to scan first.
-    work.sort(key=lambda item: -float(item[0].get("base_score", item[0].get("score", 0)) or 0.0))
+    # The trader's own names first, then the ones most able to pay the percent
+    # floor, then trend conviction (sold-put and PCS interleaved) - so the
+    # shared quote budget is spent where a live credit can actually come back,
+    # never on whichever symbols happened to scan first.
+    work = _theta_enrichment_work_order(work)
 
     # Persisted same-day chains + last working market data type make reruns
     # cheap; only real IB clients touch the on-disk cache (unit-test fakes
@@ -19485,6 +19545,34 @@ def _theta_option_alternatives(row: dict, *, play_type: str) -> list[str]:
     return out
 
 
+def _format_theta_premium_line(option: dict | None) -> str:
+    """The Phase 0.11 premium facts for one sold-put option, or "".
+
+    ``key=value | key=value``, the idiom the rest of this report already uses,
+    so `extract_theta_rows_from_report` can read back exactly what was written.
+    Only emitted for a row that actually has a quoted credit - a support-only
+    strike zone has no premium to describe, and inventing zeros there would
+    read as a measurement.
+    """
+    if not isinstance(option, dict):
+        return ""
+    credit_pct = _coerce_float(option.get("credit_pct_of_strike"))
+    if credit_pct is None:
+        return ""
+    parts = [f"credit_pct={credit_pct:.2f}"]
+    yield_week = _coerce_float(option.get("credit_pct_per_week"))
+    if yield_week is not None:
+        parts.append(f"yield_pct_wk={yield_week:.2f}")
+    spread_pct = _coerce_float(option.get("spread_pct"))
+    parts.append(f"spread_pct={spread_pct:.1f}" if spread_pct is not None else "spread_pct=n/a")
+    parts.append(f"source={str(option.get('credit_source') or 'n/a').strip() or 'n/a'}")
+    sma_above = int(option.get("covered_major_sma_support_count", 0) or 0)
+    # The 2+ boost is a ranking rule, so the report says when it applied
+    # rather than leaving the trader to infer it from the ordering.
+    parts.append(f"sma_above_strike={sma_above}" + (" (boost)" if sma_above >= 2 else ""))
+    return "premium=" + " | ".join(parts)
+
+
 def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> None:
     option = row.get("best_option") if isinstance(row.get("best_option"), dict) else {}
     next_earnings = row.get("next_earnings_date") or f">{THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS}d/unknown"
@@ -19534,6 +19622,9 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
                 f"| prev_1stdev={option.get('covered_previous_first_dev_support_count', 0)} "
                 f"| gave_up_supports={option.get('surrendered_support_count', 0)}\n"
             )
+        premium_line = _format_theta_premium_line(option)
+        if premium_line:
+            handle.write(f"   {premium_line}\n")
     handle.write(f"   strike_zone={row.get('strike_zone')}\n")
     if option and option.get("covered_support_summary"):
         handle.write(f"   option_supports={option.get('covered_support_summary')}\n")
@@ -19657,6 +19748,7 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
         re.IGNORECASE,
     )
     earnings_pattern = re.compile(r"next\s+([^;]+?)(?:\s+\(([-]?\d+)d\))?(?:$|;)", re.IGNORECASE)
+    premium_pattern = re.compile(r"^\s*premium=(.+)$", re.IGNORECASE)
 
     current = None
     current_play_type = "sold_put"
@@ -19687,6 +19779,10 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
                 "recommended_long_strike": None,
                 "recommended_credit": None,
                 "recommended_credit_source": "",
+                "credit_pct_of_strike": None,
+                "credit_pct_per_week": None,
+                "spread_pct": None,
+                "major_sma_above_strike": None,
             }
             continue
         if not current:
@@ -19718,6 +19814,25 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
             current["recommended_credit_source"] = credit_source
             current["primary_strike_band"] = f"{pcs_match.group(2)}/{pcs_match.group(3)} PCS {pcs_match.group(1)}"
             current["liquidity_score"] = credit_source
+            continue
+        premium_match = premium_pattern.match(line)
+        if premium_match:
+            for chunk in premium_match.group(1).split("|"):
+                key, _sep, value = chunk.strip().partition("=")
+                key = key.strip().lower()
+                value = value.strip()
+                if key == "credit_pct":
+                    current["credit_pct_of_strike"] = _coerce_float(value)
+                elif key == "yield_pct_wk":
+                    current["credit_pct_per_week"] = _coerce_float(value)
+                elif key == "spread_pct":
+                    current["spread_pct"] = _coerce_float(value)
+                elif key == "sma_above_strike":
+                    # "2 (boost)" - the flag is for the reader, the number is
+                    # the datum.
+                    current["major_sma_above_strike"] = _coerce_int(value.split()[0] if value else "")
+                elif key == "source" and not current.get("recommended_credit_source"):
+                    current["recommended_credit_source"] = value
             continue
         if line.lower().startswith("earnings="):
             earnings_match = earnings_pattern.search(line)

@@ -21,6 +21,14 @@ class ThetaRow:
     recommended_credit_source: str = ""
     primary_strike_band: str = ""
     liquidity_score: str = ""
+    # Phase 0.11: the premium facts the report now states per sold-put row.
+    # None means "this row has no quoted credit to describe" (a support-only
+    # strike zone, or a PCS row measured on credit/width instead) - never zero,
+    # which would read as a measurement.
+    credit_pct_of_strike: float | None = None
+    credit_pct_per_week: float | None = None
+    spread_pct: float | None = None
+    major_sma_above_strike: int | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -41,6 +49,10 @@ class ThetaRow:
             recommended_credit_source=str(row.get("recommended_credit_source") or ""),
             primary_strike_band=str(row.get("primary_strike_band") or ""),
             liquidity_score=str(row.get("liquidity_score") or ""),
+            credit_pct_of_strike=_float_or_none(row.get("credit_pct_of_strike")),
+            credit_pct_per_week=_float_or_none(row.get("credit_pct_per_week")),
+            spread_pct=_float_or_none(row.get("spread_pct")),
+            major_sma_above_strike=_int_or_none(row.get("major_sma_above_strike")),
             raw=dict(row),
         )
 

@@ -6778,6 +6778,148 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "an uncapped penalty separates them by more than the old cap ever could",
         )
 
+    # ---- Phase 0.11 T3: credit spreads get three weeks ---------------------
+    @staticmethod
+    def _expiration_n_market_days_out(reference: date, wanted: int) -> date:
+        """The first date exactly ``wanted`` market days after ``reference``,
+        measured by the module's own counter so the test cannot drift from it."""
+        from datetime import timedelta
+
+        for step in range(1, 60):
+            candidate = reference + timedelta(days=step)
+            if master_avwap._market_days_between(reference, candidate) == wanted:
+                return candidate
+        raise AssertionError(f"no date {wanted} market days after {reference}")
+
+    def _selected_market_days(self, reference, expirations, *, min_days, max_days):
+        selected = master_avwap._select_option_expirations(
+            expirations,
+            reference,
+            {"symbol": "ABC"},
+            min_market_days=min_days,
+            max_market_days=max_days,
+            limit=10,
+        )
+        return sorted(int(item["market_days"]) for item in selected)
+
+    def test_credit_spreads_reach_three_weeks_and_sold_puts_still_stop_at_two(self):
+        """Trader, 2026-08-31: "2 weeks max for put sells, 3 weeks for credit
+        spread." A defined-risk spread can afford the wait a naked put cannot."""
+        reference = date(2026, 5, 5)
+        thirteen = self._expiration_n_market_days_out(reference, 13)
+        sixteen = self._expiration_n_market_days_out(reference, 16)
+        expirations = [
+            master_avwap._format_option_expiration(thirteen),
+            master_avwap._format_option_expiration(sixteen),
+        ]
+
+        pcs_days = self._selected_market_days(
+            reference,
+            expirations,
+            min_days=master_avwap.THETA_PCS_MIN_EXPIRATION_MARKET_DAYS,
+            max_days=master_avwap.THETA_PCS_MAX_EXPIRATION_MARKET_DAYS,
+        )
+        sold_put_days = self._selected_market_days(
+            reference,
+            expirations,
+            min_days=1,
+            max_days=master_avwap.THETA_PUT_MAX_EXPIRATION_MARKET_DAYS,
+        )
+
+        self.assertEqual(pcs_days, [13], "13 market days is a credit spread, not a sold put")
+        self.assertEqual(sold_put_days, [])
+        self.assertNotIn(16, pcs_days, "16 market days is past three weeks for either")
+
+    # ---- Phase 0.11 T4: the quote budget goes where premium can be paid -----
+    @staticmethod
+    def _theta_work_row(symbol, *, score, close=100.0, atr20=2.0, source=""):
+        row = {
+            "symbol": symbol,
+            "score": score,
+            "base_score": score,
+            "last_close": close,
+            "atr20": atr20,
+        }
+        if source:
+            row["theta_list_source"] = source
+        return row
+
+    def test_thetalongs_names_are_quoted_before_higher_scored_watchlist_names(self):
+        """R9.4: `thetalongs.txt` is the trader saying "check this one for
+        premium". Nothing the machine estimates outranks that."""
+        mine = self._theta_work_row("DRAM", score=10, atr20=1.0, source="thetalongs")
+        stronger = self._theta_work_row("AAA", score=99, atr20=6.0)
+
+        ordered = master_avwap._theta_enrichment_work_order(
+            [(stronger, "sold_put"), (mine, "sold_put")]
+        )
+
+        self.assertEqual([row["symbol"] for row, _kind in ordered], ["DRAM", "AAA"])
+
+    def test_at_equal_conviction_the_richer_volatility_is_quoted_first(self):
+        quiet = self._theta_work_row("QUIET", score=80, atr20=0.5)
+        lively = self._theta_work_row("LIVE", score=80, atr20=5.0)
+
+        ordered = master_avwap._theta_enrichment_work_order(
+            [(quiet, "sold_put"), (lively, "pcs")]
+        )
+
+        self.assertEqual([row["symbol"] for row, _kind in ordered], ["LIVE", "QUIET"])
+        self.assertGreater(lively["theta_premium_capacity"], quiet["theta_premium_capacity"])
+
+    def test_an_unmeasurable_name_sorts_last_and_is_never_dropped(self):
+        """Missing data is uncertainty, never confirmation (plan.md sec 5) -
+        and here it is also never a reason to skip a row."""
+        blank = self._theta_work_row("BLANK", score=95, atr20=None)
+        measured = self._theta_work_row("MEAS", score=10, atr20=3.0)
+
+        ordered = master_avwap._theta_enrichment_work_order(
+            [(blank, "sold_put"), (measured, "sold_put")]
+        )
+
+        self.assertEqual([row["symbol"] for row, _kind in ordered], ["MEAS", "BLANK"])
+        self.assertEqual(blank["theta_premium_capacity"], 0.0)
+        self.assertEqual(len(ordered), 2)
+
+    def test_base_score_still_breaks_a_tie_between_equal_capacities(self):
+        low = self._theta_work_row("LOW", score=10)
+        high = self._theta_work_row("HIGH", score=90)
+
+        ordered = master_avwap._theta_enrichment_work_order(
+            [(low, "sold_put"), (high, "sold_put")]
+        )
+
+        self.assertEqual([row["symbol"] for row, _kind in ordered], ["HIGH", "LOW"])
+
+    def test_the_enrichment_run_visits_rows_in_that_order(self):
+        from datetime import timedelta
+
+        reference = date(2026, 5, 5)
+        expirations = {
+            master_avwap._format_option_expiration(reference + timedelta(days=days))
+            for days in (7, 14)
+        }
+        chain = {"tradingClass": "X", "multiplier": "100", "expirations": expirations, "strikes": {90, 95}}
+        visited = []
+
+        def fake_chain(_ib, _cache, symbol, _budget):
+            visited.append(symbol)
+            return chain
+
+        rows = [
+            self._theta_work_row("AAA", score=99, atr20=6.0),
+            self._theta_work_row("QUIET", score=80, atr20=0.5),
+            self._theta_work_row("DRAM", score=10, atr20=1.0, source="thetalongs"),
+        ]
+
+        with patch.object(master_avwap, "is_daily_data_client_connected", return_value=True), \
+                patch.object(master_avwap, "_fetch_theta_chain_for_symbol", side_effect=fake_chain), \
+                patch.object(master_avwap, "_enrich_sold_put_row_with_ib_options"), \
+                patch.object(master_avwap, "_enrich_pcs_row_with_ib_options"):
+            master_avwap.enrich_theta_rows_with_ib_option_premiums(object(), rows, [], reference)
+
+        self.assertEqual(visited, ["DRAM", "AAA", "QUIET"])
+
     def test_the_deeper_cheaper_strike_no_longer_wins(self):
         """The exact failure this packet exists to fix: two recommended rows
         where the deeper-OTM one is cheaper. The old strike-ascending key put
