@@ -148,6 +148,7 @@ class TradingDeskPanel(QWidget):
         self.swing_favorites_service.takenChanged.connect(self.swing_favorites_bar.set_taken)
         self.swing_favorites_service.statusChanged.connect(self.swing_favorites_bar.set_status)
         self.swing_favorites_service.statusChanged.connect(self.statusChanged)
+        self.swing_favorites_bar.firstShown.connect(self._refresh_swing_favorites)
         # A SPLITTER, not a fixed stack (trader, 2026-08-31: "the tab needs to
         # be resizable relative to the M5 alerts tab, I should be able to drag
         # it up to see more"). Its own settings key, so this drag and the desk's
@@ -327,11 +328,17 @@ class TradingDeskPanel(QWidget):
     def _refresh_swing_favorites(self) -> None:
         """Show the current session's list and re-ask the journal about it.
 
-        Cheap by construction: the list is a replay of one session's rows in a
-        small JSONL, and the journal join runs on its own thread.
+        The list is a replay of one session's rows in a small JSONL, so it is
+        cheap enough for any caller. The journal join is NOT: it opens sqlite
+        over a year of fills on a worker thread, so it is asked only once the
+        strip is actually on screen. A desk built and dropped without a
+        `shutdown()` - which is every headless construction - then starts no
+        thread at all, and the badge still appears the moment the trader can
+        see it (`firstShown`).
         """
         self.swing_favorites_bar.set_favorites(self.swing_favorites_service.favorites())
-        self.swing_favorites_service.refresh_taken()
+        if self.swing_favorites_bar.isVisible():
+            self.swing_favorites_service.refresh_taken()
 
     def _show_setup_in_workspace(self, payload: dict) -> None:
         self.master_workspace.show_setups()

@@ -317,4 +317,5 @@ def test_the_bar_is_the_left_column_before_the_chart():
         desk.alert_center.m5AlertPosted.emit(alert)
         assert desk.m5_alert_bar.alerts() == [alert]
     finally:
+        desk.shutdown()
         desk.close()

@@ -116,6 +116,12 @@ class SwingFavoritesBar(QWidget):
     addRequested = Signal(str, str)
     #: (symbol, side)
     removeRequested = Signal(str, str)
+    #: Emitted once, the first time the strip is actually on screen. The
+    #: journal read behind the "took" badge hangs off this rather than off
+    #: construction: a strip nobody has looked at yet has no reason to open the
+    #: journal, and a worker started during __init__ outlives any host that is
+    #: torn down without calling shutdown().
+    firstShown = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -207,6 +213,13 @@ class SwingFavoritesBar(QWidget):
 
         self._side = "long"
         self._taken: set[tuple[str, str]] = set()
+        self._announced_shown = False
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        if not self._announced_shown:
+            self._announced_shown = True
+            self.firstShown.emit()
 
     # ------------------------------------------------------------- input
     def side(self) -> str:

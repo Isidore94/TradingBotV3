@@ -21,8 +21,8 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | **`claude/strength-board-into-desk`** - cut from `main` at `f36ab59` for the trader-directed Strength Board move (2026-08-31). One commit, `be35fb6`, pushed, not merged. `main` already carries the day-trade pass, today's swing picks (both landed together in `ed3c73c`, which resolved the shared-checkout collision recorded below) and the desk-lockup fix; no divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5581 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/strength-board-into-desk` at `edc7999`) · smoke **7/7** · source `--selftest` **73/73** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks SECOND PASS (drag, Copy/Paste, the `vetted` cohort) adds the 10 on top of the 5571 measured before it. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
-| Frozen exe | **STALE by the Strength Board move** (a new module under an already-collected package - no spec trigger, but the exe predates it). Previously rebuilt 2026-08-31 at `d0a2ae6` (419 MB onedir), `selftest OK: 72/72 checks passed (frozen)`, exit 0. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
+| Last verified baseline | `pytest tests/ -q` **5583 passed, 72 subtests** (2026-08-31, desk `.venv`, at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. **`ruff` is NOT installed in this `.venv`** (`No module named ruff`), so no lint run backs this baseline. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge point, `selftest OK: 73/73 checks passed (frozen)`, exit 0. Previously rebuilt at `d0a2ae6`, 72/72. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
 
 ### Open gates, newest first
@@ -54,6 +54,30 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 22 | **Strength Board in the Desk** - one desk session: the trader opens the section under the Strength window, reads the board in the column, clicks a row onto the Visual Alert Review chart, adds a name from it, and says whether the vertical stack is right | 2026-08-31 Strength Board entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+
+### Cross-packet compatibility check before the 2026-08-31 merge
+
+Three packets built in one shared checkout that afternoon - today's swing picks,
+the day-trade pass, and the Strength Board move - so the merge was checked as one
+thing rather than three. What was verified: full suite **5583 passed / 72
+subtests**, exit 0; smoke 7/7; source selftest 73/73; **frozen rebuild + frozen
+selftest 73/73, exit 0**; spec-drift 17; `main` a strict ancestor (fast-forward,
+no divergence); `CLAUDE.md` byte-identical to `AGENTS.md`; both themes render
+with **no unsubstituted `@token@`** left in the stylesheet; every `symbolActivated`
+/ `symbolRequested` connected to `chart_symbol` still emits one argument against
+its keyword-only `side`/`origin`; the two split settings keys are distinct; no new
+dependency, no new non-`.py` asset, no new top-level package.
+
+One real defect was found and fixed in the process: the swing-picks strip asked
+the journal for its "took" badge during **construction**, so any desk built and
+dropped without `shutdown()` left a worker thread behind it. The read now hangs
+off the strip's first paint (`firstShown`), a test pins that construction opens no
+thread, and every desk-building test hands its threads back the way the app does.
+
+`QThread: Destroyed while thread '' is still running` still prints once at
+interpreter exit on a full run. It is **not ours**: a session-end probe over every
+live `QThread` found only `Qt mainThread`, and the line does not appear when the
+qt-marked and non-qt halves are run separately. Cosmetic, exit code 0.
 
 ### Merged to main without a live-validation day — stated, not hidden
 

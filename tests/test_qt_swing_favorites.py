@@ -454,6 +454,7 @@ class TestWhereItLives:
             assert desk.m5_alert_bar.parent() is desk.m5_column
             assert desk.swing_favorites_bar.parent() is desk.m5_column
         finally:
+            desk.shutdown()
             desk.close()
 
     def test_the_alert_bar_still_posts_and_charts_across_a_mode_switch(self):
@@ -481,6 +482,7 @@ class TestWhereItLives:
             desk.m5_alert_bar.list.itemClicked.emit(desk.m5_alert_bar.list.item(0))
             assert charted == ["NVDA"]
         finally:
+            desk.shutdown()
             desk.close()
 
     def test_the_two_share_a_draggable_split_that_neither_can_collapse(self):
@@ -499,6 +501,7 @@ class TestWhereItLives:
             desk.m5_column.setSizes([400, 400])
             assert min(desk.m5_column.sizes()) > 0
         finally:
+            desk.shutdown()
             desk.close()
 
     def test_the_column_drag_has_its_own_settings_key(self):
@@ -516,6 +519,34 @@ class TestWhereItLives:
         assert bar.chip_scroll.minimumHeight() >= MIN_CHIP_HEIGHT
         assert bar.chip_scroll.maximumHeight() >= 16777215, "no ceiling"
 
+    def test_building_the_desk_opens_no_journal_thread(self):
+        """A desk that is built and dropped without `shutdown()` - every
+        headless construction - must leave no worker running behind it. The
+        journal read hangs off the strip's first paint, not off __init__."""
+        from ui.panels.trading_desk import TradingDeskPanel
+
+        desk = TradingDeskPanel(workspace_mode="workspace")
+        try:
+            assert desk.swing_favorites_bar.isVisible() is False
+            assert desk.swing_favorites_service._worker is None
+        finally:
+            desk.shutdown()
+            desk.close()
+
+    def test_the_badge_is_asked_for_when_the_strip_first_appears(self):
+        from ui.widgets.swing_favorites_bar import SwingFavoritesBar
+
+        bar = SwingFavoritesBar()
+        shown: list[int] = []
+        bar.firstShown.connect(lambda: shown.append(1))
+        bar.show()
+        bar.hide()
+        bar.show()
+        try:
+            assert shown == [1], "announced once, not on every re-show"
+        finally:
+            bar.close()
+
     def test_a_day_roll_re_derives_the_strip_and_clears_the_bar(self):
         from ui.panels.trading_desk import TradingDeskPanel
 
@@ -528,4 +559,5 @@ class TestWhereItLives:
             assert refreshed == [1]
             assert desk.swing_favorites_bar.symbols() == [], "a new session starts empty"
         finally:
+            desk.shutdown()
             desk.close()
