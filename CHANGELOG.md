@@ -81,8 +81,10 @@ which is evidence and must not be loaded as context.
   capacity (ATR%-based, no new network call), then `base_score`; nothing is
   dropped and the support-only fallback still covers the tail. The report and the
   Qt theta panel carry credit % of strike, yield per week, spread %, credit source
-  and the SMA-above-strike count. PCS tiering stays on credit/width by design -
-  see `plan.md` Phase 0.11 for the arithmetic and the one open trader decision.
+  and the SMA-above-strike count. Credit spreads carry the same rule: above the
+  20% credit/width target the ratio still decides the tier, but the credit must
+  also clear 0.5% of the short strike (or $0.40), because the width is capped at
+  10 points however expensive the stock is and the ratio therefore stops scaling.
 - BounceBot completed-M5 detection with session VWAP/bands, EMA and prior-day
   levels, relative strength/weakness, regime-aware candidate discovery, tiering,
   alerts, outcome tracking, and the day-scoped M5 Focus path.
@@ -576,8 +578,18 @@ tests were deliberately reversed - their old rule (a sub-floor quote kept as
 removes. Eligibility (>= 3 supports, >= 1 major SMA, earnings buffer) and R9.4
 `theta_side` semantics are unchanged, and nothing here executes anything.
 
-**Open trader decision, not taken:** whether the percent floor should also apply to
-the PCS short leg. Arithmetic and reasoning in `plan.md` Phase 0.11.
+**And then the spreads too.** The one open question - whether the floor should
+apply to the PCS short leg - was put to the trader with its arithmetic and
+answered: *"Yes it should scale with price of the underlying."* The credit/width
+ratio does not scale because the width is capped at 10 points at any price, so
+the 20% target credit stops growing at $2.00: 1.36% of a $37 short strike, 0.31%
+of a $644 one. `theta_pcs_credit_floor` is now a hard minimum of 0.5% of the
+short strike (or $0.40), with the ratio still deciding the tier above it. The
+1.0% recommended percent is deliberately not applied to spreads - it would be a
+64% credit/width bar on an expensive name, which deletes rather than ranks.
+Expensive spreads will mostly disappear unless their credit really scales; the
+lever to bring them back is the WIDTH cap, not the floor, and that changes
+capital at risk per contract so it was not touched.
 
 ### 2026-08-31 — The linter was configured but never installed, and it was hiding four bugs
 

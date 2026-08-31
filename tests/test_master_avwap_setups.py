@@ -6778,6 +6778,92 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "an uncapped penalty separates them by more than the old cap ever could",
         )
 
+    # ---- Phase 0.11: the spread credit scales with the underlying too ------
+    #
+    # Trader, 2026-08-31, asked directly: "Yes it should scale with price of the
+    # underlying." The credit/width ratio alone does not, because the width is
+    # capped at 10 points however expensive the stock is - so the 20% target
+    # credit stops growing at $2.00, which is 1.36% of a $37 short strike and
+    # 0.31% of a $644 one.
+    @staticmethod
+    def _pcs_spread_row(short_strike, long_strike, credit, **overrides):
+        spread_row = {
+            "short_strike": short_strike,
+            "long_strike": long_strike,
+            "expiration": "20260515",
+            "expiration_date": date(2026, 5, 15),
+            "market_days": 8,
+            "covered_support_count": 2,
+            "covered_major_sma_support_count": 1,
+            "covered_avwap_support_count": 1,
+            "total_support_count": 2,
+            "surrendered_support_count": 0,
+            "support_quality_score": 2.0,
+            # short bid minus long ask is the conservative spread credit.
+            "short_quote": {"bid": credit + 1.0, "ask": credit + 1.1},
+            "long_quote": {"bid": 0.9, "ask": 1.0},
+        }
+        spread_row.update(overrides)
+        return spread_row
+
+    def _ranked_pcs(self, spread_rows, last_close):
+        row = {"symbol": "ABC", "last_close": last_close, "score": 75, "base_score": 75}
+        ranked = master_avwap._rank_pcs_option_recommendations(row, spread_rows)
+        return row, ranked
+
+    def test_an_expensive_spread_paying_the_ratio_no_longer_qualifies_on_it_alone(self):
+        """$2.00 on a 10-wide spread is the full 20% credit/width target - and
+        0.31% of a $644 short strike, which is the reward this packet exists to
+        stop showing."""
+        spread = self._pcs_spread_row(644.0, 634.0, 2.00)
+
+        row, ranked = self._ranked_pcs([spread], last_close=700.0)
+
+        self.assertEqual(ranked, [])
+        self.assertEqual(row["pcs_quotes_below_floor"], 1)
+
+    def test_the_same_ratio_still_qualifies_on_a_mid_priced_underlying(self):
+        """The rule is the percent, not a blanket tightening: $1.00 on a 5-wide
+        spread is the same 20% ratio and 0.72% of a $138 strike."""
+        spread = self._pcs_spread_row(138.0, 133.0, 1.00)
+
+        _row, ranked = self._ranked_pcs([spread], last_close=150.0)
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["status"], "recommended")
+        self.assertAlmostEqual(ranked[0]["credit_pct_of_strike"], 0.72, places=1)
+
+    def test_a_cheap_spread_cannot_qualify_on_pennies(self):
+        """The cusp ratio on a 2.5-wide spread is $0.30, under the absolute
+        no-pennies floor."""
+        spread = self._pcs_spread_row(36.8, 34.3, 0.30)
+
+        row, ranked = self._ranked_pcs([spread], last_close=40.0)
+
+        self.assertEqual(ranked, [])
+        self.assertEqual(row["pcs_quotes_below_floor"], 1)
+
+    def test_above_the_floor_the_credit_width_ratio_still_decides_the_tier(self):
+        rich = self._pcs_spread_row(138.0, 133.0, 1.00, expiration="20260515")
+        lean = self._pcs_spread_row(138.0, 133.0, 0.72, expiration="20260522")
+
+        _row, ranked = self._ranked_pcs([rich, lean], last_close=150.0)
+
+        by_credit = {round(item["credit"], 2): item for item in ranked}
+        self.assertEqual(by_credit[1.00]["status"], "recommended")
+        self.assertEqual(by_credit[0.72]["status"], "cusp")
+
+    def test_an_expensive_spread_that_actually_pays_is_kept(self):
+        """Never a blanket ban on expensive names - a spread that pays 0.5% of
+        its short strike is still recommended."""
+        spread = self._pcs_spread_row(644.0, 634.0, 3.30)
+
+        _row, ranked = self._ranked_pcs([spread], last_close=700.0)
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["status"], "recommended")
+        self.assertGreater(ranked[0]["credit_pct_of_strike"], 0.5)
+
     # ---- Phase 0.11 T3: credit spreads get three weeks ---------------------
     @staticmethod
     def _expiration_n_market_days_out(reference: date, wanted: int) -> date:

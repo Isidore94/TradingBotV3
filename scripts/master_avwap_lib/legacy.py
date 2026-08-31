@@ -19068,6 +19068,34 @@ def theta_put_credit_floors(strike: float | None) -> tuple[float | None, float |
     return cusp, ideal
 
 
+def theta_pcs_credit_floor(short_strike: float | None) -> float | None:
+    """The minimum credit a put credit spread may show, in dollars.
+
+    Trader, 2026-08-31, asked directly whether the spread bar should scale with
+    the underlying: *"Yes it should scale with price of the underlying."* The
+    credit/width ratio alone does not - `_pcs_long_strike_choices` caps the
+    width at 10 points however expensive the stock is, so the 20% target credit
+    stops growing at $2.00. Expressed as a percent of the short strike that is
+    1.36% at a $40 close, 0.72% at $150, 0.45% at $240 and 0.31% at $700: the
+    dearer the stock, the smaller the reward for the same assignment risk.
+
+    So the CUSP percent (0.5% of the short strike, or the absolute floor,
+    whichever is larger) is a hard minimum for a spread as well, and the
+    credit/width ratio still decides recommended-vs-cusp above it. The
+    RECOMMENDED percent is deliberately not used here: 1% of a $644 strike is a
+    $6.44 credit on a 10-wide spread, a 64% credit/width bar that no real market
+    pays, so applying it would silently delete every expensive spread rather
+    than rank it.
+    """
+    strike_value = _coerce_float(short_strike)
+    if strike_value is None or strike_value <= 0:
+        return None
+    return max(
+        strike_value * THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE / 100.0,
+        THETA_PUT_ABSOLUTE_MIN_CREDIT,
+    )
+
+
 def _contracts_needed_for_target_credit(credit: float | None) -> int | None:
     credit_value = _coerce_float(credit)
     if credit_value is None or credit_value <= 0:
@@ -19325,6 +19353,7 @@ def _pcs_long_strike_choices(short_strike: float, strikes: list[float], close_va
 
 def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list[dict]:
     ranked = []
+    below_floor_count = 0
     base_score = int(row.get("base_score", row.get("score", 0)) or 0)
     for spread_row in spread_rows or []:
         short_quote = spread_row.get("short_quote") if isinstance(spread_row, dict) else None
@@ -19339,6 +19368,15 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
         width = short_strike - long_strike
         if width <= 0:
             continue
+        # The credit has to scale with the underlying, not just with the
+        # width (trader, 2026-08-31). Under the floor the spread leaves the
+        # report entirely, the same way a sub-floor sold put does; the ratio
+        # still decides the tier above it.
+        credit_floor = theta_pcs_credit_floor(short_strike)
+        if credit_floor is not None and credit < credit_floor:
+            below_floor_count += 1
+            continue
+        credit_pct_of_strike = credit / short_strike * 100.0
         credit_ratio = credit / width
         status = "below_target"
         status_rank = 2
@@ -19385,6 +19423,8 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
                 "credit_source": credit_source,
                 "credit_width_ratio": round(float(credit_ratio), 4),
                 "credit_width_pct": round(float(credit_ratio * 100.0), 1),
+                "credit_pct_of_strike": round(float(credit_pct_of_strike), 3),
+                "min_credit_floor": round(float(credit_floor), 3) if credit_floor is not None else None,
                 "max_loss": round(float((width - credit) * 100.0), 2),
                 "short_bid": _quote_value(short_quote, "bid"),
                 "short_ask": _quote_value(short_quote, "ask"),
@@ -19418,6 +19458,8 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
             -float(item.get("rank_score", 0.0) or 0.0),
         )
     )
+    if isinstance(row, dict):
+        row["pcs_quotes_below_floor"] = int(below_floor_count)
     actionable = [
         item
         for item in ranked
@@ -19563,6 +19605,9 @@ def _format_theta_premium_line(option: dict | None) -> str:
     yield_week = _coerce_float(option.get("credit_pct_per_week"))
     if yield_week is not None:
         parts.append(f"yield_pct_wk={yield_week:.2f}")
+    credit_width_pct = _coerce_float(option.get("credit_width_pct"))
+    if credit_width_pct is not None:
+        parts.append(f"credit_width_pct={credit_width_pct:.1f}")
     spread_pct = _coerce_float(option.get("spread_pct"))
     parts.append(f"spread_pct={spread_pct:.1f}" if spread_pct is not None else "spread_pct=n/a")
     parts.append(f"source={str(option.get('credit_source') or 'n/a').strip() or 'n/a'}")
@@ -19594,6 +19639,7 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
         f"| supports={int(row.get('support_count', 0) or 0)} "
         f"| option_status={status}{credit_text}{source_text}\n"
     )
+    premium_line = _format_theta_premium_line(option)
     if play_type == "pcs":
         handle.write(f"   {_format_pcs_option_line(option)}\n")
         alternatives = _theta_option_alternatives(row, play_type=play_type)
@@ -19608,6 +19654,8 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
                 f"| major_sma={option.get('covered_major_sma_support_count', 0)} "
                 f"| avwap_supports={option.get('covered_avwap_support_count', 0)}\n"
             )
+        if premium_line:
+            handle.write(f"   {premium_line}\n")
     else:
         handle.write(f"   {_format_sold_put_option_line(option)}\n")
         alternatives = _theta_option_alternatives(row, play_type=play_type)
@@ -19622,7 +19670,6 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
                 f"| prev_1stdev={option.get('covered_previous_first_dev_support_count', 0)} "
                 f"| gave_up_supports={option.get('surrendered_support_count', 0)}\n"
             )
-        premium_line = _format_theta_premium_line(option)
         if premium_line:
             handle.write(f"   {premium_line}\n")
     handle.write(f"   strike_zone={row.get('strike_zone')}\n")
@@ -19673,7 +19720,9 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
     handle.write(
         "PCS rules: LONG watchlist (or thetalongs.txt) only; recommendation-only; >=2 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support; "
         f"expiration {THETA_PCS_MIN_EXPIRATION_MARKET_DAYS}-{THETA_PCS_MAX_EXPIRATION_MARKET_DAYS} market days; "
-        f"IBKR-confirmed target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width; "
+        f"IBKR-confirmed target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width, "
+        f"and the credit must also clear {THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE:g}% of the short strike "
+        f"(min {_format_option_decimal(THETA_PUT_ABSOLUTE_MIN_CREDIT)}) so it scales with the underlying; "
         "target-hit rows are trade-ready while cusp/below-target/no-quote rows stay visible as pullback/support watches.\n"
     )
     handle.write(
@@ -19781,6 +19830,7 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
                 "recommended_credit_source": "",
                 "credit_pct_of_strike": None,
                 "credit_pct_per_week": None,
+                "credit_width_pct": None,
                 "spread_pct": None,
                 "major_sma_above_strike": None,
             }
@@ -19825,6 +19875,8 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
                     current["credit_pct_of_strike"] = _coerce_float(value)
                 elif key == "yield_pct_wk":
                     current["credit_pct_per_week"] = _coerce_float(value)
+                elif key == "credit_width_pct":
+                    current["credit_width_pct"] = _coerce_float(value)
                 elif key == "spread_pct":
                     current["spread_pct"] = _coerce_float(value)
                 elif key == "sma_above_strike":

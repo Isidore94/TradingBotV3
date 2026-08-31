@@ -828,18 +828,29 @@ PCS reaches 15 market days. The quote budget is ordered thetalongs -> estimated
 premium capacity (ATR%-based, no new network call) -> base_score. The report and
 the Qt panel carry credit %, yield/week, spread % and the SMA-above-strike count.
 
-**One decision left to the trader, deliberately not taken.** T1 asked for the
-percent floor on the PCS short leg *only if* the credit/width ratios do not
-already imply a stricter bar. Measured, they mostly do but not always - expressed
-as a percent of the short strike, the 20% credit/width target is 1.36% at a $40
-close, 0.72% at $150, and falls to 0.45% at $240 and 0.31% at $700. So a
-high-priced spread can pass on a ratio that a naked put of the same strike would
-fail. PCS tiering was left ALONE anyway, because a spread's capital at risk is
-the WIDTH, not the strike: demanding 0.5% of a $600 strike would mean a $3.00
-credit on a $10-wide spread, a 30% credit/width bar far above the 20% target,
-which is a different rule rather than the same one. The cusp ratio can also
-produce a $0.30 credit on a 2.5-wide spread, under the $0.40 "no pennies" floor.
-Both are one-line changes if the trader wants them.
+6. **T7 The spread credit scales with the underlying too. — DECIDED and BUILT
+   2026-08-31.** The open question was put to the trader with its arithmetic and
+   answered in as many words: *"Yes it should scale with price of the underlying."*
+   The credit/width ratio does not scale, because `_pcs_long_strike_choices` caps
+   the width at 10 points however expensive the stock is, so the 20% target credit
+   stops growing at $2.00 - 1.36% of a $37 short strike and 0.31% of a $644 one.
+   `theta_pcs_credit_floor(short_strike)` is now a hard minimum: 0.5% of the short
+   strike or the $0.40 absolute floor, whichever is larger, sharing the sold-put
+   constants so "the percent floor" has one definition. Under it the spread leaves
+   the report; above it the credit/width ratio still decides recommended-vs-cusp.
+   The RECOMMENDED percent (1.0%) is deliberately NOT applied here - 1% of a $644
+   strike is a $6.44 credit on a 10-wide spread, a 64% credit/width bar no real
+   market pays, so using it would delete every expensive spread rather than rank
+   it. The report's PCS rows now carry the same `premium=` line as sold puts, with
+   `credit_width_pct` alongside `credit_pct`.
+
+   *Consequence, stated rather than discovered on the desk:* expensive credit
+   spreads will mostly disappear unless their credit genuinely scales. If the
+   trader wants those opportunities back, the lever is the WIDTH cap in
+   `_pcs_long_strike_choices` (`max(10.0, preferred_width)`), not the floor -
+   widening a $700-stock spread to ~17 points would let a 20% ratio pay $3.50 and
+   clear 0.5%. That changes capital at risk per contract, so it was not done
+   without asking.
 
 Gate: one desk scan whose theta report shows percent-floored, support-first
 rows, with `via thetalongs.txt` labelling intact.

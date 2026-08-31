@@ -20,8 +20,8 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 |---|---|
 | Working branch | **`claude/theta-premium`** - cut from `main` for Phase 0.11 (theta premium optimization), two commits, pushed, not merged. `main` itself is at the ruff commit - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **Phase 0.11 theta premium optimization (2026-08-31 — BUILT and GREEN on `claude/theta-premium`, live gate owed; one trader decision open)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5614 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/theta-premium`; Phase 0.11 adds 24 net over `main`'s 5590) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Phase 0.11 theta premium optimization (2026-08-31 — BUILT and GREEN on `claude/theta-premium`, T1-T7, live gate owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5619 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/theta-premium`; Phase 0.11 adds 29 net over `main`'s 5590) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | Rebuilt 2026-08-31 at `534e0e0`, `selftest OK: 73/73 checks passed (frozen)`, exit 0. **Two commits behind since**, both lint-only (an annotation-resolving `TYPE_CHECKING` import and the unused-import sweep) - no packaging trigger fires, and the unfrozen selftest, which imports every lazy engine, passes 73/73 after them. Rebuild at the next real change rather than for these. Also built and verified at the merge point. Previously rebuilt at `d0a2ae6`, 72/72. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
 
@@ -87,26 +87,36 @@ written, NOT built" entry below.**
   every field back; the Qt theta table gained four columns, blank rather than zero
   for a row with no quote.
 
-### The one decision left to the trader
+### The open decision was put to the trader, and answered
 
-T1 asked for the percent floor on the PCS short leg *only if* the credit/width
-ratios do not already imply a stricter bar. **Measured, they mostly do but not
-always.** As a percent of the short strike, the 20% credit/width target is 1.36%
-at a $40 close, 0.72% at $150, **0.54% at $200, 0.45% at $240**, 0.72% at $300 and
-**0.31% at $700**. So a high-priced spread can pass on a ratio a naked put of the
-same strike would fail.
+The question was whether the percent floor should apply to the PCS short leg
+as well. It was put with its arithmetic - as a percent of the short strike the
+20% credit/width target is 1.36% at a $40 close, 0.72% at $150, **0.54% at $200,
+0.45% at $240**, 0.72% at $300 and **0.31% at $700**, because
+`_pcs_long_strike_choices` caps the width at 10 points however expensive the
+stock is, so the target credit stops growing at $2.00 - and answered in as many
+words: ***"Yes it should scale with price of the underlying."***
 
-**PCS tiering was left alone anyway**, and this is a judgement call rather than an
-oversight: a spread's capital at risk is the WIDTH, not the strike. Demanding 0.5%
-of a $600 strike means a $3.00 credit on a $10-wide spread - a 30% credit/width
-bar, half again the 20% target - which is a different rule, not the same one. The
-cusp ratio can also produce a $0.30 credit on a 2.5-wide spread, under the $0.40
-"no pennies" floor. Either is a one-line change; both are the trader's call.
+Built as T7. `theta_pcs_credit_floor(short_strike)` is a hard minimum of 0.5% of
+the short strike or $0.40, whichever is larger, sharing the sold-put constants so
+the percent floor has one definition. Under it the spread leaves the report;
+above it the credit/width ratio still decides recommended-vs-cusp. The 1.0%
+RECOMMENDED percent is deliberately not applied to spreads: 1% of a $644 strike
+is $6.44 on a 10-wide spread, a 64% credit/width bar no market pays, so it would
+delete every expensive spread instead of ranking it.
+
+**Consequence, said here rather than discovered on the desk:** expensive credit
+spreads will mostly disappear unless their credit genuinely scales. The lever to
+bring them back is the WIDTH cap in `_pcs_long_strike_choices`, not the floor -
+widening a $700-stock spread to ~17 points lets a 20% ratio pay $3.50 and clear
+0.5%. That changes capital at risk per contract, so it was not done without
+asking. **Gate 23 should be read with this in mind: a PCS section that is
+thinner than usual is the rule working, not a bug.**
 
 ### Verification
 
-`pytest tests/ -q` **5614 passed, 72 subtests**, exit 0; `ruff check .` clean;
-smoke 7/7; source `--selftest` 73/73. **26 theta tests**, each new or rewritten one
+`pytest tests/ -q` **5619 passed, 72 subtests**, exit 0; `ruff check .` clean;
+smoke 7/7; source `--selftest` 73/73. **31 theta tests**, each new or rewritten one
 proven to fail against the un-fixed code (the file copied aside, reverted with
 `git checkout`, run, restored). Four pass on the un-fixed code and are
 documentation of preserved behaviour rather than proof - named in the commit
