@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | **`claude/strength-board-into-desk`** - cut from `main` at `f36ab59` for the trader-directed Strength Board move (2026-08-31). One commit, `be35fb6`, pushed, not merged. `main` already carries the day-trade pass, today's swing picks (both landed together in `ed3c73c`, which resolved the shared-checkout collision recorded below) and the desk-lockup fix; no divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5571 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/strength-board-into-desk`) · smoke **7/7** · source `--selftest` **73/73** · spec-drift **17**. The Strength Board move adds 17 tests net. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Last verified baseline | `pytest tests/ -q` **5581 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/strength-board-into-desk` at `edc7999`) · smoke **7/7** · source `--selftest` **73/73** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks SECOND PASS (drag, Copy/Paste, the `vetted` cohort) adds the 10 on top of the 5571 measured before it. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **STALE by the Strength Board move** (a new module under an already-collected package - no spec trigger, but the exe predates it). Previously rebuilt 2026-08-31 at `d0a2ae6` (419 MB onedir), `selftest OK: 72/72 checks passed (frozen)`, exit 0. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
 
@@ -50,7 +50,7 @@ the dated entry named beside it.
 | 16 | **IBKR file import** — the trader imports their IBKR transaction file on the desk; the second account's mask resolves once Flex has named it | R7 IBKR file (2026-08-28 IBKR entry) |
 | 17 | **File authority** — one desk import where a shared day agrees (sync keeps its times) and, if one ever disagrees, the file takes it | R7 file authority (2026-08-28 authority entry) |
 | 18 | **Tax report** — one desk run of "Realised P&L for tax..." against the live journal, with the BoC rates booked so the CAD total is complete | R7 tax report (2026-08-28 tax entry) |
-| 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
+| 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 22 | **Strength Board in the Desk** - one desk session: the trader opens the section under the Strength window, reads the board in the column, clicks a row onto the Visual Alert Review chart, adds a name from it, and says whether the vertical stack is right | 2026-08-31 Strength Board entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
@@ -72,11 +72,15 @@ live journal database, and the frozen exe, which is six commits stale.
 
 **Merge or review `claude/strength-board-into-desk` (`be35fb6`), then run gate 22 on the desk.** The one judgement call inside it that the trader may want reversed: the board's own RS/RW half retired with the page, on the reasoning that the Alert Center's RS/RW Board tab is now one tab-click away in the same column. Say the word and it comes back as a second section.
 
-Then run the owed live gates in the order above, gate 19 first. The
-`ed3c73c` shared-checkout collision recorded earlier is **resolved**: both
-packets landed on `main` together, and `claude/swing-favorites` never held
-either - do not go looking for the swing-picks work on the branch named for it.
-because it is the one that says this morning cannot repeat. **The remaining
+Then run the owed live gates in the order above, gate 19 first, because it is
+the one that says this morning cannot repeat. The `ed3c73c` shared-checkout
+collision recorded earlier is **resolved**: both packets landed on `main`
+together, and `claude/swing-favorites` no longer exists - do not go looking for
+the swing-picks work on the branch named for it. **One piece of it is still
+off `main`:** the swing-picks SECOND PASS (the draggable split, Copy/Paste, and
+the `vetted` cohort) is inside `edc7999` on
+`claude/strength-board-into-desk`, so it reaches the desk when that branch
+merges. **The remaining
 gates are all live-session work that only the trader can run.** The statement importer is **built and
 layers correctly** — the trader's next move is to import both real files on the
 desk and run the self-check (gates 14-15). Two of his asks are scoped and
@@ -267,6 +271,38 @@ That made the splitter hold the column rather than the bar, so
 `splitter.widget(0) is desk.m5_column` **and** that the bar is the first thing inside
 it. The trader rule it pins - the bar is left of the chart - is unchanged and still
 verified.
+
+### Second pass the same day: it drags, it copies, and it grades
+
+The trader came back with three things. **The code for all three is in `edc7999`
+on `claude/strength-board-into-desk`, not on `main`** - the shared checkout had
+moved to that branch by the time they landed, the same collision recorded above.
+
+- **"The tab needs to be resizable relative to the M5 alerts tab, I should be
+  able to drag it up to see more."** `m5_column` is now a vertical `QSplitter`
+  with its own settings key (`qt_m5_column_split_sizes_v1`), so this drag and the
+  desk's three-column drag never overwrite each other, and
+  `setChildrenCollapsible(False)` because a strip dragged to nothing is one the
+  trader cannot find again. The chip area gained a floor and **lost its ceiling** -
+  a maximum height would have made the drag do nothing past it.
+- **Copy and Paste, for TC2000.** Copy puts the day's tickers on the clipboard one
+  per line, each once, in list order; Paste adds every ticker on the clipboard on
+  the side the toggle is showing. Same idiom as the M5 alert bar's "Copy all".
+- **"Will the bot do anything special with this data overnight, or for the
+  journal, or for setup efficacy?"** As first shipped: nothing beyond it being an
+  ordinary swing Focus pick. That is now a better answer by one deliberate line -
+  the Focus like-origin is **`vetted`**, not `manual`, so the human-focus tracker's
+  existing 1/3/5/10-session grader files these under `human_focus_swing_vetted`
+  instead of mixing them with every other hand-typed swing name. "How do my
+  hand-picked swings do against the bot's?" is now answerable from a grader that
+  already runs.
+
+  **Still deliberately NOT built, each additive and each the trader's call:**
+  `swing_favorites.jsonl` is not in `ai_summary`'s overnight evidence pack (that
+  costs local-model context, which was its own packet on 2026-08-28); nothing
+  joins the list to per-setup journal statistics; and
+  `journal_analytics.AutoTagger` reads the SCANNER's output files, so it does not
+  see this list - and no tag may ever be derived from an outcome.
 
 ### Verification
 

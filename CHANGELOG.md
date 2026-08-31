@@ -168,9 +168,15 @@ which is evidence and must not be loaded as context.
   store. A "took" badge marks a pick whose symbol has a TRADE-journal trade opened
   on or after the pick date — display only, joined on a worker thread over a
   bounded 10-day window, silent when the journal would have to be migrated to
-  answer. Diffed like the Focus board, styled by `theme.qss`, no phone push, and
-  nothing in the chain reaches a detector, score, alert, watchlist ranking or
-  `review_policy.json`.
+  answer. The strip and the alert bar share a **draggable** vertical split with
+  its own settings key, no collapse, and a chip area with a floor and no ceiling;
+  **Copy** puts the day's tickers on the clipboard one per line for TC2000 and
+  **Paste** adds a TC2000 list on the selected side. The Focus like-origin is
+  **`vetted`**, so the picks grade as their own `human_focus_swing_vetted`
+  sub-cohort in the existing 1/3/5/10-session human-focus tracker rather than
+  mixing with every other hand-typed swing name. Diffed like the Focus board,
+  styled by `theme.qss`, no phone push, and nothing in the chain reaches a
+  detector, score, alert, watchlist ranking or `review_policy.json`.
 
 - One Master AVWAP scan action, 2026-08-15 (packet R1). The Shared/Local pair read
   the identical two watchlist files, so `use_shared_watchlists` and the menu choice
@@ -542,12 +548,29 @@ brought in themselves.
   column in workspace mode, and the trader's saved `qt_workspace_mode` is
   `workspace` — so the alert bar and the strip now share one host
   (`TradingDeskPanel.m5_column`) that both modes mount, and the strip is the bottom
-  of it either way. The bar takes the stretch and keeps its minimum width, its
-  routing and its behaviour; `M5AlertBar` itself is unchanged. The pinned
-  "bar is left of the chart" test now asserts the column holds the bar first.
+  of it either way. `M5AlertBar` and every alert routing path are unchanged. The
+  pinned "bar is left of the chart" test now asserts the column holds the bar first.
+- **The split is the trader's to drag** (same day, second pass: *"the tab needs to
+  be resizable relative to the M5 alerts tab, I should be able to drag it up to see
+  more"*). `m5_column` is a vertical `QSplitter` with its own settings key
+  (`qt_m5_column_split_sizes_v1`), so this drag and the desk's three-column drag
+  never overwrite each other, and `setChildrenCollapsible(False)` because a strip
+  dragged to nothing is one the trader cannot find again. The chip area gained a
+  floor and **lost its ceiling** — a maximum height would have made the drag do
+  nothing past it.
+- **Copy / Paste, the TC2000 seam.** Copy puts the day's tickers on the clipboard
+  one per line, each once, in list order; Paste adds every ticker on the clipboard
+  on the side the toggle is showing. Same idiom as the M5 alert bar's "Copy all".
+- **They grade as their own cohort.** The Focus like-origin is `vetted`, not
+  `manual`, so the human-focus tracker's existing 1/3/5/10-session grader files
+  them under `human_focus_swing_vetted` instead of mixing them with every other
+  hand-typed swing name — which is what makes "how do my hand-picked swings do
+  against the bot's?" answerable at all. Deliberately NOT built: the file is not in
+  `ai_summary`'s overnight evidence pack and nothing joins it to per-setup journal
+  statistics. Both are additive and unasked.
 - Chips are diffed, never rebuilt, and every variant (side colour, the "took" mark)
   is a dynamic property answered by `theme.qss` — no per-widget stylesheet.
-- **59 new tests** (`tests/test_swing_favorites.py`,
+- **69 new tests** (`tests/test_swing_favorites.py`,
   `tests/test_qt_swing_favorites.py`). No phone push; nothing reaches a detector,
   score, alert, watchlist ranking or `review_policy.json`.
 - **Known limit, stated:** the strip shows the CURRENT session's list, so a pick
