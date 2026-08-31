@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/swing-favorites`** — cut from `main` at `ab2423b` for the trader-directed "Today's swing picks" feature (2026-08-31). `main` itself carries the desk-lockup fix, merged by trader instruction ("go ahead and merge to main"), fast-forward from `claude/focus-refresh-storm`, no divergence |
+| Working branch | **`claude/daytrade-pass-reasons`** — cut from `main` at `ab2423b` for the trader-directed day-trade "passed on it" capture (2026-08-31). **It also carries "Today's swing picks":** two agents shared this checkout, and commit `ed3c73c` ("today's swing picks") was made while HEAD sat on this branch, so it swept both packets into one commit. `claude/swing-favorites` is still at `ab2423b` and holds none of it. Nothing is lost - both features are green here - but the split has to be done deliberately or not at all. `main` itself carries the desk-lockup fix, merged by trader instruction ("go ahead and merge to main"), fast-forward from `claude/focus-refresh-storm`, no divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5538 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/swing-favorites`) · smoke **7/7** · source `--selftest` **73/73**. **That run was NOT isolated:** the checkout was shared with a second in-flight packet's uncommitted work, which accounts for 23 of those tests and for the selftest's 72 → 73; this branch itself adds **59**. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`; +29 new tests over the 5427 the pre-merge checkout collects) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5553 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 38. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** — rebuilt 2026-08-31 at `d0a2ae6` (419 MB onedir), `selftest OK: 72/72 checks passed (frozen)`, exit 0. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required, and it is now the only thing between the trader and the lockup fix** — the fix is on `main`, the desk runs from source, so the next launch has it. The warehouse and journal packets are still owed the same restart |
 
@@ -51,6 +51,7 @@ the dated entry named beside it.
 | 17 | **File authority** — one desk import where a shared day agrees (sync keeps its times) and, if one ever disagrees, the file takes it | R7 file authority (2026-08-28 authority entry) |
 | 18 | **Tax report** — one desk run of "Realised P&L for tax..." against the live journal, with the BoC rates booked so the CAD total is complete | R7 tax report (2026-08-28 tax entry) |
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
+| 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 ### Merged to main without a live-validation day — stated, not hidden
@@ -68,9 +69,13 @@ live journal database, and the frozen exe, which is six commits stale.
 
 ### Immediate next action
 
-**Restart the desk.** "Today's swing picks" is built and green on
-`claude/swing-favorites` and reaches the desk when that branch merges; its live
-proof is gate 20. The lockup fix is on `main` as of 2026-08-31, and the desk
+**Decide what to do with `ed3c73c` first.** Two agents shared this checkout on
+2026-08-31 and that commit swept both packets - "Today's swing picks" and the
+day-trade pass - onto `claude/daytrade-pass-reasons`. Both are built and green
+together (5553 / 73-73); `claude/swing-favorites` holds neither. Either merge
+the one branch as it stands, or split it deliberately - but do not assume the
+swing-picks work is on the branch named for it. Their live proofs are gates 20
+and 21. The lockup fix is on `main` as of 2026-08-31, and the desk
 runs from source, so the next launch picks it up — nothing else is between the
 trader and it. Then run the owed live gates in the order above, gate 19 first
 because it is the one that says this morning cannot repeat. **The remaining
@@ -80,6 +85,60 @@ desk and run the self-check (gates 14-15). Two of his asks are scoped and
 NOT built, and one needs his answer first: statements as the source of truth over
 the API (it would cost the only intraday timestamps the journal has), and the
 IBKR transaction-file importer (masked account numbers are the open problem).
+
+---
+
+## 2026-08-31 - "I liked it and passed": the day-trade pass, under the note
+
+**Trader-directed, authorized in chat 2026-08-31.** Branch
+`claude/daytrade-pass-reasons`. Phase 0.5 item 14. **BUILT; live gate 21 owed.**
+
+*"Many times I really like this stock for a daytrade but it has this ONE
+issue"* - and the trader passes. The capture window had a veto (this chart is
+not for today), a like, and a note; the far more common judgement, a name that
+WAS tradeable but for one thing, had nowhere to go.
+
+**What was built.** `EVENT_PASS` in `ui/annotations/store.py` with
+`record_pass_annotation`; a separate versioned vocabulary FAMILY
+(`ui/annotations/vocabularies/pass_reasons_v1.json`, loaded by
+`load_pass_vocabulary` - `vocabulary.py` now loads any family and validates
+`vocabulary_id` against the filename); the M5 sidecar in
+`ui/annotations/pass_bars.py`; the "Passed - why?" block under the Note field
+in `ui/widgets/capture_rail.py` (Alt+P, digits 1-5 toggle, scoped to the
+checkbox box so a digit typed in the note stays a digit); and
+`SymbolSnapshotWidget.cached_m5_bars` wired as a zero-fetch bar provider on all
+three capture hosts.
+
+**The three decisions worth remembering** (full reasoning in
+`docs/DESK_INTERNALS.md`):
+
+1. **A separate vocabulary family, not five more veto reasons.** Sharing the
+   veto list would have restamped `vocab_version` across cohorts already
+   accruing forward returns, for two lists that answer different questions.
+2. **A pass never retires the chart.** It is note-shaped - written about the
+   chart still in front of the trader - so both hosts' `_on_captured` continue
+   to key on veto and like alone. No new exception was added anywhere.
+3. **The bars are a sidecar and are never fetched.** One session is ~78 M5 bars,
+   far past the store's 4096-byte single-write cap, and that cap is what makes a
+   torn tail cost exactly one row. Sidecar first, row second. Nothing cached, or
+   a provider that raises, costs the attachment and never the row - the trader's
+   own fallback was *"just store the exact timestamp"*, and every row carries a
+   zoned one.
+
+**Verification.** `pytest tests/ -q` 5553 passed / 72 subtests (this packet adds
+38, including fail-before-fix proofs that a pass retires the chart if the host
+rule is broken and that the sidecar keeps only the newest session); source
+`--selftest` 73/73.
+
+**Not built, deliberately, and both are trader decisions:** whether a pass
+should mark the symbol "Reviewed today" (`pick_feedback._ANNOTATION_DECISIONS`
+- that set is also read by the scan runner and four panels, so widening it is
+not a capture-packet side effect), and whether a pass should ever retire the
+chart.
+
+**Shared-checkout warning.** This branch's commit `ed3c73c` also contains the
+"Today's swing picks" packet: a second agent was working the same checkout and
+committed while HEAD sat here. See the glance block.
 
 ---
 

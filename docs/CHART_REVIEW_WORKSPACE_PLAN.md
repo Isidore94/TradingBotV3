@@ -88,21 +88,45 @@ across machines, readable by an AI.
 ```
 {schema_version: 1,
  event_id,                 # uuid4 hex
- event_type,               # veto | like_claim | hypo_stop | note
+ event_type,               # veto | like_claim | hypo_stop | note | pass
  symbol,
  session_date,             # market date
  created_at,               # ISO-8601, ALWAYS tz-aware
  source: "chart_review",
  reason_code?,             # veto: a code from the versioned vocabulary
- vocab_version?,           # veto: which vocabulary version produced it
+ vocab_version?,           # veto/pass: which vocabulary version produced it
+ vocabulary_id?,           # pass: which vocabulary FAMILY (see 4.1)
+ reason_codes?,            # pass: >=1 code, in vocabulary order
  claimed_setup_id?,        # like_claim (required); optional elsewhere
  stop_price?, side?,       # hypo_stop (both required)
  last_price?,
  ref_level_id?,            # the painted level the capture referenced
  ref_level_family?,
  note?,
+ m5_bars_ref?,             # pass: "trader_annotation_bars/<event_id>.json"
+ m5_bar_count?,
+ m5_first_bar?, m5_last_bar?,
  timeframe}
 ```
+
+### 3.1 The M5 bar sidecar (2026-08-31)
+
+A `pass` may reference one session of the symbol's M5 bars, stored in
+`trader_annotation_bars/<event_id>.json` beside this file
+(`ui/annotations/pass_bars.py`). The bars are NOT inlined: one session is ~78
+RTH bars, far past the 4096-byte single-write bound above, and that bound is
+what makes a torn tail cost exactly one row. The sidecar is written FIRST and
+the row second, so a reference in the stream always has a file behind it; a
+sidecar with no row is an orphan worth a few KB and nothing else.
+
+The bars only ever come from what a chart the trader is looking at has ALREADY
+materialised (`CaptureRail.set_m5_bars_provider` <-
+`SymbolSnapshotWidget.cached_m5_bars`). A capture click never fetches, never
+reaches a bot or a feed, and never blocks the Qt thread past serialising what
+is already in memory. Nothing cached is an ordinary outcome: the row is written
+with its tz-aware `created_at` alone, which was the trader's own stated
+fallback - *"just store the exact timestamp and the AI can read the charts by
+it."*
 
 **Extensible, never renamed.** Later schema versions add fields. A field that
 exists at v1 keeps its name and meaning forever, because rows already written
@@ -164,6 +188,36 @@ A missing or malformed vocabulary is a **packaging defect, not a runtime
 condition to paper over**: the loader raises, and the rail disables the veto
 action and displays the reason. The alternative is writing reason codes no
 later analysis would recognise.
+
+### 4.1 The pass vocabulary is a SEPARATE family (2026-08-31)
+
+The day-trade pass (`event_type: "pass"`) reads
+`ui/annotations/vocabularies/pass_reasons_v*.json`, a second family loaded by
+the same machinery with the same fail-closed validation, plus one extra check:
+a file must declare the `vocabulary_id` its filename claims.
+
+Why not five more veto reasons. Cohort identity on write is
+`(vocab_version, reason_code)`, and the veto cohorts are already accruing
+forward returns; a shared version series would have restamped all of them for
+a list that answers a different question. A veto says *this chart is not for
+today*. A pass says *the day trade was there and one thing stopped me* -
+trader, 2026-08-31: *"many times I really like this stock for a daytrade but it
+has this ONE issue."* The two families share no codes.
+
+The starting v1 list is the trader's own five, in their own words: Poor market
+conditions, Low rvol, LRSI/SMI incongruency, Incoming Horizontal, Other
+incoming S/R. A pass is MULTI-SELECT - `reason_codes` is a list - and the codes
+are written in vocabulary order, not click order, so two passes citing the same
+two reasons compare equal a year from now. None of them requires a note; the
+free-text note in that section rides along and stays optional.
+
+**A pass never retires the chart.** It is note-shaped: written about the chart
+still in front of the trader. Only a veto and a like move the review on.
+
+Never assert a literal `vocab_version` in a test - assert against the loaded
+vocabulary.
+
+---
 
 ---
 
@@ -392,11 +446,15 @@ run of them is itself a finding.
 | `Alt+K` | like + setup claim |
 | `Alt+S` | hypothetical stop |
 | `Alt+N` | note |
+| `Alt+P`, then `1`–`5`, then the button | day-trade pass — the digits TOGGLE, because a pass is multi-select |
 | `Alt+E` | slide the Setups drawer in/out |
 
 `Alt`+letter rather than bare letters: the rail is full of text inputs, and a
 bare `v` has to stay a `v` when the trader is typing a note. Digits are scoped
-to the reason list widget for the same reason.
+to the reason list widget for the same reason, and the pass digits are scoped
+to the box that holds only its checkboxes — so a `3` typed into the note field
+directly above them stays a `3`. The three digit maps can never be in context
+at once, so none of them is a second live binding for one sequence.
 
 ---
 

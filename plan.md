@@ -399,6 +399,12 @@ are listed in `CURRENT_CHECKPOINT.md`.
    **Live gate owed:** one desk session where the trader enters their real end-of-day swing list, the names appear in swing Focus as theirs (no marker, and "Not today"/desync repair leave them alone), one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" the next time the strip refreshes.
    **Open product question, not built:** the strip shows the CURRENT session only, so a pick typed after the close cannot carry its "took" badge into the next session. Carrying picks forward is the trader's call and has not been asked.
 
+14. **Day-trade "passed on it" reasons in the capture window. - BUILT 2026-08-31 (trader-directed, authorized in chat 2026-08-31).**
+   *"Many times I really like this stock for a daytrade but it has this ONE issue"* and the trader passes; they asked for a tickable reason list under the existing Note area, several reasons allowed per pass, plus the free-text note, and - when the M5 data is already in memory - the bars attached so an AI can read the chart back as it was, with the explicit fallback of the timestamp alone.
+   Built: `EVENT_PASS` in `ui/annotations/store.py` with `record_pass_annotation`; a separate versioned vocabulary family (`ui/annotations/vocabularies/pass_reasons_v1.json`, `load_pass_vocabulary`); the M5 sidecar in `ui/annotations/pass_bars.py`; the "Passed - why?" block under Note in `ui/widgets/capture_rail.py` with Alt+P and digit toggles; `SymbolSnapshotWidget.cached_m5_bars` wired as the zero-fetch bar provider on all three capture hosts. A pass never retires the chart, writes no list, and reaches no detector, score, alert or `review_policy.json`.
+   **Live gate owed:** one desk session where the trader records a real pass from the Alert Center capture tab - the ticked reasons and the note land in `trader_annotations.jsonl`, the chart stays up, and a pass taken while an M5 chart is drawn carries its bars in `trader_annotation_bars/`.
+   **Open product questions, not built:** whether a pass should mark the symbol "Reviewed today" (`pick_feedback._ANNOTATION_DECISIONS`, which the scan runner also reads), and whether a pass should ever retire the chart. Both are trader decisions.
+
 ### Phase 0.6 — R9: trade-review response packet (authorized 2026-08-22)
 
 Source: `docs/analysis/TRADE_REVIEW_2026-08-21.md` §8–§9, its nine questions

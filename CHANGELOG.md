@@ -94,6 +94,11 @@ which is evidence and must not be loaded as context.
 - Chart Review workspace with lookup for any symbol, hidden-by-default Setups drawer,
   keyboard-first LIKE/veto/note/setup-claim capture, versioned veto vocabulary,
   append-only `trader_annotations.jsonl`, and isolated forward veto cohorts.
+- Day-trade **pass** capture under the Note section of the capture rail (2026-08-31):
+  multi-select reasons from a separate versioned `pass_reasons` vocabulary family,
+  the same free-text note, and — only when the desk already holds them — one session
+  of the symbol's M5 bars in a sidecar keyed by the annotation id. A pass writes one
+  row and retires nothing; a capture click never fetches.
 - Painted D1 S/R, previous-day H/L, projected trendline, SMA/EMA/AVWAP groups,
   machine-local visibility preferences, stable level IDs, click selection, and
   click-to-arm routed through the one `PriceAlertService` writer.
@@ -356,6 +361,66 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-31 - "I liked it and passed": the day-trade pass, under the note
+
+**Trader-directed, authorized in chat 2026-08-31.** Branch
+`claude/daytrade-pass-reasons`.
+
+*"Many times I really like this stock for a daytrade but it has this ONE issue"*
+- and the trader passes. The capture window could record a veto (this chart is
+not for today), a like, or a note; it had nowhere to put the far more common
+judgement of a name that WAS tradeable but for one thing. It does now.
+
+**A new decision kind, not a wider veto.** `EVENT_PASS` (`"pass"`) joins the
+schema-v1 event types, and its reasons come from a NEW vocabulary family,
+`ui/annotations/vocabularies/pass_reasons_v1.json`, carrying the five reasons
+the trader listed in their own words: Poor market conditions, Low rvol,
+LRSI/SMI incongruency, Incoming Horizontal, Other incoming S/R. Extending the
+veto vocabulary instead would have restamped `vocab_version` across veto
+cohorts that are already accruing forward returns, for two lists that answer
+different questions. `ui/annotations/vocabulary.py` now loads any family
+(`load_vocabulary` / `load_pass_vocabulary`, `available_versions`) with the
+identical fail-closed validation the veto list has always had, plus one new
+check: a file must declare the `vocabulary_id` its filename claims.
+
+**A pass never retires the chart.** It is note-shaped: written about the chart
+the trader is still reading. Both hosts' `_on_captured` key on veto and like
+alone, so nothing had to learn a new exception.
+
+**Several reasons at once, in vocabulary order.** Ticking is multi-select by
+instruction. `_clean_pass_codes` dedupes and reorders into vocabulary order, so
+two passes citing the same two reasons compare equal a year from now. The note
+field is the one already in that section - a pass is a note with the reason
+ticked - and it stays optional.
+
+**The chart rides along when the desk already has it, and is never fetched.**
+`ui/annotations/pass_bars.py` writes one session of cached M5 bars to
+`trader_annotation_bars/<event_id>.json` and the row carries `m5_bars_ref`,
+`m5_bar_count` and the first/last bar stamps. A sidecar rather than an inline
+array because one session is ~78 bars and far past the store's 4096-byte
+single-write cap, and that cap is what keeps a torn tail costing exactly one
+row. Sidecar first, row second, so a reference in the stream always has a file
+behind it. The bars come from a host-supplied provider reading what the pane
+already DREW (`CaptureRail.set_m5_bars_provider` <- `SymbolSnapshotWidget.cached_m5_bars`),
+wired on all three capture hosts; nothing cached, or a provider that raises,
+costs the attachment and never the row - the trader's own fallback was *"just
+store the exact timestamp"*, and every row carries a zoned one.
+
+**Keyboard.** Alt+P focuses the tick list and 1-5 toggle, scoped to the box
+that holds only the checkboxes so a digit typed into the note above stays a
+digit. `action_shortcuts()` gained the pair, so the Alert Center's panel-scope
+rebinding picked it up without a second list; the rail still binds nothing its
+host owns.
+
+**Boundaries held.** Analysis-only evidence: no mute, no suppression field, no
+score, no gate, no alert, no watchlist or Focus write. Deliberately NOT
+changed: `pick_feedback._ANNOTATION_DECISIONS`, so a pass does not yet mark a
+symbol "Reviewed today" - that set feeds the scan runner and four panels, and
+widening it is the trader's call.
+
+Verified: `pytest tests/ -q` 5553 passed / 72 subtests; source `--selftest`
+73/73 (the pass vocabulary is its own bundled-asset check).
 
 ### 2026-08-31 — Today's swing picks: the trader's own list, under the alert bar
 
