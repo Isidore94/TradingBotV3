@@ -200,6 +200,259 @@ def test_a_badge_lookup_failure_never_takes_down_the_pane(pane, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# The day-trade pass (trader, 2026-08-31)
+#
+# "Many times I really like this stock for a daytrade but it has this ONE issue"
+# - and they pass on it. The pass is a NOTE-shaped decision, not a veto: it
+# records why, and the chart stays exactly where it was.
+# --------------------------------------------------------------------------
+def _pass_codes(pane, count: int = 1) -> list:
+    return list(pane.capture_rail._pass_vocabulary.codes[:count])
+
+
+def _rows(path):
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _tick(pane, codes) -> None:
+    for code in codes:
+        pane.capture_rail.pass_checkboxes[code].setChecked(True)
+
+
+def _m5(day: int = 31, count: int = 3) -> list:
+    return [
+        {
+            "dt": datetime(2026, 8, day, 9, 30 + 5 * index),
+            "open": 10.0,
+            "high": 10.4,
+            "low": 9.8,
+            "close": 10.1,
+            "volume": 500.0,
+        }
+        for index in range(count)
+    ]
+
+
+def test_the_rail_offers_the_five_pass_reasons_the_trader_listed(pane):
+    labels = [check.text() for check in pane.capture_rail.pass_checkboxes.values()]
+    assert [label.split("  ", 1)[-1] for label in labels] == [
+        "Poor market conditions",
+        "Low rvol",
+        "LRSI/SMI incongruency",
+        "Incoming Horizontal",
+        "Other incoming S/R",
+    ]
+
+
+def test_the_pass_block_sits_under_the_note_field(pane):
+    """Trader: "a section under the existing note area". Under, and inside it,
+    so "under" survives a host wide enough to flow sections side by side."""
+    rail = pane.capture_rail
+    section = rail.note_input.parentWidget()
+    assert section.isAncestorOf(rail.pass_reason_box), "the pass is in the Note section"
+    inner = section.layout()
+    order = [inner.itemAt(i).widget() for i in range(inner.count())]
+    assert order.index(rail.note_input) < order.index(rail.pass_reason_box.parentWidget())
+
+
+def test_a_pass_writes_one_row_carrying_every_ticked_reason(pane, monkeypatch, tmp_path):
+    _show(pane, monkeypatch, "NVDA", "LONG")
+    codes = _pass_codes(pane, 2)
+    _tick(pane, codes)
+    pane.capture_rail.note_input.setText("liked it, rvol never came")
+    assert pane.capture_rail.commit_pass() is not None
+
+    rows = _rows(tmp_path / "trader_annotations.jsonl")
+    assert len(rows) == 1
+    assert rows[0]["event_type"] == "pass"
+    assert rows[0]["symbol"] == "NVDA"
+    assert rows[0]["reason_codes"] == codes
+    assert rows[0]["note"] == "liked it, rvol never came"
+    # Never a literal: the stamp is whatever the loaded vocabulary declares.
+    assert rows[0]["vocab_version"] == pane.capture_rail._pass_vocabulary.vocab_version
+
+
+def test_a_pass_never_retires_the_chart(pane, monkeypatch):
+    """CLAUDE.md: a veto and a like each retire the chart; a note never does.
+    A pass is on the note side of that line - the trader is still reading it."""
+    _show(pane, monkeypatch)
+    retired: list = []
+    advanced: list = []
+    pane.removeTodayRequested.connect(retired.append)
+    pane.likeAdvanceRequested.connect(advanced.append)
+
+    _tick(pane, _pass_codes(pane))
+    assert pane.capture_rail.commit_pass() is not None
+
+    assert retired == [], "a pass must not retire the chart"
+    assert advanced == [], "a pass must not advance the queue"
+    assert pane.alert is not None
+
+
+def test_a_pass_places_nothing_and_writes_no_watchlist(pane, monkeypatch, tmp_path):
+    """The rail is a recorder. A pass is evidence, never a list membership."""
+    from ui.widgets import capture_rail as capture_rail_module
+
+    monkeypatch.setattr(
+        capture_rail_module,
+        "record_annotation",
+        lambda *a, **k: pytest.fail("a pass must not route through the veto/note path"),
+    )
+    _show(pane, monkeypatch)
+    _tick(pane, _pass_codes(pane))
+    assert pane.capture_rail.commit_pass() is not None
+    assert not any(tmp_path.glob("*.txt")), "no watchlist file is written"
+
+
+def test_a_pass_attaches_the_m5_bars_the_pane_already_drew(pane, monkeypatch, tmp_path):
+    from ui.annotations import pass_bars
+
+    _show(pane, monkeypatch, "AMD")
+    pane.snapshot._m5 = {"bars": _m5(31, 3), "overlays": []}
+    _tick(pane, _pass_codes(pane))
+    row = pane.capture_rail.commit_pass()
+
+    assert row["m5_bar_count"] == 3
+    stored = pass_bars.read_pass_bars(
+        row, annotations_path=tmp_path / "trader_annotations.jsonl"
+    )
+    assert len(stored["bars"]) == 3
+    assert stored["symbol"] == "AMD"
+
+
+def test_a_pass_with_nothing_cached_writes_the_timestamp_and_fetches_nothing(
+    pane, monkeypatch, tmp_path
+):
+    """The trader's own fallback: "just store the exact timestamp".
+
+    The stronger half is that reaching for bars must never reach for a FEED.
+    Every fetch seam the desk owns is made to explode; the capture still lands.
+    """
+    import ui.services.chart_bar_refresh as refresh
+    import ui.services.chart_data_service as data_service
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("a capture click must never fetch")
+
+    monkeypatch.setattr(data_service, "shared_service", _boom)
+    monkeypatch.setattr(refresh, "shared_refresh_service", _boom)
+
+    class _ExplodingBot:
+        def m5_chart_bars(self, *_a, **_k):
+            raise AssertionError("a capture click must never read the bot")
+
+        fetch_m5_chart_bars = m5_chart_bars
+
+    _show(pane, monkeypatch, "TSLA")
+    pane.snapshot._bot = _ExplodingBot()
+    pane.snapshot._m5 = {}
+    _tick(pane, _pass_codes(pane))
+    row = pane.capture_rail.commit_pass()
+
+    assert row is not None
+    assert "m5_bars_ref" not in row
+    assert datetime.fromisoformat(row["created_at"]).tzinfo is not None
+    assert _rows(tmp_path / "trader_annotations.jsonl")[0]["event_type"] == "pass"
+
+
+def test_a_provider_that_throws_costs_the_bars_and_never_the_row(pane, monkeypatch):
+    def _angry():
+        raise RuntimeError("chart is mid-rebuild")
+
+    _show(pane, monkeypatch)
+    pane.capture_rail.set_m5_bars_provider(_angry)
+    _tick(pane, _pass_codes(pane))
+    row = pane.capture_rail.commit_pass()
+    assert row is not None and "m5_bars_ref" not in row
+
+
+def test_a_pass_with_no_reason_ticked_writes_nothing_and_says_so(
+    pane, monkeypatch, tmp_path
+):
+    _show(pane, monkeypatch)
+    assert pane.capture_rail.commit_pass() is None
+    assert "reason" in pane.capture_rail.status_text().lower()
+    assert not (tmp_path / "trader_annotations.jsonl").exists()
+
+
+def test_a_failed_append_is_reported_and_leaves_the_review_flow_alone(
+    pane, monkeypatch, tmp_path
+):
+    """An evidence store is never allowed to cost the thing it records."""
+    blocked = tmp_path / "unwritable"
+    blocked.mkdir()
+    pane.capture_rail._annotations_path = blocked
+    retired: list = []
+    pane.removeTodayRequested.connect(retired.append)
+
+    _show(pane, monkeypatch)
+    _tick(pane, _pass_codes(pane))
+    assert pane.capture_rail.commit_pass() is None
+    assert "NOT SAVED" in pane.capture_rail.status_text()
+    assert retired == []
+    assert pane.alert is not None
+
+
+def test_a_digit_toggles_a_pass_reason_and_never_commits_on_its_own(
+    pane, monkeypatch, tmp_path
+):
+    """Unlike the veto digit, which commits: a pass is multi-select, so the
+    trader has to be able to press 2 and 4 before anything is written."""
+    _show(pane, monkeypatch)
+    first, second = _pass_codes(pane, 2)
+    pane.capture_rail.toggle_pass_reason(first)
+    pane.capture_rail.toggle_pass_reason(second)
+    assert pane.capture_rail.selected_pass_codes() == [first, second]
+    assert not (tmp_path / "trader_annotations.jsonl").exists()
+
+    pane.capture_rail.toggle_pass_reason(first)
+    assert pane.capture_rail.selected_pass_codes() == [second]
+
+
+def test_committing_a_pass_clears_the_ticks_and_the_note(pane, monkeypatch):
+    _show(pane, monkeypatch)
+    _tick(pane, _pass_codes(pane))
+    pane.capture_rail.note_input.setText("one issue")
+    pane.capture_rail.commit_pass()
+    assert pane.capture_rail.selected_pass_codes() == []
+    assert pane.capture_rail.note_input.text() == ""
+
+
+def test_alt_p_is_offered_to_a_host_that_rebinds_the_keys(pane):
+    assert "Alt+P" in dict(pane.capture_rail.action_shortcuts())
+
+
+def test_alt_p_raises_the_tab_and_lands_on_the_pass_reasons(panel):
+    panel.tabs.setCurrentIndex(0)
+    panel._capture_shortcuts["Alt+P"].activated.emit()
+    rail = panel.chart_review.capture_rail
+    assert panel.tabs.currentIndex() == panel._capture_tab_index
+    assert rail.pass_reason_box.isAncestorOf(rail.focusWidget())
+
+
+def test_the_pass_digits_are_scoped_to_their_own_box(panel):
+    """A 3 typed into the note above has to stay a 3. The digit shortcuts live
+    on the box that holds ONLY the checkboxes, so the note field is outside
+    their context - and so are the veto and claim lists' identical digits."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QShortcut
+
+    rail = panel.chart_review.capture_rail
+    digits = [
+        shortcut
+        for shortcut in rail.pass_reason_box.findChildren(QShortcut)
+        if shortcut.parent() is rail.pass_reason_box
+    ]
+    assert {s.key().toString() for s in digits} == set(rail._pass_hotkeys)
+    assert all(
+        s.context() == Qt.ShortcutContext.WidgetWithChildrenShortcut for s in digits
+    )
+    assert not rail.pass_reason_box.isAncestorOf(rail.note_input)
+
+
+
+
+# --------------------------------------------------------------------------
 # 2026-08-20: the rail moved onto a tab, and the keyboard contract came with it
 #
 # The trader could not read the charts at all: title -> setup text -> charts ->
@@ -322,7 +575,7 @@ def test_the_rail_binds_no_duplicate_of_a_key_its_host_owns(panel):
         for shortcut in rail.findChildren(QShortcut)
         if shortcut.parent() is rail
     }
-    assert not owned & {"Alt+V", "Alt+K", "Alt+N"}
+    assert not owned & {"Alt+V", "Alt+K", "Alt+N", "Alt+P"}
 
 
 def test_the_rail_still_writes_through_record_annotation_after_reparenting(

@@ -790,6 +790,17 @@ class SymbolSnapshotWidget(QWidget):
             self.m5_legend.setText(legend)
         self.snapshotRendered.emit(symbol)
 
+    def cached_m5_bars(self) -> list:
+        """The M5 bars this widget is CURRENTLY drawing. Never fetches.
+
+        The rendered snapshot is already materialised on the GUI side, so this
+        is a list copy and nothing else - which is what makes it safe to call
+        from a capture click (see CaptureRail.set_m5_bars_provider). An empty
+        list means the desk is holding no intraday bars for this name, which
+        is an ordinary state for a symbol outside the scan set.
+        """
+        return list((self._m5 or {}).get("bars") or [])
+
     def quick_fill(self, source: str) -> float | None:
         """Resolve a quick-fill source against the M5 chart's drawn series.
 
@@ -929,6 +940,9 @@ class SymbolSnapshotDialog(QDialog):
 
         self.capture_rail = CaptureRail(annotations_path=annotations_path)
         self.capture_rail.captured.connect(self._on_captured)
+        # A day-trade pass attaches the chart the trader is looking at, when
+        # the widget already holds it. Read-only, memory-only, at click time.
+        self.capture_rail.set_m5_bars_provider(self.snapshot.cached_m5_bars)
         self.snapshot.d1LevelSelected.connect(self._on_d1_level_selected)
 
         # R4 section 5: "very obvious I have already checked that chart today".

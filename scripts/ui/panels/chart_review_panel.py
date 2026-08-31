@@ -343,6 +343,8 @@ class ChartReviewPanel(QFrame):
         )
         self.snapshot.d1LevelSelected.connect(self._on_d1_level_selected)
         self.snapshot.snapshotMetaChanged.connect(self._on_snapshot_meta)
+        # A day-trade pass attaches whatever M5 bars this chart already holds.
+        self.capture_rail.set_m5_bars_provider(self.snapshot.cached_m5_bars)
         layout.addWidget(self.snapshot, 1)
         return area
 

@@ -36,21 +36,26 @@ from ui.annotations.setup_claims import (  # noqa: E402
     all_setup_claims,
     is_valid_setup_claim,
 )
+from ui.annotations import pass_bars  # noqa: E402
 from ui.annotations.store import (  # noqa: E402
     EVENT_HYPO_STOP,
     EVENT_LIKE_CLAIM,
     EVENT_NOTE,
+    EVENT_PASS,
     EVENT_VETO,
     AnnotationError,
     append_annotation_row,
     build_annotation,
     load_annotations,
     record_annotation,
+    record_pass_annotation,
 )
 from ui.annotations.vocabulary import (  # noqa: E402
     VocabularyError,
+    available_pass_versions,
     available_veto_versions,
     clear_vocabulary_cache,
+    load_pass_vocabulary,
     load_veto_vocabulary,
 )
 
@@ -450,6 +455,283 @@ class SetupClaimTests(unittest.TestCase):
     def test_every_claim_has_a_label(self) -> None:
         for claim in all_setup_claims():
             self.assertTrue(claim.label.strip(), claim.setup_id)
+
+
+# --------------------------------------------------------------------------
+# The day-trade pass (trader, 2026-08-31)
+#
+# "Many times I really like this stock for a daytrade but it has this ONE
+# issue" - and they pass. That judgement was going nowhere; these pin the shape
+# it now gets recorded in. The properties that matter are the ones that make it
+# readable in a year: its own vocabulary family, several reasons per pass in a
+# stable order, and a chart attached only when the desk already had one.
+# --------------------------------------------------------------------------
+def _write_pass_vocab(directory: Path, version: int, reasons: list[dict]) -> Path:
+    path = directory / f"pass_reasons_v{version}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "vocabulary_id": "pass_reasons",
+                "vocab_version": version,
+                "reasons": reasons,
+            }
+        ),
+        encoding="utf-8",
+    )
+    clear_vocabulary_cache()
+    return path
+
+
+class ShippedPassVocabularyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_vocabulary_cache()
+
+    def test_the_pass_family_ships_and_loads(self) -> None:
+        self.assertTrue(available_pass_versions())
+        vocab = load_pass_vocabulary()
+        self.assertEqual(vocab.vocabulary_id, "pass_reasons")
+        self.assertTrue(vocab.reasons)
+
+    def test_it_carries_the_five_reasons_the_trader_listed(self) -> None:
+        # The trader wrote these five, in this order, with these words. The
+        # LABELS are pinned rather than paraphrased: the picklist is the
+        # question being asked, and rewording it silently changes the answers.
+        self.assertEqual(
+            [reason.label for reason in load_pass_vocabulary(1).reasons],
+            [
+                "Poor market conditions",
+                "Low rvol",
+                "LRSI/SMI incongruency",
+                "Incoming Horizontal",
+                "Other incoming S/R",
+            ],
+        )
+
+    def test_no_pass_reason_demands_a_note(self) -> None:
+        """Ticking a box is the whole capture; the note stays optional."""
+        vocab = load_pass_vocabulary()
+        self.assertEqual([r.code for r in vocab.reasons if r.note_required], [])
+
+    def test_the_pass_family_is_separate_from_the_veto_family(self) -> None:
+        """Separate files, separate version series, no shared codes.
+
+        A pass is not a veto, and pooling them would restamp cohort identity
+        for every veto reason already accruing forward returns.
+        """
+        pass_vocab = load_pass_vocabulary()
+        veto_vocab = load_veto_vocabulary()
+        self.assertNotEqual(pass_vocab.vocabulary_id, veto_vocab.vocabulary_id)
+        self.assertEqual(set(pass_vocab.codes) & set(veto_vocab.codes), set())
+
+
+class PassVocabularyVersioningTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_vocabulary_cache()
+        self._tmp = TemporaryDirectory()
+        self.directory = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(clear_vocabulary_cache)
+
+    def test_codes_round_trip_from_the_file(self) -> None:
+        _write_pass_vocab(self.directory, 1, [_reason("alpha", "1"), _reason("beta", "2")])
+        vocab = load_pass_vocabulary(directory=self.directory)
+        self.assertEqual(vocab.codes, ("alpha", "beta"))
+        self.assertEqual(vocab.reason("beta").label, "Beta")
+
+    def test_a_reused_code_fails_closed(self) -> None:
+        _write_pass_vocab(self.directory, 1, [_reason("alpha", "1"), _reason("alpha", "2")])
+        with self.assertRaises(VocabularyError):
+            load_pass_vocabulary(directory=self.directory)
+
+    def test_a_family_reads_only_its_own_files(self) -> None:
+        """A veto file in the folder is not a pass version, and vice versa."""
+        _write_vocab(self.directory, 7, [_reason("alpha", "1")])
+        self.assertEqual(available_pass_versions(self.directory), ())
+        _write_pass_vocab(self.directory, 3, [_reason("beta", "2")])
+        self.assertEqual(available_pass_versions(self.directory), (3,))
+        self.assertEqual(available_veto_versions(self.directory), (7,))
+
+    def test_a_file_that_declares_the_wrong_family_is_refused(self) -> None:
+        path = self.directory / "pass_reasons_v1.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "vocabulary_id": "veto_reasons",
+                    "vocab_version": 1,
+                    "reasons": [_reason("alpha", "1")],
+                }
+            ),
+            encoding="utf-8",
+        )
+        clear_vocabulary_cache()
+        with self.assertRaises(VocabularyError):
+            load_pass_vocabulary(directory=self.directory)
+
+
+class PassRowTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_vocabulary_cache()
+        self.vocab = load_pass_vocabulary()
+
+    def test_a_pass_carries_every_ticked_reason(self) -> None:
+        row = build_annotation(
+            EVENT_PASS,
+            symbol="aapl",
+            side="LONG",
+            reason_codes=[self.vocab.codes[2], self.vocab.codes[0]],
+            note="one issue",
+        )
+        self.assertEqual(row["event_type"], EVENT_PASS)
+        self.assertEqual(row["symbol"], "AAPL")
+        self.assertEqual(row["note"], "one issue")
+        # Never a literal: the version is whatever the loaded file declares.
+        self.assertEqual(row["vocab_version"], self.vocab.vocab_version)
+        self.assertEqual(row["vocabulary_id"], self.vocab.vocabulary_id)
+
+    def test_reasons_are_written_in_vocabulary_order_not_click_order(self) -> None:
+        first, second = self.vocab.codes[0], self.vocab.codes[3]
+        clicked = build_annotation(
+            EVENT_PASS, symbol="AAPL", reason_codes=[second, first]
+        )
+        self.assertEqual(clicked["reason_codes"], [first, second])
+
+    def test_a_repeated_tick_is_recorded_once(self) -> None:
+        code = self.vocab.codes[1]
+        row = build_annotation(EVENT_PASS, symbol="AAPL", reason_codes=[code, code])
+        self.assertEqual(row["reason_codes"], [code])
+
+    def test_a_pass_with_no_reason_is_refused(self) -> None:
+        with self.assertRaises(AnnotationError):
+            build_annotation(EVENT_PASS, symbol="AAPL", reason_codes=[])
+
+    def test_a_reason_outside_the_vocabulary_is_refused(self) -> None:
+        with self.assertRaises(AnnotationError):
+            build_annotation(
+                EVENT_PASS, symbol="AAPL", reason_codes=["made_up_reason"]
+            )
+
+    def test_the_note_stays_optional(self) -> None:
+        row = build_annotation(
+            EVENT_PASS, symbol="AAPL", reason_codes=[self.vocab.codes[0]]
+        )
+        self.assertNotIn("note", row)
+
+    def test_the_timestamp_is_zoned_so_a_chart_can_be_found_by_it(self) -> None:
+        """The trader's fallback: "just store the exact timestamp"."""
+        row = build_annotation(
+            EVENT_PASS, symbol="AAPL", reason_codes=[self.vocab.codes[0]]
+        )
+        self.assertIsNotNone(datetime.fromisoformat(row["created_at"]).tzinfo)
+
+
+class PassBarSidecarTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_vocabulary_cache()
+        self._tmp = TemporaryDirectory()
+        self.directory = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.path = self.directory / "trader_annotations.jsonl"
+        self.code = load_pass_vocabulary().codes[0]
+
+    def _bars(self, day: int, count: int = 3) -> list[dict]:
+        return [
+            {
+                "dt": datetime(2026, 8, day, 9, 30 + 5 * index),
+                "open": 10.0,
+                "high": 10.5,
+                "low": 9.9,
+                "close": 10.2,
+                "volume": 1000.0 + index,
+            }
+            for index in range(count)
+        ]
+
+    def test_cached_bars_are_attached_through_a_sidecar(self) -> None:
+        row = record_pass_annotation(
+            symbol="AAPL",
+            reason_codes=[self.code],
+            m5_bars=self._bars(31),
+            path=self.path,
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row["m5_bar_count"], 3)
+        stored = pass_bars.read_pass_bars(row, annotations_path=self.path)
+        self.assertEqual(len(stored["bars"]), 3)
+        self.assertEqual(stored["event_id"], row["event_id"])
+        self.assertEqual(stored["bars"][0]["close"], 10.2)
+
+    def test_only_the_newest_session_is_kept(self) -> None:
+        """The desk hands out two sessions; a pass is about today's chart."""
+        row = record_pass_annotation(
+            symbol="AAPL",
+            reason_codes=[self.code],
+            m5_bars=self._bars(30, 4) + self._bars(31, 2),
+            path=self.path,
+        )
+        stored = pass_bars.read_pass_bars(row, annotations_path=self.path)
+        self.assertEqual(row["m5_bar_count"], 2)
+        self.assertTrue(all(bar["dt"].startswith("2026-08-31") for bar in stored["bars"]))
+
+    def test_with_nothing_cached_the_row_still_writes_with_its_timestamp(self) -> None:
+        row = record_pass_annotation(
+            symbol="AAPL", reason_codes=[self.code], m5_bars=[], path=self.path
+        )
+        self.assertIsNotNone(row)
+        self.assertNotIn("m5_bars_ref", row)
+        self.assertTrue(row["created_at"])
+        self.assertEqual(len(load_annotations(self.path, event_types=(EVENT_PASS,))), 1)
+
+    def test_a_failed_sidecar_costs_the_bars_and_never_the_row(self) -> None:
+        """Evidence stores are never allowed to cost the thing they record."""
+        blocker = pass_bars.sidecar_dir(self.path)
+        blocker.write_text("not a directory", encoding="utf-8")
+        row = record_pass_annotation(
+            symbol="AAPL",
+            reason_codes=[self.code],
+            m5_bars=self._bars(31),
+            path=self.path,
+        )
+        self.assertIsNotNone(row)
+        self.assertNotIn("m5_bars_ref", row)
+        self.assertEqual(len(load_annotations(self.path, event_types=(EVENT_PASS,))), 1)
+
+    def test_a_referenced_sidecar_always_exists_on_disk(self) -> None:
+        """Sidecar first, row second - a reference in the stream never lies."""
+        row = record_pass_annotation(
+            symbol="AAPL",
+            reason_codes=[self.code],
+            m5_bars=self._bars(31),
+            path=self.path,
+        )
+        self.assertTrue((self.path.parent / row["m5_bars_ref"]).is_file())
+
+    def test_a_missing_sidecar_reads_as_empty_rather_than_raising(self) -> None:
+        row = record_pass_annotation(
+            symbol="AAPL",
+            reason_codes=[self.code],
+            m5_bars=self._bars(31),
+            path=self.path,
+        )
+        (self.path.parent / row["m5_bars_ref"]).unlink()
+        self.assertEqual(pass_bars.read_pass_bars(row, annotations_path=self.path), {})
+
+    def test_a_failed_append_reports_none(self) -> None:
+        """An unwritable stream is reported, never raised at the capture."""
+        blocked = self.directory / "as_a_directory"
+        blocked.mkdir()
+        self.assertIsNone(
+            record_pass_annotation(
+                symbol="AAPL", reason_codes=[self.code], m5_bars=[], path=blocked
+            )
+        )
+
+    def test_a_pass_row_never_carries_a_suppression_field(self) -> None:
+        """plan.md sec 5: this stream annotates, and has no way to mute."""
+        row = record_pass_annotation(
+            symbol="AAPL", reason_codes=[self.code], m5_bars=[], path=self.path
+        )
+        forbidden = {"suppress", "suppressed", "mute", "muted", "hide", "score"}
+        self.assertEqual(set(row) & forbidden, set())
 
 
 if __name__ == "__main__":

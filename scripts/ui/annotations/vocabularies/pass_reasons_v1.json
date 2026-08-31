@@ -1,0 +1,42 @@
+{
+  "vocabulary_id": "pass_reasons",
+  "vocab_version": 1,
+  "description": "Why the trader LIKED a name for a day trade and passed on it anyway. Starting vocabulary agreed with the trader 2026-08-31: 'many times I really like this stock for a daytrade but it has this ONE issue' - so these are single blocking objections against a name the trader wanted, not a rejection of the chart (that is veto_reasons, a separate family with its own version series). Multiple reasons may be ticked for one pass. Codes are permanent identifiers: a code is never renamed or reused for a different meaning, because rows already written carry it. A later vocabulary adds pass_reasons_v2.json alongside this file and leaves v1 readable for the rows stamped with it. Labels are the trader's own words, unedited.",
+  "reasons": [
+    {
+      "code": "poor_market_conditions",
+      "label": "Poor market conditions",
+      "hotkey": "1",
+      "note_required": false,
+      "hint": "The tape or the index was wrong for it, whatever this name was doing."
+    },
+    {
+      "code": "low_rvol",
+      "label": "Low rvol",
+      "hotkey": "2",
+      "note_required": false,
+      "hint": "Relative volume too thin to trust the move or to get out of it."
+    },
+    {
+      "code": "lrsi_smi_incongruency",
+      "label": "LRSI/SMI incongruency",
+      "hotkey": "3",
+      "note_required": false,
+      "hint": "The oscillators disagreed with the price move or with each other."
+    },
+    {
+      "code": "incoming_horizontal",
+      "label": "Incoming Horizontal",
+      "hotkey": "4",
+      "note_required": false,
+      "hint": "A horizontal level sits close enough ahead to cap or catch the trade."
+    },
+    {
+      "code": "incoming_sr_other",
+      "label": "Other incoming S/R",
+      "hotkey": "5",
+      "note_required": false,
+      "hint": "Some other support or resistance arrives in the path: a line, a moving average, a band."
+    }
+  ]
+}

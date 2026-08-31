@@ -1,13 +1,21 @@
 """Versioned picklists for trader annotations, loaded from bundled JSON.
 
-Why a JSON asset and not a Python constant: the veto vocabulary is data the
-trader and the analysis side both have to agree on months from now, and every
-row written stamps the ``vocab_version`` it used. Keeping the list in a file
+Why a JSON asset and not a Python constant: a vocabulary is data the trader
+and the analysis side both have to agree on months from now, and every row
+written stamps the ``vocab_version`` it used. Keeping the list in a file
 per version means a later vocabulary is a new file - ``veto_reasons_v2.json``
 next to ``veto_reasons_v1.json`` - and rows stamped ``1`` stay interpretable
 against exactly the list that produced them. Editing a shipped version in
-place is the one thing that breaks that, so :func:`load_veto_vocabulary`
+place is the one thing that breaks that, so :func:`load_vocabulary`
 validates the invariants a version file must hold rather than trusting it.
+
+Two FAMILIES ship, and they are separate files on purpose. ``veto_reasons``
+is why the trader will not take the chart in front of them at all;
+``pass_reasons`` (2026-08-31) is why they liked a name for a day trade and
+still passed on it - "one issue" rather than a rejection. Folding the second
+into the first would have re-stamped a shared ``vocab_version`` onto every
+veto cohort already accruing forward returns, for two lists that answer
+different questions. A family owns its own version series.
 
 Fail-closed on purpose. A missing or malformed vocabulary is a packaging
 defect, not a runtime condition to paper over: the alternative is a capture
@@ -33,7 +41,13 @@ VOCABULARY_DIR = Path(__file__).resolve().parent / "vocabularies"
 #: keeps codes usable as column names, filename fragments and cohort-source
 #: suffixes later without escaping (see annotations.veto_cohort).
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{2,47}$")
-_VERSION_FILE_RE = re.compile(r"^veto_reasons_v(\d+)\.json$")
+#: Which picklists ship. A family is a filename prefix and a series of
+#: versions that only ever grows: ``<family>_v<N>.json``.
+VETO_FAMILY = "veto_reasons"
+PASS_FAMILY = "pass_reasons"
+FAMILIES = (VETO_FAMILY, PASS_FAMILY)
+
+_FAMILY_RE = re.compile(r"^[a-z][a-z0-9_]{2,31}$")
 
 #: Cohort sources are built as ``veto_<code>``; a code that collided with the
 #: existing focus prefixes would land veto rows in a focus cohort.
@@ -61,8 +75,14 @@ class VetoReason:
 
 @dataclass(frozen=True)
 class VetoVocabulary:
-    """One immutable version of the veto picklist."""
+    """One immutable version of one family's picklist.
 
+    Named for the veto because it shipped first and rows, tests and analysis
+    all import it by that name; ``vocabulary_id`` is what actually says which
+    family a loaded list belongs to.
+    """
+
+    vocabulary_id: str
     vocab_version: int
     description: str
     reasons: tuple[VetoReason, ...]
@@ -86,8 +106,24 @@ class VetoVocabulary:
         return None
 
 
-def available_veto_versions(directory: Path | None = None) -> tuple[int, ...]:
-    """Every vocabulary version present, ascending."""
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise VocabularyError(message)
+
+
+def _version_file_re(family: str):
+    _require(
+        bool(_FAMILY_RE.fullmatch(str(family or ""))),
+        f"vocabulary family {family!r} must match {_FAMILY_RE.pattern}",
+    )
+    return re.compile(rf"^{re.escape(family)}_v(\d+)\.json$")
+
+
+def available_versions(
+    family: str = VETO_FAMILY, directory: Path | None = None
+) -> tuple[int, ...]:
+    """Every version of ``family`` present, ascending."""
+    pattern = _version_file_re(family)
     target = Path(directory) if directory is not None else VOCABULARY_DIR
     try:
         entries = list(target.iterdir())
@@ -95,20 +131,32 @@ def available_veto_versions(directory: Path | None = None) -> tuple[int, ...]:
         return ()
     versions = []
     for entry in entries:
-        match = _VERSION_FILE_RE.fullmatch(entry.name)
+        match = pattern.fullmatch(entry.name)
         if match and entry.is_file():
             versions.append(int(match.group(1)))
     return tuple(sorted(versions))
 
 
-def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise VocabularyError(message)
+def available_veto_versions(directory: Path | None = None) -> tuple[int, ...]:
+    """Every veto vocabulary version present, ascending."""
+    return available_versions(VETO_FAMILY, directory)
 
 
-def _parse(payload: object, *, version: int, origin: str) -> VetoVocabulary:
+def available_pass_versions(directory: Path | None = None) -> tuple[int, ...]:
+    """Every day-trade pass-reason version present, ascending."""
+    return available_versions(PASS_FAMILY, directory)
+
+
+def _parse(
+    payload: object, *, family: str, version: int, origin: str
+) -> VetoVocabulary:
     _require(isinstance(payload, dict), f"{origin}: top level is not an object")
     assert isinstance(payload, dict)  # narrowed by _require
+    declared_id = payload.get("vocabulary_id")
+    _require(
+        declared_id == family,
+        f"{origin}: declares vocabulary_id {declared_id!r} but is named {family}",
+    )
     declared = payload.get("vocab_version")
     _require(
         isinstance(declared, int) and declared == version,
@@ -161,14 +209,15 @@ def _parse(payload: object, *, version: int, origin: str) -> VetoVocabulary:
         )
 
     return VetoVocabulary(
+        vocabulary_id=family,
         vocab_version=version,
         description=str(payload.get("description") or "").strip(),
         reasons=tuple(reasons),
     )
 
 
-@lru_cache(maxsize=8)
-def _load_cached(path_text: str, version: int) -> VetoVocabulary:
+@lru_cache(maxsize=16)
+def _load_cached(path_text: str, family: str, version: int) -> VetoVocabulary:
     path = Path(path_text)
     try:
         raw = path.read_text(encoding="utf-8")
@@ -178,7 +227,34 @@ def _load_cached(path_text: str, version: int) -> VetoVocabulary:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise VocabularyError(f"{path.name}: is not valid JSON ({exc})") from exc
-    return _parse(payload, version=version, origin=path.name)
+    return _parse(payload, family=family, version=version, origin=path.name)
+
+
+def load_vocabulary(
+    family: str = VETO_FAMILY,
+    version: int | None = None,
+    *,
+    directory: Path | None = None,
+) -> VetoVocabulary:
+    """One family's picklist, defaulting to the newest version present.
+
+    Pass ``version`` to read an older list back - that is what makes a row
+    stamped ``vocab_version: 1`` interpretable after v2 ships.
+    """
+    target = Path(directory) if directory is not None else VOCABULARY_DIR
+    versions = available_versions(family, target)
+    if not versions:
+        raise VocabularyError(
+            f"no {family}_v*.json under {target} - the vocabulary asset is "
+            "missing from this build (packaging/tradingbotv3.spec mirrors every "
+            "non-.py file under scripts/ui)"
+        )
+    wanted = versions[-1] if version is None else int(version)
+    if wanted not in versions:
+        raise VocabularyError(
+            f"{family} vocabulary v{wanted} not present; have {list(versions)}"
+        )
+    return _load_cached(str(target / f"{family}_v{wanted}.json"), family, wanted)
 
 
 def load_veto_vocabulary(
@@ -186,25 +262,23 @@ def load_veto_vocabulary(
     *,
     directory: Path | None = None,
 ) -> VetoVocabulary:
-    """The veto picklist, defaulting to the newest version present.
+    """The veto picklist - why this chart is not for today at all."""
+    return load_vocabulary(VETO_FAMILY, version, directory=directory)
 
-    Pass ``version`` to read an older list back - that is what makes a row
-    stamped ``vocab_version: 1`` interpretable after v2 ships.
+
+def load_pass_vocabulary(
+    version: int | None = None,
+    *,
+    directory: Path | None = None,
+) -> VetoVocabulary:
+    """The day-trade pass picklist - the ONE issue that cost a liked name.
+
+    Trader, 2026-08-31: "many times I really like this stock for a daytrade
+    but it has this one issue" and they pass. That is a different judgement
+    from a veto, and it gets its own family for the reason the module
+    docstring gives.
     """
-    target = Path(directory) if directory is not None else VOCABULARY_DIR
-    versions = available_veto_versions(target)
-    if not versions:
-        raise VocabularyError(
-            f"no veto_reasons_v*.json under {target} - the vocabulary asset is "
-            "missing from this build (packaging/tradingbotv3.spec mirrors every "
-            "non-.py file under scripts/ui)"
-        )
-    wanted = versions[-1] if version is None else int(version)
-    if wanted not in versions:
-        raise VocabularyError(
-            f"veto vocabulary v{wanted} not present; have {list(versions)}"
-        )
-    return _load_cached(str(target / f"veto_reasons_v{wanted}.json"), wanted)
+    return load_vocabulary(PASS_FAMILY, version, directory=directory)
 
 
 def clear_vocabulary_cache() -> None:

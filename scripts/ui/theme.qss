@@ -337,3 +337,53 @@ QLabel#GroupChipName[side="short"] {
 QLabel#GroupChipValue {
     color: @text_muted@;
 }
+
+/* ------------------------------------------------------------------ */
+/* Today's swing picks - the trader's own vetted list, under the M5    */
+/* alert list. Same rule as the group chips above: the side variant    */
+/* and the "took" mark are dynamic properties answered here, so a chip */
+/* costs a property set and a re-polish rather than a CSS parse.       */
+/* ------------------------------------------------------------------ */
+
+QFrame#SwingFavoriteChip {
+    border: 1px solid @group_chip_unknown_border@;
+    border-radius: 6px;
+    background: @group_chip_unknown_bg@;
+}
+
+QFrame#SwingFavoriteChip[side="long"] {
+    border: 1px solid @group_chip_long_border@;
+    background: @group_chip_long_bg@;
+}
+
+QFrame#SwingFavoriteChip[side="short"] {
+    border: 1px solid @group_chip_short_border@;
+    background: @group_chip_short_bg@;
+}
+
+QFrame#SwingFavoriteChip[taken="true"] {
+    border: 1px solid @favorite@;
+}
+
+QFrame#SwingFavoriteChip QLabel {
+    border: none;
+    background: transparent;
+}
+
+QLabel#SwingFavoriteName {
+    color: @neutral@;
+    font-weight: 700;
+}
+
+QLabel#SwingFavoriteName[side="long"] {
+    color: @long@;
+}
+
+QLabel#SwingFavoriteName[side="short"] {
+    color: @short@;
+}
+
+QLabel#SwingFavoriteTaken {
+    color: @favorite@;
+    font-weight: 700;
+}

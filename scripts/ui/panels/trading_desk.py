@@ -20,12 +20,14 @@ from ui.panels.focus_picks_panel import FocusPicksPanel
 from ui.panels.industry_panel import IndustryPanel
 from ui.panels.master_avwap_panel import MasterAvwapPanel
 from ui.widgets.m5_alert_bar import M5AlertBar
+from ui.widgets.swing_favorites_bar import SwingFavoritesBar
 from ui.panels.rs_window_panel import RsWindowPanel
 from ui.panels.theta_panel import ThetaPanel
 from ui.panels.watchlists_panel import WatchlistsPanel
 from ui.services.focus_service import FocusService
 from ui.services.price_alert_service import PriceAlertService
 from ui.services.group_tape_service import GroupTapeService
+from ui.services.swing_favorites_service import SwingFavoritesService
 from ui.widgets.group_tape_strip import GroupTapeStrip
 from ui.widgets.setups_toggle_button import SetupsToggleButton
 
@@ -122,6 +124,33 @@ class TradingDeskPanel(QWidget):
         self.alert_center.m5AlertPosted.connect(self.m5_alert_bar.post)
         self.alert_center.m5AlertsDayRolled.connect(self.m5_alert_bar.clear_all)
         self.m5_alert_bar.alertActivated.connect(self.alert_center.chart_alert)
+
+        # Trader, 2026-08-31: "at the end of the day I have a list of my top
+        # swing targets... put it at the very bottom of the M5 alerts tab, the
+        # tab is so long and I never use all of it." The M5 alerts surface is a
+        # TAB in tabs mode and the tall left COLUMN in workspace mode - the
+        # trader runs workspace - so the bar and the strip share one host that
+        # both modes mount, and the strip is always the bottom of it. The bar
+        # keeps every pixel it wants: it takes the stretch, the strip takes
+        # none. Nothing here touches the bar or any alert routing.
+        self.swing_favorites_bar = SwingFavoritesBar()
+        self.swing_favorites_service = SwingFavoritesService(self.focus_service, parent=self)
+        self.swing_favorites_bar.addRequested.connect(self._add_swing_favorites)
+        self.swing_favorites_bar.removeRequested.connect(self._remove_swing_favorite)
+        self.swing_favorites_service.favoritesChanged.connect(self._refresh_swing_favorites)
+        self.swing_favorites_service.takenChanged.connect(self.swing_favorites_bar.set_taken)
+        self.swing_favorites_service.statusChanged.connect(self.swing_favorites_bar.set_status)
+        self.swing_favorites_service.statusChanged.connect(self.statusChanged)
+        self.m5_column = QWidget()
+        m5_column_layout = QVBoxLayout(self.m5_column)
+        m5_column_layout.setContentsMargins(0, 0, 0, 0)
+        m5_column_layout.setSpacing(4)
+        m5_column_layout.addWidget(self.m5_alert_bar, 1)
+        m5_column_layout.addWidget(self.swing_favorites_bar, 0)
+        self._refresh_swing_favorites()
+        # A day roll starts a new session, so the strip re-derives from the
+        # store and comes back empty. Read-only: the rows themselves stay.
+        self.alert_center.m5AlertsDayRolled.connect(self._refresh_swing_favorites)
         self.bounce_panel.service.connectionChanged.connect(self.connectionChanged)
         self.bounce_panel.service.alertReceived.connect(self.focus_picks_panel.record_bounce_alert)
         self.bounce_panel.service.rrsSnapshotChanged.connect(self.focus_picks_panel.record_rrs_snapshot)
@@ -203,7 +232,7 @@ class TradingDeskPanel(QWidget):
             tabs = QTabWidget()
             tabs.addTab(self.master_workspace, "Master AVWAP")
             tabs.addTab(self.alert_center, "Alert Center")
-            tabs.addTab(self.m5_alert_bar, "M5 alerts")
+            tabs.addTab(self.m5_column, "M5 alerts")
             tabs.addTab(self.bounce_panel, "BounceBot")
             self._mode_widget = tabs
             self.center_layout.addWidget(tabs)
@@ -220,7 +249,7 @@ class TradingDeskPanel(QWidget):
         # pass: "move it to the left of the visual chart"). It takes no
         # stretch: extra width goes to the chart column first, then the
         # setups.
-        splitter.addWidget(self.m5_alert_bar)
+        splitter.addWidget(self.m5_column)
         splitter.addWidget(self.alert_center)
         splitter.addWidget(self.master_workspace)
         # The chart column leads. The old 1:2 stretch meant every pixel
@@ -258,6 +287,30 @@ class TradingDeskPanel(QWidget):
         self.setups_toggle.setVisible(True)
         self.master_workspace.setVisible(self._setups_visible)
 
+    # ------------------------------------------------------- swing picks
+    def _add_swing_favorites(self, text: str, side: str) -> None:
+        """Place the typed or pasted names on today's list and in swing Focus."""
+        added = self.swing_favorites_service.add(text, side)
+        if added:
+            self.swing_favorites_bar.set_status(
+                f"Added {', '.join(added)} to today's swing picks."
+            )
+        else:
+            self.swing_favorites_bar.set_status("Nothing to add.")
+
+    def _remove_swing_favorite(self, symbol: str, side: str) -> None:
+        if self.swing_favorites_service.remove(symbol, side):
+            self.swing_favorites_bar.set_status(f"Dropped {symbol}.")
+
+    def _refresh_swing_favorites(self) -> None:
+        """Show the current session's list and re-ask the journal about it.
+
+        Cheap by construction: the list is a replay of one session's rows in a
+        small JSONL, and the journal join runs on its own thread.
+        """
+        self.swing_favorites_bar.set_favorites(self.swing_favorites_service.favorites())
+        self.swing_favorites_service.refresh_taken()
+
     def _show_setup_in_workspace(self, payload: dict) -> None:
         self.master_workspace.show_setups()
         self.master_panel.detail_view.show_setup(**payload)
@@ -268,6 +321,9 @@ class TradingDeskPanel(QWidget):
         price_alert_service = getattr(self, "price_alert_service", None)
         if price_alert_service is not None:
             components.append(("price alerts", price_alert_service.shutdown))
+        swing_favorites_service = getattr(self, "swing_favorites_service", None)
+        if swing_favorites_service is not None:
+            components.append(("swing favorites", swing_favorites_service.shutdown))
         components.extend((
             ("BounceBot", self.bounce_panel.on_close),
             ("industry board", self.industry_panel.shutdown),
@@ -298,7 +354,7 @@ class TradingDeskPanel(QWidget):
         rescued = (
             self.master_workspace,
             self.alert_center,
-            self.m5_alert_bar,
+            self.m5_column,
             self.bounce_panel,
             self.tape_host,
         )
@@ -328,7 +384,7 @@ class TradingDeskPanel(QWidget):
         """
         self.alert_center.setMinimumWidth(theme.px(360))
         # Wide enough for "07:09  ▲ SYMBOL  VWAP reclaim" and the two buttons.
-        self.m5_alert_bar.setMinimumWidth(theme.px(150))
+        self.m5_column.setMinimumWidth(theme.px(150))
         self.master_workspace.setMinimumWidth(theme.px(420))
 
     def apply_scaled_metrics(self) -> None:

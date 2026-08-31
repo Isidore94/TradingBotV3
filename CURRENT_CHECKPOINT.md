@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** — the 2026-08-31 desk-lockup fix was merged by trader instruction ("go ahead and merge to main"), fast-forward from `claude/focus-refresh-storm`, no divergence |
+| Working branch | **`claude/swing-favorites`** — cut from `main` at `ab2423b` for the trader-directed "Today's swing picks" feature (2026-08-31). `main` itself carries the desk-lockup fix, merged by trader instruction ("go ahead and merge to main"), fast-forward from `claude/focus-refresh-storm`, no divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5456 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main`; +29 new tests over the 5427 the pre-merge checkout collects) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5538 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/swing-favorites`) · smoke **7/7** · source `--selftest` **73/73**. **That run was NOT isolated:** the checkout was shared with a second in-flight packet's uncommitted work, which accounts for 23 of those tests and for the selftest's 72 → 73; this branch itself adds **59**. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`; +29 new tests over the 5427 the pre-merge checkout collects) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** — rebuilt 2026-08-31 at `d0a2ae6` (419 MB onedir), `selftest OK: 72/72 checks passed (frozen)`, exit 0. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required, and it is now the only thing between the trader and the lockup fix** — the fix is on `main`, the desk runs from source, so the next launch has it. The warehouse and journal packets are still owed the same restart |
 
@@ -50,6 +50,7 @@ the dated entry named beside it.
 | 16 | **IBKR file import** — the trader imports their IBKR transaction file on the desk; the second account's mask resolves once Flex has named it | R7 IBKR file (2026-08-28 IBKR entry) |
 | 17 | **File authority** — one desk import where a shared day agrees (sync keeps its times) and, if one ever disagrees, the file takes it | R7 file authority (2026-08-28 authority entry) |
 | 18 | **Tax report** — one desk run of "Realised P&L for tax..." against the live journal, with the BoC rates booked so the CAD total is complete | R7 tax report (2026-08-28 tax entry) |
+| 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 ### Merged to main without a live-validation day — stated, not hidden
@@ -67,7 +68,9 @@ live journal database, and the frozen exe, which is six commits stale.
 
 ### Immediate next action
 
-**Restart the desk.** The lockup fix is on `main` as of 2026-08-31, and the desk
+**Restart the desk.** "Today's swing picks" is built and green on
+`claude/swing-favorites` and reaches the desk when that branch merges; its live
+proof is gate 20. The lockup fix is on `main` as of 2026-08-31, and the desk
 runs from source, so the next launch picks it up — nothing else is between the
 trader and it. Then run the owed live gates in the order above, gate 19 first
 because it is the one that says this morning cannot repeat. **The remaining
@@ -77,6 +80,85 @@ desk and run the self-check (gates 14-15). Two of his asks are scoped and
 NOT built, and one needs his answer first: statements as the source of truth over
 the API (it would cost the only intraday timestamps the journal has), and the
 IBKR transaction-file importer (masked account numbers are the open problem).
+
+---
+
+## 2026-08-31 - Today's swing picks: the trader's own list, under the alert bar
+
+**Trader-directed, authorized in chat 2026-08-31.** Branch `claude/swing-favorites`,
+cut from `main` at `ab2423b`. Green; live gate 20 owed.
+
+### What the trader asked for
+
+*"At the end of the day I have a list of my top swing targets. I want a place to put
+them in so the bot knows my personal favourite picks. They will usually become focus
+picks too but these ones get special standing because I picked them by hand... put it
+at the very bottom of the M5 alerts tab, the tab is so long and I never use all of it.
+And the bot should scan the journal to know which ones I actually took."*
+
+Deliberately **not** the Master AVWAP like/dislike capture, which already exists and
+records a verdict on a row the bot proposed. This records a name the trader brought in
+themselves.
+
+### What was built
+
+- `scripts/swing_favorites.py` - append-only store and the session replay. A row is
+  `(schema, action, session_date, symbol, side, event_at, origin)`; `event_at` is
+  tz-aware and `session_date` is market-local, the `evidence_ledger` convention.
+- `scripts/ui/services/swing_favorites_service.py` - the two writes, and the journal
+  join on a worker thread.
+- `scripts/ui/widgets/swing_favorites_bar.py` - the strip: input, Long/Short toggle,
+  chips with an x, diffed like the Focus board, styled by `theme.qss`.
+- `project_paths.SWING_FAVORITES_FILE` -> `swing_favorites.jsonl` in the shared home,
+  the same storage class as `pick_feedback.jsonl` and `trader_annotations.jsonl`.
+
+### The decisions worth keeping
+
+- **Two writes, in a fixed order.** The swing Focus write-through goes first through
+  the existing store and must not fail - it is what the trader asked for. The evidence
+  row goes second and a failed append is swallowed with a status line, because an
+  evidence store is never allowed to cost the thing it records.
+- **No auto-adoption marker, ever.** A hand-vetted pick carrying one would be reachable
+  by "Not today" and the desync repair - the exact removal path that marker exists to
+  keep off the trader's own names.
+- **A removal is a retraction, not an edit.** The add row stays and a `remove` row
+  follows it, so "added AMD and then thought better of it" survives as a fact.
+- **The "took" badge is display only**, joins the TRADE journal (not the Market
+  Journal), runs on a worker thread over a bounded 10-day window, and is **silent when
+  the journal would have to be created or migrated to answer** - a display badge must
+  never be the thing that triggers a schema migration. It derives no rate, grade or
+  statistic.
+
+### Where it lives, and the one existing test that moved
+
+The M5 alerts surface is a TAB in tabs mode and the tall left COLUMN in workspace mode.
+**The trader's saved `qt_workspace_mode` is `workspace`**, so "the M5 alerts tab" is, on
+their desk, that column - which is exactly the "so long and I never use all of it" they
+described. The bar and the strip therefore share one host (`TradingDeskPanel.m5_column`)
+that both modes mount, and the strip is the bottom of it either way. `M5AlertBar` and
+every alert routing path are untouched.
+
+That made the splitter hold the column rather than the bar, so
+`test_the_bar_is_the_left_column_before_the_chart` now asserts
+`splitter.widget(0) is desk.m5_column` **and** that the bar is the first thing inside
+it. The trader rule it pins - the bar is left of the chart - is unchanged and still
+verified.
+
+### Verification
+
+`pytest tests/ -q` **5538 passed, 72 subtests**, smoke **7/7**, source `--selftest`
+**73/73**, spec-drift 17. **Stated plainly: that suite run was not isolated.** The
+checkout was shared with a second in-flight packet's uncommitted work (annotations /
+pass-bars files), which accounts for 23 of those tests and for the selftest going
+72 -> 73. This branch's own contribution is **59 tests** over the 5456 baseline. Only
+this feature's files were committed.
+
+### Owed, and one question not asked
+
+Gate 20 above. And a product question the trader has **not** been asked: the strip
+shows the CURRENT session only, so a pick typed after the close is shown that evening
+and its "took" badge can only ever reflect that same session. Carrying picks forward to
+the next session is their call.
 
 ---
 

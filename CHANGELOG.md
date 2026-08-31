@@ -142,6 +142,20 @@ which is evidence and must not be loaded as context.
   staging picks for the wake-up flip; OFF is the only mode that still
   self-applies. Quiet hours confine every automatic starter to weekdays,
   06:00–14:00 local; manual buttons are never gated.
+- **Today's swing picks**, 2026-08-31 (trader-directed): a strip at the bottom of the
+  M5 alerts column where the trader types or pastes their own end-of-day swing
+  targets with a Long/Short toggle. Two writes per add — the swing Focus
+  write-through through the existing store, as the TRADER's entry with **no
+  auto-adoption marker**, and an append-only row in `swing_favorites.jsonl`
+  (`project_paths.SWING_FAVORITES_FILE`). A removal appends a RETRACTION row and
+  drops the Focus entry; nothing is ever rewritten, and prior sessions stay in the
+  store. A "took" badge marks a pick whose symbol has a TRADE-journal trade opened
+  on or after the pick date — display only, joined on a worker thread over a
+  bounded 10-day window, silent when the journal would have to be migrated to
+  answer. Diffed like the Focus board, styled by `theme.qss`, no phone push, and
+  nothing in the chain reaches a detector, score, alert, watchlist ranking or
+  `review_policy.json`.
+
 - One Master AVWAP scan action, 2026-08-15 (packet R1). The Shared/Local pair read
   the identical two watchlist files, so `use_shared_watchlists` and the menu choice
   it drove were removed across thirteen files. Cloud-drive *store discovery* went
@@ -342,6 +356,60 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-31 — Today's swing picks: the trader's own list, under the alert bar
+
+**Trader-directed, authorized in chat 2026-08-31.** Branch `claude/swing-favorites`.
+
+*"At the end of the day I have a list of my top swing targets. I want a place to
+put them in so the bot knows my personal favourite picks. They will usually
+become focus picks too but these ones get special standing because I picked them
+by hand... put it at the very bottom of the M5 alerts tab, the tab is so long and
+I never use all of it. And the bot should scan the journal to know which ones I
+actually took."*
+
+Deliberately **not** the Master AVWAP like/dislike capture, which already exists
+and records a verdict on a row the bot proposed. This records a name the trader
+brought in themselves.
+
+- **New:** `scripts/swing_favorites.py` (plain-Python append-only store and the
+  session replay), `scripts/ui/services/swing_favorites_service.py` (the two
+  writes plus the journal join on a worker thread),
+  `scripts/ui/widgets/swing_favorites_bar.py` (the strip), and
+  `project_paths.SWING_FAVORITES_FILE` → `swing_favorites.jsonl` in the shared
+  home, the same storage class as `pick_feedback.jsonl` and
+  `trader_annotations.jsonl`.
+- **Two writes per add, in a fixed order.** The swing Focus write-through goes
+  first, through the existing store, and must not fail — it is the thing the
+  trader asked for. The evidence row goes second and a failed append is swallowed
+  with a status line, because an evidence store is never allowed to cost the thing
+  it records. Nothing in the chain calls `mark_auto_adopted`: a hand-vetted pick
+  carrying an auto marker would be reachable by "Not today" and the desync repair,
+  which is the removal path that marker exists to keep off the trader's own names.
+- **A removal is a retraction.** The add row stays; a `remove` row follows it. The
+  live list is a replay of one session in file order, so a re-add returns to the
+  end, where the trader just put it. Prior sessions are untouched.
+- **The "took" badge is display only** and joins against the TRADE journal, not the
+  Market Journal. Symbol match, "opened on or after the pick date", bounded to a
+  10-day window, run on a worker thread, and **silent when the journal would have
+  to be created or migrated to answer** — a display badge must never be the thing
+  that triggers a schema migration. No rate, no grade, no statistic.
+- **Where it lives.** The M5 alerts surface is a tab in tabs mode and the tall left
+  column in workspace mode, and the trader's saved `qt_workspace_mode` is
+  `workspace` — so the alert bar and the strip now share one host
+  (`TradingDeskPanel.m5_column`) that both modes mount, and the strip is the bottom
+  of it either way. The bar takes the stretch and keeps its minimum width, its
+  routing and its behaviour; `M5AlertBar` itself is unchanged. The pinned
+  "bar is left of the chart" test now asserts the column holds the bar first.
+- Chips are diffed, never rebuilt, and every variant (side colour, the "took" mark)
+  is a dynamic property answered by `theme.qss` — no per-widget stylesheet.
+- **59 new tests** (`tests/test_swing_favorites.py`,
+  `tests/test_qt_swing_favorites.py`). No phone push; nothing reaches a detector,
+  score, alert, watchlist ranking or `review_policy.json`.
+- **Known limit, stated:** the strip shows the CURRENT session's list, so a pick
+  typed after the close is shown that evening and the "took" badge for it can only
+  ever reflect that same session. Carrying a pick forward to the next session is a
+  product decision the trader has not been asked yet.
 
 ### 2026-08-31 — One Focus add must not repaint the desk five times over
 

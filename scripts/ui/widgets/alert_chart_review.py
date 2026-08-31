@@ -227,6 +227,10 @@ class AlertChartReview(QWidget):
         )
         self.capture_rail.captured.connect(self._on_captured)
         self.capture_rail.vetoDayTradeRequested.connect(self._on_veto_day_trade)
+        # A day-trade pass attaches the M5 bars this pane already drew, so the
+        # chart can be read back as it stood. Memory-only and read at click
+        # time; a pane with nothing cached simply writes the timestamp.
+        self.capture_rail.set_m5_bars_provider(self.snapshot.cached_m5_bars)
         self.snapshot.d1LevelSelected.connect(self._on_capture_level_selected)
 
         # R4 section 5, on the surface the trader stares at most.

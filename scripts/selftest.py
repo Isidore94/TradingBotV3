@@ -196,6 +196,21 @@ def _check_veto_vocabulary() -> None:
         raise RuntimeError("the veto vocabulary loaded with no reasons")
 
 
+def _check_pass_vocabulary() -> None:
+    """The day-trade pass picklist is its own bundled asset (2026-08-31).
+
+    A separate check from the veto one because it is a separate FILE: the two
+    families ship independently, and a spec that mirrored one and missed the
+    other would leave the capture rail with its pass action disabled on the
+    desk and nowhere else.
+    """
+    from ui.annotations.vocabulary import load_pass_vocabulary
+
+    vocabulary = load_pass_vocabulary()
+    if not vocabulary.reasons:
+        raise RuntimeError("the pass vocabulary loaded with no reasons")
+
+
 def _check_setup_claims() -> None:
     """Setup claims come from the setup-doc registry the rail reads."""
     from ui.annotations.setup_claims import all_setup_claims
@@ -279,6 +294,7 @@ def _check_testing_plan() -> None:
 ASSET_CHECKS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("ui/theme.qss", _check_stylesheet),
     ("ui/annotations/vocabularies/veto_reasons_v*.json", _check_veto_vocabulary),
+    ("ui/annotations/vocabularies/pass_reasons_v*.json", _check_pass_vocabulary),
     ("docs/DESK_TESTING_PLAN.md", _check_testing_plan),
     ("setup claim registry", _check_setup_claims),
     ("frozen sys.path assumptions", _check_frozen_path_assumptions),

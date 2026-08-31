@@ -378,6 +378,16 @@ ALERT_REVIEW_EVENTS_DIR = PERSISTENT_DATA_DIR / "alert_review_events"
 # desk GUI is its sole writer. Analysis-only evidence: nothing in the running
 # system reads this file to mute, score, gate, or alert (plan.md sec 5).
 TRADER_ANNOTATIONS_FILE = PERSISTENT_DATA_DIR / "trader_annotations.jsonl"
+# Append-only JSONL of the trader's hand-vetted swing picks - "today's best
+# swing targets", typed at the end of a session into the strip under the M5
+# alert list. One row per action: an add carries (session_date, symbol, side,
+# event_at, origin="trader"), a removal appends a RETRACTION row and nothing is
+# ever rewritten. Same storage class as the two logs above: small, trader-
+# authored, shared home. The live list is derived by replaying a session's rows
+# in file order. Evidence only - it is written beside the Focus write-through,
+# never in front of it, and nothing in the running system reads this file to
+# detect, score, rank, gate or alert (plan.md sec 5).
+SWING_FAVORITES_FILE = PERSISTENT_DATA_DIR / "swing_favorites.jsonl"
 # Aggregated revealed-preference state derived from the review-events log by
 # scripts/review_learning.py: per-segment take rates, taken-vs-passed
 # outcomes, blind spots / leaks, watch conversion. Rebuilt when stale.

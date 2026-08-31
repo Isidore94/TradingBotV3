@@ -1,4 +1,4 @@
-"""The capture rail: four decisions, each in about two keystrokes.
+"""The capture rail: the trader's decisions, each in about two keystrokes.
 
 Design constraint from the trader, and the reason this widget looks the way it
 does: **every capture action is under five seconds and reachable without the
@@ -13,6 +13,16 @@ What it writes:
                accrue against the reason (ui.annotations.veto_cohort).
 * LIKE      -> ui.annotations.store, one row carrying the claimed setup id.
 * NOTE      -> ui.annotations.store.
+* PASS      -> ui.annotations.store, one row carrying every ticked pass
+               reason, plus the M5 bars the desk already held (sidecar).
+
+The PASS section (2026-08-31) sits under Note because the trader asked for it
+there, and because it shares that section's free-text field: a pass is a note
+with the reason ticked. Trader: "many times I really like this stock for a
+daytrade but it has this ONE issue" - so a pass is NOT a veto and, like a
+note, it never retires the chart. The host decides that, and the host's rule
+is the one in CLAUDE.md: a veto and a like each retire the chart, a note never
+does. A pass is on the note side of that line.
 
 The hypothetical stop was removed from this surface on 2026-08-20 (trader:
 "get rid of hypothetical stop for now its not useful"). Only the CONTROL is
@@ -43,6 +53,7 @@ from typing import Any, Callable
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -65,11 +76,17 @@ from ui.annotations.setup_claims import (  # noqa: F401  (re-exported for hosts/
 from ui.annotations.store import (
     EVENT_LIKE_CLAIM,
     EVENT_NOTE,
+    EVENT_PASS,
     EVENT_VETO,
     AnnotationError,
     record_annotation,
+    record_pass_annotation,
 )
-from ui.annotations.vocabulary import VocabularyError, load_veto_vocabulary
+from ui.annotations.vocabulary import (
+    VocabularyError,
+    load_pass_vocabulary,
+    load_veto_vocabulary,
+)
 from ui.widgets.flow_layout import FlowLayout
 
 _REASON_ROLE = Qt.ItemDataRole.UserRole
@@ -96,7 +113,7 @@ def offered_setup_claims() -> list:
 
 
 class CaptureRail(QFrame):
-    """Veto / like+claim / note for the focused symbol."""
+    """Veto / like+claim / note / day-trade pass for the focused symbol."""
 
     #: (event_type, row) after a row reaches disk. Analysis-only consumers.
     captured = Signal(str, dict)
@@ -138,6 +155,12 @@ class CaptureRail(QFrame):
         # the object the Focus placement needs would already be gone. This is
         # how that host is told to hold the chart for one commit.
         self._veto_keeps_chart = False
+        # Supplied by the host that owns a chart, and called only at commit
+        # time. It reads memory the desk already materialised and must never
+        # fetch: no bars cached is an ordinary outcome, and the pass row is
+        # written with its timestamp alone (trader, 2026-08-31: "if that is
+        # hard just store the exact timestamp and the AI can read the charts").
+        self._m5_bars_provider: Callable[[], list] | None = None
 
         if veto_cohort_merge is not None:
             self._merge_veto_cohort = veto_cohort_merge
@@ -154,6 +177,14 @@ class CaptureRail(QFrame):
             # than writing reason codes no later analysis would recognise.
             self._vocabulary = None
             self._vocabulary_error = str(exc)
+
+        try:
+            self._pass_vocabulary = load_pass_vocabulary()
+            self._pass_vocabulary_error = ""
+        except VocabularyError as exc:
+            # Same fail-visible rule as the veto list, for the same reason.
+            self._pass_vocabulary = None
+            self._pass_vocabulary_error = str(exc)
 
         self._build()
         self._bind_shortcuts()
@@ -329,6 +360,16 @@ class CaptureRail(QFrame):
         return frame
 
     def _note_section(self) -> QFrame:
+        """Note, and directly under it the day-trade pass.
+
+        Under, and inside the same section, by trader instruction
+        (2026-08-31): "in the capture window add a section under the note area
+        where I can tick a few reasons for passing... plus the existing note."
+        Nesting it here rather than adding a fourth flow section is what makes
+        "under" true at every host width - a fourth section flows to the RIGHT
+        of Note on a wide host - and it is what lets the pass reuse the one
+        free-text field instead of introducing a second one for the same job.
+        """
         frame, inner = self._section("Note  (Alt+N)")
         self.note_input = QLineEdit()
         self.note_input.setPlaceholderText("freeform note")
@@ -337,10 +378,69 @@ class CaptureRail(QFrame):
         self.note_button = QPushButton("Save note")
         self.note_button.clicked.connect(self.commit_note)
         inner.addWidget(self.note_button)
+        inner.addWidget(self._pass_block())
         return frame
 
+    def _pass_block(self) -> QFrame:
+        """The "Passed - why?" block: the ONE issue that cost a liked trade.
+
+        Checkboxes, not a picklist, because the trader said several reasons can
+        be true of one pass. The digits still work the way they do on the veto
+        list, scoped to this box alone, so a 3 typed into the note above stays
+        a 3 - the box holds only the checkboxes for exactly that reason, and
+        the shared note field sits outside it.
+        """
+        box = QFrame()
+        box.setObjectName("PassReasonBox")
+        inner = QVBoxLayout(box)
+        inner.setContentsMargins(0, theme.px(6), 0, 0)
+        inner.setSpacing(theme.px(3))
+        heading = QLabel("Passed - why?  (Alt+P)")
+        heading.setObjectName("SectionTitle")
+        heading.setToolTip(
+            "Liked it for a day trade and did not take it. Tick every reason "
+            "that applied; the note above rides along. Nothing is muted, "
+            "removed or scored - the chart stays up, exactly as it does for a "
+            "note."
+        )
+        inner.addWidget(heading)
+
+        self.pass_reason_box = QFrame()
+        self.pass_reason_box.setObjectName("PassReasonChecks")
+        checks = QVBoxLayout(self.pass_reason_box)
+        checks.setContentsMargins(0, 0, 0, 0)
+        checks.setSpacing(theme.px(2))
+        self.pass_checkboxes: dict[str, QCheckBox] = {}
+        self._pass_hotkeys: dict[str, str] = {}
+        if self._pass_vocabulary is not None:
+            for reason in self._pass_vocabulary.reasons:
+                check = QCheckBox(f"{reason.hotkey}  {reason.label}")
+                if reason.hint:
+                    check.setToolTip(reason.hint)
+                checks.addWidget(check)
+                self.pass_checkboxes[reason.code] = check
+                if reason.hotkey:
+                    self._pass_hotkeys[reason.hotkey] = reason.code
+        inner.addWidget(self.pass_reason_box)
+
+        self.pass_button = QPushButton("Record pass")
+        self.pass_button.setToolTip(
+            "Write one row: the ticked reasons, the note above, the exact "
+            "timestamp, and - only when the desk already holds them - this "
+            "session's M5 bars, so the chart can be read back as it was."
+        )
+        self.pass_button.clicked.connect(self.commit_pass)
+        if self._pass_vocabulary is None:
+            self.pass_button.setEnabled(False)
+            self.pass_button.setToolTip(self._pass_vocabulary_error)
+            warning = QLabel(f"Pass disabled: {self._pass_vocabulary_error}")
+            warning.setWordWrap(True)
+            inner.addWidget(warning)
+        inner.addWidget(self.pass_button)
+        return box
+
     def action_shortcuts(self) -> tuple[tuple[str, Callable[[], None]], ...]:
-        """The rail's four key bindings, as (sequence, handler) pairs.
+        """The rail's key bindings, as (sequence, handler) pairs.
 
         Public so a host that took the rail onto a tab of its own can bind the
         identical keys at a scope the trader can actually reach, instead of
@@ -350,6 +450,7 @@ class CaptureRail(QFrame):
             ("Alt+V", self.focus_veto),
             ("Alt+K", self.focus_like),
             ("Alt+N", self.focus_note),
+            ("Alt+P", self.focus_pass),
         )
 
     def _bind_shortcuts(self) -> None:
@@ -376,6 +477,17 @@ class CaptureRail(QFrame):
             shortcut = QShortcut(QKeySequence(hotkey), self.setup_list)
             shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
             shortcut.activated.connect(lambda claim=setup_id: self.select_setup(claim))
+        # And the pass checkboxes, scoped to the box that holds ONLY them -
+        # WidgetWithChildren, because focus sits on a child QCheckBox rather
+        # than on the box itself. The three digit maps can never be in context
+        # at the same time (each needs the focus inside its own widget), so
+        # this is not a second live binding for one sequence.
+        for hotkey, code in self._pass_hotkeys.items():
+            shortcut = QShortcut(QKeySequence(hotkey), self.pass_reason_box)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(
+                lambda pass_code=code: self.toggle_pass_reason(pass_code)
+            )
 
     # ------------------------------------------------------------------
     # context
@@ -411,12 +523,38 @@ class CaptureRail(QFrame):
             self.veto_day_trade_button,
             self.like_button,
             self.note_button,
+            self.pass_button,
         ):
             button.setEnabled(armed)
         if self._vocabulary is None:
             self.veto_button.setEnabled(False)
             self.veto_day_trade_button.setEnabled(False)
+        if self._pass_vocabulary is None:
+            self.pass_button.setEnabled(False)
         self._set_status("" if armed else "Look up a symbol to start capturing.")
+
+    def set_m5_bars_provider(self, provider: Callable[[], list] | None) -> None:
+        """Tell the rail where the charted symbol's M5 bars already live.
+
+        The host passes a zero-argument callable that reads ITS OWN
+        already-materialised bars (``SymbolSnapshotWidget.cached_m5_bars``).
+        The rail never reaches for a bot, a service or a feed: attaching a
+        chart to a pass is a bonus the desk can offer when it happens to be
+        holding one, and it must not become a reason for a capture click to
+        touch the network or block the Qt thread.
+        """
+        self._m5_bars_provider = provider
+
+    def cached_m5_bars(self) -> list:
+        """Whatever the host already has, or ``[]``. Never fetches, never raises."""
+        provider = self._m5_bars_provider
+        if provider is None:
+            return []
+        try:
+            return list(provider() or [])
+        except Exception:
+            # A chart that cannot answer costs the attachment, never the row.
+            return []
 
     @property
     def symbol(self) -> str:
@@ -446,6 +584,32 @@ class CaptureRail(QFrame):
 
     def focus_note(self) -> None:
         self.note_input.setFocus()
+
+    def focus_pass(self) -> None:
+        """Alt+P: land on the pass checkboxes so 1-5 and space work at once."""
+        for check in self.pass_checkboxes.values():
+            check.setFocus()
+            return
+        self.note_input.setFocus()
+
+    def toggle_pass_reason(self, code: str) -> None:
+        """Tick or untick one pass reason. A digit is a toggle, never a commit.
+
+        Deliberately unlike the veto digit, which commits on the spot: a pass
+        is multi-select, so the trader has to be able to press 2 and 4 before
+        anything is written.
+        """
+        check = self.pass_checkboxes.get(str(code or "").strip().lower())
+        if check is not None:
+            check.setChecked(not check.isChecked())
+
+    def selected_pass_codes(self) -> list[str]:
+        """Ticked reasons in VOCABULARY order, which is the order written."""
+        return [code for code, check in self.pass_checkboxes.items() if check.isChecked()]
+
+    def clear_pass_selection(self) -> None:
+        for check in self.pass_checkboxes.values():
+            check.setChecked(False)
 
     def select_reason(self, code: str) -> None:
         """Select a reason by code. Commits immediately unless a note is due."""
@@ -636,6 +800,53 @@ class CaptureRail(QFrame):
         self._set_status(f"LIKE {row['symbol']} - {setup_id}")
         return row
 
+
+    def commit_pass(self) -> dict | None:
+        """Record a day-trade pass. Writes one row; retires nothing.
+
+        The chart stays up on purpose. A pass is a note about the name in
+        front of the trader ("liked it, one issue"), and CLAUDE.md's rule is
+        that only a veto and a like move the review on. Nothing here mutes,
+        suppresses, scores or gates the symbol either - the pass reasons are
+        evidence and nothing in the running desk reads them.
+        """
+        if self._pass_vocabulary is None:
+            self._set_status(f"Pass disabled: {self._pass_vocabulary_error}", ok=False)
+            return None
+        codes = self.selected_pass_codes()
+        if not codes:
+            self._set_status("Tick at least one reason for passing.", ok=False)
+            return None
+        if not self._symbol:
+            self._set_status("No symbol in focus.", ok=False)
+            return None
+        fields = {
+            **self._common_fields(),
+            "reason_codes": codes,
+            "vocabulary": self._pass_vocabulary,
+            "side": self._side,
+            "note": self.note_input.text(),
+        }
+        # The bars are read HERE, at the moment of the decision, so what is
+        # attached is the chart the trader was actually looking at.
+        fields["m5_bars"] = self.cached_m5_bars()
+        try:
+            row = record_pass_annotation(**fields)
+        except AnnotationError as exc:
+            self._set_status(str(exc), ok=False)
+            return None
+        if row is None:
+            self._set_status(
+                "NOT SAVED - the annotation log could not be written.", ok=False
+            )
+            return None
+        self.captured.emit(EVENT_PASS, row)
+        self.note_input.clear()
+        self.clear_pass_selection()
+        attached = row.get("m5_bar_count")
+        detail = f"  ({attached} M5 bars attached)" if attached else "  (timestamp only)"
+        self._set_status(f"PASS {row['symbol']} - {', '.join(codes)}{detail}")
+        return row
 
     def commit_note(self) -> dict | None:
         text = self.note_input.text().strip()

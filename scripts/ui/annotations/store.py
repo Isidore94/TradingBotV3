@@ -5,6 +5,14 @@ claimed as a setup, where they would have put a stop. Outcomes are already
 tracked elsewhere; this supplies the middle term - the judgement - that no
 other artifact in the program records.
 
+Two kinds of "no" live here and they are not the same answer. A VETO says the
+chart in front of the trader is not for today. A PASS (2026-08-31) says the
+day trade WAS there and one specific thing stopped them - "I really like this
+stock for a daytrade but it has this ONE issue." Separate event type, separate
+vocabulary family, and a pass may carry several reasons at once. When the desk
+already holds the symbol's M5 bars, a pass also references the chart as it
+stood at that moment through :mod:`ui.annotations.pass_bars`.
+
 HARD BOUNDARY (plan.md sec 5). Everything written here is analysis-only
 evidence. Nothing in the running system reads this file to mute, suppress,
 score, gate, rank, or alert, and no such consumer ships in this packet. The
@@ -45,7 +53,11 @@ from typing import Any
 
 from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
 from project_paths import TRADER_ANNOTATIONS_FILE
-from ui.annotations.vocabulary import VetoVocabulary, load_veto_vocabulary
+from ui.annotations.vocabulary import (
+    VetoVocabulary,
+    load_pass_vocabulary,
+    load_veto_vocabulary,
+)
 
 SCHEMA_VERSION = 1
 ANNOTATION_SOURCE = "chart_review"
@@ -54,7 +66,24 @@ EVENT_VETO = "veto"
 EVENT_LIKE_CLAIM = "like_claim"
 EVENT_HYPO_STOP = "hypo_stop"
 EVENT_NOTE = "note"
-EVENT_TYPES = (EVENT_VETO, EVENT_LIKE_CLAIM, EVENT_HYPO_STOP, EVENT_NOTE)
+#: The day-trade pass (2026-08-31). A name the trader LIKED and did not take
+#: because of one specific issue, ticked from the ``pass_reasons`` vocabulary.
+#: Deliberately not a veto: a veto says the chart is not for today, a pass says
+#: the trade was there and one thing was in the way - and, on the surface, a
+#: pass never retires the chart (it behaves like a note).
+EVENT_PASS = "pass"
+EVENT_TYPES = (
+    EVENT_VETO,
+    EVENT_LIKE_CLAIM,
+    EVENT_HYPO_STOP,
+    EVENT_NOTE,
+    EVENT_PASS,
+)
+
+#: A pass is multi-select by trader instruction; the cap only exists so one
+#: row can never outgrow MAX_ROW_BYTES. It is larger than any shipped
+#: vocabulary, so ticking every box is always writable.
+MAX_PASS_REASONS = 16
 
 #: Notes are a capture surface, not a journal - the journal already exists.
 #: The cap is what keeps a row inside :data:`MAX_ROW_BYTES`, so every row is
@@ -144,6 +173,37 @@ def _clean_price(value: Any, *, field: str) -> float | None:
     return price
 
 
+def _clean_pass_codes(codes: Any, vocabulary: VetoVocabulary) -> list[str]:
+    """Validate a multi-select pass into vocabulary order, without duplicates.
+
+    Ordered by the VOCABULARY, not by the order the trader ticked boxes: two
+    passes citing the same two reasons have to compare equal months from now,
+    and click order carries no meaning worth preserving over that.
+    """
+    if isinstance(codes, str):
+        raw = [codes]
+    else:
+        try:
+            raw = list(codes or ())
+        except TypeError as exc:
+            raise AnnotationError(f"reason_codes is not a list: {codes!r}") from exc
+    wanted = {str(code or "").strip().lower() for code in raw}
+    wanted.discard("")
+    if not wanted:
+        raise AnnotationError("a pass needs at least one reason")
+    unknown = sorted(code for code in wanted if vocabulary.reason(code) is None)
+    if unknown:
+        raise AnnotationError(
+            f"reason_codes {unknown} are not in {vocabulary.vocabulary_id} "
+            f"v{vocabulary.vocab_version} ({list(vocabulary.codes)})"
+        )
+    if len(wanted) > MAX_PASS_REASONS:
+        raise AnnotationError(
+            f"a pass carries {len(wanted)} reasons; the cap is {MAX_PASS_REASONS}"
+        )
+    return [code for code in vocabulary.codes if code in wanted]
+
+
 def build_annotation(
     event_type: str,
     *,
@@ -151,7 +211,12 @@ def build_annotation(
     session_date: Any = None,
     created_at: datetime | None = None,
     reason_code: str = "",
+    reason_codes: Any = (),
     vocabulary: VetoVocabulary | None = None,
+    m5_bars_ref: str = "",
+    m5_bar_count: Any = None,
+    m5_first_bar: str = "",
+    m5_last_bar: str = "",
     claimed_setup_id: str = "",
     stop_price: Any = None,
     side: Any = "",
@@ -199,6 +264,12 @@ def build_annotation(
         row["reason_code"] = reason.code
         row["vocab_version"] = vocab.vocab_version
 
+    if kind == EVENT_PASS:
+        vocab = vocabulary if vocabulary is not None else load_pass_vocabulary()
+        row["reason_codes"] = _clean_pass_codes(reason_codes, vocab)
+        row["vocab_version"] = vocab.vocab_version
+        row["vocabulary_id"] = vocab.vocabulary_id
+
     if kind == EVENT_LIKE_CLAIM:
         claim = str(claimed_setup_id or "").strip().lower()
         if not claim:
@@ -238,6 +309,17 @@ def build_annotation(
         row["note"] = note_text
     if timeframe:
         row["timeframe"] = str(timeframe).strip().upper()
+    # The attached chart, when the desk already held one. Written as a
+    # reference rather than inline so the row stays one small buffered write -
+    # see ui.annotations.pass_bars for why the bars live in a sidecar.
+    if m5_bars_ref:
+        row["m5_bars_ref"] = str(m5_bars_ref)
+        if m5_bar_count is not None:
+            row["m5_bar_count"] = int(m5_bar_count)
+        if m5_first_bar:
+            row["m5_first_bar"] = str(m5_first_bar)
+        if m5_last_bar:
+            row["m5_last_bar"] = str(m5_last_bar)
     return row
 
 
@@ -308,6 +390,41 @@ def record_annotation(
     :class:`AnnotationError` when the row itself is invalid.
     """
     row = build_annotation(event_type, **fields)
+    return row if append_annotation_row(row, path=path) else None
+
+
+def record_pass_annotation(
+    *,
+    m5_bars: Any = (),
+    path: Path = TRADER_ANNOTATIONS_FILE,
+    **fields: Any,
+) -> dict[str, Any] | None:
+    """Write one day-trade pass, attaching cached M5 bars when there are any.
+
+    The id is minted HERE rather than inside :func:`build_annotation` because
+    the sidecar is named after it and has to be on disk before the row that
+    references it - see :mod:`ui.annotations.pass_bars` for why that order is
+    the one that cannot lie.
+
+    A sidecar that fails to write costs the bars and never the row: the
+    trader's stated reason for passing is the evidence, and the chart behind
+    it is a bonus the desk could only ever offer when it happened to be
+    holding one.
+    """
+    from ui.annotations import pass_bars
+
+    event_id = str(fields.pop("event_id", "") or "").strip() or uuid.uuid4().hex
+    row = build_annotation(EVENT_PASS, event_id=event_id, **fields)
+    reference = pass_bars.write_pass_bars(
+        event_id,
+        list(m5_bars or ()),
+        symbol=row.get("symbol", ""),
+        side=row.get("side", ""),
+        created_at=row.get("created_at", ""),
+        annotations_path=path,
+    )
+    if reference:
+        row.update(reference)
     return row if append_annotation_row(row, path=path) else None
 
 
