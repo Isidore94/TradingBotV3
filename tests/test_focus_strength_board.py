@@ -226,13 +226,19 @@ def test_alert_center_puts_the_board_beside_the_tab_stack(tmp_path):
     panel = AlertCenterPanel(review_events_path=tmp_path / "events.jsonl")
     assert panel.tabs_row.count() == 2
     assert panel.tabs_row.widget(0) is panel.tabs
-    assert panel.tabs_row.widget(1) is panel.focus_strength
+    # Since 2026-08-31 the right-hand half is a COLUMN: this board on top, the
+    # M5 Strength Board in a closed section under it. The board itself is still
+    # beside the tab stack rather than inside a tab.
+    assert panel.tabs_row.widget(1) is panel.strength_column
+    assert panel.focus_strength.parent() is panel.strength_column
     # The board is beside the tabs, not inside one, so it stays visible when
     # the trader switches to D1 Focus or Armed.
     assert panel.focus_strength.parent() is not panel.tabs
     assert panel.splitter.widget(1) is panel.tabs_row
     # Adding the board must not push the alert column past the 360px floor
-    # the desk splitter gives it.
+    # the desk splitter gives it. The strength column is measured now, not just
+    # the board, because the section below it is part of that width.
+    assert panel.tabs.minimumWidth() + panel.strength_column.minimumWidth() <= 360
     assert panel.tabs.minimumWidth() + panel.focus_strength.minimumWidth() <= 360
 
     panel.focus_strength.update_snapshot(_payload())

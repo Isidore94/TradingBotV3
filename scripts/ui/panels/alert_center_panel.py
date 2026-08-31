@@ -110,6 +110,7 @@ from ui.models.bounce import (
 from ui.widgets.alert_chart_review import AlertChartReview
 from ui.widgets.alert_feed_item import AlertFeedItem
 from ui.widgets.armed_watch_list import ArmedWatchList
+from ui.widgets.collapsible_section import CollapsibleSection
 from ui.widgets.entry_assist_board import EntryAssistBoard
 from ui.widgets.focus_strength_board import FocusStrengthBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
@@ -867,9 +868,35 @@ class AlertCenterPanel(QFrame):
         self.focus_strength.symbolActivated.connect(self._show_board_symbol_snapshot)
         self.focus_strength.reviewAllRequested.connect(self.review_focus_picks)
 
+        # The M5 Strength Board moved in under it (trader, 2026-08-31: "it
+        # really should be modified to fit in the 'strength' window in the
+        # trading desk - either integrated directly or be positioned below
+        # it"). Positioned below, in a section that starts CLOSED: the alert
+        # column has a 360 px floor and everything left of it is chart, so a
+        # board that claimed space at startup would take it from the chart the
+        # trader is reading. Closed it is one header row.
+        #
+        # This panel only HOSTS. `MainWindow` still owns the one
+        # `StrengthBoardService`, its one timer and its one fetch, and hands
+        # it here through `attach_strength_board` - the board changed address,
+        # not owner, and nothing here refreshes, schedules or caches.
+        self.strength_board: "StrengthBoardPanel | None" = None
+        self.strength_board_section = CollapsibleSection("M5 Strength Board")
+        self.strength_column = QWidget()
+        strength_layout = QVBoxLayout(self.strength_column)
+        strength_layout.setContentsMargins(0, 0, 0, 0)
+        strength_layout.setSpacing(theme.px(4))
+        strength_layout.addWidget(self.focus_strength, 1)
+        strength_layout.addWidget(self.strength_board_section, 0)
+        # A closed section asks for nothing; an open one earns the larger half
+        # of the column, and closing hands every pixel straight back.
+        self.strength_board_section.toggled.connect(
+            lambda expanded: strength_layout.setStretch(1, 2 if expanded else 0)
+        )
+
         self.tabs_row = QSplitter(Qt.Orientation.Horizontal)
         self.tabs_row.addWidget(self.tabs)
-        self.tabs_row.addWidget(self.focus_strength)
+        self.tabs_row.addWidget(self.strength_column)
         self.tabs_row.setStretchFactor(0, 3)
         self.tabs_row.setStretchFactor(1, 2)
         self.tabs_row.setChildrenCollapsible(False)
@@ -4832,13 +4859,52 @@ class AlertCenterPanel(QFrame):
     def show_board_symbol(self, symbol: str, side: str = "") -> None:
         """Public entry for boards that live on OTHER pages.
 
-        The RS/RW, entry and Focus-strength boards are children of this
-        panel and call the private opener directly. The M5 strength board
-        is a page of its own, so it needs a named door rather than a
-        reach into a private method - same popup, same owner, same capture
-        rail and painted levels (R4 unification, 2026-08-19).
+        The RS/RW, entry, Focus-strength and (since 2026-08-31) M5 strength
+        boards are all children of this panel and call the private opener
+        directly. This stays as the named door for anything that is not -
+        the AWAY Recap page uses it - so a board on another page never has to
+        reach into a private method. Same popup, same owner, same capture rail
+        and painted levels (R4 unification, 2026-08-19).
         """
         self._show_board_symbol_snapshot(symbol, side)
+
+    def attach_strength_board(self, service, focus_service=None) -> None:
+        """Host the M5 Strength Board under the Strength window.
+
+        `MainWindow` builds and owns the one `StrengthBoardService`; this
+        panel is given it. Called once at startup - a second call would
+        replace the section's body, not add a second board, but nothing does.
+
+        Deliberately NOT here: any refresh, timer, thread or fetch. The
+        service's single-flight owner and its 15-minute clock are unchanged by
+        the move, and the board is still batched yfinance over
+        `universe_all.txt` with **zero IB traffic**. The only thing this panel
+        adds is a parent and a snapshot popup for a row click - the same popup
+        every other board on this panel opens.
+        """
+        from ui.panels.strength_board_panel import StrengthBoardPanel
+
+        board = StrengthBoardPanel(
+            service=service,
+            focus_service=self.focus_service if focus_service is None else focus_service,
+        )
+        board.symbolActivated.connect(self._show_board_symbol_snapshot)
+        self.strength_board = board
+
+        # The alert column's floor is 360 px and the tab stack already claims
+        # 170 of it. The board asks for 270 (two side tables, each with a
+        # heading row and an "Add all" button), and a widget's minimum reaches
+        # the splitter, so hosting it bare would have raised the floor the
+        # charts are sized against - the one thing this move must not do.
+        # Inside a scroll area the board's minimum stops here: at a normal
+        # column width nothing scrolls, and a trader who drags the column
+        # narrower gets a scrollbar instead of narrower charts.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(board)
+        scroll.setMinimumWidth(theme.px(170))
+        self.strength_board_section.set_content(scroll)
 
     def _show_board_symbol_snapshot(self, symbol: str, side: str = "") -> None:
         """RS/RW-board ticker click: use the same cache-only quick look."""

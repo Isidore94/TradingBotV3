@@ -46,7 +46,6 @@ from ui.panels.market_journal_panel import MarketJournalPanel
 from ui.panels.weekend_prep_panel import WeekendPrepPanel
 from ui.panels.research_panel import ResearchPanel
 from ui.panels.settings_panel import SettingsPanel
-from ui.panels.strength_board_panel import StrengthBoardPanel
 from ui.panels.trading_desk import TradingDeskPanel
 from ui.panels.universe_panel import UniversePanel
 from ui import theme
@@ -83,7 +82,6 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     PageSpec("Trading Desk", "mdi.chart-timeline-variant", "trading_panel"),
     PageSpec("Chart Review", "mdi.chart-line", "chart_review_panel"),
     PageSpec("Focus Picks", "mdi.star-outline", "trading_panel.focus_picks_panel"),
-    PageSpec("Strength Board", "mdi.trending-up", "strength_board_panel"),
     PageSpec("Journal", "mdi.notebook-outline", "journal_panel"),
     # R10.H. The label difference from "Journal" above is deliberate and
     # recorded: that one is the trade and tax record, this one is what the
@@ -167,18 +165,17 @@ class MainWindow(QMainWindow):
         # M5 strength board (packet R2 Part B). The service owns the data and
         # its single-flight refresh; the panel only shows it and routes adds
         # through the Part A adoption gate.
+        #
+        # Since 2026-08-31 the board is not a page. The trader asked for it in
+        # the Desk's Strength window ("either integrated directly or be
+        # positioned below it"), so the Alert Center hosts it in a collapsible
+        # section under `FocusStrengthBoard` and the nav entry is gone. The
+        # SERVICE still lives here: one instance, one timer, one fetch, owned
+        # by the window that shuts it down. Only the wiring moved.
         self.strength_board_service = StrengthBoardService(self)
-        self.strength_board_panel = StrengthBoardPanel(
-            service=self.strength_board_service,
+        self.trading_panel.alert_center.attach_strength_board(
+            self.strength_board_service,
             focus_service=self.trading_panel.focus_service,
-        )
-        # Selecting a row on the strength board charts it in the desk's
-        # existing snapshot popup - the same one the RS/RW and Industry
-        # boards open, owned by the Alert Center, so the chart carries the
-        # bot-backed series, the painted levels and the capture rail
-        # without a second chart widget existing anywhere (R4 pattern).
-        self.strength_board_panel.symbolActivated.connect(
-            self.trading_panel.alert_center.show_board_symbol
         )
         # The AWAY Recap charts through the SAME popup, for the same reason: a
         # trader reading the day back needs the chart beside the alert, and a
@@ -187,16 +184,12 @@ class MainWindow(QMainWindow):
         self.away_recap_panel.symbolActivated.connect(
             self.trading_panel.alert_center.show_board_symbol
         )
-        # The page's RS/RW half reads the SAME rrsSnapshotChanged payload the
-        # Alert Center's RS/RW tab reads (trader, 2026-08-21). A second
-        # listener on one signal, not a second source: the bounce service
-        # still owns and produces that data, and nothing on this page fetches.
-        _bounce_service = getattr(
-            getattr(self.trading_panel, "bounce_panel", None), "service", None
-        )
-        _rrs_signal = getattr(_bounce_service, "rrsSnapshotChanged", None)
-        if _rrs_signal is not None:
-            _rrs_signal.connect(self.strength_board_panel.update_rrs_snapshot)
+        # The page used to carry a second RS/RW view, so that the two reads
+        # could be compared without flipping pages (trader, 2026-08-21). With
+        # the board inside the Alert Center, the Alert Center's own RS/RW
+        # Board tab is one tab-click away in the SAME column, so that second
+        # listener retired with the page. The tape, its owner and the RS/RW
+        # tab are untouched.
         self.chart_review_panel = ChartReviewPanel(
             bot_provider=self.trading_panel.bounce_panel.service.current_bot
         )
@@ -741,6 +734,14 @@ class MainWindow(QMainWindow):
                 panel.shutdown()
             except Exception:
                 pass
+        # The strength board's service is owned by the window rather than by a
+        # panel (its surface is a section inside the Alert Center), so it is
+        # not in the loop above and needs stopping here. Its timer is the only
+        # thing it holds.
+        try:
+            self.strength_board_service.shutdown()
+        except Exception:
+            pass
         # Backstop for the shared writer lease: AutopilotService.shutdown
         # normally releases it, but a panel that failed to shut down must not
         # leave the lease held. Releasing twice is a no-op, and a lease this

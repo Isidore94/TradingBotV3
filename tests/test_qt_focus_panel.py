@@ -153,9 +153,9 @@ def test_focus_picks_is_top_level_app_page():
         "Trading Desk",
         "Chart Review",
         "Focus Picks",
-        # The M5 strength board sits next to Focus Picks because that is where
-        # its output goes (packet R2 Part B).
-        "Strength Board",
+        # The M5 strength board used to sit here. Since 2026-08-31 it is a
+        # section under the Desk's Strength window instead of a page of its
+        # own (trader request), so it has no nav button at all.
         "Journal",
         # R10.H sits the Market Journal next to the trade/tax Journal, and the
         # near-identical labels are deliberate: one records what you TRADED,

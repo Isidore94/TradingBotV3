@@ -69,9 +69,17 @@ def test_no_two_pages_share_a_title_or_a_widget():
     assert len(set(attributes)) == len(attributes)
 
 
-def test_the_strength_board_is_in_the_list_at_all():
-    """The page whose arrival broke the titles. It was in two lists of three."""
-    assert "Strength Board" in [spec.title for spec in PAGE_SPECS]
+def test_the_strength_board_page_is_gone_and_gone_from_every_list():
+    """The page whose ARRIVAL broke the titles, removed 2026-08-31.
+
+    It went the other way for the same reason it came: a page tracked in three
+    places is removed from three places or from none. There is one list now, so
+    this is a one-line check - which is the whole point of the refactor above.
+    The board itself did not leave; it lives under the Desk's Strength window
+    (`tests/test_qt_strength_board_in_the_desk.py`).
+    """
+    assert "Strength Board" not in [spec.title for spec in PAGE_SPECS]
+    assert "strength_board_panel" not in [spec.attribute for spec in PAGE_SPECS]
 
 
 def test_weekend_prep_uses_the_desk_shared_focus_service(qt_desk):

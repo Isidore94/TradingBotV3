@@ -267,45 +267,50 @@ class TestChartOnSelection:
 
 
 # --------------------------------------------------------------------------
-# RS/RW under the board (trader, 2026-08-21: "add RS/RW board under the
-# strength board"). One page, one payload source, no second chart widget.
+# The board moved into the Desk's Strength window (trader, 2026-08-31), and the
+# RS/RW half it used to carry went with the page.
+#
+# That half existed for one reason (trader, 2026-08-21): the board says who is
+# strong on the day, the RS/RW read says who is strong RELATIVE to SPY, and
+# flipping between PAGES to compare them was the friction. The board now lives
+# in the alert column, where the Alert Center's own RS/RW Board tab is one
+# tab-click away in that same column - so a second RrsSnapshotWidget here would
+# have been a duplicate view of one payload, six inches from the original.
+#
+# What did NOT change: the tape, its owner, the rrsSnapshotChanged signal, and
+# the Alert Center's RS/RW Board tab. Only this second VIEW retired.
 # --------------------------------------------------------------------------
-def test_the_page_carries_an_rs_rw_section_under_the_board():
+def test_the_board_no_longer_carries_its_own_rs_rw_view():
     from ui.panels.strength_board_panel import StrengthBoardPanel
     from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 
     panel = StrengthBoardPanel()
-    assert panel.splitter.count() == 2
-    # Order matters: the board is the top half, the RS/RW read is UNDER it.
-    assert panel.splitter.widget(1).findChild(RrsSnapshotWidget) is panel.rrs_snapshot
-    assert panel.splitter.widget(0).findChild(RrsSnapshotWidget) is None
+    assert panel.findChild(RrsSnapshotWidget) is None
+    assert not hasattr(panel, "rrs_snapshot")
+    assert not hasattr(panel, "update_rrs_snapshot")
 
 
-def test_both_halves_can_be_given_the_whole_page():
-    """A trader reading one half should be able to collapse the other."""
+def test_the_alert_center_still_owns_the_rs_rw_board():
+    """The surviving view, so the read did not leave the desk with the page."""
+    source = (SCRIPTS_DIR / "ui" / "panels" / "alert_center_panel.py").read_text(
+        encoding="utf-8"
+    )
+    assert "self.rrs_snapshot = RrsSnapshotWidget()" in source
+    assert 'self.tabs.addTab(board_tab, "RS/RW Board")' in source
+    assert "service.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)" in source
+
+
+def test_the_two_sides_stack_vertically_for_a_narrow_column():
+    """Two five-column tables side by side were readable on a full-width page.
+    In the alert column they are not, so the splitter runs top-to-bottom and
+    either side can be given the whole section."""
+    from PySide6.QtCore import Qt
+
     from ui.panels.strength_board_panel import StrengthBoardPanel
 
     panel = StrengthBoardPanel()
-    assert panel.splitter.childrenCollapsible() is True
-
-
-def test_the_rs_rw_half_only_displays_what_it_is_handed():
-    """No fetch, no service, no timer on this page - it renders a payload."""
-    from ui.panels.strength_board_panel import StrengthBoardPanel
-
-    panel = StrengthBoardPanel()
-    payload = {"generated_at": "2026-08-21T08:00:00", "scopes": {}}
-    panel.update_rrs_snapshot(payload)
-    assert panel.rrs_snapshot._payload == payload
-
-
-def test_charting_from_the_rs_rw_half_uses_the_page_s_one_signal():
-    """Both halves route through symbolActivated, which app.py points at the
-    Alert Center's existing snapshot popup - never a second chart widget."""
-    from ui.panels.strength_board_panel import StrengthBoardPanel
-
-    panel = StrengthBoardPanel()
-    seen: list[str] = []
-    panel.symbolActivated.connect(seen.append)
-    panel.rrs_snapshot.symbolActivated.emit("nvda", "LONG")
-    assert seen == ["NVDA"]
+    assert panel.sides.orientation() == Qt.Orientation.Vertical
+    assert panel.sides.count() == 2
+    assert panel.sides.widget(0) is panel.longs
+    assert panel.sides.widget(1) is panel.shorts
+    assert panel.sides.childrenCollapsible() is True

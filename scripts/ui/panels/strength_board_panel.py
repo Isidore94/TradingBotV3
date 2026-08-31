@@ -1,14 +1,26 @@
 """The M5 strength board (plan.md Phase 0.5, packet R2 Part B.3.4).
 
-Side-split rows from `StrengthBoardService`, with one-click **Add to M5 Focus**
-per row and a side-aware **Add all shown**. Every add passes through packet R2
-Part A's adoption gate, and a row that fails it at click time is refused with
-the reason shown rather than silently dropped - the trader asked why a name is
-not there often enough that "nothing happened" is not an acceptable answer.
+Rows from `StrengthBoardService`, with one-click **Add to M5 Focus** per row
+and a side-aware **Add all shown**. Every add passes through packet R2 Part A's
+adoption gate, and a row that fails it at click time is refused with the reason
+shown rather than silently dropped - the trader asked why a name is not there
+often enough that "nothing happened" is not an acceptable answer.
 
 Every column sorts on click (trader request 2026-08-19) and selecting a row
 opens that symbol in the desk's existing snapshot popup, so the board can be
 read as charts rather than as a list of tickers.
+
+**Since 2026-08-31 this is not a page.** The trader asked for the board to live
+in the Desk's Strength window rather than behind a nav button, so it is hosted
+by `AlertCenterPanel` in a collapsible section under `FocusStrengthBoard`. Two
+consequences are visible here. The sides stack **vertically** in a splitter,
+because the alert column is a column - two five-column tables side by side were
+readable on a full-width page and are not readable at 200 px. And the RS/RW
+half this file used to carry is **gone**: it existed so the two reads could be
+compared without flipping pages (2026-08-21), and the Alert Center's own RS/RW
+Board tab is now one tab-click away in the SAME column, so a second
+`RrsSnapshotWidget` here would be a duplicate view six inches from the
+original. Nothing about the tape, its owner or that tab changed.
 
 Decision support only: no alerts, no watchlist writes beyond the Focus adds the
 trader explicitly clicks, and no influence on any champion path. Sorting is
@@ -36,8 +48,6 @@ from PySide6.QtWidgets import (
 )
 
 import focus_adoption_gate
-from ui.widgets.rrs_snapshot import RrsSnapshotWidget
-from ui.widgets.section_header import SectionHeader
 
 _COLUMNS = ("Symbol", "Strength", "Day %", "vs VWAP", "Last")
 #: Which row field each column shows, so a header click sorts on the NUMBER
@@ -108,7 +118,10 @@ class _SideTable(QWidget):
         self._title.setStyleSheet("font-weight: 600;")
         header.addWidget(self._title)
         header.addStretch(1)
-        self._add_all = QPushButton("Add all shown")
+        # "Add all", not "Add all shown": the board lives in the alert column
+        # now, and a QPushButton demands its whole label (208 px measured for
+        # the longer text). The tooltip still says the whole thing.
+        self._add_all = QPushButton("Add all")
         self._add_all.setToolTip(
             "Add every row shown here to M5 Focus. Each one is re-checked "
             "against the adoption gate at click time, so a name that has "
@@ -268,28 +281,20 @@ class StrengthBoardPanel(QWidget):
         self.service = service
         self.focus_service = focus_service
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(SectionHeader("M5 Strength Board"))
-
-        # The board and the RS/RW read share this page in a draggable
-        # splitter (trader, 2026-08-21: "add RS/RW board under the strength
-        # board"). One page rather than a second nav entry, because the two
-        # are read together: the board says who is strong on the day, the
-        # RS/RW read says who is strong RELATIVE to SPY, its sector and its
-        # industry, and flipping between pages to compare them is the friction
-        # the request is about.
-        #
-        # The RS/RW widget here is the SAME RrsSnapshotWidget the Alert Center
-        # tab uses, fed by the same rrsSnapshotChanged payload. It is a second
-        # VIEW, never a second source: nothing on this page fetches, and the
-        # bounce service stays the only owner of that data.
-        board_section = QWidget()
-        board_layout = QVBoxLayout(board_section)
+        # No SectionHeader: the collapsible section that hosts this names it,
+        # and a second title inside a narrow column is a row of height the
+        # charts paid for.
+        board_layout = QVBoxLayout(self)
         board_layout.setContentsMargins(0, 0, 0, 0)
 
         controls = QHBoxLayout()
         self.status = QLabel("Strength board: never refreshed")
-        controls.addWidget(self.status)
+        # Wrapped, so the status line asks the layout for the width of its
+        # longest WORD rather than of its longest sentence. It carries a
+        # failure reason, so it can be long, and an unwrapped label would have
+        # made a bad refresh widen the alert column at the charts' expense.
+        self.status.setWordWrap(True)
+        controls.addWidget(self.status, 1)
         controls.addStretch(1)
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.setToolTip(
@@ -300,21 +305,23 @@ class StrengthBoardPanel(QWidget):
         board_layout.addLayout(controls)
 
         self.hint = QLabel(
-            "Click any column heading to sort. Select a row to chart it - the "
-            "chart opens in the desk's usual snapshot popup, with the same "
-            "levels and capture buttons as every other board."
+            "Click a heading to sort. Select a row to chart it."
         )
         self.hint.setObjectName("MutedLabel")
         self.hint.setWordWrap(True)
         board_layout.addWidget(self.hint)
 
-        tables = QHBoxLayout()
+        # Vertical, not side by side. This lives in the alert column now, and
+        # two five-column tables sharing ~200 px of width are unreadable; a
+        # splitter lets the trader give either side the whole section.
+        self.sides = QSplitter(Qt.Orientation.Vertical)
         self.longs = _SideTable("long")
         self.shorts = _SideTable("short")
         for table in (self.longs, self.shorts):
             table.addRequested.connect(self._add_one)
             table.addAllRequested.connect(self._add_all)
-            tables.addWidget(table)
+            self.sides.addWidget(table)
+        self.sides.setChildrenCollapsible(True)
         # One chart at a time: selecting on one side drops the other side's
         # selection, so "the charted name" is never ambiguous.
         self.longs.symbolActivated.connect(
@@ -323,32 +330,7 @@ class StrengthBoardPanel(QWidget):
         self.shorts.symbolActivated.connect(
             lambda symbol: self._on_symbol_activated(symbol, self.longs)
         )
-        board_layout.addLayout(tables)
-
-        rs_section = QWidget()
-        rs_layout = QVBoxLayout(rs_section)
-        rs_layout.setContentsMargins(0, 0, 0, 0)
-        rs_layout.addWidget(SectionHeader("RS/RW Board"))
-        self.rrs_snapshot = RrsSnapshotWidget()
-        if focus_service is not None:
-            self.rrs_snapshot.set_focus_service(focus_service)
-        # Charting a name from here goes through the panel's existing
-        # symbolActivated, so both halves of the page open the one snapshot
-        # popup the desk already owns - no second chart widget (R4 pattern).
-        self.rrs_snapshot.symbolActivated.connect(
-            lambda symbol, _side="": self.symbolActivated.emit(str(symbol or "").upper())
-        )
-        rs_layout.addWidget(self.rrs_snapshot, 1)
-
-        self.splitter = QSplitter(Qt.Orientation.Vertical)
-        self.splitter.addWidget(board_section)
-        self.splitter.addWidget(rs_section)
-        # The board is what the page is named for, so it gets the larger
-        # share; both halves stay collapsible because a trader reading one of
-        # them should be able to give it the whole page.
-        self.splitter.setStretchFactor(0, 3)
-        self.splitter.setStretchFactor(1, 2)
-        layout.addWidget(self.splitter, 1)
+        board_layout.addWidget(self.sides, 1)
 
         if service is not None:
             service.boardChanged.connect(self.set_board)
@@ -369,10 +351,6 @@ class StrengthBoardPanel(QWidget):
         self.symbolActivated.emit(symbol)
 
     # ------------------------------------------------------------------ views
-    def update_rrs_snapshot(self, payload) -> None:
-        """Show a relative-strength payload. Display only - see __init__."""
-        self.rrs_snapshot.update_snapshot(payload)
-
     def set_board(self, board: dict) -> None:
         self.longs.set_rows(list(board.get("long") or []))
         self.shorts.set_rows(list(board.get("short") or []))
