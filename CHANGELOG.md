@@ -77,7 +77,9 @@ which is evidence and must not be loaded as context.
   versioned persistence, and partial shadow adoption. Full authority remains open.
 - Industry Board with one single-flight owner, hourly refresh, atomic last-good
   snapshot, numeric sorting, freshness/Health integration, and advisory aligned
-  industry-vs-SPY plus stock-vs-primary-industry fields.
+  industry-vs-SPY plus stock-vs-primary-industry fields. Since 2026-08-31 the 60 s
+  check tick emits `snapshotChanged` only when `snapshot_id` moved, so an unchanged
+  board is never re-read or re-measured (snappiness packet 1 item 2).
 - M5 Strength Board (`strength_scan` + one `StrengthBoardService` owner, 15-minute
   single-flight refresh on the quiet-hours window, last-good on failure): batched
   yfinance over `universe_all.txt`, **zero IB traffic**, every column click-to-sort
@@ -390,6 +392,74 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-31 — Desk snappiness packet 1: the three largest measured stall causes
+
+A read-only performance audit of the desk's own stall log
+(`ui_stalls.jsonl`, 2026-08-31: 8,008 stalls, ~78 minutes of GUI-thread freeze in
+one day) named three causes; the trader authorized exactly these fixes. All three
+are caching/cadence changes only — no detector, scoring, alert, output, file
+format, or push behavior differs, and every cached result is byte-identical to
+the uncached parse for unchanged inputs. The `(st_mtime_ns, st_size)` stamp
+template is `review_events.load_review_events`; both stamps because an append
+inside one filesystem timestamp tick still moves the byte count.
+
+**Item 1 — the Health audit stops re-parsing unchanged evidence.**
+`_outcome_claim_coverage_check` re-parsed the 269 MB, 294k-row
+`intraday_bounce_outcomes.csv` on every 15 s audit pass (measured 2.29 s each),
+and the two shadow checks re-streamed both shadow JSONLs with no mtime guard.
+The CSV check now caches its finished check dict on the file stamp
+(`operations_audit.py`), and `shadow_log_audit.scan_shadow_log` caches its scan
+per (profile, path, stamp, market_date, reconcile date) — `now` deliberately
+outside the key, so a future-stamped row in an unchanged file stays counted
+until the file moves. Error results are never cached. `HealthPanel` keeps its
+15 s cadence only while the page is showing; hidden it ticks at 120 s — the
+timer never stops, so the shell's status chip keeps updating, and returning to
+the page refreshes immediately. Tests: `tests/test_health_audit_caching.py`
+(parse-once, append-invalidates, error-not-cached, market-date-in-key) plus a
+cadence test in `tests/test_qt_health_panel.py`; all verified failing pre-fix.
+
+**Item 2 — column auto-sizing is bounded, and the Industry Board stops its
+no-op refresh.** `measure_column_widths` (`data_table.py`) ran
+`resizeColumnsToContents` unbounded — 9.6 minutes and single stalls of 85 s on
+2026-08-31. It now applies `setResizeContentsPrecision(200)` first; Qt gotcha:
+`sizeHintForColumn` walks rows bounded by the VERTICAL header's precision, so
+that header is the one that caps this call (the horizontal gets the same cap
+for any section still in ResizeToContents mode). Tables under 200 rows measure
+identically. `IndustryBoardService.refresh_if_due` skips the `snapshotChanged`
+emit when `snapshot_id` is unchanged (the due-check still runs), and
+`IndustryPanel._on_snapshot_changed` early-returns on an id it already rendered
+(belt-and-braces). The two headers stuck in `ResizeToContents` —
+`price_alerts_panel.py` and `health_panel.py`'s `_table` — are now Interactive
+with one bounded fit when rows land. Known small tradeoff, accepted by the
+packet: the Industry Board's reviewed-today badges now refresh when the CSVs
+move (or on manual Reload) rather than every 60 s. Tests:
+`tests/test_desk_snappiness_tables.py`.
+
+**Item 3 — the Auto Pilot status row stops re-reading files on the GUI
+thread.** `status_snapshot()` did 2 watchlist + 2 auto-watchlist reads and 2
+state-JSON parses per call, driven by a 5 s panel timer with no visibility
+check and called twice back-to-back in the 30 s tick — most of the 10 minutes
+charged to `watchlist_utils.py:33` and 3.9 minutes to `project_paths.py:165`.
+Each file-backed piece is memoized on the file stamp
+(`_memoized_file_read` in `autopilot_service.py`; values copied out), the tick
+computes one snapshot and reuses it for the heartbeat and the emit, the
+panel's 5 s slot early-returns while hidden (timer keeps running; the
+service's 30 s `statusChanged` still lands), and `_apply_status` restyles a
+label only when its text/tone changed (five unconditional `setStyleSheet`
+calls per refresh before). Only these authorized pieces of
+`autopilot_service.py` were touched — no alert or push code. Tests:
+`tests/test_autopilot_status_snapshot_caching.py`; 5 of 7 verified failing
+pre-fix (the two invalidation tests pass either way, by design).
+
+**What should now go quiet in `ui_stalls.jsonl`** (the next desk session is
+the proof): `data_table.py:170`, `watchlist_utils.py:33`,
+`project_paths.py:165`, and the operations-audit CSV parse. The stall watchdog
+stays ON — it is the before/after instrument and still owed for lockup gate
+#19. Also fixed en route: `test_refresh_never_blocks_the_gui_thread...` leaked
+a 0.5 s audit thread (construction's `singleShot(0, refresh)` firing after
+`deleteLater` without `shutdown`), which failed the process-wide thread sweep
+in any non-alphabetical file order.
 
 ### 2026-08-31 — The Strength Board moves into the Desk's Strength window
 

@@ -18,12 +18,12 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** at the ruff commit - `claude/strength-board-into-desk` was fast-forwarded in on trader instruction ("ensure no issues with compatibility from the different runs then commit to main") and pushed. `main` now carries all three 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix. No divergence |
-| Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **Phase 0.11 theta premium optimization (2026-08-31 — prompt ready, NOT built: `docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Working branch | **`claude/desk-snappiness-1`** - cut from `main` at `50af716` for desk snappiness packet 1 (the three largest measured stall causes), BUILT and GREEN, pushed, not merged. `main` itself carries all three earlier 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix, and the theta plan/prompt docs at its tip |
+| Also in flight | `claude/theta-premium` (Phase 0.11, BUILT per its own branch checkpoint, live gate owed); `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
+| Active roadmap items | **Desk snappiness packet 1 (2026-08-31 — BUILT and GREEN on `claude/desk-snappiness-1`, live gate #24 owed)**; **Phase 0.11 theta premium optimization (2026-08-31 — BUILT on `claude/theta-premium` per its branch checkpoint; on `main` the prompt doc is the record: `docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5612 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/desk-snappiness-1`; the snappiness packet adds 22 tests over `main`'s 5590) · smoke **7/7** · `ruff` **clean**. Previous baseline: `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | Rebuilt 2026-08-31 at `534e0e0`, `selftest OK: 73/73 checks passed (frozen)`, exit 0. **Two commits behind since**, both lint-only (an annotation-resolving `TYPE_CHECKING` import and the unused-import sweep) - no packaging trigger fires, and the unfrozen selftest, which imports every lazy engine, passes 73/73 after them. Rebuild at the next real change rather than for these. Also built and verified at the merge point. Previously rebuilt at `d0a2ae6`, 72/72. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
-| Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
+| Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The snappiness packet (this branch) and theta premium each need a merge — or their branch checked out — before a desk session can exercise them; the checkout was left on `claude/theta-premium`, where the previous agent left it |
 
 ### Open gates, newest first
 
@@ -54,6 +54,55 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 22 | **Strength Board in the Desk** - one desk session: the trader opens the section under the Strength window, reads the board in the column, clicks a row onto the Visual Alert Review chart, adds a name from it, and says whether the vertical stack is right | 2026-08-31 Strength Board entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+| 24 | **Desk snappiness packet 1** — one DESK session's `ui_stalls.jsonl` with `data_table.py:170`, `watchlist_utils.py:33`, `project_paths.py:165` and the operations-audit CSV parse gone quiet (stall watchdog stays ON; #23 is the theta gate on `claude/theta-premium`) | 2026-08-31 snappiness entry |
+
+### 2026-08-31 (late evening) — Desk snappiness packet 1: the three largest measured stall causes
+
+**Trader-authorized packet on `claude/desk-snappiness-1` (cut from `main` at
+`50af716`).** The 2026-08-31 stall log measured 8,008 stalls / ~78 minutes of
+GUI-thread freeze in one day; this packet fixes the three largest causes, caching
+and cadence only — no detector/scoring/alert behavior, output, file format, or push
+differs. Full detail and the measured numbers are in the CHANGELOG dated entry; one
+line per item here:
+
+1. **Health audit** (`operations_audit.py`, `diagnostics/shadow_log_audit.py`,
+   `health_panel.py`): the 269 MB outcome CSV (2.29 s/pass, every 15 s) and both
+   shadow JSONL streams now cache on `(st_mtime_ns, st_size)`; the Health page
+   ticks at 15 s only while showing, 120 s hidden (timer never stops, the shell
+   chip keeps updating).
+2. **Tables/Industry Board** (`data_table.py`, `industry_board_service.py`,
+   `industry_panel.py`, `price_alerts_panel.py`, `health_panel.py`): the one shared
+   column fit is bounded by `setResizeContentsPrecision(200)` — set on the VERTICAL
+   header, the one Qt consults for column hints (85 s single stalls, 9.6 min/day);
+   the board's 60 s tick no longer emits an unchanged `snapshot_id` (the panel
+   double-checks); the two `ResizeToContents` headers fit once when rows land, then
+   stay Interactive.
+3. **Auto Pilot status row** (`autopilot_service.py` — only the authorized pieces,
+   no alert/push code; `autopilot_panel.py`): the file-backed pieces of
+   `status_snapshot` are memoized on the file stamp, the 30 s tick takes ONE
+   snapshot (was two), the 5 s panel poll early-returns while hidden, and labels
+   restyle only on text/tone change (~14 min/day of file-read stalls).
+
+Tests: 21 new across `test_health_audit_caching.py`,
+`test_desk_snappiness_tables.py`, `test_autopilot_status_snapshot_caching.py`, plus
+the Health cadence test in `test_qt_health_panel.py` — the behavioral ones verified
+failing against the HEAD versions of the touched files before the fix. Also fixed
+en route: a pre-existing thread leak in
+`test_qt_health_panel.py::test_refresh_never_blocks...` (no `shutdown()` before
+`deleteLater()`, so the construction `singleShot(0, refresh)` started one more slow
+audit thread at the final `processEvents`), reproduced on unmodified HEAD — it
+failed the audit-thread sweep in any non-alphabetical file order.
+
+**Live gate #24** (numbered past the theta gate #23 that lives on
+`claude/theta-premium`): one DESK session's `ui_stalls.jsonl` with
+`data_table.py:170`, `watchlist_utils.py:33`, `project_paths.py:165` and the
+operations-audit CSV parse gone quiet. The stall watchdog stays ON — it is also
+gate 19's instrument. No frozen rebuild trigger fired: no new dependency, asset,
+package, or dynamic import; every change is inside existing modules.
+
+**NOT touched (packet 2+, some need trader sign-off):** Alert Center M5/D1 poll
+work, the 1 GB journal retag load, the 618 MB technical-integrity log, the
+Industry Board quiet-hours gate.
 
 ### 2026-08-31 (evening) — Phase 0.11 theta premium optimization: planned, prompt written, NOT built
 
