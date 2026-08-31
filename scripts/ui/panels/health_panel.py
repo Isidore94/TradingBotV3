@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from operations_audit import build_operations_audit
 from ui import theme
 from ui.timer_utils import start_staggered
+from ui.widgets.data_table import measure_column_widths
 from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.section_header import SectionHeader
 
@@ -128,10 +129,14 @@ def _table(columns: tuple[str, ...], *, stretch_column: int) -> QTableWidget:
     table.verticalHeader().setVisible(False)
     header = table.horizontalHeader()
     header.setStretchLastSection(False)
+    # Interactive, not ResizeToContents: a section left in ResizeToContents
+    # mode re-measures every row on every data change, and these tables
+    # rewrite their cells on the audit timer. The one measured fit happens in
+    # `_fill`, when rows land (packet 1 item 2c).
     for index in range(len(columns)):
         header.setSectionResizeMode(
             index,
-            header.ResizeMode.Stretch if index == stretch_column else header.ResizeMode.ResizeToContents,
+            header.ResizeMode.Stretch if index == stretch_column else header.ResizeMode.Interactive,
         )
     return table
 
@@ -176,8 +181,9 @@ def _fill(table: QTableWidget, rows: list[tuple[str, ...]], *, tones: list[str] 
     on every refresh. Same rows, same text, same colours - and a steady churn of
     Qt objects on a timer, which is also where the scroll position went.
     """
+    rows_landed = table.rowCount() != len(rows)
     with _KeepView(table):
-        if table.rowCount() != len(rows):
+        if rows_landed:
             table.setRowCount(len(rows))
         for row_index, values in enumerate(rows):
             for column, value in enumerate(values):
@@ -187,6 +193,9 @@ def _fill(table: QTableWidget, rows: list[tuple[str, ...]], *, tones: list[str] 
                     item.setText(text)
                 if column == 0 and tones:
                     item.setForeground(QColor(theme.color(tones[row_index])))
+    # Fit once when rows land; the sections then stay Interactive.
+    if rows_landed and rows:
+        measure_column_widths(table)
 
 
 class HealthPanel(QFrame):

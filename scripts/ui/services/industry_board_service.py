@@ -128,6 +128,13 @@ class IndustryBoardService(QObject):
         self._refresh_thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._running = False
+        #: snapshot_id of the last snapshotChanged emit. The 60 s check tick
+        #: used to emit unconditionally, and the panel then re-read both CSVs
+        #: and rebuilt+re-measured both tables for a board that had not moved
+        #: (2026-08-31 stall log). An unchanged id is an unchanged board -
+        #: it hashes the two files' (mtime_ns, size) - so the tick stays a
+        #: pure due-check.
+        self._last_emitted_snapshot_id: str | None = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(INDUSTRY_REFRESH_CHECK_MS)
@@ -146,7 +153,7 @@ class IndustryBoardService(QObject):
         if not self._timer.isActive():
             self._timer.start()
         self._startup_timer.start(self._startup_delay_ms)
-        self.snapshotChanged.emit(self.snapshot())
+        self._emit_snapshot(self.snapshot())
 
     def shutdown(self) -> None:
         self._timer.stop()
@@ -159,10 +166,17 @@ class IndustryBoardService(QObject):
             fresh_for_seconds=self._refresh_interval_seconds,
         )
 
+    def _emit_snapshot(self, snapshot: dict[str, Any]) -> None:
+        self._last_emitted_snapshot_id = str(snapshot.get("snapshot_id") or "")
+        self.snapshotChanged.emit(snapshot)
+
     @Slot()
     def refresh_if_due(self) -> bool:
         snapshot = self.snapshot()
-        self.snapshotChanged.emit(snapshot)
+        # Emit only when the board actually moved; the due-check below runs
+        # either way.
+        if str(snapshot.get("snapshot_id") or "") != self._last_emitted_snapshot_id:
+            self._emit_snapshot(snapshot)
         if not industry_refresh_due(snapshot):
             return False
         return self.request_refresh(force=False)
@@ -252,5 +266,5 @@ class IndustryBoardService(QObject):
         except OSError:
             pass
         result = {**payload, "snapshot": snapshot, "state": state}
-        self.snapshotChanged.emit(snapshot)
+        self._emit_snapshot(snapshot)
         self.refreshFinished.emit(result)

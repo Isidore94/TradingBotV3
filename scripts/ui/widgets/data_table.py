@@ -65,6 +65,13 @@ MAX_COLUMN_WIDTH = 260
 #: must never be walked for it.
 CLASSIFY_SAMPLE_ROWS = 50
 
+#: How many rows `resizeColumnsToContents` may measure per column. Unbounded,
+#: the 2026-08-31 stall log charged `measure_column_widths` 9.6 minutes in one
+#: day with single stalls of 85 s - every row of every column measured through
+#: a QStyledItemDelegate on the GUI thread. 200 rows is far past what a screen
+#: shows, and a table under the cap measures identically to the unbounded call.
+MEASURE_PRECISION_ROWS = 200
+
 _NUMBER = re.compile(r"^[+-]?[$]?\(?[0-9][0-9,]*(\.[0-9]+)?\)?[%x×]?$")
 
 
@@ -166,7 +173,17 @@ def measure_column_widths(view) -> list[int]:
     the 7.9% / 115 s site of the 2026-08-26 measurement (worst stall 23.9 s), so
     this is the single place a bounded measurement replaces it - every caller
     goes through here.
+
+    The bound is `MEASURE_PRECISION_ROWS`, applied through
+    `setResizeContentsPrecision`. Qt's gotcha: `QTableView.sizeHintForColumn`
+    walks ROWS bounded by the VERTICAL header's precision (and vice versa for
+    row hints), so the vertical header is the one that caps this call; the
+    horizontal header gets the same cap so any section still left in
+    `ResizeToContents` mode is bounded too.
     """
+    for header in (view.verticalHeader(), view.horizontalHeader()):
+        if header.resizeContentsPrecision() != MEASURE_PRECISION_ROWS:
+            header.setResizeContentsPrecision(MEASURE_PRECISION_ROWS)
     view.resizeColumnsToContents()
     header = view.horizontalHeader()
     return [int(header.sectionSize(column)) for column in range(_column_count(view))]

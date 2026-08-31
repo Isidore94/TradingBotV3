@@ -31,6 +31,7 @@ from push_notify import (
     PUSH_TOPIC_SETTING,
 )
 from ui.services.price_alert_service import ALWAYS_ON_SETTING, PriceAlertService
+from ui.widgets.data_table import measure_column_widths
 from ui.widgets.section_header import SectionHeader
 
 _COLUMNS = ("Symbol", "Alert Above", "Alert Below", "Armed ^", "Armed v", "Note", "Last Trigger")
@@ -59,7 +60,10 @@ class PriceAlertsPanel(QFrame):
         self.table = QTableWidget(0, len(_COLUMNS))
         self.table.setHorizontalHeaderLabels(_COLUMNS)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        # Interactive, not ResizeToContents: a section left in ResizeToContents
+        # mode re-measures every row on every data change. The one measured fit
+        # happens in _load_table, when rows land (packet 1 item 2c).
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(_COLUMNS.index("Note"), QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(_COLUMNS.index("Last Trigger"), QHeaderView.ResizeMode.Stretch)
         self.table.cellChanged.connect(self._on_cell_changed)
@@ -178,6 +182,8 @@ class PriceAlertsPanel(QFrame):
             self.table.setRowCount(len(entries))
             for row, entry in enumerate(entries):
                 self._set_row(row, entry)
+            # One bounded fit per load; the sections then stay Interactive.
+            measure_column_widths(self.table)
         finally:
             self._loading = False
 

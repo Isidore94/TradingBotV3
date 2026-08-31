@@ -71,6 +71,10 @@ class IndustryPanel(QFrame):
         self.service = service or IndustryBoardService(self)
         self._bounce_service = None
         self._chart_watch_host = None
+        #: snapshot_id last rendered by reload_from_disk. Belt-and-braces with
+        #: the service's own unchanged-id emit skip: whatever emits, an
+        #: unchanged board is never re-read and re-measured.
+        self._last_rendered_snapshot_id: str | None = None
 
         self.refresh_button = QPushButton("Refresh Board (yfinance)")
         self.refresh_button.setObjectName("PrimaryButton")
@@ -165,6 +169,7 @@ class IndustryPanel(QFrame):
             self.industry_table, INDUSTRY_COLUMNS, industry_rows, reviewed_symbols=reviewed
         )
         snapshot = snapshot or inspect_industry_snapshot()
+        self._last_rendered_snapshot_id = str(snapshot.get("snapshot_id") or "")
         as_of = snapshot.get("as_of")
         if isinstance(as_of, datetime):
             state = str(snapshot.get("state") or "unknown").upper()
@@ -240,6 +245,9 @@ class IndustryPanel(QFrame):
         self.statusChanged.emit(message)
 
     def _on_snapshot_changed(self, snapshot: dict) -> None:
+        snapshot_id = str((snapshot or {}).get("snapshot_id") or "")
+        if snapshot_id and snapshot_id == self._last_rendered_snapshot_id:
+            return
         if not self.service.running:
             self.reload_from_disk(snapshot)
 
