@@ -18,12 +18,12 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** — the journal packet was merged 2026-08-28 by trader instruction ("ok push to main"), fast-forward, no divergence |
+| Working branch | **`claude/focus-refresh-storm`** — the 2026-08-31 desk-lockup fix, pushed, NOT merged. `main` last moved 2026-08-28 (journal packet, fast-forward) |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **R7 journal auto-tagging + statement import (2026-08-28)**; Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger); Phase 0.8 (GUI fluidity) |
-| Last verified baseline | `pytest tests/ -q` **5419 passed, 72 subtests** (2026-08-28, Linux CI container; 2 pre-existing font-metric failures reproduce on a clean checkout) · smoke **7/7** · `--selftest` **72/72** |
+| Active roadmap items | **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5456 passed, 72 subtests** (2026-08-31, desk `.venv`, branch `claude/focus-refresh-storm`; +29 new tests over the 5427 that checkout collects) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **STALE** — last built at `fff07b8`, six journal commits behind. The desk runs from SOURCE by trader decision, so this is a verification artifact only and the source launch is live; a rebuild + frozen selftest is owed before the exe is trusted again |
-| Desk restart | **required** — neither the warehouse packet nor the journal packet is on the running desk until then |
+| Desk restart | **required** — neither the warehouse packet nor the journal packet is on the running desk until then, and the lockup fix is on a branch the desk is not running at all |
 
 ### Open gates, newest first
 
@@ -50,6 +50,7 @@ the dated entry named beside it.
 | 16 | **IBKR file import** — the trader imports their IBKR transaction file on the desk; the second account's mask resolves once Flex has named it | R7 IBKR file (2026-08-28 IBKR entry) |
 | 17 | **File authority** — one desk import where a shared day agrees (sync keeps its times) and, if one ever disagrees, the file takes it | R7 file authority (2026-08-28 authority entry) |
 | 18 | **Tax report** — one desk run of "Realised P&L for tax..." against the live journal, with the BoC rates booked so the CAD total is complete | R7 tax report (2026-08-28 tax entry) |
+| 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 ### Merged to main without a live-validation day — stated, not hidden
 
@@ -66,7 +67,10 @@ live journal database, and the frozen exe, which is six commits stale.
 
 ### Immediate next action
 
-Restart the desk, then run the owed live gates in the order above. **The remaining
+**Merge `claude/focus-refresh-storm` and restart the desk.** The 2026-08-31 freeze
+made the desk unusable for a whole morning, and the fix cannot help until the desk
+is launched from a tree that has it. Then run the owed live gates in the order
+above. **The remaining
 gates are all live-session work that only the trader can run.** The statement importer is **built and
 layers correctly** — the trader's next move is to import both real files on the
 desk and run the self-check (gates 14-15). Two of his asks are scoped and
@@ -75,6 +79,106 @@ the API (it would cost the only intraday timestamps the journal has), and the
 IBKR transaction-file importer (masked account numbers are the open problem).
 
 ---
+
+## 2026-08-31 - The desk froze because one Focus add repainted five surfaces
+
+**Branch `claude/focus-refresh-storm`. Built, green, live gate 19 owed. Not merged.**
+
+### What happened
+
+07:37-07:53 this morning: ~500 s of GUI-thread blockage in a 16-minute session.
+Since 07:45 the UI was blocked 216 s in 5.5 minutes; 07:50-07:52 it was 113 s in
+2.3 minutes, about 80% frozen. Single stalls of **44.3 s**, 15.9 s and 15.2 s.
+Windows reported the process Not Responding. The trader killed the desk twice
+(07:31, 07:37) and each restart re-ran the 07:30 swing scan, repeating the pain.
+Memory was fine (~2 GB working set) - this is **not** the 2026-08-27 warehouse
+bug.
+
+### Why
+
+At 07:41:58-07:42:11 the Alert Center drain adopted **45 staged picks into M5
+Focus one at a time**, ~300 ms apart (`C:\TradingBotData\focus_auto_picks.json`,
+every `adopted_at` inside that window). The 15.2 s stall charged to
+`focus_picks_panel.py:441` landed at the end of it.
+
+`FocusPickStore.add()` notifies on every add. That contract is right - several
+surfaces genuinely need to know about each mutation. What was wrong is that
+**five listeners each treated one add as "rebuild everything"**: four editor
+rebuilds plus a feedback-file read plus a forced snapshot write (Focus board);
+both alert feeds destroyed and reconstructed, up to 350 widget trees each with
+its own stylesheet (Alert Center); a full setups-viewport repaint through
+`SetupTableDelegate` (Master AVWAP - the hottest stack in the stall log, ~300
+samples across paint lines 78-152); the strength board rebuilt as HTML and
+re-parsed by `setHtml`; the price-alert symbol combo cleared and refilled.
+
+Times 45, in 13 seconds. The ~300 ms spacing between adoptions WAS that work.
+
+### What was built
+
+The signal contract is untouched: `focusChanged` still fires per mutation and the
+coalescing lives at each **listener**. `ui.timer_utils.SignalCoalescer` is a
+leading-edge window with a trailing fire - the first request opens a 200 ms
+window, later requests fold into it and deliberately do **not** restart it. A
+synchronous drain loop lands whole inside one window (one reaction); a sustained
+trickle fires on a fixed cadence rather than starving, which a plain
+restart-on-signal debounce would do. 200 ms is the trader's ceiling, not a target.
+
+Three more defects in the same chain, all fixed:
+
+- `FocusSideEditor.refresh()` **claimed to diff and did not** - it emptied the
+  flow layout and re-added every chip on every call, unchanged list included. 90
+  layout operations on a 45-name board to change nothing. The unchanged case now
+  does zero layout work; arrivals/departures/reorders are index-precise, and
+  `FlowLayout` grew `insertWidget` because `QLayout` has no generic insert and
+  its absence is exactly why the teardown existed.
+- `record_bounce_alert` rebuilt four editors and re-read `pick_feedback` to light
+  one chip's badge. It now touches only the matching chip; `_bounce_state` is
+  still written first, so a name that joins Focus after its alert still gets the
+  badge when its chip is built.
+- The DESK drain now adopts at most **10** picks per 30-second cycle
+  (`AUTO_ADOPT_BATCH_LIMIT`). **Pacing, never policy.** The freshness gate, the
+  flip barrier, ownership markers and AWAY/EVENING's refusal are all upstream and
+  untouched. A deferred pick is not marked seen, the cap counts adoptions rather
+  than iterations, and **no pick is ever dropped** - a cap that withheld one would
+  be the suppression field this chain deliberately does not have. A 45-pick
+  morning now finishes over ~2.5 minutes of background ticks.
+
+### The ask-first rule, twice
+
+`alert_center_panel.py` houses alert code. The packet's authorization covered the
+drain cap. The feed-rebuild coalescing was a second edit in that file, so it was
+**asked about separately and approved** before it was made. Only the trigger is
+coalesced - which alerts pass the feed gate, their order, the repetition fold and
+the digest are all decided inside `_rebuild_feed` and are unchanged.
+
+### Deliberately not touched
+
+The GUI-thread GC controller. Its ~600 ms young sweeps in the stall log are a
+*symptom* of this churn, and its delay-never-cancel and GUI-thread-only invariants
+are load-bearing. No detector, scoring, gating or adoption-gate logic changed.
+
+### Verification
+
+29 new tests, every one written against the old behaviour and **watched failing
+first**. Full suite **5456 passed, 72 subtests** on the desk `.venv` (the
+pre-change checkout collects 5427). Smoke **7/7**. Source `--selftest` **72/72**.
+No packaging trigger: no new dependency, no new non-`.py` asset, no new top-level
+package, no new dynamic import - the spec-drift test agrees.
+
+`ruff` is **not installed in the desk `.venv`** (`No module named ruff`), so the
+project rule set was run through `uvx ruff@latest` instead. The three F401s it
+reports in the touched files (`flow_layout.QSizePolicy`,
+`master_avwap_panel.SectionHeader`, `price_alert_board.Qt`) all reproduce on
+`main` and are pre-existing; this change adds none. The repo-wide count from that
+newer ruff is not comparable to the pinned one and was not chased.
+
+### What is NOT verified
+
+Any of it on a live desk. Gate 19 is a directional morning with a large staged
+batch. **The desk runs from source on `main`, so this fix reaches the trader only
+when the branch is merged and the desk is restarted** - until then this morning
+can repeat.
+
 
 ## 2026-08-28 - The tax number is the broker's, never ours
 

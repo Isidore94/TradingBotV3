@@ -570,6 +570,47 @@ nothing else.
    Qt signal back into itself has the same defect. This wave fixed the one it
    tripped over, not the class.
 
+9. **G-P1.8 The 2026-08-31 desk lockup: a burst of one signal is one reaction.**
+   *Built 2026-08-31, branch `claude/focus-refresh-storm`; live gate 19 owed.*
+   ~500 s of GUI-thread blockage in a 16-minute session, worst stall **44.3 s**,
+   Windows Not Responding, the desk killed twice. Cause: the DESK drain adopted
+   **45 staged picks one at a time** and five `focusChanged` listeners each
+   treated one add as a full rebuild. Fixed by coalescing at every listener
+   (`ui.timer_utils.SignalCoalescer`, 200 ms leading-edge window) while the store
+   keeps emitting per mutation; by making `FocusSideEditor.refresh()` the diff it
+   already claimed to be (it still emptied and refilled the flow layout on every
+   call); by narrowing `record_bounce_alert` to one chip; and by capping the
+   drain at `AUTO_ADOPT_BATCH_LIMIT` (10) adoptions per cycle — pacing only, no
+   pick dropped, a deferred pick never marked seen.
+
+   **Authorization:** the trader approved the drain cap and the redraw slowdown
+   on 2026-08-31, and approved the `alert_center_panel.py` feed-rebuild
+   coalescing separately under the file-scoped ask-first rule. That fence is
+   otherwise unchanged and this authorization does not extend past those two
+   edits.
+
+   **Deliberately NOT done, and why** (the packet allowed the cheapest 80% here):
+
+   * **The table model resets.** `SetupTableModel`, `TrackerTableModel` and
+     `ThetaTableModel` still `beginResetModel`/`endResetModel` on every
+     `set_rows` instead of emitting `dataChanged` for the cells that changed.
+     Left alone on measurement, not on effort: `setup_tracker_panel`,
+     `theta_panel` and `daytrade_tracker_panel` own **no timer at all**, so
+     those tables rebuild on an explicit refresh or a service signal, never per
+     tick. The 2026-08-31 delegate samples came from *repaints*, and the burst
+     that drove them is the one now coalesced. Converting to row-identity diffs
+     also has to preserve sort and selection, which is its own packet.
+   * **`fit_columns` / `apply_width_rule`.** `data_table.py:170`
+     (`resizeColumnsToContents`) and `:135` (`classify_columns`' per-cell
+     `model.data`) both appear in the 2026-08-31 samples and both still run a
+     full measurement on every table rebuild. `data_table.py:35` was already the
+     costliest non-GC site of the 2026-08-26 session (7.9%, 115 s), so this is a
+     known, measured, unconverted cost — it belongs with G-P1.5's owed panels
+     rather than with a lockup fix.
+   * **The GUI-thread GC controller.** Untouched by design: its ~600 ms young
+     sweeps that morning were a *symptom* of this churn, and G-P1.7 above still
+     says any work there is a separate trader decision.
+
 Gates: **the live-session soak in the proposal's §11.3 is OWED and cannot be
 discharged by any test run.** Its acceptance targets are stall count, p90 and
 worst-case blocked time measured over a real desk session with the watchdog

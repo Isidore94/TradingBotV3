@@ -51,6 +51,12 @@ which is evidence and must not be loaded as context.
   Documentation-only change: no path, behavior, or test changed.
 - Designated-writer authority, local kernel exclusion, fenced writer lease, atomic
   publication, readback verification, last-good preservation, and bounded archives.
+- **`focusChanged` is coalesced at every listener** (`ui.timer_utils.SignalCoalescer`,
+  200 ms leading-edge window, trailing fire). The store still emits once per mutation;
+  the Focus board, the Alert Center feed, the setups-table repaint, the strength board
+  and the price-alert combo each react once per BURST. The DESK auto-adoption drain
+  additionally adopts at most `AUTO_ADOPT_BATCH_LIMIT` (10) staged picks per 30-second
+  cycle - pacing only, nothing withheld, no pick dropped.
 - Main desk is the sole always-on scanner. The former mini-PC scanner and Desk Link
   satellite topology were `RETIRED` 2026-08-08 and their code was **removed 2026-08-24**
   (P1.5): no `desk_link` package, no `ui/satellite.py`, no `master_avwap_mini_pc.py`, no
@@ -335,6 +341,92 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
+
+
+### 2026-08-31 — One Focus add must not repaint the desk five times over
+
+`IMPLEMENTED`, `GREEN`, **live gate owed**. Branch `claude/focus-refresh-storm`.
+
+**The measurement.** 07:37-07:53 on 2026-08-31: ~500 s of GUI-thread blockage in a
+16-minute session. Since 07:45 the UI was blocked 216 s in 5.5 min; 07:50-07:52 it
+was 113 s in 2.3 min (~80% frozen). Single stalls of 44.3 s, 15.9 s and 15.2 s;
+Windows reported Not Responding and the trader killed the desk twice, each restart
+re-running the 07:30 swing scan. Memory was fine (~2 GB WS) — this is not the
+2026-08-27 warehouse bug.
+
+**The cause.** At 07:41:58-07:42:11 the Alert Center drain adopted **45 staged picks
+into M5 Focus one at a time**, ~300 ms apart (`focus_auto_picks.json`, all
+`adopted_at` in that window). `FocusPickStore.add()` notifies per add — correctly,
+several surfaces depend on it — but every one of five listeners treated a single add
+as "rebuild everything":
+
+| Listener | What one add cost |
+|---|---|
+| `FocusPicksPanel._on_focus_changed` | 4 full editor rebuilds + a `pick_feedback` read + a forced snapshot WRITE |
+| `AlertCenterPanel._rebuild_feed` | both feeds destroyed and reconstructed — up to 350 widget trees, each with its own stylesheet |
+| `MasterAvwapPanel` | a full setups-viewport repaint through `SetupTableDelegate` (the hottest stack in the stall log, ~300 samples across paint lines 78-152) |
+| `FocusStrengthBoard._render` | the whole board rebuilt as HTML and re-parsed by `setHtml` |
+| `PriceAlertBoard._refresh_symbol_choices` | the symbol combo cleared and refilled |
+
+Times 45, in 13 seconds. The 15.2 s stall charged to `focus_picks_panel.py:441`
+landed at the end of that burst.
+
+**The fix, and where it does NOT live.** `focusChanged` still fires once per store
+mutation — other listeners rely on it, and moving the coalescing into the store
+would change a contract to fix a symptom. The coalescing lives at each LISTENER.
+
+`ui.timer_utils.SignalCoalescer` is a **leading-edge window with a trailing fire**:
+the first request opens a 200 ms window, later requests fold into it and
+deliberately **do not restart** it. A synchronous drain loop therefore lands whole
+inside one window and produces exactly one reaction; a sustained trickle fires on a
+fixed cadence instead of being starved, which is what a plain restart-on-signal
+debounce would do. A reaction that raises cannot leave the coalescer armed. 200 ms
+is the trader's ceiling, not a target — a hand-typed ticker still appears instantly.
+
+**Three more defects in the same chain.**
+
+- `FocusSideEditor.refresh()` documented itself as a diff and still **emptied the
+  flow layout and re-added every chip on every call**, even when nothing had
+  changed — 90 layout operations on a 45-name board to change nothing. The
+  unchanged case now performs **zero** layout work and only hands each chip its
+  state; arrivals, departures and reorders are index-precise. `FlowLayout` grew
+  `insertWidget`, because `QLayout` has no generic insert and its absence is why
+  the teardown existed.
+- `record_bounce_alert` lit ONE chip's badge by rebuilding four editors and
+  re-reading the feedback file. It now updates only the matching chip.
+  `_bounce_state` is still written first, so a name that joins Focus after its
+  alert picks the badge up when its chip is built.
+- The DESK drain adopts at most **`AUTO_ADOPT_BATCH_LIMIT` = 10** picks per
+  30-second cycle (trader-approved 2026-08-31: *"cap the auto-adopt batch and slow
+  the redraws"*). **Pacing, never policy** — the freshness gate, the flip barrier,
+  ownership markers and AWAY/EVENING's refusal are untouched and upstream of it. A
+  deferred pick is **not** marked seen, so the next cycle finds it exactly as this
+  one did; the cap counts adoptions rather than iterations, so a day the gate
+  refuses most of the queue still adopts a full batch of what qualifies. **No pick
+  is ever dropped** — a cap that withheld one would be the suppression field this
+  chain deliberately does not have. A 45-pick morning now finishes in ~2.5 minutes
+  of background ticks instead of 13 seconds of frozen desk.
+
+The `alert_center_panel.py` feed-rebuild coalescing was approved separately under
+the file-scoped ask-first rule; only the TRIGGER is coalesced, and which alerts
+pass the feed gate, their order, the repetition fold and the digest are all decided
+inside `_rebuild_feed` and are unchanged.
+
+**Deliberately not touched.** The GUI-thread GC controller (`app.py`
+`GcController` / `install_gui_thread_gc`): its ~600 ms young sweeps were a
+*symptom* of this churn, and its delay-never-cancel and GUI-thread-only invariants
+are load-bearing. No detector, scoring, gating or adoption-gate logic changed.
+
+**Verification.** 29 new tests, every one written to fail against the old behaviour
+first and watched failing. Full suite **5456 passed, 72 subtests** (29 of those
+tests are new; the pre-change local count was 5427), smoke **7/7**, source
+`--selftest` **72/72**. No packaging trigger: no new dependency, no new asset, no
+new top-level package, no new dynamic import.
+
+**Live gate owed:** one DESK session on a directional morning where the drain
+stages a large batch — the desk stays responsive, every staged pick reaches M5
+Focus across successive ticks, and `ui_stalls.jsonl` no longer charges seconds to
+`focus_picks_panel.py` or `setup_delegate.py`.
 
 
 ### 2026-08-28 — The tax number is the broker's, never ours
