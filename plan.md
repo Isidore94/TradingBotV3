@@ -1053,12 +1053,12 @@ Two things are deliberately left, and neither blocks anything:
    `technical_integrity.py`, `human_focus_tracking.py`), where the file-scoped
    ask-first rule binds even for an import removal. Sweep them as one packet when
    no other agent is writing the tree.
-2. **One `F821`** at `ui/panels/alert_center_panel.py:883`: the annotation
-   `"StrengthBoardPanel | None"` names a class imported only inside the method
-   that builds the board. The fix is a one-line `TYPE_CHECKING` import and cannot
-   change behaviour, but the file houses alert code, so it is asked about first.
+2. ~~One `F821` in `ui/panels/alert_center_panel.py`~~ - **CLOSED 2026-08-31**:
+   asked about under the file-scoped ask-first rule, the trader said yes, and the
+   annotation now resolves through a `TYPE_CHECKING` import that is never
+   evaluated at runtime.
 
-Neither is a defect in shipped behaviour. Closing both is what makes "ruff clean"
+Item 1 is not a defect in shipped behaviour. Closing it is what makes "ruff clean"
 a claim this repo can make honestly.
 
 ## 13. Definition of done

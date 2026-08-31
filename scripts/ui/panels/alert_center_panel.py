@@ -6,6 +6,7 @@ import time
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -116,6 +117,15 @@ from ui.widgets.focus_strength_board import FocusStrengthBoard
 from ui.widgets.rrs_snapshot import RrsSnapshotWidget
 from ui.widgets.section_header import SectionHeader
 from ui.widgets.setup_detail_view import SetupDetailView
+
+if TYPE_CHECKING:  # pragma: no cover - annotation only, never imported at runtime
+    # `attach_strength_board` imports the real class inside the method, so the
+    # board's module is loaded only when a host actually installs one. The
+    # annotation on `self.strength_board` still has to name it, and with
+    # `from __future__ import annotations` that name is never evaluated - which
+    # is exactly why it went unnoticed as an undefined name until ruff was first
+    # run against this tree on 2026-08-31.
+    from ui.panels.strength_board_panel import StrengthBoardPanel
 
 _TIER_RE = re.compile(r"\[([SABCD])-TIER\]", re.IGNORECASE)
 

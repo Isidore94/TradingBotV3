@@ -548,11 +548,15 @@ and not pinned in `constraints.txt`. The first run it has ever had here returned
     `NameError`. The message is now bound at raise time.
   - Two imports nothing had used in `ui/app.py` (`pathlib.Path`, `QtCore.QProcess`)
     and one in `tests/test_trader_annotations.py`.
-- **Left, and named rather than swept:** 74 unused imports across ~40 files,
-  auto-fixable, none of them behaviour; and one `F821` on a string annotation in
-  `ui/panels/alert_center_panel.py` (`"StrengthBoardPanel | None"`). That file
-  houses alert code, so the file-scoped ask-first rule binds and the one-line
-  `TYPE_CHECKING` import was **not** made.
+- **The one `F821` in an alert file was asked about, then fixed** (trader: "yes").
+  `ui/panels/alert_center_panel.py` annotated
+  `self.strength_board: "StrengthBoardPanel | None"` with a name imported only
+  inside `attach_strength_board`; it now carries a `TYPE_CHECKING` import, which
+  is never evaluated at runtime. The lazy import that keeps the board's module
+  out of the panel's import graph is untouched, and so is every alert path.
+- **Left, and named rather than swept:** 74 unused imports across ~40 files -
+  auto-fixable, none of them behaviour, several in shadow/scoring files where the
+  ask-first rule binds even for an import removal.
 
 
 **Trader-directed, authorized in chat 2026-08-31.** Branch `claude/swing-favorites`.
