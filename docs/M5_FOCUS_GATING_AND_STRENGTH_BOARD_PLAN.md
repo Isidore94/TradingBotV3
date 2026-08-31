@@ -603,6 +603,35 @@ owner, the `rrsSnapshotChanged` signal and that tab are untouched — one listen
 retired, nothing else moved. If the trader wants that second view back, it is a
 section, not a page.
 
+### A row click charts in the review pane
+
+Same day, second pass — *"when I click on a stock in this M5 strength board it
+should come up on the Visual chart review in the trading desk."* It used to open
+the snapshot popup, which was the right answer while the board was a page of its
+own and the pane was somewhere else; now that the two share a column, a popup
+over the top of the pane is a window in the way.
+
+The click goes through **`chart_symbol`** — the same door the lookup box uses —
+and deliberately **not** through `_enqueue_review_alert`. That is the door for
+things the *scanner* said, and it would have been wrong four ways for a click:
+it drops everything in AWAY, it drops parked symbols, it diverts M5 alerts to
+the alert bar instead of the chart, and the movers-only filter can hide a row.
+**A name the trader clicked must appear.**
+
+Consequences, all deliberate:
+
+- It charts as a `MANUAL_CHART`, so the pane's setup text stays **muted rather
+  than red** — nothing fired; the trader was looking.
+- It never enters the alert feed, which is a record of what the scanner said.
+- Clicking an ignored symbol **un-ignores** it, exactly as typing one does: "not
+  today" must not make a name silently un-chartable, which reads as the board
+  being broken.
+- `symbolActivated` now carries `(symbol, side)`. The board is the only thing
+  that knows which of its two tables the row came from, and a short charted as a
+  plain `WATCH` reads as the wrong thesis.
+- `chart_symbol` grew two optional keyword arguments (`side`, `origin`) for
+  provenance and display; its defaults reproduce the lookup box exactly.
+
 ### Owed, live
 
 One desk session where the trader opens the section, reads the board in the

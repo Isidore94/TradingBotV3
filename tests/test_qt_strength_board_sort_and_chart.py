@@ -215,7 +215,7 @@ class TestChartOnSelection:
     def test_selecting_a_row_charts_it_once(self, monkeypatch):
         panel = _panel(monkeypatch)
         charted: list[str] = []
-        panel.symbolActivated.connect(charted.append)
+        panel.symbolActivated.connect(lambda symbol, _side: charted.append(symbol))
 
         panel.longs.table.selectRow(0)
         assert charted == [panel.longs.table.item(0, 0).text()]
@@ -228,7 +228,7 @@ class TestChartOnSelection:
         panel = _panel(monkeypatch)
         panel.set_board({"long": LONGS, "short": [dict(LONGS[0], symbol="ZZZ")]})
         charted: list[str] = []
-        panel.symbolActivated.connect(charted.append)
+        panel.symbolActivated.connect(lambda symbol, _side: charted.append(symbol))
 
         panel.longs.table.selectRow(0)
         panel.shorts.table.selectRow(0)
@@ -243,7 +243,7 @@ class TestChartOnSelection:
         charted_first = panel.longs.selected_symbol()
 
         charted: list[str] = []
-        panel.symbolActivated.connect(charted.append)
+        panel.symbolActivated.connect(lambda symbol, _side: charted.append(symbol))
         panel.set_board({"long": list(reversed(LONGS)), "short": []})
 
         assert panel.longs.selected_symbol() == charted_first
@@ -253,7 +253,7 @@ class TestChartOnSelection:
         panel = _panel(monkeypatch)
         panel.longs.table.selectRow(0)
         charted: list[str] = []
-        panel.symbolActivated.connect(charted.append)
+        panel.symbolActivated.connect(lambda symbol, _side: charted.append(symbol))
 
         panel.set_board({"long": [LONGS[0]], "short": []})
         assert charted == []
@@ -261,7 +261,7 @@ class TestChartOnSelection:
     def test_double_click_still_charts(self, monkeypatch):
         panel = _panel(monkeypatch)
         charted: list[str] = []
-        panel.symbolActivated.connect(charted.append)
+        panel.symbolActivated.connect(lambda symbol, _side: charted.append(symbol))
         panel.longs._on_double_click(1, 0)
         assert charted == [panel.longs.table.item(1, 0).text()]
 

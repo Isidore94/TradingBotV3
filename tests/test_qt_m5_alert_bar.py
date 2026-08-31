@@ -309,7 +309,7 @@ def test_the_bar_is_the_left_column_before_the_chart():
         # so the column is what the splitter holds - and the bar is still the
         # first thing in it, still before the chart. That is the trader rule.
         assert splitter.widget(0) is desk.m5_column
-        assert desk.m5_column.layout().itemAt(0).widget() is desk.m5_alert_bar
+        assert desk.m5_column.widget(0) is desk.m5_alert_bar
         assert splitter.widget(1) is desk.alert_center
         assert splitter.widget(2) is desk.master_workspace
         # Wired both ways: alerts flow in, a click flows back.

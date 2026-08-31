@@ -85,9 +85,10 @@ which is evidence and must not be loaded as context.
   every add re-running the M5 Focus adoption gate at click time with the refusal
   reason named. **Since 2026-08-31 it is a collapsible section under the Desk's
   Strength window rather than a left-nav page** (trader request): starting closed so
-  it costs the charts nothing, sides stacked vertically for the column, and its own
-  RS/RW half retired to the Alert Center's RS/RW Board tab, which is now one
-  tab-click away in the same column.
+  it costs the charts nothing, sides stacked vertically for the column, its own
+  RS/RW half retired to the Alert Center's RS/RW Board tab (one tab-click away in
+  the same column), and a row click charting into the **Visual Alert Review pane**
+  through `chart_symbol` rather than opening the snapshot popup.
 - Auto-populate rules for both regimes, previous-day-extreme gating, DESK adoption
   into M5 Focus, and one extension notification per Focus name/day while pullback
   notifications stay active.
@@ -402,6 +403,21 @@ all" (124 px) with the tooltip unchanged. The section also **starts closed**, so
 default it costs one header row. The two sides stack **vertically** — side by side
 was right for a full-width page and unreadable in a column.
 
+**A row click charts in the review pane, not a popup.** Same day, second pass:
+*"when I click on a stock in this M5 strength board it should come up on the Visual
+chart review in the trading desk."* The popup was the right answer while the board
+was a page elsewhere; sharing a column with the pane, it is a window in the way. The
+click goes through `chart_symbol` — the **lookup box's** door — and deliberately not
+through `_enqueue_review_alert`, the **scanner's** door, which would have been wrong
+four ways for a click: it drops everything in AWAY, drops parked symbols, diverts M5
+alerts to the alert bar instead of the chart, and can hide a row behind movers-only.
+A name the trader clicked must appear. It charts as a `MANUAL_CHART` (muted, not red
+— nothing fired, the trader was looking), never enters the alert feed, un-ignores a
+"not today" symbol exactly as typing one does, and carries its side, because a short
+charted as a plain `WATCH` reads as the wrong thesis. `symbolActivated` is now
+`(symbol, side)`; `chart_symbol` grew optional `side`/`origin` whose defaults
+reproduce the lookup box exactly.
+
 **The RS/RW half retired with the page.** It was added 2026-08-21 so the two reads
 could be compared without flipping **pages**; the Alert Center's own RS/RW Board tab
 is now one tab-click away in the **same column**, so keeping it would have been two
@@ -415,10 +431,10 @@ rather than three) and the two test files that enumerate nav labels. The module 
 in the tree inside an already-collected package, so `packaging/tradingbotv3.spec`
 needed no change and the spec-drift test stays green at 17.
 
-Verified: `pytest tests/ -q` **5565 passed, 72 subtests** (was 5554) · smoke **7/7** ·
+Verified: `pytest tests/ -q` **5571 passed, 72 subtests** (was 5554) · smoke **7/7** ·
 source `--selftest` **73/73** · spec-drift **17**. Live gate owed: one desk session
-where the trader opens the section, reads the board in the column and adds a name
-from it — plus a judgement on the vertical stack.
+where the trader opens the section, reads the board in the column, clicks a row onto
+the review chart and adds a name from it — plus a judgement on the vertical stack.
 
 ### 2026-08-31 - "I liked it and passed": the day-trade pass, under the note
 

@@ -95,6 +95,32 @@ class TestTheTwoWrites:
         assert focus.store.auto_pick_marker("NVDA", "long", "swing") is None
         assert focus.store.auto_pick_markers() == {}
 
+    def test_the_pick_carries_its_own_like_origin(self, service, focus, monkeypatch):
+        """So the human-focus tracker grades these as `human_focus_swing_vetted`
+        rather than mixing them with every other hand-typed swing name - which
+        is what makes "how do MY picks do?" answerable at all."""
+        from ui.services import swing_favorites_service as module
+
+        seen: list[dict] = []
+        original = focus.add
+        monkeypatch.setattr(
+            focus,
+            "add",
+            lambda symbol, side, category="m5", **kwargs: (
+                seen.append({"category": category, **kwargs})
+                or original(symbol, side, category, **kwargs)
+            ),
+        )
+        service.add("NVDA", "long")
+        assert seen == [{"category": "swing", "origin": module.FOCUS_LIKE_ORIGIN}]
+        assert module.FOCUS_LIKE_ORIGIN == "vetted"
+
+    def test_the_like_origin_is_a_documented_one(self):
+        import pick_feedback
+        from ui.services import swing_favorites_service as module
+
+        assert module.FOCUS_LIKE_ORIGIN in pick_feedback.PICK_ORIGINS
+
     def test_the_pick_does_not_land_in_the_m5_category(self, service, focus):
         service.add("NVDA", "long")
         assert focus.is_focus("NVDA", "long", "m5") is False
@@ -342,6 +368,47 @@ class TestTheStrip:
         bar._current_chips()[0].removed.emit("NVDA", "long")
         assert seen == [("NVDA", "long")]
 
+    def test_copy_puts_the_tickers_on_the_clipboard_one_per_line(self):
+        """The trader pastes this straight into a TC2000 watchlist."""
+        bar = self._bar()
+        bar.set_favorites([
+            {"symbol": "NVDA", "side": "long"},
+            {"symbol": "AMD", "side": "short"},
+        ])
+        assert bar.copy_all() == "NVDA\nAMD"
+        assert QApplication.clipboard().text() == "NVDA\nAMD"
+
+    def test_copy_lists_a_ticker_once_even_on_both_sides(self):
+        bar = self._bar()
+        bar.set_favorites([
+            {"symbol": "NVDA", "side": "long"},
+            {"symbol": "NVDA", "side": "short"},
+        ])
+        assert bar.copy_all() == "NVDA"
+
+    def test_copy_with_nothing_to_copy_says_so(self):
+        bar = self._bar()
+        assert bar.copy_all() == ""
+        assert "Nothing to copy" in bar.status_label.text()
+
+    def test_paste_adds_the_clipboard_on_the_selected_side(self):
+        bar = self._bar()
+        seen: list[tuple[str, str]] = []
+        bar.addRequested.connect(lambda text, side: seen.append((text, side)))
+        bar.set_side("short")
+        QApplication.clipboard().setText("nvda\namd\ntsla")
+        bar.paste()
+        assert seen == [("nvda\namd\ntsla", "short")]
+
+    def test_paste_with_an_empty_clipboard_asks_for_nothing(self):
+        bar = self._bar()
+        seen: list[tuple[str, str]] = []
+        bar.addRequested.connect(lambda text, side: seen.append((text, side)))
+        QApplication.clipboard().setText("   ")
+        bar.paste()
+        assert seen == []
+        assert "Clipboard is empty" in bar.status_label.text()
+
     def test_no_chip_carries_a_stylesheet_of_its_own(self):
         """Variants live in theme.qss; a per-widget stylesheet is a CSS parse
         on the GUI thread (fluidity rules, 2026-08-21)."""
@@ -374,9 +441,9 @@ class TestWhereItLives:
 
         desk = TradingDeskPanel(workspace_mode="workspace")
         try:
-            layout = desk.m5_column.layout()
-            assert layout.itemAt(0).widget() is desk.m5_alert_bar
-            assert layout.itemAt(layout.count() - 1).widget() is desk.swing_favorites_bar
+            assert desk.m5_column.count() == 2
+            assert desk.m5_column.widget(0) is desk.m5_alert_bar
+            assert desk.m5_column.widget(1) is desk.swing_favorites_bar
             assert desk.desk_splitter.widget(0) is desk.m5_column
 
             desk.set_mode("tabs")
@@ -415,6 +482,39 @@ class TestWhereItLives:
             assert charted == ["NVDA"]
         finally:
             desk.close()
+
+    def test_the_two_share_a_draggable_split_that_neither_can_collapse(self):
+        """Trader, 2026-08-31: "the tab needs to be resizable relative to the M5
+        alerts tab, I should be able to drag it up to see more"."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QSplitter
+        from ui.panels.trading_desk import TradingDeskPanel
+
+        desk = TradingDeskPanel(workspace_mode="workspace")
+        try:
+            assert isinstance(desk.m5_column, QSplitter)
+            assert desk.m5_column.orientation() == Qt.Orientation.Vertical
+            assert desk.m5_column.childrenCollapsible() is False
+            desk.m5_column.resize(240, 800)
+            desk.m5_column.setSizes([400, 400])
+            assert min(desk.m5_column.sizes()) > 0
+        finally:
+            desk.close()
+
+    def test_the_column_drag_has_its_own_settings_key(self):
+        """Dragging the strip must never overwrite the desk's column split."""
+        from ui.panels import trading_desk
+
+        assert trading_desk.M5_COLUMN_SPLIT_KEY != trading_desk.DESK_SPLIT_KEY
+        assert trading_desk.M5_COLUMN_SPLIT_KEY == "qt_m5_column_split_sizes_v1"
+
+    def test_the_chip_area_has_a_floor_and_no_ceiling(self):
+        """A ceiling would make "drag it up to see more" do nothing."""
+        from ui.widgets.swing_favorites_bar import MIN_CHIP_HEIGHT, SwingFavoritesBar
+
+        bar = SwingFavoritesBar()
+        assert bar.chip_scroll.minimumHeight() >= MIN_CHIP_HEIGHT
+        assert bar.chip_scroll.maximumHeight() >= 16777215, "no ceiling"
 
     def test_a_day_roll_re_derives_the_strip_and_clears_the_bar(self):
         from ui.panels.trading_desk import TradingDeskPanel

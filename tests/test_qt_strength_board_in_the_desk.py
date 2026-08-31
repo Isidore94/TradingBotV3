@@ -286,3 +286,83 @@ def test_expanding_the_section_never_moves_the_arm_bar(qt_desk):
         assert center.chart_review.arm_bar.parentWidget() is before
     finally:
         center.strength_board_section.set_expanded(False)
+
+
+# ---------------------------------------------------------------------------
+# 6. A row click charts into the Visual Alert Review pane, not a popup
+#    (trader, 2026-08-31: "when I click on a stock in this M5 strength board
+#    it should come up on the Visual chart review in the trading desk")
+# ---------------------------------------------------------------------------
+def test_a_row_click_charts_in_the_review_pane_and_opens_no_popup(qt_desk, monkeypatch):
+    center = qt_desk.trading_panel.alert_center
+    popups: list[str] = []
+    monkeypatch.setattr(
+        center, "_show_board_symbol_snapshot", lambda *a, **k: popups.append("popup")
+    )
+
+    center.strength_board.symbolActivated.emit("nvda", "long")
+
+    assert popups == [], "the popup was the old page's answer, not this one"
+    current = center._current_review_alert
+    assert current is not None and current.symbol == "NVDA"
+    assert center.chart_review.title.text().startswith("NVDA")
+
+
+def test_the_side_travels_with_the_click(qt_desk):
+    """A short charted as a plain WATCH reads as the wrong thesis."""
+    center = qt_desk.trading_panel.alert_center
+
+    center.strength_board.symbolActivated.emit("soxs", "short")
+
+    assert center._current_review_alert.side == "SHORT"
+
+
+def test_the_charted_row_is_a_manual_chart_not_an_alert(qt_desk):
+    """Nothing fired - the trader was looking. So the pane stays muted, the
+    alert feed is untouched, and no review alert is invented."""
+    from ui.models.bounce import MANUAL_CHART_TAG
+
+    center = qt_desk.trading_panel.alert_center
+    feed_before = len(center._alerts)
+
+    center.strength_board.symbolActivated.emit("amd", "long")
+
+    assert center._current_review_alert.tag == MANUAL_CHART_TAG
+    assert len(center._alerts) == feed_before, "a look is not a scanner alert"
+
+
+def test_a_click_never_goes_through_the_scanner_door(qt_desk, monkeypatch):
+    """`_enqueue_review_alert` drops in AWAY, drops parked symbols, diverts M5
+    to the alert bar and can hide a row behind movers-only. A name the trader
+    clicked must appear, so the click uses the lookup box's door instead."""
+    center = qt_desk.trading_panel.alert_center
+    enqueued: list[object] = []
+    monkeypatch.setattr(center, "_enqueue_review_alert", enqueued.append)
+
+    center.strength_board.symbolActivated.emit("tsla", "long")
+
+    assert enqueued == []
+    assert center._current_review_alert.symbol == "TSLA"
+
+
+def test_an_ignored_symbol_is_un_ignored_by_clicking_it(qt_desk):
+    """Same rule the lookup box has: "Remove for today" must not make a name
+    silently un-chartable, which reads as the board being broken."""
+    center = qt_desk.trading_panel.alert_center
+    center._ignored_symbols.add("MSFT")
+
+    center.strength_board.symbolActivated.emit("msft", "long")
+
+    assert "MSFT" not in center._ignored_symbols
+    assert center._current_review_alert.symbol == "MSFT"
+
+
+def test_the_lookup_box_still_behaves_exactly_as_it_did(qt_desk):
+    """`chart_symbol` grew two optional arguments; its defaults are the box."""
+    center = qt_desk.trading_panel.alert_center
+
+    assert center.chart_symbol("intc") is True
+
+    assert center._current_review_alert.side == "WATCH"
+    assert center._current_review_alert.trigger == "Charted on demand"
+    assert center.chart_symbol("(BULLISH_STRONG)") is False

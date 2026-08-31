@@ -41,7 +41,11 @@ PICK_VERDICTS = ("like", "dislike", "unfavorite", "not_today")
 # descriptive only - `record_pick_feedback` accepts any string - but the
 # human-focus snapshot turns them into cohort suffixes such as
 # `focus_swing_chart_review`, so the list documents what those names mean.
-PICK_ORIGINS = ("h1", "d1", "m5", "setups", "manual", "chart_review", "auto_pick")
+# "vetted" is the trader's own end-of-day swing list (the strip under the M5
+# alert bar): distinct from "manual" on purpose, so those picks grade as their
+# own `human_focus_swing_vetted` cohort rather than mixing with every other
+# hand-typed swing name.
+PICK_ORIGINS = ("h1", "d1", "m5", "setups", "manual", "chart_review", "auto_pick", "vetted")
 
 _REVIEWED_TODAY_CACHE: dict[tuple, frozenset[str]] = {}
 _PICK_DECISIONS = {"like", "dislike", "unfavorite", "not_today"}

@@ -35,6 +35,13 @@ from ui.widgets.setups_toggle_button import SetupsToggleButton
 # v2 split saved with the bar in the middle must not be replayed onto it.
 DESK_SPLIT_KEY = "qt_desk_split_sizes_v3"
 
+# The bar/strip split inside the M5 alerts column. Its own key, so dragging it
+# never disturbs the three-column desk split above.
+M5_COLUMN_SPLIT_KEY = "qt_m5_column_split_sizes_v1"
+#: Opening weights for that split: the alert list leads, the strip takes the
+#: bottom quarter, and the trader's drag replaces both from then on.
+M5_COLUMN_WEIGHTS = (3, 1)
+
 
 class TradingDeskPanel(QWidget):
     statusChanged = Signal(str)
@@ -141,12 +148,27 @@ class TradingDeskPanel(QWidget):
         self.swing_favorites_service.takenChanged.connect(self.swing_favorites_bar.set_taken)
         self.swing_favorites_service.statusChanged.connect(self.swing_favorites_bar.set_status)
         self.swing_favorites_service.statusChanged.connect(self.statusChanged)
-        self.m5_column = QWidget()
-        m5_column_layout = QVBoxLayout(self.m5_column)
-        m5_column_layout.setContentsMargins(0, 0, 0, 0)
-        m5_column_layout.setSpacing(4)
-        m5_column_layout.addWidget(self.m5_alert_bar, 1)
-        m5_column_layout.addWidget(self.swing_favorites_bar, 0)
+        # A SPLITTER, not a fixed stack (trader, 2026-08-31: "the tab needs to
+        # be resizable relative to the M5 alerts tab, I should be able to drag
+        # it up to see more"). Its own settings key, so this drag and the desk's
+        # three-column drag never overwrite each other. Neither pane collapses:
+        # a strip dragged to nothing is one the trader cannot find again.
+        self.m5_column = QSplitter(Qt.Orientation.Vertical)
+        self.m5_column.addWidget(self.m5_alert_bar)
+        self.m5_column.addWidget(self.swing_favorites_bar)
+        self.m5_column.setChildrenCollapsible(False)
+        self.m5_column.setStretchFactor(0, 1)
+        self.m5_column.setStretchFactor(1, 0)
+        desk_layout.apply_saved_sizes(
+            self.m5_column, M5_COLUMN_SPLIT_KEY, M5_COLUMN_WEIGHTS
+        )
+        # Held at the preset until the trader drags it, then saved. Built once
+        # here rather than per mode, so the drag survives a workspace<->tabs
+        # switch the same way the column itself does.
+        desk_layout.track_preset(
+            self, self.m5_column, M5_COLUMN_SPLIT_KEY, lambda _extent: M5_COLUMN_WEIGHTS
+        )
+        desk_layout.persist_sizes(self, self.m5_column, M5_COLUMN_SPLIT_KEY)
         self._refresh_swing_favorites()
         # A day roll starts a new session, so the strip re-derives from the
         # store and comes back empty. Read-only: the rows themselves stay.

@@ -5,10 +5,12 @@ targets. I want a place to put them in so the bot knows my personal favourite
 picks... put it at the very bottom of the M5 alerts tab, the tab is so long and
 I never use all of it."*
 
-So it is a strip, not a panel: one input, a Long/Short toggle, and a chip per
-pick with an x. It shares a column with the alert list and must never take
-space that list wants, which is why the chips live in a short scroll area
-rather than growing the strip.
+So it is a strip, not a panel: one input, a Long/Short toggle, Copy/Paste for
+the trader's TC2000 list, and a chip per pick with an x. It shares a DRAGGABLE
+split with the alert list above it (trader, 2026-08-31: *"the tab needs to be
+resizable relative to the M5 alerts tab, I should be able to drag it up to see
+more"*), so the chip area has a floor and no ceiling - how much of the column
+this strip gets is the trader's decision, saved across restarts.
 
 Fluidity rules (2026-08-21 / 2026-08-31): the chip area is **diffed, never
 rebuilt** - an add costs one insert and a removal one take, and the common case
@@ -28,6 +30,7 @@ from typing import Any, Iterable, Mapping
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -42,10 +45,11 @@ from PySide6.QtWidgets import (
 from ui import theme
 from ui.widgets.flow_layout import FlowLayout
 
-#: How tall the chip area is allowed to get before it scrolls. The alert list
-#: above it is the thing the trader is actually watching; this strip borrows
-#: the bottom of that column and gives the rest back.
-MAX_CHIP_HEIGHT = 132
+#: The chip area never goes below this, so the strip cannot be dragged into a
+#: sliver with no visible picks. It has no ceiling: the trader asked to be able
+#: to "drag it up to see more" (2026-08-31), and a maximum height would make the
+#: drag do nothing past the ceiling.
+MIN_CHIP_HEIGHT = 44
 
 
 class SwingFavoriteChip(QFrame):
@@ -134,6 +138,16 @@ class SwingFavoritesBar(QWidget):
         self.count_label = QLabel("0")
         self.count_label.setObjectName("MutedLabel")
         header.addWidget(self.count_label, 0)
+        self.copy_button = QToolButton()
+        self.copy_button.setText("Copy")
+        self.copy_button.setProperty("rowChrome", True)
+        self.copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_button.setToolTip(
+            "Copy today's picks to the clipboard, one ticker per line, each "
+            "once, in list order - paste straight into a TC2000 watchlist."
+        )
+        self.copy_button.clicked.connect(self.copy_all)
+        header.addWidget(self.copy_button, 0)
         layout.addLayout(header)
 
         self.input = QLineEdit()
@@ -162,9 +176,16 @@ class SwingFavoritesBar(QWidget):
             "Add these to today's swing picks and to the swing Focus list."
         )
         self.add_button.clicked.connect(self._emit_add)
+        self.paste_button = QPushButton("Paste")
+        self.paste_button.setToolTip(
+            "Add every ticker on the clipboard to today's swing picks, on the "
+            "side selected here - paste a TC2000 list straight in."
+        )
+        self.paste_button.clicked.connect(self.paste)
         side_row.addWidget(self.long_button, 0)
         side_row.addWidget(self.short_button, 0)
         side_row.addWidget(self.add_button, 1)
+        side_row.addWidget(self.paste_button, 1)
         layout.addLayout(side_row)
 
         self.chip_host = QWidget()
@@ -173,9 +194,11 @@ class SwingFavoritesBar(QWidget):
         self.chip_scroll.setObjectName("SwingFavoriteChips")
         self.chip_scroll.setWidgetResizable(True)
         self.chip_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.chip_scroll.setMaximumHeight(theme.px(MAX_CHIP_HEIGHT))
+        # A floor, not a ceiling: the strip shares a draggable split with the
+        # alert list, so the trader decides how much of it they want.
+        self.chip_scroll.setMinimumHeight(theme.px(MIN_CHIP_HEIGHT))
         self.chip_scroll.setWidget(self.chip_host)
-        layout.addWidget(self.chip_scroll)
+        layout.addWidget(self.chip_scroll, 1)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("MutedLabel")
@@ -201,6 +224,26 @@ class SwingFavoritesBar(QWidget):
             return
         self.input.clear()
         self.addRequested.emit(text, self._side)
+
+    def paste(self) -> None:
+        """Add whatever is on the clipboard, on the currently selected side."""
+        text = QApplication.clipboard().text().strip()
+        if not text:
+            self.set_status("Clipboard is empty.")
+            return
+        self.addRequested.emit(text, self._side)
+
+    def copy_all(self) -> str:
+        """Put today's tickers on the clipboard, one per line. Returns the text."""
+        symbols = list(dict.fromkeys(symbol for symbol, _side in self.symbols()))
+        text = "\n".join(symbols)
+        QApplication.clipboard().setText(text)
+        self.set_status(
+            f"Copied {len(symbols)} ticker{'' if len(symbols) == 1 else 's'}."
+            if symbols
+            else "Nothing to copy yet."
+        )
+        return text
 
     def set_status(self, text: str) -> None:
         self.status_label.setText(str(text or ""))

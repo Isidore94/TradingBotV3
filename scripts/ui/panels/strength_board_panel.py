@@ -96,7 +96,7 @@ class _SideTable(QWidget):
 
     addRequested = Signal(str, str)      # symbol, side
     addAllRequested = Signal(str)        # side
-    symbolActivated = Signal(str)        # symbol (open the chart popup)
+    symbolActivated = Signal(str, str)   # symbol, side (chart it)
 
     def __init__(self, side: str, parent=None) -> None:
         super().__init__(parent)
@@ -184,7 +184,7 @@ class _SideTable(QWidget):
     def _on_double_click(self, row: int, _column: int) -> None:
         item = self.table.item(row, 0)
         if item is not None:
-            self.symbolActivated.emit(item.text())
+            self.symbolActivated.emit(item.text(), self._side)
 
     def _on_selection_changed(self) -> None:
         symbol = self.selected_symbol()
@@ -194,7 +194,7 @@ class _SideTable(QWidget):
             # is not a new request.
             return
         self._selected_symbol = symbol
-        self.symbolActivated.emit(symbol)
+        self.symbolActivated.emit(symbol, self._side)
 
     def selected_symbol(self) -> str:
         items = self.table.selectedItems()
@@ -274,7 +274,10 @@ class StrengthBoardPanel(QWidget):
     """The board surface. Owns no data - `StrengthBoardService` does."""
 
     statusChanged = Signal(str)
-    symbolActivated = Signal(str)
+    #: symbol, side ("long"/"short"). The side travels with the click because
+    #: the board is the only thing that knows which table the row came from,
+    #: and a short charted as a long reads as the wrong thesis.
+    symbolActivated = Signal(str, str)
 
     def __init__(self, service=None, focus_service=None, parent=None) -> None:
         super().__init__(parent)
@@ -325,10 +328,10 @@ class StrengthBoardPanel(QWidget):
         # One chart at a time: selecting on one side drops the other side's
         # selection, so "the charted name" is never ambiguous.
         self.longs.symbolActivated.connect(
-            lambda symbol: self._on_symbol_activated(symbol, self.shorts)
+            lambda symbol, side: self._on_symbol_activated(symbol, side, self.shorts)
         )
         self.shorts.symbolActivated.connect(
-            lambda symbol: self._on_symbol_activated(symbol, self.longs)
+            lambda symbol, side: self._on_symbol_activated(symbol, side, self.longs)
         )
         board_layout.addWidget(self.sides, 1)
 
@@ -338,17 +341,18 @@ class StrengthBoardPanel(QWidget):
             self.set_board(service.board())
             self.status.setText(service.status_text())
 
-    def _on_symbol_activated(self, symbol: str, other: "_SideTable") -> None:
+    def _on_symbol_activated(self, symbol: str, side: str, other: "_SideTable") -> None:
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return
         other.clear_selection()
-        # The host (the Alert Center, as for every other board) owns the popup,
-        # so the chart carries the same bot-backed series, painted levels and
-        # capture rail as the RS/RW and Industry boards. Nothing new is drawn
-        # here and nothing is fetched: this is R4's unification, not a second
-        # chart widget.
-        self.symbolActivated.emit(symbol)
+        # The HOST decides where the chart goes, and since 2026-08-31 it is the
+        # desk's Visual Alert Review pane rather than the snapshot popup
+        # (trader: "when I click on a stock in this M5 strength board it should
+        # come up on the Visual chart review in the trading desk"). Either way
+        # nothing is drawn or fetched here - this is still R4's unification,
+        # not a second chart widget.
+        self.symbolActivated.emit(symbol, side)
 
     # ------------------------------------------------------------------ views
     def set_board(self, board: dict) -> None:

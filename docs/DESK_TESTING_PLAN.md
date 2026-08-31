@@ -611,8 +611,10 @@ Trading Desk. There is no left-hand menu button for it.
    under them).
 4. Click **Refresh** and watch the status line.
 5. Compare the names against your TC2000 scan.
-6. Add one name and check it lands in M5 Focus.
-7. Tell us whether the two lists stacked one above the other read well in that
+6. Click a row. The name should come up on the **Visual Alert Review** chart in
+   the same column - no popup window.
+7. Add one name and check it lands in M5 Focus.
+8. Tell us whether the two lists stacked one above the other read well in that
    column, or whether you want them side by side with the column dragged wider.
 
 ### GOOD

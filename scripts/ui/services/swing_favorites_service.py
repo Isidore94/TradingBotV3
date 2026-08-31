@@ -32,6 +32,11 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 import swing_favorites
 
+#: The pick-feedback like origin these picks carry. It becomes the human-focus
+#: tracker's sub-cohort suffix, so a hand-vetted swing pick grades separately
+#: from every other manually added swing name.
+FOCUS_LIKE_ORIGIN = "vetted"
+
 
 def default_trades_provider(session_date: str, days: int) -> list[dict[str, Any]]:
     """Journal trades opened in the bounded window, or [] when unanswerable.
@@ -188,7 +193,14 @@ class SwingFavoritesService(QObject):
         try:
             # `add` never writes an auto-adoption marker; only
             # `mark_auto_adopted` does, and nothing here calls it.
-            self._focus_service.add(symbol, side, "swing", origin="manual")
+            #
+            # The origin is "vetted" rather than "manual" so these grade as
+            # their OWN sub-cohort in the human-focus tracker
+            # (`human_focus_swing_vetted`) instead of disappearing into every
+            # other hand-typed swing name. That is what makes "how do my
+            # hand-picked swings do against the bot's?" a question the
+            # existing 1/3/5/10-session grader can already answer.
+            self._focus_service.add(symbol, side, "swing", origin=FOCUS_LIKE_ORIGIN)
         except Exception as exc:  # noqa: BLE001
             logging.warning("Swing favorite %s not added to Focus: %s", symbol, exc)
             self.statusChanged.emit(f"{symbol} not added to swing Focus: {exc}")

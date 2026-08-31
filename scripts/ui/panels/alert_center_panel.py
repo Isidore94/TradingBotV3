@@ -3942,7 +3942,7 @@ class AlertCenterPanel(QFrame):
         )
         return True
 
-    def chart_symbol(self, symbol: str) -> bool:
+    def chart_symbol(self, symbol: str, *, side: str = "", origin: str = "") -> bool:
         """Put any symbol on the big chart on demand.
 
         The review pane previously only ever showed what the alert queue handed
@@ -3953,6 +3953,14 @@ class AlertCenterPanel(QFrame):
         Typing a symbol also un-ignores it: "Remove for today" would otherwise
         make it silently un-chartable for the rest of the session, which reads
         as the box being broken.
+
+        `side` and `origin` are for callers that know more than the lookup box
+        does - the M5 Strength Board knows which of its two tables the row came
+        from, and a short charted as a plain WATCH reads as the wrong thesis.
+        They are display and provenance only: the chart stays a MANUAL_CHART,
+        so it is muted rather than red (nothing fired - the trader was
+        looking), it never enters the alert feed, and it is not an alert of any
+        kind. Defaults reproduce the lookup box exactly.
         """
         symbol = str(symbol or "").strip().upper()
         if not symbol or not SYMBOL_RE.fullmatch(symbol):
@@ -3963,18 +3971,22 @@ class AlertCenterPanel(QFrame):
         # Typing a parked symbol is re-engaging with it: un-park so its
         # alerts can occupy the chart again.
         self._unpark_review_symbol(symbol)
+        source = str(origin or "").strip()
         alert = BounceAlert(
             time_text=datetime.now().strftime("%H:%M:%S"),
             symbol=symbol,
-            side="WATCH",
-            trigger="Charted on demand",
+            side=str(side or "WATCH").strip().upper(),
+            trigger=f"Charted from {source}" if source else "Charted on demand",
             tag=MANUAL_CHART_TAG,
             raw_text=f"MANUAL CHART {symbol}",
         )
         # Straight to the review pane; never into the alert feed, which is a
         # record of what the scanner said, not of what was looked at.
         self._select_review_alert(alert)
-        self.statusChanged.emit(f"{symbol}: charted on demand.")
+        self.statusChanged.emit(
+            f"{symbol}: charted from {source}." if source
+            else f"{symbol}: charted on demand."
+        )
         return True
 
     def _arm_level_from_dock(self, symbol: str, direction: str, level: float) -> None:
@@ -4868,6 +4880,26 @@ class AlertCenterPanel(QFrame):
         """
         self._show_board_symbol_snapshot(symbol, side)
 
+    def _chart_strength_board_symbol(self, symbol: str, side: str = "") -> None:
+        """A strength-board row click charts that name in the review pane.
+
+        Trader, 2026-08-31: *"when I click on a stock in this M5 strength board
+        it should come up on the Visual chart review in the trading desk."* It
+        used to open the snapshot popup, which was the right answer while the
+        board was a page of its own and the review pane was somewhere else;
+        now that the board sits in the same column as the pane, a popup over
+        the top of it is a window in the way.
+
+        This goes through `chart_symbol` - the SAME door the lookup box uses -
+        and deliberately not through `_enqueue_review_alert`, which is the door
+        for things the SCANNER said. That one would have been wrong four ways
+        for a click: it drops everything in AWAY, it drops parked symbols, it
+        diverts M5 alerts to the alert bar instead of the chart, and the
+        movers-only filter can hide a row. A name the trader clicked must
+        appear.
+        """
+        self.chart_symbol(symbol, side=side, origin="the M5 Strength Board")
+
     def attach_strength_board(self, service, focus_service=None) -> None:
         """Host the M5 Strength Board under the Strength window.
 
@@ -4888,7 +4920,7 @@ class AlertCenterPanel(QFrame):
             service=service,
             focus_service=self.focus_service if focus_service is None else focus_service,
         )
-        board.symbolActivated.connect(self._show_board_symbol_snapshot)
+        board.symbolActivated.connect(self._chart_strength_board_symbol)
         self.strength_board = board
 
         # The alert column's floor is 360 px and the tab stack already claims

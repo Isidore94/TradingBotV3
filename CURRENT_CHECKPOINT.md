@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | **`claude/strength-board-into-desk`** - cut from `main` at `f36ab59` for the trader-directed Strength Board move (2026-08-31). One commit, `be35fb6`, pushed, not merged. `main` already carries the day-trade pass, today's swing picks (both landed together in `ed3c73c`, which resolved the shared-checkout collision recorded below) and the desk-lockup fix; no divergence |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
 | Active roadmap items | **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5565 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/strength-board-into-desk` at `be35fb6` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** · spec-drift **17**. The Strength Board move adds 11 tests net. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Last verified baseline | `pytest tests/ -q` **5571 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/strength-board-into-desk`) · smoke **7/7** · source `--selftest` **73/73** · spec-drift **17**. The Strength Board move adds 17 tests net. Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **STALE by the Strength Board move** (a new module under an already-collected package - no spec trigger, but the exe predates it). Previously rebuilt 2026-08-31 at `d0a2ae6` (419 MB onedir), `selftest OK: 72/72 checks passed (frozen)`, exit 0. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The Strength Board move needs a merge first |
 
@@ -52,7 +52,7 @@ the dated entry named beside it.
 | 18 | **Tax report** — one desk run of "Realised P&L for tax..." against the live journal, with the BoC rates booked so the CAD total is complete | R7 tax report (2026-08-28 tax entry) |
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
-| 22 | **Strength Board in the Desk** - one desk session: the trader opens the section under the Strength window, reads the board in the column, adds a name from it, and says whether the vertical stack is right | 2026-08-31 Strength Board entry |
+| 22 | **Strength Board in the Desk** - one desk session: the trader opens the section under the Strength window, reads the board in the column, clicks a row onto the Visual Alert Review chart, adds a name from it, and says whether the vertical stack is right | 2026-08-31 Strength Board entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 ### Merged to main without a live-validation day — stated, not hidden
@@ -124,6 +124,17 @@ The section also **starts closed**, so by default it costs one header row. The
 two sides stack **vertically** - side by side was right for a full-width page and
 is unreadable in a column.
 
+**A row click charts in the review pane** (trader, same day, second pass:
+*"when I click on a stock in this M5 strength board it should come up on the
+Visual chart review in the trading desk"*). It goes through `chart_symbol`, the
+LOOKUP BOX's door, and deliberately not `_enqueue_review_alert`, the SCANNER's
+door - that one drops everything in AWAY, drops parked symbols, diverts M5
+alerts to the alert bar and can hide a row behind movers-only, and **a name the
+trader clicked must appear**. It charts as a `MANUAL_CHART` (muted, not red -
+nothing fired), never enters the alert feed, un-ignores a "not today" symbol as
+typing one does, and carries its side. `chart_symbol` grew optional
+`side`/`origin`; the lookup box's behaviour is unchanged and pinned.
+
 **The RS/RW half retired with the page.** It was added 2026-08-21 so the two
 reads could be compared without flipping PAGES; the Alert Center's own RS/RW
 Board tab is now one tab-click away in the SAME column. The tape, its owner, the
@@ -136,14 +147,15 @@ line, which is the payoff of the 2026-08 nav refactor) plus the two test files
 that enumerate nav labels. The module stays inside an already-collected package,
 so `packaging/tradingbotv3.spec` needed no change.
 
-**Verified:** `pytest tests/ -q` **5565 passed, 72 subtests** (was 5554) · smoke
+**Verified:** `pytest tests/ -q` **5571 passed, 72 subtests** (was 5554) · smoke
 **7/7** · source `--selftest` **73/73** · spec-drift **17**. `ruff` was not run -
 the desk `.venv` has no `ruff` installed.
 
 **Owed, live (gate 22):** one desk session where the trader opens the section,
-reads the board in the column and adds a name from it - plus a judgement on
-whether the vertical stack is right or the sides want their side-by-side shape
-back with the column dragged wider.
+reads the board in the column, clicks a row onto the Visual Alert Review chart
+and adds a name from it - plus a judgement on whether the vertical stack is
+right or the sides want their side-by-side shape back with the column dragged
+wider.
 
 ## 2026-08-31 - "I liked it and passed": the day-trade pass, under the note
 
