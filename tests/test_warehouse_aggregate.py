@@ -259,7 +259,29 @@ def test_worst_capture_mode_wins():
 def test_unsupported_timeframes_are_refused():
     session = xcal.trading_session(date(2026, 8, 3))
     with pytest.raises(ValueError, match="unsupported derived timeframe"):
-        list(aggregate.session_buckets(session, "H2"))  # H2 is CUT (sec 5.2)
+        list(aggregate.session_buckets(session, "H3"))
+
+
+def test_h2_is_supported_now_that_a_consumer_exists():
+    """H2 was CUT by the locked plan (sec 5.2) for having no consumer. The
+    Phase 0.12 B3 higher-timeframe LRSI recipe grid is that consumer, which is
+    the cut's own reopen condition (BD-78).
+
+    RTH is 6.5h, so two-hour buckets do not divide it: three full buckets and
+    a 30-minute STUB. The stub keeps its true duration and is flagged, exactly
+    as the H1 stub is - a research lane that averaged it into a full H2 would
+    be measuring a bar that never existed."""
+    session = xcal.trading_session(date(2026, 8, 3))
+    buckets = list(aggregate.session_buckets(session, "H2"))
+    # UTC, as every bucket boundary in this module is: 13:30Z is 09:30 ET.
+    assert [bucket[0].strftime("%H:%M") for bucket in buckets] == [
+        "13:30",
+        "15:30",
+        "17:30",
+        "19:30",
+    ]
+    assert [bucket[3] for bucket in buckets] == [False, False, False, True]
+    assert [bucket[2] for bucket in buckets] == [24, 24, 24, 6]
 
 
 # --- the build job ---------------------------------------------------------

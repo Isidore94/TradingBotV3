@@ -1,0 +1,166 @@
+{
+  "schema": "efficiency_lrsi_research_fixture_v1",
+  "feature_version": "efficiency_lrsi_tc2000_v1",
+  "raw_input_keys": [
+    "closes"
+  ],
+  "raw_input_sha256": "f92afa8cffa331a2b7eaad508f13eede73008d29256aaaada147137b5d2d52c2",
+  "acquired_at": "2026-09-01T07:30:00-07:00",
+  "as_of": "2026-09-01T07:30:00-07:00",
+  "universe_version": "synthetic_efficiency_churn_run_fade_v1",
+  "provider_assumptions": "Synthetic closes only - no provider, calendar or bar construction is involved. The oscillator reads closes and nothing else, so a close series is the complete input.",
+  "expected_keys": [
+    "expected"
+  ],
+  "numeric_tolerance": 1e-06,
+  "intentional_difference": "",
+  "what_it_pins": "The higher-timeframe LRSI research grid (Phase 0.12 B3) reads the UNMIRRORED series and takes its short legs from cross_down at 50 and 80. The mirrored-close idiom the live M5 engines use is a DIFFERENT feature, not a transform of this one: the formula clamps at 0, so the unmirrored series carries no information about how efficient a DOWN move is. This fixture holds both so the difference is a number rather than an argument - the unmirrored down-cross fires at bar 27 (the up move's efficiency collapsing) and the mirrored up-cross at bar 29 (the down move established). Two different events, two bars apart.",
+  "configuration": {
+    "ema_length": 9,
+    "sum_length": 4
+  },
+  "closes": [
+    100.0,
+    100.8,
+    100.0,
+    100.8,
+    100.0,
+    100.8,
+    100.0,
+    100.8,
+    100.0,
+    100.8,
+    100.0,
+    100.8,
+    100.0,
+    100.8,
+    100.0,
+    100.6,
+    101.3,
+    102.1,
+    103.0,
+    104.0,
+    105.0,
+    105.2,
+    104.9,
+    105.1,
+    104.8,
+    105.0,
+    104.2,
+    103.1,
+    102.0,
+    100.8,
+    99.5,
+    98.2,
+    98.3,
+    98.1,
+    98.4
+  ],
+  "expected": {
+    "values": [
+      null,
+      null,
+      null,
+      null,
+      55.405405,
+      49.848024,
+      36.263129,
+      31.279056,
+      23.550001,
+      19.771226,
+      15.215329,
+      12.554299,
+      9.797439,
+      7.994605,
+      6.295031,
+      0.0,
+      58.786284,
+      72.758589,
+      100.0,
+      100.0,
+      100.0,
+      100.0,
+      100.0,
+      100.0,
+      100.0,
+      100.0,
+      100.0,
+      33.76277,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "cross_up": {
+      "20": [
+        16
+      ],
+      "50": [
+        16
+      ],
+      "80": [
+        18
+      ]
+    },
+    "cross_down": {
+      "50": [
+        5,
+        27
+      ],
+      "80": [
+        27
+      ]
+    },
+    "mirrored_values": [
+      null,
+      null,
+      null,
+      null,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      7.006177,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      46.911692,
+      98.599625,
+      100.0,
+      100.0,
+      100.0,
+      100.0,
+      100.0
+    ],
+    "mirrored_cross_up": {
+      "20": [
+        28
+      ],
+      "50": [
+        29
+      ],
+      "80": [
+        29
+      ]
+    }
+  }
+}
