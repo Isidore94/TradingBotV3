@@ -2021,3 +2021,164 @@ name at most three next tests. It cannot write live policy.
 **Where.** `cli.py::_run_outcomes`; `store.py::read_rows`;
 `ai_jobs/setup_research.py`; `ai_jobs/runner.py`; AST and behavior guards in
 `tests/test_setup_research_pipeline.py`.
+
+## BD-80 — Episodes are published beside rows; the floor still counts rows, and the follow-up is a CROSS-CELL floor
+
+**Date:** 2026-09-01 (Phase 0.13 packet P3, item 1).
+
+**Decision.** Every fact-pack cell now reports `n_episodes` — distinct
+`dependency_cluster_id` — beside `n`. The eligibility floor **still counts
+outcome rows**. The pack additionally publishes `evidence_shape`: rows, distinct
+occurrences, distinct episodes and rows-per-occurrence over its whole
+trade-family base.
+
+**Why.** The ERD cardinality table is explicit that `setup_occurrence` →
+`outcome_path` is 1:N and that "alternative recipes/horizons are correlated
+diagnostics of ONE episode; they are never summed as independent samples". The
+pack reported `n` as if rows were samples.
+
+**What the measurement changed.** The first assumption was that a per-cell
+episode count would be smaller than `n` and that the floor should simply move
+onto it. Measured on the live lake 2026-09-01: 9,372 outcome rows rest on 599
+occurrences and 287 clusters — but **inside a single (family, side, recipe)
+cell, `n` and `n_episodes` were EQUAL in all 756 cells**. One row per occurrence
+per recipe, so the per-cell count is not where the double-counting lives; 1,804
+of 3,436 clusters carry more than one family, and there are 15.6 recipe rows per
+occurrence.
+
+The correlation is therefore **across cells**, not within one: nine ATR variants
+of one family are nine readings of the same 33 moves. `evidence_shape` exists
+because that is the denominator a reader comparing cells actually needs.
+
+**Reopen trigger / follow-up.** Moving the floor changes which cells the model
+may narrate, so it is its own packet. When it happens it must be a **cross-cell**
+rule — an episode budget over the family, or a correlated-cell cap — and not the
+per-cell swap first assumed, which on today's data would change nothing at all.
+Publishing both counts now is what makes that packet decidable.
+
+**Where.** `ai_jobs/setup_research.py::_summarize` (`n_episodes`,
+`eligibility_rule`), `build_fact_pack` (`evidence_shape`);
+`tests/test_setup_research_fact_pack_truth.py`.
+
+## BD-81 — The fact pack leads with what cleared the floor, in two blocks
+
+**Date:** 2026-09-01 (packet P3, item 2).
+
+**Decision.** `policies` is built as two blocks: the **eligible** cells, whole
+and sorted by trimmed mean as before, then a **bounded ineligible** block
+(`MAX_INELIGIBLE_POLICY_ROWS = 40`) sorted by `n` DESC then trimmed mean. Drops
+are counted per block (`eligible_policy_cells_dropped`,
+`ineligible_policy_cells_dropped`); `policy_cells_dropped_from_pack` keeps its
+meaning. The Markdown opens with the eligible block under its own heading.
+
+**Why.** The 2026-08-31 pack sorted everything by trimmed mean into one list.
+Its nine eligible cells were all `AVWAPE_TO_FIRST_DEV`/LONG against ATR stop
+controls and all NEGATIVE; rows 10 onward were n=1 cells reading +2.9R, and the
+80-row cap then dropped 508 more without saying which kind. A reader skimming
+the top of that file learned the opposite of what the evidence said.
+
+Ordering the ineligible block by `n` first — the shape the context-cell path
+already used — means what rides along is the thickest evidence that has not
+cleared the floor, never the luckiest single trade.
+
+**Where.** `ai_jobs/setup_research.py::build_fact_pack`, `render_markdown`. A
+pack published before the split still renders as its author published it: a pack
+is never edited, and a new reading is a superseding sibling.
+
+## BD-82 — Non-trade families are excluded by an explicit role map, and reported
+
+**Date:** 2026-09-01 (packet P3, item 3).
+
+**Decision.** `NON_TRADE_FAMILY_ROLES` names `GENERAL` = FALLBACK and
+`FAVORITE_ZONE_WATCH` = WATCH_STATE. Those families are excluded from every
+policy and context cell and published in a `non_trade_families` block with their
+outcome-row, episode and occurrence counts. Everything not named is a TRADE
+setup.
+
+**Why.** Appendix C is already normative: General/Untagged is a "Diagnostic
+fallback" that "must not become a pooled 'setup' edge", and Favorite Zone Watch
+is a "Watch state" that is "never counted as a triggered trade setup". Nothing
+in the nightly job knew the roles, so it pooled both — on the 2026-08-31 pack
+that was 735 and 486 occurrences, and on today's lake 1,182 and 804 outcome
+rows.
+
+Counts still travel because **absence is a first-class fact**: a family that
+simply is not in the table reads as one with nothing to say.
+
+**Default TRADE, deliberately.** A family added tomorrow is measured rather than
+silently excluded, and excluding a real setup takes someone typing its name.
+
+**Reopen trigger.** Packet P7's setup registry owns `role` as a column
+(`TRADE_SETUP`, `CONTEXT`, `WATCH_STATE`, `CONTROL`, `FALLBACK`). When it lands,
+this constant goes and the role is read from the registry row.
+
+**Where.** `ai_jobs/setup_research.py` (`NON_TRADE_FAMILY_ROLES`, `family_role`,
+`build_fact_pack`, `render_markdown`).
+
+## BD-83 — Outcome bucket coverage is recorded per firing, under the store root
+
+**Date:** 2026-09-01 (packet P3, item 4).
+
+**Decision.** New `research_warehouse/outcome_coverage.py`: an append-only JSONL
+under `<store root>/_diagnostics/`, one line per outcome firing naming the
+symbol bucket it covered. `run_build` appends after the outcomes step;
+`ai_jobs/setup_research` reads the last 32 firings into the pack's `coverage`
+alongside families with zero outcome rows and the first M5 session in the lake.
+
+**Why.** `cli._run_outcomes` simulates ONE of 32 symbol buckets per firing, so a
+family can be missing from a pack for two opposite reasons: it was measured and
+produced nothing, or its symbols have not come up yet. The pack could not tell
+them apart. "Not measured yet" must read differently from "measured and flat".
+
+**No history reads UNKNOWN, never "0 of 32"** — a zero there is a measured claim
+nobody measured. A step that never reached a bucket (`NO_OCCURRENCES`, a refused
+lock) is not recorded rather than logged as covering bucket 0. A failed append
+returns False and logs at debug: the outcome rows are the product, and this is
+evidence about them.
+
+**Location, and a deviation from the packet as written.** The packet asked for
+the sidecar "beside the packs", i.e. in the AI store. That would make
+`research_warehouse.cli` — the data layer — import `ai_jobs.store`, inverting the
+one-way dependency the tree keeps (`ai_jobs` reads `research_warehouse`, never
+the reverse). It lives under the store root instead, beside the lake it
+describes. The reader already imports this package, so the pack still gets the
+number.
+
+**`first_m5_session` reads partition NAMES from the manifest**, never bar rows:
+materialising a month of M5 bars to learn its own name is precisely the mistake
+the month-keyed read rules exist to prevent (BD-66/BD-69).
+
+**Where.** `research_warehouse/outcome_coverage.py`; `cli.py::run_build`;
+`ai_jobs/setup_research.py::_coverage_state`, `_first_m5_session`,
+`_coverage_lines`.
+
+## BD-84 — `slice_readout` can read every family; `SLICE_SETUPS` is not widened
+
+**Date:** 2026-09-01 (packet P3, item 5).
+
+**Decision.** `slice_readout` gains `setups`. Omitted (a sentinel, not `None`)
+means `SLICE_SETUPS`, so every existing caller is byte-identical; `None` means
+every family present in the lake; a collection means exactly those. The Research
+readout panel gains a family combo defaulting to the pinned slice, plus the four
+columns the query always computed and the panel dropped — `n_symbols`,
+`n_sessions`, `n_truncated`, `as_observed_only`.
+
+**Why `SLICE_SETUPS` stays two.** It is the pinned Phase-6 vertical slice AND
+`cli._run_outcomes` uses it to choose which occurrences get the legacy slice
+recipe. Widening it would change what the warehouse **simulates**, not just what
+a reader is shown. The argument changes only the reading.
+
+**Why the panel needed it.** The occurrence table holds far more than the slice,
+and a panel that can only ever show two families cannot answer "is anything else
+being measured?" — the question the coverage work above exists to make askable.
+
+**Selecting a family reads nothing.** Refresh remains the only thing that
+touches the share (plan sec 20), still off-thread, and the EXPLORATORY caveat
+now explains what the new columns mean.
+
+**Where.** `research_warehouse/queries.py::slice_readout`;
+`ui/panels/warehouse_readout_panel.py`.
+
+> Numbering note: BD-78 and BD-79 are taken by the Phase 0.12 higher-timeframe
+> LRSI work on `claude/focus-declutter-lrsi-htf`, which is unmerged. P3 branched
+> off `main` and continues from BD-80 so the two lines cannot collide.
