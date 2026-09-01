@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - both 2026-08-31 evening lines were merged into it by trader instruction: the snappiness line (packets 1-3, stacked, fast-forward from `claude/desk-snappiness-3`) and then Phase 0.11 theta premium (`claude/theta-premium`, a real merge). Only the two shared ledgers conflicted - this file - and both sides' dated entries were kept. `main` already carried today's swing picks (both passes), the day-trade pass, the Strength Board move and the desk-lockup fix |
+| Working branch | **`claude/p2-show-me`**, off `main` at `66a0c31` - Phase 0.13 packet P2 (show me): six display changes over evidence the desk already had. Authorized by the trader pasting the packet. Also open and unmerged, all three off `main` at the same commit: `claude/p1-grade-what-you-said` (P1, gate #30), `claude/p0-apply-decisions` (P0, gate #29) and `claude/focus-declutter-lrsi-htf` (Phase 0.12 A+B, gates #27 and #28). P2 reads `r_gaps` DEFENSIVELY, so it renders whether or not P1 has landed |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
-| Active roadmap items | **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Phase 0.13 packet P2 (2026-09-01 - BUILT on `claude/p2-show-me`; live gate #31 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5775 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p2-show-me`, MEASURED with pytest's own exit code captured, not a piped tail's - an earlier run of this tree read 5774 with one unhandled-thread warning, which was a real defect and is fixed) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · spec-drift green · frozen exe NOT rebuilt and not required: `ai_jobs` is an existing collected package and there is no new dependency and no new non-`.py` asset. Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **DONE 2026-08-31 21:51, trader-authorized.** The checkout sits on `main` and the desk was stopped (pid 9832, the pid its own `heartbeat.json` named; its launcher parent 3476 had already exited) and relaunched through `trading_desk.cmd` - the production launcher, unchanged. New pids: **23588** (the desk) under trampoline **23796**. Verified UP three ways rather than assumed: the process outlived 60 s, a second launch printed "another TradingBotV3 desk is already running" and exited 0, and `heartbeat.json` re-stamped at 21:52:40 naming pid 23588 (it had read 21:50:40 / pid 9832 before the kill). Everything merged tonight is what is now running, and the stall watchdog is ON - this session's `ui_stalls.jsonl` is the AFTER side of gates 24-26 |
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 31 | **P2 surfaces (Phase 0.13 P2)** — one DESK session where the trader opens all six: the two Weekend Prep judgement tables (robust columns, horizon selector, greyed sub-floor rows), the week page's named callouts, the Daytrade Tracker's **My Decisions** tabs, the A.I. Summary **gate strip**, and the M5 alert bar showing both a **take %** suffix and a **×N** fold — and `ui_stalls.jsonl` charges no seconds to any of them | 2026-09-01 Phase 0.13 P2 entry |
 | ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-08-31** at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
@@ -58,6 +59,90 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+
+### 2026-09-01 - Phase 0.13 packet P2: show me
+
+**Branch `claude/p2-show-me`, off `main` at `66a0c31`.** Six display changes, each
+read-only over a file something else already writes. Nothing reaches a detector, score,
+alert, Focus list, review queue or `review_policy.json`. Live gate 31 owed. No frozen
+rebuild: no packaging trigger was hit.
+
+**1. The two judgement tables show the robust half.** They projected six columns and
+dropped `median_return`, `trimmed_mean_return`, `ci_low`/`ci_high`, `symbols`,
+`sessions`, `top_symbol_share`, `evidence_label` and `meets_n_floor` - all written since
+R10.C, and most already on screen in the Focus performance table on the SAME page. What
+survived was a bare mean on a ratio: the statistic R10.C published the robust half to
+stop anyone reading alone. One shared `_cohort_robust_fields` feeds both tables so they
+cannot drift.
+
+ONE horizon at a time (default h3) with a selector that re-renders from memory, so a
+view change never touches disk on the Qt thread. **`meets_n_floor` is not a column**: it
+decides the ORDER and the greying. The live `human_focus_veto_compressed` row - n=3,
+PF 165 - now sorts after every cohort that cleared the floor instead of wherever the CSV
+put it, and the note says a row under the floor is not a weak finding but not a finding.
+Rows above it order by the TRIMMED mean. The liked table carries the bounded-picklist
+caveat the AI gets, through the ONE existing `ai_summary._offered_claim_caveat`.
+
+**2. The callouts are named.** "Blind Spots: 3" was two integers over a store that knows
+which segment, how often it was shown, the take rate against the overall one, and what
+each half measured. `callout_lines` builds those rows on the worker and reads the
+classes DEFENSIVELY, so the page renders against a scoreboard written with or without
+P1's `r_gaps`.
+
+**3. "My Decisions" beside the Daytrade Tracker.** 13 tabs over
+`review_preference_state.json`, which had no surface outside a text report. `gap` is the
+one derived number and only when both sides carry a measured average. Off the Qt thread
+both at construction (READ only) and on the button (which also calls
+`refresh_review_learning_if_stale`, exactly as `app.py:250` does). The probation badge is
+`M5_SIGNAL_TYPE_DEFAULTS - BOUNCE_TYPE_DEFAULTS` and nothing else; an unreadable taxonomy
+badges nothing rather than calling a champion "probation".
+
+**4. The AI phase gates get a surface.** New `ai_jobs/gate_counters.py`, pure and
+Qt-free. Live, read not typed: **Digest 6/10 · Enrichment 6/10 · Weekly synthesis 2/10 ·
+Policy draft 5/10 · Evidence window 6/10**. Synthesis is counted through `_read_cohort` +
+`graded_sessions` - the job's own two functions - and the draft and evidence counts are
+parsed from the PUBLISHED files, because a recomputed number could be right while the
+file the model was handed says something else. An unreadable source says "unavailable":
+a blank cell reads as zero, and zero is a claim.
+
+**5. THE CODE DISAGREED WITH THE PACKET, and it is reported rather than forced.** The
+packet's premise was that guidance is computed before `m5AlertPosted.emit`. It is not:
+the emit sits at `alert_center_panel.py:2018` and `_enqueue_review_alert` returns for an
+M5 alert at 2026, **before** `_queue_score` - the only enqueue-path caller of
+`_guidance_for` - is reached. So `_attach_cached_take_prob` reads `_review_guidance.get`
+and NEVER `_guidance_for`, whose `_refresh()` stats two files and can re-read a 34 KB
+JSON, per alert, on the Qt thread - the exact drip the three snappiness packets removed.
+The consequence is stated, not hidden: the suffix appears for a symbol the desk has
+already charted this session and is silent otherwise. Silence is the honest rendering of
+"not measured"; a 0% would be a claim.
+
+**6. The repetition fold.** A repeat of the same symbol+side folds with a ×N badge and
+returns to the top carrying the newest alert, so a tier upgrade rewrites the row with the
+stronger one. Keyed on symbol AND side, because a name that flips direction is a
+different claim. **Presentation only** and the docstring still says so: every event
+reached `_enqueue_review_alert`, the outcome CSV and the review-event store first, a
+folded row's tooltip says it folds rather than drops, Copy-all still lists one symbol per
+row, and clicking charts the newest. One existing test encoded the old rule and was
+rewritten - the authorized behaviour change, not drift - with its invariant now held by
+`test_the_fold_is_presentation_only`.
+
+**Found by the full suite and fixed:** both new workers could emit into a deleted panel
+(`RuntimeError: Signal source has been deleted`, out of a daemon thread). Isolated runs
+never hit it. `shutdown` joins the thread, but deletion can win the race; both guard the
+emit and drop the payload now, proven deterministically with `shiboken6.delete` - which
+reaches the state the race produces where `deleteLater` alone does not.
+
+**Two fixtures were wrong and are corrected.**
+`test_focus_review_keeps_its_rows_when_a_refresh_fails` used `"horizon": "h3"`, which
+nothing writes - `human_focus_tracking` writes plain integers and the live rollups carry
+"1"/"3"/"5". `test_table_width_rule_pages` rendered cohort rows with no horizon at all.
+Both were invisible until the selector started filtering on it.
+
+**Verification.** `pytest tests/ -q` **5775 passed, 72 subtests, process exit 0** ·
+`ruff` **clean** · smoke **7/7** · source `--selftest` **73/73**. Fail-before-fix with
+`scripts/` stashed: 15 tests for items 1-2, 14 for item 3, 15 for item 4 (the whole file
+fails to collect with the untracked module stashed too), 11 for items 5-6, and both
+deleted-panel guards.
 
 ### 2026-08-31 (late evening) - Desk snappiness packet 3: the last of the three
 
