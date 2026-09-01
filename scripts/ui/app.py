@@ -1088,6 +1088,21 @@ def main(argv: list[str] | None = None) -> int:
 
     window = MainWindow(state)
     window.show()
+    # Snappiness packet 2, item 2: sweep the startup garbage once, then take the
+    # survivors out of every future sweep's scan set.
+    #
+    # All cyclic collection runs on this thread by design (install_gui_thread_gc
+    # above, and that design stays), so every sweep's cost is a GUI freeze. On
+    # 2026-08-31 gen-0 sweeps averaged ~300 ms and full sweeps ~770 ms, and 6.5
+    # minutes of that day's 78 minutes of freeze was the collector. Most of what
+    # it walks is the startup graph - the widget tree, the theme, every imported
+    # module - which lives for the whole process and can never be garbage.
+    # `gc.freeze()` moves that graph to a permanent generation the collector does
+    # not scan; the collect first is what makes sure only survivors get frozen.
+    # Nothing about the controller's cadence, deadlines or disable/collect design
+    # changes: the same sweeps happen, over a smaller heap.
+    gc.collect(2)
+    gc.freeze()
     # Off unless this machine asked for it. When on, every GUI-thread block
     # over the threshold is logged with the stack that caused it, which is
     # the only honest way to pick what to optimize next (Part C rule C1).
