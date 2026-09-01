@@ -88,10 +88,24 @@ def test_a_claim_with_no_setup_id_is_its_own_cohort_not_a_dropped_row():
 
 
 def test_the_pick_key_matches_the_focus_tracker_so_the_math_agrees():
+    """The identity the outcome math resolves a row by - date, symbol and the
+    normalized side - has to be the same on both sides of the delegate.
+
+    Since 2026-09-01 the focus key carries a FOURTH element, the category slot,
+    so one name on both the swing and the M5 list gets a row for each. The
+    cohort merges deliberately do NOT: their documented rule is one graded row
+    per name per day (a chart claimed twice is one judgement), and widening
+    their key would quietly repeal it. The head of the key is what must agree,
+    and does.
+    """
     from human_focus_tracking import _pick_key as focus_key
+    from human_focus_tracking import pick_source_family
 
     row = {"trade_date": "2026-08-20", "symbol": "aapl", "side": "short"}
-    assert like_cohort._pick_key(row) == focus_key(row)
+    assert like_cohort._pick_key(row) == focus_key(row)[:3]
+    # And a like source occupies its own slot rather than being read as a
+    # focus category, so the delegate keeps like rows apart from focus rows.
+    assert pick_source_family("like_post_earnings_52w_break") == "like_post_earnings_52w_break"
 
 
 # ==========================================================================

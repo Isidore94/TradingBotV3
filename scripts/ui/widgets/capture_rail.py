@@ -130,6 +130,7 @@ class CaptureRail(QFrame):
         *,
         annotations_path: Any = None,
         veto_cohort_merge: Callable[..., dict] | None = None,
+        like_cohort_merge: Callable[..., dict] | None = None,
         bind_action_shortcuts: bool = True,
         parent: QWidget | None = None,
     ) -> None:
@@ -168,6 +169,19 @@ class CaptureRail(QFrame):
             from ui.annotations.veto_cohort import merge_veto_cohort_picks
 
             self._merge_veto_cohort = merge_veto_cohort_picks
+
+        # The LIKE half of the same decision, merged on the same click for the
+        # same reason (2026-09-01). It was nightly-only: `like_cohort_picks.csv`
+        # was last written 2026-08-27 against likes recorded through 09-01, so
+        # a like was invisible to its own cohort for up to a day - and on any
+        # day the overnight job did not run, indefinitely. The nightly merge
+        # stays; both are idempotent, so running twice adds nothing.
+        if like_cohort_merge is not None:
+            self._merge_like_cohort = like_cohort_merge
+        else:
+            from ui.annotations.like_cohort import merge_like_cohort_picks
+
+            self._merge_like_cohort = merge_like_cohort_picks
 
         try:
             self._vocabulary = load_veto_vocabulary()
@@ -721,11 +735,25 @@ class CaptureRail(QFrame):
 
     def _merge_veto_cohort_safely(self) -> str:
         """Forward tracking is capture-side and must never break a capture."""
+        return self._merge_cohort_safely(self._merge_veto_cohort)
+
+    def _merge_like_cohort_safely(self) -> str:
+        """The like's half, identical in shape to the veto's (2026-09-01)."""
+        return self._merge_cohort_safely(self._merge_like_cohort)
+
+    def _merge_cohort_safely(self, merge) -> str:
+        """Forward tracking is capture-side and must never break a capture.
+
+        An evidence store never costs the event it records: the annotation row
+        is already on disk when this runs, so every failure here degrades to a
+        status suffix and the next merge - nightly or the next click - picks the
+        row up. Both merges are idempotent, which is what makes that true.
+        """
         try:
             kwargs: dict[str, Any] = {}
             if self._annotations_path is not None:
                 kwargs["annotations_path"] = self._annotations_path
-            result = self._merge_veto_cohort(**kwargs)
+            result = merge(**kwargs)
         except Exception:
             return "  (cohort update deferred)"
         if isinstance(result, dict) and not result.get("written", True):
@@ -797,7 +825,8 @@ class CaptureRail(QFrame):
         # alerting, and this rail is analysis-only. Adding a name to a list
         # stays an explicit action on the Focus surfaces that own those files.
         self.like_note_input.clear()
-        self._set_status(f"LIKE {row['symbol']} - {setup_id}")
+        detail = self._merge_like_cohort_safely()
+        self._set_status(f"LIKE {row['symbol']} - {setup_id}{detail}")
         return row
 
 

@@ -43,6 +43,7 @@ from project_paths import (
     MASTER_AVWAP_DAILY_BARS_DIR,
     TRADER_ANNOTATIONS_FILE,
 )
+from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
 from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
 
 #: The mirror trio, re-exported from `project_paths` where the veto trio also
@@ -176,6 +177,12 @@ def merge_like_cohort_picks(
 
     Idempotent: it never rewrites or removes an existing row, so a merge lost
     to a concurrent writer is recovered by the next call rather than gone.
+
+    Called from TWO places since 2026-09-01 - the capture rail at click time
+    and the nightly job - so it takes the writer lock the veto merge has always
+    taken. Losing the lock returns ``written: False`` and the next call
+    recovers, which is the same contract as before and the reason it is safe to
+    run at capture time at all.
     """
     annotations = load_annotations(annotations_path, event_types=(EVENT_LIKE_CLAIM,))
     candidates, skipped_no_side = like_pick_rows(annotations, now=now)
@@ -199,7 +206,11 @@ def merge_like_cohort_picks(
     merged = sorted(
         by_key.values(), key=lambda row: (_pick_key(row)[0], _pick_key(row)[2], _pick_key(row)[1])
     )
-    result["written"] = _write_rows(Path(picks_path), merged)
+    try:
+        with local_writer_lock(lock_key_for_path(Path(picks_path)), timeout_seconds=1.0):
+            result["written"] = _write_rows(Path(picks_path), merged)
+    except LocalLockUnavailable:
+        result["written"] = False
     return result
 
 

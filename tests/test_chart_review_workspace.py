@@ -595,6 +595,63 @@ class CaptureRailTests(unittest.TestCase):
         )
 
 
+    def test_a_like_creates_its_forward_tracking_cohort_row_on_the_click(self) -> None:
+        """The LIKE half of the same decision, merged on the same click.
+
+        It used to be nightly-only: `like_cohort_picks.csv` was last written
+        2026-08-27 against likes recorded through 2026-09-01, so a like was
+        invisible to its own cohort for up to a day - and on any day the
+        overnight job did not run, indefinitely. The veto has merged at click
+        time since it shipped; these are read side by side, so a difference
+        between them has to come from the data.
+
+        Fail-before-fix: on the un-fixed rail the merge is never called and the
+        picks file is never created.
+        """
+        picks = self.tmp / "like_cohort_picks.csv"
+        calls: list[dict] = []
+
+        def _merge(**kwargs):
+            calls.append(kwargs)
+            from ui.annotations.like_cohort import merge_like_cohort_picks
+
+            return merge_like_cohort_picks(picks_path=picks, **kwargs)
+
+        self.rail._merge_like_cohort = _merge
+        self.rail.setup_list.setCurrentRow(0)
+        claimed = self.rail.selected_setup_id()
+        self.rail.like_note_input.setText("level held")
+        self.assertIsNotNone(self.rail.commit_like())
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(picks.exists())
+        self.assertIn(f"like_{claimed}", picks.read_text(encoding="utf-8"))
+
+    def test_a_failed_like_cohort_merge_never_costs_the_like(self) -> None:
+        """An evidence store never costs the event it records. The annotation
+        row is already on disk when the merge runs, so a merge that raises
+        degrades to a status suffix and the next call picks the row up."""
+
+        def _explode(**kwargs):
+            raise RuntimeError("disk gone")
+
+        self.rail._merge_like_cohort = _explode
+        self.rail.setup_list.setCurrentRow(0)
+        self.rail.like_note_input.setText("level held")
+        row = self.rail.commit_like()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(len(self._rows()), 1)
+        self.assertIn("deferred", self.rail.status_text())
+
+    def test_a_like_merge_that_cannot_write_says_so_exactly_as_a_veto_does(self) -> None:
+        self.rail._merge_like_cohort = lambda **kwargs: {"written": False}
+        self.rail.setup_list.setCurrentRow(0)
+        self.rail.like_note_input.setText("level held")
+        self.assertIsNotNone(self.rail.commit_like())
+        self.assertIn("deferred", self.rail.status_text())
+
+
 class NavigationRegistrationTests(unittest.TestCase):
     """Adding a page shifts every later index; these must stay aligned.
 
