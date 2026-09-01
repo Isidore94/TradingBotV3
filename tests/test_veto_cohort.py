@@ -535,6 +535,68 @@ class CanonicalCohortTests(unittest.TestCase):
             canonical_veto_cohort("veto_v3_sma_incoming"), "veto_v3_sma_incoming"
         )
 
+    def test_a_pre_versioning_row_pools_with_the_version_that_INTRODUCED_its_code(
+        self,
+    ) -> None:
+        """Unversioned rows were mapped only while walking the LOWEST version,
+        so a code introduced later never got an unversioned mapping at all and
+        its pre-versioning picks graded as a cohort of their own forever.
+
+        Live proof: `veto_cohort_performance.csv` carried
+        `human_focus_veto_compressed` (n=3, PF 165) beside
+        `human_focus_veto_v2_compressed` (n=18, PF 0.39) - one judgement read
+        as two opposite ones, with the three-sample half looking spectacular.
+
+        Version-literal-free by house rule: the vocabulary is LOADED and the
+        late-introduced code is DISCOVERED, so a future bump cannot make this
+        test wrong without making the behaviour wrong too.
+        """
+        from ui.annotations.veto_cohort import canonical_veto_cohort, veto_cohort_source
+        from ui.annotations.vocabulary import available_veto_versions, load_veto_vocabulary
+
+        versions = sorted(available_veto_versions())
+        self.assertGreater(len(versions), 1, "needs at least two vocabularies")
+
+        earliest_version_of: dict[str, int] = {}
+        for version in versions:
+            for reason in load_veto_vocabulary(version=version).reasons:
+                earliest_version_of.setdefault(reason.code, version)
+
+        late = {
+            code: version
+            for code, version in earliest_version_of.items()
+            if version != versions[0]
+        }
+        self.assertTrue(late, "no reason is introduced after the first vocabulary")
+
+        for code, introduced_in in late.items():
+            unversioned = canonical_veto_cohort(veto_cohort_source(code))
+            versioned = canonical_veto_cohort(veto_cohort_source(code, introduced_in))
+            self.assertEqual(
+                unversioned,
+                versioned,
+                f"pre-versioning {code!r} must grade with the version that introduced it",
+            )
+            # And it must not have been dumped on the first vocabulary, which
+            # never defined the code at all.
+            self.assertNotEqual(unversioned, veto_cohort_source(code, versions[0]))
+
+    def test_every_known_code_has_an_unversioned_mapping(self) -> None:
+        """No code may be left without one: a row written before the key
+        carried a version is exactly the row that cannot say which vocabulary
+        it meant, so leaving it unmapped is what stranded it."""
+        from ui.annotations.veto_cohort import canonical_veto_cohort, veto_cohort_source
+        from ui.annotations.vocabulary import available_veto_versions, load_veto_vocabulary
+
+        for version in sorted(available_veto_versions()):
+            for reason in load_veto_vocabulary(version=version).reasons:
+                bare = veto_cohort_source(reason.code)
+                self.assertNotEqual(
+                    canonical_veto_cohort(bare),
+                    bare,
+                    f"{reason.code!r} has no pooled home for its pre-versioning rows",
+                )
+
     def test_a_retired_reason_is_never_pooled_into_a_survivor(self) -> None:
         """v1's 'support_resistance_cluttered' was replaced, not renamed."""
         from ui.annotations.veto_cohort import canonical_veto_cohort
