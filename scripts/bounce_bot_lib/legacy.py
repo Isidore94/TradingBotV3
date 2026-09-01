@@ -574,6 +574,10 @@ ORB_EVENT_TYPES = {
 }
 
 M5_SIGNAL_TYPE_DEFAULTS = {
+    # DELIBERATELY still True - see LRSI_M5_ALERTS_RETIRED below. This toggle
+    # gates DETECTION (`check_lrsi_cross_setups` drops the event before it is
+    # ever emitted), so flipping it False would stop the outcome rows the
+    # trader asked to keep. The retirement is applied at the emit seam instead.
     LRSI_CROSS_20_TYPE: True,
     LRSI_CROSS_50_TYPE: True,
     # OFF until a desk session says otherwise. R5 section 8.2 wanted the
@@ -608,6 +612,20 @@ H1_GREEN_TO_YELLOW_TYPE = "h1_green_to_yellow"
 # accruing and a signal can earn its way back; H1's live job is now to
 # CONFIRM D1 setup-tracker picks (see assess_h1_riding_ema15).
 H1_ALERTS_RETIRED = True
+# LRSI M5 alerts retired 2026-09-01 (trader: "LRSI alerts seem to be mostly
+# spam. however I enjoy them as something that can boost the potential of an
+# alert. for now let's put them on the back burner. let's measure how they
+# perform on different timeframes but no need for their M5 alerts").
+# Measured basis: on 2026-09-01 the two LRSI levels were 84 of 128 new M5
+# episodes by 11:14 - 66% of the morning's alert volume from one engine.
+# Same shape as the H1 retirement above and for the same reason: the detector
+# keeps sweeping, the candidate row is still logged, `_register_bounce_outcome`
+# still writes `intraday_bounce_outcomes.csv`, the learning tier is still
+# recorded and PROVEN stamping still runs - only `gui_callback` is skipped, so
+# the alert never reaches the trader's ears. The "different timeframes"
+# measurement the trader asked for is the shadow warehouse study
+# (`outcomes.HTF_LRSI_RECIPES`, M30/H1/H2/H4), which this flag does not touch.
+LRSI_M5_ALERTS_RETIRED = True
 # "A strong trend riding the H1 15EMA is a good sign for a long" (trader,
 # 2026-07-17): over the last window of closed H1 candles the 15EMA must slope
 # with the side and nearly every close must hold beyond it, including the
@@ -8503,16 +8521,27 @@ class BounceBot(EWrapper, EClient):
             f"({side}): efficiency {event.previous:.1f} -> {event.value:.1f} on the "
             f"completed 5m bar at {event.close:.2f}."
         )
-        exit_note = self._measured_exit_suffix(side, levels)
-        if exit_note:
-            message += f" | {exit_note}"
-        payload = self._build_bounce_feedback_alert_payload(message, event_row)
-        if self.gui_callback:
-            # R5 section 8.1: its own tag family, never d1_flag. Per-engine
-            # identity rides bounce_type, so the feed can count each engine
-            # separately; the tag only says "M5 signal engine, on probation".
-            self.gui_callback(payload, M5_SIGNAL_TAG)
-        self.log_symbol(symbol, f"ALERT: {message}")
+        if LRSI_M5_ALERTS_RETIRED:
+            # Retired 2026-09-01: everything above this line still runs - the
+            # candidate row, the outcome registration, the tier and the PROVEN
+            # stamp - so the evidence keeps accruing on exactly the rows
+            # review_learning and the Daytrade Tracker already read. Nothing
+            # below reaches the trader. `log_bounce_to_file` still runs (unlike
+            # the H1 retirement) because `journal_analytics.AutoTagger` reads
+            # INTRADAY_BOUNCES_CSV to answer "which of my setups was this?",
+            # and losing that would blank the tag on a real LRSI trade.
+            self.log_symbol(symbol, f"LEARNING_ONLY [LRSI M5 retired]: {message}")
+        else:
+            exit_note = self._measured_exit_suffix(side, levels)
+            if exit_note:
+                message += f" | {exit_note}"
+            payload = self._build_bounce_feedback_alert_payload(message, event_row)
+            if self.gui_callback:
+                # R5 section 8.1: its own tag family, never d1_flag. Per-engine
+                # identity rides bounce_type, so the feed can count each engine
+                # separately; the tag only says "M5 signal engine, on probation".
+                self.gui_callback(payload, M5_SIGNAL_TAG)
+            self.log_symbol(symbol, f"ALERT: {message}")
         self.log_bounce_to_file(
             symbol=symbol,
             direction=side,

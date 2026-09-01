@@ -13,6 +13,13 @@ fail if anyone ever "tidies" the two together.
 with no tier bypass and no champion privilege. That is enforced by what the
 detector passes to ``gui_callback`` and by the UI's own tag predicates, so it
 is checked on both sides of the seam.
+
+**The retirement (2026-09-01).** ``LRSI_M5_ALERTS_RETIRED`` silences the GUI
+leg only. Every assertion about detection, the candidate row, the outcome
+registration and the tier is unchanged; the message these tests used to read
+off ``gui_callback`` is now read off the ``LEARNING_ONLY`` line, which carries
+the same text. The lane tests build the payload themselves for the same
+reason - the tag family still has to be right the day the trader un-retires it.
 """
 
 from __future__ import annotations
@@ -85,6 +92,16 @@ def stub_bot(symbol_bars, *, longs=(), shorts=()):
     return bot
 
 
+def learning_only_messages(bot):
+    """The alert text the trader no longer hears, off the LEARNING_ONLY line.
+
+    Retired 2026-09-01, so ``bot.emitted`` is empty by design; the message
+    itself is unchanged and is what these tests are actually about.
+    """
+    marker = "LEARNING_ONLY [LRSI M5 retired]: "
+    return [text[len(marker):] for _symbol, text in bot.logged if text.startswith(marker)]
+
+
 @pytest.fixture
 def at_the_crossing(monkeypatch):
     """Freeze the detector clock where bar 9 is the last completed bar."""
@@ -118,28 +135,31 @@ class TestTheTaxonomyPin:
 
 
 class TestTheSweep:
-    def test_a_crossing_on_the_last_completed_bar_alerts_once(self, at_the_crossing):
+    def test_a_crossing_on_the_last_completed_bar_fires_once(self, at_the_crossing):
         bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
 
         assert len(bot.check_lrsi_cross_setups()) == 1
-        assert len(bot.emitted) == 1
+        assert len(learning_only_messages(bot)) == 1
 
         # Same bar, next scan cycle: the ledger already holds it.
         assert bot.check_lrsi_cross_setups() == []
-        assert len(bot.emitted) == 1
+        assert len(learning_only_messages(bot)) == 1
 
     def test_the_stronger_level_is_the_one_reported(self, at_the_crossing):
         bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
         bot.check_lrsi_cross_setups()
-        payload, _tag = bot.emitted[0]
-        assert "LRSI CROSS 20" in payload["text"]
+        assert "LRSI CROSS 20" in learning_only_messages(bot)[0]
 
-    def test_a_disabled_engine_emits_nothing(self, at_the_crossing):
+    def test_a_disabled_engine_detects_nothing_at_all(self, at_the_crossing):
+        """The toggle gates DETECTION, which is why the retirement is not
+        applied here: a False toggle drops the event before the candidate row
+        and the outcome registration, and the trader asked to keep those."""
         bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
         bot.set_m5_signal_enabled(legacy.LRSI_CROSS_20_TYPE, False)
 
         assert bot.check_lrsi_cross_setups() == []
         assert bot.emitted == []
+        assert learning_only_messages(bot) == []
 
     def test_a_forming_crossing_bar_is_not_an_alert(self, monkeypatch):
         forming = OPEN + timedelta(minutes=5 * 9 + 4)
@@ -153,8 +173,7 @@ class TestTheSweep:
         bot = stub_bot({"ZZZ": bars_from(mirrored)}, shorts=["ZZZ"])
 
         assert len(bot.check_lrsi_cross_setups()) == 1
-        payload, _tag = bot.emitted[0]
-        assert "(short)" in payload["text"]
+        assert "(short)" in learning_only_messages(bot)[0]
 
     def test_a_symbol_with_no_cached_bars_is_silence(self, at_the_crossing):
         bot = stub_bot({}, longs=["AAA"])
@@ -168,21 +187,21 @@ class TestTheSweep:
     def test_the_state_resets_on_a_new_session(self, at_the_crossing):
         bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
         bot.check_lrsi_cross_setups()
-        assert len(bot.emitted) == 1
+        assert len(learning_only_messages(bot)) == 1
 
         bot._lrsi_cross_state["date"] = OPEN.date() - timedelta(days=1)
         bot.check_lrsi_cross_setups()
-        assert len(bot.emitted) == 2
+        assert len(learning_only_messages(bot)) == 2
 
 
 class TestTheLane:
-    def test_the_alert_rides_the_new_tag_family(self, at_the_crossing):
-        bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
-        bot.check_lrsi_cross_setups()
-        _payload, tag = bot.emitted[0]
+    """The lane the engine would ride if it were un-retired. The tag family
+    still has to be right, so these build the payload the emit path builds
+    rather than reading a callback that no longer fires."""
 
-        assert tag == M5_SIGNAL_TAG == "m5_signal"
-        assert not tag.startswith("d1_flag")
+    def test_the_alert_would_ride_the_new_tag_family(self, at_the_crossing):
+        assert M5_SIGNAL_TAG == "m5_signal"
+        assert not M5_SIGNAL_TAG.startswith("d1_flag")
 
     def test_the_ui_reads_it_as_an_ordinary_m5_alert(self, at_the_crossing):
         """No D1 routing, no chart-watch privilege, no entry-assist bypass."""
@@ -194,12 +213,70 @@ class TestTheLane:
 
         bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
         bot.check_lrsi_cross_setups()
-        payload, tag = bot.emitted[0]
+        message = learning_only_messages(bot)[0]
 
-        alert = BounceAlert.from_callback(payload, tag)
+        alert = BounceAlert.from_callback({"text": message}, M5_SIGNAL_TAG)
         assert alert.is_d1 is False
         assert is_chart_watch_alert(alert) is False
         assert is_entry_assist_text(alert.raw_text) is False
+
+
+# ==========================================================================
+# Retired 2026-09-01 - trader: "LRSI alerts seem to be mostly spam. however I
+# enjoy them as something that can boost the potential of an alert. for now
+# let's put them on the back burner. let's measure how they perform on
+# different timeframes but no need for their M5 alerts."
+#
+# The whole point is that ONLY the GUI leg goes. Detection, the candidate row,
+# `intraday_bounce_outcomes.csv`, the learning tier and the PROVEN stamp all
+# keep running, because the 'different timeframes' measurement the trader
+# asked for is built on exactly those rows.
+# ==========================================================================
+class TestTheM5AlertRetirement:
+    def test_the_flag_is_on(self):
+        assert legacy.LRSI_M5_ALERTS_RETIRED is True
+
+    def test_a_crossing_logs_an_outcome_row_and_produces_no_gui_callback(
+        self, at_the_crossing
+    ):
+        """Fail-before-fix: on the un-fixed code `bot.emitted` has one entry."""
+        bot = stub_bot({"AAA": _ranged_bars(CHURN_THEN_RUN)}, longs=["AAA"])
+        registered = []
+        rows = []
+        tiers = []
+        bot._register_bounce_outcome = lambda *a, **k: registered.append(a)
+        bot._log_bounce_candidate_event = lambda *a, **k: (
+            rows.append(a) or {"event_id": "evt-1", "symbol": a[1], "direction": a[2]}
+        )
+        bot.record_alert_tier = lambda event_id, quality: tiers.append((event_id, quality))
+
+        assert len(bot.check_lrsi_cross_setups()) == 1
+
+        assert bot.emitted == [], "the retired engine must never reach the GUI"
+        assert len(registered) == 1, "the outcome row is the evidence being kept"
+        assert len(rows) == 1, "the candidate row is still logged"
+        assert len(tiers) == 1, "the learning tier is still recorded"
+        assert len(learning_only_messages(bot)) == 1
+
+    def test_the_simplified_bounce_log_still_gets_the_row(self, at_the_crossing):
+        """`journal_analytics.AutoTagger` reads INTRADAY_BOUNCES_CSV to answer
+        which of my setups a trade was; losing it would blank the tag on a real
+        LRSI trade. This is where the retirement differs from H1's."""
+        bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
+        filed = []
+        bot.log_bounce_to_file = lambda **k: filed.append(k)
+
+        bot.check_lrsi_cross_setups()
+
+        assert len(filed) == 1
+        assert set(filed[0]["levels"]) == {legacy.LRSI_CROSS_20_TYPE}
+
+    def test_the_detection_toggles_stay_on(self):
+        """Flipping these False would stop DETECTION and therefore the evidence
+        (`check_lrsi_cross_setups` drops the event before the candidate row),
+        which is the opposite of what the trader asked for."""
+        assert legacy.M5_SIGNAL_TYPE_DEFAULTS[legacy.LRSI_CROSS_20_TYPE] is True
+        assert legacy.M5_SIGNAL_TYPE_DEFAULTS[legacy.LRSI_CROSS_50_TYPE] is True
 
 
 # ==========================================================================
