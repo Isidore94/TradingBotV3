@@ -93,6 +93,11 @@ def dataset_inventory(store: ResearchStore | None) -> list[dict]:
     return sorted(inventory.values(), key=lambda row: row["dataset"])
 
 
+#: Sentinel for `slice_readout(setups=...)`. A caller that omits the argument
+#: gets the pinned slice; one that passes None asks for every family.
+_UNSET = object()
+
+
 def _mean(values):
     numbers = [float(value) for value in values if value is not None]
     return sum(numbers) / len(numbers) if numbers else None
@@ -104,18 +109,36 @@ def slice_readout(
     year: int | None = None,
     as_of: datetime | None = None,
     outcome_definition_id: str = OUTCOME_DEFINITION_ID,
+    setups=_UNSET,
 ) -> QuerySnapshot:
-    """The Phase-7 Research-tab table: raw results for the two slice setups.
+    """The Phase-7 Research-tab table: raw results, by family.
 
     One row per (canonical_setup_id, side, recipe_id). Counts are reported
     three ways on purpose - rows, occurrences, and **episodes** - because only
     the last is a sample size, and matured outcomes are counted separately from
     open ones so an unresolved trade never flatters a mean.
+
+    ``setups`` selects which families are read:
+
+    * omitted (the default) - ``SLICE_SETUPS``, so every existing caller gets
+      byte-identical rows to before this argument existed;
+    * ``None`` - **every family present in the lake**. The occurrences table
+      holds far more than the slice, and a panel that can only ever show two
+      families cannot answer "is anything else being measured?";
+    * any collection of canonical ids - exactly those.
+
+    ``SLICE_SETUPS`` itself is NOT widened. It is the pinned Phase-6 vertical
+    slice and other code depends on that meaning - `cli._run_outcomes` uses it
+    to choose which occurrences get the legacy slice recipe. Widening it there
+    would change what the warehouse SIMULATES; this argument only changes what
+    a reader is shown.
     """
     snapshot = QuerySnapshot(as_of=as_of or utc_now())
     if store is None:
         return snapshot
     target_year = year or snapshot.as_of.year
+    # `_UNSET` distinguishes "caller said nothing" from "caller said all".
+    wanted = set(SLICE_SETUPS) if setups is _UNSET else (set(setups) if setups is not None else None)
 
     occurrences_by_id = latest_occurrences(store, target_year)
     # Every partition, then the latest computed_at per (occurrence, recipe,
@@ -134,7 +157,7 @@ def slice_readout(
         if occurrence is None:
             continue
         setup = str(occurrence.get("canonical_setup_id") or "")
-        if setup not in SLICE_SETUPS:
+        if wanted is not None and setup not in wanted:
             continue
         key = (setup, str(occurrence.get("side") or ""), str(outcome.get("recipe_id") or ""))
         bucket = grouped.setdefault(
