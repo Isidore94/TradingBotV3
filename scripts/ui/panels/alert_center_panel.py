@@ -2137,6 +2137,11 @@ class AlertCenterPanel(QFrame):
             if self._current_review_holds_place:
                 self._review_queue.insert(0, current)
             else:
+                # A click away IS a pass, and that is the intended meaning -
+                # trader decision 2026-09-01: "clicking away = a pass". See
+                # docs/DESK_INTERNALS.md, the M5 alert bar entry. Do not
+                # "fix" this into a take or into silence, and do not rename
+                # the reason string: review_learning keys on it.
                 self._record_review_event(
                     "skip",
                     alert=current,
