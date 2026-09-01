@@ -153,6 +153,16 @@ class AutoWatchlistViewerArea(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
+        # Hidden pages pay nothing: this is a read-only mirror of two files and
+        # nothing downstream depends on it having been refreshed. The timer
+        # keeps running; `showEvent` catches the page up when it comes back.
+        if not self.isVisible():
+            return
+        self.long_viewer.refresh_from_disk()
+        self.short_viewer.refresh_from_disk()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
         self.long_viewer.refresh_from_disk()
         self.short_viewer.refresh_from_disk()
 
@@ -199,11 +209,31 @@ class AutoWatchlistViewerPanel(QFrame):
     def current_symbols(self) -> list[str]:
         return extract_watchlist_symbols(self.text.toPlainText())
 
-    def refresh_from_disk(self) -> None:
+    @staticmethod
+    def _path_signature(path: Path) -> tuple[int, int] | None:
+        try:
+            stat = Path(path).stat()
+        except OSError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
+
+    def refresh_from_disk(self, *, force: bool = False) -> None:
+        """Re-read the file, but only rewrite the box when the file MOVED.
+
+        `setPlainText` resets the scroll position and the caret, so a 30-second
+        timer that called it unconditionally yanked the view out from under
+        anyone reading the list - every thirty seconds, whether or not Auto
+        Pilot had written anything. The signature is (mtime_ns, size), the same
+        template `master_avwap_panel` already uses for its report polls.
+        """
+        signature = self._path_signature(self.path)
+        if not force and signature == getattr(self, "_disk_signature", object()):
+            return
         try:
             raw = self.path.read_text(encoding="utf-8") if self.path.exists() else ""
         except OSError:
             raw = ""
+        self._disk_signature = signature
         symbols = extract_watchlist_symbols(raw)
         self.text.setPlainText("\n".join(symbols))
         written_at = ""

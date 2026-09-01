@@ -331,6 +331,12 @@ class MasterAvwapPanel(QWidget):
         self.scheduler_timer.start()
         self._refresh_scheduler_status()
 
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        # Caught up once on the way back in, so a page that was hidden across a
+        # scheduler slot shows the right status immediately.
+        self._scheduler_tick()
+
     def _build_layout(self) -> None:
         """One control strip over the table.
 
@@ -712,6 +718,13 @@ class MasterAvwapPanel(QWidget):
         self.overflow_button.setToolTip(self.scheduler_status_label.text())
 
     def _scheduler_tick(self) -> None:
+        # Nothing this tick can do matters while the page is hidden: its only
+        # outputs are the scheduler status label and the overflow tooltip, and
+        # it cannot start a scan the trader is not looking at without saying so.
+        # It is also inert when another process owns scheduled scans. The timer
+        # keeps running; `showEvent` refreshes once when the page returns.
+        if not self.isVisible() or self.external_scheduler_owner:
+            return
         now = datetime.now()
         self._reset_scheduler_state_for_day(now)
         if self.scan_service.running:

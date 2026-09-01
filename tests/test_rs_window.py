@@ -749,6 +749,10 @@ def test_panel_auto_tick_fills_without_clicks():
     )
     try:
         panel = RsWindowPanel(_StubService())
+        # Shown on purpose: a HIDDEN page pays nothing for its auto tick since
+        # snappiness packet 3 - this is a pure chart-and-table refresh, and
+        # nobody is looking at it. The timer keeps running either way.
+        panel.show()
         assert panel._auto_timer.isActive()
         panel._auto_tick()  # what the timer does: refresh + rank, zero clicks
         assert panel.chart.bar_count() == 30

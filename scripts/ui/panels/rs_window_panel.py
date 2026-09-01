@@ -214,6 +214,10 @@ class RsWindowPanel(QFrame):
         self._auto_timer.start()
         QTimer.singleShot(20_000, self._auto_tick)
 
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        self._auto_tick()
+
     def _build_layout(self) -> None:
         header = SectionHeader(
             "RS Window",
@@ -322,6 +326,11 @@ class RsWindowPanel(QFrame):
     def _auto_tick(self) -> None:
         """Hands-off refresh: new bars + re-rank, no clicks. The region keeps
         tracking the trailing hour until the trader customizes it."""
+        # Pure presentation - a chart redraw and a ranking table. Nothing here
+        # feeds an alert, a file write or a push, so a hidden page pays nothing
+        # and `showEvent` catches it up.
+        if not self.isVisible():
+            return
         if self._current_bot() is None:
             return  # quiet: the bot auto-connects; next tick will catch it
         self.refresh_chart()
