@@ -174,6 +174,27 @@ def technical_integrity_events_path() -> Path:
     return get_diagnostics_dir() / "technical_integrity_events.jsonl"
 
 
+#: Schema name for the resolved-events sidecar. By NAME, never by number.
+RESOLVED_SIDECAR_SCHEMA = "technical_integrity_resolved_v1"
+
+
+def technical_integrity_resolved_path(events_path: Path | None = None) -> Path:
+    """The resolved-events sidecar, beside whatever events log it derives from.
+
+    `technical_integrity_events.jsonl` measured **618 MB** on 2026-08-31, and the
+    after-close wrap-up replayed it daily by streaming and `json.loads`-ing every
+    line to keep the `level_resolved` rows - a small subset. That is an
+    hour-class job inside the desk process, and Python's GIL means an hour of hot
+    parsing steals GUI-thread time all evening.
+
+    So the resolved rows are ALSO written here as they happen. The main log is
+    untouched - same rows, same path, nothing removed - and this file is a
+    derived convenience that can be deleted and rebuilt at any time.
+    """
+    source = Path(events_path or technical_integrity_events_path())
+    return source.with_name(source.stem + "_resolved.jsonl")
+
+
 def technical_integrity_state_path() -> Path:
     return get_diagnostics_dir() / "technical_integrity_state.json"
 
@@ -1334,6 +1355,15 @@ class TechnicalIntegrityMonitor:
             handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+            offset = handle.tell()
+        # The resolved rows are mirrored to a sidecar as they happen, so the
+        # daily replay never has to stream 618 MB to find them. The main log
+        # above is the authority and is written FIRST; this is derived, its
+        # failure is swallowed, and a missed line only costs a catch-up scan.
+        if str(payload.get("event_type") or "") == "level_resolved":
+            append_resolved_sidecar_row(
+                technical_integrity_resolved_path(self.events_path), payload, offset
+            )
 
     def _save_state(self) -> None:
         _atomic_write_json(
@@ -2143,7 +2173,188 @@ def compare_scoring_configs(
     }
 
 
-def load_resolved_technical_integrity_events(path: Path | None = None) -> list[dict[str, Any]]:
+def _sidecar_row_payload(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The event inside one sidecar line, or None for the header line."""
+    if not isinstance(row, Mapping):
+        return None
+    payload = row.get("row")
+    return dict(payload) if isinstance(payload, Mapping) else None
+
+
+def _sidecar_watermark(sidecar_path: Path) -> int | None:
+    """The source byte offset the sidecar is current to, or None.
+
+    Every sidecar line carries the main log's size at the moment the row it
+    mirrors was appended, so the LAST line is the watermark. Keeping it on the
+    rows rather than in the header is what lets the sidecar stay append-only: a
+    header watermark would have to be rewritten on every event.
+    """
+    last: int | None = None
+    try:
+        with Path(sidecar_path).open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    # A torn tail is a doubt, and doubt means rebuild.
+                    return None
+                if not isinstance(row, dict):
+                    return None
+                offset = row.get("src_offset")
+                if isinstance(offset, int):
+                    last = offset
+    except OSError:
+        return None
+    return last
+
+
+def _stream_resolved_rows(events_path: Path, start_offset: int = 0):
+    """(row, offset-after-this-line) for every `level_resolved` line from an offset."""
+    try:
+        with Path(events_path).open("rb") as handle:
+            if start_offset:
+                handle.seek(start_offset)
+            for raw in handle:
+                position = handle.tell()
+                try:
+                    row = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if isinstance(row, dict) and row.get("event_type") == "level_resolved":
+                    yield row, position
+    except OSError:
+        return
+
+
+def append_resolved_sidecar_row(
+    sidecar_path: Path, row: Mapping[str, Any], src_offset: int
+) -> bool:
+    """Mirror one resolved event. Returns False on failure and NEVER raises.
+
+    Evidence rule: a failed append loses the event, never the thing it records.
+    This sidecar is derived, so losing a line costs a catch-up scan later and
+    nothing else - `_sidecar_watermark` will simply say the sidecar is behind.
+    """
+    try:
+        target = Path(sidecar_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {"src_offset": int(src_offset), "row": dict(row)}, separators=(",", ":")
+                )
+                + "\n"
+            )
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def rebuild_resolved_sidecar(
+    events_path: Path | None = None, sidecar_path: Path | None = None
+) -> dict[str, Any]:
+    """Build the sidecar from the main log, completely. Idempotent.
+
+    Written to a temporary file and moved into place, so a crash halfway
+    through leaves the previous sidecar rather than a half one. Returns the
+    verification counts: `rows` is what was written, `resolved` what the stream
+    found, and they must agree.
+    """
+    source = Path(events_path or technical_integrity_events_path())
+    target = Path(sidecar_path or technical_integrity_resolved_path(source))
+    if not source.exists():
+        return {"ok": False, "reason": "no events log", "rows": 0, "resolved": 0}
+    try:
+        stat = source.stat()
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc), "rows": 0, "resolved": 0}
+    header = {
+        "schema": RESOLVED_SIDECAR_SCHEMA,
+        "source": source.name,
+        "source_mtime_ns": int(stat.st_mtime_ns),
+        "source_size": int(stat.st_size),
+        "built_at": normalize_market_local_datetime().isoformat(timespec="seconds"),
+    }
+    written = 0
+    resolved = 0
+    tmp = target.with_name(target.name + ".tmp")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(header, separators=(",", ":")) + "\n")
+            for row, offset in _stream_resolved_rows(source):
+                resolved += 1
+                handle.write(
+                    json.dumps(
+                        {"src_offset": int(offset), "row": row}, separators=(",", ":")
+                    )
+                    + "\n"
+                )
+                written += 1
+            # The last resolved row is rarely the last LINE, so the build ends
+            # by recording how far it actually read. Without it every later
+            # sync re-streams the tail after the final resolution.
+            handle.write(
+                json.dumps(
+                    {"src_offset": int(stat.st_size), "row": {"event_type": "sidecar_watermark"}},
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+        os.replace(tmp, target)
+    except OSError as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return {"ok": False, "reason": str(exc), "rows": written, "resolved": resolved}
+    return {"ok": written == resolved, "reason": "", "rows": written, "resolved": resolved}
+
+
+def sync_resolved_sidecar(
+    events_path: Path | None = None, sidecar_path: Path | None = None
+) -> dict[str, Any]:
+    """Bring the sidecar level with the main log. Cheap when it already is.
+
+    Three outcomes: CURRENT (the watermark equals the log's size - nothing to
+    do), CAUGHT UP (the log grew; only the tail past the watermark is streamed),
+    or REBUILT (no sidecar, a torn one, or a watermark past the end of the log,
+    which means the log was replaced under it).
+    """
+    source = Path(events_path or technical_integrity_events_path())
+    target = Path(sidecar_path or technical_integrity_resolved_path(source))
+    if not source.exists():
+        return {"ok": False, "action": "no_source"}
+    try:
+        size = int(source.stat().st_size)
+    except OSError:
+        return {"ok": False, "action": "unreadable_source"}
+    watermark = _sidecar_watermark(target) if target.exists() else None
+    if watermark is None or watermark > size:
+        result = rebuild_resolved_sidecar(source, target)
+        return {"ok": bool(result.get("ok")), "action": "rebuilt", **result}
+    if watermark == size:
+        return {"ok": True, "action": "current"}
+    appended = 0
+    for row, offset in _stream_resolved_rows(source, watermark):
+        if not append_resolved_sidecar_row(target, row, offset):
+            # Could not keep up; a rebuild is the honest answer next time.
+            return {"ok": False, "action": "append_failed", "appended": appended}
+        appended += 1
+    if appended == 0:
+        # The tail held no resolved rows, but the sidecar must still record how
+        # far it has read or every later call rescans the same tail.
+        if not append_resolved_sidecar_row(target, {"event_type": "sidecar_watermark"}, size):
+            return {"ok": False, "action": "append_failed", "appended": 0}
+    return {"ok": True, "action": "caught_up", "appended": appended}
+
+
+def load_resolved_technical_integrity_events(
+    path: Path | None = None, *, use_sidecar: bool = True
+) -> list[dict[str, Any]]:
     target = Path(path or technical_integrity_events_path())
     if not target.exists():
         return []
@@ -2161,6 +2372,10 @@ def load_resolved_technical_integrity_events(path: Path | None = None) -> list[d
             for row in candidates
             if isinstance(row, Mapping) and row.get("event_type") == "level_resolved"
         ]
+    if use_sidecar:
+        sidecar_rows = _resolved_rows_from_sidecar(target)
+        if sidecar_rows is not None:
+            return sidecar_rows
     try:
         with target.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -2172,6 +2387,43 @@ def load_resolved_technical_integrity_events(path: Path | None = None) -> list[d
                     rows.append(row)
     except OSError:
         return []
+    return rows
+
+
+def _resolved_rows_from_sidecar(events_path: Path) -> list[dict[str, Any]] | None:
+    """The sidecar's rows in log order, or None to make the caller stream.
+
+    None on ANY doubt - no sidecar, a sync that could not finish, a torn line.
+    The full stream is always available and always right, so the sidecar is
+    allowed to be a pure optimisation.
+    """
+    sidecar = technical_integrity_resolved_path(events_path)
+    try:
+        state = sync_resolved_sidecar(events_path, sidecar)
+    except Exception:  # noqa: BLE001 - a derived file must never break the replay
+        return None
+    if not state.get("ok"):
+        return None
+    rows: list[dict[str, Any]] = []
+    try:
+        with sidecar.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except json.JSONDecodeError:
+                    return None
+                payload = _sidecar_row_payload(parsed)
+                if payload is None:
+                    continue
+                if payload.get("event_type") != "level_resolved":
+                    # The watermark placeholder rows carry no event.
+                    continue
+                rows.append(payload)
+    except OSError:
+        return None
     return rows
 
 
