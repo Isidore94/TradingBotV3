@@ -618,7 +618,7 @@ def test_one_extension_flag_per_pick_then_only_pullbacks(tmp_path, monkeypatch):
     class _Hit:
         message = "event"
 
-    def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None):
+    def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None, levels_cache=None):
         evaluated.append(watch.kind)
         return _Hit() if watch.kind in fires else None
 
@@ -788,7 +788,7 @@ def test_focus_d1_flags_hold_until_the_break_and_then_start_there(tmp_path, monk
     class _Hit:
         message = "5d high"
 
-    def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None):
+    def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None, levels_cache=None):
         evaluated.append((watch.kind, watch.armed_at))
         return _Hit() if watch.kind == "new_5d_high" else None
 
@@ -2464,4 +2464,9 @@ def test_d1_watch_read_is_memory_only_and_prefetches_off_thread(monkeypatch):
     panel = AlertCenterPanel()
 
     assert panel._d1_bars_for(" nvda ") == bars
+    # Snappiness packet 2, item 1c: the prefetch is QUEUED, then issued as ONE
+    # batch on the next event-loop turn, so ~105 single-element tasks no longer
+    # queue ahead of the snapshot for the chart the trader just clicked.
+    assert service.requests == []
+    panel._flush_d1_prefetch()
     assert service.requests == [["NVDA"]]

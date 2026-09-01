@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -126,6 +127,12 @@ if TYPE_CHECKING:  # pragma: no cover - annotation only, never imported at runti
     # is exactly why it went unnoticed as an undefined name until ruff was first
     # run against this tree on 2026-08-31.
     from ui.panels.strength_board_panel import StrengthBoardPanel
+
+#: How many (symbol, sessions) M5 materializations to keep. The poll set is
+#: the Focus list plus whatever is armed - ~105 symbols on 2026-08-31 - and
+#: each entry is one already-built list, so this is comfortably inside it.
+#: Mirrors `chart_data_service._MAX_MATERIALIZED_SYMBOLS`.
+M5_BAR_DICT_CACHE_LIMIT = 240
 
 _TIER_RE = re.compile(r"\[([SABCD])-TIER\]", re.IGNORECASE)
 
@@ -933,6 +940,21 @@ class AlertCenterPanel(QFrame):
         # chart worker pool; the first poll may honestly be UNKNOWN rather than
         # blocking the whole desk on one symbol's durable store.
         self._d1_prefetch_last: dict[str, float] = {}
+        # Snappiness packet 2, item 1a. `bot.m5_chart_bars` rebuilds ~150 dicts
+        # with six float() coercions each, and eight timer-driven sites ask for
+        # the same symbol's bars on the 30s and 60s ticks. Memoized here rather
+        # than in ChartDataService because the source series belongs to
+        # BounceBot, which the service cannot see. Same shape as the D1 twin
+        # (`ChartDataService.cached_bar_dicts`, 2026-08-21): a strong reference
+        # to the source list is held so the identity check cannot be fooled by
+        # a recycled id, and length + last stamp catch an in-place append.
+        self._m5_bar_dicts: "OrderedDict[tuple[str, int], tuple[list, tuple, list]]" = OrderedDict()
+        # Item 1c: one prefetch per tick instead of ~105 single-element tasks
+        # queued ahead of the snapshot for the chart the trader just clicked.
+        # Flushed on the next event-loop turn, so every caller batches without
+        # each poll having to know it is the last one.
+        self._d1_prefetch_pending: list[str] = []
+        self._d1_prefetch_flush_armed = False
 
         # Armed chart watches are re-checked against the bot's cached M5 bars
         # every 30s (bars complete on 5-minute boundaries; this bounds the
@@ -3431,6 +3453,12 @@ class AlertCenterPanel(QFrame):
                 # the name did while inside yesterday's range stays unflagged.
                 armed_at = max(day_start, break_open_at)
                 extension_spent = False
+                # Item 1b: ten kinds per symbol used to re-enter
+                # `d1_event_levels` ten times with identical arguments - a sort
+                # of ~490 bars, 5d/20d extremes, three SMAs, an EMA15 recursion
+                # and the AVWAP bands, each time. One cache per symbol, built
+                # here and dropped when the symbol's loop ends.
+                levels_cache: dict = {}
                 for kind in pending_kinds:
                     # Spent within this pass too: two extension kinds routinely
                     # hit the same bar (a new 5d high IS often a new 20d high),
@@ -3446,6 +3474,7 @@ class AlertCenterPanel(QFrame):
                             d1_bars,
                             now=moment,
                             avwape_anchor=avwape_anchor if kind.startswith("avwape_") else None,
+                            levels_cache=levels_cache,
                         )
                     except Exception:
                         hit = None
@@ -3670,12 +3699,47 @@ class AlertCenterPanel(QFrame):
         symbol = str(symbol or "").strip().upper()
         return {watch.kind for watch in self._chart_watches if watch.symbol == symbol}
 
+    @staticmethod
+    def _m5_source_bars(bot, symbol: str) -> list:
+        """The raw series `m5_chart_bars` will read, for cache-keying only.
+
+        Deliberately the same two-key lookup `BounceBot.m5_chart_bars` does, in
+        the same order - RRS stores under the qualified key, the confirmation
+        fetch under the plain one. It is never the VALUE: the dicts always come
+        from `m5_chart_bars` itself, so if this lookup ever diverged the cost
+        would be a missed cache hit, not a wrong bar.
+        """
+        latest = getattr(bot, "latest_bars", None)
+        if not isinstance(latest, dict):
+            return []
+        key = str(symbol or "").strip().upper()
+        return latest.get(f"{key}|5 D|5 mins") or latest.get(key) or []
+
+    @staticmethod
+    def _m5_source_stamp(source: list) -> tuple:
+        """(length, last bar time) - what changes when a bar arrives.
+
+        The series is sometimes replaced (new object, identity catches it) and
+        sometimes appended to in place (same object, this catches it).
+        """
+        if not source:
+            return (0, None)
+        return (len(source), getattr(source[-1], "dt", None))
+
     def _m5_bars_for(self, symbol: str, *, sessions: int = 1) -> list:
         """Cached M5 bars for a symbol. Reads memory only; never fetches.
 
         ``sessions`` is 1 for anything that asks about today. Pass 2 when a
         measure needs warm-up bars that today cannot supply - an ATR(14) needs
         fifteen bars, and forty minutes after the open there are nine.
+
+        Materialized once per (symbol, sessions) per source series. Eight
+        timer-driven sites ask for the same bars on the 30s and 60s ticks -
+        chart watches, hold expiry, D1 level and event watches, any-bounce
+        twice per watch, Focus D1 interest - and each call was rebuilding ~150
+        dicts with six float() coercions apiece, on the Qt thread, for ~105
+        symbols. Nothing about WHICH bars come back changes: the value is
+        always `m5_chart_bars`'s own output.
         """
         bot = None
         if self._bounce_service is not None:
@@ -3685,10 +3749,25 @@ class AlertCenterPanel(QFrame):
                 bot = None
         if bot is None:
             return []
+        key = (str(symbol or "").strip().upper(), max(1, int(sessions)))
         try:
-            return bot.m5_chart_bars(symbol, max_sessions=max(1, int(sessions))) or []
+            source = self._m5_source_bars(bot, symbol)
+        except Exception:
+            source = []
+        stamp = self._m5_source_stamp(source)
+        cached = self._m5_bar_dicts.get(key)
+        if cached is not None and cached[0] is source and cached[1] == stamp:
+            self._m5_bar_dicts.move_to_end(key)
+            return cached[2]
+        try:
+            bars = bot.m5_chart_bars(symbol, max_sessions=key[1]) or []
         except Exception:
             return []
+        self._m5_bar_dicts[key] = (source, stamp, bars)
+        self._m5_bar_dicts.move_to_end(key)
+        while len(self._m5_bar_dicts) > M5_BAR_DICT_CACHE_LIMIT:
+            self._m5_bar_dicts.popitem(last=False)
+        return bars
 
     def arm_chart_watch_for(
         self, symbol: str, side: str, kind: str, *, source_text: str = ""
@@ -4273,7 +4352,11 @@ class AlertCenterPanel(QFrame):
             retry_seconds = 60.0 if series is not None else 15.0
             if now - last >= retry_seconds:
                 self._d1_prefetch_last[symbol] = now
-                service.prefetch([symbol])
+                # Queued, not issued: ~105 single-element prefetch tasks per
+                # minute queue ahead of the snapshot task for the chart the
+                # trader just clicked in the 2-thread chart pool. One batched
+                # call per event-loop turn instead (item 1c).
+                self._queue_d1_prefetch(symbol)
             # cached_bar_dicts, not series.as_bar_dicts(): this runs on the Qt
             # thread for every armed and every Focus symbol on a 60s timer, and
             # materializing ~490 dicts per symbol per poll is what the service
@@ -4281,6 +4364,38 @@ class AlertCenterPanel(QFrame):
             return service.cached_bar_dicts(symbol) if series is not None else []
         except Exception:
             return []
+
+    def _queue_d1_prefetch(self, symbol: str) -> None:
+        """Add a symbol to this turn's prefetch batch and arm the flush."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return
+        if symbol not in self._d1_prefetch_pending:
+            self._d1_prefetch_pending.append(symbol)
+        if self._d1_prefetch_flush_armed:
+            return
+        self._d1_prefetch_flush_armed = True
+        try:
+            QTimer.singleShot(0, self._flush_d1_prefetch)
+        except Exception:
+            # No event loop to defer into (tests, teardown): send it now rather
+            # than losing the warm-up entirely.
+            self._d1_prefetch_flush_armed = False
+            self._flush_d1_prefetch()
+
+    def _flush_d1_prefetch(self) -> None:
+        """Issue this turn's queued prefetch as ONE task."""
+        self._d1_prefetch_flush_armed = False
+        symbols = list(self._d1_prefetch_pending)
+        self._d1_prefetch_pending.clear()
+        if not symbols:
+            return
+        try:
+            from ui.services.chart_data_service import shared_service
+
+            shared_service().prefetch(symbols)
+        except Exception:
+            pass
 
     def _poll_d1_level_watches(self, now: datetime | None = None) -> None:
         if not self._d1_level_watches:
@@ -4395,6 +4510,9 @@ class AlertCenterPanel(QFrame):
         moment = now or datetime.now()
         remaining: list[D1EventWatch] = []
         triggered = []
+        # One reference-level build per symbol per tick, shared across every
+        # watch on it (item 1b). Scoped to this tick and discarded with it.
+        levels_caches: dict[str, dict] = {}
         for watch in self._d1_event_watches:
             hit = None
             m5_bars = self._m5_bars_for(watch.symbol)
@@ -4415,7 +4533,12 @@ class AlertCenterPanel(QFrame):
                         avwape_anchor = None
                 try:
                     hit = evaluate_d1_event_watch(
-                        watch, m5_bars, d1_bars, now=moment, avwape_anchor=avwape_anchor
+                        watch,
+                        m5_bars,
+                        d1_bars,
+                        now=moment,
+                        avwape_anchor=avwape_anchor,
+                        levels_cache=levels_caches.setdefault(watch.symbol, {}),
                     )
                 except Exception:
                     hit = None
@@ -4516,7 +4639,9 @@ class AlertCenterPanel(QFrame):
         self.statusChanged.emit(f"{symbol}: any-bounce alert disarmed.")
         return True
 
-    def _any_bounce_levels_for(self, symbol: str, moment: datetime) -> dict:
+    def _any_bounce_levels_for(
+        self, symbol: str, moment: datetime, *, m5_bars: list | None = None
+    ) -> dict:
         """The armed level set from whatever the desk already has cached.
 
         The D1 side comes from the scan's zone-arms file (which is where the
@@ -4541,7 +4666,7 @@ class AlertCenterPanel(QFrame):
             d1_levels = None
         return any_bounce_levels(
             zone_arm_entry=entry,
-            m5_bars=self._m5_bars_for(symbol),
+            m5_bars=self._m5_bars_for(symbol) if m5_bars is None else m5_bars,
             d1_levels=d1_levels,
             now=moment,
         )
@@ -4555,11 +4680,12 @@ class AlertCenterPanel(QFrame):
         for watch in self._any_bounce_watches:
             hit = None
             try:
-                levels = self._any_bounce_levels_for(watch.symbol, moment)
+                # Once per watch, not twice: the levels builder and the
+                # evaluation both need today's M5 bars.
+                m5_bars = self._m5_bars_for(watch.symbol)
+                levels = self._any_bounce_levels_for(watch.symbol, moment, m5_bars=m5_bars)
                 if levels:
-                    hit = evaluate_any_bounce_watch(
-                        watch, self._m5_bars_for(watch.symbol), levels, now=moment
-                    )
+                    hit = evaluate_any_bounce_watch(watch, m5_bars, levels, now=moment)
             except Exception:
                 hit = None
             if hit is None:

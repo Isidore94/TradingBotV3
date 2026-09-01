@@ -909,6 +909,35 @@ def _d1_event_hit(
     return None
 
 
+def _cached_d1_event_levels(
+    cache: dict | None,
+    d1_bars: Iterable[Mapping[str, Any]] | None,
+    session: date,
+    avwape_anchor: date | None,
+) -> dict[str, Any]:
+    """`d1_event_levels`, memoized inside one caller-supplied dict.
+
+    `d1_event_levels` sorts ~490 bars and builds 5d/20d extremes, SMA
+    50/100/200, an EMA15 recursion and the AVWAP band series. The Focus D1
+    interest poll evaluates up to ten kinds per symbol per minute and every one
+    of them re-entered it with the SAME arguments, ~105 symbols at a time.
+
+    The cache is the CALLER's, and it must be scoped to one symbol and one
+    `d1_bars` list for one tick - the key is only (session, anchor), because
+    within that scope nothing else can vary. With ``cache=None`` this is
+    exactly the call it replaced, which is what makes the fast path
+    behaviour-identical by construction rather than by argument.
+    """
+    if cache is None:
+        return d1_event_levels(d1_bars, session=session, avwape_anchor=avwape_anchor)
+    key = (session, avwape_anchor)
+    levels = cache.get(key)
+    if levels is None:
+        levels = d1_event_levels(d1_bars, session=session, avwape_anchor=avwape_anchor)
+        cache[key] = levels
+    return levels
+
+
 def evaluate_d1_event_watch(
     watch: D1EventWatch,
     m5_bars: Iterable[Mapping[str, Any]] | None,
@@ -916,6 +945,7 @@ def evaluate_d1_event_watch(
     *,
     now: datetime | None = None,
     avwape_anchor: date | None = None,
+    levels_cache: dict | None = None,
 ) -> ChartWatchTrigger | None:
     """First post-arm completed bar meeting the condition, or None.
 
@@ -926,6 +956,11 @@ def evaluate_d1_event_watch(
     the running previous close so a gap over a line counts exactly once.
     ``avwape_anchor`` (the current earnings anchor date) feeds the AVWAPE
     kinds; without it they simply wait.
+
+    ``levels_cache`` is an optional dict the caller owns, scoped to one symbol
+    and one ``d1_bars`` list for one tick. It changes nothing about what is
+    evaluated - see `_cached_d1_event_levels` - only how many times the same
+    reference levels get rebuilt when ten kinds are asked about one symbol.
     """
     moment = _naive(now or datetime.now())
     armed_at = _naive(watch.armed_at)
@@ -933,10 +968,11 @@ def evaluate_d1_event_watch(
     session_bars = _session_bars(m5_bars, moment)
     completed = [bar for bar in session_bars if _bar_end(bar) <= moment]
     if completed:
-        levels = d1_event_levels(
+        levels = _cached_d1_event_levels(
+            levels_cache,
             d1_bars,
-            session=_naive(completed[0]["dt"]).date(),
-            avwape_anchor=avwape_anchor,
+            _naive(completed[0]["dt"]).date(),
+            avwape_anchor,
         )
         prev_close = levels.get("prev_close")
         for bar in completed:
@@ -970,7 +1006,7 @@ def evaluate_d1_event_watch(
         # day's own daily bar also contains pre-arm prices).
         if bar_date <= armed_at.date() or bar_date >= moment.date():
             continue
-        levels = d1_event_levels(daily, session=bar_date, avwape_anchor=avwape_anchor)
+        levels = _cached_d1_event_levels(levels_cache, daily, bar_date, avwape_anchor)
         hit = _d1_event_hit(
             watch.kind,
             levels,

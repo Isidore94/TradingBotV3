@@ -82,7 +82,7 @@ def test_a_bounce_fires_once_names_the_level_and_retires(monkeypatch, tmp_path):
     monkeypatch.setattr(
         panel,
         "_any_bounce_levels_for",
-        lambda symbol, moment: {"d1_ema15": 100.0},
+        lambda symbol, moment, **kwargs: {"d1_ema15": 100.0},
     )
 
     before = len(panel._alerts)
