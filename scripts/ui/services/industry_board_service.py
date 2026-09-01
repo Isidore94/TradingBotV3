@@ -170,6 +170,24 @@ class IndustryBoardService(QObject):
         self._last_emitted_snapshot_id = str(snapshot.get("snapshot_id") or "")
         self.snapshotChanged.emit(snapshot)
 
+    @staticmethod
+    def _automatic_refresh_allowed(now: datetime | None = None) -> bool:
+        """Quiet hours, fail-open - the rule every other recurring starter obeys.
+
+        This service was the only recurring downloader with no gate, so its
+        ~1,930-ticker nine-month `yf.download` ran hourly all night and fired
+        about five seconds after every desk launch, at any hour. The MANUAL
+        "Refresh Board (yfinance)" button is never gated: quiet hours confine
+        automatic starters, never the trader's own click.
+        """
+        try:
+            import autopilot_core as core
+
+            allowed, _reason = core.auto_scanning_due(now or datetime.now())
+        except Exception:
+            return True  # fail open, as everywhere else
+        return bool(allowed)
+
     @Slot()
     def refresh_if_due(self) -> bool:
         snapshot = self.snapshot()
@@ -178,6 +196,8 @@ class IndustryBoardService(QObject):
         if str(snapshot.get("snapshot_id") or "") != self._last_emitted_snapshot_id:
             self._emit_snapshot(snapshot)
         if not industry_refresh_due(snapshot):
+            return False
+        if not self._automatic_refresh_allowed():
             return False
         return self.request_refresh(force=False)
 

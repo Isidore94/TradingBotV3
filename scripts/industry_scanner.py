@@ -637,13 +637,38 @@ def build_industry_board(
 # ---------------------------------------------------------------------------
 # Fetching (yfinance batch; the only networked part)
 # ---------------------------------------------------------------------------
-def fetch_daily_frames_yf(symbols: list[str], *, period: str = FETCH_PERIOD) -> dict[str, pd.DataFrame]:
-    """One batched yfinance download -> {symbol: OHLCV frame}. Missing symbols skipped."""
-    import yfinance as yf
+#: How many tickers go into one yfinance call. The board covers ~1,930 symbols
+#: over nine months, and handing all of them to a single `yf.download` makes one
+#: enormous request whose failure loses everything and whose response arrives as
+#: one very large frame. The strength board already chunks its download for the
+#: same reason; the frames that come back are identical either way.
+FETCH_CHUNK_SIZE = 200
 
+
+def fetch_daily_frames_yf(symbols: list[str], *, period: str = FETCH_PERIOD) -> dict[str, pd.DataFrame]:
+    """Batched yfinance download -> {symbol: OHLCV frame}. Missing symbols skipped.
+
+    Chunked at `FETCH_CHUNK_SIZE`: a chunk that fails costs that chunk, not the
+    whole board. The merged result is the same mapping the single call produced.
+    """
     tickers = sorted({str(s or "").strip().upper() for s in symbols if str(s or "").strip()})
     if not tickers:
         return {}
+    frames: dict[str, pd.DataFrame] = {}
+    for start in range(0, len(tickers), FETCH_CHUNK_SIZE):
+        chunk = tickers[start : start + FETCH_CHUNK_SIZE]
+        try:
+            frames.update(_fetch_daily_frames_chunk(chunk, period=period))
+        except Exception as exc:  # noqa: BLE001
+            logging.warning(
+                "Industry board chunk %s..%s failed: %s", chunk[0], chunk[-1], exc
+            )
+    return frames
+
+
+def _fetch_daily_frames_chunk(tickers: list[str], *, period: str) -> dict[str, pd.DataFrame]:
+    import yfinance as yf
+
     raw = yf.download(
         tickers=" ".join(tickers),
         period=period,
