@@ -363,15 +363,27 @@ def load_journal_positions() -> tuple[list[WalkawayPosition], int]:
 
 
 def load_focus_positions() -> list[WalkawayPosition]:
-    """Every snapshotted human focus pick (entry = pick-day close, no exit)."""
+    """Every snapshotted human focus pick (entry = pick-day close, no exit).
+
+    ONE position per (symbol, side, date), even though the pick store now
+    carries a row per category (2026-09-01): a name the trader put on both the
+    swing and the M5 list is still one position they were in, and replaying it
+    twice would weight it double in every walkaway aggregate. Which list
+    proposed it is a cohort question, answered in `human_focus_tracking`.
+    """
     from human_focus_tracking import load_human_focus_daily_picks
 
     positions = []
+    seen: set[tuple[str, str, str]] = set()
     for row in load_human_focus_daily_picks():
         symbol = str(row.get("symbol") or "").strip().upper()
         trade_date = str(row.get("trade_date") or "").strip()
         if not symbol or not trade_date:
             continue
+        side_key = "SHORT" if str(row.get("side") or "").upper() == "SHORT" else "LONG"
+        if (trade_date, symbol, side_key) in seen:
+            continue
+        seen.add((trade_date, symbol, side_key))
         positions.append(
             WalkawayPosition(
                 source="focus",

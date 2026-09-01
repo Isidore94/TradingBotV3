@@ -177,3 +177,32 @@ class WindowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_one_focus_position_per_name_even_when_it_is_on_two_lists(monkeypatch):
+    """The pick store carries a row per CATEGORY since 2026-09-01, so a name on
+    both the swing and the M5 list snapshots twice. The walkaway replays a
+    POSITION, and the trader was in one - counting it twice would weight that
+    name double in every aggregate on the page.
+
+    Fail-before-fix: on the un-fixed loader this returns two positions.
+    """
+    import human_focus_tracking
+
+    rows = [
+        {"trade_date": "2026-06-01", "symbol": "AMGN", "side": "LONG", "source": "focus_m5"},
+        {"trade_date": "2026-06-01", "symbol": "AMGN", "side": "LONG", "source": "focus_swing_vetted"},
+        {"trade_date": "2026-06-01", "symbol": "AMGN", "side": "SHORT", "source": "focus_m5"},
+        {"trade_date": "2026-06-02", "symbol": "AMGN", "side": "LONG", "source": "focus_m5"},
+    ]
+    monkeypatch.setattr(
+        human_focus_tracking, "load_human_focus_daily_picks", lambda *a, **k: rows
+    )
+
+    positions = jw.load_focus_positions()
+
+    assert [(p.entry_date, p.symbol, p.side) for p in positions] == [
+        ("2026-06-01", "AMGN", "LONG"),
+        ("2026-06-01", "AMGN", "SHORT"),
+        ("2026-06-02", "AMGN", "LONG"),
+    ]
