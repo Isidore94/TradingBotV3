@@ -170,7 +170,7 @@ def test_an_unreadable_taxonomy_badges_nothing_rather_than_guessing(monkeypatch)
 # ==========================================================================
 # the panel: one tab per dimension, and no file read on the Qt thread
 # ==========================================================================
-def _settle(panel, predicate, timeout=10.0):
+def _settle(_panel, predicate, timeout=10.0):
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance()
@@ -186,7 +186,18 @@ def _settle(panel, predicate, timeout=10.0):
 
 @pytest.fixture
 def panel(qapp_guard):
+    """A panel whose CONSTRUCTION read has already finished.
+
+    `start_decisions_refresh` is single-flight by design, so a test that fires
+    a second read while the constructor's is still running is silently ignored
+    - fast enough to pass alone and racy under a loaded full-suite run. The
+    button is re-enabled by `_on_decisions_loaded`, which is exactly "no read
+    in flight".
+    """
     made = panel_module.DaytradeTrackerPanel()
+    assert _settle(made, lambda: made.decisions_button.isEnabled()), (
+        "the construction read never finished"
+    )
     yield made
     made.shutdown()
     made.deleteLater()
@@ -288,3 +299,38 @@ def test_a_missing_scoreboard_reads_as_absent_not_as_no_decisions(panel, monkeyp
     monkeypatch.setattr(review_learning, "load_review_learning_state", lambda *a, **k: None)
     panel.start_decisions_refresh(rebuild=False)
     assert _settle(panel, lambda: "absent measurement" in panel.decisions_status.text())
+
+
+def test_the_worker_never_emits_into_a_deleted_panel(qapp_guard, monkeypatch):
+    """A worker must not outlive the widget it was going to update.
+
+    `shutdown` joins the thread, but deletion can win the race - and emitting
+    into a deleted signal source raises `RuntimeError: Signal source has been
+    deleted` out of a daemon thread. The full suite caught exactly that as an
+    unhandled thread exception before this guard existed.
+
+    Driven deterministically: the C++ object is destroyed first, then the
+    worker body is run directly, which is the state the race produces.
+
+    Fail-before-fix: without the guard this raises RuntimeError.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    import review_learning
+
+    monkeypatch.setattr(review_learning, "load_review_learning_state", lambda *a, **k: _state())
+
+    made = panel_module.DaytradeTrackerPanel()
+    assert _settle(made, lambda: made.decisions_button.isEnabled())
+    worker = made._decisions_worker
+
+    # `shiboken6.delete` destroys the C++ object deterministically, which is
+    # the state the race produces and `deleteLater` alone does not reach while
+    # a Python reference survives.
+    import shiboken6
+
+    shiboken6.delete(made)
+    QApplication.instance().processEvents()
+
+    # There is nothing left to update; the payload is dropped, not raised.
+    worker(False)

@@ -181,7 +181,12 @@ class AiSummaryPanel(QFrame):
                 "tooltip": "",
                 "counters": [],
             }
-        self._gatesLoaded.emit(payload)
+        try:
+            self._gatesLoaded.emit(payload)
+        except RuntimeError:
+            # The panel was deleted while this read was in flight; there is
+            # nothing left to update. See the same guard in the tracker panel.
+            pass
 
     def _on_gates_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}

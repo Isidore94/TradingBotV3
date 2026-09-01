@@ -376,7 +376,14 @@ class DaytradeTrackerPanel(QFrame):
             payload["probation"] = _probation_types()
         except Exception as exc:  # noqa: BLE001 - a scoreboard is advisory
             payload["message"] = f"Your decisions could not be read: {exc}"
-        self._decisionsLoaded.emit(payload)
+        try:
+            self._decisionsLoaded.emit(payload)
+        except RuntimeError:
+            # The panel was deleted while this read was in flight. `shutdown`
+            # joins the thread, but deletion can still win the race, and a
+            # worker must never touch a widget that is gone - there is nothing
+            # left to update, so the payload is simply dropped.
+            pass
 
     def _on_decisions_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}

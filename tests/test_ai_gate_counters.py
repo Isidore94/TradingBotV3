@@ -283,3 +283,30 @@ def test_a_failed_gate_read_states_it_on_the_strip(qapp, monkeypatch):
     finally:
         panel.shutdown()
         panel.deleteLater()
+
+
+def test_the_gate_worker_never_emits_into_a_deleted_panel(qapp, monkeypatch):
+    """The same guard as the tracker's decisions worker, for the same reason:
+    a worker must not touch a widget that is gone, and emitting into a deleted
+    signal source raises out of a daemon thread.
+
+    Fail-before-fix: without the guard this raises RuntimeError.
+    """
+    import shiboken6
+    from PySide6.QtWidgets import QApplication
+
+    from ui.panels.ai_summary_panel import AiSummaryPanel
+
+    monkeypatch.setattr(
+        gate_counters,
+        "counters_payload",
+        lambda: {"counters": [], "text": "Digest 6/10", "tooltip": ""},
+    )
+    panel = AiSummaryPanel()
+    assert _settle(lambda: panel.refresh_gates_button.isEnabled())
+    worker = panel._gates_worker
+
+    shiboken6.delete(panel)
+    QApplication.instance().processEvents()
+
+    worker()
