@@ -119,9 +119,26 @@ which is evidence and must not be loaded as context.
   RS/RW half retired to the Alert Center's RS/RW Board tab (one tab-click away in
   the same column), and a row click charting into the **Visual Alert Review pane**
   through `chart_symbol` rather than opening the snapshot popup.
-- Auto-populate rules for both regimes, previous-day-extreme gating, DESK adoption
-  into M5 Focus, and one extension notification per Focus name/day while pullback
-  notifications stay active.
+- Auto-populate rules for both regimes, previous-day-extreme gating and DESK
+  adoption into M5 Focus. A Focus pick's AUTOMATIC D1 alerts are the pullback set
+  only (2026-09-01); the extension set fires solely from a trader-armed D1 event
+  watch, through the separate armed poll, so an extension event has exactly one
+  path. Supersedes the earlier one-extension-per-name-per-day ration.
+- Armed alerts expire on the TRADING-day clock (`scripts/armed_alert_expiry.py`):
+  5 sessions for a manually armed 5d extreme watch, 10 for a 20d one, 10 for D1
+  level watches, any-bounce watches and manual price alerts. Uncertainty never
+  deletes; every expiry appends a row; a price alert is disarmed, not deleted;
+  arming restarts the clock. No new timer - each expiry rides the poll that
+  already owns its store.
+- A Focus pick with no alert and no pullback event for 10 trading days FADES to a
+  reversible faded list (`focus_pick_clocks.json`, `focus_faded.json`,
+  `focus_fade_events.jsonl`), swing and M5, the trader's own included by explicit
+  2026-09-01 authorization. Activity resets the clock; restore gives a fresh one;
+  discard leaves the evidence. A faded swing favorite gets a RETRACTION row, never
+  an edit, and no `pick_feedback` verdict is written for a fade.
+- The strength board's buttons carry their counts - "Focus pick review (N)" and
+  "Faded review (N)" - and the faded walkthrough charts through the one review
+  door with `FOCUS_FADED_TAG`, which bypasses movers-only.
 - Focus privileges begin only beyond the previous session's directional extreme;
   missing prior-day data grants nothing.
 - D1 Focus routes final Favorite/High Conviction upgrades while developing trigger
@@ -404,6 +421,26 @@ which is evidence and must not be loaded as context.
 - macOS launcher, CloudStorage Drive discovery, Keychain credentials, and machine-
   local path normalization.
 
+### Shadow research: higher-timeframe LRSI entries
+
+- `H2` (120 min) is a derived timeframe again (BD-78) because the LRSI study is
+  the consumer the locked plan's cut asked for. RTH is 6.5 h, so H2/H4 end each
+  session with a stub: published as evidence, excluded from the oscillator input.
+- `outcomes.HTF_LRSI_RECIPES` is a bounded 16-recipe diagnostic grid - M30/H1/H2/H4
+  x {cross-up 50, cross-up 20, cross-down 50, cross-down 80}, one stop model (the
+  signal bar's extreme + 0.25 ATR on the same timeframe) and one 2.0R target.
+  `simulate_htf_lrsi_entry` builds the rolling multi-session series through the
+  warehouse's own aggregation contract from canonical M5 - never a second bar
+  source - and enters on a completed derived bar close at or after the setup
+  became known.
+- Long and short legs read the SAME unmirrored series (BD-79): the efficiency
+  formula clamps at 0, so the mirrored-close idiom the live M5 engines use is a
+  different feature, not a transform. `RESEARCH_CROSS_LEVELS` is additive; the
+  live `CROSS_LEVELS` and every `m5_signal_engines` behaviour are unchanged.
+- Nothing here is registered in `outcome_semantics` (BD-80) - these are warehouse
+  `outcome_path` rows keyed by `recipe_id` and never acquire a bounce family.
+  Shadow only: no detector, score, alert, Focus list or review queue is reachable.
+
 ### Shadow challengers
 
 - Side-symmetric SPY market-state/pullback engine runs beside the legacy pause
@@ -420,6 +457,79 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-09-01 — Focus de-clutter, and a shadow study of higher-timeframe LRSI entries
+
+Phase 0.12, authorized by the trader in chat that day. Two independent packets:
+one changes the desk, one adds a research lane with zero desk cost.
+
+**Packet A - the Focus surfaces stop growing without bound.**
+
+- **A Focus pick's automatic D1 alerts are PULLBACKS only.** The extension set -
+  new 5d/20d extreme, SMA break, AVWAPE and 1σ break - no longer fires by itself;
+  it is what filled the feed with "still going" news about names the trader had
+  already seen. The trader arms the ones they want, and `_poll_d1_event_watches`
+  stays the single path that fires one, so an extension event cannot arrive twice.
+  The gate is at the flag-GENERATION seam: an extension kind is never constructed
+  in `_poll_focus_d1_interest`, so nothing has to be suppressed downstream. The
+  2026-08-05 one-extension-per-day ration is gone - it had nothing left to ration,
+  and a filter that can never fire reads to the next agent like a live rule.
+- **An arm now has a life, measured in SESSIONS.** 5 trading days for a manually
+  armed 5d extreme watch, 10 for a 20d one, 10 for D1 level watches, any-bounce
+  watches and manual price alerts. `market_calendar.trading_days_between` is new
+  and is the clock - weekday arithmetic counts Thanksgiving and brings a Friday
+  arm due on the wrong Friday. Uncertainty never deletes: a date the calendar
+  refuses keeps the entry armed. Every expiry appends a row naming store, symbol,
+  kind, `armed_at` and `expired_at`. A price alert is DISARMED rather than
+  deleted, keeping its levels, note and history, so `price_alerts.json` still
+  honours "user-entered names are never automatically removed"; arming restarts
+  its clock. Expiry rides the poll that already owns each store - no new timer.
+- **A quiet Focus pick fades, reversibly.** Ten trading days with no alert and no
+  pullback event and the pick moves to a faded list; a fired Focus D1 flag, an
+  armed-watch hit or the trader's own "★ keep" resets the clock. It covers swing
+  and M5 picks including the trader's own - an explicit authorization to
+  auto-remove a hand-typed name, scoped to Focus and routed through the store's
+  own removal path so a hand-maintained watchlist line is untouched. Nothing is
+  deleted: "★ Restore to Focus" gives a FRESH ten sessions, "✕ Discard" clears the
+  list and leaves the evidence. A faded swing favorite appends a RETRACTION with
+  origin `focus_fade`, never an edit, and no `pick_feedback` verdict is written -
+  a fade is the desk noticing silence, not the trader passing a verdict, and every
+  verdict in that file feeds a graded surface. `FocusPickStore` is the single
+  writer; the check runs on the day roll plus a half-hourly timer, never inside
+  the 60 s poll's per-symbol loop.
+- **The buttons say how many.** "Review ▶" became "Focus pick review (N)", with
+  "Faded review (N)" beside it. Both counts repaint through the board's existing
+  `SignalCoalescer`, so a burst of Focus mutations is one render.
+
+**Packet B - is there anything in a higher-timeframe LRSI entry? Shadow only.**
+
+- **H2 is a derived timeframe again.** The locked plan cut it for having no
+  consumer and named that as the reopen condition; this study is one (BD-78).
+  Additive: no existing timeframe, contract id or published row changes. RTH is
+  6.5 h, so H2 and H4 end each session with a stub - published as evidence,
+  excluded from the oscillator's input, because an EMA fed a 30-minute bar inside
+  an H2 series measures a duration that changes with the time of day.
+- **The short legs are unmirrored, and that is a decision with a stated cost**
+  (BD-79). The efficiency formula clamps at 0, so a perfectly efficient DOWN move
+  and a motionless one both read 0 - the mirrored-close idiom and `cross_down` are
+  different features, not a transform of one. All four legs read the SAME series
+  so the grid answers one question; the cost is that the short legs measure
+  EXHAUSTION rather than down-momentum and fire earlier.
+  `tests/fixtures/efficiency_lrsi_research_v1.json` pins the gap as a number: the
+  unmirrored down-cross at bar 27, the mirrored up-cross at bar 29.
+- **A bounded 16-recipe diagnostic grid**, never a Cartesian search: M30/H1/H2/H4
+  x four entries, one stop model (the signal bar's extreme + 0.25 ATR on the SAME
+  timeframe - an M5 ATR under an H4 entry would size risk off a bar the recipe
+  never looks at) and one 2.0R target. It reads the occurrences and canonical M5
+  bars the nightly has already materialised, so it adds simulation work and not a
+  second data pass.
+- **Nothing is registered in `outcome_semantics`** (BD-80): these rows are keyed by
+  `recipe_id` and never acquire a bounce family, so they never reach `claim_kind`.
+  Registering the `lrsi_cross_80` that registry's docstring names as a
+  hypothetical would assert a claim kind for a family with no producer.
+
+Live `CROSS_LEVELS` and every `m5_signal_engines` behaviour are unchanged, and no
+Packet B output reaches a detector, score, alert, Focus list or review queue.
 
 ### 2026-08-31 — Desk snappiness packet 3: the log, the downloader, the hidden pages, the drips
 

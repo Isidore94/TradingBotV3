@@ -137,3 +137,135 @@ would only bound disk growth.
 - Quiet hours (packet R1): every **automatic** starter is gated on `autopilot_core.auto_scanning_due` — weekdays, session open−30m through close+60m (06:00–14:00 PT), fail-open on a session lookup it cannot answer. It covers the launch/tick universe self-heal, the boot resume that used to connect BounceBot to IB at any hour, the daily 07:00 self-arm, the open watchlist build and the swing slots. The window is deliberately a **superset** of `bouncebot_scan_window`; keep it that way or the gates contradict each other. **Manual buttons are never gated** — `force=True` is the carve-out on the universe rebuild.
 - Auto/Away phone output: `autopilot_today.txt` is the single verified home-folder digest, with the safety/freshness header first, then numbered best swing trades, then intraday and condensed operations. Mode changes (OFF/DESK/AWAY/EVENING) are made on the main desk.
 - Unattended: the separate mini-PC scanner role is retired (2026-08-08) — the 8845HS main desk is the only always-on machine and the only scan host, so no cross-machine IB budget question exists. `scripts/master_avwap_mini_pc.py` was **removed 2026-08-24** (P1.5); the named-slot scheduling shape it established lives on in `ai_jobs/runner.py`, which says so.
+
+---
+
+## Focus picks alert on PULLBACKS only (2026-09-01, Phase 0.12 A1)
+
+Trader, 2026-09-01: the Focus D1 feed had become unreadable, and what filled it
+was the extension half of the automatic event set - the "still going" news about
+names the trader had already seen.
+
+The 2026-08-05 rule (FRPT printing a new 20-day high and then simply staying
+extended: *"it comes up as a new 20 day high alert but now it's extended and I'd
+only want to see it on an SMA bounce or something"*) rationed those to one per
+name per day. A ration was not enough. Every Focus name is now implicitly
+watched for the PULLBACK set alone - a 15EMA reject, an AVWAPE or 1σ bounce -
+and for nothing else.
+
+**The gate is at the flag-GENERATION seam, not a filter downstream.**
+`_poll_focus_d1_interest` builds `pending_kinds` from `D1_PULLBACK_KINDS`, so an
+extension kind is never constructed, never evaluated, never flagged and never
+has to be suppressed. That matters because the downstream chains in this desk
+are display-only by rule and have no suppression field; the only honest place to
+stop an alert is before it exists.
+
+**Arming is the one surviving route, and it is a DIFFERENT poll.**
+`_poll_d1_event_watches` reads `d1_event_watches.json` and is untouched by this
+rule. Keeping the two lanes disjoint is what makes double-firing structurally
+impossible: the automatic lane cannot emit an extension kind, so an armed one
+can only arrive once.
+
+The one-extension-per-day bookkeeping (`_focus_extension_spent`) is gone. It had
+nothing left to ration, and a filter that can never fire is worse than no
+filter - the next reader would take it for a live rule.
+
+**Nothing else moved.** The prev-day break gate, the once-per-kind-per-session
+registry, the window that opens AT the break rather than at midnight, the
+`focusBreakStatesChanged` emission and the feed/beep routing are all unchanged.
+
+## An armed alert has a life, measured in sessions (2026-09-01, Phase 0.12 A2)
+
+The Armed inventory is supposed to read as "the exact conditions I am waiting
+on". It accumulated forever, so half of it was a watch armed weeks ago on a
+thesis that had since gone stale, and the surface stopped meaning anything.
+
+**The windows.** A manually armed 5-day extreme watch gets 5 trading days; a
+20-day one gets 10; everything else armed - D1 level watches, any-bounce
+watches, manual price alerts - gets 10.
+
+**Sessions, never weekdays.** `market_calendar.trading_days_between` is the
+clock. Weekday arithmetic gets this wrong twice: it counts Thanksgiving as a
+day, and a five-session watch armed on a Friday would come due the following
+Friday rather than the Friday after.
+
+**Uncertainty never deletes.** `armed_alert_expiry.is_expired` returns `None`
+when the calendar refuses - a date outside its validated range, an unreadable
+stamp - and `None` is never read as `True`. Every caller here removes something
+the trader created by hand, so failing closed is the only safe direction.
+
+**Nothing is silently lost.** Every expiry appends one row to the
+`armed_alert_expiry` evidence stream naming the store, the symbol, the kind,
+when it was armed, when it came due and how many sessions it was given. The
+append is best-effort and swallowed on failure - an evidence store is never
+allowed to cost the thing it records.
+
+**A price alert is DISARMED, never deleted.** It leaves the Armed board, which
+is what the trader asked for, and keeps its levels, its note and its trigger
+history exactly where they were, so re-arming is one click and nothing has to be
+retyped. That also keeps plan.md sec 5's "user-entered names are never
+automatically removed" literally true of `price_alerts.json`, which the module's
+own docstring had promised since it was written. **Arming restarts the clock**
+(`price_alerts.mark_armed_now`, called from every arm site in the board) or the
+re-armed alert would be disarmed again by the stamp that expired it.
+
+**No new timer.** Expiry runs at the head of the poll that already owns each
+store: the 60 s D1 watch tick for the three chart-watch stores, and the price
+alert service's own poll for `price_alerts.json`.
+
+**An entry with no stamp gets TODAY.** Never an older guess - guessing backwards
+would disarm the trader's whole board on the first load after the upgrade.
+
+## A Focus pick that never speaks fades (2026-09-01, Phase 0.12 A3)
+
+A Focus list only means "the names I am watching" while something takes names
+off it. A pick that has fired no alert and printed no pullback event for ten
+trading days is not being watched; it is furniture, and it is what makes the
+list too long to read.
+
+**The clock.** It starts at ADD time and lives in `focus_pick_clocks.json`, a
+sidecar `FocusPickStore` owns beside the focus files. Activity RESETS it: a
+fired Focus D1 flag, an armed-watch hit (every armed poll builds its alert
+through `_chart_watch_alert`, so one call covers all three lanes), or the
+trader's own "★ keep" on the review chart - the strongest statement of interest
+the desk ever gets. Ten trading days without a reset and the pick fades.
+
+**It applies to the trader's own names, and only here.** Fading a hand-typed
+pick is an explicit trader authorization given on 2026-09-01. It is scoped to
+Focus and goes through the store's own removal path, so `_uninject_from_shared`
+still refuses to touch a broad-watchlist line Focus did not inject
+(CandidateRegistry invariant, plan.md sec 5). No other automatic path gains the
+right: `remove_if_auto_adopted` still refuses anything without a marker.
+
+**Faded is not deleted.** The pick moves to `focus_faded.json` with an
+append-only row in `focus_fade_events.jsonl` behind it, and the trader gets it
+back with "★ Restore to Focus" (a FRESH ten sessions - a restore is not a
+fade-proof) or clears it with "✕ Discard", which leaves the evidence and only
+clears the list.
+
+**A faded swing favorite gets a RETRACTION, never an edit.** `swing_favorites`
+is append-only by design - "added on the 3rd, faded on the 17th" stays two rows
+in the order they happened - so the fade appends `ACTION_REMOVE` with origin
+`focus_fade` rather than `trader`, because the trader did not do it and a store
+whose rows all claimed to be theirs could not answer "did I drop this, or did it
+time out?". The Focus entry is already gone by then; this writes evidence only.
+
+**No pick-feedback verdict is written.** A fade is the desk noticing silence,
+not the trader passing a verdict, and every verdict in `pick_feedback.jsonl`
+feeds a graded surface. Inventing a "faded" verdict would put the desk's own
+housekeeping into the trader's scoreboard. The membership `left` event carries
+reason `focus_fade`, which is where that belongs.
+
+**Uncertainty never fades**, on the same rule as A2. A clock the calendar cannot
+read keeps the pick; a pick with no readable clock is re-stamped TODAY rather
+than faded on a guess.
+
+**Where it runs.** The day roll (the fade clock is measured in sessions, so that
+is exactly when a pick can come due) and a half-hourly timer. Never inside the
+60 s poll's per-symbol loop: it walks every Focus entry and asks a calendar.
+
+**The faded walkthrough uses the ONE door.** `review_faded_picks` enqueues
+through `_enqueue_review_alert` with `FOCUS_FADED_TAG`, which bypasses
+movers-only exactly as `FOCUS_REVIEW_TAG` does - a faded pick is by definition
+one that has not been moving, so the filter would hide every row of the list the
+trader just asked to see.

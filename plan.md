@@ -222,6 +222,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0 — NOW** | Validate and merge | Prove the testing-week build on the real desk and merge it safely |
 | **0.5** | Trader refinement packets | Build the trader's 2026-08-14/15 desk requests in ranked order (R1–R8) |
 | **0.8** | GUI fluidity Wave P1 | Repair the measured Standard-mode stalls and three verified GUI defects |
+| **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
 | **3** | Evidence and capture | Mature warehouse/AI/shadow evidence and capture trader commentary honestly |
@@ -854,6 +855,84 @@ the Qt panel carry credit %, yield/week, spread % and the SMA-above-strike count
 
 Gate: one desk scan whose theta report shows percent-floored, support-first
 rows, with `via thetalongs.txt` labelling intact.
+
+### Phase 0.12 — Focus de-clutter + higher-timeframe LRSI research (authorized 2026-09-01)
+
+Two independent packets, authorized by the trader in chat on 2026-09-01. Packet
+A changes the desk; Packet B is a shadow research lane with zero desk cost.
+
+#### Packet A — Focus alert de-clutter — BUILT, live gate owed
+
+The Focus D1 feed had become unreadable, the Armed inventory accumulated
+forever, and Focus itself only ever grew.
+
+1. **A1 Pullback-only automatic Focus alerts.** `_poll_focus_d1_interest`
+   evaluates the PULLBACK set only - 15EMA reject, AVWAPE and 1σ bounce. The
+   EXTENSION set (new 5d/20d extreme, SMA break, AVWAPE / 1σ break) no longer
+   fires automatically at all; the trader arms the ones they want per symbol and
+   `_poll_d1_event_watches` remains the single path that fires one. The gate is
+   at the flag-GENERATION seam - an extension kind is never evaluated, so
+   nothing has to be suppressed downstream. Supersedes the 2026-08-05
+   one-extension-per-day ration, which had nothing left to ration.
+2. **A2 Armed alerts expire, in TRADING days.** A manually armed 5-day extreme
+   watch gets 5 sessions; a 20-day one gets 10; every other armed thing - D1
+   level watches, any-bounce watches, manual price alerts - gets 10. The clock
+   is `market_calendar.trading_days_between`, never weekday arithmetic. Expiry
+   runs at the head of the poll that already owns each store, so no new timer
+   appears. **Uncertainty never deletes**: a date the calendar cannot reason
+   about keeps the entry armed. Every expiry appends a row naming store, symbol,
+   kind, `armed_at` and `expired_at`. A price alert is DISARMED rather than
+   deleted - it leaves the Armed surface and keeps its levels, note and history,
+   so plan.md sec 5's "user-entered names are never auto-removed" still holds.
+3. **A3 Focus picks fade.** A pick that has fired no alert and printed no
+   pullback event for 10 trading days moves to a FADED list. The clock starts at
+   add time and is reset by a fired Focus D1 flag, an armed-watch hit, or the
+   trader's own "keep in Focus" on the review chart. It applies to swing AND M5
+   picks, the trader's own included - an explicit trader authorization to
+   auto-remove a hand-typed name, scoped to Focus alone, through the store's own
+   removal path so a hand-maintained watchlist line is untouched. Fading a
+   hand-vetted swing pick appends a RETRACTION row, never an edit. It is
+   reversible: "★ Restore to Focus" (fresh clock) and "✕ Discard". The check
+   runs on the day roll and a half-hourly timer, never inside the 60 s poll.
+4. **A4 Buttons and counts.** "Review ▶" is now "Focus pick review (N)", with
+   "Faded review (N)" beside it. The faded walkthrough goes through
+   `_enqueue_review_alert` - the one door - with `FOCUS_FADED_TAG`, which
+   bypasses movers-only the way `FOCUS_REVIEW_TAG` does (a faded pick is by
+   definition one that has not been moving). Counts repaint through the board's
+   existing `SignalCoalescer` at the listener.
+
+Gate: one desk session where the D1 Focus feed carries pullbacks only, an armed
+extension watch still fires, an expired watch leaves the Armed board with a row
+behind it, and a faded pick can be restored and discarded from the chart.
+
+#### Packet B — Higher-timeframe LRSI entry research — BUILT, shadow only
+
+"Is there something there" evidence for entering Focus-style setups on LRSI
+crosses at M30/H1/H2/H4. Research lane only: it reaches no detector, score,
+alert, Focus list or review queue, and promotion remains sec 7's job.
+
+1. **B1 H2 exists.** 120 minutes joins `TIMEFRAME_MINUTES` and
+   `DERIVED_TIMEFRAMES`. The locked plan CUT H2 for having no consumer; B3 is
+   one, which is the cut's own reopen condition (BD-78). RTH is 6.5 h, so H2 and
+   H4 end each session with a stub - published as evidence, EXCLUDED from the
+   oscillator's input.
+2. **B2 The short legs are unmirrored, and that is a decision.** The efficiency
+   formula clamps at 0, so the mirrored-close idiom and `cross_down` are
+   different features rather than a transform of one. The study reads ONE series
+   for all four legs: cross-up 50/20 for longs, cross-down 50/80 for shorts.
+   Rationale, cost and fixture in BD-79. Live `CROSS_LEVELS` unchanged.
+3. **B3 A bounded 16-recipe diagnostic grid.** 4 timeframes × 4 entries, one
+   stop model (the signal bar's extreme + 0.25 ATR on the SAME timeframe,
+   following `DIAGNOSTIC_ATR_STOP_V1`) and one target (2.0R). Never a Cartesian
+   search. Alternative recipes on one occurrence stay correlated diagnostics of
+   ONE episode. It reads the occurrences and canonical M5 bars the nightly has
+   already materialised, so it adds simulation and not a second data pass.
+4. **B4 Nothing is registered in `outcome_semantics`.** These rows are warehouse
+   `outcome_path` rows keyed by `recipe_id`; they never acquire a bounce family
+   and never reach `claim_kind`. BD-80 records the reopen trigger.
+
+Gate: one overnight `setup_research` run producing HTF rows inside the existing
+reserve, then a first read of whether any cell clears the evidence floor.
 
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 

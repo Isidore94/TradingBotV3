@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - both 2026-08-31 evening lines were merged into it by trader instruction: the snappiness line (packets 1-3, stacked, fast-forward from `claude/desk-snappiness-3`) and then Phase 0.11 theta premium (`claude/theta-premium`, a real merge). Only the two shared ledgers conflicted - this file - and both sides' dated entries were kept. `main` already carried today's swing picks (both passes), the day-trade pass, the Strength Board move and the desk-lockup fix |
+| Working branch | **`claude/focus-declutter-lrsi-htf`**, off `main` at `66a0c31` - Phase 0.12 (Focus de-clutter + higher-timeframe LRSI research), authorized by the trader in chat 2026-09-01. Previously `main` - both 2026-08-31 evening lines were merged into it by trader instruction: the snappiness line (packets 1-3, stacked, fast-forward from `claude/desk-snappiness-3`) and then Phase 0.11 theta premium (`claude/theta-premium`, a real merge). Only the two shared ledgers conflicted - this file - and both sides' dated entries were kept. `main` already carried today's swing picks (both passes), the day-trade pass, the Strength Board move and the desk-lockup fix |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
-| Active roadmap items | **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Phase 0.12 Focus de-clutter (2026-09-01, A1-A4 — BUILT on `claude/focus-declutter-lrsi-htf`; live gate #27 owed)**; **Phase 0.12 higher-timeframe LRSI research (2026-09-01, B1-B4 — BUILT, shadow only; gate #28 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5761 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/focus-declutter-lrsi-htf`, MEASURED after the review-round fix - an earlier full run of the same tree minus the review test read 5760 and ended in the known intermittent `0xC0000409` Qt-teardown crash after the summary printed; the builder's pre-written 5763 was never a measurement and is corrected here) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · frozen exe NOT rebuilt this packet and not required: no packaging trigger was hit (no new dependency, no new non-`.py` runtime asset, no new top-level `scripts/` package - `armed_alert_expiry.py` is a module inside the already-collected root, and the Focus fade sidecars are DATA under the home folder, not bundled assets). Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **DONE 2026-08-31 21:51, trader-authorized.** The checkout sits on `main` and the desk was stopped (pid 9832, the pid its own `heartbeat.json` named; its launcher parent 3476 had already exited) and relaunched through `trading_desk.cmd` - the production launcher, unchanged. New pids: **23588** (the desk) under trampoline **23796**. Verified UP three ways rather than assumed: the process outlived 60 s, a second launch printed "another TradingBotV3 desk is already running" and exited 0, and `heartbeat.json` re-stamped at 21:52:40 naming pid 23588 (it had read 21:50:40 / pid 9832 before the kill). Everything merged tonight is what is now running, and the stall watchdog is ON - this session's `ui_stalls.jsonl` is the AFTER side of gates 24-26 |
 
@@ -32,6 +32,8 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 28 | **HTF LRSI study (Phase 0.12 B)** — one overnight `setup_research` run that publishes `htf_lrsi_*` outcome rows inside the existing 20-minute reserve, with `bar_derived` rows under `timeframe=H2` present and no stub in the oscillator's input; then a first read of whether any cell clears the evidence floor | 2026-09-01 Phase 0.12 entry |
+| 27 | **Focus de-clutter (Phase 0.12 A)** — one DESK session: the D1 Focus feed carries pullbacks only, an armed extension watch still fires from the Armed board, a watch past its window leaves the board with a row behind it, and a faded pick can be restored (fresh clock) and discarded from the chart | 2026-09-01 Phase 0.12 entry |
 | ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-08-31** at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
@@ -58,6 +60,92 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+
+### 2026-09-01 - Phase 0.12: the Focus surfaces stop growing, and a shadow LRSI study
+
+**Branch `claude/focus-declutter-lrsi-htf`, off `main` at `66a0c31`.** Two
+independent packets, both authorized by the trader in chat on 2026-09-01. Live
+gates 27 and 28 owed. No frozen rebuild: no packaging trigger was hit.
+
+**Packet A - Focus de-clutter (desk change).**
+
+- **A1** `_poll_focus_d1_interest` evaluates the PULLBACK set only. The
+  extension set fires solely from a trader-armed D1 event watch, through the
+  separate armed poll - two disjoint lanes, so an extension event has exactly
+  one path and cannot arrive twice. Gated at the flag-GENERATION seam: an
+  extension kind is never constructed, so nothing is suppressed downstream. The
+  2026-08-05 one-extension-per-day ration is removed; it had nothing left to
+  ration. Two golden tests that encoded the old rule were rewritten to the new
+  one, which is the authorized behaviour change, not drift.
+- **A2** Armed alerts expire on a TRADING-day clock. New: `market_calendar.
+  trading_days_between` and `scripts/armed_alert_expiry.py` (policy in one
+  place). 5 sessions for a manually armed 5d extreme watch, 10 for a 20d one, 10
+  for D1 level watches, any-bounce watches and manual price alerts. Uncertainty
+  never deletes - a date the calendar refuses keeps the entry armed. Every
+  expiry appends a row to the `armed_alert_expiry` evidence stream. **A price
+  alert is DISARMED, not deleted**, so `price_alerts.json` still honours plan.md
+  sec 5; arming restarts its clock. Each expiry rides the poll that already owns
+  its store, so no new timer appeared.
+- **A3** A Focus pick with no alert and no pullback event for 10 trading days
+  fades to a reversible faded list. `FocusPickStore` is the single writer and
+  owns three new sidecars beside the focus files (`focus_pick_clocks.json`,
+  `focus_faded.json`, `focus_fade_events.jsonl`). Swing and M5, the trader's own
+  included - an explicit authorization to auto-remove a hand-typed name, scoped
+  to Focus and routed through the store's own removal path, so a hand-maintained
+  broad-watchlist line is still never touched. A faded swing favorite gets a
+  RETRACTION with origin `focus_fade`, never an edit; no `pick_feedback` verdict
+  is written for a fade. Day roll + a half-hourly timer, never inside the 60 s
+  poll.
+- **A4** "Focus pick review (N)" and "Faded review (N)". The faded walkthrough
+  goes through `_enqueue_review_alert` - the one door - with `FOCUS_FADED_TAG`,
+  which bypasses movers-only exactly as `FOCUS_REVIEW_TAG` does.
+
+**Review round (2026-09-01, Fable): one defect found, reproduced, fixed.**
+`_arm_price_alert_from_level` - the chart's own arm route - re-armed an
+existing side at a changed level without restarting its `armed_at` clock, so a
+level re-armed from the chart still carried the stamp that expired it and would
+have been disarmed again on the next poll. The Focus-tab board's merge stamped
+correctly; the panel's mirror of it did not. Failing test written first
+(`test_rearming_from_the_chart_restarts_the_expiry_clock`), then the one-line
+stamp added. The deliberate unchanged-level no-re-arm rule is untouched and the
+test asserts it does not move the stamp either.
+
+**Packet B - higher-timeframe LRSI entry research (shadow, zero desk cost).**
+
+- **B1** H2 (120 min) is a derived timeframe again. The locked plan cut it for
+  having no consumer and named that as the reopen condition; this study is one
+  (BD-78). Additive - no existing timeframe, contract id or published row moved.
+  H2/H4 stubs are published as evidence and EXCLUDED from the oscillator input.
+- **B2** The short legs are unmirrored: cross-down through 50 and 80 on the same
+  series the long legs read. The formula clamps at 0, so the mirrored-close
+  idiom is a different feature, not a transform (BD-79). Cost stated: this
+  measures exhaustion, not down-momentum, and fires earlier -
+  `tests/fixtures/efficiency_lrsi_research_v1.json` pins the gap at two bars.
+  Live `CROSS_LEVELS` and `m5_signal_engines` untouched.
+- **B3** `outcomes.HTF_LRSI_RECIPES`: a bounded 16-recipe diagnostic grid
+  (M30/H1/H2/H4 x four entries, one stop model, one 2.0R target) with
+  `simulate_htf_lrsi_entry` and its dispatch branch. It reads the occurrences and
+  canonical M5 bars the nightly already materialises, so it adds simulation and
+  not a second data pass.
+- **B4** Nothing registered in `outcome_semantics` (BD-80): these rows are keyed
+  by `recipe_id` and never acquire a bounce family.
+
+**One thing the trader should know about the checkout.** When this session
+started, the working copy of this file was a 6,881-line PRE-ARCHIVE version -
+every entry already moved to `docs/CHECKPOINT_ARCHIVE_2026-08.md` was back, and
+the "Active state at a glance" block was gone. It contained nothing dated
+2026-09-01 and nothing absent from `HEAD` or the archive, so it was a stale
+revert rather than someone's work in progress. It was backed up to the session
+scratchpad and this file was restored from `HEAD` before these edits. Worth a
+look at whichever agent or tool produced it.
+
+**Ambiguity resolved, and stated rather than buried.** The authorizing prompt
+described the B3 grid as "16 recipes" and also as carrying "the existing small
+target set" (three targets), which are 16 and 48. It was built as **16** - the
+explicit number, and the reading that keeps the nightly inside its reserve -
+with one 2.0R target, the middle of `M5_CLOSE_TARGETS_R` and the same target the
+fixed-R control uses, so the two compare directly. Widening to the full set is
+the single constant `HTF_LRSI_TARGETS_R`.
 
 ### 2026-08-31 (late evening) - Desk snappiness packet 3: the last of the three
 
