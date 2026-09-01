@@ -140,7 +140,7 @@ MIN_TIER_CHOICES = (
     ("All alerts", "all"),
     ("B tier and above", "B"),
     ("A tier and above", "A"),
-    ("S tier / bangers only", "S"),
+    ("S tier / PROVEN only", "S"),
 )
 _TIER_RANK = {"S": 4, "A": 3, "B": 2, "C": 1, "D": 0}
 MAX_FEED_ITEMS = 250
@@ -279,8 +279,10 @@ def extract_alert_tier(alert: BounceAlert) -> str:
     return match.group(1).upper() if match else ""
 
 
-def is_banger_alert(alert: BounceAlert) -> bool:
-    return "BANGER" in str(alert.raw_text or "").upper()
+# "BANGER" was retired 2026-09-01 (trader: "We can probably remove this because
+# idk what it is"). It was only ever a literal token match against alert text,
+# and nothing in the tree ever emitted the token: 0 of 8,818 recorded review
+# rows carried banger=True. PROVEN is the top alert class and is untouched.
 
 
 # Learning-loop PROVEN stamp: this exact bounce configuration (type/combo/
@@ -300,18 +302,17 @@ def is_entry_assist_alert(alert: BounceAlert) -> bool:
 def alert_passes_min_tier(alert: BounceAlert, mode: str) -> bool:
     """Filter policy for the live feed (D1 alerts route to their own feed).
 
-    Bangers always pass (they are the sit-back-and-wait trades), and so does
-    entry-assist output — the trader clicked a button asking for it, so it
+    PROVEN alerts always pass (they are the sit-back-and-wait trades), and so
+    does entry-assist output — the trader clicked a button asking for it, so it
     must never be swallowed by the tier gate. Chart-watch hits pass for the
     same reason: the trader armed that exact condition from the M5 chart.
     Untiered alerts (regime notes, pause-watch summaries) pass everything
-    except the S-only mode, where only bangers/S-tier remain.
+    except the S-only mode, where only PROVEN/S-tier remain.
     """
     if mode in ("", "all"):
         return True
     if (
-        is_banger_alert(alert)
-        or is_proven_alert(alert)
+        is_proven_alert(alert)
         or is_entry_assist_alert(alert)
         or is_chart_watch_alert(alert)
     ):
@@ -323,12 +324,11 @@ def alert_passes_min_tier(alert: BounceAlert, mode: str) -> bool:
 
 
 def alert_is_loud(alert: BounceAlert) -> bool:
-    """Alerts worth a sound: bangers, proven configs, S/A tiers, ready D1,
-    and chart-watch hits (the trader armed the exact condition and is
+    """Alerts worth a sound: proven configs, S/A tiers, ready D1, and
+    chart-watch hits (the trader armed the exact condition and is
     waiting on it)."""
     return (
-        is_banger_alert(alert)
-        or is_proven_alert(alert)
+        is_proven_alert(alert)
         or is_ready_d1_alert(alert)
         or is_chart_watch_alert(alert)
         or extract_alert_tier(alert) in {"S", "A"}
@@ -420,7 +420,7 @@ class _ClickableItem(QFrame):
 class AlertCenterPanel(QFrame):
     """The sit-back-and-wait surface, split into two stacked feeds.
 
-    Top: the live intraday stream (bounce alerts, RW/RS bangers, regime
+    Top: the live intraday stream (bounce alerts, RW/RS movers, regime
     notes, and generic champion D1 flags) behind the minimum-tier gate with an
     optional sound. Bottom: the D1 Focus feed - ONLY the moments a completed
     scan confirms that a stock turned into a favorite/high-conviction name.
@@ -663,7 +663,7 @@ class AlertCenterPanel(QFrame):
         # automatic D1 interest flags, the tier-gate bypass, the always-sound -
         # only once it trades beyond yesterday's extreme in its own direction.
         # Below that it is not silenced: it simply falls back to the ordinary
-        # tier gate, so a genuinely strong bounce (S/A, PROVEN, banger) still
+        # tier gate, so a genuinely strong bounce (S/A, PROVEN) still
         # comes through. "SYM|long" -> prev_day_gate state; the companion map
         # stamps when the break was first seen so the D1 event window opens
         # THERE and never replays what the name did while still inside
@@ -716,7 +716,7 @@ class AlertCenterPanel(QFrame):
         self.min_tier_input.setCurrentIndex(max(0, self.min_tier_input.findData(saved_mode)))
         self.min_tier_input.currentIndexChanged.connect(self._on_prefs_changed)
 
-        self.sound_input = QCheckBox("Sound on S/A + bangers")
+        self.sound_input = QCheckBox("Sound on S/A + PROVEN")
         self.sound_input.setChecked(bool(get_local_setting("qt_alert_sound", True)))
         self.sound_input.toggled.connect(self._on_prefs_changed)
 
@@ -1198,7 +1198,6 @@ class AlertCenterPanel(QFrame):
                 symbol=alert.symbol,
                 side=alert.side,
                 tier=extract_alert_tier(alert),
-                is_banger=is_banger_alert(alert),
                 is_proven=is_proven_alert(alert),
                 privileged=privileged,
             )
@@ -1289,7 +1288,7 @@ class AlertCenterPanel(QFrame):
                 "Ordinary alerts in the first minutes after the open are "
                 "grouped here so the burst does not bury the feed. Every one "
                 "of them is still in History, in the chart review queue, and "
-                "in the evidence log - nothing was dropped. Bangers, PROVEN "
+                "in the evidence log - nothing was dropped. PROVEN "
                 "configs, Focus names and anything you armed yourself bypass "
                 "this entirely."
             )

@@ -119,17 +119,30 @@ Anything marked ⚠ is a point I'm least sure of — please check those first.
 - **PROVEN** (2026-07-09, "see the best bounces live"): a segment across
   bounce_type / bounce_combo / setup_family / swing_trait / focus with n ≥ 12,
   avg ≥ +0.45R, median ≥ 0 stamps a matching live bounce PROVEN — it upgrades and
-  bypasses the Alert Center tier gate like a banger; a segment with avg ≥ +0.90R
-  floors the alert at S. Proven *negatives* keep the mute veto.
-- ⚠ "Banger" I read as the pre-existing top-alert class that bypasses the tier gate;
-  I did not find its exact trigger definition — worth stating precisely here.
+  bypasses the Alert Center tier gate; a segment with avg ≥ +0.90R
+  floors the alert at S. Proven *negatives* keep the mute veto. **PROVEN is the top
+  alert class** — since 2026-09-01 it is the only one.
+- **Banger — RETIRED 2026-09-01** (trader: *"not sure to be honest. We can probably
+  remove this because idk what it is"*). It was a legacy top-alert class defined by a
+  literal `"BANGER" in raw_text` match in the Alert Center, granting a tier-gate
+  bypass, an always-sound and a repetition escalation. **Nothing in the tree ever
+  emitted the token**: no detector path builds it (the regime-pause sweep is
+  deliberately untiered and stamps no token), and 0 of 8,818 recorded review rows
+  carried `banger=True` (`docs/analysis/EVIDENCE_AUDIT_2026-08-22.md`, row D8b). The
+  matcher, the bypass, the sound branch and the escalation branches are removed;
+  the `banger` column stays in `trader_annotations`/review rows as a constant `False`
+  so historical readers and the row shape are unchanged. The `REGIME_BANGER_*`
+  constants in `bounce_bot_lib/legacy.py` are regime-pause thresholds — a different
+  thing, and untouched.
 
 ## Review notes / open questions for Aaron
 
 1. Is "the major setup" to you specifically **AVWAPE → 1st Dev**, the
    **Post-Earnings Candle Break**, or the whole production set above? The doc leads
    with the shared machinery; happy to restructure around one flagship.
-2. ⚠ Banger definition (above).
+2. ~~⚠ Banger definition.~~ **ANSWERED 2026-09-01.** Banger was a legacy class with
+   a matcher and no producer; removed 2026-09-01 by trader decision. PROVEN is the
+   top class.
 3. ⚠ The 2026-07-01 weight rebalance numbers quoted per family come from
    `setup_docs.py` "evidence" strings; confirm they're still the operative weights.
 4. Anything here that reads correct-but-mis-weighted — i.e., true in code but not how

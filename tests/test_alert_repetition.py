@@ -46,7 +46,6 @@ def _consider(ledger, symbol="AAPL", side="LONG", *, now=None, **flags):
         symbol=symbol,
         side=side,
         tier=flags.pop("tier", "B"),
-        is_banger=flags.pop("is_banger", False),
         is_proven=flags.pop("is_proven", False),
         privileged=flags.pop("privileged", False),
         now=now or OPEN + timedelta(hours=2),
@@ -134,19 +133,20 @@ def test_a_lower_tier_does_not_escalate():
     assert _consider(ledger, tier="B").action == ACTION_FOLD
 
 
-def test_the_first_banger_escalates():
-    ledger = _ledger()
-    _consider(ledger, tier="B")
-    assert _consider(ledger, tier="B", is_banger=True).action == ACTION_ESCALATE
+def test_the_banger_escalation_is_gone():
+    """BANGER retired 2026-09-01 (trader: "We can probably remove this because
+    idk what it is"): a matcher with no producer, so this branch could never
+    fire. The keyword is removed rather than ignored, so a caller still passing
+    it is a loud error and not a silent no-op.
 
+    Fail-before-fix: on the un-fixed code `consider` accepts `is_banger` and the
+    second call escalates.
+    """
+    import pytest as _pytest
 
-def test_a_second_banger_does_not_escalate_again():
-    """'FIRST banger' - otherwise a repeatedly-banger name re-sounds forever,
-    which is the exact spam this section exists to remove."""
     ledger = _ledger()
-    _consider(ledger, is_banger=True)
-    _consider(ledger, is_banger=True)
-    assert _consider(ledger, is_banger=True).action == ACTION_FOLD
+    with _pytest.raises(TypeError):
+        ledger.consider(symbol="AAPL", side="LONG", tier="B", is_banger=True)
 
 
 def test_the_first_proven_escalates():
@@ -210,12 +210,6 @@ def test_a_privileged_hit_survives_an_ordinary_row_already_existing():
 def test_a_privileged_hit_is_never_digested_at_the_open():
     ledger = _ledger()
     decision = _consider(ledger, privileged=True, now=OPEN + timedelta(minutes=3))
-    assert decision.action == ACTION_NEW
-
-
-def test_a_banger_is_never_digested_at_the_open():
-    ledger = _ledger()
-    decision = _consider(ledger, is_banger=True, now=OPEN + timedelta(minutes=3))
     assert decision.action == ACTION_NEW
 
 
