@@ -80,6 +80,16 @@ which is evidence and must not be loaded as context.
   industry-vs-SPY plus stock-vs-primary-industry fields. Since 2026-08-31 the 60 s
   check tick emits `snapshotChanged` only when `snapshot_id` moved, so an unchanged
   board is never re-read or re-measured (snappiness packet 1 item 2).
+- **Snappiness packet 2, 2026-08-31.** The Alert Center's minute tick materializes
+  each symbol's M5 bars once per series rather than once per caller (eight
+  timer-driven sites asked), builds each symbol's D1 reference levels once per
+  tick rather than once per event kind, and issues ONE batched chart prefetch per
+  event-loop turn rather than ~105 single-symbol tasks. The GUI-thread collector
+  sweeps the startup heap once at launch and then `gc.freeze()`s it out of every
+  later sweep. The journal's retag runs on a single-flight worker with the
+  buttons disabled and failures shown, its scanner-file parses are cached per
+  file version, `list_trades` resolves every trade's regime in one query instead
+  of one connection per trade, and the filter header debounces at 250 ms.
 - M5 Strength Board (`strength_scan` + one `StrengthBoardService` owner, 15-minute
   single-flight refresh on the quiet-hours window, last-good on failure): batched
   yfinance over `universe_all.txt`, **zero IB traffic**, every column click-to-sort
@@ -392,6 +402,78 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
 
+
+### 2026-08-31 — Desk snappiness packet 2: the next three measured stall causes
+
+Packet 1 took the three largest. These are the next three, ranked by benefit,
+against the same evidence: 8,008 GUI freezes / ~78 minutes in one day.
+Memoization, threading and batching only - no detector, gate, alert, score or
+statistic computes anything different, and no output, file format or push
+changed.
+
+**The Alert Center's minute tick stops redoing itself.** Three repetitions, all
+over a ~105-symbol Focus set:
+
+- **M5 bars were re-materialized per caller.** `bot.m5_chart_bars` rebuilds ~150
+  dicts with six `float()` coercions each, and EIGHT timer-driven sites asked
+  for the same symbol's bars per tick. Memoized in the panel - the source series
+  belongs to BounceBot, which `ChartDataService` cannot see - keyed on the
+  source list's identity plus its length and last stamp, with a strong reference
+  held so `is` cannot be fooled by a recycled id. A replaced series is caught by
+  identity, an in-place append by the stamp. `m5_chart_bars` is untouched and
+  still produces every value. `_poll_any_bounce_watches` also read the same
+  bars twice per watch; it reads once.
+- **D1 reference levels were built ten times per symbol.** `d1_event_levels`
+  sorts ~490 bars and builds 5d/20d extremes, three SMAs, an EMA15 recursion and
+  the AVWAP band series; `_poll_focus_d1_interest` re-entered it once per kind
+  with identical arguments. `evaluate_d1_event_watch` gained an optional
+  `levels_cache` the caller owns and scopes to one symbol and one bar list for
+  one tick - with `None` it is exactly the call it replaced, which is what makes
+  the fast path behaviour-identical by construction. Keyed on (session, anchor),
+  so the AVWAPE kinds keep their own entry.
+- **~105 single-element prefetch tasks per minute** queued ahead of the snapshot
+  for the chart the trader had just clicked, in a 2-thread pool. Symbols are
+  queued and issued as ONE call on the next event-loop turn. Pool size and task
+  priorities untouched.
+
+**The startup heap is swept once, then frozen.** 6.5 of that day's ~78 minutes
+of freeze were collections - gen-0 ~300 ms, full ~770 ms - and all cyclic
+collection runs on the GUI thread by design, so every sweep is a freeze. Most of
+what it walked can never be garbage: the widget tree, the theme, every import.
+`main()` runs one `gc.collect(2)` then `gc.freeze()` after the window shows. The
+order is the rule - freezing first would make startup GARBAGE immortal.
+`_GuiGcController`'s cadence, idle waits and bounded deadlines are untouched.
+
+**The journal's worst per-click costs.** Accepting a correction ran
+`rebuild_trades()` -> `refresh_auto_tags()` -> a `json.loads` of the 1.08 GB
+setup-tracker file plus a 73 MB CSV, synchronously behind the OK button.
+
+- The retag runs on a worker through the new
+  `ui/services/journal_rebuild_service.py`: single-flight (a second request is
+  refused, not queued), buttons disabled with a "tagging..." state, results back
+  on the GUI thread, and a failure shown rather than swallowed - the journal's
+  loud-write rule. Both journal tabs share the service, so results are routed by
+  token.
+- `load_context_rows` caches the PROJECTED rows per source file on
+  (`st_mtime_ns`, `st_size`); a missing or unstampable file is deliberately not
+  cached so a later one is picked up. No new dependency - no `ijson`, which
+  would be a packaging trigger.
+- `list_trades` opened a fresh sqlite connection PER TRADE for the regime.
+  `get_regimes_for_dates` reads the one-row-per-day table once and answers the
+  same two questions in Python; `get_regime_for_date` is now that method with a
+  list of one, so they cannot drift.
+- The filter header debounces at 250 ms through `SignalCoalescer`.
+
+**27 new tests**, 29 of the 31 assertions-of-change proven to fail against the
+un-fixed code; the rest are documentation of behaviour that must not be lost and
+say so. Not done, and named: the hold-expiry double `survives()` evaluation -
+the packet allowed a per-tick verdict cache only, and `survives()` has side
+effects, so whether the second call's effects are redundant is a behaviour
+question rather than a memoization one. Left for packet 3.
+
+No packaging trigger: no new dependency, no new non-`.py` asset, no new
+top-level package (the new service is inside the already-collected
+`scripts/ui/services/`), no new dynamic import.
 
 ### 2026-08-31 — Desk snappiness packet 1: the three largest measured stall causes
 

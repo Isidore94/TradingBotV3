@@ -18,12 +18,12 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/desk-snappiness-1`** - cut from `main` at `50af716` for desk snappiness packet 1 (the three largest measured stall causes), BUILT and GREEN, pushed, not merged. `main` itself carries all three earlier 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix, and the theta plan/prompt docs at its tip |
+| Working branch | **`claude/desk-snappiness-2`** - cut from `claude/desk-snappiness-1` (NOT from `main`) for snappiness packet 2, three commits, BUILT and GREEN, pushed, not merged. It therefore carries packet 1 as well. Packet 1 itself was cut from `main` at `50af716` (the three largest measured stall causes), BUILT and GREEN, pushed, not merged. `main` itself carries all three earlier 2026-08-31 packets - today's swing picks (both passes), the day-trade pass, the Strength Board move - plus the desk-lockup fix, and the theta plan/prompt docs at its tip |
 | Also in flight | `claude/theta-premium` (Phase 0.11, BUILT per its own branch checkpoint, live gate owed); `claude/gui-phase-0-9` (Phase 0.9, tip `fd76923`) |
-| Active roadmap items | **Desk snappiness packet 1 (2026-08-31 — BUILT and GREEN on `claude/desk-snappiness-1`, live gate #24 owed)**; **Phase 0.11 theta premium optimization (2026-08-31 — BUILT on `claude/theta-premium` per its branch checkpoint; on `main` the prompt doc is the record: `docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5612 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/desk-snappiness-1`; the snappiness packet adds 22 tests over `main`'s 5590) · smoke **7/7** · `ruff` **clean**. Previous baseline: `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Desk snappiness packets 1 and 2 (2026-08-31 — BUILT and GREEN on `claude/desk-snappiness-2`, which stacks on packet 1; live gates #24 and #25 owed)**; **Phase 0.11 theta premium optimization (2026-08-31 — BUILT on `claude/theta-premium` per its branch checkpoint; on `main` the prompt doc is the record: `docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5639 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/desk-snappiness-2`) · smoke **7/7** · source `--selftest` **73/73** · `ruff` **clean**. Packet 2 adds 27 tests over packet 1's 5612, which itself added 22 over `main`'s 5590. **No packaging trigger fires** for either packet - no new dependency, asset, top-level package or dynamic import - so the frozen exe is not owed a rebuild for them. Previous baseline: **5612 passed, 72 subtests** on `claude/desk-snappiness-1`. Previous baseline: `pytest tests/ -q` **5590 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` after the ruff packet; 5583 at the merge point) · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. The Strength Board move adds 17 tests net; the swing-picks second pass (drag, Copy/Paste, the `vetted` cohort) adds 10, and the deferred-journal-read fix 2. `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN** - `All checks passed`, down from 1,703 on its first run (trader-directed, same day). Previous baseline: `pytest tests/ -q` **5554 passed, 72 subtests** (2026-08-31, desk `.venv`, on `claude/daytrade-pass-reasons` at `ed3c73c` plus the doc reconciliation) · smoke **7/7** · source `--selftest` **73/73** (the pass vocabulary is its own bundled-asset check). **That count covers BOTH packets in this checkout**: the swing-picks packet adds 59 and the day-trade pass packet 39. Previous baseline: **5456 passed, 72 subtests** (2026-08-31, on `main`) · smoke **7/7** · source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | Rebuilt 2026-08-31 at `534e0e0`, `selftest OK: 73/73 checks passed (frozen)`, exit 0. **Two commits behind since**, both lint-only (an annotation-resolving `TYPE_CHECKING` import and the unused-import sweep) - no packaging trigger fires, and the unfrozen selftest, which imports every lazy engine, passes 73/73 after them. Rebuild at the next real change rather than for these. Also built and verified at the merge point. Previously rebuilt at `d0a2ae6`, 72/72. Smart App Control read OFF at build time (`VerifiedAndReputablePolicyState = 0`), so it would launch. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
-| Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. The snappiness packet (this branch) and theta premium each need a merge — or their branch checked out — before a desk session can exercise them; the checkout was left on `claude/theta-premium`, where the previous agent left it |
+| Desk restart | **required** - the desk runs from source, so `main`'s lockup fix, warehouse and journal packets all arrive on the next launch. Both snappiness packets (this branch) and theta premium need a merge — or their branch checked out — before a desk session can exercise them. The checkout is on `claude/desk-snappiness-2` |
 
 ### Open gates, newest first
 
@@ -54,7 +54,93 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 22 | **Strength Board in the Desk** - one desk session: the trader opens the section under the Strength window, reads the board in the column, clicks a row onto the Visual Alert Review chart, adds a name from it, and says whether the vertical stack is right | 2026-08-31 Strength Board entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+| 25 | **Desk snappiness packet 2** — one DESK session with the stall watchdog ON: `ui_stalls.jsonl` quiet at `bar_cache.py:75` and at the GC collector lines, and a journal retag (accept a correction, or add an execution) that shows "tagging..." and does NOT freeze the desk | 2026-08-31 snappiness packet 2 entry |
 | 24 | **Desk snappiness packet 1** — one DESK session's `ui_stalls.jsonl` with `data_table.py:170`, `watchlist_utils.py:33`, `project_paths.py:165` and the operations-audit CSV parse gone quiet (stall watchdog stays ON; #23 is the theta gate on `claude/theta-premium`) | 2026-08-31 snappiness entry |
+
+### 2026-08-31 (late evening) - Desk snappiness packet 2: the next three stall causes
+
+**Branch `claude/desk-snappiness-2`, cut from `claude/desk-snappiness-1` and NOT
+from `main`, so it carries packet 1 too.** Three commits, green, pushed. Live
+gate 25 owed.
+
+Same evidence as packet 1: the 2026-08-31 stall log measured **8,008 GUI freezes
+/ ~78 minutes in one day**. Packet 1 took the three largest causes; these are the
+next three. Every change is memoization, threading or batching - nothing
+computes anything different.
+
+### Item 1 - the Alert Center's minute tick stops redoing itself
+
+Three repetitions, all over a ~105-symbol Focus set:
+
+- **M5 bars re-materialized per caller.** `bot.m5_chart_bars` rebuilds ~150 dicts
+  with six `float()` coercions each, and EIGHT timer-driven sites asked for the
+  same symbol's bars per tick. Memoized in the panel - the source series belongs
+  to BounceBot, which `ChartDataService` cannot see - on the source list's
+  identity plus length and last stamp, strong reference held so `is` cannot be
+  fooled by a recycled id. `m5_chart_bars` is untouched and still produces every
+  value, so a divergence in the key lookup would cost a cache miss, never a wrong
+  bar. `_poll_any_bounce_watches` also read the same bars twice per watch.
+- **D1 levels built ten times per symbol.** `evaluate_d1_event_watch` gained an
+  optional `levels_cache` scoped by the caller to one symbol and one bar list for
+  one tick; with `None` it is exactly the call it replaced. Keyed on (session,
+  anchor), so the AVWAPE kinds keep their own entry and never see the plain one.
+  No threshold, kind list or evaluation rule moved.
+- **~105 single-element prefetch tasks per minute**, queued ahead of the snapshot
+  for the chart the trader had just clicked. One batched call per event-loop
+  turn. Pool size and priorities untouched.
+
+### Item 2 - the startup heap is swept once, then frozen
+
+`main()` runs `gc.collect(2)` then `gc.freeze()` after the window shows. The
+order is the rule: freezing first would make startup GARBAGE immortal.
+`_GuiGcController` is untouched - same cadence, same bounded waits. Detail and
+the numbers behind it are in `docs/DESK_INTERNALS.md` beside the collector rule.
+
+### Item 3 - the journal's 1 GB click-freeze, the N+1, and the filters
+
+Accepting a correction parsed a **1.08 GB** tracker file plus a 73 MB CSV
+synchronously behind the OK button. Now: a single-flight worker
+(`ui/services/journal_rebuild_service.py`) with the buttons disabled, a
+"tagging..." status, results on the GUI thread and failures SHOWN - the journal's
+loud-write rule; a per-source-file parse cache stamped on (mtime_ns, size) that
+holds the projection and never the blob; one regime query instead of one sqlite
+connection per trade; and a 250 ms debounce on the filter header.
+
+**One thing that needed care.** Deferring the header's emit moved WHEN it lands.
+Construction populates the widgets, which fire their change signals; those used
+to emit synchronously, before anything was connected, and were harmless.
+Coalesced, one landed after construction and read as a real filter change - it
+made a failed-migration panel reload and claim "No accounts", which an existing
+test caught. Nothing is owed now when the header is born, or after
+`refresh_accounts` rebuilds the tree.
+
+### Left out, and why
+
+The hold-expiry double `survives()` evaluation of the current alert. The packet
+allowed a fix here only as a per-tick verdict cache; `survives()` has side
+effects, so whether the second call's effects are genuinely redundant is a
+behaviour question rather than a memoization one, and this packet is not
+authorized to answer it. Left for packet 3 with that note.
+
+### Verification
+
+`pytest tests/ -q` **5639 passed, 72 subtests**, exit 0; `ruff check .` clean;
+smoke 7/7; source `--selftest` 73/73. **27 new tests**, each change proven to
+fail against the un-fixed code by copying the files aside, reverting them with
+`git checkout`, running, and restoring - 8 of 12 for item 1, 2 of 3 for item 2,
+and all 12 for item 3; the ones that pass either way are documentation of
+behaviour the new code must not lose, and are named in the commit messages.
+
+Two existing test stubs needed the new keyword arguments. Worth recording why
+they failed loudly only here: both call sites are wrapped in `except Exception`,
+so a stub with the wrong signature turns a `TypeError` into "no hit" rather than
+an error.
+
+**No packaging trigger** for either packet: no new dependency, no new non-`.py`
+asset, no new top-level package (the new service is inside the already-collected
+`scripts/ui/services/`), no new dynamic import. The stall watchdog stays ON.
+
+---
 
 ### 2026-08-31 (late evening) — Desk snappiness packet 1: the three largest measured stall causes
 
