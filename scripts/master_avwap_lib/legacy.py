@@ -485,19 +485,54 @@ THETA_AVWAP_FAMILY_SUPPORT_LABELS = (
 # Keep theta plays short-dated: at most ~2 weeks out, preferring the nearest
 # weekly. Market days, so 10 ~= 2 calendar weeks, 5 ~= 1 week.
 THETA_PUT_MAX_EXPIRATION_MARKET_DAYS = 10
+# Phase 0.11 (trader, 2026-08-31): "on a 200 dollar stock I'd want at least 1
+# dollar, ideally 2." The premium bar is a PERCENT OF THE STRIKE, not a flat
+# dollar amount. The old bar was literally $0.25 - THETA_PUT_TARGET_TOTAL_CREDIT
+# / 100 / THETA_PUT_MAX_CONTRACTS - which is 0.125% of a $200 strike and 1.25%
+# of a $20 one: one number meaning two completely different trades, and the
+# reason the report kept surfacing quarter-dollar credits on expensive names.
+#
+# A quote below BOTH floors leaves the report entirely rather than showing as
+# "below_target": $0.25 on a $200 name is not a pullback watch, it is noise.
+THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE = 0.5
+THETA_PUT_IDEAL_CREDIT_PCT_OF_STRIKE = 1.0
+# ...and an absolute floor so a cheap stock never shows pennies: 0.5% of a $20
+# strike is $0.10, which no one is selling for.
+THETA_PUT_ABSOLUTE_MIN_CREDIT = 0.40
+# The $100/4-contract framing is now DISPLAY INFO ONLY - "how many contracts
+# would this take to make $100" - and never a qualifying bar.
 THETA_PUT_TARGET_TOTAL_CREDIT = 100.0
 THETA_PUT_MAX_CONTRACTS = 4
-THETA_PUT_TARGET_MIN_CREDIT = THETA_PUT_TARGET_TOTAL_CREDIT / 100.0 / THETA_PUT_MAX_CONTRACTS
-THETA_PUT_CUSP_MIN_CREDIT = 0.15
 THETA_PUT_SUPPORT_GIVEUP_ALLOWANCE = 2
 THETA_PUT_MAX_STRIKES_PER_EXPIRATION = 12
 THETA_PUT_MAX_EXPIRATIONS = 3
 # Points subtracted per market day to expiration, so the shorter-dated play wins
-# unless a slightly longer one is clearly better.
+# unless a slightly longer one is clearly better. PCS only since Phase 0.11: the
+# sold-put path now judges time through YIELD PER MARKET DAY instead, which says
+# the same thing without punishing a longer expiry that pays for the wait.
 THETA_DTE_PENALTY_PER_MARKET_DAY = 4.0
+# Phase 0.11 sold-put ranking. Priority is support, then premium, then spread
+# (trader, 2026-08-31: "spreads are a spectrum ... #1 priority is still areas of
+# support"). These weights only have to keep rank_score agreeing with the
+# explicit sort below; the sort is what actually decides the order.
+THETA_PUT_YIELD_RANK_WEIGHT = 90.0
+# "2 is a big rank boost": a second major SMA above the strike is worth more
+# than any realistic premium difference between two otherwise equal strikes.
+THETA_PUT_TWO_SMA_RANK_BOOST = 45.0
+THETA_PUT_MAJOR_SMA_RANK_WEIGHT = 12.0
+# Spread is ranked as a SPECTRUM, never a new hard block, and the penalty is
+# monotonic and UNCAPPED - the old one capped at 18 points, so a 40% market and
+# a 150% one cost the same and neither sank.
+THETA_SPREAD_PENALTY_PER_PCT = 1.5
+# No two-sided market to measure: treated as the wide-spread threshold rather
+# than as free, because an unmeasurable spread is not a tight one.
+THETA_SPREAD_UNKNOWN_PCT = 25.0
 THETA_PCS_MIN_SUPPORT_LEVELS = 2
 THETA_PCS_MIN_EXPIRATION_MARKET_DAYS = 4
-THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 10
+# Trader, 2026-08-31: "2 weeks max for put sells, 3 weeks for credit spread."
+# A credit spread is defined-risk, so it can afford the longer wait that a
+# naked short put cannot. The sold-put maximum above stays at 10.
+THETA_PCS_MAX_EXPIRATION_MARKET_DAYS = 15
 THETA_PCS_TARGET_CREDIT_WIDTH_RATIO = 0.20
 THETA_PCS_CUSP_CREDIT_WIDTH_RATIO = 0.12
 THETA_PCS_MAX_EXPIRATIONS = 3
@@ -15527,7 +15562,10 @@ def _enrich_sold_put_row_with_ib_options(
                     break  # dead ladder: deeper strikes will not quote either
                 continue
             empty_streak = 0
-            if credit < THETA_PUT_CUSP_MIN_CREDIT:
+            ladder_cusp_floor, _ladder_ideal_floor = theta_put_credit_floors(
+                strike_candidate.get("strike")
+            )
+            if ladder_cusp_floor is not None and credit < ladder_cusp_floor:
                 below_cusp_streak += 1
                 if below_cusp_streak >= THETA_LADDER_BELOW_CUSP_BAIL:
                     break  # credit shrinks with the strike: rest is unactionable
@@ -15545,7 +15583,8 @@ def _enrich_sold_put_row_with_ib_options(
                 row,
                 (
                     f"IBKR checked {len(quote_rows)} sell-strike quote(s); "
-                    f"none met >= {_format_option_decimal(THETA_PUT_CUSP_MIN_CREDIT)} minimum credit"
+                    f"none met the >= {THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE:g}% of strike "
+                    f"(min {_format_option_decimal(THETA_PUT_ABSOLUTE_MIN_CREDIT)}) credit floor"
                 ),
             )
         # No live credit, but the support-derived strike needs no quote: always
@@ -15851,6 +15890,62 @@ def _apply_support_only_theta_fallback(row: dict, kind: str, chain: dict, refere
     return True
 
 
+def _theta_premium_capacity_estimate(row: dict) -> float:
+    """How plausibly this symbol can pay the percent floor. Ordering only.
+
+    The quote budget (240 quotes / 360 s) is finite, so who gets asked FIRST
+    decides who gets a live credit at all. It used to be spent in `base_score`
+    order, which is a trend-quality ranking and says nothing about whether the
+    name's options carry premium - so dead-vol names burned quotes that rich
+    ones never got.
+
+    ATR20 as a percent of the close is the only volatility number already on
+    every theta row, and no new network call is allowed here. An option's
+    expected move over N market days scales with sqrt(N), and the premium a
+    support-defended OTM strike can carry scales with that move, so:
+
+        capacity = atr_pct * sqrt(max sold-put market days) / the 0.5% floor
+
+    A value >= 1 means the name plausibly pays the floor inside the window;
+    below 1 it probably cannot. It is an ESTIMATE and never a filter: a low
+    score sorts last, it does not drop the row, and the budget-exhaustion path
+    still writes every tail row its support-only strike zone. A row with no
+    usable ATR or close returns 0.0 - unmeasurable goes to the back of the
+    queue, never out of it.
+    """
+    close_value = _coerce_float(row.get("last_close")) if isinstance(row, dict) else None
+    atr_value = _coerce_float(row.get("atr20")) if isinstance(row, dict) else None
+    if close_value is None or close_value <= 0 or atr_value is None or atr_value <= 0:
+        return 0.0
+    atr_pct = atr_value / close_value * 100.0
+    horizon = math.sqrt(max(1, int(THETA_PUT_MAX_EXPIRATION_MARKET_DAYS)))
+    floor_pct = max(THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE, 0.01)
+    return atr_pct * horizon / floor_pct
+
+
+def _theta_enrichment_work_order(work: list) -> list:
+    """Order the quote-budget work list: the trader's own names, then the ones
+    most able to pay, then trend conviction.
+
+    `thetalongs.txt` rows are pinned first because that file IS the trader
+    saying "evaluate this one for premium" (R9.4); nothing the machine
+    estimates outranks it. `base_score` stays as the last key, so two names of
+    equal estimated capacity still resolve the way they always did.
+    """
+    ordered = list(work or [])
+    for row, _kind in ordered:
+        if isinstance(row, dict):
+            row["theta_premium_capacity"] = round(_theta_premium_capacity_estimate(row), 3)
+    ordered.sort(
+        key=lambda item: (
+            0 if str(item[0].get("theta_list_source") or "").strip().lower() == "thetalongs" else 1,
+            -float(item[0].get("theta_premium_capacity", 0.0) or 0.0),
+            -float(item[0].get("base_score", item[0].get("score", 0)) or 0.0),
+        )
+    )
+    return ordered
+
+
 def enrich_theta_rows_with_ib_option_premiums(
     ib: IBApi | None,
     theta_rows: list[dict],
@@ -15882,10 +15977,11 @@ def enrich_theta_rows_with_ib_option_premiums(
         logging.info("Theta option enrichment skipped because the IBKR option client is unavailable.")
         return
 
-    # Highest-conviction rows first (sold-put and PCS interleaved) so the
-    # shared quote budget is always spent on the best picks, never on
-    # whichever symbols happened to scan first.
-    work.sort(key=lambda item: -float(item[0].get("base_score", item[0].get("score", 0)) or 0.0))
+    # The trader's own names first, then the ones most able to pay the percent
+    # floor, then trend conviction (sold-put and PCS interleaved) - so the
+    # shared quote budget is spent where a live credit can actually come back,
+    # never on whichever symbols happened to scan first.
+    work = _theta_enrichment_work_order(work)
 
     # Persisted same-day chains + last working market data type make reruns
     # cheap; only real IB clients touch the on-disk cache (unit-test fakes
@@ -18181,22 +18277,27 @@ def find_directional_trendline_candidate(
 
 
 def _format_theta_premium_target(last_close: float | None) -> str:
+    """What a strike near this price has to pay, in the report's own terms.
+
+    Percent of the strike, not a flat dollar band (Phase 0.11). The dollars are
+    quoted at the CLOSE, which sits above every sold-put strike, so they read
+    as an upper bound on what the floor will actually ask for.
+    """
     price = _coerce_float(last_close)
     if price is None or price <= 0:
         return "manual chain check"
-    if price < 12:
-        return "$0.20-$0.30"
-    if price < 25:
-        return "$0.25-$0.45"
-    if price < 40:
-        return "$0.50-$0.65"
-    if price < 75:
-        return "$0.50-$0.90"
-    if price < 110:
-        return "$1.00-$1.25"
-    if price < 160:
-        return "$1.25-$1.75"
-    return "$1.50-$2.00+"
+    cusp_floor, ideal_floor = theta_put_credit_floors(price)
+    if cusp_floor is None or ideal_floor is None:
+        return "manual chain check"
+    if abs(ideal_floor - cusp_floor) < 0.005:
+        # The absolute floor swallowed both percent tiers: on a cheap name
+        # 1% of the strike is less than the dollar minimum, so there is one
+        # bar, not two, and saying "0.40-0.40" would just look broken.
+        return f"{_format_option_decimal(cusp_floor)}+ (absolute floor)"
+    return (
+        f"{_format_option_decimal(cusp_floor)}-{_format_option_decimal(ideal_floor)} "
+        f"({THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE:g}%-{THETA_PUT_IDEAL_CREDIT_PCT_OF_STRIKE:g}% of strike)"
+    )
 
 
 def _theta_support_entry(
@@ -18945,6 +19046,56 @@ def _support_only_pcs_option(
     }
 
 
+def theta_put_credit_floors(strike: float | None) -> tuple[float | None, float | None]:
+    """(cusp floor, recommended floor) in dollars of credit for one strike.
+
+    Both are a percent of the STRIKE - the capital actually put at risk when
+    the put is assigned - with an absolute dollar floor underneath so cheap
+    names cannot qualify on pennies. Returns (None, None) for an unusable
+    strike, which callers treat as "cannot judge", never as "passes".
+    """
+    strike_value = _coerce_float(strike)
+    if strike_value is None or strike_value <= 0:
+        return None, None
+    cusp = max(
+        strike_value * THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE / 100.0,
+        THETA_PUT_ABSOLUTE_MIN_CREDIT,
+    )
+    ideal = max(
+        strike_value * THETA_PUT_IDEAL_CREDIT_PCT_OF_STRIKE / 100.0,
+        THETA_PUT_ABSOLUTE_MIN_CREDIT,
+    )
+    return cusp, ideal
+
+
+def theta_pcs_credit_floor(short_strike: float | None) -> float | None:
+    """The minimum credit a put credit spread may show, in dollars.
+
+    Trader, 2026-08-31, asked directly whether the spread bar should scale with
+    the underlying: *"Yes it should scale with price of the underlying."* The
+    credit/width ratio alone does not - `_pcs_long_strike_choices` caps the
+    width at 10 points however expensive the stock is, so the 20% target credit
+    stops growing at $2.00. Expressed as a percent of the short strike that is
+    1.36% at a $40 close, 0.72% at $150, 0.45% at $240 and 0.31% at $700: the
+    dearer the stock, the smaller the reward for the same assignment risk.
+
+    So the CUSP percent (0.5% of the short strike, or the absolute floor,
+    whichever is larger) is a hard minimum for a spread as well, and the
+    credit/width ratio still decides recommended-vs-cusp above it. The
+    RECOMMENDED percent is deliberately not used here: 1% of a $644 strike is a
+    $6.44 credit on a 10-wide spread, a 64% credit/width bar that no real market
+    pays, so applying it would silently delete every expensive spread rather
+    than rank it.
+    """
+    strike_value = _coerce_float(short_strike)
+    if strike_value is None or strike_value <= 0:
+        return None
+    return max(
+        strike_value * THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE / 100.0,
+        THETA_PUT_ABSOLUTE_MIN_CREDIT,
+    )
+
+
 def _contracts_needed_for_target_credit(credit: float | None) -> int | None:
     credit_value = _coerce_float(credit)
     if credit_value is None or credit_value <= 0:
@@ -19014,6 +19165,7 @@ def _sold_put_candidate_strikes(row: dict, strikes: list[float]) -> list[dict]:
 
 def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> list[dict]:
     ranked = []
+    below_floor_count = 0
     base_score = int(row.get("base_score", row.get("score", 0)) or 0)
     close_value = _coerce_float(row.get("last_close")) or 0.0
     for quote_row in quote_rows or []:
@@ -19026,34 +19178,50 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
             continue
         contracts_needed = _contracts_needed_for_target_credit(credit)
         total_credit_at_cap = credit * 100.0 * THETA_PUT_MAX_CONTRACTS
-        status = "below_target"
-        status_rank = 2
-        if credit >= THETA_PUT_TARGET_MIN_CREDIT and contracts_needed is not None and contracts_needed <= THETA_PUT_MAX_CONTRACTS:
+        # T1: the bar is a percent of the strike, and a quote under both floors
+        # leaves the report rather than lingering as "below_target".
+        cusp_floor, ideal_floor = theta_put_credit_floors(strike)
+        if cusp_floor is None or ideal_floor is None:
+            continue
+        if credit < cusp_floor:
+            below_floor_count += 1
+            continue
+        if credit >= ideal_floor:
             status = "recommended"
             status_rank = 0
-        elif credit >= THETA_PUT_CUSP_MIN_CREDIT:
+        else:
             status = "cusp"
             status_rank = 1
+        credit_pct_of_strike = credit / strike * 100.0
+        market_days = max(1, int(quote_row.get("market_days", 0) or 0))
+        credit_pct_per_market_day = credit_pct_of_strike / market_days
         spread_pct = _option_quote_spread_pct(quote)
-        spread_penalty = min(18.0, (spread_pct or 0.0) * 0.12) if spread_pct is not None else 6.0
+        # Uncapped and monotonic: a truly wide market sinks to the bottom of its
+        # tier instead of paying a flat 18-point toll.
+        spread_penalty = (
+            spread_pct if spread_pct is not None else THETA_SPREAD_UNKNOWN_PCT
+        ) * THETA_SPREAD_PENALTY_PER_PCT
         support_quality = float(quote_row.get("support_quality_score", 0.0) or 0.0)
         surrendered = int(quote_row.get("surrendered_support_count", 0) or 0)
+        major_sma_support_count = int(quote_row.get("covered_major_sma_support_count", 0) or 0)
         avwap_support_count = int(quote_row.get("covered_avwap_support_count", 0) or 0)
         previous_first_dev_support_count = int(quote_row.get("covered_previous_first_dev_support_count", 0) or 0)
+        major_sma_bonus = major_sma_support_count * THETA_PUT_MAJOR_SMA_RANK_WEIGHT
+        if major_sma_support_count >= 2:
+            major_sma_bonus += THETA_PUT_TWO_SMA_RANK_BOOST
         moneyness_penalty = 0.0
         if close_value > 0:
             moneyness_penalty = max(0.0, ((close_value - strike) / close_value * 100.0) - 8.0) * 0.6
-        dte_penalty = max(0, int(quote_row.get("market_days", 0) or 0)) * THETA_DTE_PENALTY_PER_MARKET_DAY
         rank_score = (
             base_score
-            + credit * 90.0
+            + credit_pct_per_market_day * THETA_PUT_YIELD_RANK_WEIGHT
             + support_quality * 9.0
+            + major_sma_bonus
             + avwap_support_count * 4.0
             + previous_first_dev_support_count * 3.0
             - surrendered * 8.0
             - spread_penalty
             - moneyness_penalty
-            - dte_penalty
             - status_rank * 55.0
         )
         ranked.append(
@@ -19072,6 +19240,11 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
                 "last": _quote_value(quote, "last"),
                 "model_price": _quote_value(quote, "model_price"),
                 "spread_pct": round(float(spread_pct), 1) if spread_pct is not None else None,
+                "credit_pct_of_strike": round(float(credit_pct_of_strike), 3),
+                "credit_pct_per_market_day": round(float(credit_pct_per_market_day), 4),
+                "credit_pct_per_week": round(float(credit_pct_per_market_day) * 5.0, 3),
+                "min_credit_floor": round(float(cusp_floor), 3),
+                "ideal_credit_floor": round(float(ideal_floor), 3),
                 "contracts_needed_for_100": contracts_needed,
                 "max_contracts": THETA_PUT_MAX_CONTRACTS,
                 "total_credit_at_contract_cap": round(float(total_credit_at_cap), 2),
@@ -19093,22 +19266,31 @@ def _rank_sold_put_option_recommendations(row: dict, quote_rows: list[dict]) -> 
                 "support_quality_score": round(float(support_quality), 3),
             }
         )
+    # Trader's priority, in order: support, then premium, then spread. The old
+    # key sorted by STRIKE ASCENDING inside each tier, which preferred the
+    # deepest-OTM - and therefore cheapest - qualifying option every single
+    # time. That one line is most of why the report read like pennies.
     ranked.sort(
         key=lambda item: (
             0 if item.get("status") == "recommended" else 1 if item.get("status") == "cusp" else 2,
-            float(item.get("strike", 0.0) or 0.0),
-            int(item.get("market_days", 9999) or 9999),
-            -int(item.get("covered_support_count", 0) or 0),
-            -float(item.get("credit", 0.0) or 0.0),
+            -int(item.get("covered_major_sma_support_count", 0) or 0),
+            -float(item.get("support_quality_score", 0.0) or 0.0),
+            -float(item.get("credit_pct_per_market_day", 0.0) or 0.0),
+            (
+                float(item.get("spread_pct"))
+                if item.get("spread_pct") is not None
+                else THETA_SPREAD_UNKNOWN_PCT
+            ),
             -float(item.get("rank_score", 0.0) or 0.0),
         )
     )
-    actionable = [
-        item
-        for item in ranked
-        if str(item.get("status") or "").strip().lower() in {"recommended", "cusp"}
-    ]
-    return actionable if actionable else ranked
+    # Everything that survives the floor is actionable by construction now, so
+    # the old "return the below-target rows when nothing qualifies" fallback is
+    # gone: an empty list sends the caller to the support-only strike zone,
+    # which is the honest answer when no quote could pay.
+    if isinstance(row, dict):
+        row["sold_put_quotes_below_floor"] = int(below_floor_count)
+    return ranked
 
 
 def _preferred_pcs_width(close_value: float) -> float:
@@ -19171,6 +19353,7 @@ def _pcs_long_strike_choices(short_strike: float, strikes: list[float], close_va
 
 def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list[dict]:
     ranked = []
+    below_floor_count = 0
     base_score = int(row.get("base_score", row.get("score", 0)) or 0)
     for spread_row in spread_rows or []:
         short_quote = spread_row.get("short_quote") if isinstance(spread_row, dict) else None
@@ -19185,6 +19368,15 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
         width = short_strike - long_strike
         if width <= 0:
             continue
+        # The credit has to scale with the underlying, not just with the
+        # width (trader, 2026-08-31). Under the floor the spread leaves the
+        # report entirely, the same way a sub-floor sold put does; the ratio
+        # still decides the tier above it.
+        credit_floor = theta_pcs_credit_floor(short_strike)
+        if credit_floor is not None and credit < credit_floor:
+            below_floor_count += 1
+            continue
+        credit_pct_of_strike = credit / short_strike * 100.0
         credit_ratio = credit / width
         status = "below_target"
         status_rank = 2
@@ -19231,6 +19423,8 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
                 "credit_source": credit_source,
                 "credit_width_ratio": round(float(credit_ratio), 4),
                 "credit_width_pct": round(float(credit_ratio * 100.0), 1),
+                "credit_pct_of_strike": round(float(credit_pct_of_strike), 3),
+                "min_credit_floor": round(float(credit_floor), 3) if credit_floor is not None else None,
                 "max_loss": round(float((width - credit) * 100.0), 2),
                 "short_bid": _quote_value(short_quote, "bid"),
                 "short_ask": _quote_value(short_quote, "ask"),
@@ -19264,6 +19458,8 @@ def _rank_pcs_option_recommendations(row: dict, spread_rows: list[dict]) -> list
             -float(item.get("rank_score", 0.0) or 0.0),
         )
     )
+    if isinstance(row, dict):
+        row["pcs_quotes_below_floor"] = int(below_floor_count)
     actionable = [
         item
         for item in ranked
@@ -19391,6 +19587,37 @@ def _theta_option_alternatives(row: dict, *, play_type: str) -> list[str]:
     return out
 
 
+def _format_theta_premium_line(option: dict | None) -> str:
+    """The Phase 0.11 premium facts for one sold-put option, or "".
+
+    ``key=value | key=value``, the idiom the rest of this report already uses,
+    so `extract_theta_rows_from_report` can read back exactly what was written.
+    Only emitted for a row that actually has a quoted credit - a support-only
+    strike zone has no premium to describe, and inventing zeros there would
+    read as a measurement.
+    """
+    if not isinstance(option, dict):
+        return ""
+    credit_pct = _coerce_float(option.get("credit_pct_of_strike"))
+    if credit_pct is None:
+        return ""
+    parts = [f"credit_pct={credit_pct:.2f}"]
+    yield_week = _coerce_float(option.get("credit_pct_per_week"))
+    if yield_week is not None:
+        parts.append(f"yield_pct_wk={yield_week:.2f}")
+    credit_width_pct = _coerce_float(option.get("credit_width_pct"))
+    if credit_width_pct is not None:
+        parts.append(f"credit_width_pct={credit_width_pct:.1f}")
+    spread_pct = _coerce_float(option.get("spread_pct"))
+    parts.append(f"spread_pct={spread_pct:.1f}" if spread_pct is not None else "spread_pct=n/a")
+    parts.append(f"source={str(option.get('credit_source') or 'n/a').strip() or 'n/a'}")
+    sma_above = int(option.get("covered_major_sma_support_count", 0) or 0)
+    # The 2+ boost is a ranking rule, so the report says when it applied
+    # rather than leaving the trader to infer it from the ordering.
+    parts.append(f"sma_above_strike={sma_above}" + (" (boost)" if sma_above >= 2 else ""))
+    return "premium=" + " | ".join(parts)
+
+
 def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> None:
     option = row.get("best_option") if isinstance(row.get("best_option"), dict) else {}
     next_earnings = row.get("next_earnings_date") or f">{THETA_UPCOMING_EARNINGS_LOOKAHEAD_DAYS}d/unknown"
@@ -19412,6 +19639,7 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
         f"| supports={int(row.get('support_count', 0) or 0)} "
         f"| option_status={status}{credit_text}{source_text}\n"
     )
+    premium_line = _format_theta_premium_line(option)
     if play_type == "pcs":
         handle.write(f"   {_format_pcs_option_line(option)}\n")
         alternatives = _theta_option_alternatives(row, play_type=play_type)
@@ -19426,6 +19654,8 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
                 f"| major_sma={option.get('covered_major_sma_support_count', 0)} "
                 f"| avwap_supports={option.get('covered_avwap_support_count', 0)}\n"
             )
+        if premium_line:
+            handle.write(f"   {premium_line}\n")
     else:
         handle.write(f"   {_format_sold_put_option_line(option)}\n")
         alternatives = _theta_option_alternatives(row, play_type=play_type)
@@ -19440,6 +19670,8 @@ def _write_theta_row_details(handle, idx: int, row: dict, *, play_type: str) -> 
                 f"| prev_1stdev={option.get('covered_previous_first_dev_support_count', 0)} "
                 f"| gave_up_supports={option.get('surrendered_support_count', 0)}\n"
             )
+        if premium_line:
+            handle.write(f"   {premium_line}\n")
     handle.write(f"   strike_zone={row.get('strike_zone')}\n")
     if option and option.get("covered_support_summary"):
         handle.write(f"   option_supports={option.get('covered_support_summary')}\n")
@@ -19479,12 +19711,18 @@ def write_theta_put_report(path: Path, theta_rows: list[dict], pcs_rows: list[di
         "Sold put rules: LONG watchlist (or thetalongs.txt) only; recommendation-only; >=3 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support "
         "(current AVWAPE, previous AVWAPE, or previous 1st-dev); "
         f"short put expiration <= {THETA_PUT_MAX_EXPIRATION_MARKET_DAYS} market days; "
-        f"target >= {_format_option_decimal(THETA_PUT_TARGET_MIN_CREDIT)} credit so <= {THETA_PUT_MAX_CONTRACTS} contracts can reach ~$100.\n"
+        f"credit >= {THETA_PUT_IDEAL_CREDIT_PCT_OF_STRIKE:g}% of the strike is recommended and "
+        f">= {THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE:g}% is cusp, with an absolute floor of "
+        f"{_format_option_decimal(THETA_PUT_ABSOLUTE_MIN_CREDIT)} per contract; "
+        "anything under both floors is left out of this report entirely. "
+        f"Contracts-for-${THETA_PUT_TARGET_TOTAL_CREDIT:.0f} is shown as information only.\n"
     )
     handle.write(
         "PCS rules: LONG watchlist (or thetalongs.txt) only; recommendation-only; >=2 nearby support references including >=1 SMA50/100/200 and >=1 AVWAP-family support; "
         f"expiration {THETA_PCS_MIN_EXPIRATION_MARKET_DAYS}-{THETA_PCS_MAX_EXPIRATION_MARKET_DAYS} market days; "
-        f"IBKR-confirmed target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width; "
+        f"IBKR-confirmed target >= {THETA_PCS_TARGET_CREDIT_WIDTH_RATIO:.0%} credit/width, "
+        f"and the credit must also clear {THETA_PUT_MIN_CREDIT_PCT_OF_STRIKE:g}% of the short strike "
+        f"(min {_format_option_decimal(THETA_PUT_ABSOLUTE_MIN_CREDIT)}) so it scales with the underlying; "
         "target-hit rows are trade-ready while cusp/below-target/no-quote rows stay visible as pullback/support watches.\n"
     )
     handle.write(
@@ -19559,6 +19797,7 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
         re.IGNORECASE,
     )
     earnings_pattern = re.compile(r"next\s+([^;]+?)(?:\s+\(([-]?\d+)d\))?(?:$|;)", re.IGNORECASE)
+    premium_pattern = re.compile(r"^\s*premium=(.+)$", re.IGNORECASE)
 
     current = None
     current_play_type = "sold_put"
@@ -19589,6 +19828,11 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
                 "recommended_long_strike": None,
                 "recommended_credit": None,
                 "recommended_credit_source": "",
+                "credit_pct_of_strike": None,
+                "credit_pct_per_week": None,
+                "credit_width_pct": None,
+                "spread_pct": None,
+                "major_sma_above_strike": None,
             }
             continue
         if not current:
@@ -19620,6 +19864,27 @@ def extract_theta_rows_from_report(text: str) -> list[dict]:
             current["recommended_credit_source"] = credit_source
             current["primary_strike_band"] = f"{pcs_match.group(2)}/{pcs_match.group(3)} PCS {pcs_match.group(1)}"
             current["liquidity_score"] = credit_source
+            continue
+        premium_match = premium_pattern.match(line)
+        if premium_match:
+            for chunk in premium_match.group(1).split("|"):
+                key, _sep, value = chunk.strip().partition("=")
+                key = key.strip().lower()
+                value = value.strip()
+                if key == "credit_pct":
+                    current["credit_pct_of_strike"] = _coerce_float(value)
+                elif key == "yield_pct_wk":
+                    current["credit_pct_per_week"] = _coerce_float(value)
+                elif key == "credit_width_pct":
+                    current["credit_width_pct"] = _coerce_float(value)
+                elif key == "spread_pct":
+                    current["spread_pct"] = _coerce_float(value)
+                elif key == "sma_above_strike":
+                    # "2 (boost)" - the flag is for the reader, the number is
+                    # the datum.
+                    current["major_sma_above_strike"] = _coerce_int(value.split()[0] if value else "")
+                elif key == "source" and not current.get("recommended_credit_source"):
+                    current["recommended_credit_source"] = value
             continue
         if line.lower().startswith("earnings="):
             earnings_match = earnings_pattern.search(line)

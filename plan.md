@@ -789,7 +789,7 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
-### Phase 0.11 — Theta premium optimization (authorized 2026-08-31)
+### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads
 because the target is literally $0.25 (`$100 / 4 contracts`), the final sort
@@ -818,6 +818,39 @@ Build prompt: [`docs/prompts/THETA_PREMIUM_OPUS_PROMPT.md`](docs/prompts/THETA_P
 Eligibility rules (≥3 supports, ≥1 major SMA, earnings buffer) and R9.4
 `theta_side` semantics are unchanged. Universe coverage already holds at
 evaluation time (universe longs join full scans); T4 is allocation, not reach.
+
+**Status 2026-08-31: T1-T6 BUILT and GREEN on `claude/theta-premium`.** Sold-put
+credit is judged at >= 1.0% of the strike (recommended) / >= 0.5% (cusp) with a
+$0.40 absolute floor, and a quote under both leaves the report. The final sort is
+tier -> major SMAs above the strike -> support quality -> yield per market day ->
+spread, with the strike-ascending key removed and the spread penalty uncapped.
+PCS reaches 15 market days. The quote budget is ordered thetalongs -> estimated
+premium capacity (ATR%-based, no new network call) -> base_score. The report and
+the Qt panel carry credit %, yield/week, spread % and the SMA-above-strike count.
+
+6. **T7 The spread credit scales with the underlying too. — DECIDED and BUILT
+   2026-08-31.** The open question was put to the trader with its arithmetic and
+   answered in as many words: *"Yes it should scale with price of the underlying."*
+   The credit/width ratio does not scale, because `_pcs_long_strike_choices` caps
+   the width at 10 points however expensive the stock is, so the 20% target credit
+   stops growing at $2.00 - 1.36% of a $37 short strike and 0.31% of a $644 one.
+   `theta_pcs_credit_floor(short_strike)` is now a hard minimum: 0.5% of the short
+   strike or the $0.40 absolute floor, whichever is larger, sharing the sold-put
+   constants so "the percent floor" has one definition. Under it the spread leaves
+   the report; above it the credit/width ratio still decides recommended-vs-cusp.
+   The RECOMMENDED percent (1.0%) is deliberately NOT applied here - 1% of a $644
+   strike is a $6.44 credit on a 10-wide spread, a 64% credit/width bar no real
+   market pays, so using it would delete every expensive spread rather than rank
+   it. The report's PCS rows now carry the same `premium=` line as sold puts, with
+   `credit_width_pct` alongside `credit_pct`.
+
+   *Consequence, stated rather than discovered on the desk:* expensive credit
+   spreads will mostly disappear unless their credit genuinely scales. If the
+   trader wants those opportunities back, the lever is the WIDTH cap in
+   `_pcs_long_strike_choices` (`max(10.0, preferred_width)`), not the floor -
+   widening a $700-stock spread to ~17 points would let a 20% ratio pay $3.50 and
+   clear 0.5%. That changes capital at risk per contract, so it was not done
+   without asking.
 
 Gate: one desk scan whose theta report shows percent-floored, support-first
 rows, with `via thetalongs.txt` labelling intact.

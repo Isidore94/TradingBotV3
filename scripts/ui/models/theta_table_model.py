@@ -23,6 +23,13 @@ class ThetaTableModel(QAbstractTableModel):
         ("next_earnings_days", "Earnings DTE"),
         ("recommended_strike", "Strike"),
         ("recommended_credit", "Credit"),
+        # Phase 0.11: a credit only means something next to the strike it was
+        # written against, so the percent, the weekly yield, the market it
+        # would fill in and the SMA count defending it sit beside it.
+        ("credit_pct_of_strike", "Credit %"),
+        ("credit_pct_per_week", "Yield/wk"),
+        ("spread_pct", "Spread %"),
+        ("major_sma_above_strike", "SMA>K"),
         ("primary_strike_band", "Strike Band"),
         ("liquidity_score", "Liquidity"),
     )
@@ -49,7 +56,18 @@ class ThetaTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             return _display_value(row, key)
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            if key in {"score", "support_count", "close", "next_earnings_days", "recommended_strike", "recommended_credit"}:
+            if key in {
+                "score",
+                "support_count",
+                "close",
+                "next_earnings_days",
+                "recommended_strike",
+                "recommended_credit",
+                "credit_pct_of_strike",
+                "credit_pct_per_week",
+                "spread_pct",
+                "major_sma_above_strike",
+            }:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole:
@@ -146,6 +164,14 @@ def _display_value(row: ThetaRow, key: str) -> str:
         return "" if row.recommended_strike is None else f"{row.recommended_strike:.2f}"
     if key == "recommended_credit":
         return "" if row.recommended_credit is None else f"{row.recommended_credit:.2f}"
+    if key in {"credit_pct_of_strike", "credit_pct_per_week", "spread_pct"}:
+        value = getattr(row, key)
+        return "" if value is None else f"{value:.2f}%"
+    if key == "major_sma_above_strike":
+        if row.major_sma_above_strike is None:
+            return ""
+        # The 2+ boost is a ranking rule; the board says when it applied.
+        return f"{row.major_sma_above_strike}+" if row.major_sma_above_strike >= 2 else str(row.major_sma_above_strike)
     if key == "primary_strike_band":
         return row.primary_strike_band
     if key == "liquidity_score":
@@ -154,10 +180,17 @@ def _display_value(row: ThetaRow, key: str) -> str:
 
 
 def _sort_value(row: ThetaRow, key: str) -> Any:
-    if key in {"score", "support_count", "next_earnings_days"}:
+    if key in {"score", "support_count", "next_earnings_days", "major_sma_above_strike"}:
         value = getattr(row, key)
         return value if value is not None else -999999
-    if key in {"close", "recommended_strike", "recommended_credit"}:
+    if key in {
+        "close",
+        "recommended_strike",
+        "recommended_credit",
+        "credit_pct_of_strike",
+        "credit_pct_per_week",
+        "spread_pct",
+    }:
         value = getattr(row, key)
         return value if value is not None else -999999.0
     return _display_value(row, key)
@@ -166,6 +199,24 @@ def _sort_value(row: ThetaRow, key: str) -> Any:
 def _tooltip(row: ThetaRow, key: str) -> str:
     if key == "recommended_credit" and row.recommended_credit_source:
         return f"Credit source: {row.recommended_credit_source}"
+    if key == "credit_pct_of_strike":
+        return (
+            "Credit as a percent of the strike - the bar the report actually "
+            "applies. A dollar amount means nothing without the strike it was "
+            "written against."
+        )
+    if key == "credit_pct_per_week":
+        return "Credit percent per week to expiration - what ranks premium."
+    if key == "spread_pct":
+        return (
+            "Bid/ask spread as a percent of the midpoint. Ranked down heavily "
+            "but never blocked - a wide market is a worse fill, not a refusal."
+        )
+    if key == "major_sma_above_strike":
+        return (
+            "How many of SMA 50/100/200 are still above this strike. One is "
+            "required; two or more is a large ranking boost."
+        )
     if key == "recommended_strike" and row.recommended_long_strike is not None:
         return f"Long leg strike: {row.recommended_long_strike:.2f}"
     if key in {"next_earnings_days", "next_earnings_label"} and row.next_earnings_label:

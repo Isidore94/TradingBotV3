@@ -6317,7 +6317,9 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertNotIn(96.0, [candidate["strike"] for candidate in candidates])
         self.assertNotIn(98.0, [candidate["strike"] for candidate in candidates])
 
-        credits = {94.0: 0.30, 92.0: 0.12}
+        # Phase 0.11: credits are judged against a percent of the STRIKE, so
+        # these are stated relative to it - 94 asks 0.94 to be recommended.
+        credits = {94.0: 1.10, 92.0: 0.20}
         quote_rows = []
         for candidate in candidates:
             credit = credits[candidate["strike"]]
@@ -6334,7 +6336,8 @@ class MasterAvwapSetupTests(unittest.TestCase):
         ranked = master_avwap._rank_sold_put_option_recommendations(row, quote_rows)
         self.assertEqual(ranked[0]["strike"], 94.0)
         self.assertEqual(ranked[0]["status"], "recommended")
-        self.assertEqual(ranked[0]["contracts_needed_for_100"], 4)
+        # Display info only since Phase 0.11, never a qualifying bar.
+        self.assertEqual(ranked[0]["contracts_needed_for_100"], 1)
         self.assertEqual(ranked[0]["covered_support_count"], 3)
         self.assertEqual(ranked[0]["covered_major_sma_support_count"], 1)
         self.assertNotIn("SMA_20", ranked[0]["covered_support_summary"])
@@ -6577,16 +6580,444 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "covered_previous_first_dev_support_count": 1,
             "total_support_count": 3,
             "support_quality_score": 3.0,
-            # Illiquid wide market: the stale 0.18 last trade overstated the credit;
-            # the realistic fill is the 0.01 bid, which correctly ranks this out.
-            "quote": {"bid": 0.01, "ask": 0.99, "last": 0.18},
+            # Illiquid wide market: the stale 1.40 last trade overstates the
+            # credit; the realistic fill is the 0.60 bid, which is what gets
+            # judged against the floor.
+            "quote": {"bid": 0.60, "ask": 1.60, "last": 1.40},
         }
 
         ranked = master_avwap._rank_sold_put_option_recommendations(row, [quote_row])
 
-        self.assertAlmostEqual(ranked[0]["credit"], 0.01)
+        self.assertAlmostEqual(ranked[0]["credit"], 0.60)
         self.assertEqual(ranked[0]["credit_source"], "bid_wide_spread")
-        self.assertEqual(ranked[0]["status"], "below_target")
+        # 0.60 on a 95 strike is 0.63%: over the 0.5% cusp floor, under the
+        # 1.0% recommended one. Asserted as a TIER, never as a constant.
+        self.assertEqual(ranked[0]["status"], "cusp")
+
+    def test_sold_put_below_the_percent_floor_leaves_the_report(self):
+        """Phase 0.11 (trader, 2026-08-31): a $0.25 credit on an expensive
+        strike is not a pullback watch, it is noise. It used to be kept as
+        `below_target` and could become the row's best option when nothing
+        better quoted; now it is dropped and counted."""
+        row = {"symbol": "CIEN", "last_close": 105.0, "score": 80, "base_score": 80}
+        quote_row = {
+            "strike": 95.0,
+            "expiration": "20260508",
+            "expiration_date": date(2026, 5, 8),
+            "market_days": 4,
+            "covered_support_count": 3,
+            "covered_major_sma_support_count": 1,
+            "total_support_count": 3,
+            "support_quality_score": 3.0,
+            "quote": {"bid": 0.24, "ask": 0.26},
+        }
+
+        ranked = master_avwap._rank_sold_put_option_recommendations(row, [quote_row])
+
+        self.assertEqual(ranked, [])
+        self.assertEqual(row["sold_put_quotes_below_floor"], 1)
+
+    def test_the_absolute_floor_stops_a_cheap_stock_showing_pennies(self):
+        """0.75% of a $20 strike is $0.15. The percent floor alone would call
+        that qualifying, so an absolute dollar floor sits underneath it."""
+        row = {"symbol": "CHEAP", "last_close": 22.0, "score": 80, "base_score": 80}
+        quote_row = {
+            "strike": 20.0,
+            "expiration": "20260508",
+            "expiration_date": date(2026, 5, 8),
+            "market_days": 4,
+            "covered_support_count": 3,
+            "covered_major_sma_support_count": 1,
+            "total_support_count": 3,
+            "support_quality_score": 3.0,
+            "quote": {"bid": 0.14, "ask": 0.16},
+        }
+
+        self.assertEqual(master_avwap._rank_sold_put_option_recommendations(row, [quote_row]), [])
+        self.assertEqual(row["sold_put_quotes_below_floor"], 1)
+
+        quote_row["quote"] = {"bid": 0.44, "ask": 0.46}
+        ranked = master_avwap._rank_sold_put_option_recommendations(row, [quote_row])
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["status"], "recommended")
+
+    def test_a_two_hundred_dollar_strike_asks_for_a_dollar(self):
+        """Trader, 2026-08-31: "on a 200 dollar stock I'd want at least 1
+        dollar, ideally 2." Asserted through the tiers, not the constants."""
+        row = {"symbol": "RICH", "last_close": 215.0, "score": 80, "base_score": 80}
+
+        def _rank(credit):
+            quote_row = {
+                "strike": 200.0,
+                "expiration": "20260508",
+                "expiration_date": date(2026, 5, 8),
+                "market_days": 4,
+                "covered_support_count": 3,
+                "covered_major_sma_support_count": 1,
+                "total_support_count": 3,
+                "support_quality_score": 3.0,
+                "quote": {"bid": credit - 0.01, "ask": credit + 0.01},
+            }
+            return master_avwap._rank_sold_put_option_recommendations(dict(row), [quote_row])
+
+        self.assertEqual(_rank(2.00)[0]["status"], "recommended")
+        self.assertEqual(_rank(1.00)[0]["status"], "cusp")
+        self.assertEqual(_rank(0.25), [], "the old $0.25 target is gone from the report")
+
+    # ---- Phase 0.11 T2: support, then premium, then spread ----------------
+    #
+    # The old sort key inside each tier was (strike ASCENDING, market_days,
+    # covered supports, credit, rank_score), so the deepest-OTM - and therefore
+    # cheapest - qualifying option won every time. These five pin the trader's
+    # stated priority instead: "#1 priority is still areas of support", then
+    # premium, then spread as a spectrum.
+    @staticmethod
+    def _put_quote_row(**overrides):
+        quote_row = {
+            "strike": 95.0,
+            "expiration": "20260508",
+            "expiration_date": date(2026, 5, 8),
+            "market_days": 5,
+            "covered_support_count": 3,
+            "covered_major_sma_support_count": 1,
+            "covered_avwap_support_count": 1,
+            "total_support_count": 3,
+            "surrendered_support_count": 0,
+            "support_quality_score": 3.0,
+            "quote": {"bid": 1.19, "ask": 1.21},
+        }
+        quote_row.update(overrides)
+        return quote_row
+
+    def _ranked_puts(self, quote_rows, last_close=105.0):
+        row = {"symbol": "ABC", "last_close": last_close, "score": 80, "base_score": 80}
+        return master_avwap._rank_sold_put_option_recommendations(row, quote_rows)
+
+    def test_support_outranks_premium(self):
+        """Trader: "#1 priority is still areas of support". Two major SMAs
+        above the strike beat a strike paying two-thirds more."""
+        # The 2-SMA strike is deliberately the HIGHER one, so the old
+        # strike-ascending key would have put the cheap 1-SMA strike first.
+        two_sma = self._put_quote_row(
+            strike=95.0, covered_major_sma_support_count=2, quote={"bid": 1.19, "ask": 1.21}
+        )
+        one_sma = self._put_quote_row(
+            strike=90.0, covered_major_sma_support_count=1, quote={"bid": 1.99, "ask": 2.01}
+        )
+
+        ranked = self._ranked_puts([one_sma, two_sma])
+
+        self.assertEqual(ranked[0]["strike"], 95.0)
+        self.assertEqual(ranked[0]["covered_major_sma_support_count"], 2)
+        self.assertEqual(ranked[1]["strike"], 90.0, "the richer 1-SMA strike is still offered")
+
+    def test_equal_support_lets_the_better_yield_win_at_the_higher_strike(self):
+        rich_high = self._put_quote_row(strike=100.0, quote={"bid": 1.49, "ask": 1.51})
+        lean_low = self._put_quote_row(strike=90.0, quote={"bid": 1.09, "ask": 1.11})
+
+        ranked = self._ranked_puts([lean_low, rich_high], last_close=104.0)
+
+        self.assertEqual(ranked[0]["strike"], 100.0)
+        self.assertGreater(
+            ranked[0]["credit_pct_per_market_day"], ranked[1]["credit_pct_per_market_day"]
+        )
+
+    def test_yield_is_per_market_day_so_a_nearer_expiry_wins_on_the_same_percent(self):
+        near = self._put_quote_row(market_days=5, expiration="20260508")
+        far = self._put_quote_row(market_days=10, expiration="20260515")
+
+        ranked = self._ranked_puts([far, near])
+
+        self.assertEqual(ranked[0]["market_days"], 5)
+        self.assertGreater(
+            ranked[0]["credit_pct_per_market_day"], ranked[1]["credit_pct_per_market_day"]
+        )
+        self.assertAlmostEqual(
+            ranked[0]["credit_pct_per_week"], ranked[0]["credit_pct_per_market_day"] * 5.0, places=2
+        )
+
+    def test_equal_support_and_yield_lets_the_tighter_spread_win(self):
+        # Both collect 1.20: the tight market pays the midpoint, the 40% market
+        # pays its bid (the existing wide-spread credit source, unchanged).
+        tight = self._put_quote_row(expiration="20260508", quote={"bid": 1.13, "ask": 1.27})
+        wide = self._put_quote_row(expiration="20260509", quote={"bid": 1.20, "ask": 1.80})
+
+        ranked = self._ranked_puts([wide, tight])
+
+        self.assertAlmostEqual(ranked[0]["credit"], 1.20)
+        self.assertAlmostEqual(ranked[1]["credit"], 1.20)
+        self.assertLess(ranked[0]["spread_pct"], ranked[1]["spread_pct"])
+        self.assertEqual(ranked[1]["credit_source"], "bid_wide_spread")
+
+    def test_a_wide_spread_ranks_down_but_is_never_blocked(self):
+        """Trader: "spreads are a spectrum ... tighter spread the better, but
+        within reason". No new hard gate - the wide one is still offered."""
+        tight = self._put_quote_row(expiration="20260508", quote={"bid": 1.13, "ask": 1.27})
+        wide = self._put_quote_row(expiration="20260509", quote={"bid": 1.20, "ask": 1.80})
+
+        ranked = self._ranked_puts([wide, tight])
+
+        self.assertEqual(len(ranked), 2, "a wide market is ranked down, never dropped")
+        self.assertGreater(ranked[1]["spread_pct"], 30.0)
+
+    def test_the_spread_penalty_is_uncapped(self):
+        """The old penalty was min(18, pct * 0.12), so past ~150% every market
+        cost the same 18 points and a catastrophic spread stopped sinking."""
+        moderate = self._put_quote_row(expiration="20260508", quote={"bid": 1.20, "ask": 1.80})
+        catastrophic = self._put_quote_row(expiration="20260509", quote={"bid": 1.20, "ask": 9.20})
+
+        ranked = self._ranked_puts([catastrophic, moderate])
+
+        by_spread = {round(item["spread_pct"]): item for item in ranked}
+        self.assertEqual(len(by_spread), 2)
+        worse, better = max(by_spread), min(by_spread)
+        self.assertGreater(worse, 150.0, "the catastrophic market is past the old cap")
+        self.assertGreater(
+            by_spread[better]["rank_score"] - by_spread[worse]["rank_score"],
+            18.0,
+            "an uncapped penalty separates them by more than the old cap ever could",
+        )
+
+    # ---- Phase 0.11: the spread credit scales with the underlying too ------
+    #
+    # Trader, 2026-08-31, asked directly: "Yes it should scale with price of the
+    # underlying." The credit/width ratio alone does not, because the width is
+    # capped at 10 points however expensive the stock is - so the 20% target
+    # credit stops growing at $2.00, which is 1.36% of a $37 short strike and
+    # 0.31% of a $644 one.
+    @staticmethod
+    def _pcs_spread_row(short_strike, long_strike, credit, **overrides):
+        spread_row = {
+            "short_strike": short_strike,
+            "long_strike": long_strike,
+            "expiration": "20260515",
+            "expiration_date": date(2026, 5, 15),
+            "market_days": 8,
+            "covered_support_count": 2,
+            "covered_major_sma_support_count": 1,
+            "covered_avwap_support_count": 1,
+            "total_support_count": 2,
+            "surrendered_support_count": 0,
+            "support_quality_score": 2.0,
+            # short bid minus long ask is the conservative spread credit.
+            "short_quote": {"bid": credit + 1.0, "ask": credit + 1.1},
+            "long_quote": {"bid": 0.9, "ask": 1.0},
+        }
+        spread_row.update(overrides)
+        return spread_row
+
+    def _ranked_pcs(self, spread_rows, last_close):
+        row = {"symbol": "ABC", "last_close": last_close, "score": 75, "base_score": 75}
+        ranked = master_avwap._rank_pcs_option_recommendations(row, spread_rows)
+        return row, ranked
+
+    def test_an_expensive_spread_paying_the_ratio_no_longer_qualifies_on_it_alone(self):
+        """$2.00 on a 10-wide spread is the full 20% credit/width target - and
+        0.31% of a $644 short strike, which is the reward this packet exists to
+        stop showing."""
+        spread = self._pcs_spread_row(644.0, 634.0, 2.00)
+
+        row, ranked = self._ranked_pcs([spread], last_close=700.0)
+
+        self.assertEqual(ranked, [])
+        self.assertEqual(row["pcs_quotes_below_floor"], 1)
+
+    def test_the_same_ratio_still_qualifies_on_a_mid_priced_underlying(self):
+        """The rule is the percent, not a blanket tightening: $1.00 on a 5-wide
+        spread is the same 20% ratio and 0.72% of a $138 strike."""
+        spread = self._pcs_spread_row(138.0, 133.0, 1.00)
+
+        _row, ranked = self._ranked_pcs([spread], last_close=150.0)
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["status"], "recommended")
+        self.assertAlmostEqual(ranked[0]["credit_pct_of_strike"], 0.72, places=1)
+
+    def test_a_cheap_spread_cannot_qualify_on_pennies(self):
+        """The cusp ratio on a 2.5-wide spread is $0.30, under the absolute
+        no-pennies floor."""
+        spread = self._pcs_spread_row(36.8, 34.3, 0.30)
+
+        row, ranked = self._ranked_pcs([spread], last_close=40.0)
+
+        self.assertEqual(ranked, [])
+        self.assertEqual(row["pcs_quotes_below_floor"], 1)
+
+    def test_above_the_floor_the_credit_width_ratio_still_decides_the_tier(self):
+        rich = self._pcs_spread_row(138.0, 133.0, 1.00, expiration="20260515")
+        lean = self._pcs_spread_row(138.0, 133.0, 0.72, expiration="20260522")
+
+        _row, ranked = self._ranked_pcs([rich, lean], last_close=150.0)
+
+        by_credit = {round(item["credit"], 2): item for item in ranked}
+        self.assertEqual(by_credit[1.00]["status"], "recommended")
+        self.assertEqual(by_credit[0.72]["status"], "cusp")
+
+    def test_an_expensive_spread_that_actually_pays_is_kept(self):
+        """Never a blanket ban on expensive names - a spread that pays 0.5% of
+        its short strike is still recommended."""
+        spread = self._pcs_spread_row(644.0, 634.0, 3.30)
+
+        _row, ranked = self._ranked_pcs([spread], last_close=700.0)
+
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0]["status"], "recommended")
+        self.assertGreater(ranked[0]["credit_pct_of_strike"], 0.5)
+
+    # ---- Phase 0.11 T3: credit spreads get three weeks ---------------------
+    @staticmethod
+    def _expiration_n_market_days_out(reference: date, wanted: int) -> date:
+        """The first date exactly ``wanted`` market days after ``reference``,
+        measured by the module's own counter so the test cannot drift from it."""
+        from datetime import timedelta
+
+        for step in range(1, 60):
+            candidate = reference + timedelta(days=step)
+            if master_avwap._market_days_between(reference, candidate) == wanted:
+                return candidate
+        raise AssertionError(f"no date {wanted} market days after {reference}")
+
+    def _selected_market_days(self, reference, expirations, *, min_days, max_days):
+        selected = master_avwap._select_option_expirations(
+            expirations,
+            reference,
+            {"symbol": "ABC"},
+            min_market_days=min_days,
+            max_market_days=max_days,
+            limit=10,
+        )
+        return sorted(int(item["market_days"]) for item in selected)
+
+    def test_credit_spreads_reach_three_weeks_and_sold_puts_still_stop_at_two(self):
+        """Trader, 2026-08-31: "2 weeks max for put sells, 3 weeks for credit
+        spread." A defined-risk spread can afford the wait a naked put cannot."""
+        reference = date(2026, 5, 5)
+        thirteen = self._expiration_n_market_days_out(reference, 13)
+        sixteen = self._expiration_n_market_days_out(reference, 16)
+        expirations = [
+            master_avwap._format_option_expiration(thirteen),
+            master_avwap._format_option_expiration(sixteen),
+        ]
+
+        pcs_days = self._selected_market_days(
+            reference,
+            expirations,
+            min_days=master_avwap.THETA_PCS_MIN_EXPIRATION_MARKET_DAYS,
+            max_days=master_avwap.THETA_PCS_MAX_EXPIRATION_MARKET_DAYS,
+        )
+        sold_put_days = self._selected_market_days(
+            reference,
+            expirations,
+            min_days=1,
+            max_days=master_avwap.THETA_PUT_MAX_EXPIRATION_MARKET_DAYS,
+        )
+
+        self.assertEqual(pcs_days, [13], "13 market days is a credit spread, not a sold put")
+        self.assertEqual(sold_put_days, [])
+        self.assertNotIn(16, pcs_days, "16 market days is past three weeks for either")
+
+    # ---- Phase 0.11 T4: the quote budget goes where premium can be paid -----
+    @staticmethod
+    def _theta_work_row(symbol, *, score, close=100.0, atr20=2.0, source=""):
+        row = {
+            "symbol": symbol,
+            "score": score,
+            "base_score": score,
+            "last_close": close,
+            "atr20": atr20,
+        }
+        if source:
+            row["theta_list_source"] = source
+        return row
+
+    def test_thetalongs_names_are_quoted_before_higher_scored_watchlist_names(self):
+        """R9.4: `thetalongs.txt` is the trader saying "check this one for
+        premium". Nothing the machine estimates outranks that."""
+        mine = self._theta_work_row("DRAM", score=10, atr20=1.0, source="thetalongs")
+        stronger = self._theta_work_row("AAA", score=99, atr20=6.0)
+
+        ordered = master_avwap._theta_enrichment_work_order(
+            [(stronger, "sold_put"), (mine, "sold_put")]
+        )
+
+        self.assertEqual([row["symbol"] for row, _kind in ordered], ["DRAM", "AAA"])
+
+    def test_at_equal_conviction_the_richer_volatility_is_quoted_first(self):
+        quiet = self._theta_work_row("QUIET", score=80, atr20=0.5)
+        lively = self._theta_work_row("LIVE", score=80, atr20=5.0)
+
+        ordered = master_avwap._theta_enrichment_work_order(
+            [(quiet, "sold_put"), (lively, "pcs")]
+        )
+
+        self.assertEqual([row["symbol"] for row, _kind in ordered], ["LIVE", "QUIET"])
+        self.assertGreater(lively["theta_premium_capacity"], quiet["theta_premium_capacity"])
+
+    def test_an_unmeasurable_name_sorts_last_and_is_never_dropped(self):
+        """Missing data is uncertainty, never confirmation (plan.md sec 5) -
+        and here it is also never a reason to skip a row."""
+        blank = self._theta_work_row("BLANK", score=95, atr20=None)
+        measured = self._theta_work_row("MEAS", score=10, atr20=3.0)
+
+        ordered = master_avwap._theta_enrichment_work_order(
+            [(blank, "sold_put"), (measured, "sold_put")]
+        )
+
+        self.assertEqual([row["symbol"] for row, _kind in ordered], ["MEAS", "BLANK"])
+        self.assertEqual(blank["theta_premium_capacity"], 0.0)
+        self.assertEqual(len(ordered), 2)
+
+    def test_base_score_still_breaks_a_tie_between_equal_capacities(self):
+        low = self._theta_work_row("LOW", score=10)
+        high = self._theta_work_row("HIGH", score=90)
+
+        ordered = master_avwap._theta_enrichment_work_order(
+            [(low, "sold_put"), (high, "sold_put")]
+        )
+
+        self.assertEqual([row["symbol"] for row, _kind in ordered], ["HIGH", "LOW"])
+
+    def test_the_enrichment_run_visits_rows_in_that_order(self):
+        from datetime import timedelta
+
+        reference = date(2026, 5, 5)
+        expirations = {
+            master_avwap._format_option_expiration(reference + timedelta(days=days))
+            for days in (7, 14)
+        }
+        chain = {"tradingClass": "X", "multiplier": "100", "expirations": expirations, "strikes": {90, 95}}
+        visited = []
+
+        def fake_chain(_ib, _cache, symbol, _budget):
+            visited.append(symbol)
+            return chain
+
+        rows = [
+            self._theta_work_row("AAA", score=99, atr20=6.0),
+            self._theta_work_row("QUIET", score=80, atr20=0.5),
+            self._theta_work_row("DRAM", score=10, atr20=1.0, source="thetalongs"),
+        ]
+
+        with patch.object(master_avwap, "is_daily_data_client_connected", return_value=True), \
+                patch.object(master_avwap, "_fetch_theta_chain_for_symbol", side_effect=fake_chain), \
+                patch.object(master_avwap, "_enrich_sold_put_row_with_ib_options"), \
+                patch.object(master_avwap, "_enrich_pcs_row_with_ib_options"):
+            master_avwap.enrich_theta_rows_with_ib_option_premiums(object(), rows, [], reference)
+
+        self.assertEqual(visited, ["DRAM", "AAA", "QUIET"])
+
+    def test_the_deeper_cheaper_strike_no_longer_wins(self):
+        """The exact failure this packet exists to fix: two recommended rows
+        where the deeper-OTM one is cheaper. The old strike-ascending key put
+        the cheap one first."""
+        deep_cheap = self._put_quote_row(strike=90.0, quote={"bid": 0.99, "ask": 1.01})
+        near_rich = self._put_quote_row(strike=95.0, quote={"bid": 1.49, "ask": 1.51})
+
+        ranked = self._ranked_puts([deep_cheap, near_rich])
+
+        self.assertEqual([item["status"] for item in ranked], ["recommended", "recommended"])
+        self.assertEqual(ranked[0]["strike"], 95.0)
+        self.assertGreater(ranked[0]["credit"], ranked[1]["credit"])
 
     def test_theta_option_client_reconnects_when_scan_client_is_unavailable(self):
         class FakeIb:
@@ -6725,7 +7156,11 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertEqual(fake_ib.market_data_types, [1])
         self.assertEqual(quote["ib_error_codes"], [200])
 
-    def test_sold_put_enrichment_scans_lower_strikes_and_prefers_furthest_viable_premium(self):
+    def test_sold_put_enrichment_scans_lower_strikes_and_prefers_the_richer_one(self):
+        """Phase 0.11 reversed this test's old rule. It used to assert that the
+        DEEPEST viable strike won, which is the strike-ascending sort key that
+        made the report read like pennies; now the equally-defended richer
+        strike wins and the sub-floor one is still excluded."""
         row = {
             "symbol": "ABC",
             "last_close": 105.0,
@@ -6743,10 +7178,10 @@ class MasterAvwapSetupTests(unittest.TestCase):
             "strikes": {100, 99, 98, 97, 96, 95, 94, 93, 92},
         }
         quotes = {
-            96.0: {"bid": 0.04, "ask": 0.08},
-            95.0: {"bid": 0.12, "ask": 0.18},
-            94.0: {"bid": 0.27, "ask": 0.31},
-            93.0: {"bid": 0.25, "ask": 0.25},
+            96.0: {"bid": 0.10, "ask": 0.14},
+            95.0: {"bid": 1.18, "ask": 1.22},
+            94.0: {"bid": 0.93, "ask": 0.97},
+            93.0: {"bid": 0.48, "ask": 0.52},
             92.0: {"bid": 0.08, "ask": 0.10},
         }
         quoted_strikes = []
@@ -6768,10 +7203,10 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertIn(96.0, quoted_strikes)
         self.assertIn(93.0, quoted_strikes)
         self.assertEqual(row["option_status"], "recommended")
-        self.assertEqual(row["best_option"]["strike"], 93.0)
-        self.assertEqual(row["best_option"]["contracts_needed_for_100"], 4)
+        self.assertEqual(row["best_option"]["strike"], 95.0, "the richer strike, not the deepest")
         self.assertGreaterEqual(len(row["option_recommendations"]), 2)
-        self.assertNotIn(92.0, [option["strike"] for option in row["option_recommendations"]])
+        for dropped in (92.0, 96.0):
+            self.assertNotIn(dropped, [option["strike"] for option in row["option_recommendations"]])
 
     def test_pcs_enrichment_scans_lower_short_strikes_for_viable_credit_width(self):
         row = {
@@ -6865,11 +7300,12 @@ class MasterAvwapSetupTests(unittest.TestCase):
             )
 
         self.assertEqual(quoted_strikes, [96.0, 95.0, 94.0], "ladder must stop after 3 below-cusp quotes")
-        # Below-target quotes are still surfaced (strike + real credit) for
-        # monitoring; only a quote-less row falls back to support_only.
-        self.assertEqual(row["option_status"], "below_target")
+        # Phase 0.11: none of those pennies clears the percent floor, so the row
+        # falls back to its support-defended strike zone with no credit rather
+        # than showing an untradeable one.
+        self.assertEqual(row["option_status"], "support_only")
         self.assertGreater(row["best_option"]["strike"], 0.0)
-        self.assertIsNotNone(row["best_option"]["credit"])
+        self.assertIsNone(row["best_option"]["credit"])
 
     def test_sold_put_ladder_bails_on_dead_quotes_and_surfaces_support_strike(self):
         row = self._sold_put_scan_row()
@@ -7667,7 +8103,11 @@ class MasterAvwapSetupTests(unittest.TestCase):
         self.assertFalse(pcs_row.get("theta_filter_out", False))
         self.assertNotIn("theta_filter_reason", pcs_row)
 
-    def test_sold_put_below_cusp_quote_is_kept_for_monitoring(self):
+    def test_sold_put_below_the_floor_falls_back_to_the_support_strike(self):
+        """Phase 0.11 reversed this test's old rule: a sub-floor quote used to
+        be surfaced as `below_target` for monitoring. A $0.04 credit is not a
+        monitorable trade, so the row now shows its support-defended strike
+        zone with no credit at all."""
         row = {
             "symbol": "ABC",
             "last_close": 105.0,
@@ -7698,10 +8138,10 @@ class MasterAvwapSetupTests(unittest.TestCase):
                 date(2026, 5, 5),
             )
 
-        self.assertEqual(row["option_status"], "below_target")
+        self.assertEqual(row["option_status"], "support_only")
         self.assertIn("strike", row["best_option"])
-        self.assertAlmostEqual(row["best_option"]["credit"], 0.04)
-        self.assertEqual(row["best_option"]["credit_source"], "bid_wide_spread")
+        self.assertIsNone(row["best_option"]["credit"])
+        self.assertGreater(row["sold_put_quotes_below_floor"], 0)
 
     def test_theta_ib_unavailable_keeps_pcs_support_only_rows(self):
         sold_put_row = {"symbol": "ABC", "score": 80, "notes": "theta setup"}
