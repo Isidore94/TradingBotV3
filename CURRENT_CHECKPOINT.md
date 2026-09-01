@@ -77,6 +77,17 @@ in a header are in `docs/DESK_INTERNALS.md`. The main log is the authority and i
 written first; the sidecar's append is swallowed on failure; the replay falls
 back to the full stream on any doubt.
 
+**Review round (2026-08-31, Fable): one defect found, reproduced, fixed.** A
+thread switch between the clock's main-log append and its sidecar mirror, while
+the wrap-up's sync was catching up the tail, wrote the same event into the
+sidecar twice - and the replay then counted it twice while the full stream
+counted it once (deterministic reproduction, sidecar `['A','B','B']` vs stream
+`['A','B']`). Both copies carry the same source byte offset - the line's
+identity - so `_resolved_rows_from_sidecar` now dedupes on it: the duplicate may
+sit on disk, never in the answer. Test
+`test_a_late_mirror_after_a_catch_up_cannot_double_count` pins it and failed
+before the fix.
+
 **Part (d), the month roll, was NOT built - this is the packet's own stop
 condition, met.** Renaming the live log into `-YYYYMM` segments requires every
 reader to see the live file plus the segments, and

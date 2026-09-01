@@ -416,6 +416,11 @@ The last of the three. Packets 1-2 took the six largest causes of the day's
   reasoning in `docs/DESK_INTERNALS.md`. The **month roll was not built**: it
   would need the research warehouse's one-path `BronzeArtifact` contract to
   accept segments, which is a locked area this packet does not authorize.
+  **Review-round fix (2026-08-31):** a thread switch between the clock's
+  main-log append and its sidecar mirror, during a concurrent sync catch-up,
+  could mirror one event twice and make the replay count it twice (reproduced
+  deterministically). The reader now dedupes on the source byte offset each
+  line already carries; the duplicate may sit on disk, never in the answer.
 - **The Industry Board obeys quiet hours.** It was the only recurring
   downloader without an `auto_scanning_due` gate, so its ~1,930-ticker
   nine-month `yf.download` ran hourly all night and fired five seconds after

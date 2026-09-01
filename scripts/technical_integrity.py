@@ -2435,6 +2435,14 @@ def _resolved_rows_from_sidecar(events_path: Path) -> list[dict[str, Any]] | Non
     if not state.get("ok"):
         return None
     rows: list[dict[str, Any]] = []
+    # One ANSWER per source line, however many times it was mirrored. The
+    # evidence clock appends to the main log first and mirrors second, and the
+    # wrap-up's sync runs on another thread: a switch between those two steps
+    # lets sync catch up the tail before the clock's own mirror lands, so the
+    # same row reaches the sidecar twice (review round, 2026-08-31, reproduced).
+    # Both copies carry the same source byte offset - the line's identity - so
+    # the duplicate may sit on disk but never in what the replay is handed.
+    seen_offsets: set[int] = set()
     try:
         with sidecar.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -2451,6 +2459,11 @@ def _resolved_rows_from_sidecar(events_path: Path) -> list[dict[str, Any]] | Non
                 if payload.get("event_type") != "level_resolved":
                     # The watermark placeholder rows carry no event.
                     continue
+                offset = parsed.get("src_offset") if isinstance(parsed, dict) else None
+                if isinstance(offset, int):
+                    if offset in seen_offsets:
+                        continue
+                    seen_offsets.add(offset)
                 rows.append(payload)
     except OSError:
         return None

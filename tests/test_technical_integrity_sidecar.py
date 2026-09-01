@@ -88,6 +88,38 @@ class TestTheSidecarMatchesTheStream:
         assert ti.technical_integrity_resolved_path(events).parent == events.parent
         assert ti.technical_integrity_resolved_path(events).name.endswith("_resolved.jsonl")
 
+    def test_a_late_mirror_after_a_catch_up_cannot_double_count(self, tmp_path):
+        """Review round, packet 3: the interleaving that wrote one event twice.
+
+        The evidence clock appends a resolved row to the MAIN log first and
+        mirrors it to the sidecar second; the wrap-up's sync runs on another
+        thread. A thread switch between those two steps let sync catch up the
+        tail (appending the row) before the clock's own mirror landed (appending
+        it again) - and the replay then counted that event twice while the full
+        stream counted it once. Both copies carry the same source byte offset,
+        which is what the reader now dedupes on. Disk may hold the duplicate
+        line; the ANSWER may not.
+        """
+        events = tmp_path / "technical_integrity_events.jsonl"
+        sidecar = ti.technical_integrity_resolved_path(events)
+
+        _write_log(events, [_event(0, "level_test_started"), _event(0)])
+        offset_a = events.stat().st_size
+        ti.append_resolved_sidecar_row(sidecar, _event(0), offset_a)
+
+        # Clock thread appends B to the log...
+        _write_log(events, [_event(1)])
+        offset_b = events.stat().st_size
+        # ...thread switch: sync catches up the tail before B's mirror lands...
+        assert ti.sync_resolved_sidecar(events)["action"] == "caught_up"
+        # ...and the clock's own mirror of B arrives late.
+        ti.append_resolved_sidecar_row(sidecar, _event(1), offset_b)
+
+        from_sidecar = ti.load_resolved_technical_integrity_events(events)
+        from_stream = ti.load_resolved_technical_integrity_events(events, use_sidecar=False)
+        assert from_sidecar == from_stream
+        assert [row["event_id"] for row in from_sidecar] == ["E0", "E1"]
+
 
 class TestTheWatermarkCatchesUpRatherThanLying:
     def test_a_stale_sidecar_appends_the_tail_and_answers_completely(self, tmp_path):
