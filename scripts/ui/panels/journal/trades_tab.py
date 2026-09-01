@@ -700,6 +700,63 @@ class TradesTab(QFrame):
         if callable(refresh):
             refresh()
 
+    # ---------------------------------------------------------------- rebuild
+    def _rebuild_buttons(self) -> list:
+        """The controls a running rebuild must not let the trader press again."""
+        return [
+            getattr(self, name, None)
+            for name in ("correct_button", "add_execution_button", "accept_tags_button", "accept_all_tags_button")
+        ]
+
+    def _set_rebuilding(self, running: bool) -> None:
+        for button in self._rebuild_buttons():
+            if button is not None:
+                button.setEnabled(not running)
+
+    def _start_rebuild(self, done_message: str, *, refused_title: str) -> None:
+        """Re-derive the trades on a WORKER, not behind the OK button.
+
+        `rebuild_trades` re-runs both auto-tag lanes, and the tagger parses the
+        scanner's output files - 1.08 GB of setup tracker on 2026-08-31. That
+        used to run synchronously here, so accepting a correction froze the
+        desk for as long as a gigabyte takes to parse.
+        """
+        from ui.services.journal_rebuild_service import shared_rebuild_service
+
+        service = shared_rebuild_service()
+        self._rebuild_message = done_message
+        self._rebuild_refused_title = refused_title
+        # Connected once and never disconnected: both journal tabs share one
+        # service, so results are routed by TOKEN rather than by rewiring the
+        # signal per request.
+        if not getattr(self, "_rebuild_connected", False):
+            service.finished.connect(self._on_rebuild_finished)
+            self._rebuild_connected = True
+        token = service.request(done_message)
+        if not token:
+            self.statusChanged.emit("journal rebuild already running")
+            return
+        self._rebuild_token = token
+        self._set_rebuilding(True)
+        self.statusChanged.emit("tagging...")
+
+    def _on_rebuild_finished(self, result: dict) -> None:
+        if result.get("token") != getattr(self, "_rebuild_token", None):
+            return
+        self._rebuild_token = None
+        self._set_rebuilding(False)
+        if not result.get("ok", False):
+            # A journal write fails LOUDLY - never a swallowed worker.
+            QMessageBox.warning(
+                self,
+                getattr(self, "_rebuild_refused_title", "Journal rebuild failed"),
+                str(result.get("reason") or "the journal rebuild did not finish"),
+            )
+            self.statusChanged.emit("journal rebuild FAILED")
+            return
+        self.statusChanged.emit(getattr(self, "_rebuild_message", "journal rebuilt"))
+        self.reload()
+
     def _open_corrections(self) -> None:
         if self._current is None:
             return
@@ -709,12 +766,12 @@ class TradesTab(QFrame):
         request = dialog.request()
         try:
             journal_feed.record_adjustment(**request)
-            journal_feed.rebuild_trades()
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Correction refused", str(exc))
             return
-        self.statusChanged.emit(f"correction recorded: {request['action']}")
-        self.reload()
+        self._start_rebuild(
+            f"correction recorded: {request['action']}", refused_title="Correction refused"
+        )
 
     def _open_manual_execution(self) -> None:
         dialog = ManualExecutionDialog(self)
@@ -722,9 +779,7 @@ class TradesTab(QFrame):
             return
         try:
             journal_feed.add_manual_execution(dialog.fields())
-            journal_feed.rebuild_trades()
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Execution refused", str(exc))
             return
-        self.statusChanged.emit("execution added")
-        self.reload()
+        self._start_rebuild("execution added", refused_title="Execution refused")

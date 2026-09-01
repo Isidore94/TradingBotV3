@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import csv
 import hashlib
 import json
@@ -1799,9 +1800,19 @@ class JournalStore:
                 params,
             ).fetchall()
         trades = [_row_to_dict(row) for row in rows]
-        for trade in trades:
-            regime = self.get_regime_for_date(_date_text(trade.get("opened_at") or trade.get("trade_date")))
-            trade.update(regime)
+        # One query for every trade on the tab, not one CONNECTION per trade.
+        regime_dates = [
+            _date_text(trade.get("opened_at") or trade.get("trade_date")) for trade in trades
+        ]
+        regimes = self.get_regimes_for_dates(regime_dates)
+        blank_regime = {
+            "mid_term_regime": "",
+            "short_term_regime": "",
+            "intraday_regime": "",
+            "regime_notes": "",
+        }
+        for trade, date_value in zip(trades, regime_dates):
+            trade.update(regimes.get(date_value, blank_regime))
             trade["display_tags"] = trade.get("setup_tags") or trade.get("auto_tag_summary") or ""
         # Tags are matched in Python, not SQL. They are free text in one
         # column with three possible separators, so a LIKE would either match
@@ -2286,28 +2297,65 @@ class JournalStore:
                 ),
             )
 
-    def get_regime_for_date(self, trade_date: str | date) -> dict[str, str]:
-        date_value = _date_text(trade_date)
+    def get_regimes_for_dates(self, trade_dates: Iterable[Any]) -> dict[str, dict[str, str]]:
+        """The regime block for many dates, in ONE connection and ONE query.
+
+        `list_trades` asked `get_regime_for_date` per trade, and that opened a
+        fresh sqlite connection - with its `PRAGMA foreign_keys` - and ran two
+        queries for every row on the tab. A year of trades is a few thousand
+        connections behind one filter change.
+
+        The `regimes` table is one row per trading day, so the whole thing is
+        read once and the same two questions are answered in Python: the EXACT
+        row for the date, and the most recent row at or before it that actually
+        carries a mid/short label. Result-identical per date - the single-date
+        accessor below is now this method with one date.
+        """
+        wanted = [_date_text(value) for value in trade_dates or []]
+        wanted = [value for value in wanted if value]
+        if not wanted:
+            return {}
         with self.connection() as conn:
-            exact = conn.execute("SELECT * FROM regimes WHERE trade_date = ?", (date_value,)).fetchone()
-            carry = conn.execute(
-                """
-                SELECT * FROM regimes
-                WHERE trade_date <= ?
-                  AND (mid_term_regime != '' OR short_term_regime != '')
-                ORDER BY trade_date DESC
-                LIMIT 1
-                """,
-                (date_value,),
-            ).fetchone()
-        exact_row = _row_to_dict(exact) if exact else {}
-        carry_row = _row_to_dict(carry) if carry else {}
-        return {
-            "mid_term_regime": str(exact_row.get("mid_term_regime") or carry_row.get("mid_term_regime") or ""),
-            "short_term_regime": str(exact_row.get("short_term_regime") or carry_row.get("short_term_regime") or ""),
-            "intraday_regime": str(exact_row.get("intraday_regime") or ""),
-            "regime_notes": str(exact_row.get("notes") or ""),
-        }
+            rows = conn.execute("SELECT * FROM regimes ORDER BY trade_date").fetchall()
+        all_rows = [_row_to_dict(row) for row in rows]
+        by_date = {str(row.get("trade_date") or ""): row for row in all_rows}
+        # Carry candidates in date order. ISO dates sort lexicographically the
+        # way they sort chronologically, which is what makes the bisect legal.
+        carry_dates: list[str] = []
+        carry_rows: list[dict[str, Any]] = []
+        for row in all_rows:
+            if str(row.get("mid_term_regime") or "") != "" or str(row.get("short_term_regime") or "") != "":
+                carry_dates.append(str(row.get("trade_date") or ""))
+                carry_rows.append(row)
+        out: dict[str, dict[str, str]] = {}
+        for date_value in wanted:
+            if date_value in out:
+                continue
+            exact_row = by_date.get(date_value) or {}
+            index = bisect.bisect_right(carry_dates, date_value) - 1
+            carry_row = carry_rows[index] if index >= 0 else {}
+            out[date_value] = {
+                "mid_term_regime": str(exact_row.get("mid_term_regime") or carry_row.get("mid_term_regime") or ""),
+                "short_term_regime": str(exact_row.get("short_term_regime") or carry_row.get("short_term_regime") or ""),
+                "intraday_regime": str(exact_row.get("intraday_regime") or ""),
+                "regime_notes": str(exact_row.get("notes") or ""),
+            }
+        return out
+
+    def get_regime_for_date(self, trade_date: str | date) -> dict[str, str]:
+        """One date's regime block. The batch method with a list of one, so the
+        two can never drift apart."""
+        date_value = _date_text(trade_date)
+        found = self.get_regimes_for_dates([date_value])
+        return found.get(
+            date_value,
+            {
+                "mid_term_regime": "",
+                "short_term_regime": "",
+                "intraday_regime": "",
+                "regime_notes": "",
+            },
+        )
 
     def list_import_runs(self, limit: int = 25) -> list[dict[str, Any]]:
         with self.connection() as conn:

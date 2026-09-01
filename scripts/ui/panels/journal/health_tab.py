@@ -474,11 +474,42 @@ class HealthTab(QFrame):
             journal_feed.confirm_reconciliation_suggestion(
                 suggestion, reason=str(suggestion.get("reason") or "confirmed from reconciliation")
             )
-            journal_feed.rebuild_trades()
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Refused", str(exc))
             return
-        self.statusChanged.emit("force-close recorded")
+        self._start_rebuild("force-close recorded")
+
+    def _start_rebuild(self, done_message: str) -> None:
+        """Same worker and the same single flight as the Trades tab: the
+        rebuild re-runs the tagger, which parses a gigabyte of scanner output,
+        and it has no business being behind a dialog's OK button."""
+        from ui.services.journal_rebuild_service import shared_rebuild_service
+
+        service = shared_rebuild_service()
+        self._rebuild_message = done_message
+        if not getattr(self, "_rebuild_connected", False):
+            service.finished.connect(self._on_rebuild_finished)
+            self._rebuild_connected = True
+        token = service.request(done_message)
+        if not token:
+            self.statusChanged.emit("journal rebuild already running")
+            return
+        self._rebuild_token = token
+        self.statusChanged.emit("tagging...")
+
+    def _on_rebuild_finished(self, result: dict) -> None:
+        if result.get("token") != getattr(self, "_rebuild_token", None):
+            return
+        self._rebuild_token = None
+        if not result.get("ok", False):
+            QMessageBox.warning(
+                self,
+                "Journal rebuild failed",
+                str(result.get("reason") or "the journal rebuild did not finish"),
+            )
+            self.statusChanged.emit("journal rebuild FAILED")
+            return
+        self.statusChanged.emit(getattr(self, "_rebuild_message", "journal rebuilt"))
         self.reload()
 
     def shutdown(self) -> None:

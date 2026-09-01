@@ -13,6 +13,8 @@ look at everything at once, and is not allowed to do it by accident.
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
+
+from ui.timer_utils import SignalCoalescer
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -32,6 +34,12 @@ DATE_PRESETS = ("7d", "30d", "QTD", "YTD", "All", "Custom")
 CURRENCY_MODES = ("CAD", "Native", "USD")
 
 
+#: The filter header's reload window. Long enough that walking a four-account
+#: menu with the mouse is one query, short enough that a single tick still feels
+#: immediate.
+JOURNAL_FILTER_COALESCE_MS = 250
+
+
 class JournalHeader(QFrame):
     """Account selection, currency and date range, shared by every sub-tab."""
 
@@ -43,6 +51,14 @@ class JournalHeader(QFrame):
         self._accounts: list[tuple[str, str]] = []
         self._selected: set[tuple[str, str]] = set()
         self._loading = False
+        # Every checkbox, combo and date widget in this header re-queries the
+        # journal, and ticking four accounts is four full reloads - each one a
+        # `list_trades` over the whole store. The window is the house pattern:
+        # leading-edge, folding, and unable to starve, so a burst of toggles is
+        # ONE reload and it is never more than the window late.
+        self._change_coalescer = SignalCoalescer(
+            self.selectionChanged.emit, JOURNAL_FILTER_COALESCE_MS, self
+        )
 
         self.account_button = QPushButton("All accounts")
         self.account_menu = QMenu(self)
@@ -143,6 +159,11 @@ class JournalHeader(QFrame):
         if autoload:
             self.refresh_accounts()
             self._reload_tags()
+        # Building and populating the widgets fires their own change signals.
+        # Those used to emit synchronously - before anyone had connected - and
+        # were harmless; a coalesced one would land AFTER construction and read
+        # as a real filter change. Nothing is owed when the header is born.
+        self._change_coalescer.cancel()
 
     # -- manual USD display rate -------------------------------------------
     def _load_usd_rate(self) -> None:
@@ -200,6 +221,7 @@ class JournalHeader(QFrame):
             self._selected = set()
             self._loading = False
             self.account_button.setText("Journal unavailable")
+            self._change_coalescer.cancel()
             return
         self.account_menu.clear()
         self._accounts = []
@@ -228,6 +250,9 @@ class JournalHeader(QFrame):
             self._selected &= set(self._accounts)
         self._loading = False
         self._update_account_summary()
+        # The tree was just rebuilt from the feed, so anything the rebuild's own
+        # widget signals asked for is already answered.
+        self._change_coalescer.cancel()
 
     def _on_account_toggled(self, key: tuple[str, str], checked: bool) -> None:
         if checked:
@@ -235,8 +260,8 @@ class JournalHeader(QFrame):
         else:
             self._selected.discard(key)
         self._update_account_summary()
-        if not self._loading:
-            self.selectionChanged.emit()
+        # Ticking several accounts in a row is one reload, not one per tick.
+        self._emit_changed()
 
     def _update_account_summary(self) -> None:
         total = len(self._accounts)
@@ -270,8 +295,13 @@ class JournalHeader(QFrame):
         self._emit_changed()
 
     def _emit_changed(self, *_args) -> None:
+        """Ask for a reload, coalesced. See `_change_coalescer`."""
         if not self._loading:
-            self.selectionChanged.emit()
+            self._change_coalescer.request()
+
+    def flush_pending_change(self) -> None:
+        """Run an owed reload now. For tests and for a deliberate hurry."""
+        self._change_coalescer.flush()
 
     # -- what the tabs ask for --------------------------------------------
 

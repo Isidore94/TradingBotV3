@@ -79,6 +79,49 @@ def _coerce_float(value: Any) -> float | None:
     return numeric
 
 
+#: Projected context rows, keyed by source path, holding the file stamp they
+#: were built from. Bounded to one entry per source file by construction (four
+#: of them), and each entry is the SMALL projection, never the parsed blob.
+#:
+#: Why it exists: `master_avwap_setup_tracker.json` measured 1.08 GB on
+#: 2026-08-31 and `json.loads` of it runs behind the Corrections dialog's OK
+#: button. Two retags in a row - accept a correction, add an execution - parsed
+#: it twice for byte-identical input.
+_CONTEXT_ROW_CACHE: dict[str, tuple[tuple[int, int], list[dict[str, Any]]]] = {}
+
+
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    """(mtime_ns, size), or None when the file cannot be stamped.
+
+    None means "do not cache this" - an unreadable or missing source is not a
+    fact worth remembering, and a later appearance must be picked up.
+    """
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return (int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _cached_context_rows(path: Path, builder) -> list[dict[str, Any]]:
+    """`builder()`'s projected rows, reused while the file has not changed."""
+    key = str(Path(path))
+    stamp = _file_stamp(path)
+    if stamp is not None:
+        cached = _CONTEXT_ROW_CACHE.get(key)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+    rows = builder()
+    if stamp is not None:
+        _CONTEXT_ROW_CACHE[key] = (stamp, rows)
+    return rows
+
+
+def clear_context_row_cache() -> None:
+    """Forget every cached projection. For tests and for a forced re-read."""
+    _CONTEXT_ROW_CACHE.clear()
+
+
 def _load_json(path: Path) -> Any:
     if not path.exists():
         return None
@@ -135,13 +178,22 @@ class AutoTagger:
         self._context_rows: list[dict[str, Any]] | None = None
 
     def load_context_rows(self) -> list[dict[str, Any]]:
+        """The scanner-output rows the tagger matches trades against.
+
+        Cached per SOURCE FILE, not just per tagger: every one of these is a
+        pure projection of a file, so two taggers built minutes apart over
+        unchanged files must not parse them twice. The tracker file alone
+        measured 1.08 GB on 2026-08-31 and this runs behind an OK button.
+        """
         if self._context_rows is not None:
             return self._context_rows
         rows: list[dict[str, Any]] = []
-        rows.extend(self._load_tracker_rows())
-        rows.extend(self._load_focus_rows())
-        rows.extend(self._load_avwap_signal_rows())
-        rows.extend(self._load_intraday_bounce_rows())
+        rows.extend(_cached_context_rows(self.setup_tracker_path, self._load_tracker_rows))
+        rows.extend(_cached_context_rows(self.focus_path, self._load_focus_rows))
+        rows.extend(_cached_context_rows(self.avwap_signals_path, self._load_avwap_signal_rows))
+        rows.extend(
+            _cached_context_rows(self.intraday_bounces_path, self._load_intraday_bounce_rows)
+        )
         self._context_rows = rows
         return rows
 
@@ -170,6 +222,11 @@ class AutoTagger:
                     "compression": bool(setup.get("compression_flag")),
                 }
             )
+        # The parsed blob is 1.08 GB and the projection above is a few MB.
+        # Dropping the references here rather than at the return statement
+        # means the tagging that follows never runs alongside both.
+        del setups
+        del payload
         return rows
 
     def _load_focus_rows(self) -> list[dict[str, Any]]:
