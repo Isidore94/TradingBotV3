@@ -85,15 +85,21 @@ class TestTheBar:
         assert [a.symbol for a in bar.alerts()] == ["CCC", "BBB", "AAA"]
         assert bar.title_label.text() == "M5 alerts (3)"
 
-    def test_every_alert_is_its_own_row_and_the_type_is_on_it(self):
+    def test_a_repeat_folds_into_its_row_and_the_type_is_on_it(self):
+        """AUTHORIZED CHANGE (P2 item 6), not drift: this test used to assert
+        "every alert is its own row". A repeat of the same symbol+side now
+        folds, which is the main feed's own rule brought to this bar. The row
+        carries the NEWEST alert and a x2 badge; nothing is dropped anywhere
+        else, and `test_the_fold_is_presentation_only` pins that."""
         from ui.widgets.m5_alert_bar import row_text
 
         bar = self._bar()
         bar.post(_m5("AAA", trigger="[S-TIER] VWAP reclaim"))
         bar.post(_m5("AAA", trigger="M5 regime-pause watch · new HOD", at="07:20:00"))
-        assert [a.symbol for a in bar.alerts()] == ["AAA", "AAA"]
+        assert [a.symbol for a in bar.alerts()] == ["AAA"]
+        assert bar.count() == 1
         assert row_text(bar.alerts()[0]) == "07:20  ▲ AAA  new HOD"
-        assert row_text(bar.alerts()[1]) == "07:09  ▲ AAA  VWAP reclaim"
+        assert bar.list.item(0).text() == "07:20  ▲ AAA  new HOD  ×2"
         assert row_text(_m5("ZZZ", "SHORT", trigger="lrsi_cross_20")).endswith("▼ ZZZ  lrsi_cross_20")
 
     def test_copy_all_is_one_ticker_per_line_each_once_newest_first(self):

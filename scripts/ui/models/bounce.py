@@ -76,6 +76,12 @@ class BounceAlert:
     raw_text: str = ""
     is_d1: bool = False
     payload: dict[str, Any] = field(default_factory=dict)
+    #: P(take | shown) for this alert's segments, as the Alert Center's review
+    #: guidance already measured it - attached by the host at post time so the
+    #: M5 alert bar can show it without computing anything (P2 item 5).
+    #: None means "the desk has no guidance for this symbol yet", which the bar
+    #: renders as SILENCE. A 0% would be a claim; an absent suffix is not.
+    review_take_prob: float | None = None
 
     @classmethod
     def from_callback(cls, message: Any, tag: str, timestamp: datetime | None = None) -> "BounceAlert":
