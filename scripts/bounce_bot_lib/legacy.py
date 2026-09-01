@@ -1472,7 +1472,10 @@ def _format_bounce_alert_message(symbol, direction, levels_list, event_row, qual
 
     PROVEN bounces (a segment with strong measured avg AND median R matched
     this alert) carry the token + the evidence so the trader sees WHY it is a
-    take-this-one alert; the Alert Center gives the token banger treatment."""
+    take-this-one alert; the Alert Center gives the token a tier-gate bypass
+    and an always-sound. PROVEN is the top alert class - BANGER, which this
+    line used to compare it to, was retired 2026-09-01.
+    """
     row = event_row if isinstance(event_row, dict) else {}
     quality = quality if isinstance(quality, dict) else {}
     tier = str(quality.get("tier") or "B")
@@ -5024,6 +5027,10 @@ class BounceBot(EWrapper, EClient):
                     "tier": tier,
                     "muted": bool(verdict.get("muted")),
                     "proven": bool(verdict.get("proven")),
+                    # RETIRED 2026-09-01. The learning verdict has never
+                    # carried this key, so the column has always been False;
+                    # it is left in place unchanged so the tier_assigned row
+                    # shape does not move under the readers of the history.
                     "banger": bool(verdict.get("banger")),
                     "reason": str(verdict.get("reason") or ""),
                 }
