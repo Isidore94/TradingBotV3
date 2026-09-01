@@ -789,6 +789,36 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+### Phase 0.13 packet P1 — Grade what you already said (2026-09-01) — BUILT, live gate owed
+
+Authorized by the trader pasting the packet. Built on `claude/p1-grade-what-you-said`.
+Evidence-side only: nothing here reaches a detector, score, alert, watchlist, Focus
+list, review queue or `review_policy.json`.
+
+1. **The human-focus pick key carries its category.** One name on both the swing and
+   the M5 list is now two rows and two graded cohorts; before, whichever list was
+   snapshotted second was silently discarded and `human_focus_swing_vetted` had zero
+   rows. The weekend-prep join and `journal_walkaway` follow the rows.
+2. **A like merges into its cohort on the click**, through the same helper the veto
+   uses. The nightly slot stays; both merges are idempotent.
+3. **A pre-versioning veto pools with the version that introduced its code**, so a
+   reason added in a later vocabulary no longer grades as its own cohort forever.
+4. **The scoreboard grades every explicit decision** (seven action families, ~640
+   decisions) and carries a third callout class, `r_gap`, that asks the R question
+   without consulting the take rate. Chart Review's coded vetoes feed the
+   `dislike_reason` dimension through a measured join.
+
+**Reported, not forced:** the swing-favorites Focus write-through already existed and
+worked (QFIN, 2026-08-31, proves it), and QFIN's `focus_swing_manual` origin is history
+rather than a code path — `FOCUS_LIKE_ORIGIN` became `"vetted"` ten minutes after that
+like. The packet's `lrsi_cross_20` R gap is real on the un-fixed action sets and closes
+once they are corrected; the `r_gap` class is pinned to those literal numbers so it is
+proven either way.
+
+**Live gate (#30):** one Weekend Prep opened after the next scan showing a
+`human_focus_swing_vetted` row, a like merged on the day it was captured, one pooled
+`compressed` cohort, and the `r_gap` callout present in `review_preference_state.json`.
+
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads

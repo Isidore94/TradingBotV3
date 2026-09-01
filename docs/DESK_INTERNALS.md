@@ -137,3 +137,53 @@ would only bound disk growth.
 - Quiet hours (packet R1): every **automatic** starter is gated on `autopilot_core.auto_scanning_due` — weekdays, session open−30m through close+60m (06:00–14:00 PT), fail-open on a session lookup it cannot answer. It covers the launch/tick universe self-heal, the boot resume that used to connect BounceBot to IB at any hour, the daily 07:00 self-arm, the open watchlist build and the swing slots. The window is deliberately a **superset** of `bouncebot_scan_window`; keep it that way or the gates contradict each other. **Manual buttons are never gated** — `force=True` is the carve-out on the universe rebuild.
 - Auto/Away phone output: `autopilot_today.txt` is the single verified home-folder digest, with the safety/freshness header first, then numbered best swing trades, then intraday and condensed operations. Mode changes (OFF/DESK/AWAY/EVENING) are made on the main desk.
 - Unattended: the separate mini-PC scanner role is retired (2026-08-08) — the 8845HS main desk is the only always-on machine and the only scan host, so no cross-machine IB budget question exists. `scripts/master_avwap_mini_pc.py` was **removed 2026-08-24** (P1.5); the named-slot scheduling shape it established lives on in `ai_jobs/runner.py`, which says so.
+
+## Grading what the trader already said (packet P1, 2026-09-01)
+
+Four rules, all on the evidence side. None of them reaches a detector, score, alert,
+watchlist, Focus list, review queue or `review_policy.json`, and none of them may be
+allowed to cost the event it records.
+
+- **A human-focus pick is identified by its category as well as its name.**
+  `human_focus_tracking._pick_key` is (trade_date, symbol, side, category slot), and the
+  slot is the base source with any like-origin suffix removed - so `focus_swing_vetted`
+  and `focus_swing` are ONE swing membership and a re-snapshot under a newly-recorded
+  origin adds no row. Without the category, a name already on one list swallowed its row
+  on the other: on 2026-09-01 AMGN LONG was liked into swing Focus with origin `vetted`
+  at 11:33:06, the day already held a `focus_m5` AMGN LONG row from 08:02:14, and
+  `human_focus_swing_vetted` had **zero rows in all 4,083**. `focus_membership_events`
+  had already diagnosed this (audit F3) and keyed its own episodes by category. **Any
+  join over these files must use `pick_source_family`** - `weekend_prep_panel` does, or
+  it would hand one category the other's forward returns. **A walkaway replays ONE
+  position per (date, symbol, side)**: which list proposed a name is a cohort question,
+  not a second position.
+- **A like and a veto merge into their cohorts on the same click, through one helper.**
+  `commit_like` and `commit_veto` both call `_merge_cohort_safely`, so the two cannot
+  drift - they are read side by side on Weekend Prep and a difference between them has
+  to come from the data. The like was nightly-only until 2026-09-01:
+  `like_cohort_picks.csv` was last written 2026-08-27 against likes recorded through
+  09-01. Failure is swallowed to a "(cohort update deferred)" status suffix because the
+  annotation row is already on disk when the merge runs, and both merges are idempotent,
+  which is what makes running at capture time safe.
+- **A pre-versioning veto pools with the version that INTRODUCED its code**, never with
+  the lowest version overall. `compressed` arrived in v2, so gating the unversioned
+  mapping on `min(versions)` stranded its three pre-versioning picks:
+  `human_focus_veto_compressed` (n=3, PF 165) read beside
+  `human_focus_veto_v2_compressed` (n=18, PF 0.39) - one judgement as two opposite ones.
+  Pooling stays a reading of the record: it happens only in
+  `_rebuild_pooled_performance` and no pick or outcome row is ever rewritten. **Never
+  assert a literal `vocab_version` in a test here** - load the vocabulary and discover
+  the late codes.
+- **The scoreboard grades every explicit decision, and the `r_gap` callout is
+  report-only.** An action enters `TAKE_ACTIONS`/`REJECT_ACTIONS` on what its WRITER
+  does, not on its name: approve writes a watchlist, remove calls `remove_everywhere`,
+  `veto_day_trade` vetoes the D1 chart that was shown (its M5 interest is a different
+  claim on a different timeframe). Machine events, `*_fired`, `*_expired` and every
+  `disarm_*` stay out - none is a verdict on a chart. `r_gap` fires on the R difference
+  alone, never the take rate, which is the only way to see a segment taken at the normal
+  rate whose two halves measure far apart; it lives on the state and in the report and
+  is deliberately absent from `draft_policy_from_state`, `review_guidance` and the AI
+  evidence package. **Coded vetoes annotate the `dislike_reason` dimension and never
+  re-resolve an episode** - the verdict comes from the review event store alone, a veto
+  whose side disagrees is skipped rather than guessed, and a veto with no episode is
+  left alone rather than inventing an impression.

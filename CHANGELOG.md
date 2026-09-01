@@ -148,6 +148,41 @@ which is evidence and must not be loaded as context.
 - Visual Alert Center and review queue, chart-armed watches, persistent History,
   structured review decisions, review scoreboard, and annotation-only/FIFO policy
   gate.
+- **A human-focus pick is identified by its CATEGORY as well as its name**
+  (2026-09-01). `human_focus_tracking._pick_key` returns
+  (trade_date, symbol, side, category slot), so one name on both the swing and
+  the M5 list gets one row per list and grades in both cohorts. The slot strips
+  the like-origin suffix, so a re-snapshot under a newly-recorded origin adds
+  nothing. Before this, whichever list was snapshotted second was silently
+  discarded and `human_focus_swing_vetted` had zero rows in the whole file. The
+  weekend-prep pick/outcome join uses the same canonical
+  `pick_source_family`; `journal_walkaway` replays ONE position per
+  (date, symbol, side) because the trader was in one.
+- **A like merges into its cohort on the click, exactly as a veto does**
+  (2026-09-01). `commit_like` and `commit_veto` share one
+  `_merge_cohort_safely`, so they cannot drift; failure degrades to a
+  "(cohort update deferred)" status and the next merge recovers, because the
+  annotation row is already on disk. The nightly slot stays and both merges are
+  idempotent. `merge_like_cohort_picks` now takes the writer lock the veto merge
+  always took.
+- **A pre-versioning veto pools with the version that INTRODUCED its code**, not
+  with the lowest version overall (2026-09-01). A code added in a later
+  vocabulary used to get no unversioned mapping at all, so its pre-versioning
+  picks graded alone forever. Pooling still happens only in
+  `_rebuild_pooled_performance`; rows are never rewritten.
+- **The review scoreboard grades every explicit decision, and carries a third
+  callout class** (2026-09-01). Seven action families joined the take/reject
+  sets - `auto_pick_approve`, `focus_review_keep`, `arm_d1_event`,
+  `arm_any_bounce` as takes; `auto_pick_pass`, `focus_review_remove`,
+  `veto_day_trade` as rejects - about 640 decisions previously scored as
+  silence. Machine events and disarms are deliberately excluded and pinned by a
+  test. The new **`r_gap`** class fires on |taken.r_avg - passed.r_avg| >= 0.5R
+  with >= 8 measured R per side and NO reference to the take rate, so it sees
+  what the take-rate classes structurally cannot. It is report-only: it never
+  reaches `review_policy.json`, `review_guidance` or the AI evidence package.
+  Chart Review's coded vetoes now feed the `dislike_reason` dimension through a
+  measured (session_date, symbol, side) join - 202 of 212, zero side
+  mismatches - annotating only, never re-resolving an episode.
 - Main-only price-level polling with cross-up/cross-down, one fire per arm, urgent
   ntfy push, persistent main-desk presentation, and manual re-arm.
 - Auto modes OFF/DESK/AWAY/EVENING, honest global status, EVENING early scan and
@@ -416,6 +451,118 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-01 - Phase 0.13 packet P1: grade what you already said
+
+**Branch `claude/p1-grade-what-you-said`, off `main` at `66a0c31`.** Four defects in
+the loop between a decision the trader makes and the evidence that grades it. Every
+premise was reproduced at code level and against the live stores before anything was
+edited. Live gate #30 owed.
+
+**1. Today's swing picks never reached `human_focus_swing_vetted`.** `_pick_key`
+returned (trade_date, symbol, side) with no category, so a name already on one Focus
+list swallowed its row on the other. Live: AMGN LONG was liked into swing Focus with
+origin `vetted` at 11:33:06 on 2026-09-01, the day already held a `focus_m5` AMGN LONG
+row from 08:02:14, and the swing row was dropped - `grep -c vetted` on
+`human_focus_daily_picks.csv` reads **0 across all 4,083 rows**. The cohort that origin
+exists to build has never had a single row.
+
+The diagnosis already existed: `focus_membership_events.py`'s docstring names it as
+audit F3 and keys its own episodes by category. The pick store is what never caught up.
+The key now carries the category slot - the base source with any like-origin suffix
+removed, so `focus_swing_vetted` and `focus_swing` are one swing membership and a
+re-snapshot cannot duplicate a row. The same key runs over the outcomes file, so the
+two cohorts grade forward independently. No column or schema moves: every historical
+row carries `source` and re-keys to the slot it already occupied.
+
+Two joins had to follow the rows. `weekend_prep_panel._join_focus_week` would have
+handed one category the other's forward returns - opposite trades, not a rounding
+error - and now uses the one canonical `pick_source_family`.
+`journal_walkaway.load_focus_positions` would have replayed a two-list name as two
+positions and double-weighted it in every aggregate; the trader was in one position,
+so it dedupes and leaves the cohort question to the tracker.
+
+**Two packet premises differed from the code and are reported, not forced.** The
+swing-favorites write-through ALREADY EXISTS and works: `_place_in_focus` ->
+`FocusPickStore.add` -> `focusChanged` -> the Focus panel's coalesced
+`_apply_focus_change` -> `snapshot_today(force=True)`, which passes `force` and is
+never stopped by the `already_snapshotted` early return. QFIN on 2026-08-31 proves it -
+liked 11:26:19, pick row stamped 11:26:20. And QFIN's `focus_swing_manual` is not a
+live code path: `FOCUS_LIKE_ORIGIN` read `"manual"` until commit `edc7999`, which
+landed at 11:36 that day - ten minutes AFTER the like. Nothing to fix at the source,
+and the existing row is correctly left alone.
+
+**2. A like merged overnight; a veto merged on the click.** `like_cohort_picks.csv` was
+last written **2026-08-27** (53 rows) against like_claim annotations recorded through
+09-01, so a like was invisible to its own cohort for up to a day - and indefinitely on
+any day the overnight job did not run. The two cohorts are read side by side on Weekend
+Prep, so a difference between them has to come from the data. `commit_like` now merges
+through the same `_merge_cohort_safely` the veto uses, failure swallowed the same way
+(the annotation row is already on disk), and `merge_like_cohort_picks` takes the writer
+lock now that it has two callers. The nightly slot stays; both are idempotent.
+
+**3. Unversioned veto codes pooled only with the lowest vocabulary.**
+`_canonical_cohort_map` mapped the unversioned form of a reason only while walking
+`min(versions)`, so a code introduced later got no unversioned mapping at all. Live:
+`human_focus_veto_compressed` (n=3, PF 165 at h3) sat beside
+`human_focus_veto_v2_compressed` (n=18, PF 0.39) - one judgement read as two opposite
+ones, the three-sample half looking spectacular. A `setdefault` on the already-ascending
+version walk IS "the earliest version that defines this code" and stays right for
+anything added later. Verified against the loaded vocabularies: `veto_compressed` ->
+`veto_v2_compressed`, `veto_sma_incoming` -> `veto_v3_sma_incoming`, `veto_volume_dry`
+-> `veto_v1_volume_dry` unchanged. No literal `vocab_version` is asserted in either new
+test - both load the vocabularies and DISCOVER which codes arrive late.
+
+**4. The scoreboard ignored ~640 explicit decisions and could not see an R gap.**
+
+Seven action families joined the take/reject sets, each classified from what its WRITER
+does in `alert_center_panel.py` rather than from its name, and each documented in the
+module comment the way `like_advance` is. Live counts: `auto_pick_pass` 254,
+`arm_d1_event` 160, `focus_review_remove` 88, `focus_review_keep` 71,
+`auto_pick_approve` 63, `arm_any_bounce` 22, `veto_day_trade` 4. `veto_day_trade` is a
+REJECT because the episode being graded is the D1 chart that was shown; the M5 interest
+is a different claim on a different timeframe. Machine events, `*_fired`, `*_expired`
+and every `disarm_*` are deliberately excluded and pinned by a test. Measured effect:
+takes **645 -> 845** of 2,607 shown, overall take rate **0.247 -> 0.324**.
+
+The new **`r_gap`** class fires when both sides carry >= 8 measured R and the averages
+differ by >= 0.5R, with no reference to the take rate - so it can only surface what the
+other two are structurally unable to see.
+
+**The packet's live case moves once the action sets are fixed, and that is reported
+rather than papered over.** `bounce_type=lrsi_cross_20` at taken -0.376R (n=8) vs
+passed +0.962R (n=24) reproduces EXACTLY on the un-fixed sets, and the new class
+catches it at a -1.34R gap while blind_spots and leaks are both empty. Under the
+corrected sets it no longer reads that way: seven of those lrsi charts turn out to have
+been ARMED rather than passed, so taken becomes +0.519R (n=12) and the gap closes. The
+apparent edge was an artefact of the misread decisions - which is what the action-set
+fix exists to remove. The class is pinned to the packet's literal numbers in a test, so
+its behaviour is proven on that case either way. On the live store today it produces
+**18 callouts while blind_spots and leaks produce 0**, so it is currently the only class
+saying anything at all.
+
+`r_gap` is REPORT-ONLY by design: it is a field on `review_preference_state.json` and a
+section in the rendered report, and it is deliberately not wired into
+`draft_policy_from_state`, `review_guidance` or the AI evidence package - those write
+priority deltas into `review_policy.json`, which this packet may not touch. A test
+asserts none of the three so much as mentions it.
+
+Chart Review's coded vetoes now feed the `dislike_reason` dimension. The join was
+MEASURED before it was built: **202 of 212 vetoes join to an existing episode, 198 of
+those to a SHOWN one, and the side matches on 202 of 202 with zero mismatches**, so the
+packet's stop-and-report condition does not apply; 199 attach inside the 90-day window.
+It annotates and never re-resolves - the verdict still comes from the review event store
+alone. A veto whose side disagrees is SKIPPED rather than guessed, one with no episode
+is left alone rather than inventing an impression, and an unreadable log is 0 rather
+than an error.
+
+**Verification.** `pytest tests/ -q` **5737 passed, 72 subtests, process exit 0** (desk
+`.venv`) · `ruff` clean · smoke **7/7** · source `--selftest` **73/73**. Every fix ships
+tests proven to fail with `scripts/` stashed: 3 for #1, 3 for #2, 2 for #3, 12 for #4.
+No frozen rebuild - no packaging trigger was hit. The trader's live evidence files were
+checked before and after and are byte-unchanged (the suite redirects
+`TRADINGBOTV3_DATA_DIR`, `tests/conftest.py:57`).
+
 
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
