@@ -150,6 +150,7 @@ class BounceService(QObject):
     connectionChanged = Signal(str)
     activeBouncesChanged = Signal(int)
     _activeBouncesReady = Signal(object)
+    _entryBoardReady = Signal(object)
     scanningChanged = Signal(bool)
     autoRegimeChanged = Signal(object)  # reading dict from get_auto_regime_reading(), or {}
     technicalIntegrityChanged = Signal(object)  # advisory completed-M5 hierarchy, or {}
@@ -224,6 +225,12 @@ class BounceService(QObject):
         self._active_bounces_signature: tuple[int, int] | None = None
         self._active_bounces_refreshing = False
         self._activeBouncesReady.connect(self._on_active_bounces_ready)
+        # The entry-assist board is the same shape of problem as the active
+        # bounces above: a minute timer calling a snapshot builder that walks
+        # the bot's cached bars, on the Qt thread. Same answer - single-flight
+        # worker, ready-signal, emitted from the GUI thread.
+        self._entry_board_refreshing = False
+        self._entryBoardReady.connect(self._on_entry_board_ready)
         _SERVICE_REFS.add(self)
 
         self._health_timer = QTimer(self)
@@ -784,17 +791,46 @@ class BounceService(QObject):
 
     @Slot()
     def refresh_entry_board(self) -> None:
-        """Recompute + emit the always-on entry-assist RS/RW board."""
+        """Recompute + emit the always-on entry-assist RS/RW board.
+
+        The snapshot walks the bot's cached bars for every board name, and it
+        used to do that on the Qt thread once a minute. It runs on a worker now,
+        single-flight, and the result is emitted from the GUI thread through
+        `_entryBoardReady`. `entry_assist_board_snapshot` itself is untouched -
+        only who calls it moved.
+        """
         if not self._is_live():
             return
         bot = self._current_bot()
+        if bot is None:
+            self._emit(self.entryBoardChanged, {})
+            return
+        if self._entry_board_refreshing:
+            return
+        self._entry_board_refreshing = True
+        threading.Thread(
+            target=self._load_entry_board_worker,
+            name="qt-entry-board",
+            daemon=True,
+        ).start()
+
+    def _load_entry_board_worker(self) -> None:
         board = None
+        bot = self._current_bot()
         if bot is not None:
             try:
                 board = bot.entry_assist_board_snapshot()
             except Exception:
+                logging.debug("Entry-assist board refresh failed.", exc_info=True)
                 board = None
-        self._emit(self.entryBoardChanged, board or {})
+        self._emit(self._entryBoardReady, board or {})
+
+    @Slot(object)
+    def _on_entry_board_ready(self, payload: object) -> None:
+        self._entry_board_refreshing = False
+        if not self._is_live():
+            return
+        self._emit(self.entryBoardChanged, payload if isinstance(payload, dict) else {})
 
     @Slot()
     def refresh_auto_regime(self) -> None:
@@ -876,12 +912,31 @@ class BounceService(QObject):
         self._emit(self.activeBouncesChanged, self._active_bounces_count)
         if self._active_bounces_refreshing:
             return
+        # The stat is microseconds; the PARSE is what needed a thread. Doing the
+        # stat inline means the 3-second tick creates a thread only when the
+        # file actually moved - about 1,200 fewer thread creations an hour.
+        if not self._active_bounces_signature_moved():
+            return
         self._active_bounces_refreshing = True
         threading.Thread(
             target=self._load_active_bounces_worker,
             name="qt-bounce-health",
             daemon=True,
         ).start()
+
+    def _active_bounces_signature_moved(self) -> bool:
+        """Whether the signals file has changed since the last successful read.
+
+        True on any doubt: an unreadable file gets a worker, because the worker
+        is the thing that knows how to turn that into an honest zero.
+        """
+        try:
+            from project_paths import AVWAP_SIGNALS_FILE
+
+            stat = Path(AVWAP_SIGNALS_FILE).stat()
+        except (OSError, ImportError):
+            return True
+        return (int(stat.st_size), int(stat.st_mtime_ns)) != self._active_bounces_signature
 
     def _load_active_bounces_worker(self) -> None:
         count = self._active_bounces_count

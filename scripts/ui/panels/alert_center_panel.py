@@ -87,7 +87,7 @@ from project_paths import (
     D1_EVENT_WATCHES_FILE,
     D1_LEVEL_WATCHES_FILE,
     get_local_setting,
-    save_local_setting,
+    save_local_settings,
 )
 from alert_repetition import ACTION_DIGEST, ACTION_FOLD
 from review_events import record_review_event
@@ -1433,8 +1433,16 @@ class AlertCenterPanel(QFrame):
         return str(self.min_tier_input.currentData() or "all")
 
     def _on_prefs_changed(self, *_args) -> None:
-        save_local_setting("qt_alert_min_tier", self._min_tier_mode())
-        save_local_setting("qt_alert_sound", bool(self.sound_input.isChecked()))
+        # ONE read-modify-write of the settings file, not two. Two separate
+        # saves are two full cycles over the same JSON and a window between
+        # them in which another process can drop whatever was written first
+        # (the reason `save_local_settings` exists - 2026-08-25).
+        save_local_settings(
+            {
+                "qt_alert_min_tier": self._min_tier_mode(),
+                "qt_alert_sound": bool(self.sound_input.isChecked()),
+            }
+        )
         self._rebuild_feed()
 
     def _alert_is_focus(self, alert: BounceAlert) -> bool:
@@ -2281,8 +2289,20 @@ class AlertCenterPanel(QFrame):
         after the bar refresh so it measures bars that just landed.
         """
         expired: list[BounceAlert] = []
+        # EXACTLY ONE evaluation per alert per tick. `survives` has side
+        # effects - it rewrites the caption and writes a `hold_expired` review
+        # event - and the current alert used to be run through it a second time
+        # after the queue filter, so an alert that was both queued and on screen
+        # produced two events and two caption mutations on the tick it expired.
+        # The verdicts are computed first, into a dict keyed by identity, and
+        # every consumer below reads from that dict.
+        verdicts: dict[int, bool] = {}
 
         def survives(alert: BounceAlert) -> bool:
+            key = id(alert)
+            if key in verdicts:
+                return verdicts[key]
+            verdicts[key] = True  # provisional, so a re-entrant read is honest
             if not is_regime_pause_alert(alert):
                 return True
             verdict = self._hold_verdict_for(alert)
@@ -2302,6 +2322,7 @@ class AlertCenterPanel(QFrame):
                     "bars_since_extreme": verdict.hold.bars_since_extreme,
                 },
             )
+            verdicts[key] = False
             return False
 
         queue_before = len(self._review_queue)

@@ -31,6 +31,7 @@ from project_paths import (
 )
 from research_explanations import build_plain_english_whats_working
 from ui import theme
+from ui.timer_utils import SignalCoalescer
 from ui.models.tracker_table_model import ROW_ROLE, TrackerSortProxyModel, TrackerTableModel
 from ui.services.human_focus_tracker_feed import (
     build_human_focus_comparison_rows,
@@ -271,7 +272,13 @@ class SetupTrackerPanel(QFrame):
         self.min_closed_input = QSpinBox()
         self.min_closed_input.setRange(1, 100)
         self.min_closed_input.setValue(5)
-        self.min_closed_input.valueChanged.connect(self.refresh)
+        # Held for ~250 ms: the spinbox arrows step one at a time and every
+        # step re-ran the WHOLE page - ten CSV parses, ten model resets and ten
+        # column fits. Same leading-edge window as everywhere else.
+        self._refresh_coalescer = SignalCoalescer(self.refresh, 250, self)
+        self.min_closed_input.valueChanged.connect(
+            lambda *_args: self._refresh_coalescer.request()
+        )
 
         self.refresh_button = QPushButton("Refresh Tracker")
         self.refresh_button.setObjectName("PrimaryButton")
@@ -457,17 +464,17 @@ class SetupTrackerPanel(QFrame):
 
     def refresh(self) -> None:
         min_closed = int(self.min_closed_input.value())
-        all_setup_type_rows = _load_csv_rows(SETUP_TYPE_STATS_FILE)
-        all_playbook_rows = _load_csv_rows(SETUP_PLAYBOOKS_FILE)
-        tier_performance_export_rows = _load_csv_rows(MASTER_AVWAP_TIER_PERFORMANCE_FILE)
-        self.current_pick_rows = _rank_current_picks(_load_csv_rows(MASTER_AVWAP_TIER_LIST_FILE))
+        all_setup_type_rows = _load_csv_rows_cached(SETUP_TYPE_STATS_FILE)
+        all_playbook_rows = _load_csv_rows_cached(SETUP_PLAYBOOKS_FILE)
+        tier_performance_export_rows = _load_csv_rows_cached(MASTER_AVWAP_TIER_PERFORMANCE_FILE)
+        self.current_pick_rows = _rank_current_picks(_load_csv_rows_cached(MASTER_AVWAP_TIER_LIST_FILE))
         self.setup_type_rows = _rank_setup_types(all_setup_type_rows, min_closed=min_closed)
-        self.recent_type_rows = _rank_recent_types(_load_csv_rows(RECENT_SETUP_TYPE_STATS_FILE))
-        self.short_term_rows = _rank_short_term(_load_csv_rows(SHORT_HORIZON_FILE))
+        self.recent_type_rows = _rank_recent_types(_load_csv_rows_cached(RECENT_SETUP_TYPE_STATS_FILE))
+        self.short_term_rows = _rank_short_term(_load_csv_rows_cached(SHORT_HORIZON_FILE))
         self.playbook_rows = _rank_playbooks(all_playbook_rows, min_closed=min_closed)
-        self.scan_factor_rows = _rank_scan_factors(_load_csv_rows(MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE))
+        self.scan_factor_rows = _rank_scan_factors(_load_csv_rows_cached(MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE))
         self.tier_performance_rows = _rank_tier_performance(tier_performance_export_rows)
-        self.catch_rate_rows = _rank_catch_rates(_load_csv_rows(MASTER_AVWAP_TIER_CATCH_RATE_FILE))
+        self.catch_rate_rows = _rank_catch_rates(_load_csv_rows_cached(MASTER_AVWAP_TIER_CATCH_RATE_FILE))
         self.human_pick_rows = build_human_focus_comparison_rows(
             load_human_focus_performance_rows(),
             tier_performance_export_rows,
@@ -475,7 +482,7 @@ class SetupTrackerPanel(QFrame):
         # Shadow section. Same inline read as every other export on this page
         # (plan.md Phase 0.9 G-P2.3 owns moving this panel off the Qt thread as
         # a whole; doing it for one section would leave the page half on each).
-        self.band_variant_rows = _rank_band_variants(_load_csv_rows(BAND_VARIANT_STATS_FILE))
+        self.band_variant_rows = _rank_band_variants(_load_csv_rows_cached(BAND_VARIANT_STATS_FILE))
 
         self.current_model.set_rows(self.current_pick_rows[:300])
         self.human_pick_model.set_rows(self.human_pick_rows)
@@ -551,6 +558,45 @@ class SetupTrackerPanel(QFrame):
             ):
                 return row
         return None
+
+
+#: Parsed export rows, keyed by path, with the (mtime_ns, size) they came from.
+#: Bounded to one entry per export file - there are ten, and they are rewritten
+#: by the scan, not by this page.
+_CSV_ROW_CACHE: dict[str, tuple[tuple[int, int], list[dict]]] = {}
+
+
+def clear_setup_tracker_csv_cache() -> None:
+    """Forget every cached export. For tests and for a forced re-read."""
+    _CSV_ROW_CACHE.clear()
+
+
+def _csv_signature(path) -> tuple[int, int] | None:
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return (int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _load_csv_rows_cached(path) -> list[dict]:
+    """`_load_csv_rows`, parsed once per file version.
+
+    One `refresh()` parses ten exports, and the page refreshes on a spinbox
+    step, a button and every tab visit - for files a scan rewrites at most a
+    few times a day. An unstampable file is not cached, so one that appears
+    later is picked up.
+    """
+    key = str(path)
+    signature = _csv_signature(path)
+    if signature is not None:
+        cached = _CSV_ROW_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+    rows = _load_csv_rows(path)
+    if signature is not None:
+        _CSV_ROW_CACHE[key] = (signature, rows)
+    return rows
 
 
 def _load_csv_rows(path: Path) -> list[dict[str, Any]]:

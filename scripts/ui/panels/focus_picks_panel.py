@@ -295,7 +295,11 @@ class FocusPicksPanel(QFrame):
                 elif row.side == "RW" and symbol in focus.get("short", []):
                     aligned[symbol] = {"tone": "short", "text": f"RW {row.rrs:+.2f} vs {scope}"}
         self._rrs_state = aligned
-        self._refresh_all()
+        # Coalesced like every other rebuild request on this panel: an RRS
+        # snapshot arrives per scan cycle and used to rebuild all four boards
+        # synchronously (`record_bounce_alert` was routed through the window on
+        # 2026-08-31; this one was missed).
+        self._refresh_coalescer.request()
 
     def snapshot_today(self, *, force: bool, emit_status: bool = True) -> None:
         if not getattr(self.service.store, "uses_default_paths", lambda: False)():
@@ -686,19 +690,25 @@ class FocusStatusChip(QFrame):
         if look != self._look:
             self._look = look
             self._apply_look(has_bounce, has_rrs, accent_tone)
+            # The badge's colour is decided by exactly the same three facts, so
+            # it belongs inside the same guard. Outside it, this ran a
+            # stylesheet parse per chip per update - on a 45-name board, every
+            # bounce alert and every mover pass.
+            if has_bounce:
+                self.live_flag.setStyleSheet(
+                    f"color: {theme.color('favorite')}; font-weight: 700;"
+                )
+            elif has_rrs:
+                self.live_flag.setStyleSheet(
+                    f"color: {theme.color(accent_tone)}; font-weight: 700;"
+                )
 
         self.moving_flag.setVisible(is_mover)
         if has_bounce:
             self.live_flag.setText("BOUNCE")
-            self.live_flag.setStyleSheet(
-                f"color: {theme.color('favorite')}; font-weight: 700;"
-            )
             self.live_flag.setVisible(True)
         elif has_rrs:
             self.live_flag.setText("RRS")
-            self.live_flag.setStyleSheet(
-                f"color: {theme.color(accent_tone)}; font-weight: 700;"
-            )
             self.live_flag.setVisible(True)
         else:
             self.live_flag.setVisible(False)

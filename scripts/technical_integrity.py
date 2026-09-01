@@ -627,15 +627,45 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
                 pass
 
 
+#: The parsed snapshot, keyed by path, with the (mtime_ns, size) it came from.
+#: Bounded to one entry per snapshot file - there is one.
+_SNAPSHOT_CACHE: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+
+
+def clear_technical_integrity_snapshot_cache() -> None:
+    """Forget the parsed snapshot. For tests and for a forced re-read."""
+    _SNAPSHOT_CACHE.clear()
+
+
 def load_technical_integrity_snapshot(path: Path | None = None) -> dict[str, Any]:
+    """The advisory snapshot, parsed once per file version.
+
+    The GUI polls this every 30 seconds and the file is ~453 KB that the scan
+    rewrites about once an hour, so roughly 29 of every 30 parses were reading
+    the same bytes to the same answer. Keyed on (mtime_ns, size); an
+    unstampable file is not cached, so one that appears later is picked up.
+    """
     target = Path(path or technical_integrity_snapshot_path())
     if not target.exists():
         return {}
+    key = str(target)
+    try:
+        stat = target.stat()
+        signature: tuple[int, int] | None = (int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        signature = None
+    if signature is not None:
+        cached = _SNAPSHOT_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    return payload if isinstance(payload, dict) and payload.get("schema") == SNAPSHOT_SCHEMA else {}
+    result = payload if isinstance(payload, dict) and payload.get("schema") == SNAPSHOT_SCHEMA else {}
+    if signature is not None:
+        _SNAPSHOT_CACHE[key] = (signature, result)
+    return result
 
 
 def _level_candidates(

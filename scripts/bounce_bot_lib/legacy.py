@@ -13508,7 +13508,13 @@ class BounceBot(EWrapper, EClient):
                         self._maybe_refresh_auto_regime_while_paused()
                     except Exception:
                         logging.exception("Paused-mode auto regime refresh failed.")
-                    self._stop_event.wait(0.5)
+                    # 5 s, not 0.5: both calls above are date/time guarded
+                    # and can change at most once per 5-minute bar, so 120
+                    # wake-ups a minute bought nothing. Shutdown latency moves
+                    # from 0.5 s to 5 s, which the trader accepted
+                    # (snappiness packet 3). This is the only authorized line
+                    # in this file.
+                    self._stop_event.wait(5.0)
                     continue
 
                 if not self.ensure_connected():
