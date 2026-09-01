@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - both 2026-08-31 evening lines were merged into it by trader instruction: the snappiness line (packets 1-3, stacked, fast-forward from `claude/desk-snappiness-3`) and then Phase 0.11 theta premium (`claude/theta-premium`, a real merge). Only the two shared ledgers conflicted - this file - and both sides' dated entries were kept. `main` already carried today's swing picks (both passes), the day-trade pass, the Strength Board move and the desk-lockup fix |
+| Working branch | **`claude/p0-apply-decisions`**, off `main` at `66a0c31` - Phase 0.13 packet P0, the trader's three 2026-09-01 decisions (retire BANGER, silence the LRSI M5 alerts, record click-away = pass), authorized by the trader pasting the packet. Deliberately branched off `main` and NOT off `claude/focus-declutter-lrsi-htf`: Phase 0.12's two packets are independent of these three and the higher-timeframe LRSI study is untouched by the M5 retirement. `claude/focus-declutter-lrsi-htf` (Phase 0.12 A+B, gates 27 and 28) is still open and unmerged |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
-| Active roadmap items | **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Phase 0.13 packet P0 (2026-09-01 - BUILT on `claude/p0-apply-decisions`; live gate #29 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5720 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p0-apply-decisions`, MEASURED - the run completed cleanly with no Qt-teardown crash) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · frozen exe NOT rebuilt this packet and not required: no packaging trigger was hit (no new dependency, no new non-`.py` runtime asset, no new top-level `scripts/` package). The +5 over `main`'s 5715 is P0's own net test count. Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **DONE 2026-08-31 21:51, trader-authorized.** The checkout sits on `main` and the desk was stopped (pid 9832, the pid its own `heartbeat.json` named; its launcher parent 3476 had already exited) and relaunched through `trading_desk.cmd` - the production launcher, unchanged. New pids: **23588** (the desk) under trampoline **23796**. Verified UP three ways rather than assumed: the process outlived 60 s, a second launch printed "another TradingBotV3 desk is already running" and exited 0, and `heartbeat.json` re-stamped at 21:52:40 naming pid 23588 (it had read 21:50:40 / pid 9832 before the kill). Everything merged tonight is what is now running, and the stall watchdog is ON - this session's `ui_stalls.jsonl` is the AFTER side of gates 24-26 |
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 29 | **P0 trader decisions (Phase 0.13)** — one DESK session with **no LRSI line on the M5 alert bar**, `lrsi_cross_20` / `lrsi_cross_50` rows **still arriving in `intraday_bounce_outcomes.csv`** that same day, and **no BANGER branch left in the alert path** (grep `scripts/` for `banger` — only the retired `banger` review column, the `REGIME_BANGER_*` regime-pause thresholds and the trader's own quote in the `alert_repetition.py` docstring may remain) | 2026-09-01 Phase 0.13 P0 entry |
 | ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-08-31** at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
@@ -58,6 +59,83 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+
+### 2026-09-01 - Phase 0.13 packet P0: three trader decisions, applied
+
+**Branch `claude/p0-apply-decisions`, off `main` at `66a0c31`.** Authorized by the
+trader pasting the packet. Live gate 29 owed. No frozen rebuild: no packaging trigger
+was hit. Branched off `main` rather than off `claude/focus-declutter-lrsi-htf`
+deliberately - the three decisions are independent of Phase 0.12, and the
+higher-timeframe LRSI study on that branch is untouched by the M5 retirement here.
+
+**1. BANGER retired** (trader: *"not sure to be honest. We can probably remove this
+because idk what it is"*). It was a top-alert class with a matcher and **no producer**:
+the only definition was `"BANGER" in raw_text.upper()` in `alert_center_panel.py`, no
+detector path builds the token, and 0 of 8,818 recorded review rows carried
+`banger=True`. Removed: the matcher, the tier-gate bypass, the always-sound branch, the
+`is_banger` argument to `RepetitionLedger.consider`, the `had_banger` row field and
+both escalation branches. The argument is REMOVED, not ignored, so a stale caller
+raises. **Kept:** the `banger` review-event column as a constant `False`, documented as
+retired, so historical readers and the schema id are unchanged. PROVEN is the top class
+and is untouched; two feed labels now say PROVEN where they said bangers.
+`REGIME_BANGER_*` in `legacy.py` is a regime-pause threshold and was left alone.
+
+**2. LRSI M5 alerts retired, every row of evidence kept** (trader: *"LRSI alerts seem
+to be mostly spam. however I enjoy them as something that can boost the potential of an
+alert. for now let's put them on the back burner. let's measure how they perform on
+different timeframes but no need for their M5 alerts"*). They were **84 of 128 new M5
+episodes by 11:14** that morning. `LRSI_M5_ALERTS_RETIRED = True` sits beside
+`H1_ALERTS_RETIRED` and gates the **emit** seam.
+
+The seam was verified before it was chosen, and it is not the one the packet's first
+guess named. `check_lrsi_cross_setups` tests `is_m5_signal_enabled` **before** the event
+joins `hits`, so a `False` toggle drops it ahead of the candidate row and the outcome
+registration - flipping `M5_SIGNAL_TYPE_DEFAULTS` would have stopped the evidence
+rather than the noise. The defaults stay `True` with a comment saying why; the gate sits
+after `record_alert_tier`. So the sweep, the candidate row,
+`intraday_bounce_outcomes.csv`, the learning tier and the PROVEN stamp all keep running,
+and only `gui_callback` is skipped - the message goes to the symbol log as
+`LEARNING_ONLY [LRSI M5 retired]`, exactly as H1 does.
+
+One deliberate difference from H1: `log_bounce_to_file` still runs. H1 returns before
+it, but `journal_analytics.AutoTagger` reads `INTRADAY_BOUNCES_CSV` to answer "which of
+my setups was this?", and skipping it would blank the tag on a real LRSI trade. **No
+Settings toggle exists** for these engines - nothing under `scripts/ui/` references
+`set_m5_signal_enabled` or `M5_SIGNAL_TYPE_DEFAULTS` - so there was no dialog label to
+correct. The "different timeframes" measurement is Phase 0.12 packet B's warehouse
+study, on the other branch, unaffected.
+
+**Owed, not built:** LRSI as a display suffix on OTHER M5 alerts - the "boost" the
+trader described. `_format_bounce_alert_message` is a module-level function taking no
+bars, so a cross reading has to be plumbed through every champion alert caller. That is
+a champion-path change, not the display tweak the packet's escape clause allowed, so it
+was skipped and recorded rather than half-built.
+
+**3. Clicking away is a pass - recorded, no code change** (trader: *"clicking away = a
+pass. The tabs under the visual chart review should give us all the tools we need and we
+decide as we see. set alerts / add to focus and then move on"*). `_select_review_alert`
+already wrote the `skip` row with `detail.reason = clicked_away_from_m5_alert`; the
+trader has confirmed that IS the meaning. The decision is now in `docs/DESK_INTERNALS.md`
+under the M5 alert bar entry, with a one-line pointer at the writer, so no later packet
+repairs it into a take or into silence. The reason string is frozen -
+`review_learning` keys on it, and `tests/test_qt_m5_alert_bar.py` already pins it.
+
+**Golden note.** No byte-level M5 alert fixture exists in the tree;
+`tests/test_r5_lrsi_cross_wiring.py` is the golden for this path. Every detection,
+candidate-row, outcome-row and tier assertion in it is unchanged - the message
+assertions now read the identical text off the `LEARNING_ONLY` line instead of
+`gui_callback`. That is the "byte-identical except absent from the GUI stream" the
+packet asked for, stated honestly.
+
+**Verification.** `pytest tests/ -q` **5720 passed, 72 subtests, process exit 0** ·
+`ruff` **clean** · smoke **7/7** · source `--selftest` **73/73**. Every fix ships a test
+proven to fail with `scripts/` stashed: five for BANGER
+(`test_the_banger_column_is_retired_but_still_written`,
+`test_the_banger_escalation_is_gone`,
+`test_the_banger_token_no_longer_bypasses_the_tier_gate`,
+`test_the_banger_token_no_longer_skips_the_digest`, `test_tier_extraction`) and seven in
+`test_r5_lrsi_cross_wiring.py`, including
+`test_a_crossing_logs_an_outcome_row_and_produces_no_gui_callback`.
 
 ### 2026-08-31 (late evening) - Desk snappiness packet 3: the last of the three
 

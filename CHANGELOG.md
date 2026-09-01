@@ -148,6 +148,35 @@ which is evidence and must not be loaded as context.
 - Visual Alert Center and review queue, chart-armed watches, persistent History,
   structured review decisions, review scoreboard, and annotation-only/FIFO policy
   gate.
+- **PROVEN is the top alert class, and since 2026-09-01 it is the only one.**
+  BANGER was retired by trader decision ("We can probably remove this because idk
+  what it is"): its only definition was a literal `"BANGER" in raw_text` match in
+  the Alert Center, nothing in the tree ever emitted the token, and 0 of 8,818
+  recorded review rows carried it. The matcher, the tier-gate bypass, the
+  always-sound branch and both repetition escalations are gone; `is_banger` is
+  REMOVED from `RepetitionLedger.consider` rather than ignored, so a stale caller
+  is a loud error. The `banger` column stays in the review-event row as a constant
+  `False` so historical readers and the row shape are unchanged. The
+  `REGIME_BANGER_*` constants in `bounce_bot_lib/legacy.py` are regime-pause
+  thresholds - a different thing - and are untouched.
+- **The LRSI M5 alerts are retired and every row of their evidence is kept**
+  (trader, 2026-09-01: "LRSI alerts seem to be mostly spam ... no need for their
+  M5 alerts"; they were 84 of 128 new M5 episodes by 11:14 that morning).
+  `LRSI_M5_ALERTS_RETIRED` gates the EMIT seam in `_emit_lrsi_cross_alert`, the
+  same shape as `H1_ALERTS_RETIRED`: the sweep, the candidate row,
+  `_register_bounce_outcome` (`intraday_bounce_outcomes.csv`), the learning tier
+  and the PROVEN stamp all still run, and only `gui_callback` is skipped. **The
+  detection toggles stay `True` on purpose** - `is_m5_signal_enabled` is tested
+  before the event joins `hits`, so flipping them would stop the evidence rather
+  than the noise. Unlike H1's, this retirement still calls `log_bounce_to_file`,
+  because `journal_analytics.AutoTagger` reads `INTRADAY_BOUNCES_CSV` to name a
+  trade's setup. No Settings toggle exists for these engines. The higher-timeframe
+  LRSI warehouse study is the measurement the trader asked for and is untouched.
+- **A click away from an M5 chart IS a pass** (trader decision 2026-09-01,
+  confirming the 2026-08-27 mechanic): `_select_review_alert` writes a `skip` row
+  with `detail.reason = clicked_away_from_m5_alert`, and that string is frozen
+  because `review_learning` keys on it. What the trader wanted from the chart they
+  take with the tabs under it - arm an alert, add to Focus - before moving on.
 - Main-only price-level polling with cross-up/cross-down, one fire per arm, urgent
   ntfy push, persistent main-desk presentation, and manual re-arm.
 - Auto modes OFF/DESK/AWAY/EVENING, honest global status, EVENING early scan and
@@ -416,6 +445,76 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-01 - Phase 0.13 packet P0: three trader decisions applied
+
+**Branch `claude/p0-apply-decisions`, off `main` at `66a0c31`.** Three decisions the
+trader gave in chat on 2026-09-01, each quoted in the code beside what it changed.
+Live gate #29 owed.
+
+**1. BANGER is retired.** Trader: *"not sure to be honest. We can probably remove
+this because idk what it is."* It was a top-alert class with a matcher and no
+producer. The only definition was `"BANGER" in raw_text.upper()` in
+`alert_center_panel.py`; no detector path builds the token (the regime-pause sweep is
+deliberately untiered and stamps none), and 0 of 8,818 recorded review rows carried
+`banger=True` (`docs/analysis/EVIDENCE_AUDIT_2026-08-22.md`, row D8b). It granted
+three privileges nothing could reach: a tier-gate bypass, an always-sound, and a
+repetition escalation. All three are gone, along with `is_banger_alert`, the
+`is_banger` argument to `RepetitionLedger.consider` and the `had_banger` row field.
+The argument is REMOVED rather than ignored, so a caller still passing it raises
+instead of silently doing nothing. The `banger` column survives in the review-event
+row as a documented constant `False`, so every reader of the historical rows keeps
+working and the schema id does not move. PROVEN stays the top class, untouched, and
+the two feed labels now say so ("S tier / PROVEN only", "Sound on S/A + PROVEN").
+
+**2. The LRSI M5 alerts are silenced; the evidence is not.** Trader: *"LRSI alerts
+seem to be mostly spam. however I enjoy them as something that can boost the potential
+of an alert. for now let's put them on the back burner. let's measure how they perform
+on different timeframes but no need for their M5 alerts."* Measured basis: the two
+LRSI levels were 84 of 128 new M5 episodes by 11:14 that morning - 66% of the
+session's alert volume from one engine. New `LRSI_M5_ALERTS_RETIRED = True` beside
+`H1_ALERTS_RETIRED`, applied at the EMIT seam.
+
+The seam matters and was verified before it was chosen. `check_lrsi_cross_setups`
+tests `is_m5_signal_enabled` **before** the event joins `hits`, so a `False` toggle
+drops the event ahead of the candidate row and the outcome registration: flipping the
+defaults would have stopped the very rows the trader asked to keep. The defaults stay
+`True` with a comment saying why, and the gate sits after `record_alert_tier` instead
+- so the sweep, the candidate row, `intraday_bounce_outcomes.csv`, the learning tier
+and the PROVEN stamp all keep running and only `gui_callback` is skipped. The message
+goes to the symbol log as `LEARNING_ONLY [LRSI M5 retired]`, exactly as H1 does.
+
+One deliberate difference from H1: `log_bounce_to_file` still runs. H1's retirement
+returns before it, but `journal_analytics.AutoTagger` reads `INTRADAY_BOUNCES_CSV` to
+answer "which of my setups was this?", and skipping it would blank the tag on a real
+LRSI trade. No Settings toggle exists for these engines - nothing in `scripts/ui/`
+references `set_m5_signal_enabled` or `M5_SIGNAL_TYPE_DEFAULTS` - so there was no
+dialog label to correct. The "different timeframes" measurement is the Phase 0.12
+packet B warehouse study (`outcomes.HTF_LRSI_RECIPES`, M30/H1/H2/H4), which this flag
+does not touch and which lives on a different branch.
+
+**Owed, not built:** LRSI as a display suffix on OTHER M5 alerts - the "boost" the
+trader described. `_format_bounce_alert_message` is a module-level function that takes
+no bars, so feeding it a cross reading means plumbing bars through every champion
+alert caller. That is a change to the champion alert path, not the display tweak the
+packet's escape clause allowed, so it was skipped and is recorded here.
+
+**3. Clicking away is a pass - recorded, not changed.** Trader: *"clicking away = a
+pass. The tabs under the visual chart review should give us all the tools we need and
+we decide as we see. set alerts / add to focus and then move on."* `_select_review_alert`
+already wrote a `skip` row with `detail.reason = clicked_away_from_m5_alert`; the
+trader has now confirmed that IS the intended meaning. No code behaviour changed. The
+decision is in `docs/DESK_INTERNALS.md` under the M5 alert bar entry with a one-line
+pointer at the writer, so no later packet repairs it into a take or into silence, and
+the reason string is frozen because `review_learning` keys on it.
+
+**Verification.** `pytest tests/ -q` **5720 passed, 72 subtests, process exit 0**
+(desk `.venv`) · `ruff` clean · smoke **7/7** · source `--selftest` **73/73**. Every
+fix ships a test proven to fail with `scripts/` stashed: five for BANGER, seven in
+`test_r5_lrsi_cross_wiring.py` for LRSI. No frozen rebuild - no packaging trigger was
+hit (no new dependency, no new non-`.py` runtime asset, no new top-level `scripts/`
+package).
+
 
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
