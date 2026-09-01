@@ -22,6 +22,9 @@ class FocusService(QObject):
     """
 
     focusChanged = Signal()
+    #: The rows the fade just moved out of the active lists (A3). Display and
+    #: the swing-favorites retraction listen; nothing here reaches a detector.
+    picksFaded = Signal(object)
 
     def __init__(self, store: FocusPickStore | None = None, parent=None) -> None:
         super().__init__(parent)
@@ -84,6 +87,38 @@ class FocusService(QObject):
 
     def clear(self, side, category="m5") -> int:
         return self._store.clear(side, category)
+
+    # ---- the fade clock (A3) ---------------------------------------------
+    # The store is the single writer; these are the seams the desk calls.
+    #
+    # Deliberately NOT recorded to `pick_feedback.jsonl`. A fade is the desk
+    # noticing silence, not the trader passing a verdict, and every verdict in
+    # that file feeds a graded surface - inventing a "faded" verdict would put
+    # the desk's own housekeeping into the trader's scoreboard. The fade
+    # already writes its own append-only row plus a membership `left` event
+    # with reason `focus_fade`, which is where the evidence belongs.
+    def note_focus_activity(self, symbol, side=None, category=None, *, reason="") -> int:
+        """This pick said something - restart its ten-session clock."""
+        try:
+            return self._store.note_focus_activity(symbol, side, category, reason=reason)
+        except Exception:
+            return 0
+
+    def fade_stale_picks(self) -> list:
+        """Move every pick silent past its window to the faded list."""
+        faded = self._store.fade_stale_picks()
+        if faded:
+            self.picksFaded.emit([dict(row) for row in faded])
+        return faded
+
+    def faded_picks(self) -> list:
+        return self._store.faded_picks()
+
+    def restore_faded(self, symbol, side, category="m5") -> bool:
+        return self._store.restore_faded(symbol, side, category)
+
+    def discard_faded(self, symbol, side, category="m5") -> bool:
+        return self._store.discard_faded(symbol, side, category)
 
     def reload(self) -> None:
         self._store.reload()

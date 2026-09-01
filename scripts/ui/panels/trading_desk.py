@@ -149,6 +149,13 @@ class TradingDeskPanel(QWidget):
         self.swing_favorites_service.statusChanged.connect(self.swing_favorites_bar.set_status)
         self.swing_favorites_service.statusChanged.connect(self.statusChanged)
         self.swing_favorites_bar.firstShown.connect(self._refresh_swing_favorites)
+        # A3: fading a hand-vetted swing pick appends a RETRACTION row to the
+        # favorites store - never an edit, so "added on the 3rd, faded on the
+        # 17th" stays two rows in the order they happened. The Focus entry is
+        # already gone by the time this runs; this writes evidence only.
+        self.focus_service.picksFaded.connect(
+            self.swing_favorites_service.retract_faded_picks
+        )
         # A SPLITTER, not a fixed stack (trader, 2026-08-31: "the tab needs to
         # be resizable relative to the M5 alerts tab, I should be able to drag
         # it up to see more"). Its own settings key, so this drag and the desk's

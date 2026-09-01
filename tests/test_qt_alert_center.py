@@ -560,11 +560,16 @@ def test_focus_privilege_waits_for_the_previous_day_extreme(tmp_path, monkeypatc
     assert not panel._alert_has_focus_privilege(quiet)
 
 
-def test_one_extension_flag_per_pick_then_only_pullbacks(tmp_path, monkeypatch):
-    """FRPT's case (2026-08-05): it printed a new 20-day high and then simply
-    stayed extended. The first extension event spends the whole extension set
-    for the day; the pullback set stays live so the pick can still speak when
-    it comes back to a level."""
+def test_focus_picks_auto_fire_pullbacks_only(tmp_path, monkeypatch):
+    """Phase 0.12 A1 (trader, 2026-09-01): a Focus pick's automatic D1 alerts
+    are the PULLBACK set only. Extension events - a new 5d/20d extreme, a close
+    through an SMA or an AVWAPE line - no longer fire on their own; the trader
+    arms them per symbol when they want one, and `_poll_d1_event_watches` is
+    the single path that fires an armed watch.
+
+    Supersedes the 2026-08-05 "one extension per pick per day" rule (FRPT):
+    that rule rationed extension flags, this removes them from the automatic
+    lane entirely."""
     try:
         import os
         from datetime import datetime
@@ -632,25 +637,78 @@ def test_one_extension_flag_per_pick_then_only_pullbacks(tmp_path, monkeypatch):
     monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol: list(d1_bars))
     monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol: list(m5_bars))
 
-    # 06:40 - the breakout prints a new 20-day high.
-    fires.add("new_20d_high")
-    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 6, 40))
-    assert [a.trigger for a in panel._d1_alerts] == ["Focus D1 · event"]
-    assert panel._focus_extension_spent("FRPT")
-
-    # Later: EVERY kind would hit. Only the pullback set is even measured -
-    # no second "still breaking out" flag on a name that is now extended.
-    evaluated.clear()
+    # 06:40 - the breakout prints a new 20-day high, and every other kind
+    # would hit too. Nothing in the extension set is even MEASURED: the gate
+    # is at the flag-generation seam, not a suppression downstream.
     fires.update(D1_EXTENSION_KINDS | D1_PULLBACK_KINDS)
-    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 9, 40))
-    assert set(evaluated) <= D1_PULLBACK_KINDS
+    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 6, 40))
+    assert set(evaluated) == set(D1_PULLBACK_KINDS)
     assert not (set(evaluated) & D1_EXTENSION_KINDS)
-    assert evaluated, "the pullback events must still be live"
     fired_kinds = {
         flag.split("|", 1)[1] for flag in panel._focus_d1_flags if flag.startswith("FRPT|")
     }
-    assert fired_kinds & D1_PULLBACK_KINDS  # it can still speak on a bounce
-    assert fired_kinds & D1_EXTENSION_KINDS == {"new_20d_high"}
+    assert fired_kinds == set(D1_PULLBACK_KINDS)
+    assert not (fired_kinds & D1_EXTENSION_KINDS)
+    assert panel._d1_alerts, "the pullback events still speak"
+
+    # A second pass adds nothing: the pullbacks are spent for the day and the
+    # extension set was never in the running.
+    evaluated.clear()
+    panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 9, 40))
+    assert evaluated == []
+
+
+def test_an_armed_extension_watch_is_the_only_route_for_an_extension_event(
+    tmp_path, monkeypatch
+):
+    """A1's other half: arming is what brings an extension event back.
+
+    The armed watch fires through `_poll_d1_event_watches`, which is untouched
+    by A1 - so there is exactly ONE path for an extension event and no chance
+    of one alert arriving twice."""
+    try:
+        import os
+        from datetime import datetime
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels import alert_center_panel as panel_mod
+        from ui.panels.alert_center_panel import AlertCenterPanel
+        from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    monkeypatch.setattr(
+        SymbolSnapshotWidget, "set_symbol", lambda self, symbol, **kwargs: None
+    )
+
+    class _Hit:
+        message = "new 20d high"
+        resolved_side = "LONG"
+
+        def __init__(self, watch):
+            self.watch = watch
+
+    def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None, levels_cache=None):
+        return _Hit(watch) if watch.kind == "new_20d_high" else None
+
+    monkeypatch.setattr(panel_mod, "evaluate_d1_event_watch", _fake_evaluate)
+
+    panel = AlertCenterPanel(
+        parked_symbols_path=tmp_path / "parked.json",
+        focus_d1_flags_path=tmp_path / "focus_flags.json",
+        d1_event_watches_path=tmp_path / "d1_events.json",
+    )
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol: [{"dt": datetime(2026, 8, 4)}])
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol: [])
+
+    assert panel.arm_d1_event_watch("FRPT", "new_20d_high") is True
+    panel._poll_d1_event_watches(now=datetime(2026, 8, 5, 6, 40))
+    assert panel.armed_d1_event_kinds("FRPT") == set()  # one-shot, retired
 
 
 def test_a_focus_picks_own_chart_can_remove_it(tmp_path, monkeypatch):
@@ -737,7 +795,10 @@ def _feed_alerts(panel) -> list:
 def test_focus_d1_flags_hold_until_the_break_and_then_start_there(tmp_path, monkeypatch):
     """The open-time flood fix: no automatic D1 flag while the name is inside
     yesterday's range, and when it breaks out the event window starts AT the
-    break - the 09:35 reject it printed while still below never fires."""
+    break - the 09:35 reject it printed while still below never fires.
+
+    The vehicle is `ema15_reject` because since Phase 0.12 A1 the pullback set
+    IS the automatic lane; the gate itself is unchanged."""
     try:
         import os
         from datetime import datetime
@@ -786,11 +847,11 @@ def test_focus_d1_flags_hold_until_the_break_and_then_start_there(tmp_path, monk
     evaluated = []  # (kind, armed_at) per D1 event actually measured
 
     class _Hit:
-        message = "5d high"
+        message = "15EMA reject"
 
     def _fake_evaluate(watch, m5, d1, *, now=None, avwape_anchor=None, levels_cache=None):
         evaluated.append((watch.kind, watch.armed_at))
-        return _Hit() if watch.kind == "new_5d_high" else None
+        return _Hit() if watch.kind == "ema15_reject" else None
 
     monkeypatch.setattr(panel_mod, "evaluate_d1_event_watch", _fake_evaluate)
 
@@ -820,10 +881,10 @@ def test_focus_d1_flags_hold_until_the_break_and_then_start_there(tmp_path, monk
     # breakout bar's own events count, while 09:35/09:40 (which end at 09:40
     # and 09:45, before 11:00) stay outside it.
     assert evaluated and {armed_at for _kind, armed_at in evaluated} == {breakout_bar}
-    assert ("new_5d_high", breakout_bar) in evaluated
+    assert ("ema15_reject", breakout_bar) in evaluated
     assert panel.focus_break_state("NVDA", "long") == "open"
     assert panel._focus_gate_held == 0
-    assert "NVDA|new_5d_high" in panel._focus_d1_flags
+    assert "NVDA|ema15_reject" in panel._focus_d1_flags
     assert [alert.symbol for alert in panel._d1_alerts] == ["NVDA"]
     assert panel._d1_alerts[0].tag == panel_mod.FOCUS_D1_EVENT_TAG
 
@@ -831,7 +892,7 @@ def test_focus_d1_flags_hold_until_the_break_and_then_start_there(tmp_path, monk
     # and the window keeps its original 11:00 open stamp.
     evaluated.clear()
     panel._poll_focus_d1_interest(now=datetime(2026, 8, 5, 11, 30))
-    assert "new_5d_high" not in {kind for kind, _armed_at in evaluated}
+    assert "ema15_reject" not in {kind for kind, _armed_at in evaluated}
     assert {armed_at for _kind, armed_at in evaluated} == {breakout_bar}
     assert len(panel._d1_alerts) == 1
 
@@ -2345,9 +2406,13 @@ def test_focus_review_button_queues_every_pick(tmp_path, monkeypatch):
     assert service.is_focus("NVDA", "long", "swing")
 
 
-def test_focus_picks_flag_on_any_d1_interest_once_per_day(tmp_path, monkeypatch):
-    """2026-07-31: Focus picks are auto-watched for the whole D1 event set;
-    each (symbol, event) flags once per session into the D1 Focus feed."""
+def test_a_new_multi_session_high_no_longer_flags_a_focus_pick(tmp_path, monkeypatch):
+    """Phase 0.12 A1, end to end on REAL evaluation (no monkeypatched hit).
+
+    2026-07-31 auto-watched Focus picks for the whole D1 event set. Trader,
+    2026-09-01: the extension half of that set is what filled the feed. The
+    same bars that used to print "new 5d high" now print nothing at all, and
+    the trader gets the alert back by ARMING it."""
     try:
         import os
 
@@ -2406,24 +2471,28 @@ def test_focus_picks_flag_on_any_d1_interest_once_per_day(tmp_path, monkeypatch)
     panel._poll_focus_d1_interest(now=moment)
 
     flagged = [alert for alert in panel._d1_alerts if alert.tag == "focus_d1_event"]
-    assert flagged, "a new multi-session high must flag the Focus pick"
-    assert all(alert.symbol == "NVDA" for alert in flagged)
-    assert any("NVDA|new_5d_high" == flag or flag.startswith("NVDA|") for flag in panel._focus_d1_flags)
-    assert "NVDA|new_5d_high" in panel._focus_d1_flags
+    assert not flagged, "an extension event no longer flags a Focus pick on its own"
+    assert "NVDA|new_5d_high" not in panel._focus_d1_flags
 
-    # Second poll: everything already flagged today - nothing new.
-    before = len(panel._d1_alerts)
-    panel._poll_focus_d1_interest(now=moment)
-    assert len(panel._d1_alerts) == before
+    # Arming is the route back, and it is the OTHER poll - so an extension
+    # event can never arrive twice.
+    panel._d1_event_watches_path = tmp_path / "d1_event_watches.json"
+    assert panel.arm_d1_event_watch("NVDA", "new_5d_high") is True
+    # Re-stamp the arm to the fixture's session; the real one is "now".
+    from chart_watch import D1EventWatch
 
-    # A fresh panel on the same day reloads the fired registry from disk.
-    rebuilt = AlertCenterPanel(
-        service,
-        ignored_symbols_path=tmp_path / "ignored.txt",
-        review_events_path=tmp_path / "review_events.jsonl",
-        focus_d1_flags_path=tmp_path / "focus_d1_flags.json",
-    )
-    assert "NVDA|new_5d_high" in rebuilt._focus_d1_flags
+    panel._d1_event_watches = [
+        D1EventWatch(symbol=watch.symbol, kind=watch.kind, armed_at=datetime(2026, 7, 31))
+        for watch in panel._d1_event_watches
+    ]
+    panel._poll_d1_event_watches(now=moment)
+    armed = [
+        alert
+        for alert in list(panel._alerts) + list(panel._d1_alerts)
+        if alert.tag == "chart_watch"
+    ]
+    assert armed and armed[0].symbol == "NVDA"
+    assert panel.armed_d1_event_kinds("NVDA") == set()  # one-shot, retired
 
 
 def test_d1_watch_read_is_memory_only_and_prefetches_off_thread(monkeypatch):
@@ -2470,3 +2539,121 @@ def test_d1_watch_read_is_memory_only_and_prefetches_off_thread(monkeypatch):
     assert service.requests == []
     panel._flush_d1_prefetch()
     assert service.requests == [["NVDA"]]
+
+
+def test_an_armed_watch_expires_off_the_board_and_leaves_a_row(tmp_path, monkeypatch):
+    """Phase 0.12 A2: the expiry runs at the head of the poll that already
+    owns the store - no new timer - and it writes an append-only row rather
+    than deleting quietly. A watch the calendar cannot date stays armed."""
+    try:
+        import os
+        from datetime import datetime
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+    import armed_alert_expiry
+    from chart_watch import D1EventWatch
+
+    written: list[dict] = []
+
+    class _Ledger:
+        def append_many(self, rows, **kwargs):
+            written.extend(dict(row) for row in rows)
+            return len(rows)
+
+    monkeypatch.setattr(armed_alert_expiry, "default_ledger", lambda: _Ledger())
+
+    panel = AlertCenterPanel(
+        parked_symbols_path=tmp_path / "parked.json",
+        focus_d1_flags_path=tmp_path / "focus_flags.json",
+        d1_event_watches_path=tmp_path / "d1_events.json",
+    )
+    monkeypatch.setattr(panel, "_d1_bars_for", lambda symbol: [])
+    monkeypatch.setattr(panel, "_m5_bars_for", lambda symbol: [])
+    panel._d1_event_watches = [
+        # 5-day watch armed 2026-07-20: due well before 2026-08-10.
+        D1EventWatch("MSFT", "new_5d_high", datetime(2026, 7, 20, 10, 0)),
+        # 20-day watch armed 2026-08-07: three sessions in, still live.
+        D1EventWatch("AAPL", "new_20d_high", datetime(2026, 8, 7, 10, 0)),
+        # Outside the calendar's validated range: never expired on a guess.
+        D1EventWatch("IBM", "new_5d_high", datetime(1990, 1, 2, 10, 0)),
+    ]
+
+    panel._poll_d1_event_watches(now=datetime(2026, 8, 10, 9, 40))
+
+    assert sorted(watch.symbol for watch in panel._d1_event_watches) == ["AAPL", "IBM"]
+    assert [row["symbol"] for row in written] == ["MSFT"]
+    row = written[0]
+    assert row["store"] == "d1_event_watches"
+    assert row["kind"] == "new_5d_high"
+    assert row["armed_at"].startswith("2026-07-20")
+    assert row["expired_at"] == "2026-08-10"
+    assert row["trading_days"] == 5
+
+
+def test_rearming_from_the_chart_restarts_the_expiry_clock(monkeypatch):
+    """Phase 0.12 A2: arming restarts the trading-day clock - INCLUDING the
+    chart's own arm route. The panel merge mirrors the Focus tab board key for
+    key, and the board stamps `armed_at` on a re-arm; without the same stamp
+    here, a level re-armed from the chart would still carry the date that
+    expired it and would be disarmed again on the next poll. The deliberate
+    no-re-arm rule is untouched: an unchanged level does not re-arm and does
+    not move the stamp."""
+    try:
+        import os
+        from datetime import date
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from ui.panels.alert_center_panel import AlertCenterPanel
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    class _Service:
+        def __init__(self, rows):
+            self.rows = rows
+            self.saved = None
+
+        def entries(self):
+            return [dict(row) for row in self.rows]
+
+        def save_entries(self, rows):
+            self.saved = [dict(row) for row in rows]
+            return True
+
+    stale = {
+        "symbol": "AAPL",
+        "above": 100.0,
+        "below": None,
+        "armed_above": False,
+        "armed_below": False,
+        "armed_at": "2026-08-01",
+        "note": "",
+        "history": [],
+    }
+    panel = AlertCenterPanel()
+    panel.price_alert_service = _Service([stale])
+
+    # A changed level re-arms the side AND restarts the clock.
+    panel._arm_price_alert_from_level("AAPL", "above", 105.0)
+    saved = panel.price_alert_service.saved[0]
+    assert saved["armed_above"] is True
+    assert saved["armed_at"] == date.today().isoformat()
+
+    # An unchanged level neither re-arms nor moves the stamp.
+    panel.price_alert_service = _Service([stale])
+    panel._arm_price_alert_from_level("AAPL", "above", 100.0)
+    saved = panel.price_alert_service.saved[0]
+    assert saved["armed_above"] is False
+    assert saved["armed_at"] == "2026-08-01"

@@ -39,6 +39,10 @@ FOCUS_REVIEW_TAG = "focus_review"
 # review chart queue - Focus names get flagged for ANYTHING remotely
 # interesting on the D1 (trader rule 2026-07-31).
 FOCUS_D1_EVENT_TAG = "focus_d1_event"
+# A pick the fade moved out of Focus after ten silent trading days, queued for
+# the "Faded review" walkthrough (A3/A4). Same standing as a Focus review: the
+# trader asked for their own list, so the movers-only filter never touches it.
+FOCUS_FADED_TAG = "focus_faded"
 
 
 def is_auto_pick_alert(alert: Any) -> bool:
