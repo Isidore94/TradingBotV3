@@ -18,6 +18,46 @@ If you change a rule, change it in both places.
 
 ---
 
+## The technical-integrity event log's layout (2026-08-31, snappiness packet 3)
+
+`technical_integrity_events.jsonl` is the authority and has not changed: same
+rows, same path, append-only, nothing removed or rewritten. It measured **618 MB**
+on 2026-08-31 with no retention, and the after-close wrap-up replayed it every
+evening by streaming and `json.loads`-ing every line to keep the `level_resolved`
+rows - a small subset. That is an hour-class job, and although it runs on a
+background thread the GIL means an hour of hot parsing steals GUI-thread time all
+evening.
+
+**Beside it now sits `technical_integrity_events_resolved.jsonl`, a DERIVED
+sidecar.** `_append_event` writes the main log FIRST and then mirrors any
+`level_resolved` row; that second append is swallowed on failure, because losing
+a derived line costs a catch-up scan and nothing else.
+
+**The watermark rides on the rows, not in the header.** Every sidecar line carries
+the main log's byte offset at the moment the row it mirrors was appended, so the
+last line IS the watermark and the file stays append-only - a header watermark
+would have to be rewritten on every event. `sync_resolved_sidecar` therefore has
+three honest outcomes: **current** (offset == size, no work), **caught up**
+(stream only the tail past the offset), and **rebuilt** (no sidecar, a torn line,
+or an offset past the end of the log, which means the log was replaced under it).
+Both the build and every catch-up end by recording how far they actually read,
+because the last resolved row is rarely the last LINE and without that every later
+sync re-streams the same tail forever.
+
+`load_resolved_technical_integrity_events` prefers the sidecar and falls back to
+the full stream on any doubt; `use_sidecar=False` forces the old path, and a test
+asserts the two return the same rows in the same order.
+
+**The month roll is deliberately NOT built.** Renaming the live log into
+`-YYYYMM` segments needs every reader to see the live file plus the segments, and
+`research_warehouse/ingest_existing.py` registers the log as a `BronzeArtifact`
+whose `resolve_path()` returns exactly ONE path. Teaching it several is a change
+to the warehouse's bronze contract - a locked area with its own decision log -
+so shipping the roll would have left the warehouse silently ingesting one month.
+The sidecar removes the replay cost, which was the GUI-freeze problem; the roll
+would only bound disk growth.
+
+
 - Entry: `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). There is one desk role and no flag to change it — the Desk Link satellite role was retired 2026-08-08 and its code was **removed 2026-08-24** (P1.5): no `desk_link` package, no `ui/satellite.py`, no `--satellite`/`--desk-role` flags, no Settings ▸ Desk Link tab. `scripts/gui.py --ui tk` is the legacy Tk UI kept during migration.
 - Market data: IBKR TWS/Gateway on `127.0.0.1:7496` (`ibapi`) primary, `yfinance` fallback; bar source is tracked per scan. See `docs/BROKER_ADAPTERS.md`.
 - Engines: `scripts/master_avwap.py` (+`master_avwap_lib/`) D1 AVWAP swing scanner; `scripts/bounce_bot.py` (+`bounce_bot_lib/`) intraday M5 bounce detector; `market_prep/` pre-session services.

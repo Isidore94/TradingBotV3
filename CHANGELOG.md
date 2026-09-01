@@ -403,6 +403,44 @@ Dated entries for the two most recent build days, newest first. Older dated entr
 move to the archive; the durable statement of what they built is in the inventory above.
 
 
+### 2026-08-31 — Desk snappiness packet 3: the log, the downloader, the hidden pages, the drips
+
+The last of the three. Packets 1-2 took the six largest causes of the day's
+~78 minutes of GUI freeze; this one takes what remained.
+
+- **The 618 MB technical-integrity log stops being replayed whole.** Its
+  `level_resolved` rows are mirrored to a derived sidecar as they happen, with
+  the source byte offset on every line so the file stays append-only and a
+  catch-up streams only the tail. The main log is untouched - same rows, same
+  path - and the replay falls back to the full stream on any doubt. Layout and
+  reasoning in `docs/DESK_INTERNALS.md`. The **month roll was not built**: it
+  would need the research warehouse's one-path `BronzeArtifact` contract to
+  accept segments, which is a locked area this packet does not authorize.
+- **The Industry Board obeys quiet hours.** It was the only recurring
+  downloader without an `auto_scanning_due` gate, so its ~1,930-ticker
+  nine-month `yf.download` ran hourly all night and fired five seconds after
+  every launch. The automatic tick is gated, fail-open; the manual button never
+  is. The download is chunked at 200 with per-chunk failure isolation.
+- **Three hidden pages stop paying for their timers** - the auto-watchlist
+  viewers, the Master AVWAP scheduler tick and the RS Window auto tick. The
+  timers keep running; the work early-returns while hidden and `showEvent`
+  catches up once. The watchlist viewer also guards its `setPlainText` on the
+  file's (mtime_ns, size), so reading a list no longer means being yanked to the
+  top every thirty seconds.
+- **Eight drips**: the entry-assist board moved to a worker; the 3-second health
+  tick stats inline and spawns a thread only when the file moved (~1,200 fewer
+  thread creations an hour); the technical-integrity snapshot and the setup
+  tracker's ten CSV exports are memoized per file version; the tracker's spinbox
+  and the Focus panel's RRS snapshot are coalesced; the Alert Center writes its
+  preferences once instead of twice; the Focus chip's badge stylesheet moved
+  inside the existing look guard; the hold expiry evaluates each alert exactly
+  once per tick (one `hold_expired` event, not two - authorized); and the paused
+  strategy loop waits 5 s instead of 0.5 s.
+
+**53 new tests**, 50 of them proven to fail against the un-fixed code. No
+packaging trigger: the sidecar is created at runtime in the diagnostics
+directory, not bundled.
+
 ### 2026-08-31 — Desk snappiness packet 2: the next three measured stall causes
 
 Packet 1 took the three largest. These are the next three, ranked by benefit,
