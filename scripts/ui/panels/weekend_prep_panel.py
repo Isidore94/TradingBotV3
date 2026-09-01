@@ -22,8 +22,10 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -130,6 +132,93 @@ class _StepPage(QFrame):
         join_worker(getattr(self, "_worker", None))
 
 
+#: The callout classes, in the order they are printed. `r_gaps` is the third
+#: class (P1): a segment whose taken and passed halves measure far apart even
+#: though its take rate looks ordinary. It is read DEFENSIVELY - a state file
+#: written by a build without it simply has no such key, and this page must
+#: keep working against both.
+CALLOUT_CLASSES = (
+    ("blind_spots", "BLIND SPOTS - you pass on these; they measure well"),
+    ("leaks", "LEAKS - you take these; they measure poorly"),
+    ("r_gaps", "R GAPS - taken and passed measure far apart, whatever the take rate"),
+)
+
+
+def _callout_measure(entry) -> str:
+    """What the callout measured, in the units it was measured in.
+
+    A blind spot is carried by the PASSED half, a leak by the TAKEN half, and
+    an r_gap by both plus their difference. Each entry carries only the keys
+    its own class produced, so this reads what is there rather than assuming a
+    shape - and a class this build does not know still prints its segment and
+    take rate instead of vanishing.
+    """
+    parts = []
+    if entry.get("taken_r_avg") is not None:
+        parts.append(f"taken {float(entry['taken_r_avg']):+.2f}R (n={entry.get('taken_r_n', '?')})")
+    if entry.get("passed_r_avg") is not None:
+        parts.append(f"passed {float(entry['passed_r_avg']):+.2f}R (n={entry.get('passed_r_n', '?')})")
+    if entry.get("taken_fwd_avg_pct") is not None:
+        parts.append(f"taken {float(entry['taken_fwd_avg_pct']):+.1f}% (n={entry.get('taken_fwd_n', '?')})")
+    if entry.get("passed_fwd_avg_pct") is not None:
+        parts.append(f"passed {float(entry['passed_fwd_avg_pct']):+.1f}% (n={entry.get('passed_fwd_n', '?')})")
+    if entry.get("r_difference") is not None:
+        parts.append(f"gap {float(entry['r_difference']):+.2f}R")
+    return "; ".join(parts)
+
+
+def callout_lines(state) -> list[str]:
+    """The scoreboard's callouts BY NAME, not as two integers.
+
+    This page printed "Blind Spots: 3" and "Leaks: 1" - counts a reader can do
+    nothing with, over a store that has always known which segment, how often
+    it was shown, how the trader's take rate on it compared with their overall
+    one, and what the two halves measured. `review_learning.render_report`
+    already prints exactly that; this builds the same rows for the page that is
+    actually opened on a Saturday.
+
+    Every number comes from the state file. Nothing is computed here (ground
+    rule 6), and a class the state does not carry is simply absent rather than
+    reported as zero.
+    """
+    if not isinstance(state, dict):
+        return []
+    overall = state.get("overall_take_rate")
+    lines: list[str] = ["", "CALLOUTS - where what you do and what it measures disagree"]
+    if overall is not None:
+        lines.append(f"  Your overall take rate this window: {float(overall) * 100:.0f}%")
+    found = False
+    for key, title in CALLOUT_CLASSES:
+        entries = state.get(key)
+        if entries is None:
+            continue
+        lines.append("")
+        lines.append(f"  == {title} ==")
+        if not entries:
+            lines.append("    none at current sample sizes.")
+            continue
+        found = True
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            rate = entry.get("take_rate")
+            rate_text = f"{float(rate) * 100:.0f}%" if rate is not None else "n/a"
+            measure = _callout_measure(entry)
+            lines.append(
+                f"    {entry.get('dimension', '?')}={entry.get('segment', '?')}: "
+                f"take {rate_text} of {entry.get('shown', '?')} shown"
+                + (f"; {measure}" if measure else "")
+            )
+    if not found:
+        lines.append("")
+        lines.append(
+            "  Nothing cleared a callout threshold this window. That is a "
+            "quiet week, not a clean one - the thresholds need a minimum "
+            "number of shown charts before any segment may be named."
+        )
+    return lines
+
+
 class WeekReviewPage(_StepPage):
     """Step 1: what happened, from the review-learning state and the RS extremes."""
 
@@ -190,11 +279,17 @@ class WeekReviewPage(_StepPage):
 
         state = build_review_learning_state(window_days=7)
         lines = [f"Week of {self.service.week_bounds[0]} to {self.service.week_bounds[1]}", ""]
-        for key in ("takes", "skips", "rejects", "blind_spots", "leaks", "watch_conversion"):
+        for key in ("takes", "skips", "rejects", "watch_conversion"):
             value = state.get(key) if isinstance(state, dict) else None
             if value is None:
                 continue
             lines.append(f"{key.replace('_', ' ').title()}: {value if not isinstance(value, list) else len(value)}")
+        # The callouts are the point of this page and used to print as two
+        # integers. "Blind Spots: 3" is a number a reader cannot act on; the
+        # scoreboard has always known WHICH segments and by how much, and
+        # `review_learning.render_report` already prints them. This is the same
+        # information as a table, built here on the worker.
+        lines += callout_lines(state)
         # The recorded, accepted v1 limitation - stated where it is read, not
         # buried in a spec nobody opens on a Saturday.
         lines += ["", "Episodes fold on (trade_date, symbol): two setups in one name on one day read as one."]
@@ -305,9 +400,20 @@ class FocusReviewPage(_StepPage):
         self.cohort_caption = QLabel("")
         self.cohort_caption.setObjectName("SectionSubtitle")
         self.cohort_caption.setWordWrap(True)
-        self.cohort_table = QTableWidget(0, 6)
+        # P2 item 1: the robust half of ground rule 10, which these two tables
+        # were dropping while the Focus performance table below already showed
+        # it. One horizon at a time, chosen here, so 13 columns stay readable.
+        self.cohort_horizon_input = QComboBox()
+        for horizon in COHORT_HORIZONS:
+            self.cohort_horizon_input.addItem(f"{horizon}-session horizon", horizon)
+        self.cohort_horizon_input.setCurrentIndex(
+            max(0, self.cohort_horizon_input.findData(DEFAULT_COHORT_HORIZON))
+        )
+        self.cohort_horizon_input.currentIndexChanged.connect(self._on_cohort_horizon_changed)
+
+        self.cohort_table = QTableWidget(0, len(COHORT_TABLE_COLUMNS))
         self.cohort_table.setHorizontalHeaderLabels(
-            ["Veto reason", "Side", "n", "Win rate", "Avg return", "PF"]
+            ["Veto reason", *COHORT_TABLE_HEADERS[1:]]
         )
         self.cohort_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.cohort_note = QLabel("")
@@ -316,13 +422,20 @@ class FocusReviewPage(_StepPage):
         # Packet 8b: R10.F's LIKE cohort, beside the veto one. The two are the
         # halves of one judgement - what you threw away and what you endorsed -
         # and reading either alone gives half an answer.
-        self.like_table = QTableWidget(0, 6)
+        self.like_table = QTableWidget(0, len(COHORT_TABLE_COLUMNS))
         self.like_table.setHorizontalHeaderLabels(
-            ["Claimed setup", "Side", "n", "Win rate", "Avg return", "PF"]
+            ["Claimed setup", *COHORT_TABLE_HEADERS[1:]]
         )
         self.like_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.like_note = QLabel("")
         self.like_note.setWordWrap(True)
+        self.claim_caveat = QLabel("")
+        self.claim_caveat.setObjectName("MutedLabel")
+        self.claim_caveat.setWordWrap(True)
+        #: The last full read, kept so the horizon selector re-renders without
+        #: touching disk. Selecting a horizon is a VIEW change.
+        self._cohort_rows: list[dict] = []
+        self._like_rows: list[dict] = []
 
         # Packet W2: R8 sec 6's last two DEFERRED joins. The cohorts above are
         # the two judgement mirrors - what was thrown away, what was endorsed.
@@ -350,13 +463,19 @@ class FocusReviewPage(_StepPage):
         self._layout.addWidget(self.refresh_button)
         self._layout.addWidget(self.table, 1)
         self._layout.addWidget(self.note)
-        self._layout.addWidget(QLabel("Vetoed picks, graded forward"))
+        horizon_row = QHBoxLayout()
+        horizon_row.setContentsMargins(0, 0, 0, 0)
+        horizon_row.addWidget(QLabel("Vetoed picks, graded forward"), 1)
+        horizon_row.addWidget(QLabel("Horizon"), 0)
+        horizon_row.addWidget(self.cohort_horizon_input, 0)
+        self._layout.addLayout(horizon_row)
         self._layout.addWidget(self.cohort_caption)
         self._layout.addWidget(self.cohort_table, 1)
         self._layout.addWidget(self.cohort_note)
         self._layout.addWidget(QLabel("Liked picks, graded forward"))
         self._layout.addWidget(self.like_table, 1)
         self._layout.addWidget(self.like_note)
+        self._layout.addWidget(self.claim_caveat)
         self._layout.addWidget(QLabel("Focus picks, graded forward"))
         self._layout.addWidget(self.performance_table, 1)
         self._layout.addWidget(self.performance_note)
@@ -390,6 +509,7 @@ class FocusReviewPage(_StepPage):
         return {
             "cohort": _read_veto_cohort(),
             "like": _read_like_cohort(),
+            "claim_caveat": _claim_picklist_caveat(),
             "performance": _read_focus_performance(),
             "feedback": _read_pick_feedback_week(self.service.week_bounds),
             "week": _join_focus_week(self.service.week_bounds),
@@ -400,6 +520,7 @@ class FocusReviewPage(_StepPage):
         data = payload if isinstance(payload, dict) else {}
         self._render_cohort(data.get("cohort") or [])
         self._render_like_cohort(data.get("like") or [])
+        self.claim_caveat.setText(str(data.get("claim_caveat") or ""))
         self._render_performance(data.get("performance") or [])
         self._render_feedback(data.get("feedback") or [])
         self._render_week(data.get("week") or [])
@@ -521,18 +642,29 @@ class FocusReviewPage(_StepPage):
             note += f" {len(rows) - len(shown)} row(s) beyond the first {len(shown)} are not shown."
         self.feedback_note.setText(note)
 
+    def _cohort_horizon(self) -> str:
+        """The selected horizon; the default if the widget is not built yet."""
+        widget = getattr(self, "cohort_horizon_input", None)
+        if widget is None:
+            return DEFAULT_COHORT_HORIZON
+        return str(widget.currentData() or DEFAULT_COHORT_HORIZON)
+
+    def _on_cohort_horizon_changed(self) -> None:
+        """Re-render both tables from what is already in memory.
+
+        No disk, no worker: the full read is kept in `_cohort_rows` /
+        `_like_rows`, so changing the horizon filters and re-sorts a list that
+        is already here. A selector that re-read two CSVs would put a file read
+        on the Qt thread for a view change.
+        """
+        self._render_cohort(self._cohort_rows)
+        self._render_like_cohort(self._like_rows)
+
     def _render_like_cohort(self, rows) -> None:
         """R10.F's cohort, rendered under the same honesty rules as the veto one."""
-        self.like_table.setRowCount(len(rows))
-        columns = ("cohort", "side", "n", "win_rate", "avg_return", "profit_factor")
-        for index, row in enumerate(rows):
-            for column, key in enumerate(columns):
-                self.like_table.setItem(
-                    index, column, QTableWidgetItem(str(row.get(key) or ""))
-                )
-        apply_width_rule_to_table_widget(
-            self.like_table, text_columns=(0,), elide_columns=(0,)
-        )
+        self._like_rows = list(rows or [])
+        shown = _cohort_view(self._like_rows, self._cohort_horizon())
+        _fill_cohort_table(self.like_table, shown)
         if not rows:
             self.like_note.setText(
                 "No graded LIKE cohort yet. It is written by the overnight "
@@ -541,27 +673,28 @@ class FocusReviewPage(_StepPage):
                 "an empty record."
             )
             return
+        if not shown:
+            self.like_note.setText(
+                _NO_ROWS_AT_HORIZON.format(
+                    horizon=self._cohort_horizon(), total=len(rows)
+                )
+            )
+            return
         self.like_note.setText(
-            f"{len(rows)} cohort row(s), one per claimed setup family. Returns are "
-            "side-adjusted, so POSITIVE means the pick you liked WORKED - the "
-            "opposite reading from the veto table above, where positive means the "
-            "one you rejected would have. Read as DISCOVERY, not confirmation: "
-            "n is small per family and a blank is a horizon that has not matured. "
-            "The two tables are the mirror pair - what you threw away, and what "
-            "you endorsed."
+            f"{len(shown)} row(s) at the {self._cohort_horizon()}-session horizon, "
+            f"of {len(rows)} across all horizons, one per claimed setup family. "
+            "Returns are side-adjusted, so POSITIVE means the pick you liked "
+            "WORKED - the opposite reading from the veto table above, where "
+            "positive means the one you rejected would have. "
+            + _floor_sentence(shown)
+            + " The two tables are the mirror pair - what you threw away, and "
+            "what you endorsed."
         )
 
     def _render_cohort(self, rows) -> None:
-        self.cohort_table.setRowCount(len(rows))
-        columns = ("cohort", "side", "n", "win_rate", "avg_return", "profit_factor")
-        for index, row in enumerate(rows):
-            for column, key in enumerate(columns):
-                self.cohort_table.setItem(
-                    index, column, QTableWidgetItem(str(row.get(key) or ""))
-                )
-        apply_width_rule_to_table_widget(
-            self.cohort_table, text_columns=(0,), elide_columns=(0,)
-        )
+        self._cohort_rows = list(rows or [])
+        shown = _cohort_view(self._cohort_rows, self._cohort_horizon())
+        _fill_cohort_table(self.cohort_table, shown)
         if not rows:
             self.cohort_caption.setText("")
             self.cohort_note.setText(
@@ -574,13 +707,22 @@ class FocusReviewPage(_StepPage):
         # The label is fixed text, not a computed claim: it describes what the
         # rows ARE. Nothing here derives a statistic the CSV does not carry
         # (plan.md Phase 0.7 ground rule 6).
-        horizons = sorted({str(row.get("horizon") or "").strip() for row in rows} - {""})
-        span = ", ".join(horizons) if horizons else "unstated"
+        if not shown:
+            self.cohort_caption.setText("")
+            self.cohort_note.setText(
+                _NO_ROWS_AT_HORIZON.format(
+                    horizon=self._cohort_horizon(), total=len(rows)
+                )
+            )
+            return
         self.cohort_caption.setText(
-            f"Session horizon(s): {span}. Returns are side-adjusted, so POSITIVE "
-            "means the pick you vetoed would have WORKED. Read as DISCOVERY, not "
-            "confirmation: these are the trader's own rejections graded forward, "
-            "n is small per reason, and a blank is a horizon that has not matured."
+            f"Showing the {self._cohort_horizon()}-session horizon "
+            f"({len(shown)} of {len(rows)} rows across all horizons). Returns are "
+            "side-adjusted, so POSITIVE means the pick you vetoed would have "
+            "WORKED. Read as DISCOVERY, not confirmation: these are the trader's "
+            "own rejections graded forward, and a blank is a horizon that has not "
+            "matured, never a zero. "
+            + _floor_sentence(shown)
         )
         self.cohort_note.setText(
             f"{len(rows)} cohort row(s). Two capture facts travel with this "
@@ -1209,17 +1351,17 @@ def _read_veto_cohort() -> list[dict[str, str]]:
 
     rows: list[dict[str, str]] = []
     for raw in raw_rows:
-        rows.append(
-            {
-                "cohort": veto_cohort.canonical_veto_cohort(raw.get("cohort") or ""),
-                "side": str(raw.get("side") or "").strip(),
-                "horizon": str(raw.get("horizon_sessions") or "").strip(),
-                "n": str(raw.get("sample_count") or "").strip(),
-                "win_rate": _pct(raw.get("win_rate")),
-                "avg_return": _signed_pct(raw.get("avg_side_return")),
-                "profit_factor": _ratio(raw.get("profit_factor")),
-            }
-        )
+        row = {
+            "cohort": veto_cohort.canonical_veto_cohort(raw.get("cohort") or ""),
+            "side": str(raw.get("side") or "").strip(),
+            "horizon": str(raw.get("horizon_sessions") or "").strip(),
+            "n": str(raw.get("sample_count") or "").strip(),
+            "win_rate": _pct(raw.get("win_rate")),
+            "avg_return": _signed_pct(raw.get("avg_side_return")),
+            "profit_factor": _ratio(raw.get("profit_factor")),
+        }
+        row.update(_cohort_robust_fields(raw))
+        rows.append(row)
     return rows
 
 
@@ -1256,18 +1398,157 @@ def _read_like_cohort() -> list[dict[str, str]]:
 
     rows: list[dict[str, str]] = []
     for raw in raw_rows:
-        rows.append(
-            {
-                "cohort": str(raw.get("cohort") or "").strip(),
-                "side": str(raw.get("side") or "").strip(),
-                "horizon": str(raw.get("horizon_sessions") or "").strip(),
-                "n": str(raw.get("sample_count") or "").strip(),
-                "win_rate": _cohort_pct(raw.get("win_rate")),
-                "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
-                "profit_factor": _cohort_ratio(raw.get("profit_factor")),
-            }
-        )
+        row = {
+            "cohort": str(raw.get("cohort") or "").strip(),
+            "side": str(raw.get("side") or "").strip(),
+            "horizon": str(raw.get("horizon_sessions") or "").strip(),
+            "n": str(raw.get("sample_count") or "").strip(),
+            "win_rate": _cohort_pct(raw.get("win_rate")),
+            "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
+            "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+        }
+        row.update(_cohort_robust_fields(raw))
+        rows.append(row)
     return rows
+
+
+#: The two judgement tables' columns. `meets_n_floor` is deliberately NOT a
+#: column: it decides the ORDER and the greying, which a reader takes in
+#: without having to compare a yes/no cell against a sample count.
+COHORT_TABLE_COLUMNS = (
+    "cohort", "side", "n", "win_rate", "avg_return", "median", "trimmed",
+    "profit_factor", "symbols", "sessions", "top_share", "ci", "evidence",
+)
+COHORT_TABLE_HEADERS = (
+    "Cohort", "Side", "n", "Win rate", "Avg", "Median", "Trimmed", "PF",
+    "Symbols", "Sessions", "Top share", "Block CI", "Evidence",
+)
+
+
+def _fill_cohort_table(table, rows) -> None:
+    """Write one horizon's rows, greying anything under the n floor.
+
+    The grey is a FOREGROUND ROLE on the item, never a per-widget stylesheet:
+    a stylesheet per row is the exact cost the fluidity rules forbid, and this
+    table is repainted every time the horizon selector moves.
+    """
+    from ui import theme
+
+    try:
+        muted = QColor(theme.color("text_muted"))
+    except Exception:  # noqa: BLE001 - a missing token must not cost the table
+        muted = None
+    table.setRowCount(len(rows))
+    for index, row in enumerate(rows):
+        under_floor = not row.get("_meets_floor")
+        for column, key in enumerate(COHORT_TABLE_COLUMNS):
+            item = QTableWidgetItem(str(row.get(key) or ""))
+            if under_floor and muted is not None:
+                item.setForeground(muted)
+            if key == "ci" and row.get("ci_basis"):
+                item.setToolTip(str(row.get("ci_basis")))
+            table.setItem(index, column, item)
+    apply_width_rule_to_table_widget(table, text_columns=(0,), elide_columns=(0,))
+
+
+def _floor_sentence(rows) -> str:
+    """Say how many rows are below the reportable-n floor, and what that means.
+
+    A count with no sentence reads as a footnote. The point of the floor is
+    that a cohort under it is not a weak finding, it is not a finding.
+    """
+    under = sum(1 for row in rows if not row.get("_meets_floor"))
+    if not rows:
+        return ""
+    if not under:
+        return "Every row shown clears the reportable-n floor."
+    return (
+        f"{under} of {len(rows)} row(s) are UNDER the reportable-n floor: they are "
+        "greyed and sorted last, because a cohort below the floor is not a weak "
+        "finding, it is not a finding. Rows above it are ordered by TRIMMED mean, "
+        "not the bare average."
+    )
+
+
+#: Horizons offered by the cohort selector, and the one it opens on. h3 is the
+#: default because it is the shortest horizon at which the rollup carries a
+#: block interval for most cohorts - h1 is almost all single-session samples.
+COHORT_HORIZONS = ("1", "3", "5", "10")
+#: Sentence used when the cohort exists but this HORIZON has no matured rows.
+#: Distinguished from "no cohort at all" deliberately: they are different
+#: absences, and printing the second for the first reads as a clean record.
+_NO_ROWS_AT_HORIZON = (
+    "No row has matured to the {horizon}-session horizon yet, though "
+    "{total} row(s) exist at other horizons. Pick another horizon above - this "
+    "is an unmatured measurement, not an empty record."
+)
+DEFAULT_COHORT_HORIZON = "3"
+
+
+def _cohort_robust_fields(raw) -> dict[str, str]:
+    """Ground rule 10's robust half, which both cohort tables were dropping.
+
+    `human_focus_tracking` has written `median_return`, `trimmed_mean_return`,
+    `p10/p90`, `symbols`, `sessions`, `top_symbol_share`, `ci_low`/`ci_high`,
+    `ci_basis`, `evidence_label` and `meets_n_floor` since R10.C, and the Focus
+    performance table on this same page already shows most of them. The two
+    judgement tables kept six columns and threw the rest away, so the trader
+    read a bare mean on a ratio - the statistic that produced
+    `regime_pause_rw`'s -1.82R - with nothing beside it.
+
+    Reformatted, never derived (ground rule 6). A blank stays blank: an
+    interval that could not be computed, or a horizon that has not matured, is
+    an absent measurement and a substituted zero would be a false lesson.
+    `_sort_value` and `_meets_floor` are kept as raw floats/bools beside the
+    display text so the view can order and grey rows without re-parsing them.
+    """
+    low = str(raw.get("ci_low") or "").strip()
+    high = str(raw.get("ci_high") or "").strip()
+    floor_text = str(raw.get("meets_n_floor") or "").strip().lower()
+    meets_floor = floor_text in {"1", "true", "yes"}
+    try:
+        trimmed_value = float(str(raw.get("trimmed_mean_return") or "").strip())
+    except (TypeError, ValueError):
+        trimmed_value = None
+    return {
+        "median": _cohort_signed_pct(raw.get("median_return")),
+        "trimmed": _cohort_signed_pct(raw.get("trimmed_mean_return")),
+        "symbols": str(raw.get("symbols") or "").strip(),
+        "sessions": str(raw.get("sessions") or "").strip(),
+        "top_share": _cohort_pct(raw.get("top_symbol_share")),
+        "ci": f"[{low}, {high}]" if low and high else "",
+        "ci_basis": str(raw.get("ci_basis") or "").strip(),
+        "evidence": str(raw.get("evidence_label") or "").strip(),
+        "meets_n_floor": "1" if meets_floor else "",
+        "_meets_floor": meets_floor,
+        "_sort_value": trimmed_value,
+    }
+
+
+def _cohort_view(rows, horizon: str) -> list[dict]:
+    """One horizon's rows, floor-clearing ones first, by trimmed mean.
+
+    The ORDER is the honesty: a cohort that has not cleared the reportable-n
+    floor sorts after every cohort that has, however flattering its average,
+    and the view greys it. Sorting them together is what lets an n=3 row with a
+    profit factor of 165 sit at the top of a table read on a Saturday.
+
+    Within each group the key is the TRIMMED mean, not the bare one - the same
+    reason R10.C published it. A row with no trimmed mean sorts last inside its
+    own group rather than being promoted by a default of zero.
+    """
+    wanted = str(horizon or "").strip()
+    kept = [row for row in rows if str(row.get("horizon") or "").strip() == wanted]
+    return sorted(
+        kept,
+        key=lambda row: (
+            0 if row.get("_meets_floor") else 1,
+            0 if row.get("_sort_value") is not None else 1,
+            -(row.get("_sort_value") or 0.0),
+            str(row.get("cohort") or ""),
+            str(row.get("side") or ""),
+        ),
+    )
 
 
 def _cohort_pct(value) -> str:
@@ -1334,6 +1615,33 @@ def _focus_row(key, pick, outcome, *, orphan: bool) -> dict[str, Any]:
     }
 
 
+
+
+def _claim_picklist_caveat() -> str:
+    """The caveat the AI already gets, shown to the trader who wrote the data.
+
+    `ai_summary._offered_claim_caveat` states that the like+claim control
+    offers a BOUNDED picklist, so a claim type missing from the liked-cohort
+    table is a fact about the user interface and not a preference. The model
+    has been told that on every package; the trader reading the same table on a
+    Saturday has not been. Reading the claim absence as "I never like those
+    setups" is the confident wrong conclusion the caveat exists to stop.
+
+    The one existing implementation is called - never a second copy of the
+    sentence, which would drift the moment `MAIN_CLAIM_GROUP` changes. It runs
+    on this page's worker with every other read, and any failure is a quieter
+    page rather than a lost review.
+    """
+    try:
+        from ai_summary import _offered_claim_caveat
+
+        return str(_offered_claim_caveat() or "")
+    except Exception:  # noqa: BLE001 - the caveat is context, never the review
+        return (
+            "The like+claim control offers a bounded picklist and it could not "
+            "be read. Which claim types were reachable is UNKNOWN: do not read "
+            "any claim's absence from the table above as a preference."
+        )
 
 
 def _read_focus_performance() -> list[dict[str, str]]:
