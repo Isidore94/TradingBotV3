@@ -1,6 +1,6 @@
 # Branch history and the consolidation to `main`
 
-Last reconciled: **2026-08-26**
+Last reconciled: **2026-08-31**
 
 This file records what each development branch was, and where its work ended up, so
 that deleting a merged branch never destroys the only account of what it contained.
@@ -95,6 +95,27 @@ Two things must be settled before it can be merged:
    and resolving the conflict by content would silently destroy one of the two.
 
 Until both are answered the branch stays as it is. Nothing on `main` depends on it.
+
+## The 2026-08-31 evening integration
+
+Two independent lines were merged into `main` on the evening of 2026-08-31 and their
+branches deleted. Both were cut from `main` at `50af716`, so they were parallel rather
+than nested: the snappiness line fast-forwarded, and theta was a real merge whose only
+conflict was in `CURRENT_CHECKPOINT.md` - both sides' dated entries were kept.
+
+### Branches that landed
+
+| Branch | Commits | Tip | What it held | Disposition |
+|---|---|---|---|---|
+| `claude/desk-snappiness-3` | 14 (its own 5, plus packets 1-2) | `6df2036` | Desk snappiness packet 3: the technical-integrity resolved sidecar so the nightly replay stops streaming 618 MB, the Industry Board's quiet-hours gate and chunked download, three hidden-page timer gates, and eight measured drips. Also the reviewer's fix so the sidecar cannot count one resolved event twice | **Fast-forwarded onto `main` 2026-08-31** (`50af716..6df2036`). Contained; deleted local + origin |
+| `claude/desk-snappiness-2` | 4 | `93bbe1b` | Snappiness packet 2: the Alert Center minute tick (M5 bar memo, one D1 level build per symbol, batched prefetch), the startup `gc.collect` + `gc.freeze`, and the journal's threaded retag, parse cache, single regime query and debounced filters | Contained in packet 3 and therefore in `main`. Deleted local + origin |
+| `claude/desk-snappiness-1` | 4 | `3ba49ea` | Snappiness packet 1: the health-audit evidence cache, the bounded column fit, and the Auto Pilot status memo | Contained in packet 2 and therefore in `main`. Deleted local + origin |
+| `claude/theta-premium` | 5 | `19a4a7a` | Phase 0.11 theta premium optimization, T1-T7: the credit floor as a percent of the strike, support-first ranking with an uncapped spread penalty, 15 market days for credit spreads, a premium-capacity-ordered quote budget, the `premium=` report line and its Qt columns, and the spread credit scaling with the underlying | **Merged into `main` 2026-08-31** (merge commit `fad97d6`). Contained; deleted local + origin |
+
+Every one of the four passed `git merge-base --is-ancestor <branch> main` before
+deletion. `claude/gui-phase-0-9` was deliberately left alone: it is separate
+long-running work with its own open gate (SOAK 1) and was not part of this
+integration.
 
 ## Rule going forward
 
