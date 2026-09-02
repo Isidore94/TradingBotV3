@@ -52,10 +52,6 @@ MAX_INELIGIBLE_POLICY_ROWS = 40
 #: name. **P7's registry replaces this map**; when it lands, this constant goes
 #: and the role comes from the registry row.
 ROLE_TRADE = "TRADE"
-NON_TRADE_FAMILY_ROLES = {
-    "GENERAL": "FALLBACK",
-    "FAVORITE_ZONE_WATCH": "WATCH_STATE",
-}
 NON_TRADE_ROLE_REASONS = {
     "FALLBACK": "Appendix C: diagnostic fallback - must not become a pooled 'setup' edge.",
     "WATCH_STATE": "Appendix C: watch state - never counted as a triggered trade setup.",
@@ -63,8 +59,22 @@ NON_TRADE_ROLE_REASONS = {
 
 
 def family_role(family: str) -> str:
-    """The role this family grades under. TRADE unless explicitly named."""
-    return NON_TRADE_FAMILY_ROLES.get(str(family or "").strip().upper(), ROLE_TRADE)
+    """The role this family grades under. TRADE unless the registry says otherwise.
+
+    P3 shipped this as a two-entry map of its own, because the setup registry did
+    not exist yet. It does now (P7), so the map is gone and this reads the ONE
+    table - the merge of the two branches on 2026-09-02 is what made the swap
+    possible, and P7 named it as owed to whichever landed second.
+
+    The wording is unchanged on purpose. The registry keeps Appendix C's spelling
+    (`TRADE_SETUP`) and `fact_pack_role` translates it back to this pack's own
+    `TRADE`, so the fact pack's output is byte-identical while the ontology has
+    one owner instead of two. An unknown family still grades as TRADE: a registry
+    gap must not silently reclassify live evidence.
+    """
+    from setup_registry import fact_pack_role
+
+    return fact_pack_role(family)
 
 
 def _now(value: datetime | None = None) -> datetime:

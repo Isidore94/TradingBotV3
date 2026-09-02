@@ -124,6 +124,47 @@ Anything marked ⚠ is a point I'm least sure of — please check those first.
 - ⚠ "Banger" I read as the pre-existing top-alert class that bypasses the tier gate;
   I did not find its exact trigger definition — worth stating precisely here.
 
+## Registry identity (P7, 2026-09-01)
+
+One line per production family, from the frozen crosswalk
+(`scripts/setup_registry_v1.json`). The `setup_id@version` is the key; the
+canonical id is what the warehouse stores in `setup_occurrence`. Read
+`docs/RESEARCH_WAREHOUSE_ERD.md` for what the registry is and is not.
+
+**Not authoritative yet** - `plan.md P4.1` freezes the identity graph, and until
+then these rows describe what the code already believes rather than deciding
+anything. Where two sources disagree about one setup, the registry records the
+disagreement instead of picking a winner; those rows are in the registry's
+`known_divergences` block, and three of them are about families listed here
+(`PREVIOUS_AVWAPE_BOUNCE`, `SMA_BREAKOUT_WATCH`, `TOP_PATTERN_WATCH` - each has
+its own canonical id but is documented under another family's page).
+
+`supported_sides`, the timeframe roles, the exact completed-bar trigger and the
+primary recipe are deliberately BLANK on every row: no source establishes them,
+and a guess would read as established.
+
+| `setup_id@version` | Canonical id | Label | Role | Exclusivity group |
+|---|---|---|---|---|
+| `avwape_to_first_dev@1` | AVWAPE_TO_FIRST_DEV | AVWAPE -> 1st Dev (Favorite) | TRADE_SETUP | `avwap_favorite_thesis` |
+| `avwap_band_bounce@1` | AVWAP_BAND_BOUNCE | AVWAP Band Bounce | TRADE_SETUP | `avwap_band_bounce` |
+| `avwap_breakout@1` | AVWAP_BREAKOUT | AVWAP Breakout | TRADE_SETUP | `avwap_breakout` |
+| `avwap_retest@1` | AVWAP_RETEST | AVWAP Retest Followthrough | TRADE_SETUP | `avwap_favorite_thesis` |
+| `extreme_move_retest@1` | EXTREME_MOVE_RETEST | Extreme Move Retest | TRADE_SETUP | `extreme_move_retest` |
+| `favorite_zone_watch@1` | FAVORITE_ZONE_WATCH | Favorite Zone Watch | WATCH_STATE | `favorite_zone_watch` |
+| `general@1` | GENERAL | General / Untagged | FALLBACK | `general` |
+| `mid_earnings_ema15_retest@1` | MID_EARNINGS_EMA15_RETEST | Mid-Earnings EMA15 Retest | TRADE_SETUP | `mid_earnings_retest` |
+| `mid_earnings_ema21_retest@1` | MID_EARNINGS_EMA21_RETEST | Mid-Earnings EMA21 Retest | TRADE_SETUP | `mid_earnings_retest` |
+| `mid_earnings_first_dev_retest@1` | MID_EARNINGS_FIRST_DEV_RETEST | Mid-Earnings 1st-Dev Retest | TRADE_SETUP | `mid_earnings_retest` |
+| `mid_earnings_second_dev_hold@1` | MID_EARNINGS_SECOND_DEV_HOLD | Mid Earnings Second Dev Hold | TRADE_SETUP | `mid_earnings_second_dev_hold` |
+| `post_earnings_52w_break@1` | POST_EARNINGS_52W_BREAK | Post-Earnings 52w Break | TRADE_SETUP | `post_earnings_break` |
+| `post_earnings_avwap_bounce@1` | POST_EARNINGS_AVWAP_BOUNCE | Post-Earnings AVWAPE Bounce | TRADE_SETUP | `post_earnings_avwap_bounce` |
+| `post_earnings_candle_break@1` | POST_EARNINGS_CANDLE_BREAK | Post-Earnings Candle Break | TRADE_SETUP | `post_earnings_break` |
+| `previous_avwape_bounce@1` | PREVIOUS_AVWAPE_BOUNCE | Previous Avwape Bounce | TRADE_SETUP | `previous_avwape_bounce` |
+| `sma_breakout_confirmed@1` | SMA_BREAKOUT_CONFIRMED | SMA Breakout + Retest | TRADE_SETUP | `sma_breakout_confirmed` |
+| `sma_breakout_watch@1` | SMA_BREAKOUT_WATCH | Sma Breakout Watch | WATCH_STATE | `sma_breakout_watch` |
+| `top_pattern_entry@1` | TOP_PATTERN_ENTRY | TOP Weekly Leader | TRADE_SETUP | `top_pattern_entry` |
+| `top_pattern_watch@1` | TOP_PATTERN_WATCH | Top Pattern Watch | WATCH_STATE | `top_pattern_watch` |
+
 ## Review notes / open questions for Aaron
 
 1. Is "the major setup" to you specifically **AVWAPE → 1st Dev**, the
