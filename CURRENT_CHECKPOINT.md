@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - both 2026-08-31 evening lines were merged into it by trader instruction: the snappiness line (packets 1-3, stacked, fast-forward from `claude/desk-snappiness-3`) and then Phase 0.11 theta premium (`claude/theta-premium`, a real merge). Only the two shared ledgers conflicted - this file - and both sides' dated entries were kept. `main` already carried today's swing picks (both passes), the day-trade pass, the Strength Board move and the desk-lockup fix |
+| Working branch | **`claude/p6a-tag-backlog`**, off `main` at `66a0c31` - Phase 0.13 packet P6a (tag the backlog). Also open and unmerged, all off `main` at the same commit: `claude/p6-preference-to-trade` (gate #35), `claude/p5-pass-cohorts` (#34), `claude/p4-swing-variables` (#33), `claude/p3-fact-pack-truth` (#32), `claude/p2-show-me` (#31), `claude/p1-grade-what-you-said` (#30), `claude/p0-apply-decisions` (#29) and `claude/focus-declutter-lrsi-htf` (#27/#28). **P6a and P6 both touch `journal_analytics` and `journal_store`** - P6 adds the `trader_capture` lane and `context_row_id`, P6a adds `tag_status` and the analytics split - in different functions, so they compose; a merge must keep both |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
-| Active roadmap items | **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Active roadmap items | **Phase 0.13 packet P6a (2026-09-01 - BUILT on `claude/p6a-tag-backlog`, and RUN against the live journal: 24 provisional tags, 132 needs_review; live gate #36 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5737 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p6a-tag-backlog`, MEASURED with pytest's own exit code captured) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · frozen exe NOT rebuilt and not required: the one new module sits in the already-collected `scripts/` root, with no new dependency and no new non-`.py` asset. Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **DONE 2026-08-31 21:51, trader-authorized.** The checkout sits on `main` and the desk was stopped (pid 9832, the pid its own `heartbeat.json` named; its launcher parent 3476 had already exited) and relaunched through `trading_desk.cmd` - the production launcher, unchanged. New pids: **23588** (the desk) under trampoline **23796**. Verified UP three ways rather than assumed: the process outlived 60 s, a second launch printed "another TradingBotV3 desk is already running" and exited 0, and `heartbeat.json` re-stamped at 21:52:40 naming pid 23588 (it had read 21:50:40 / pid 9832 before the kill). Everything merged tonight is what is now running, and the stall watchdog is ON - this session's `ui_stalls.jsonl` is the AFTER side of gates 24-26 |
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 36 | **The tagged backlog (Phase 0.13 P6a)** — the trader opens the Provisional filter on the desk and confirms or edits **at least ten** of the 24 provisional tags; the "my setups" chart then populates from confirmed rows only, and "provisional setups" shrinks by the same number. The 132 `needs_review` rows staying blank is the EXPECTED result — 104 of them have no scanner candidate at all — not a gate failure | 2026-09-01 Phase 0.13 P6a entry |
 | ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-08-31** at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
@@ -58,6 +59,75 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+
+### 2026-09-01 - Phase 0.13 packet P6a: tag the backlog
+
+**Branch `claude/p6a-tag-backlog`, off `main` at `66a0c31`.** Authorized by the trader:
+*"let's get Opus to do the tagging and I can review after"*. **Run against the live
+journal**, backup taken first. Live gate 36 owed. No frozen rebuild.
+
+**The gap.** 193 trades and exactly ONE setup tag the trader typed, so every per-setup
+statistic on the desk rested on that row. What was missing was never evidence - it was a
+human decision about 155 closed trades.
+
+**1. A mark that never washes out.** `trade_annotations.tag_status` through the store's
+additive migration list: `confirmed`, `provisional`, `needs_review`. The column's DEFAULT
+is what made it safe on a live database - every row that already existed was typed or
+accepted by the trader, so it became `confirmed` the moment the column appeared and no
+backfill pass had to decide that afterwards.
+
+**2. The bounded exception.** R7's I7 gives the trader `trade_annotations`;
+`journal_bulk_tag.py` is the one authorized writer and pays for it three ways, each
+tested: `apply_provisional_tags` REFUSES a confirmed row **inside the store**, because an
+exception that depends on every caller remembering a rule is not a boundary;
+`distinct_tags` counts a provisional tag in its own lane, so `own` still means "typed or
+accepted by a human" - which is exactly what the rename tool may touch; and the tagger
+**never writes `tag_corrections`**, since that table is the trader's feedback TO the
+tagger and a machine writing it is the tagger teaching itself from its own guesses.
+
+**3. THE MEASURED RUN.** Threshold **0.70**, chosen to encode a sentence rather than a
+percentile - "the tracker or a focus favourite named this symbol, on the day I traded it,
+on the side I traded". Tracker + same day + side is 0.72; a focus favourite is 0.68 before
+its bucket bonus; the SAME tracker row one day later reaches 0.66. The live histogram of
+the top setup-lane candidate over the 52 closed trades that had one:
+
+```
+  0.20   1 | 0.25   1 | 0.30   1 | 0.40   1 | 0.45   2 | 0.50   5 | 0.55   3
+  0.60  10 | 0.65   2 | ----- threshold 0.70 ----- | 0.70   5 | 0.75   2
+  0.80   5 | 0.85   6 | 0.90   3 | 0.95   5
+```
+
+156 closed trades considered · 0 already tagged by the trader (their one tagged trade is
+still OPEN) · 104 with no scanner candidate at all · **24 provisional tags applied, 132
+marked `needs_review`, 0 refused**. 24 adjustment rows written and **zero** tag
+corrections - the single correction in the store is the trader's own from 2026-08-22. The
+database was copied to `trade_journal.sqlite3.p6a-backup-20260901_214926` before the
+write. Below the line nothing is guessed: a low-confidence tag parked in `setup_tags`
+would be counted by every statistic that groups on setups, which is the circularity the
+tagging rules forbid.
+
+**4. The review surface and the split.** A tag-review filter and a count above the Trades
+table ("14 of 156 shown; 24 provisional") - a hidden row and an absent row look the same
+in a table. It narrows the rows ALREADY LOADED and issues no query. The Tags cell says
+`(provisional)` in text rather than colour, because a `QTableWidgetItem` cannot be reached
+by `theme.qss`. One click confirms; an edit replaces **and only an edit teaches the
+tagger**. In analytics "my setups" is confirmed-only and "provisional setups" is its own
+group with no catch-all bucket; the two are never blended.
+
+**VERIFIED DIFFERENCE FROM THE PACKET.** Its binding rules say the list-trades load runs
+off the Qt thread. **It does not.** `TradesTab.reload()` calls `journal_feed.load_trades`
+synchronously (line 468 before this change) and `AnalyticsTab` does the same at its line
+182; the Journal's only worker is the migration one. Nothing here makes that worse - the
+new surface adds one indexed single-row read per selection and no reload - but moving that
+load onto a worker is its own packet, and the rule as written is not what the code does.
+
+One existing test pinned `nonexclusive_groups` to exactly two entries; it now asserts the
+invariant (every tag group is declared non-exclusive) rather than the length.
+
+**Verification.** `pytest tests/ -q` **5737 passed, 72 subtests, process exit 0** ·
+`ruff` **clean** · smoke **7/7** · source `--selftest` **73/73**. Fail-before-fix: with
+`scripts/` stashed including the new module, all 17 tests in
+`tests/test_journal_bulk_tag.py` fail.
 
 ### 2026-08-31 (late evening) - Desk snappiness packet 3: the last of the three
 
