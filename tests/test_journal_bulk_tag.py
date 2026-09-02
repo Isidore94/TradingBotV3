@@ -378,3 +378,74 @@ def test_the_tagger_can_be_pointed_at_another_database(tmp_path):
     assert bulk.main(["--db", str(target), "--no-refresh"]) == 0
     # A dry run wrote nothing.
     assert store.annotation_state("T1")["setup_tags"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Review round R2 - a link is not a tag, at every seam
+# ---------------------------------------------------------------------------
+
+
+def test_a_link_never_outranks_a_setup_match_in_the_bulk_plan(tmp_path):
+    """R2: `build_plan` takes max(confidence) and the capture lane leads.
+
+    Reproduced on a copy of the live journal: TRV lost
+    `avwap_retest_followthrough` at 0.91 to `link:review:arm_level` at 0.95, and
+    VFC and UMAC the same way.
+    """
+    import journal_bulk_tag as bulk
+
+    store = _store(tmp_path)
+    trade_id = _seed_trade(store)
+    _seed_candidate(store, trade_id, "link:review:arm_level", 0.95, source="trader_capture:review:arm_level")
+    _seed_candidate(store, trade_id, "avwap_retest_followthrough", 0.91)
+
+    plan = bulk.build_plan(store, refresh=False)
+    applied = [item for item in plan.decisions if item.action == "apply"]
+
+    assert [item.tag for item in applied] == ["avwap_retest_followthrough"]
+    bulk.apply_plan(store, plan)
+    assert store.annotation_state(trade_id)["setup_tags"] == "avwap_retest_followthrough"
+
+
+def test_a_trade_whose_only_candidate_is_a_link_gets_no_tag(tmp_path):
+    """A pointer is not a weak answer; it is not an answer."""
+    import journal_bulk_tag as bulk
+
+    store = _store(tmp_path)
+    trade_id = _seed_trade(store)
+    _seed_candidate(store, trade_id, "link:review:add_focus", 0.95, source="trader_capture:review:add_focus")
+
+    plan = bulk.build_plan(store, refresh=False)
+    bulk.apply_plan(store, plan)
+
+    state = store.annotation_state(trade_id)
+    assert state["setup_tags"] == ""
+    assert state["tag_status"] == "needs_review"
+
+
+def test_tag_confidence_is_never_a_links_confidence(tmp_path):
+    """The column every reader takes to mean "how sure about the SETUP"."""
+    from journal_analytics import AutoTagger
+
+    store = _store(tmp_path)
+    trade_id = _seed_trade(store)
+
+    class _Tagger(AutoTagger):
+        def suggest_for_trade(self, trade, corrections=None, *, limit=4):
+            return [
+                {"tag": "link:review:arm_level", "confidence": 0.95,
+                 "source": "trader_capture:review:arm_level", "rationale": "",
+                 "link_only": True, "context_row_id": "review_event:x"},
+                {"tag": "avwape_to_1stdev", "confidence": 0.62,
+                 "source": "setup_tracker", "rationale": ""},
+            ]
+
+    store.refresh_auto_tags(_Tagger())
+
+    with store.connection() as conn:
+        summary, confidence = conn.execute(
+            "SELECT auto_tag_summary, tag_confidence FROM trades WHERE trade_id = ?",
+            (trade_id,),
+        ).fetchone()
+    assert "link:" not in (summary or "")
+    assert confidence == pytest.approx(0.62), "0.95 is the link's, not the setup's"

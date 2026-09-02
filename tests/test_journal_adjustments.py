@@ -270,3 +270,53 @@ def test_a_recorded_correction_survives_the_next_import(store):
 
     with store.connection() as conn:
         assert conn.execute("SELECT gross_pnl FROM trades").fetchone()[0] == pytest.approx(600.0)
+
+
+def test_a_trades_record_survives_a_journal_with_many_adjustments(tmp_path):
+    """R2: the pane fetched the newest 25 GLOBALLY, then filtered in Python.
+
+    Once the journal held more than 25 adjustments a trade's own record fell off
+    before the pane saw it. 27 exist on the applied copy of the live journal, so
+    the P6a record explaining a provisional tag was already disappearing.
+    """
+    from journal_store import PROVISIONAL_TAG_ADJUSTMENT, JournalStore
+
+    store = JournalStore(tmp_path / "journal.sqlite3")
+    # 40 unrelated adjustments, newer than the one we care about.
+    store.record_adjustment(
+        action=PROVISIONAL_TAG_ADJUSTMENT,
+        target_kind="TRADE",
+        target_uid="THE-TRADE",
+        reason="P6a bulk tag: 'avwap-reclaim' at 0.90",
+        source="journal_bulk_tag",
+    )
+    for index in range(40):
+        store.record_adjustment(
+            action="VOID_EXECUTION",
+            target_uid=f"other-exec-{index}",
+            reason=f"unrelated {index}",
+        )
+
+    # The old shape: newest 25 in the whole store, then filter.
+    globally = [
+        row for row in store.list_adjustments(limit=25)
+        if row["target_uid"] == "THE-TRADE"
+    ]
+    assert globally == [], "the reproduction: it is not in the newest 25"
+
+    # The fix: filter first, then limit.
+    scoped = store.list_adjustments(target_uids=["THE-TRADE", "some-leg"], limit=25)
+    assert [row["target_uid"] for row in scoped] == ["THE-TRADE"]
+    assert scoped[0]["action"] == PROVISIONAL_TAG_ADJUSTMENT
+
+
+def test_the_singular_target_still_works(tmp_path):
+    """Additive: every existing caller is unchanged."""
+    from journal_store import JournalStore
+
+    store = JournalStore(tmp_path / "journal.sqlite3")
+    store.record_adjustment(action="VOID_EXECUTION", target_uid="uid-1", reason="a")
+    store.record_adjustment(action="VOID_EXECUTION", target_uid="uid-2", reason="b")
+
+    assert [r["target_uid"] for r in store.list_adjustments(target_uid="uid-2")] == ["uid-2"]
+    assert len(store.list_adjustments()) == 2

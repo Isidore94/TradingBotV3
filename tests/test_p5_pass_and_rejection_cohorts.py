@@ -130,12 +130,12 @@ def test_the_pass_family_is_never_folded_into_the_veto_family():
 
 def test_the_rejection_prefix_cannot_reach_a_focus_cohort():
     """The DOUBLE underscore is load-bearing: `_outcome_base_cohort` matches
-    `startswith(prefix + "_")`, so `focus_` claims `focus__not_today` and can
+    `startswith(prefix + "_")`, so `focus_` claims `focus__m5_not_today` and can
     never claim `focus_swing`, `focus_m5` or `focus_pick`."""
     from human_focus_tracking import _outcome_base_cohort
 
-    assert _outcome_base_cohort({"source": "focus__not_today"}) == "human_focus_rejection"
-    assert _outcome_base_cohort({"source": "focus__dislike"}) == "human_focus_rejection"
+    assert _outcome_base_cohort({"source": "focus__m5_not_today"}) == "human_focus_rejection"
+    assert _outcome_base_cohort({"source": "focus__swing_dislike"}) == "human_focus_rejection"
     for untouched in ("focus_swing", "focus_swing_vetted", "focus_m5", "focus_pick"):
         assert _outcome_base_cohort({"source": untouched}) != "human_focus_rejection"
 

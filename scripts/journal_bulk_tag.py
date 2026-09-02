@@ -52,6 +52,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 
+from journal_analytics import is_link_candidate
 from journal_store import (
     PROVISIONAL_TAG_ADJUSTMENT,
     TAG_STATUS_CONFIRMED,
@@ -149,18 +150,28 @@ class BulkTagPlan:
 
 
 def _setup_lane(candidates: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Only the scanner lane. Shape tags are facts and are left exactly as they are.
+    """Only the candidates that NAME A SETUP. Two lanes are excluded, not one.
 
     ``journal_trade_shape``'s tags (``midday``, ``swing``, ``scalp``) are
     derived from the trade's own clock and legs, carry a confidence of 1.0, and
     already reach the trade through ``auto_tag_summary``. Promoting one into
     ``setup_tags`` would answer "which of my setups was this?" with a fact about
     the clock - and would do it at a confidence no scanner match can beat.
+
+    A LINK candidate is excluded for the same reason and a worse one (R2). It
+    records that the trader added the chart to Focus or armed a level; it names
+    no setup at all, and it arrives at 0.90-0.95 because the capture lane is the
+    most confident lane there is. `build_plan` takes `max(confidence)`, so a
+    link beat every scanner match beneath it - reproduced on a copy of the live
+    journal: TRV lost `avwap_retest_followthrough` at 0.91 to
+    `link:review:arm_level`, and VFC and UMAC the same way.
     """
     lane = []
     for candidate in candidates:
         source = str(candidate.get("source") or "")
         if source.startswith(f"{TRADE_SHAPE_SOURCE}:"):
+            continue
+        if is_link_candidate(candidate):
             continue
         lane.append(candidate)
     return lane

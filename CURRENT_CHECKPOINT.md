@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - review round R1 (2026-09-02) fixed the blockers on each packet branch and then merged EIGHT of them in one sitting, in the order the trader set: P0, P1, P2, P4, P5, P6, P6a, P8. With Phase 0.12, P3 and P7 already in, **every Phase 0.13 packet is now on `main`**. Merged in a SCRATCH WORKTREE, never the desk checkout, because the desk was running its nightly AI job throughout. Nothing is left unmerged except `claude/gui-phase-0-9` |
-| Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), untouched |
+| Working branch | **`main`** - review round **R2** (2026-09-02) landed two guards and a sweep of stale sentences on top of R1's integration, which had put every Phase 0.13 packet (P0-P8) on `main`. R2 was built on `claude/r2-guards` in a scratch worktree and merged. Nothing is unmerged |
+| Also in flight | **NOTHING. `claude/gui-phase-0-9` is CONTAINED in `main`** - `git merge-base --is-ancestor` succeeds and it is 0 ahead, because its content arrived through `claude/group-tape-rebuild`, which was cut from it. This row said the branch was unmerged and it was wrong (corrected R2). **What is open is GATE 7 (SOAK 1), not the branch** - a gate is owed by work that has landed, and the two are not the same thing |
 | Active roadmap items | **Phase 0.13 packets P0-P8: ALL MERGED 2026-09-02, live gates #29-#37 owed** (gates #33 and #37 are now SATISFIABLE, which they were not before R1 - see their rows); **integration gate #38** (one DESK session on the merged tree after a restart); Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **6091 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02 04:19, desk `.venv`, on `main` at `125ffa0`) - **run with the `ai_jobs_runner` writer lock FREE**, which is what makes it a baseline at all. The nightly run held that lock from 22:00 until ~04:08 (six hours; it was genuinely working the whole time - checked, the ticker-briefs slot was still writing log lines a minute before it finished, and its low CPU was waiting on the local model rather than a wedge). The 32 `ai_jobs` tests that stand down under the lock all PASS with it free. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74**
+| Last verified baseline | `pytest tests/ -q` **6104 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02 05:17, desk `.venv`, on the R2 tree) - **run with the `ai_jobs_runner` writer lock FREE and the lock re-checked immediately before the run**, which is what makes it a baseline. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger in R2. Previous: **6091 passed** on `main` at `125ffa0` |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 04:09, trader-authorized ("Go ahead and restart the desk").** The checkout was moved to `main` at `125ffa0` FIRST and verified (selftest 74/74, smoke 7/7, ruff clean) - restarting onto the branch it happened to be sitting on would have put the wrong code on the desk. Old pid 17132 (up since 2026-09-01 11:09) stopped; relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **25884** (the desk) under trampoline **9140**. Verified UP THREE WAYS rather than assumed: the process outlived the launch by minutes, `heartbeat.json` re-stamps every ~4 min naming pid 25884 (it had read pid 17132 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0. **The desk now knows `tag_status`, so P6a's 24 provisional tags render as provisional rather than as the trader's own** - which is what the restart was for. The nightly AI run was a SEPARATE process and was not disturbed; it finished normally at ~04:08 |
 
@@ -32,7 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 38 | **The merged tree, on the desk (R1)** — one DESK session after the restart with the stall watchdog ON and quiet on every new surface: the Weekend Prep pass/rejection/preference tables, the journal's Provisional filter, the Decisions pane, the M5 take-rate row and the Strength Board section | 2026-09-02 R1 entry |
+| 38 | **The merged tree, on the desk (R1, extended by R2)** — one DESK session after the restart with the stall watchdog ON and quiet on every new surface: the Weekend Prep pass/rejection/preference tables, the journal's Provisional filter, the Decisions pane, the M5 take-rate row and the Strength Board section. **R2 adds two specific things to watch**: the Setup Tracker's current-picks count after the FIRST scan of the day (it should be the real tier count, not one row per symbol - that is the NAN guard), and the Weekend Prep backlog-toggle line in `ui_stalls.jsonl`, which should now be absent | 2026-09-02 R2 entry |
 | 37 | **First setup-parameter grid (Phase 0.13 P8)** — one overnight run publishes rows for every declared cell inside the 20-minute reserve, and the trial-ledger row exists with status `collecting`. **The third condition is a refusal, not a check: no cell may be read for a verdict before the declared 20-session window closes** — including by me, and including if an early cell looks good | 2026-09-02 Phase 0.13 P8 entry |
 | 28 | **HTF LRSI study (Phase 0.12 B)** — one overnight `setup_research` run that publishes `htf_lrsi_*` outcome rows inside the existing 20-minute reserve, with `bar_derived` rows under `timeframe=H2` present and no stub in the oscillator's input; then a first read of whether any cell clears the evidence floor | 2026-09-01 Phase 0.12 entry |
 | 27 | **Focus de-clutter (Phase 0.12 A)** — one DESK session: the D1 Focus feed carries pullbacks only, an armed extension watch still fires from the Armed board, a watch past its window leaves the board with a row behind it, and a faded pick can be restored (fresh clock) and discarded from the chart | 2026-09-01 Phase 0.12 entry |
@@ -134,6 +134,66 @@ the same k.
 **Verification.** `pytest tests/ -q` **5800 passed**, the only failures being the 32
 `ai_jobs` tests that stand down while the nightly holds the machine-local writer lock ·
 `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix: 17 of 18.
+
+### 2026-09-02 - Review round R2: two guards, then the stale sentences
+
+**Branch `claude/r2-guards`, off `main` at `1c364c8`**, merged the same day. No new
+live gates; gate 38 gained two specific things to watch.
+
+**1. AN EMPTY `assigned_tier` CELL WAS ABOUT TO BECOME A TIER CALLED NAN, and this
+landed ahead of the 07:30 scan.** `tier_for_tracker_row` accepted any non-empty
+string. The live D1 feature-history file has no `assigned_tier` column yet; the first
+scan after P4 WIDENS it, every row written before that gets an empty cell, and
+`pd.read_csv` returns those as float NaN - which is TRUTHY and stringifies to `"nan"`.
+So an empty cell read as a tier named "NAN" whose source was "assigned".
+
+Reproduced on `main` before the fix: a NAN tier reaches `build_bot_tier_outcome_rows`.
+On the packet's own measurement it was 40 of 42 outcome rows and 6 picks from a
+6-symbol scan instead of 2 - the tier list, the tier outcomes and the S/A performance
+aggregate all filling with a tier that does not exist, while `derived_from_bucket`, the
+honest answer, was available the whole time.
+
+The fix READS the vocabulary from the stamper rather than choosing one:
+`_priority_partition_tier_rows` writes exactly S, A and B. Both row shapes are tested
+because they are different values - the existing unit test models the key ABSENT, and
+the real file has it PRESENT AND EMPTY.
+
+**VERIFIED AND NOT CHANGED:** the same `or ""` idiom in `setup_tracker_panel` cannot
+see a NaN - that file is read with `csv.DictReader`, so every value is a string. The
+packet's condition for changing it is not met.
+
+**2. A LINK IS NOT A TAG AT ANY SEAM.** R1 kept links out of `auto_tag_summary` and
+three seams still let them into the trader's own tag column, each with its own idea of
+what a link was: the bulk tagger's lane filter, its `max(confidence)` pick, Accept-all,
+and `tag_confidence`. A link arrives at 0.90-0.95 because the capture lane is the most
+confident there is, so it beat every scanner match beneath it - TRV lost
+`avwap_retest_followthrough` at 0.91 to `link:review:arm_level`.
+
+ONE predicate answers it now, accepting BOTH spellings deliberately: `link_only` is
+what the tagger sets in memory and the `link:` prefix is what survives a round trip
+through `auto_tag_candidates`, which stores a tag and a source but no flag. Links still
+RENDER with their event id - the pointer is worth seeing, it is just not a tag - and
+Accept-all says how many it skipped. A pass now carries ALL its codes in vocabulary
+order; `codes[0]` had been making a two-reason pass into a different statement.
+
+**Measured on a copy of the live journal:** zero link candidates are stored today and
+zero provisional tags are links, so nothing on the desk is currently mis-tagged. They
+appear at the next `refresh_auto_tags`, which is what this got ahead of. No `--apply`
+was run against the live journal.
+
+**3. The sweep.** Seven copies of the corrected "never pooled" sentence, including the
+scope description the AI reads BESIDE the pooled row it denied. Four stale
+`focus__not_today` spellings, one of them an assertion that passed because the prefix
+matcher cannot tell the difference. A dead double assignment of `nonexclusive_groups`.
+The overlap note now writes under the file's own lock through a temp file, and REPORTS
+its failures - the grading has already succeeded by then, so a silent no-op reads as
+"the note is on the file". The trade pane's adjustment query filters BEFORE it limits
+(27 adjustments exist on the applied copy, so a trade's own record was already falling
+off a global newest-25). The Weekend Prep backlog toggle reads the journal on a worker
+(169 ms, charged to a checkbox). Four DESK_INTERNALS entries that CLAUDE.md promises
+always exist. And three claims that were simply wrong: the frozen selftest is not
+29/29, `claude/gui-phase-0-9` is CONTAINED in `main` (what is open is gate 7, and a
+gate is not a branch), and a PASS merges through `_merge_cohort_safely` too.
 
 ### 2026-09-02 - The integration that unblocked P8: three branches onto `main`
 
@@ -791,7 +851,9 @@ carries `intraday_unmeasured_reason`, distinguishing
 as the second. Whether entry should instead be the last completed close AT the pass -
 the price the trader was looking at - is a definition change and the trader's to make.
 
-**2. The rejection cohort.** `not_today` and `dislike` are separate and never pooled -
+**2. The rejection cohort.** `not_today` and `dislike` are separate cohorts whose
+numbers are never combined into a verdict (their pooled BASE row exists and is
+labelled) -
 `pick_feedback` has kept them distinct since R2 because a same-day throwback and a
 judgement on the name are different claims. Live: **253 gradeable rows, 219 + 34, zero
 sideless.** `unfavorite` is not graded (a membership change, and sideless on the live
@@ -805,8 +867,9 @@ the P5 cohorts pass `pick_key_with_source`. The outcome NUMBERS are identical ac
 those rows, so what the wider key preserves is which cohorts were graded, not which
 figures.
 
-Both families registered by APPENDING. The rejection sources are `focus__not_today` /
-`focus__dislike` and the **double underscore is load-bearing**: the matcher tests
+Both families registered by APPENDING. The rejection sources are
+`focus__m5_not_today` / `focus__swing_dislike` (R1 put the LANE back into the name)
+and the **double underscore is load-bearing**: the matcher tests
 `startswith(prefix + "_")`, so `focus_` claims exactly those and cannot reach
 `focus_swing`, `focus_m5` or `focus_pick`.
 

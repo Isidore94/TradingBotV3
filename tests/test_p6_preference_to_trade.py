@@ -703,3 +703,55 @@ def test_the_suggestion_label_shows_the_linked_event():
         encoding="utf-8"
     )
     assert 'candidate.get("context_row_id")' in source
+
+
+def test_a_pass_carries_every_code_it_was_given_in_vocabulary_order(tmp_path, monkeypatch):
+    """R2: `codes[0]` threw the rest away.
+
+    A pass for "extended from VWAP AND thin liquidity" reached the tagger as the
+    first reason alone, which is a different statement from the one the trader
+    made. The annotation writes its codes in VOCABULARY order already (never
+    click order), so preserving the list preserves that too.
+    """
+    import json
+
+    import project_paths
+    from journal_analytics import AutoTagger
+
+    log = tmp_path / "trader_annotations.jsonl"
+    log.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "event_type": "pass",
+                "symbol": "AAA",
+                "side": "LONG",
+                "session_date": "2026-08-20",
+                "created_at": "2026-08-20T13:40:00-04:00",
+                # Written in VOCABULARY order by the capture rail, never click
+                # order - so carrying the list carries that guarantee too.
+                "reason_codes": ["extended_from_vwap", "thin_liquidity"],
+                "event_id": "evt-1",
+            }
+        )
+        + chr(10),
+        encoding="utf-8",
+    )
+    # Patched where it is READ from - `_load_annotation_capture_rows` imports
+    # the constant from `project_paths` inside the function.
+    monkeypatch.setattr(project_paths, "TRADER_ANNOTATIONS_FILE", log)
+
+    rows = AutoTagger()._load_annotation_capture_rows()
+    assert [row["tag"] for row in rows] == ["passed:extended_from_vwap,thin_liquidity"]
+
+
+def test_one_predicate_answers_whether_a_candidate_is_a_link():
+    """Both spellings: the in-memory flag and the prefix that survives the store."""
+    from journal_analytics import is_link_candidate
+
+    assert is_link_candidate({"link_only": True, "tag": "link:review:add_focus"})
+    assert is_link_candidate({"tag": "link:review:arm_level"})  # round-tripped
+    assert is_link_candidate("link:review:arm_level")
+    assert not is_link_candidate({"tag": "avwape_to_1stdev", "confidence": 0.9})
+    assert not is_link_candidate("avwape_to_1stdev")
+    assert not is_link_candidate(None)

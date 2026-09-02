@@ -495,6 +495,11 @@ def test_the_m30_pullback_fires_on_a_touch_that_holds_and_not_on_a_break():
     )
     assert held is not None, "a touch that closes back above the band is the entry"
     assert broke is None, "a close through the band is a break, and no entry"
+    # R2: PIN THE BAR, the way the M15 test does. "not None" passes if the rule
+    # fires on the wrong bucket, which is most of what could go wrong here - the
+    # engineered touch is the LAST bucket, on the fourth session, and the entry
+    # is the M5 bar that closes it.
+    assert held["interval_end"] == datetime(2026, 8, 7, 14, 0, tzinfo=timezone.utc)
 
 
 def test_the_derived_series_are_built_once_per_occurrence():

@@ -262,7 +262,14 @@ class AutoTagger:
                     for code in (annotation.get("reason_codes") or [])
                     if str(code or "").strip()
                 ]
-                tag = f"passed:{codes[0]}" if codes else "passed"
+                # ALL of them, in VOCABULARY order (R2). A pass is
+                # multi-select and `codes[0]` threw the rest away, so a pass for
+                # "extended from VWAP AND thin liquidity" reached the tagger as
+                # the first reason alone - which is a different statement from
+                # the one the trader made. The annotation writes its codes in
+                # vocabulary order already (never click order), so preserving
+                # the list preserves that too.
+                tag = f"passed:{','.join(codes)}" if codes else "passed"
             else:
                 continue
             rows.append(
@@ -520,7 +527,7 @@ class AutoTagger:
                 # A pointer, under a name that cannot be mistaken for a setup.
                 # It is excluded from `auto_tag_summary` by the store, so it
                 # occupies no slot in the Tags column.
-                tag = f"link:{row.get('kind')}"
+                tag = f"{LINK_TAG_PREFIX}{row.get('kind')}"
             # A stated judgement inside the trade's own window is the strongest
             # thing this tagger has, and it is still a SUGGESTION: the trader
             # accepts or ignores it, and nothing here writes trade_annotations.
@@ -821,6 +828,37 @@ TAG_STATUS_CONFIRMED = "confirmed"
 TAG_STATUS_PROVISIONAL = "provisional"
 
 
+#: The prefix every link-only candidate's tag carries. A LINK records that the
+#: trader did something WITH the chart - added it to Focus, armed a level - and
+#: says nothing about which setup it was. It is stored, it renders, it carries a
+#: `context_row_id` worth following, and it is NEVER a tag.
+LINK_TAG_PREFIX = "link:"
+
+
+def is_link_candidate(candidate: Any) -> bool:
+    """ONE predicate for "this is a pointer, not a tag" (R2).
+
+    R1 kept links out of `auto_tag_summary` and three other seams still let them
+    through: the bulk tagger's lane filter, its `max(confidence)` pick, the
+    Accept-all button, and `tag_confidence`. Each had its own idea of what a
+    link was - or no idea at all - so the rule held in one place and leaked in
+    four.
+
+    Both spellings are accepted deliberately. `link_only` is what the tagger
+    sets in memory; the PREFIX is what survives a round trip through
+    `auto_tag_candidates`, which stores a tag and a source but no flag. A reader
+    that only knew the flag would be right until the row came back from the
+    database.
+    """
+    if isinstance(candidate, str):
+        return candidate.startswith(LINK_TAG_PREFIX)
+    if not hasattr(candidate, "get"):
+        return False
+    if candidate.get("link_only"):
+        return True
+    return str(candidate.get("tag") or "").startswith(LINK_TAG_PREFIX)
+
+
 def _confirmed_setup_tags(row: dict[str, Any]) -> list[str]:
     """The tags on this trade that the TRADER stands behind (P6a).
 
@@ -913,7 +951,6 @@ def build_analytics_summary(
             )
         )
         summary["groups"][group_name] = rows
-    summary["nonexclusive_groups"] = ["my setups", "auto tags"]
     summary["group_notes"] = _empty_dimension_notes(trades, summary["groups"])
     summary["nonexclusive_groups"] = ["my setups", "provisional setups", "auto tags"]
     #: Groups whose buckets are machine-applied and awaiting review. The chart

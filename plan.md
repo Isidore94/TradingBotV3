@@ -957,7 +957,9 @@ cohorts complete the set: every verdict the trader can record now has a forward 
    never be summed. Identity on write is (vocab_version, reason_code). Beside the daily
    horizons it carries a same-session grade when a bar sidecar exists.
 2. **`rejection_cohort`** over `pick_feedback.jsonl`. `not_today` and `dislike` are
-   separate cohorts, never pooled; `unfavorite` is not graded; the free-text reason is
+   separate cohorts whose numbers are never combined into a verdict (the family's
+   pooled BASE row exists and is labelled, never read as either); `unfavorite` is not
+   graded; the free-text reason is
    carried and never coded.
 3. Two nightly slots appended, two Weekend Prep tables, both files added to the evidence
    report and the `trader_judgement` scope (with the like file, which was also missing).
@@ -1051,6 +1053,27 @@ three more looks against the same k.
 **Live gate (#37):** one overnight run publishes rows for every declared cell inside
 the 20-minute reserve; the trial-ledger row exists with status `collecting`; and **no
 cell is read for a verdict before the declared window closes.**
+
+### Phase 0.13 review round R2 (2026-09-02) — TWO GUARDS, BUILT
+
+Authorized by the trader pasting the review.
+
+1. **An empty `assigned_tier` cell is absent, not a tier called NAN.** The live
+   feature-history file has no such column; the first scan after P4 widens it and
+   every older row reads back as a float NaN, which is TRUTHY and stringifies to
+   `"nan"`. `tier_for_tracker_row` now accepts only the vocabulary the stamper
+   writes (S, A, B) and treats everything else as absent. Landed before the 07:30
+   scan.
+2. **A link is not a tag at any seam.** One predicate rejects link candidates in
+   the bulk lane, the bulk top pick, Accept/Accept-all and `tag_confidence` - R1
+   had covered only `auto_tag_summary`. A pass now carries ALL its codes.
+
+Plus the stale sentences, the atomic overlap-note write, the trade-scoped
+adjustment query, the Qt-thread backlog read, and four DESK_INTERNALS entries.
+
+**No new live gates.** Gate 38 additionally watches the Setup Tracker's
+current-picks count after the first scan (the NAN fix) and the Weekend Prep
+backlog toggle line in `ui_stalls.jsonl`.
 
 ### Phase 0.13 review round R1 (2026-09-02) — BLOCKERS FIXED, ALL PACKETS MERGED
 

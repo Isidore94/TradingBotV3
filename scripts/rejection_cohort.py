@@ -11,9 +11,14 @@ never graded at all:
   most information-dense free text the trader ever writes.
 
 `pick_feedback.py` has kept them distinct on purpose since packet R2, and this
-module keeps them distinct too: **they are separate cohorts and are never
-pooled**, because a same-day pass and a judgement on the name are different
+module keeps them distinct too: **their numbers are never combined into a
+verdict**, because a same-day pass and a judgement on the name are different
 claims and averaging them would teach the wrong lesson about both.
+
+The family DOES get a pooled base row - every cohort family does, from
+`human_focus_tracking` - and it is a total over two verdicts recorded on two
+different populations (`not_today` on intraday picks, `dislike` on swing names).
+It is labelled wherever it is shown and must never be read as either verdict.
 
 Two deliberate refusals.
 
