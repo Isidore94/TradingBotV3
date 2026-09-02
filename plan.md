@@ -789,6 +789,30 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+### Phase 0.13 packet P4 — The variables you are not looking at (2026-09-01) — BUILT, live gate owed
+
+Authorized by the trader, including an explicit yes to the first edit of
+`master_avwap_lib/legacy.py` (file-scoped ask-first rule) and to all six Half B items.
+
+**Half A, capture-only.** The attribute leaderboard gets a Qt tab (read off-thread; the
+export is 19.7 MB) with the sample floor visible, and twelve variables already on the
+record gain attribute keys. A contract-bearing golden frozen from the pre-change code
+proves the priority score, bucket and expected R are unchanged.
+
+**Half B, each behind its own fixture.** B1 sample floor on the leaderboard; B2 family
+and regime views as sibling files; B3 stale-horizon rows dropped with the count
+published; B4 the shipped tier written at assignment time; B5 calibration on structure
+points; B6 the representative exit template named.
+
+**Still owed and NOT part of this packet:** re-selecting the scan-factor future row by
+exchange session (B3 step b) redefines every historical number and is a full sec-7
+promotion; so is pinning `REPRESENTATIVE_EXIT_TEMPLATE_ID` to the documented house exit.
+Any weight change consequent on B3's new numbers is likewise a sec-7 promotion.
+
+**Live gate (#33):** one desk scan after which the Attributes tab opens off-thread with
+the floor flag visible, the scan-factor coverage line shows the stale-horizon drop
+count, and the expected-R note names its template.
+
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads

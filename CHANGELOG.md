@@ -377,6 +377,31 @@ which is evidence and must not be loaded as context.
   reads, every job invoker, live tee wiring, and off-GUI-thread spool I/O.
 - Phases 0–8 are code-complete on the testing-week branch. The broker check,
   confirmation items, and 20-session pilot remain open.
+- **The attribute leaderboard has a desk surface** (2026-09-01, P4 A1): an
+  **Attributes** tab on the Setup Tracker over the ~190-attribute export the scanner has
+  always written, floor-clearing rows first and sub-floor rows greyed, labelled and last.
+  Read OFF the Qt thread - alone among that page's exports - because it is 19.7 MB.
+- **Twelve swing variables are recorded and none is weighted** (P4 A2): human focus
+  pick/side, tracker setup family, market regime, sector, industry, ATR as a PERCENT of
+  price (beside the dollar bucket, never replacing it), signed SMA200/SMA50 distance in
+  ATR with two booleans, and relvol. A contract-bearing golden frozen from the pre-change
+  code proves the priority score, bucket and expected R are unchanged.
+- **The attribute leaderboard states its sample floor** (P4 B1) through
+  `evidence_stats.summarize`, asked of CLOSED setups, with every row kept. The offline
+  tuner's own gates still decide what may influence scoring.
+- **It can also be read by family and by regime** (P4 B2) as sibling files; the export
+  the tuner reads keeps its exact grain.
+- **Scan-factor rows whose horizon is fiction are dropped and counted** (P4 B3). The
+  horizon indexes a symbol's own scan rows, not exchange sessions. A row whose drift
+  could not be measured is KEPT. Re-selecting the future row remains a sec-7 promotion.
+- **The tier tracker grades the tier that SHIPPED** (P4 B4): `assigned_tier` is stamped
+  after the expected-R demote, the de-dupe and the best-swing merge, and `tier_source`
+  says whether a row was graded by the decision or by the old bucket derivation.
+- **Expected-R calibration reads structure points** (P4 B5), not the proven-quality score
+  that already contains realized performance.
+- **The headline per-setup R names its exit template** (P4 B6).
+  `REPRESENTATIVE_EXIT_TEMPLATE_ID` defaults to today's behaviour, and `setup_docs.py`
+  now says the headline R is not measured on the house plan it documents.
 
 ### Testing, packaging, and platform
 
@@ -416,6 +441,82 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-01 - Phase 0.13 packet P4: the variables you are not looking at
+
+**Branch `claude/p4-swing-variables`, off `main` at `66a0c31`.** Two halves, both
+authorized by the trader before the first edit to `master_avwap_lib/legacy.py` (the
+file-scoped ask-first rule): Half A capture-only, Half B all six items. Live gate #33
+owed.
+
+**HALF A - see the evidence, add the variables.**
+
+The scanner has written `master_avwap_setup_attribute_leaderboard.csv` every scan since
+it was built - ~190 attributes x side x bucket, each with its own edge - and its only
+readers were the legacy Tk GUI and the offline tuner. It is now an **Attributes** tab on
+the Qt Setup Tracker. Live: **38,617 groups, 37,049 of them (96%) under the
+reportable-n floor**, which is why the order is the honesty - floor-clearing rows first,
+sub-floor rows greyed and last with a "below floor (<30)" label, and every row KEPT.
+
+Read **off the Qt thread**, unlike its ten siblings: 19.7 MB against 5.5 MB for the next
+largest and under 150 KB for the rest. `TrackerTableModel` gained one opt-in row flag
+that mutes a row ahead of every other colour rule.
+
+Twelve variables that were already on the record or the row now have attribute keys:
+human focus pick/side, tracker setup family, market regime label, sector, industry, ATR
+as a PERCENT of price, signed SMA200/SMA50 distance in ATR with two booleans, and
+relvol. **No weights, no gates.** The percent-of-price ATR sits BESIDE the dollar bucket
+(a $2 ATR is quiet on a $400 stock and violent on a $12 one), and the SMA geometry is
+the trader's rule 3 recorded as D1 evidence so the swing record can agree or disagree
+with the Alert Center's filter.
+
+The golden is the RANKING ITSELF (`p4_ranking_unchanged_v1.json`, contract-bearing,
+frozen from the pre-Half-A code with `scripts/` stashed, replayed rather than compared).
+Score, static score, proven-quality score, bucket and expected R are unchanged. A second
+structural guard asserts none of the twelve keys appears in the scoring functions at all.
+
+**HALF B - grade what shipped.** Each item behind its own fixture, frozen first.
+
+- **B1** The attribute leaderboard states its own sample floor. Only numeric bucketing
+  had one; categorical, bool and list rows shipped at setup_count=1 with full edges.
+  `meets_n_floor` and `evidence_label` now travel on every row, through
+  `evidence_stats.summarize`, asked of CLOSED setups. The fixture freezes the leaderboard
+  AND the tuner's recommendations, and is built so the two verdicts DISAGREE - a 20-setup
+  group is under the reportable floor but clears the tuner's own gates, and the tuner
+  still writes its rule. B1 publishes that and changes nothing about it.
+- **B2** The leaderboard can be read by family and by regime, as separate sibling files.
+  The existing export keeps its exact grain because the tuner reads it into live weights.
+  Columns are read BY NAME now - the extra dimension prepends, so positional indices
+  would have shifted every column one place.
+- **B3** Fictional horizons leave the scan-factor leaderboard. `future_idx = idx +
+  horizon` indexes a symbol's own scan rows, not exchange sessions: live medians are
+  horizon 5 -> 64 sessions, horizon 10 -> 73, with 42-45% of rows over twice their
+  horizon. `stale_horizon` was computed since R10.D and never filtered on. Dropped now,
+  with the count and reason on every row. A row whose drift could not be measured is
+  KEPT. **Step (a) only** - the future row is still selected the same way, and a test
+  pins that.
+- **B4** The tier tracker grades the tier that SHIPPED. `assigned_tier` is stamped at
+  assignment time, after the expected-R demote, the de-dupe and the best-swing merge;
+  the grader prefers it and reports `tier_source`. The bucket derivation stays for the
+  months of rows without the column.
+- **B5** Calibration reads structure points. The record stored only the overwritten
+  proven-quality score, so the expected-R fit was reading realized performance as
+  structure quality - a feedback loop. `static_score` is on the record now and the helper
+  prefers it, with a counter reporting how much of each path a run used.
+- **B6** The representative exit template is NAMED.
+  `REPRESENTATIVE_EXIT_TEMPLATE_ID` defaults to today's behaviour so nothing moves; the
+  resolved template travels on the summary and is printed in every `expected_r_note`,
+  and `setup_docs.py` now says the headline R is not measured on the plan it documents.
+
+**Two things reported rather than forced.** The packet named
+`_build_priority_tier_sections`; the function is `_priority_partition_tier_rows`. And
+B5's anchor movement cannot be measured on this tree - no record on disk carries
+`static_score` yet, so every sample still takes the old path and the fit is unchanged
+today; the new counter is what will show the changeover.
+
+**Verification.** `pytest tests/ -q` **5759 passed, 72 subtests, process exit 0** ·
+`ruff` clean · smoke **7/7** · source `--selftest` **73/73**.
+
 
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.
