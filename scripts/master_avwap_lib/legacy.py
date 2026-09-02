@@ -10592,16 +10592,42 @@ def _tier_for_priority_bucket(priority_bucket: str | None) -> str:
     return ""
 
 
+#: The ONLY values `_priority_partition_tier_rows` ever stamps. Read from that
+#: function, not chosen here: it writes `("S", s_rows), ("A", a_rows),
+#: ("B", b_rows)` and nothing else, so anything else in this column is not a
+#: tier somebody recorded.
+ASSIGNED_TIER_VALUES = frozenset({"S", "A", "B"})
+
+
 def tier_for_tracker_row(row) -> tuple[str, str]:
     """(tier, source) for one history row: the assigned tier, else the derivation.
 
     The SOURCE travels with the tier so a mixed file reads honestly - rows
     written before B4 are graded by the old rule and say so, rather than
     silently looking like decisions that were recorded.
+
+    ONLY THE VOCABULARY THE STAMPER WRITES COUNTS AS ASSIGNED (R2). This used to
+    accept any non-empty string, and the value that broke it is the one the real
+    file produces: `assigned_tier` does not exist in the live feature history
+    yet, the first scan after P4 WIDENS the file, and every row written before
+    that gets an empty cell - which `pd.read_csv` returns as a float NaN.
+
+    A NaN is TRUTHY and `str(nan)` is `"nan"`, so `str(x or "").strip().upper()`
+    turned an empty cell into a tier named `"NAN"` with source `"assigned"`.
+    Reproduced on `main`: 40 of 42 outcome rows and 6 picks from a 6-symbol scan
+    instead of 2. The tier list, the tier outcomes and the S/A performance
+    aggregate would all have filled with a tier that does not exist - and
+    `derived_from_bucket`, the honest answer, was available the whole time.
+
+    Anything outside the vocabulary - NaN, "nan", "", None, whitespace, a value
+    from some future stamper - is treated as ABSENT and falls back to the
+    derivation. A tier this function does not recognise is not a decision it can
+    report as one.
     """
     getter = row.get if hasattr(row, "get") else lambda key, default=None: default
-    assigned = str(getter(ASSIGNED_TIER_FIELD, "") or "").strip().upper()
-    if assigned:
+    raw = getter(ASSIGNED_TIER_FIELD, "")
+    assigned = "" if raw is None else str(raw).strip().upper()
+    if assigned in ASSIGNED_TIER_VALUES:
         return assigned, "assigned"
     return _tier_for_priority_bucket(getter("priority_bucket")), "derived_from_bucket"
 
