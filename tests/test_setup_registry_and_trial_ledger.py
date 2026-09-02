@@ -419,3 +419,51 @@ def test_the_trial_ledger_still_has_no_production_importer():
     )
     importers = {line.strip() for line in result.stdout.splitlines() if line.strip()}
     assert importers <= {"scripts/research_warehouse/trial_ledger.py"}, importers
+
+
+def test_every_trial_row_says_when_it_was_registered(tmp_path):
+    """A declaration with no date cannot support the claim it exists to make.
+
+    The ledger's whole point is that the question was written down BEFORE the
+    numbers arrived. An undated row and a row written afterwards look identical
+    six months later, so `registered_at` is not metadata here - it is the
+    evidence.
+    """
+    from datetime import datetime
+
+    from research_warehouse import trial_ledger
+
+    for row in trial_ledger.BACKFILL_TRIALS:
+        stamped = datetime.fromisoformat(str(row["registered_at"]))
+        assert stamped.tzinfo is not None, row["trial_id"]
+
+    trial_ledger.backfill(tmp_path)
+    for row in trial_ledger.load(tmp_path):
+        stamped = datetime.fromisoformat(str(row["registered_at"]))
+        assert stamped.tzinfo is not None, row["trial_id"]
+
+
+def test_a_backfilled_row_carries_its_authorization_date_not_todays(tmp_path):
+    """A backfilled row stamped "today" would claim the look happened today."""
+    from research_warehouse import trial_ledger
+
+    stamps = {row["trial_id"]: str(row["registered_at"]) for row in trial_ledger.BACKFILL_TRIALS}
+    assert stamps["avwap_band_challenger_v1"].startswith("2026-08-26")
+    assert stamps["htf_lrsi_entry_grid_v1"].startswith("2026-09-01")
+
+
+def test_a_freshly_registered_trial_is_stamped_by_the_ledger(tmp_path):
+    """A caller may not choose the moment its own declaration was made."""
+    from datetime import datetime, timezone
+
+    from research_warehouse import trial_ledger
+
+    before = datetime.now(timezone.utc)
+    assert trial_ledger.register(
+        tmp_path,
+        {"trial_id": "fresh_v1", "authorization": "plan.md, this test"},
+    )
+    row = next(r for r in trial_ledger.load(tmp_path) if r["trial_id"] == "fresh_v1")
+    stamped = datetime.fromisoformat(row["registered_at"])
+    assert stamped.tzinfo is not None
+    assert stamped >= before.replace(microsecond=0)

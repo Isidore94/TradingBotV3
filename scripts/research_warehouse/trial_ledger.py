@@ -28,6 +28,10 @@ understate every family it covers.
 The file lives beside the warehouse's other diagnostics
 (`<store root>/_diagnostics/trial_ledger.jsonl`) and is JSONL because it is
 append-only: a row is added, never edited, and a correction is another row.
+
+Every row carries `registered_at` (UTC, aware). Backfilled rows carry the date
+their work was AUTHORIZED in plan.md rather than the date this module was
+written - a backfilled row stamped "today" would claim the look happened today.
 """
 
 from __future__ import annotations
@@ -35,6 +39,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+
+try:  # package import
+    from .manifest import utc_now
+except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+    from manifest import utc_now  # type: ignore
 
 SCHEMA = "trial_ledger_v1"
 LEDGER_FILENAME = "trial_ledger.jsonl"
@@ -58,6 +67,11 @@ BACKFILL_TRIALS: tuple[Mapping[str, Any], ...] = (
     {
         "trial_id": "m5_close_recipe_grid_v1",
         "schema": SCHEMA,
+        # The date the work was AUTHORIZED, from plan.md, not the date this
+        # file was written. A backfilled row stamped "today" would claim the
+        # look happened today, which is the understatement the backfill exists
+        # to prevent.
+        "registered_at": "2026-08-27T00:00:00+00:00",
         "family": "M5_OPPORTUNITY",
         "question": (
             "For an M5 opportunity entered at the next session's first completed M5 "
@@ -99,6 +113,11 @@ BACKFILL_TRIALS: tuple[Mapping[str, Any], ...] = (
     {
         "trial_id": "htf_lrsi_entry_grid_v1",
         "schema": SCHEMA,
+        # The date the work was AUTHORIZED, from plan.md, not the date this
+        # file was written. A backfilled row stamped "today" would claim the
+        # look happened today, which is the understatement the backfill exists
+        # to prevent.
+        "registered_at": "2026-09-01T00:00:00+00:00",
         "family": "HTF_LRSI",
         "question": (
             "Does an efficiency-LRSI cross on a higher timeframe (M30/H1/H2/H4), "
@@ -136,6 +155,11 @@ BACKFILL_TRIALS: tuple[Mapping[str, Any], ...] = (
     {
         "trial_id": "avwap_band_challenger_v1",
         "schema": SCHEMA,
+        # The date the work was AUTHORIZED, from plan.md, not the date this
+        # file was written. A backfilled row stamped "today" would claim the
+        # look happened today, which is the understatement the backfill exists
+        # to prevent.
+        "registered_at": "2026-08-26T00:00:00+00:00",
         "family": "AVWAP_BAND_SIGMA",
         "question": (
             "Does OneOption's band - AVWAP(HLC/3) +/- k * stdev(close, 20, "
@@ -173,6 +197,11 @@ BACKFILL_TRIALS: tuple[Mapping[str, Any], ...] = (
     {
         "trial_id": "v1_recipe_library",
         "schema": SCHEMA,
+        # The date the work was AUTHORIZED, from plan.md, not the date this
+        # file was written. A backfilled row stamped "today" would claim the
+        # look happened today, which is the understatement the backfill exists
+        # to prevent.
+        "registered_at": "2026-08-27T00:00:00+00:00",
         "family": "SHARED_RECIPES",
         "question": (
             "How does each setup perform under the shared house recipes and the "
@@ -301,7 +330,15 @@ def register(store_root: Path | str, trial: Mapping[str, Any]) -> bool:
         return False
     path = ledger_path(store_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    row = {"schema": SCHEMA, **dict(trial)}
+    # WHEN the declaration was made, stamped here rather than taken from the
+    # caller. The ledger's whole claim is that the question was written down
+    # before the numbers arrived, and a row with no time cannot support it: an
+    # undated declaration and a declaration written afterwards look identical
+    # six months later. A row that already carries `registered_at` keeps it,
+    # which is what lets the backfilled rows state the date they were really
+    # authorized instead of the date this code first ran.
+    row = {"schema": SCHEMA, "registered_at": utc_now().isoformat(timespec="seconds")}
+    row.update(dict(trial))
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
     return True
