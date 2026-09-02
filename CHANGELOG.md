@@ -475,6 +475,43 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-02 - Three branches onto `main`, so packet P8 has ground to stand on
+
+**Trader instruction: "yes do option 1".** P8 declared its own precondition - "Requires
+P3 and P7 landed" - and neither was, so P8 was not built; this merge is what unblocks
+it. Merged oldest first: **Phase 0.12 A+B** (clean), **Phase 0.13 P3** (two ledger
+conflicts), **Phase 0.13 P7** (six, all additive). Every conflict was resolved by
+keeping BOTH sides' dated entries, and the Active state block was rewritten once at the
+end from what is actually true.
+
+Done in a SCRATCH WORKTREE rather than the live checkout: the desk was mid-run on the
+nightly AI job, and a working tree carrying conflict markers inside `.py` files is the
+one state a running process must never see.
+
+**THE BD COLLISION IS RESOLVED.** Three branches off one commit each numbered their own
+decisions - 78-80, 80-84, 85-86. Phase 0.12 kept BD-80, P3 shifted to **81-85**, P7 to
+**86-87**; headings are now 77..87 with no repeats, asserted. Renumbered by targeted
+replacement, never by line range, because `(BD-80)` appears in both lines and only the
+surrounding words say which is which.
+
+**P7's owed swap is paid**: `setup_research.family_role` no longer carries its own
+two-entry role map and reads the registry instead. Output unchanged (`fact_pack_role`
+translates Appendix C's `TRADE_SETUP` back to the pack's `TRADE`); the ontology now has
+one owner. **And P7's blind declaration checked out**: the HTF LRSI trial-ledger row,
+written from another branch's constants, matches the real grid exactly - 16 declared,
+16 real, all 75 recipe ids owned by exactly one row.
+
+**Frozen exe rebuilt** (P7 edited the packaging spec - trigger 2): 420 MB,
+`selftest OK: 74/74 (frozen)`, exit 0. The new 74th check loads the registry JSON from
+inside the frozen process, because a `datas` rule proves a file was bundled and only a
+frozen run proves the process can read it.
+
+**Verification.** 5781 passed. 33 failures, none a regression: 32 are the `ai_jobs`
+tests standing down while the desk's nightly holds the machine-local writer lock (the
+same tests fail on a pristine `main` worktree - checked, not assumed), and one was a
+Windows `PermissionError` on `os.replace` inside pytest's own sandbox that did not
+recur. `ruff` clean · smoke **7/7** · source `--selftest` **74/74** · spec-drift **17**.
+
 ### 2026-09-01 - Phase 0.13 packet P3: the fact pack tells the truth
 
 **Branch `claude/p3-fact-pack-truth`, off `main` at `66a0c31`.** Five changes to the

@@ -378,8 +378,14 @@ def test_the_registry_has_exactly_the_readers_it_was_given():
     assert importers == {
         "scripts/setup_registry.py",
         "scripts/build_setup_registry.py",
-        # The one authorized reader (P7's owed swap, landed 2026-09-02).
+        # The one authorized PRODUCTION reader (P7's owed swap, landed 2026-09-02).
         "scripts/ai_jobs/setup_research.py",
+        # Not a reader in the same sense: the selftest loads the frozen JSON to
+        # prove the BUNDLE can find it. That check exists because the registry is
+        # the first non-.py asset at the scripts/ root, so the packaging spec had
+        # to grow a second sweep, and a `datas` rule proves a file was bundled
+        # while only a frozen run proves the process can read it.
+        "scripts/selftest.py",
     }, importers
 
 

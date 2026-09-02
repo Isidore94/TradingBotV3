@@ -291,6 +291,27 @@ def _check_testing_plan() -> None:
 
 
 #: (name, callable) - asset loads and behavioural probes, run after imports.
+def _check_setup_registry() -> None:
+    """The frozen setup crosswalk is a bundled JSON asset (P7, 2026-09-02).
+
+    It is the FIRST non-`.py` asset that lives at the scripts/ ROOT rather than
+    inside a package, which is why the packaging spec grew a second sweep for it.
+    A check belongs here for exactly the reason the others do: the failure mode
+    is a bundle that starts fine and then cannot find a file, and the spec-drift
+    test can prove a `datas` RULE exists but not that the frozen process can read
+    what the rule bundled.
+    """
+    from setup_registry import registry, resolve
+
+    entries = registry()
+    if not entries:
+        raise RuntimeError("the setup registry loaded with no entries")
+    # Resolve through the index too: a JSON that parses but whose aliases were
+    # truncated would still be a broken crosswalk.
+    if not resolve("avwap_band_bounce")["canonical_setup_id"]:
+        raise RuntimeError("the setup registry resolved a known name to nothing")
+
+
 ASSET_CHECKS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("ui/theme.qss", _check_stylesheet),
     ("ui/annotations/vocabularies/veto_reasons_v*.json", _check_veto_vocabulary),
@@ -299,6 +320,7 @@ ASSET_CHECKS: tuple[tuple[str, Callable[[], None]], ...] = (
     ("setup claim registry", _check_setup_claims),
     ("frozen sys.path assumptions", _check_frozen_path_assumptions),
     ("chart level payload", _check_chart_level_payload),
+    ("setup_registry_v1.json", _check_setup_registry),
 )
 
 
