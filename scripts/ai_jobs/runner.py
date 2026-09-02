@@ -459,7 +459,16 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     night's trades are in it means they read yesterday's. It also costs seconds
     rather than the briefs' hours, so putting it first spends nothing.
     """
-    from ai_jobs import briefs, cohorts, digest, enrichment, evidence_report, policy_draft, setup_research
+    from ai_jobs import (
+        briefs,
+        cohorts,
+        digest,
+        enrichment,
+        evidence_report,
+        note_vocabulary_audit,
+        policy_draft,
+        setup_research,
+    )
     from journal_runner import run_nightly_journal_import
     from preference_trade_outcomes import run_preference_trade_outcomes
 
@@ -558,6 +567,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=cohorts.run_rejection_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade NOT-TODAY and DISLIKE (deterministic, no model)",
+            max_attempts=3,
+        ),
+        # P10 A4, APPENDED after the cohort slots. It reads the annotation log
+        # and nothing the cohorts produce, so its position among them carries no
+        # dependency - but it belongs with them because it is the same KIND of
+        # job: deterministic, cheap, no model, its own ledger row and its own
+        # failure isolation. Later phases append; they never reorder.
+        JobSlot(
+            name="note_vocabulary_audit",
+            run=note_vocabulary_audit.run_note_vocabulary_audit,
+            reserve_minutes=5.0,
+            description=(
+                "What the trader wrote that no code says - listed, never coded "
+                "(deterministic, no model)"
+            ),
             max_attempts=3,
         ),
         # P6, APPENDED after the cohort slots and BEFORE the evidence report,
