@@ -495,6 +495,24 @@ which is evidence and must not be loaded as context.
   sentence naming the coverage. **The group is never hidden**: hiding it would
   replace a visible thin answer with an invisible one, and seeing how little is
   tagged is the prompt to tag more.
+- **A LIKE has two modes** (P9, 2026-09-02). **Alt+L** writes a QUICK like -
+  `like_mode: "quick"`, no claimed setup, no why - and **Alt+K** the claimed one,
+  which still requires both. A quick like retires the chart, records
+  `like_advance` and marks the symbol reviewed exactly as a claimed one does, and
+  **places nothing**: a like carries zero privileges (plan.md P3.1). It grades
+  under `like_unclaimed`, saves the M5 sidecar on an M5 chart through the writer
+  Pass uses, and contributes a **LINK** to the auto-tagger rather than a tag,
+  because it names no setup. `like_mode` is ADDITIVE - schema stays 1, proven
+  against every reader - and its absence reads as `claimed`.
+- **A capture sidecar is completed after the close** (P9, `sidecar_completion`
+  nightly slot). The snapshot holds what the desk had AT the click, so the
+  intraday grade's entry bar - the first completed close AFTER it - was never in
+  it and every live pass graded blank. The slot appends the rest of the session
+  from the research lake (narrowed Arrow-side, never materialised) or the desk
+  cache, into a **NEW file and a NEW field**; the original reference still means
+  what it always meant and is never rewritten. **This makes the intraday grade
+  reachable, which answers gate 34's open definition question without changing
+  the definition.**
 - **The backlog is tagged, provisionally, and the mark is permanent** (P6a,
   2026-09-01). `trade_annotations.tag_status` carries `confirmed` (the trader's),
   `provisional` (machine-applied, awaiting review) or `needs_review` (the tagger
@@ -698,6 +716,48 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-02 - Phase 0.13 packet P9: quick like
+
+**Branch `claude/p9-quick-like`, off `main` at `13cbc50`.** Live gate #39 owed.
+
+Trader: *"anytime I like and claim a setup or like a day trade setup I just want to
+let the bot and the future AI know 'something about this was good' and then we can
+figure out what about it / what's the best entry later."*
+
+**Alt+L** - unbound everywhere else in `scripts/ui`, and two live bindings for one
+sequence fire NEITHER, so a clash would have cost both verbs silently. It writes
+`like_claim` with `like_mode: "quick"`, no claim and no why, **superseding
+R9.2(a)'s why-required for that path only**. Everything a claimed like does to the
+review it does too - retire, `like_advance`, reviewed-today - and NONE of that
+needed code, because all three are keyed on the event type. Everything a like has
+never done it still does not: no Focus, no park, no watch, no alert.
+
+**The schema stays at 1 and that is proven**, not asserted: a test hands the
+loader, the like cohort, the auto-tagger's capture lane and the pass cohort a row
+carrying `like_mode` and each returns its normal answer. Absence reads as
+`claimed`, because a claim was REQUIRED until this packet.
+
+**On an M5 chart it saves the bars**, through the writer Pass already uses -
+generalised in name only, so `m5_bars_ref` and the sidecar directory are unchanged
+and no reader forks.
+
+**And the intraday grade became reachable.** `pass_cohort` returned blank on every
+live pass with `sidecar_ends_before_the_entry_bar` - the sidecar holds what the
+desk had AT the click, so the first close AFTER it was never inside. The new
+`sidecar_completion` slot appends the rest of the session after the close, into a
+NEW file and a NEW field, leaving the original snapshot byte-identical. **Gate
+34's open definition question is answered without changing the definition.**
+
+A quick like contributes a LINK to the auto-tagger, never a tag (R2's rule, since
+it names no setup); `like_mode` is a picks column so a later rollup can split the
+two without rewriting a row; Weekend Prep and the AI's judgement scope both say
+the unclaimed cohort is not a setup's edge.
+
+**Verification.** `pytest tests/ -q` **6122 passed, 72 subtests, exit 0, zero
+failures**, with the `ai_jobs_runner` lock FREE · `ruff` clean · smoke **7/7** ·
+source `--selftest` **74/74** · spec-drift **17**. Fail-before-fix: 17 of the 18
+new tests fail against `main`.
 
 ### 2026-09-02 - Review round R2: two guards, then the stale sentences
 

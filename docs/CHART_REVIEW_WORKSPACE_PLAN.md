@@ -97,7 +97,14 @@ across machines, readable by an AI.
  vocab_version?,           # veto/pass: which vocabulary version produced it
  vocabulary_id?,           # pass: which vocabulary FAMILY (see 4.1)
  reason_codes?,            # pass: >=1 code, in vocabulary order
- claimed_setup_id?,        # like_claim (required); optional elsewhere
+ claimed_setup_id?,        # like_claim: required when like_mode=claimed,
+                           #   and REFUSED when like_mode=quick (P9);
+                           #   optional elsewhere
+ like_mode?,               # like_claim only: `claimed` (Alt+K, a digit, a
+                           #   why) or `quick` (Alt+L, one key). ABSENT on
+                           #   every row written before P9, and absence
+                           #   reads as `claimed` because a claim was
+                           #   required until then. Additive: schema stays 1
  stop_price?, side?,       # hypo_stop (both required)
  last_price?,
  ref_level_id?,            # the painted level the capture referenced

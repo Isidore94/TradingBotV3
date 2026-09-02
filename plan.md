@@ -1054,6 +1054,31 @@ three more looks against the same k.
 the 20-minute reserve; the trial-ledger row exists with status `collecting`; and **no
 cell is read for a verdict before the declared window closes.**
 
+### Phase 0.13 packet P9 — Quick like (2026-09-02) — BUILT, live gate owed
+
+Authorized by the trader pasting the packet, on their own decision: a like should
+be able to say *"something about this was good"* without naming the setup.
+
+1. **Alt+L** writes `like_claim` with `like_mode: "quick"`, no claim, no why.
+   Supersedes R9.2(a)'s why-required for THIS PATH ONLY; Alt+K is untouched. The
+   chart retires, `like_advance` is recorded, the symbol is marked reviewed - and
+   nothing is placed, because a like carries zero privileges (P3.1).
+2. **The bars**, on an M5 chart, through the writer Pass already uses.
+3. **`like_mode`** as a picks column, so quick and claimed can be split later
+   without rewriting a row. The cohort stays `like_unclaimed`.
+4. **`sidecar_completion`**, a deterministic nightly slot that finishes a capture
+   sidecar to the session close from the lake or the desk cache, into a NEW file.
+   **This answers gate 34's open definition question** - "the first completed
+   close after the click" is now a real bar, so the definition does not change.
+5. A quick like contributes a LINK to the auto-tagger, never a tag; Weekend Prep
+   and the AI scope both say the unclaimed cohort is not a setup's edge.
+
+**Live gate (#39):** one DESK session where the trader quick-likes one swing
+chart and one M5 chart - both rows in `trader_annotations.jsonl` with
+`like_mode` quick, the M5 one carrying `m5_bars_ref`, both charts retired,
+nothing in Focus; the next morning `like_cohort_picks.csv` holds both, the M5 one
+has `m5_bars_completed_ref`, and its intraday columns are numbers.
+
 ### Phase 0.13 review round R2 (2026-09-02) — TWO GUARDS, BUILT
 
 Authorized by the trader pasting the review.
