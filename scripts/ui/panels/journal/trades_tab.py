@@ -297,6 +297,8 @@ class TagManagerDialog(QDialog):
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, tag)
             item.setData(Qt.UserRole + 1, bool(entry.get("derived")) or own == 0)
+            # Which KIND of not-yours it is, so the note can say so (R1).
+            item.setData(Qt.UserRole + 2, bool(entry.get("derived")))
             self.tag_list.addItem(item)
         self.tag_list.currentItemChanged.connect(self._on_selection_changed)
 
@@ -327,10 +329,26 @@ class TagManagerDialog(QDialog):
         if current is None:
             self.note.setText("")
         elif derived:
+            # R1: this said "worked out from the trade itself" for BOTH lanes,
+            # which is true of a shape tag (`midday`, derived from the clock)
+            # and false of a scanner match, which is a GUESS about which setup
+            # it was. Calling a guess a fact is the wrong way round for a
+            # dialog whose whole job is telling the trader whose words these
+            # are. The refusal is unchanged - both are recomputed on refresh -
+            # only the reason is now accurate to the lane.
+            derived_tag = bool(current.data(Qt.UserRole + 2)) if current is not None else False
             self.note.setText(
-                "This tag is worked out from the trade itself, so renaming it here "
-                "would be undone the next time tags refresh. Accept it onto a trade "
-                "first if you want to keep your own wording."
+                (
+                    "This tag is worked out from the trade's own timestamps and "
+                    "legs, so renaming it here would be undone the next time tags "
+                    "refresh."
+                    if derived_tag
+                    else
+                    "This tag is the scanner's SUGGESTION, not something you typed, "
+                    "so renaming it here would be undone the next time tags "
+                    "refresh."
+                )
+                + " Accept it onto a trade first if you want to keep your own wording."
             )
         else:
             self.note.setText("")
@@ -682,6 +700,12 @@ class TradesTab(QFrame):
         self.adjustments_list.clear()
         for record in journal_feed.list_adjustments(limit=25):
             if record.get("target_uid") not in {
+                # R1: P6a's bulk-tag records target the TRADE, and this filter
+                # knew only about positions and executions - so the audit row
+                # explaining where a provisional tag came from was invisible on
+                # the very trade being reviewed, which is where the trader is
+                # standing when they ask the question.
+                trade.trade_id,
                 journal_feed.group_key_for(trade),
                 *[str(leg.get("execution_uid") or "") for leg in legs],
             }:

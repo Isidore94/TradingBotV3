@@ -334,3 +334,47 @@ def test_the_threshold_encodes_a_same_day_same_side_match():
     assert favourite_same_day_same_side >= bulk.DEFAULT_CONFIDENCE_THRESHOLD
     assert tracker_one_day_later_nothing_else < bulk.DEFAULT_CONFIDENCE_THRESHOLD
     assert weak_source_same_day_no_priority < bulk.DEFAULT_CONFIDENCE_THRESHOLD
+
+
+# ---------------------------------------------------------------------------
+# Review round R1
+# ---------------------------------------------------------------------------
+
+
+def test_a_partly_closed_trade_is_marked_and_never_tagged(tmp_path):
+    """Six live trades are CLOSED_PARTIAL and were falling through entirely.
+
+    The OPEN rule applies - the position is not finished, so a tag is a claim
+    about something still running - but they were not being MARKED either, so
+    they left no trace at all and the counts silently did not add up.
+    """
+    import journal_bulk_tag as bulk
+
+    store = _store(tmp_path)
+    trade_id = _seed_trade(store, status="CLOSED_PARTIAL")
+    _seed_candidate(store, trade_id, "avwap-reclaim", 0.95)
+
+    plan = bulk.build_plan(store, refresh=False)
+    bulk.apply_plan(store, plan)
+
+    state = store.annotation_state(trade_id)
+    assert state["setup_tags"] == "", "a half-closed trade is never tagged"
+    assert state["tag_status"] == "needs_review", "but it is not invisible either"
+    assert plan.partial == 1
+    assert "Partly closed" in bulk.format_plan(plan)
+
+
+def test_the_tagger_can_be_pointed_at_another_database(tmp_path):
+    """A dry run against a copy is the safe way to try a threshold."""
+    import journal_bulk_tag as bulk
+
+    # `_store` appends its own filename, so the database is built directly here.
+    from journal_store import JournalStore
+
+    target = tmp_path / "copy.sqlite3"
+    store = JournalStore(target)
+    _seed_candidate(store, _seed_trade(store), "avwap-reclaim", 0.95)
+
+    assert bulk.main(["--db", str(target), "--no-refresh"]) == 0
+    # A dry run wrote nothing.
+    assert store.annotation_state("T1")["setup_tags"] == ""

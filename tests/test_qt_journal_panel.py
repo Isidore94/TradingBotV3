@@ -809,3 +809,37 @@ def test_editing_a_provisional_tag_teaches_the_tagger_and_agreeing_does_not(popu
     assert [row["setup_tag"] for row in corrections] == ["what it really was"]
     assert corrections[0]["symbol"] == "AMD"
     assert populated.annotation_state(corrected)["tag_status"] == "confirmed"
+
+
+def test_the_bulk_tag_record_is_visible_on_the_trade_it_explains(panel, populated):
+    """R1: P6a's adjustments target the TRADE and the pane filtered them out.
+
+    The record naming the candidate and its confidence is the answer to "why
+    does this trade say that?", and it was invisible on the one screen where
+    the trader asks.
+    """
+    from journal_store import PROVISIONAL_TAG_ADJUSTMENT
+
+    trade = next(t for t in populated.list_trades() if t["symbol"] == "AAPL")
+    populated.apply_provisional_tags(trade["trade_id"], "avwap-reclaim")
+    populated.record_adjustment(
+        action=PROVISIONAL_TAG_ADJUSTMENT,
+        target_kind="TRADE",
+        target_uid=trade["trade_id"],
+        reason="P8a bulk tag: 'avwap-reclaim' at 0.90, provisional until reviewed",
+        payload={"tag": "avwap-reclaim"},
+        source="journal_bulk_tag",
+    )
+
+    panel.trades_tab.reload()
+    row = next(
+        index for index in range(panel.trades_tab.table.rowCount())
+        if panel.trades_tab.table.item(index, 1).text() == "AAPL"
+    )
+    panel.trades_tab.table.selectRow(row)
+
+    listed = [
+        panel.trades_tab.adjustments_list.item(index).text()
+        for index in range(panel.trades_tab.adjustments_list.count())
+    ]
+    assert any(PROVISIONAL_TAG_ADJUSTMENT in text for text in listed), listed

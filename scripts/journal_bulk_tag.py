@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
@@ -79,6 +80,14 @@ DEFAULT_CONFIDENCE_THRESHOLD = 0.70
 #: Which trades are eligible. An OPEN trade has no shape yet and its story is
 #: not finished; tagging one is a claim about a position the trader is still in.
 ELIGIBLE_STATUS = "CLOSED"
+
+#: Half-finished, and there are SIX of them on the live journal (R1). A
+#: CLOSED_PARTIAL trade is still open in part, so the OPEN rule applies - but it
+#: was falling through the eligibility check into nothing at all: not tagged,
+#: not marked, invisible in every count on the way past. It is now marked
+#: `needs_review` and never tagged, so the trader can see the six rather than
+#: wonder why 162 closed-ish trades produced 156 decisions.
+PARTIAL_STATUS = "CLOSED_PARTIAL"
 
 #: The bucket width of the printed histogram. Fine enough to see where the
 #: threshold falls, coarse enough to read in a terminal.
@@ -127,6 +136,8 @@ class BulkTagPlan:
     considered: int = 0
     already_confirmed: int = 0
     no_candidate: int = 0
+    #: Half-closed trades: marked for review, never tagged (R1).
+    partial: int = 0
 
     @property
     def to_apply(self) -> list[TagDecision]:
@@ -179,7 +190,21 @@ def build_plan(
 
     plan = BulkTagPlan(threshold=float(threshold))
     for trade in store.list_trades():
-        if str(trade.get("status") or "").upper() != ELIGIBLE_STATUS:
+        status_text = str(trade.get("status") or "").upper()
+        if status_text == PARTIAL_STATUS:
+            plan.partial += 1
+            if str(trade.get("tag_status") or TAG_STATUS_CONFIRMED) != TAG_STATUS_NEEDS_REVIEW:
+                plan.decisions.append(
+                    TagDecision(
+                        trade_id=str(trade.get("trade_id") or ""),
+                        symbol=str(trade.get("symbol") or ""),
+                        trade_date=str(trade.get("trade_date") or "")[:10],
+                        action="needs_review",
+                        reason="partially closed - the trade is not finished, so no tag",
+                    )
+                )
+            continue
+        if status_text != ELIGIBLE_STATUS:
             continue
         plan.considered += 1
         trade_id = str(trade.get("trade_id") or "")
@@ -313,6 +338,7 @@ def format_plan(plan: BulkTagPlan, *, applied: dict[str, int] | None = None) -> 
         f"Closed trades considered:        {plan.considered}",
         f"Already tagged by the trader:    {plan.already_confirmed}",
         f"No scanner candidate at all:     {plan.no_candidate}",
+        f"Partly closed (marked, not tagged): {plan.partial}",
         f"Confidence threshold:            {plan.threshold:.2f}",
         "",
         "Top-candidate confidence, closed and untagged:",
@@ -353,13 +379,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"confidence a candidate must clear (default {DEFAULT_CONFIDENCE_THRESHOLD})",
     )
     parser.add_argument(
+        "--db",
+        default="",
+        help=(
+            "journal database to work on (default: the live one). A dry run "
+            "against a copy is the safe way to try a different --threshold."
+        ),
+    )
+    parser.add_argument(
         "--no-refresh",
         action="store_true",
         help="decide from the stored candidates instead of re-deriving them first",
     )
     args = parser.parse_args(argv)
 
-    store = JournalStore()
+    store = JournalStore(Path(args.db)) if args.db else JournalStore()
     store.initialize_schema()
     plan = build_plan(store, threshold=args.threshold, refresh=not args.no_refresh)
     applied = apply_plan(store, plan) if args.apply else None
