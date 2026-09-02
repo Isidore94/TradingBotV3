@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - three branches were merged into it on 2026-09-02 by trader instruction ("yes do option 1"), oldest first: Phase 0.12 (`claude/focus-declutter-lrsi-htf`, clean), Phase 0.13 P3 (`claude/p3-fact-pack-truth`) and Phase 0.13 P7 (`claude/p7-setup-registry`). They were merged in a SCRATCH WORKTREE, not in this checkout, because the desk was mid-run on the nightly AI job and a half-resolved working tree with conflict markers in `.py` files is the one state a running process must never see. Still open and unmerged, all off `main` at `66a0c31`: `claude/p6a-tag-backlog` (gate #36), `claude/p6-preference-to-trade` (#35), `claude/p5-pass-cohorts` (#34), `claude/p4-swing-variables` (#33), `claude/p2-show-me` (#31), `claude/p1-grade-what-you-said` (#30), `claude/p0-apply-decisions` (#29) |
+| Working branch | **`claude/p8-param-grid`**, off `main` at `1837b63` - Phase 0.13 packet P8 (the first setup-parameter grid). It could only be cut AFTER the integration recorded below: the packet declared Phase 0.12, P3 and P7 as preconditions and said to stop if any was missing, and none of the three was on `main` when it was pasted. **`main`** - three branches were merged into it on 2026-09-02 by trader instruction ("yes do option 1"), oldest first: Phase 0.12 (`claude/focus-declutter-lrsi-htf`, clean), Phase 0.13 P3 (`claude/p3-fact-pack-truth`) and Phase 0.13 P7 (`claude/p7-setup-registry`). They were merged in a SCRATCH WORKTREE, not in this checkout, because the desk was mid-run on the nightly AI job and a half-resolved working tree with conflict markers in `.py` files is the one state a running process must never see. Still open and unmerged, all off `main` at `66a0c31`: `claude/p6a-tag-backlog` (gate #36), `claude/p6-preference-to-trade` (#35), `claude/p5-pass-cohorts` (#34), `claude/p4-swing-variables` (#33), `claude/p2-show-me` (#31), `claude/p1-grade-what-you-said` (#30), `claude/p0-apply-decisions` (#29) |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), untouched by this integration |
-| Active roadmap items | **Phase 0.12 A+B (MERGED 2026-09-02; live gates #27/#28 owed)**; **Phase 0.13 P3 (MERGED 2026-09-02; gate #32 owed)**; **Phase 0.13 P7 (MERGED 2026-09-02; no gate - and `plan.md P4.1` is where the registry becomes authoritative)**; **Phase 0.13 packets P0, P1, P2, P4, P5, P6, P6a - BUILT, unmerged, gates #29-#36**; Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5781 passed, 72 subtests** on the merged tree (2026-09-02, desk `.venv`) with **33 failures that are NOT regressions**: 32 of them are `test_ai_jobs_runner.py` / `test_ai_evidence_coverage.py` / `test_ai_jobs_store_window.py`, which stand down whenever the machine-local `ai_jobs_runner` writer lock is held - the desk's nightly AI run held it from ~22:00 through this whole integration, and the same tests fail on a pristine `main` worktree, checked. The 33rd was a one-off Windows `PermissionError` on `os.replace` inside pytest's own sandbox (`test_qt_group_tape`), which did not recur on the next full run. **Re-run those three files once the nightly finishes to close the baseline.** `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** (up from 73: P7's frozen JSON is now an asset check) · spec-drift **17**. Previous baseline: **5715 passed** on `main` at `fad97d6` |
+| Active roadmap items | **Phase 0.13 packet P8 (2026-09-02 - BUILT on `claude/p8-param-grid`; live gate #37 owed)**; **Phase 0.12 A+B (MERGED 2026-09-02; live gates #27/#28 owed)**; **Phase 0.13 P3 (MERGED 2026-09-02; gate #32 owed)**; **Phase 0.13 P7 (MERGED 2026-09-02; no gate - and `plan.md P4.1` is where the registry becomes authoritative)**; **Phase 0.13 packets P0, P1, P2, P4, P5, P6, P6a - BUILT, unmerged, gates #29-#36**; Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5800 passed, 72 subtests** on `claude/p8-param-grid` (2026-09-02), the only failures being the SAME 32 `ai_jobs` tests the writer lock stands down · `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Previous: `pytest tests/ -q` **5781 passed, 72 subtests** on the merged tree (2026-09-02, desk `.venv`) with **33 failures that are NOT regressions**: 32 of them are `test_ai_jobs_runner.py` / `test_ai_evidence_coverage.py` / `test_ai_jobs_store_window.py`, which stand down whenever the machine-local `ai_jobs_runner` writer lock is held - the desk's nightly AI run held it from ~22:00 through this whole integration, and the same tests fail on a pristine `main` worktree, checked. The 33rd was a one-off Windows `PermissionError` on `os.replace` inside pytest's own sandbox (`test_qt_group_tape`), which did not recur on the next full run. **Re-run those three files once the nightly finishes to close the baseline.** `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** (up from 73: P7's frozen JSON is now an asset check) · spec-drift **17**. Previous baseline: **5715 passed** on `main` at `fad97d6` |
 | Frozen exe | **CURRENT - rebuilt 2026-09-02 from the merged tree**, 420 MB onedir, `selftest OK: 74/74 checks passed (frozen)`, exit 0. It was rebuilt because P7 EDITED THE PACKAGING SPEC (packaging trigger 2: `setup_registry_v1.json` is the first non-`.py` asset at the scripts/ ROOT, so the spec grew a second sweep bundling those to `"."`). Verified rather than assumed: the JSON is present at `_internal/setup_registry_v1.json` in the bundle, and the new selftest check LOADS it from inside the frozen process - a `datas` rule proves a file was bundled, only a frozen run proves the process can read it. Still a verification artifact: the desk runs from SOURCE by trader decision |
 | Desk restart | **OWED.** The desk has been up since 2026-09-01 11:09 (pid 17132) and is running the code as it was when it launched. Everything merged today reaches it at the next restart, which is the trader's call - and the nightly AI run was still holding its lock at the end of this integration, so restarting mid-job would abandon that run |
 | Working branch | **`claude/p0-apply-decisions`**, off `main` at `66a0c31` - Phase 0.13 packet P0, the trader's three 2026-09-01 decisions (retire BANGER, silence the LRSI M5 alerts, record click-away = pass), authorized by the trader pasting the packet. Deliberately branched off `main` and NOT off `claude/focus-declutter-lrsi-htf`: Phase 0.12's two packets are independent of these three and the higher-timeframe LRSI study is untouched by the M5 retirement. `claude/focus-declutter-lrsi-htf` (Phase 0.12 A+B, gates 27 and 28) is still open and unmerged |
@@ -62,6 +62,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 37 | **First setup-parameter grid (Phase 0.13 P8)** — one overnight run publishes rows for every declared cell inside the 20-minute reserve, and the trial-ledger row exists with status `collecting`. **The third condition is a refusal, not a check: no cell may be read for a verdict before the declared 20-session window closes** — including by me, and including if an early cell looks good | 2026-09-02 Phase 0.13 P8 entry |
 | 28 | **HTF LRSI study (Phase 0.12 B)** — one overnight `setup_research` run that publishes `htf_lrsi_*` outcome rows inside the existing 20-minute reserve, with `bar_derived` rows under `timeframe=H2` present and no stub in the oscillator's input; then a first read of whether any cell clears the evidence floor | 2026-09-01 Phase 0.12 entry |
 | 27 | **Focus de-clutter (Phase 0.12 A)** — one DESK session: the D1 Focus feed carries pullbacks only, an armed extension watch still fires from the Armed board, a watch past its window leaves the board with a row behind it, and a faded pick can be restored (fresh clock) and discarded from the chart | 2026-09-01 Phase 0.12 entry |
 | 32 | **Fact-pack truth (Phase 0.13 P3)** — one overnight `setup_research` run whose Markdown **opens with the eligible block**, shows **`n_episodes` beside `n`**, **names the excluded families** (GENERAL, FAVORITE_ZONE_WATCH) and prints the **bucket-coverage line** with a real count rather than UNKNOWN (which needs at least one warehouse build after this lands); plus the trader confirming the Research readout panel lists **more than two families** on 'All families' | 2026-09-01 Phase 0.13 P3 entry |
@@ -100,6 +101,68 @@ the dated entry named beside it.
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
+
+### 2026-09-02 - Phase 0.13 packet P8: the first setup-parameter grid
+
+**Branch `claude/p8-param-grid`, off `main` at `1837b63`** - cut only after the
+integration below, because the packet declared Phase 0.12, P3 and P7 as preconditions
+and said to stop if they were missing. Live gate 37 owed. Shadow only, and no frozen
+rebuild needed: no new dependency, no new asset, no spec change.
+
+**Declared family:** `AVWAPE_TO_FIRST_DEV` LONG - `avwape_to_first_dev@1` in P7's
+registry - **840 occurrences over 622 dependency clusters**, the largest cell in the
+lake. **Declared cells:** 12 (four entry moments x three targets). **Declared floors:**
+30 episodes, 5 symbols, 5 entry sessions, counted on `dependency_cluster_id`.
+**Declared window:** the first 20 trading sessions after the packet landed, fixed at
+registration.
+
+**ONLY THE ENTRY MOMENT VARIES.** The stop is `current_anchor:1` in every cell, and so
+are the time stop, the exit machine and the checkpoints. A grid that also varied the
+stop could not answer the question it declared - a winning cell might have won on the
+stop, and nothing in the row would say which.
+
+**The control is the code it challenges, not a copy of it.** `m5_first_close`
+delegates to the existing `simulate_m5_close_opportunity`; the three challengers use
+the same function through one new optional `entry_selector`. Parity is therefore a
+property of the code. The test pins it anyway, because "by construction" holds only
+until someone edits one of the two paths.
+
+**The golden fixture pins code that never heard of P8.**
+`build_setup_entry_timing_fixture.py` imports `outcomes.py` as `main` has it, through
+`git show` into a temp package, and freezes the three rank-1 rows from THAT. The
+packet asked for a fixture before the simulator; what actually needed protecting was
+the arithmetic that already ships, since P8 adds a parameter to the function every
+published `m5close_*` row came from.
+
+**Each entry is defined by what it refuses.** Acceptance is a completed M15 CLOSE
+beyond the trigger, never a wick. A retest TAGS the level and still closes holding it.
+A controlled pullback needs the EMAs in trend order, an extreme reaching the band and
+a close still beyond it - a bar that closes THROUGH the band is a break. Eligibility
+is STRICTLY after the trigger: a derived bar ending at that instant is the signal bar,
+and entering on it is entering on the information that made the setup. Unmeasurable -
+fewer than 21 completed M30 bars - produces NO ROW.
+
+**THE FAILURE MODE IS NAMED IN THE LEDGER, BEFORE ANY NUMBER EXISTS.** A waiting entry
+can look better purely because it SKIPS the episodes that went straight down: no
+confirmation printed, no row written, and the loss is missing from the average rather
+than counted. **The control's rows-per-cluster is the denominator to read first.** The
+second named failure is the three challengers agreeing so strongly that they are one
+look, not three.
+
+**Measured and reported.** The packet justified the family partly as "the trader's
+most-claimed setup (22 of 61 like claims)". That is right for the SETUP and wrong for
+the side: the 22 split **11 LONG / 11 SHORT**, and `avwap_breakout` LONG carries **15**.
+It is still the right first grid - it has the deepest evidence by a wide margin - but
+"most-claimed" is not the reason for the LONG leg.
+
+**Deliberately NOT built:** the conditioning axis. The packet permits one
+ATR-normalised three-bucket axis "if the question needs one"; nothing yet says it
+does, and adding it before the unconditioned answer exists is three more looks against
+the same k.
+
+**Verification.** `pytest tests/ -q` **5800 passed**, the only failures being the 32
+`ai_jobs` tests that stand down while the nightly holds the machine-local writer lock ·
+`ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix: 17 of 18.
 
 ### 2026-09-02 - The integration that unblocked P8: three branches onto `main`
 

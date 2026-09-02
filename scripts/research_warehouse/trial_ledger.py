@@ -50,9 +50,14 @@ LEDGER_FILENAME = "trial_ledger.jsonl"
 DIAGNOSTICS_DIRNAME = "_diagnostics"
 
 STATUS_REGISTERED = "registered"
+#: Declared, and its window is open. Distinct from `registered` on purpose (P8):
+#: `registered` says the question was written down, `collecting` says the clock
+#: is running, and only a trial whose declared window has CLOSED may be read for
+#: a verdict.
+STATUS_COLLECTING = "collecting"
 STATUS_ABANDONED = "abandoned"
 STATUS_CONCLUDED = "concluded"
-STATUSES = (STATUS_REGISTERED, STATUS_ABANDONED, STATUS_CONCLUDED)
+STATUSES = (STATUS_REGISTERED, STATUS_COLLECTING, STATUS_ABANDONED, STATUS_CONCLUDED)
 
 #: The grids that already existed when the ledger was written, with the real
 #: authorization pointer for each. Backfilled rather than started from zero: sec
@@ -193,6 +198,70 @@ BACKFILL_TRIALS: tuple[Mapping[str, Any], ...] = (
         "status": STATUS_REGISTERED,
         "outcome": "",
         "registered_by": "P7 backfill (grid predates the ledger)",
+    },
+    {
+        "trial_id": "setup_entry_timing_avwape_first_dev_long_v1",
+        "schema": SCHEMA,
+        # The paste date, which IS this grid's authorization pointer. Not
+        # backfill: this is the one row whose declaration really was made on the
+        # day it is stamped with.
+        "registered_at": "2026-09-02T00:00:00+00:00",
+        "family": "AVWAPE_TO_FIRST_DEV",
+        "question": (
+            "For a D1 AVWAPE-to-first-dev LONG occurrence, does an entry that WAITS "
+            "for confirmation - an M15 acceptance close, an M5 retest of the trigger "
+            "level, or an M30 EMA15/21 controlled pullback - earn more net R per "
+            "episode than entering at the first completed M5 close of the next "
+            "session, under one structural stop?"
+        ),
+        "failure_mode": (
+            "A waiting entry looks better only because it SKIPS the episodes that "
+            "went straight down - the confirmation never printed, so no row exists "
+            "and the loss is missing from the average rather than counted. The "
+            "control's row count per cluster is therefore the denominator to read "
+            "first, and a challenger with materially fewer rows is reporting "
+            "survivorship, not edge. Second failure: the three challengers agree "
+            "with each other so strongly that they are one look and not three."
+        ),
+        "declared_cells": {
+            "entry": [
+                "m5_first_close (control)",
+                "m15_acceptance_close",
+                "m5_retest_trigger",
+                "m30_ema15_21_pullback",
+            ],
+            "target_r": [1.0, 2.0, 3.0],
+        },
+        "declared_cell_count": 12,
+        "recipe_id_prefix": "setupentry_",
+        "declared_floors": {
+            "min_episodes_per_cell": 30,
+            "min_symbols": 5,
+            "min_entry_sessions": 5,
+            "counted_on": "dependency_cluster_id",
+            "note": (
+                "`evidence_stats`' contract, counted on the EPISODE and not the row: "
+                "twelve readings of one occurrence are twelve views of one trade."
+            ),
+        },
+        "declared_window": {
+            "kind": "fixed_forward_sessions",
+            "sessions": 20,
+            "opens_at": "the first overnight run after 2026-09-02",
+            "note": (
+                "Fixed at REGISTRATION. No cell is read for a verdict before the "
+                "window closes - the point of declaring a window is that it cannot be "
+                "shortened once a cell starts looking good."
+            ),
+        },
+        "authorization": (
+            "trader packet pasted 2026-09-02 (Phase 0.13 P8); recorded in plan.md as "
+            "the Phase 6.1 addendum"
+        ),
+        "analysis_unit": "opportunity",
+        "status": STATUS_COLLECTING,
+        "outcome": "",
+        "registered_by": "P8 registration (written before any outcome was inspected)",
     },
     {
         "trial_id": "v1_recipe_library",
@@ -359,6 +428,7 @@ __all__ = [
     "SCHEMA",
     "STATUSES",
     "STATUS_ABANDONED",
+    "STATUS_COLLECTING",
     "STATUS_CONCLUDED",
     "STATUS_REGISTERED",
     "backfill",

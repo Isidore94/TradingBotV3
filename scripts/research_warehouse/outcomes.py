@@ -119,6 +119,11 @@ class Recipe:
     htf_timeframe: str = ""
     cross_level: float | None = None
     cross_direction: str = ""  # "up" | "down"
+    #: Phase 0.13 P8, the setup entry-timing grid. Which entry moment this cell
+    #: varies; every other parameter in that grid is held fixed. Declarative for
+    #: the same reason the LRSI fields are: the recipe id and the rule that
+    #: produced a row can never drift apart.
+    entry_variant: str = ""
     note: str = ""
 
 
@@ -935,12 +940,20 @@ def simulate_m5_close_opportunity(
     as_of: datetime,
     computed_at: datetime | None = None,
     run_id: str = "",
+    entry_selector=None,
 ) -> dict | None:
     """Approved research entry: next session's first completed M5 close.
 
     M1 and NBBO are not inputs.  Structural candidates preserve the tracker's
     own close-failure count.  ATR controls use a hard stop.  The primary read
     is STOP_FIRST whenever one M5 range can contain both exits.
+
+    ``entry_selector`` (P8) replaces ONLY the choice of entry bar; it defaults
+    to None, so every existing caller and every existing row is unchanged - the
+    parity fixture pins that. It exists so the entry-timing grid can vary the
+    entry moment while sharing this exit machine, this stop model and these
+    checkpoints. A second copy of the loop below would eventually disagree with
+    this one, and the disagreement would read as a finding about entries.
     """
     stamp = computed_at or utc_now()
     cutoff = as_of if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
@@ -963,7 +976,10 @@ def simulate_m5_close_opportunity(
         ):
             ordered.append(row)
     ordered.sort(key=lambda row: row["interval_start"])
-    entry_bar, entry_session = _entry_bar_after_d1_close(occurrence, ordered)
+    if entry_selector is None:
+        entry_bar, entry_session = _entry_bar_after_d1_close(occurrence, ordered)
+    else:
+        entry_bar, entry_session = entry_selector(occurrence, ordered, as_of=cutoff)
     if entry_bar is None or entry_session is None:
         return None
     entry_index = ordered.index(entry_bar)
@@ -1122,6 +1138,366 @@ def simulate_m5_close_opportunity(
             if len(closes) >= sessions else None
         )
     return row
+
+
+# ---------------------------------------------------------------------------
+# Phase 0.13 P8: the first setup-parameter grid. SHADOW ONLY.
+#
+# **Authorization.** Trader packet pasted 2026-09-02, recorded in plan.md as the
+# Phase 6.1 addendum. Registered in the trial ledger BEFORE any outcome was
+# inspected (packet P7's `research_warehouse/trial_ledger.py`), which is what
+# makes `n_variants_examined` a number rather than a story told afterwards.
+#
+# **The declared family is one cell, not a survey.** `AVWAPE_TO_FIRST_DEV`,
+# LONG - the registry's `avwape_to_first_dev@1` (P7). It is the largest cell in
+# the lake, 840 occurrences over 622 dependency clusters, and the trader's
+# most-claimed setup. MEASURED AND WORTH SAYING: those 22 like-claims split 11
+# LONG / 11 SHORT, and `avwap_breakout` LONG carries 15, so this is the
+# most-claimed SETUP rather than the most-claimed long. The declared family is
+# still the right first grid - it is the deepest evidence - but "most-claimed"
+# is not the reason for the LONG leg specifically.
+#
+# **The declared question.** For a D1 AVWAPE-to-first-dev long occurrence, does
+# an entry that WAITS for confirmation earn more net R per episode than entering
+# at the first completed M5 close of the next session, under one structural stop?
+#
+# **Exactly one factor varies.** Twelve cells: four entry moments x three
+# targets. The stop is the same structural selector in every cell
+# (`current_anchor:1` - the family is DEFINED by the current earnings anchor's
+# bands, so the anchor's nearest protective level is its structural stop), the
+# exit machine is the same, and the time stop is the same. A grid that varied
+# the stop as well could not answer the question it declared, because a cell
+# that won might have won on the stop.
+#
+# **The controls are not a separate implementation.** `m5_first_close` runs the
+# EXISTING `simulate_m5_close_opportunity` with the existing rank-1 selector, so
+# its rows reproduce the `m5close_current_anchor1_*` rows for the same
+# occurrences by CONSTRUCTION rather than by coincidence. A parity test pins it.
+# The other three vary the entry bar through one optional selector on that same
+# function - one exit machine, one stop model, one set of checkpoints. Two
+# copies of an exit loop would eventually disagree, and the disagreement would
+# read as a finding about entries.
+#
+# **Every recipe carries `is_diagnostic=True`** and the twelve are correlated
+# diagnostics of ONE episode: twelve readings of one occurrence are twelve views
+# of one trade, never twelve samples. The floors count `dependency_cluster_id`.
+#
+# **Nothing here reaches a detector, score, alert, Focus list or review queue**,
+# and no family is registered in `outcome_semantics` (BD-80's rule): these are
+# `outcome_path` rows keyed by `recipe_id` and they never acquire a claim kind.
+SETUP_ENTRY_TIMING_FAMILY = "AVWAPE_TO_FIRST_DEV"
+SETUP_ENTRY_TIMING_SIDE = "LONG"
+
+#: The registry key (P7) for the declared family, carried so a reader never has
+#: to re-derive which setup this grid is about.
+SETUP_ENTRY_TIMING_SETUP_ID = "avwape_to_first_dev@1"
+
+#: The one structural stop every cell shares.
+SETUP_ENTRY_TIMING_STOP_SELECTOR = "current_anchor:1"
+
+#: The four entry moments. `m5_first_close` is the CONTROL and is listed first
+#: so it can never be read as one challenger among four.
+SETUP_ENTRY_TIMING_VARIANTS = (
+    "m5_first_close",
+    "m15_acceptance_close",
+    "m5_retest_trigger",
+    "m30_ema15_21_pullback",
+)
+SETUP_ENTRY_TIMING_CONTROL_VARIANT = "m5_first_close"
+
+#: The same three targets the M5-close grid uses, so a cell here is directly
+#: comparable with the cell it is challenging.
+SETUP_ENTRY_TIMING_TARGETS_R = (1.0, 2.0, 3.0)
+
+#: How many completed derived bars an EMA pair needs before it means anything.
+#: Below this the entry is UNMEASURABLE and the recipe produces no row - never a
+#: row with an entry the rule could not actually have found.
+SETUP_ENTRY_TIMING_MIN_EMA_BARS = 21
+
+
+def _setup_entry_timing_recipes() -> tuple[Recipe, ...]:
+    """The bounded registered grid; never a free Cartesian search."""
+    entries = {
+        "m5_first_close": "next_session_first_completed_m5_close",
+        "m15_acceptance_close": "first_completed_m15_close_beyond_trigger",
+        "m5_retest_trigger": "first_completed_m5_retest_and_hold_of_trigger",
+        "m30_ema15_21_pullback": "first_completed_m30_ema15_21_touch_and_hold",
+    }
+    recipes: list[Recipe] = []
+    for variant in SETUP_ENTRY_TIMING_VARIANTS:
+        for target in SETUP_ENTRY_TIMING_TARGETS_R:
+            recipes.append(
+                Recipe(
+                    recipe_id=f"setupentry_{variant}_{target:g}r_v1",
+                    timeframe="SETUP_ENTRY_TIMING",
+                    analysis_unit=ANALYSIS_UNIT_OPPORTUNITY,
+                    entry=entries[variant],
+                    stop="tracker_current_anchor_nearest_1_close_failure",
+                    management=f"fixed_{target:g}r_target",
+                    time_stop_sessions=SWING_TIME_STOP_SESSIONS,
+                    target_r=target,
+                    stop_selector=SETUP_ENTRY_TIMING_STOP_SELECTOR,
+                    entry_variant=variant,
+                    is_control=variant == SETUP_ENTRY_TIMING_CONTROL_VARIANT,
+                    is_diagnostic=True,
+                    note=(
+                        "P8 entry-timing grid; one factor varies; correlated "
+                        "diagnostics of one episode"
+                    ),
+                )
+            )
+    return tuple(recipes)
+
+
+SETUP_ENTRY_TIMING_RECIPES = _setup_entry_timing_recipes()
+
+
+def _ema_series(values: list[float], length: int) -> list[float | None]:
+    """EMA over closes, ``None`` until the window is full.
+
+    Seeded on the simple mean of the first ``length`` values, which is the
+    conventional seed and the one that makes the first published value a real
+    average rather than the first close. `None` before that: an EMA of three
+    bars called "EMA21" is not a shorter EMA, it is a wrong one.
+    """
+    if length <= 0 or len(values) < length:
+        return [None] * len(values)
+    out: list[float | None] = [None] * (length - 1)
+    weight = 2.0 / (length + 1.0)
+    average = sum(values[:length]) / float(length)
+    out.append(average)
+    previous = average
+    for value in values[length:]:
+        previous = (value - previous) * weight + previous
+        out.append(previous)
+    return out
+
+
+def _entry_after_m15_acceptance(occurrence: dict, ordered: list[dict], *, as_of: datetime, series_cache: dict | None = None):
+    """First completed M15 close beyond the trigger level, on the trade side.
+
+    "Acceptance" is the plainest form of waiting for confirmation: a completed
+    higher-timeframe bar closing beyond the level rather than a wick through it.
+    The M15 bars are the warehouse's OWN derived bars, so the study reads the
+    same aggregation contract the lake publishes, and stubs are excluded because
+    a short bucket is not an M15 bar.
+    """
+    return _entry_from_derived(
+        occurrence,
+        ordered,
+        timeframe="M15",
+        as_of=as_of,
+        series_cache=series_cache,
+        qualifies=lambda bar, level, side, _index, _series: _beyond(
+            _number(bar.get("close")), level, side
+        ),
+    )
+
+
+def _entry_after_m5_retest(occurrence: dict, ordered: list[dict], *, as_of: datetime, series_cache: dict | None = None):
+    """First completed M5 bar that comes BACK to the trigger and closes holding it.
+
+    The other confirmation entries wait for strength; this one waits for the
+    pullback that the trader's own retest doctrine describes - the level is
+    tagged intraday and the bar still closes on the trade side. It is measured
+    from the control's entry bar onward, so a retest is always a retest of a
+    trigger the setup had already delivered.
+    """
+    level = _number(occurrence.get("entry_price_ref"))
+    if level is None:
+        return None, None
+    side = str(occurrence.get("side") or "").upper()
+    control_bar, _control_session = _entry_bar_after_d1_close(occurrence, ordered)
+    if control_bar is None:
+        return None, None
+    start_index = ordered.index(control_bar)
+    for bar in ordered[start_index:]:
+        extreme = _number(bar.get("low") if side == "LONG" else bar.get("high"))
+        close = _number(bar.get("close"))
+        if extreme is None or close is None:
+            continue
+        tagged = extreme <= level if side == "LONG" else extreme >= level
+        if tagged and _beyond(close, level, side):
+            session = xcal.session_for(bar["interval_start"])
+            if session is not None:
+                return bar, session
+    return None, None
+
+
+def _entry_after_m30_ema_pullback(occurrence: dict, ordered: list[dict], *, as_of: datetime, series_cache: dict | None = None):
+    """First completed M30 bar that touches the EMA15/21 band and closes above it.
+
+    "Controlled pullback" is spelled out rather than implied: the two EMAs must
+    be in trend order (15 above 21 for a long), the bar's extreme must reach the
+    far side of the band, and the bar must still CLOSE beyond it. A bar that
+    closes through the band is not a controlled pullback, it is a break.
+
+    Unmeasurable below `SETUP_ENTRY_TIMING_MIN_EMA_BARS` completed M30 bars -
+    and unmeasurable means no row.
+    """
+
+    def qualifies(bar, level, side, index, series):
+        closes = [_number(row.get("close")) for row in series]
+        if any(value is None for value in closes):
+            return False
+        fast = _ema_series([float(v) for v in closes], 15)
+        slow = _ema_series([float(v) for v in closes], 21)
+        ema_fast, ema_slow = fast[index], slow[index]
+        if ema_fast is None or ema_slow is None:
+            return False
+        if side == "LONG" and not ema_fast > ema_slow:
+            return False
+        if side == "SHORT" and not ema_fast < ema_slow:
+            return False
+        band = max(ema_fast, ema_slow) if side == "LONG" else min(ema_fast, ema_slow)
+        extreme = _number(bar.get("low") if side == "LONG" else bar.get("high"))
+        close = _number(bar.get("close"))
+        if extreme is None or close is None:
+            return False
+        touched = extreme <= band if side == "LONG" else extreme >= band
+        return touched and _beyond(close, band, side)
+
+    return _entry_from_derived(
+        occurrence,
+        ordered,
+        timeframe="M30",
+        as_of=as_of,
+        qualifies=qualifies,
+        min_bars=SETUP_ENTRY_TIMING_MIN_EMA_BARS,
+        series_cache=series_cache,
+    )
+
+
+def _beyond(value, level, side: str) -> bool:
+    """Strictly on the trade side of a level. `None` is never "beyond"."""
+    if value is None or level is None:
+        return False
+    return float(value) > float(level) if side == "LONG" else float(value) < float(level)
+
+
+def _entry_from_derived(
+    occurrence: dict,
+    ordered: list[dict],
+    *,
+    timeframe: str,
+    as_of: datetime,
+    qualifies,
+    min_bars: int = 1,
+    series_cache: dict | None = None,
+):
+    """Find a qualifying DERIVED bar, then hand back the M5 bar it ends on.
+
+    The entry moment is a higher-timeframe close, but the exit machine runs on
+    M5 - so the derived bar is only used to DECIDE, and the row is anchored to
+    the M5 bar whose interval ends at the same instant. That keeps one exit
+    machine for all four entry variants; two would eventually disagree, and the
+    disagreement would read as a finding about entries.
+
+    Point-in-time throughout: only bars completing at or after the occurrence's
+    own trigger are eligible, and the derived series is cut at the cutoff.
+    """
+    level = _number(occurrence.get("entry_price_ref"))
+    side = str(occurrence.get("side") or "").upper()
+    trigger = occurrence.get("trigger_at")
+    if not isinstance(trigger, datetime):
+        return None, None
+    eligible_from = trigger if trigger.tzinfo else trigger.replace(tzinfo=timezone.utc)
+    # MEMOISED PER OCCURRENCE (R1), the way `simulate_htf_lrsi_entry` does it.
+    # BD-88 said the derived series were memoised and they were not: this grid
+    # runs three targets per entry variant, so one occurrence rebuilt the same
+    # M15 series three times and the same M30 series three more. Measured at
+    # 2.06 s per occurrence, ~0.8 s of it rebuilding series already built.
+    #
+    # The cache is handed in by the caller, keyed by symbol/timeframe/cutoff and
+    # dropped with the occurrence - never a module-level cache that could serve
+    # one occurrence's bars to another.
+    cache_key = (str(occurrence.get("symbol") or ""), timeframe, as_of)
+    if series_cache is not None and cache_key in series_cache:
+        series = series_cache[cache_key]
+    else:
+        series = [
+            row for row in _htf_series(ordered, timeframe, as_of=as_of)
+            if row.get("interval_end") <= as_of
+        ]
+        if series_cache is not None:
+            series_cache[cache_key] = series
+    if len(series) < max(1, int(min_bars)):
+        return None, None
+    by_end = {row.get("interval_end"): row for row in ordered}
+    for index, bar in enumerate(series):
+        end = bar.get("interval_end")
+        # STRICTLY after, exactly as `_entry_bar_after_d1_close` requires. A
+        # derived bar that ENDS at the trigger instant is the signal bar itself,
+        # and entering on it would be entering on the information that created
+        # the setup - which is the look-ahead this whole module exists to avoid.
+        if not isinstance(end, datetime) or end <= eligible_from:
+            continue
+        if not qualifies(bar, level, side, index, series):
+            continue
+        m5_bar = by_end.get(end)
+        if m5_bar is None:
+            # The derived bar's close does not line up with a completed M5 bar
+            # this occurrence holds. No row rather than an entry on a bar the
+            # study cannot point at.
+            continue
+        session = xcal.session_for(m5_bar["interval_start"])
+        if session is not None:
+            return m5_bar, session
+    return None, None
+
+
+SETUP_ENTRY_TIMING_SELECTORS = {
+    "m15_acceptance_close": _entry_after_m15_acceptance,
+    "m5_retest_trigger": _entry_after_m5_retest,
+    "m30_ema15_21_pullback": _entry_after_m30_ema_pullback,
+}
+
+
+def simulate_setup_entry_timing(
+    occurrence: dict,
+    m5_bars,
+    recipe: Recipe,
+    *,
+    as_of: datetime,
+    computed_at: datetime | None = None,
+    run_id: str = "",
+    series_cache: dict | None = None,
+) -> dict | None:
+    """Phase 0.13 P8: one setup, one stop, four entry moments. SHADOW ONLY.
+
+    Restricted to the DECLARED family and side. A grid declared for
+    `AVWAPE_TO_FIRST_DEV` LONG that quietly graded every family would be a
+    different experiment from the one registered in the trial ledger, and the
+    ledger's cell count would stop describing what was actually examined.
+
+    The control delegates to `simulate_m5_close_opportunity` unchanged; the
+    three challengers delegate to the SAME function with an entry selector. One
+    exit machine, one stop model, one set of checkpoints - only the entry moment
+    differs, which is the only way the answer can be about entries.
+    """
+    if str(occurrence.get("canonical_setup_id") or "") != SETUP_ENTRY_TIMING_FAMILY:
+        return None
+    if str(occurrence.get("side") or "").upper() != SETUP_ENTRY_TIMING_SIDE:
+        return None
+    chosen = SETUP_ENTRY_TIMING_SELECTORS.get(recipe.entry_variant)
+    selector = (
+        None
+        if chosen is None
+        else (
+            lambda occ, bars, *, as_of: chosen(
+                occ, bars, as_of=as_of, series_cache=series_cache
+            )
+        )
+    )
+    return simulate_m5_close_opportunity(
+        occurrence,
+        m5_bars,
+        recipe,
+        as_of=as_of,
+        computed_at=computed_at,
+        run_id=run_id,
+        entry_selector=selector,
+    )
 
 
 def _htf_series(
@@ -1782,6 +2158,22 @@ def build_outcomes(
                     run_id=run_id,
                     series_cache=htf_series_cache,
                 )
+            elif recipe.timeframe == "SETUP_ENTRY_TIMING":
+                # P8. Restricted to the declared family and side INSIDE the
+                # simulator, so the restriction travels with the recipe rather
+                # than depending on every caller passing the right occurrences.
+                computed = simulate_setup_entry_timing(
+                    occurrence,
+                    (m5_by_symbol or {}).get(symbol) or [],
+                    recipe,
+                    as_of=cutoff,
+                    computed_at=stamp,
+                    run_id=run_id,
+                    # The SAME per-occurrence cache the HTF study uses, so the
+                    # twelve cells of one occurrence build each derived series
+                    # once (R1).
+                    series_cache=htf_series_cache,
+                )
             elif recipe.timeframe == "M5_OPPORTUNITY":
                 computed = simulate_m5_close_opportunity(
                     occurrence,
@@ -1869,6 +2261,13 @@ __all__ = [
     "net_r",
     "outcome_key",
     "simulate_intraday_bounce",
+    "SETUP_ENTRY_TIMING_RECIPES",
+    "SETUP_ENTRY_TIMING_FAMILY",
+    "SETUP_ENTRY_TIMING_SIDE",
+    "SETUP_ENTRY_TIMING_SETUP_ID",
+    "SETUP_ENTRY_TIMING_VARIANTS",
+    "SETUP_ENTRY_TIMING_TARGETS_R",
+    "simulate_setup_entry_timing",
     "simulate_m5_close_opportunity",
     "simulate_swing",
 ]

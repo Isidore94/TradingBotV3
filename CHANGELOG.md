@@ -670,6 +670,51 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-02 - Phase 0.13 packet P8: the first setup-parameter grid
+
+**Branch `claude/p8-param-grid`, off `main` AFTER the morning's integration** - the
+packet declared Phase 0.12, P3 and P7 as preconditions and refused to be built without
+them. Live gate #37 owed. Shadow only.
+
+**One setup, one stop, four entry moments.** `AVWAPE_TO_FIRST_DEV` LONG (the
+registry's `avwape_to_first_dev@1`), 840 occurrences over 622 clusters. Twelve cells:
+`m5_first_close` (control), `m15_acceptance_close`, `m5_retest_trigger`,
+`m30_ema15_21_pullback`, each at 1R / 2R / 3R, with the stop fixed at
+`current_anchor:1` and the exit machine, time stop and checkpoints identical
+throughout. **A grid that also varied the stop could not answer the question it
+declared**, because a winning cell might have won on the stop.
+
+**The control is the code it challenges.** `m5_first_close` delegates to the existing
+`simulate_m5_close_opportunity` with the existing rank-1 selector, so its rows
+reproduce the `m5close_current_anchor1_*` rows by construction; the three challengers
+call the same function through one new optional `entry_selector`. **The golden fixture
+was pinned from `outcomes.py` as `main` had it** - imported through `git show` into a
+temp package - so it pins code that had never heard of P8.
+
+**Each confirmation entry is defined by what it refuses**: a completed M15 CLOSE
+beyond the trigger (not a wick), an M5 bar that TAGS the level and still closes
+holding it, an M30 bar with the EMAs in trend order whose extreme reaches the band and
+whose close is still beyond it. All read the warehouse's own derived bars, stubs
+excluded, eligible only STRICTLY after the trigger - a derived bar ending at the
+trigger instant is the signal bar. Unmeasurable produces NO row.
+
+**The trial-ledger row was written before any outcome was inspected**, with status
+`collecting` (new: the declared 20-session window's clock is running) and with the
+failure mode named in advance - **a waiting entry can look better purely because it
+SKIPS the episodes that went straight down**, so the control's rows-per-cluster is the
+denominator to read first.
+
+**Measured and reported:** the packet's "22 of 61 like claims" is right for the setup
+but splits **11 LONG / 11 SHORT**, and `avwap_breakout` LONG carries 15. This is the
+most-claimed SETUP, not the most-claimed long - still the right first grid, since it
+has the deepest evidence, but not for that reason.
+
+Recorded as **BD-88** and **BD-89**. **Verification.** `pytest tests/ -q` **5800
+passed**, with 32 `ai_jobs` tests standing down while the desk's nightly held the
+machine-local writer lock (the same tests fail on a pristine `main` - checked) ·
+`ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix: 17 of
+the 18 new tests fail with `scripts/` and the fixture stashed.
+
 ### 2026-09-02 - Three branches onto `main`, so packet P8 has ground to stand on
 
 **Trader instruction: "yes do option 1".** P8 declared its own precondition - "Requires

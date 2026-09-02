@@ -262,7 +262,13 @@ def test_every_backfilled_trial_names_its_authorization():
         assert row["declared_cells"]
         assert row["declared_floors"]
         assert row["declared_window"]
-        assert row["status"] == trial_ledger.STATUS_REGISTERED
+        # `registered` or `collecting` - P8 added the second, which says the
+        # declared window's clock is running. What must NEVER be true at
+        # declaration time is a status that implies the numbers were seen.
+        assert row["status"] in {
+            trial_ledger.STATUS_REGISTERED,
+            trial_ledger.STATUS_COLLECTING,
+        }, row["trial_id"]
         # Nothing may be declared with an outcome already in it.
         assert row["outcome"] == ""
 
@@ -407,18 +413,34 @@ def test_the_fact_packs_role_map_has_one_owner_now():
     assert setup_research.family_role("SOMETHING_NEW") == setup_research.ROLE_TRADE
 
 
-def test_the_trial_ledger_still_has_no_production_importer():
-    """Unchanged by the merge, and the more load-bearing half of the old rule."""
+def test_the_trial_ledger_has_exactly_one_production_writer():
+    """R1: it gained one, on purpose - the warehouse build.
+
+    Gate 37 asks for a ledger row after one overnight run and nothing in
+    production wrote one, so the declarations that are supposed to predate every
+    outcome would have been written after them, by hand, whenever somebody
+    remembered. `cli.run_build` registers them beside `record_firing`, in the
+    same never-costs-the-build shape, and `register` refuses a trial_id the
+    ledger already carries so every firing after the first writes nothing.
+
+    Still an explicit list rather than "no importer": a SECOND writer would be a
+    real decision, because a ledger written from two places can disagree about
+    when a declaration was made.
+    """
     import subprocess
 
+    # IMPORT-shaped, not any mention: P8's authorization block in `outcomes.py`
+    # names the trial ledger in prose, which is exactly what a registered grid
+    # should do and is not a dependency.
     result = subprocess.run(
-        ["git", "grep", "-l", "trial_ledger", "--", "scripts/"],
+        ["git", "grep", "-lE", r"^\s*(from|import)\s+.*trial_ledger", "--", "scripts/"],
         cwd=ROOT,
         capture_output=True,
         text=True,
     )
     importers = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-    assert importers <= {"scripts/research_warehouse/trial_ledger.py"}, importers
+    # The module does not import itself, so the one name here is the one writer.
+    assert importers == {"scripts/research_warehouse/cli.py"}, importers
 
 
 def test_every_trial_row_says_when_it_was_registered(tmp_path):
