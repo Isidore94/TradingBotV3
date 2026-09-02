@@ -22,6 +22,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
 | Active roadmap items | **Phase 0.12 Focus de-clutter (2026-09-01, A1-A4 — BUILT on `claude/focus-declutter-lrsi-htf`; live gate #27 owed)**; **Phase 0.12 higher-timeframe LRSI research (2026-09-01, B1-B4 — BUILT, shadow only; gate #28 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
 | Last verified baseline | `pytest tests/ -q` **5761 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/focus-declutter-lrsi-htf`, MEASURED after the review-round fix - an earlier full run of the same tree minus the review test read 5760 and ended in the known intermittent `0xC0000409` Qt-teardown crash after the summary printed; the builder's pre-written 5763 was never a measurement and is corrected here) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · frozen exe NOT rebuilt this packet and not required: no packaging trigger was hit (no new dependency, no new non-`.py` runtime asset, no new top-level `scripts/` package - `armed_alert_expiry.py` is a module inside the already-collected root, and the Focus fade sidecars are DATA under the home folder, not bundled assets). Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Working branch | **`claude/p3-fact-pack-truth`**, off `main` at `66a0c31` - Phase 0.13 packet P3 (the fact pack tells the truth): five shadow-only changes to the nightly research pack and the warehouse readout, recorded as BD-81 … BD-85. Also open and unmerged, all off `main` at the same commit: `claude/p2-show-me` (P2, gate #31), `claude/p1-grade-what-you-said` (P1, gate #30), `claude/p0-apply-decisions` (P0, gate #29) and `claude/focus-declutter-lrsi-htf` (Phase 0.12 A+B, gates #27/#28 - which owns BD-78/79, hence P3 starting at BD-80) |
+| Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
+| Active roadmap items | **Phase 0.13 packet P3 (2026-09-01 - BUILT on `claude/p3-fact-pack-truth`; live gate #32 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5741 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p3-fact-pack-truth`, MEASURED with pytest's own exit code captured) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · spec-drift **17 passed** · frozen exe NOT rebuilt and not required: `research_warehouse` is an existing collected package and there is no new dependency and no new non-`.py` asset. Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **DONE 2026-08-31 21:51, trader-authorized.** The checkout sits on `main` and the desk was stopped (pid 9832, the pid its own `heartbeat.json` named; its launcher parent 3476 had already exited) and relaunched through `trading_desk.cmd` - the production launcher, unchanged. New pids: **23588** (the desk) under trampoline **23796**. Verified UP three ways rather than assumed: the process outlived 60 s, a second launch printed "another TradingBotV3 desk is already running" and exited 0, and `heartbeat.json` re-stamped at 21:52:40 naming pid 23588 (it had read 21:50:40 / pid 9832 before the kill). Everything merged tonight is what is now running, and the stall watchdog is ON - this session's `ui_stalls.jsonl` is the AFTER side of gates 24-26 |
 
@@ -34,6 +38,7 @@ the dated entry named beside it.
 |---|---|---|
 | 28 | **HTF LRSI study (Phase 0.12 B)** — one overnight `setup_research` run that publishes `htf_lrsi_*` outcome rows inside the existing 20-minute reserve, with `bar_derived` rows under `timeframe=H2` present and no stub in the oscillator's input; then a first read of whether any cell clears the evidence floor | 2026-09-01 Phase 0.12 entry |
 | 27 | **Focus de-clutter (Phase 0.12 A)** — one DESK session: the D1 Focus feed carries pullbacks only, an armed extension watch still fires from the Armed board, a watch past its window leaves the board with a row behind it, and a faded pick can be restored (fresh clock) and discarded from the chart | 2026-09-01 Phase 0.12 entry |
+| 32 | **Fact-pack truth (Phase 0.13 P3)** — one overnight `setup_research` run whose Markdown **opens with the eligible block**, shows **`n_episodes` beside `n`**, **names the excluded families** (GENERAL, FAVORITE_ZONE_WATCH) and prints the **bucket-coverage line** with a real count rather than UNKNOWN (which needs at least one warehouse build after this lands); plus the trader confirming the Research readout panel lists **more than two families** on 'All families' | 2026-09-01 Phase 0.13 P3 entry |
 | ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-08-31** at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
@@ -146,6 +151,77 @@ explicit number, and the reading that keeps the nightly inside its reserve -
 with one 2.0R target, the middle of `M5_CLOSE_TARGETS_R` and the same target the
 fixed-R control uses, so the two compare directly. Widening to the full set is
 the single constant `HTF_LRSI_TARGETS_R`.
+### 2026-09-01 - Phase 0.13 packet P3: the fact pack tells the truth
+
+**Branch `claude/p3-fact-pack-truth`, off `main` at `66a0c31`.** Five changes to the
+nightly `setup_research` pack and the warehouse readout, all shadow-only. Live gate 32
+owed. No frozen rebuild. Recorded as **BD-81 … BD-85**; 78/79 belong to the unmerged
+Phase 0.12 branch, and the BD log says so.
+
+**The case.** The 2026-08-31 pack had 9 eligible cells - every one
+`AVWAPE_TO_FIRST_DEV`/LONG against an ATR stop control, every one NEGATIVE - in one
+table sorted by trimmed mean, so rows 10 onward were n=1 cells at +2.9R. The 80-row cap
+dropped 508 more without saying which kind. GENERAL (735 occurrences) and
+FAVORITE_ZONE_WATCH (486) were pooled as trade setups, which Appendix C forbids in
+those words. And `n` was reported as if outcome rows were samples.
+
+**1. Episodes beside rows (BD-81). THE MEASUREMENT CHANGED THE CONCLUSION.** Every cell
+carries `n_episodes`; the floor still counts rows, deliberately. But the assumption
+behind the follow-up was wrong. On the live lake: **9,372 outcome rows over 599
+occurrences and 287 clusters** - and yet **`n` and `n_episodes` were EQUAL in all 756
+cells**. One row per occurrence per recipe, so per-cell episode counting is not where
+the double-counting lives. It is ACROSS cells: 15.6 recipe rows per occurrence, and
+1,804 of 3,436 clusters carry more than one family. Nine ATR variants of one family are
+nine readings of the same 33 moves. So the pack publishes `evidence_shape` too, and
+BD-81 records that the follow-up must be a CROSS-CELL floor - not the per-cell swap,
+which on today's data would change nothing at all.
+
+**2. The eligible block leads (BD-82).** Eligible whole and sorted as before, then a
+bounded ineligible block sorted by n DESC then trimmed mean, so what rides along is the
+thickest evidence below the floor and never the luckiest single trade. Per-block drop
+counts. A pack published before the split still renders as published - a pack is never
+edited and a new reading is a superseding sibling.
+
+**3. Non-trade roles excluded and named (BD-83).** An explicit map; everything unnamed
+is TRADE, so a family added tomorrow is measured rather than silently dropped. Their
+counts still travel (today: 1,182 and 804 outcome rows), because absence is a
+first-class fact.
+
+**4. Coverage published (BD-84).** New `research_warehouse/outcome_coverage.py`,
+append-only, one line per outcome firing naming its symbol bucket. The pack reports
+buckets covered in the last 32 firings, families with zero outcome rows, and the first
+M5 session in the lake (**2026-08**, 2 months). No history reads UNKNOWN, never "0 of
+32" - a zero there is a measured claim nobody measured.
+
+**DEVIATION, REPORTED NOT FORCED.** The packet asked for the sidecar "beside the packs"
+in the AI store. That would make `research_warehouse.cli` - the data layer - import
+`ai_jobs.store`, inverting the one-way dependency the tree keeps. It lives under the
+store root instead, beside the lake it describes; the reader already imports the
+package, so the pack still gets the number. `_first_m5_session` reads partition NAMES
+from the manifest, never bar rows (BD-66/BD-69).
+
+**5. The readout is not hard-filtered (BD-85).** `slice_readout(setups=...)` - omitted
+is the pinned slice and byte-identical for every existing caller, None is every family.
+`SLICE_SETUPS` is NOT widened: `cli._run_outcomes` uses it to pick which occurrences
+get the legacy slice recipe, so widening it would change what the warehouse SIMULATES.
+The panel gains a family combo and `n_symbols`, `n_sessions`, `n_truncated`,
+`as_observed_only` - all computed by the query and dropped by the panel. Selecting a
+family reads nothing; Refresh is still the only thing that touches the share.
+
+**Owed, not built:** the optional `cell_history` block over the three sibling packs on
+disk.
+
+**Verified against the live lake, not only fixtures.** A pack built now opens with 29
+eligible cells, shows `n_episodes` on every row, names both excluded families with
+their counts, prints the evidence-shape line and states bucket coverage as UNKNOWN
+(correct - the record starts at the first build after this lands, which is what gate 32
+checks).
+
+**Verification.** `pytest tests/ -q` **5741 passed, 72 subtests, process exit 0** ·
+`ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · spec-drift **17**.
+Fail-before-fix: with `scripts/` stashed including the untracked module, 21 of the 26
+new tests fail; with tracked changes only, 16. The five that pass both ways guard
+against the wrong fix.
 
 ### 2026-08-31 (late evening) - Desk snappiness packet 3: the last of the three
 

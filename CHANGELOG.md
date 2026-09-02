@@ -394,6 +394,27 @@ which is evidence and must not be loaded as context.
   reads, every job invoker, live tee wiring, and off-GUI-thread spool I/O.
 - Phases 0–8 are code-complete on the testing-week branch. The broker check,
   confirmation items, and 20-session pilot remain open.
+- **The nightly fact pack states its own evidence shape** (2026-09-01, BD-81…85).
+  Every cell reports `n_episodes` beside `n`, and the pack reports `evidence_shape` -
+  rows, occurrences, episodes and rows-per-occurrence - because the correlation the ERD
+  warns about is ACROSS cells, not inside one (measured: `n` == `n_episodes` in all 756
+  cells, while 9,372 rows rest on 599 occurrences and 287 clusters). **The eligibility
+  floor still counts ROWS**; moving it is a cross-cell change and its own packet.
+- **The pack leads with what cleared the floor.** Two blocks - eligible whole, then a
+  bounded ineligible block ordered by n DESC - with drop counts per block, so a
+  single-trade cell can never sit above the answer.
+- **Non-trade families are excluded and reported.** `GENERAL` = FALLBACK and
+  `FAVORITE_ZONE_WATCH` = WATCH_STATE per Appendix C; anything unnamed is a TRADE setup.
+  Their counts still publish, because absence is a first-class fact. Packet P7's setup
+  registry replaces the map.
+- **Outcome bucket coverage is recorded per firing**
+  (`research_warehouse/outcome_coverage.py`, append-only under the store root), so a
+  pack can say "not measured yet" rather than implying "measured and flat". No history
+  reads UNKNOWN, never zero.
+- **`slice_readout` can read every family** (`setups=None`) while `SLICE_SETUPS` stays
+  the pinned Phase-6 slice - it also decides what the warehouse SIMULATES. The Research
+  readout panel gained a family filter and the `n_symbols` / `n_sessions` /
+  `n_truncated` / `as_observed_only` columns the query always computed.
 
 ### Testing, packaging, and platform
 
@@ -453,6 +474,72 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-01 - Phase 0.13 packet P3: the fact pack tells the truth
+
+**Branch `claude/p3-fact-pack-truth`, off `main` at `66a0c31`.** Five changes to the
+nightly `setup_research` pack and the warehouse readout. Shadow-only throughout:
+nothing here reaches a detector, score, alert, Focus list or watchlist. Live gate #32
+owed. Recorded as **BD-81 … BD-85** in `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md`
+(78/79 are taken by the unmerged Phase 0.12 branch).
+
+**The case.** The 2026-08-31 pack had 9 eligible cells - every one
+`AVWAPE_TO_FIRST_DEV`/LONG against an ATR stop control, every one NEGATIVE - printed in
+a single table sorted by trimmed mean, so rows 10 onward were n=1 cells reading +2.9R.
+The 80-row cap then dropped 508 more without saying which kind. It pooled GENERAL (735
+occurrences) and FAVORITE_ZONE_WATCH (486) as trade setups, which Appendix C forbids in
+those words. And it reported `n` as if outcome rows were samples.
+
+**1. Episodes beside rows (BD-81), and the measurement changed the conclusion.** Every
+cell now carries `n_episodes`. The floor still counts ROWS on purpose - moving it
+changes what the model may narrate and is its own packet. But the assumption behind
+that follow-up was wrong: on the live lake, 9,372 outcome rows rest on 599 occurrences
+and 287 clusters, and yet **`n` and `n_episodes` were EQUAL in all 756 cells**. One row
+per occurrence per recipe, so the per-cell count is not where the double-counting is.
+The correlation is ACROSS cells - 15.6 recipe rows per occurrence, 1,804 of 3,436
+clusters carrying more than one family - so the pack now also publishes
+`evidence_shape` (rows / occurrences / episodes / rows-per-occurrence), which is the
+denominator a reader comparing cells actually needs. BD-81 records that the follow-up
+must be a cross-cell floor, not the per-cell swap first assumed.
+
+**2. The eligible block leads (BD-82).** Two blocks: eligible whole and sorted as
+before, then a bounded ineligible block sorted by n DESC then trimmed mean - the shape
+the context-cell path already used - so what rides along is the thickest evidence below
+the floor, never the luckiest single trade. Drops are counted per block. A pack
+published before the split still renders as its author published it.
+
+**3. Non-trade roles excluded and named (BD-83).** A small explicit role map -
+`GENERAL` = FALLBACK, `FAVORITE_ZONE_WATCH` = WATCH_STATE, everything else TRADE -
+keeps them out of every policy and context cell and publishes their counts, because an
+absent family with no explanation reads as one with no data. Packet P7's registry
+replaces the map.
+
+**4. Coverage is published (BD-84).** New `research_warehouse/outcome_coverage.py`:
+append-only, one line per outcome firing naming the symbol bucket it covered. The pack
+reports buckets covered in the last 32 firings, families with occurrences but zero
+outcome rows, and the first M5 session in the lake - so "not measured yet" reads
+differently from "measured and flat". No history reads UNKNOWN, never "0 of 32".
+
+**Deviation, reported not forced:** the packet asked for the sidecar "beside the packs"
+in the AI store; that would make `research_warehouse.cli` import `ai_jobs.store`,
+inverting the tree's one-way dependency. It lives under the store root instead. The
+reader already imports the package, so the pack still gets the number.
+
+**5. The readout is not hard-filtered (BD-85).** `slice_readout(setups=...)`: omitted
+means the pinned slice (every existing caller byte-identical), None means every family.
+`SLICE_SETUPS` is NOT widened - `cli._run_outcomes` uses it to choose which occurrences
+get the legacy slice recipe, so widening it would change what the warehouse SIMULATES.
+The panel gains a family combo and the four columns the query always computed and the
+panel dropped: `n_symbols`, `n_sessions`, `n_truncated`, `as_observed_only`. Choosing a
+family reads nothing; Refresh stays the only thing that touches the share.
+
+**Owed, not built:** the optional `cell_history` block over the sibling packs on disk.
+
+**Verification.** `pytest tests/ -q` **5741 passed, 72 subtests, process exit 0** ·
+`ruff` clean · smoke **7/7** · source `--selftest` **73/73** · spec-drift 17 passed. No
+frozen rebuild: `research_warehouse` is an existing collected package and there is no
+new dependency and no new non-`.py` asset.
+
 
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.

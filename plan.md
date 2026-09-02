@@ -790,6 +790,31 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+### Phase 0.13 packet P3 — The fact pack tells the truth (2026-09-01) — BUILT, live gate owed
+
+Authorized by the trader pasting the packet. Built on `claude/p3-fact-pack-truth`.
+Shadow-only: nothing reaches a detector, score, alert, Focus list or watchlist.
+Recorded as BD-81 … BD-85.
+
+1. **Episodes beside rows.** `n_episodes` on every cell; the floor still counts rows.
+   The measurement showed the per-cell count equals `n` in all 756 cells, so the pack
+   also publishes `evidence_shape` and BD-81 names the follow-up as a CROSS-CELL floor.
+2. **The eligible block leads**, with a bounded ineligible block ordered thickest-first
+   and per-block drop counts.
+3. **Non-trade families excluded and reported** by an explicit role map, until P7's
+   setup registry owns it.
+4. **Coverage published** — buckets covered, families with zero outcome rows, first M5
+   session — so "not measured yet" reads differently from "measured and flat".
+5. **`slice_readout` can read every family** without widening the pinned `SLICE_SETUPS`;
+   the readout panel gains a family filter and four already-computed columns.
+
+**Owed:** the optional `cell_history` block over the sibling packs on disk.
+
+**Live gate (#32):** one overnight `setup_research` run whose Markdown opens with the
+eligible block, shows `n_episodes` beside `n`, names the excluded families and prints
+the bucket-coverage line; and the trader confirms the readout panel lists more than two
+families.
+
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads

@@ -34,6 +34,7 @@ try:  # package import
         features,
         market_bias_context,
         occurrences,
+        outcome_coverage,
         outcomes,
         queries,
         schemas,
@@ -59,6 +60,7 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     from manifest import utc_now  # type: ignore
     from spool import seal_spool  # type: ignore
     from store import ResearchStore  # type: ignore
+    import outcome_coverage  # type: ignore
 
 LOCK_NAME = "research_build.lock"
 JOB_TYPE = "research_warehouse_build"
@@ -543,6 +545,15 @@ def run_build(
                 )
             )
             report.steps["outcomes"] = _run_outcomes(target, day, stamp, run_id)
+            # One line per firing naming the symbol bucket it covered, so a
+            # fact pack can tell "not measured yet" from "measured and flat".
+            # Never allowed to cost the build: it returns False and logs.
+            outcome_coverage.record_firing(
+                target.root,
+                report.steps["outcomes"],
+                run_id=run_id,
+                now=stamp,
+            )
             report.steps["backups"] = _run_backups(target, stamp)
             report.steps["retired"] = vars(target.collect_retired(now=stamp))
             _record_job("COMPLETED", {"run_id": run_id})

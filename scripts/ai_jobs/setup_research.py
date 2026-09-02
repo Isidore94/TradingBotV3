@@ -22,8 +22,49 @@ NARRATION_SCHEMA = "setup_stop_target_research_narration_v1"
 FACT_SOURCE_ID = "setup_research.facts"
 MIN_SYMBOLS = 5
 MIN_SESSIONS = 5
+#: Retained as the pack's overall policy-row ceiling, and now only a ceiling:
+#: the eligible block is published WHOLE (it has never approached this - the
+#: 2026-08-31 pack had 9) and the ineligible block carries its own smaller cap.
+#: A run that ever pushed the eligible block past this would be reporting a
+#: different problem, so the assertion below states it rather than truncating
+#: the answer silently.
 MAX_POLICY_ROWS = 80
 MAX_CONTEXT_ROWS = 80
+#: How many INELIGIBLE policy cells ride along under the eligible block. They
+#: are kept because "measured and thin" is a different fact from "not measured",
+#: and bounded because the 2026-08-31 pack spent 71 of its 80 rows on n=1 cells
+#: sorted to the top by trimmed mean - the reader saw +2.9R nine rows under the
+#: real answer.
+MAX_INELIGIBLE_POLICY_ROWS = 40
+
+#: Family roles, until the setup registry of packet P7 owns them.
+#:
+#: Appendix C is normative and already says what these two are: General/Untagged
+#: is a "Diagnostic fallback" that "must not become a pooled 'setup' edge", and
+#: Favorite Zone Watch is a "Watch state" that is "never counted as a triggered
+#: trade setup". The 2026-08-31 pack pooled both anyway - GENERAL over 735
+#: occurrences and FAVORITE_ZONE_WATCH over 486 - because nothing in this job
+#: knew their roles.
+#:
+#: Deliberately a SMALL EXPLICIT MAP and not a heuristic: anything not named
+#: here is a trade setup, so a family added tomorrow is measured rather than
+#: silently excluded, and excluding a real setup would need someone to type its
+#: name. **P7's registry replaces this map**; when it lands, this constant goes
+#: and the role comes from the registry row.
+ROLE_TRADE = "TRADE"
+NON_TRADE_FAMILY_ROLES = {
+    "GENERAL": "FALLBACK",
+    "FAVORITE_ZONE_WATCH": "WATCH_STATE",
+}
+NON_TRADE_ROLE_REASONS = {
+    "FALLBACK": "Appendix C: diagnostic fallback - must not become a pooled 'setup' edge.",
+    "WATCH_STATE": "Appendix C: watch state - never counted as a triggered trade setup.",
+}
+
+
+def family_role(family: str) -> str:
+    """The role this family grades under. TRADE unless explicitly named."""
+    return NON_TRADE_FAMILY_ROLES.get(str(family or "").strip().upper(), ROLE_TRADE)
 
 
 def _now(value: datetime | None = None) -> datetime:
@@ -68,7 +109,76 @@ def _load() -> tuple[list[dict], dict[str, dict], dict[str, dict[str, str]], dic
         "context_rows": len(context_rows),
         "bias_definition_id": market_bias_context.BIAS_DEFINITION_ID,
     }
+    coverage.update(_coverage_state(store, latest, occurrence_map))
     return latest, occurrence_map, contexts, coverage
+
+
+def _coverage_state(store, outcome_rows, occurrence_map) -> dict[str, Any]:
+    """What has been measured, so an absent family reads correctly.
+
+    Three facts, and every one of them can be UNKNOWN rather than zero:
+
+    * **buckets covered** - `cli._run_outcomes` simulates ONE of 32 symbol
+      buckets per firing, so a family can be missing because its symbols have
+      not come up yet. That is the opposite conclusion from "measured and
+      flat", and the pack could not tell them apart.
+    * **families with zero outcome rows** - occurrences exist, outcomes do not.
+      Named, because a family that simply is not in the table below reads as one
+      with nothing to say.
+    * **first M5 session in the lake** - the earliest entry any simulation could
+      ever have had. Everything before it is out of reach, not flat.
+
+    Every failure here degrades to a stated absence: the fact pack is the
+    product and a coverage read must never cost it.
+    """
+    state: dict[str, Any] = {}
+    try:
+        from research_warehouse import outcome_coverage
+
+        state.update(outcome_coverage.coverage_state(getattr(store, "root", None)))
+    except Exception as exc:  # noqa: BLE001
+        state["outcome_bucket_coverage_note"] = f"coverage record unreadable: {exc}"
+
+    try:
+        measured = {str(row.get("occurrence_id") or "") for row in outcome_rows}
+        by_family: dict[str, bool] = {}
+        for identity, occurrence in occurrence_map.items():
+            family = str(occurrence.get("canonical_setup_id") or "UNKNOWN")
+            by_family[family] = by_family.get(family, False) or (str(identity) in measured)
+        state["families_without_outcomes"] = sorted(
+            family for family, seen in by_family.items() if not seen
+        )
+        state["families_with_outcomes"] = sorted(
+            family for family, seen in by_family.items() if seen
+        )
+    except Exception as exc:  # noqa: BLE001
+        state["families_without_outcomes_note"] = f"not computed: {exc}"
+
+    state.update(_first_m5_session(store))
+    return state
+
+
+def _first_m5_session(store) -> dict[str, Any]:
+    """The earliest M5 partition in the lake, read from the MANIFEST.
+
+    Partition names, never bar rows: the answer is a month, and materialising
+    a month of M5 bars to learn its own name would be the exact mistake the
+    month-keyed read rules exist to prevent (BD-66/BD-69). The manifest
+    already carries every sealed file's partition.
+    """
+    try:
+        resolved = store.manifest.resolve(dataset="bar_m5")
+        months = set()
+        for entry in resolved.entries:
+            text = str(getattr(entry, "file_path", "") or "")
+            for part in text.replace("\\", "/").split("/"):
+                if part.startswith("month="):
+                    months.add(part[len("month="):])
+        if not months:
+            return {"first_m5_session": None, "first_m5_session_note": "no sealed bar_m5 partitions"}
+        return {"first_m5_session": min(months), "m5_months_in_lake": len(months)}
+    except Exception as exc:  # noqa: BLE001
+        return {"first_m5_session": None, "first_m5_session_note": f"not readable: {exc}"}
 
 
 def _summarize(rows: list[dict]) -> dict[str, Any]:
@@ -94,10 +204,32 @@ def _summarize(rows: list[dict]) -> dict[str, Any]:
     )
     symbols = len({str(row.get("symbol") or "") for row in usable if row.get("symbol")})
     sessions = len({str(row.get("session_date") or "") for row in usable if row.get("session_date")})
+    # EPISODES, beside n. `n` counts outcome ROWS, and the ERD cardinality
+    # table says what that is: `setup_occurrence` -> `outcome_path` is 1:N, and
+    # "alternative recipes/horizons are correlated diagnostics of ONE episode;
+    # they are never summed as independent samples". `dependency_cluster_id` is
+    # the episode unit for evidence floors (occurrences.dependency_cluster_id,
+    # which deliberately excludes the setup family so simultaneous variants on
+    # one move share one cluster).
+    #
+    # The FLOOR STILL COUNTS ROWS in this packet, on purpose: moving it is a
+    # change to which cells are eligible - i.e. to what the model is allowed to
+    # narrate - and it belongs in its own packet with its own before/after.
+    # Publishing both is what makes that packet decidable. See BD-80.
+    stats["n_episodes"] = len(
+        {
+            str(row.get("dependency_cluster_id") or "")
+            for row in usable
+            if row.get("dependency_cluster_id")
+        }
+    )
     stats["eligible"] = bool(stats.get("meets_n_floor") and symbols >= MIN_SYMBOLS and sessions >= MIN_SESSIONS)
     stats["eligibility_rule"] = (
-        f"n >= 30, at least {MIN_SYMBOLS} symbols, and at least {MIN_SESSIONS} entry sessions; "
-        "still discovery, never confirmation"
+        f"n >= 30 OUTCOME ROWS, at least {MIN_SYMBOLS} symbols, and at least "
+        f"{MIN_SESSIONS} entry sessions; still discovery, never confirmation. "
+        "`n_episodes` is reported beside `n` and does NOT yet gate: rows on one "
+        "episode are correlated diagnostics, so n_episodes is the honest sample "
+        "size and moving the floor onto it is a separate, scoped change (BD-80)."
     )
     return stats
 
@@ -129,16 +261,46 @@ def build_fact_pack(
                 "side": str(occurrence.get("side") or ""),
                 "symbol": str(occurrence.get("symbol") or ""),
                 "session_date": session,
+                # Already on the occurrence rows `_load` fetches; carried so a
+                # cell can count episodes as well as rows.
+                "dependency_cluster_id": str(occurrence.get("dependency_cluster_id") or ""),
                 "contexts": dict(contexts.get(str(row.get("occurrence_id"))) or {}),
             }
         )
 
-    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    # Non-trade families are EXCLUDED and REPORTED, never silently omitted.
+    # Appendix C already says what they are; nothing in this job knew, so the
+    # 2026-08-31 pack pooled GENERAL and FAVORITE_ZONE_WATCH as setup edges.
+    # Their counts still travel, because an absent family with no explanation
+    # reads as a family with no data.
+    non_trade_rows: dict[str, list[dict]] = {}
+    trade_rows: list[dict] = []
     for row in enriched:
+        role = family_role(row["family"])
+        if role == ROLE_TRADE:
+            trade_rows.append(row)
+        else:
+            non_trade_rows.setdefault(row["family"], []).append(row)
+    non_trade_families = [
+        {
+            "family": family,
+            "role": family_role(family),
+            "reason": NON_TRADE_ROLE_REASONS.get(family_role(family), ""),
+            "outcome_rows": len(members),
+            "episodes": len(
+                {str(item.get("dependency_cluster_id") or "") for item in members if item.get("dependency_cluster_id")}
+            ),
+            "occurrences": len({str(item.get("occurrence_id") or "") for item in members}),
+        }
+        for family, members in sorted(non_trade_rows.items())
+    ]
+
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    for row in trade_rows:
         grouped.setdefault((row["family"], row["side"], str(row.get("recipe_id") or "")), []).append(row)
-    policies = []
+    all_policies = []
     for (family, side, recipe_id), members in grouped.items():
-        policies.append(
+        all_policies.append(
             {
                 "family": family,
                 "side": side,
@@ -146,18 +308,39 @@ def build_fact_pack(
                 "stats": _summarize(members),
             }
         )
-    policies.sort(
+
+    # TWO BLOCKS, because one sorted list buried the answer. Sorting everything
+    # by trimmed mean put nine real cells above 71 n=1 cells reading +2.9R, and
+    # the 80-row cap then dropped 508 more without saying which. The eligible
+    # block is complete and ordered as before; the ineligible block is bounded
+    # and ordered by n DESC first - the same shape the context-cell path uses -
+    # so what rides along is the thickest evidence that has not cleared the
+    # floor, never the luckiest single trade.
+    eligible_cells = [row for row in all_policies if row["stats"].get("eligible")]
+    ineligible_cells = [row for row in all_policies if not row["stats"].get("eligible")]
+    eligible_cells.sort(
         key=lambda row: (
-            0 if row["stats"].get("eligible") else 1,
             -_trimmed_mean_score(row),
             -int(row["stats"].get("n") or 0),
             row["family"],
             row["recipe_id"],
         )
     )
+    ineligible_cells.sort(
+        key=lambda row: (
+            -int(row["stats"].get("n") or 0),
+            -_trimmed_mean_score(row),
+            row["family"],
+            row["recipe_id"],
+        )
+    )
+    kept_ineligible = ineligible_cells[:MAX_INELIGIBLE_POLICY_ROWS]
+    # `policies` is kept, same key and same meaning, so every existing reader
+    # and the published-pack shape are unchanged: it is the two blocks in order.
+    policies = eligible_cells + kept_ineligible
 
     context_groups: dict[tuple[str, str, str, str, str], list[dict]] = {}
-    for row in enriched:
+    for row in trade_rows:
         for timeframe, env_key in row["contexts"].items():
             context_groups.setdefault(
                 (row["family"], row["side"], str(row.get("recipe_id") or ""), timeframe, env_key), []
@@ -182,7 +365,39 @@ def build_fact_pack(
             -int(row["stats"].get("n") or 0),
         )
     )
-    eligible = sum(1 for row in policies if row["stats"].get("eligible"))
+    eligible = len(eligible_cells)
+    # WHERE THE CORRELATION ACTUALLY IS. Measured on the live lake 2026-09-01:
+    # 9,372 outcome rows rest on 599 occurrences and 287 dependency clusters -
+    # 15.6 recipe rows per occurrence, and 1,804 of 3,436 clusters carry more
+    # than one family.
+    #
+    # Inside a single (family, side, recipe) cell, n and n_episodes were EQUAL
+    # in all 756 cells: one row per occurrence per recipe, so the per-cell
+    # episode count is not where the double-counting lives. The ERD's 1:N
+    # warning is about reading cells TOGETHER - nine ATR variants of one family
+    # are nine readings of the same 33 moves, not 297 samples. So the pack
+    # publishes the shape of its whole evidence base as well, because that is
+    # the number a reader comparing rows needs. See BD-80.
+    trade_occurrences = {str(row.get("occurrence_id") or "") for row in trade_rows}
+    trade_episodes = {
+        str(row.get("dependency_cluster_id") or "")
+        for row in trade_rows
+        if row.get("dependency_cluster_id")
+    }
+    evidence_shape = {
+        "outcome_rows": len(trade_rows),
+        "distinct_occurrences": len(trade_occurrences),
+        "distinct_episodes": len(trade_episodes),
+        "rows_per_occurrence": (
+            round(len(trade_rows) / len(trade_occurrences), 2) if trade_occurrences else None
+        ),
+        "note": (
+            "Cells are alternative recipes over the SAME occurrences. Reading two "
+            "cells as independent evidence double-counts the move underneath them: "
+            "the episode count is the honest denominator for anything pooled across "
+            "cells. Within one cell, n and n_episodes are equal by construction."
+        ),
+    }
     return {
         "schema": FACTS_SCHEMA,
         "generated_at": moment.isoformat(timespec="seconds"),
@@ -202,8 +417,22 @@ def build_fact_pack(
             "note": "Every result is discovery. A met floor allows narration, not a live rule change.",
         },
         "coverage": dict(coverage or {}),
-        "policies": policies[:MAX_POLICY_ROWS],
-        "policy_cells_dropped_from_pack": max(0, len(policies) - MAX_POLICY_ROWS),
+        "evidence_shape": evidence_shape,
+        "policies": policies,
+        "eligible_policies": eligible_cells,
+        "ineligible_policies": kept_ineligible,
+        # Honest per block. The total is what a reader of the old single field
+        # expects, and it is still the number of cells that exist minus the
+        # number published - it just no longer hides WHICH kind was dropped.
+        "policy_cells_dropped_from_pack": max(0, len(all_policies) - len(policies)),
+        "eligible_policy_cells_dropped": 0,
+        "ineligible_policy_cells_dropped": max(0, len(ineligible_cells) - len(kept_ineligible)),
+        "non_trade_families": non_trade_families,
+        "non_trade_families_note": (
+            "Excluded from every policy and context cell above, by role. Their "
+            "counts are published so an absent family reads as excluded rather "
+            "than as unmeasured. Packet P7's setup registry will own this map."
+        ),
         "market_context_cells": context_cells[:MAX_CONTEXT_ROWS],
         "context_cells_dropped_from_pack": max(0, len(context_cells) - MAX_CONTEXT_ROWS),
         "not_a_control_signal": (
@@ -212,25 +441,145 @@ def build_fact_pack(
     }
 
 
+_POLICY_HEADER = (
+    "| setup | side | recipe | n | episodes | trimmed mean | win rate |\n"
+    "|---|---:|---|---:|---:|---:|---:|\n"
+)
+
+
+def _policy_rows(rows) -> list[str]:
+    out = []
+    for row in rows or []:
+        stats = row.get("stats") or {}
+        clipped = stats.get("clipped") or {}
+        out.append(
+            f"| {row.get('family')} | {row.get('side')} | {row.get('recipe_id')} | "
+            f"{stats.get('n', 0)} | {stats.get('n_episodes', '-')} | "
+            f"{clipped.get('trimmed_mean')} | {stats.get('win_rate')} |\n"
+        )
+    return out
+
+
 def render_markdown(pack: Mapping[str, Any]) -> str:
+    """The pack a person reads, opening with the part that cleared the floor.
+
+    It used to open with one table sorted by trimmed mean across every cell,
+    eligible or not. On 2026-08-31 that put nine real cells - all
+    AVWAPE_TO_FIRST_DEV/LONG, all negative - above 71 single-trade cells
+    reading +2.9R, and the 80-row cap then dropped 508 more without saying
+    which kind. A reader skimming the top of that file learned the opposite of
+    what the evidence said.
+
+    Now: the eligible block first and whole, the bounded ineligible block
+    beneath it under a heading that says what it is, the excluded non-trade
+    families named, and the coverage line. Every count that was dropped is
+    printed next to the block it was dropped from.
+    """
+    gate = pack.get("gate") or {}
+    eligible = pack.get("eligible_policies")
+    ineligible = pack.get("ineligible_policies")
+    if eligible is None and ineligible is None:
+        # A pack written before the split. Read it as it was published rather
+        # than inventing a division its author never made.
+        eligible = [row for row in (pack.get("policies") or []) if (row.get("stats") or {}).get("eligible")]
+        ineligible = [row for row in (pack.get("policies") or []) if not (row.get("stats") or {}).get("eligible")]
+
     lines = [
         f"# Setup stop/target research - {str(pack.get('generated_at'))[:10]}\n\n",
         f"Entry: {pack.get('entry_contract')}.\n\n",
-        f"Gate: {pack.get('gate', {}).get('eligible_policy_cells', 0)} eligible policy cells. "
-        f"{pack.get('gate', {}).get('note', '')}\n\n",
-        "| setup | side | recipe | n | trimmed mean | win rate | eligible |\n",
-        "|---|---:|---|---:|---:|---:|---:|\n",
+        f"Gate: {gate.get('eligible_policy_cells', 0)} eligible policy cells. "
+        f"{gate.get('note', '')}\n\n",
     ]
-    for row in pack.get("policies") or []:
-        stats = row.get("stats") or {}
-        clipped = stats.get("clipped") or {}
+    lines += _coverage_lines(pack)
+    lines.append("## Eligible policy cells\n\n")
+    if eligible:
+        lines.append(_POLICY_HEADER)
+        lines += _policy_rows(eligible)
+    else:
         lines.append(
-            f"| {row.get('family')} | {row.get('side')} | {row.get('recipe_id')} | "
-            f"{stats.get('n', 0)} | {clipped.get('trimmed_mean')} | {stats.get('win_rate')} | "
-            f"{stats.get('eligible')} |\n"
+            "No cell cleared the evidence floor. That is not a flat result - it "
+            "is an absent one.\n"
         )
+    dropped_eligible = int(pack.get("eligible_policy_cells_dropped") or 0)
+    if dropped_eligible:
+        lines.append(f"\n{dropped_eligible} eligible cell(s) did not fit this pack.\n")
+
+    lines.append("\n## Below the evidence floor (thickest first, not best first)\n\n")
+    lines.append(
+        "These have NOT cleared the floor. They are ordered by n so what rides "
+        "along is the most-measured evidence, never the luckiest single trade, "
+        "and no number here may be read as a finding.\n\n"
+    )
+    if ineligible:
+        lines.append(_POLICY_HEADER)
+        lines += _policy_rows(ineligible)
+    else:
+        lines.append("None.\n")
+    dropped_ineligible = int(pack.get("ineligible_policy_cells_dropped") or 0)
+    if dropped_ineligible:
+        lines.append(
+            f"\n{dropped_ineligible} further cell(s) below the floor are not shown.\n"
+        )
+
+    families = pack.get("non_trade_families") or []
+    if families:
+        lines.append("\n## Excluded families (not trade setups)\n\n")
+        lines.append("| family | role | outcome rows | episodes | why |\n")
+        lines.append("|---|---|---:|---:|---|\n")
+        for entry in families:
+            lines.append(
+                f"| {entry.get('family')} | {entry.get('role')} | "
+                f"{entry.get('outcome_rows')} | {entry.get('episodes')} | "
+                f"{entry.get('reason')} |\n"
+            )
+        lines.append(f"\n{pack.get('non_trade_families_note', '')}\n")
+
     lines.append(f"\n{pack.get('not_a_control_signal')}\n")
     return "".join(lines)
+
+
+def _coverage_lines(pack: Mapping[str, Any]) -> list[str]:
+    """What was measured, so "not measured yet" reads differently from "flat".
+
+    Absent keys print nothing rather than a zero: a pack written before this
+    block existed must not claim zero bucket coverage.
+    """
+    coverage = pack.get("coverage") or {}
+    parts: list[str] = []
+    shape = pack.get("evidence_shape") or {}
+    if shape.get("outcome_rows") is not None:
+        parts.append(
+            f"Evidence shape: {shape.get('outcome_rows')} outcome row(s) over "
+            f"{shape.get('distinct_occurrences')} occurrence(s) and "
+            f"{shape.get('distinct_episodes')} episode(s) "
+            f"({shape.get('rows_per_occurrence')} rows per occurrence). "
+            "Cells below are alternative recipes over the SAME occurrences - "
+            "reading two of them as independent evidence double-counts the move "
+            "underneath.\n"
+        )
+    buckets = coverage.get("outcome_buckets_covered")
+    total = coverage.get("outcome_bucket_count")
+    if buckets is not None and total:
+        firings = coverage.get("outcome_firings_considered")
+        parts.append(
+            f"Bucket coverage: {buckets} of {total} symbol bucket(s) simulated in "
+            f"the last {firings if firings is not None else total} outcome firing(s). "
+            "A family absent below may simply not have been in a covered bucket yet.\n"
+        )
+    elif coverage.get("outcome_bucket_coverage_note"):
+        parts.append(f"Bucket coverage: {coverage['outcome_bucket_coverage_note']}\n")
+    zero = coverage.get("families_without_outcomes")
+    if zero:
+        shown = ", ".join(str(name) for name in zero[:12])
+        more = f" (+{len(zero) - 12} more)" if len(zero) > 12 else ""
+        parts.append(
+            f"Families with occurrences but ZERO outcome rows: {len(zero)} - {shown}{more}. "
+            "Not measured yet, which is not the same as measured and flat.\n"
+        )
+    first_m5 = coverage.get("first_m5_session")
+    if first_m5:
+        parts.append(f"First M5 session in the lake: {first_m5}.\n")
+    return [f"{part}\n" for part in parts]
 
 
 def _evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
