@@ -615,7 +615,19 @@ class FocusReviewPage(_StepPage):
         and `pick_feedback` has kept them distinct since packet R2. Pooling
         them here would undo that in the one place a reader looks.
         """
-        _fill_p5_cohort_table(self.rejection_table, rows)
+        # R1: the base row is POOLED and the table shows it, so it is LABELLED
+        # rather than hidden. Every cohort family gets a base row from
+        # `human_focus_tracking`, and a row a reader can see but the note denies
+        # is worse than either one alone - suppressing it here would also make a
+        # real row in the file invisible on the one page that reads that file.
+        pooled = [row for row in rows if _is_pooled_rejection_row(row)]
+        shown = [
+            {**row, "cohort": f"{row['cohort']}  (BOTH verdicts pooled)"}
+            if _is_pooled_rejection_row(row)
+            else row
+            for row in rows
+        ]
+        _fill_p5_cohort_table(self.rejection_table, shown)
         if not rows:
             self.rejection_note.setText(
                 "No graded NOT-TODAY / DISLIKE cohort yet. It is written by the "
@@ -623,11 +635,21 @@ class FocusReviewPage(_StepPage):
                 "measurement, not a record without rejections."
             )
             return
+        pooled_sentence = (
+            " The row marked BOTH is the family total - it is not a third "
+            "verdict, and it must not be read as either one: `not_today` is "
+            "recorded on intraday picks and `dislike` on swing names, so the "
+            "pooled number describes two different populations at once."
+            if pooled
+            else ""
+        )
         self.rejection_note.setText(
             f"{len(rows)} row(s). `not_today` is ONE session thrown back and "
-            "`dislike` is the name itself; they are separate cohorts and are "
-            "never pooled. Returns are side-adjusted, so POSITIVE means the "
-            "pick you turned down WOULD have worked. "
+            "`dislike` is the name itself; the two verdicts are separate cohorts "
+            "and their numbers are never combined into a verdict."
+            + pooled_sentence
+            + " Returns are side-adjusted, so POSITIVE means the pick you turned "
+            "down WOULD have worked. "
             + _floor_sentence_simple(rows)
         )
 
@@ -1488,6 +1510,16 @@ def _fill_p5_cohort_table(table, rows) -> None:
                 item.setForeground(muted)
             table.setItem(index, column, item)
     apply_width_rule_to_table_widget(table, text_columns=(0,), elide_columns=(0,))
+
+
+#: The base cohort every family gets from `human_focus_tracking`. For this
+#: family it pools two verdicts recorded on two different populations, so it is
+#: labelled wherever it is shown (R1).
+POOLED_REJECTION_COHORT = "human_focus_rejection"
+
+
+def _is_pooled_rejection_row(row) -> bool:
+    return str(row.get("cohort") or "").strip() == POOLED_REJECTION_COHORT
 
 
 def _read_p5_cohort(path) -> list[dict[str, str]]:

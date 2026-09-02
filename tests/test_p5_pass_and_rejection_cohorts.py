@@ -354,9 +354,20 @@ def test_not_today_and_dislike_are_separate_cohorts_and_never_pooled():
     Fail-before-fix: `rejection_cohort` does not exist.
     """
     rows, _ = rejection_cohort.rejection_pick_rows(
-        [_feedback("not_today"), _feedback("dislike", symbol="CCC")], now=NOW
+        [
+            _feedback("not_today", category="m5"),
+            _feedback("dislike", symbol="CCC", category="swing"),
+        ],
+        now=NOW,
     )
-    assert {row["source"] for row in rows} == {"focus__not_today", "focus__dislike"}
+    # R1 put the LANE back into the name: the two verdicts arrive on two
+    # different populations (not_today on intraday picks, dislike on swing
+    # names), so a source naming only the verdict claimed a record the cohort
+    # does not have.
+    assert {row["source"] for row in rows} == {
+        "focus__m5_not_today",
+        "focus__swing_dislike",
+    }
 
 
 def test_the_free_text_reason_is_carried_and_never_coded():
@@ -555,3 +566,75 @@ def test_a_missing_rollup_is_a_quieter_page_not_an_error(tmp_path):
     from ui.panels import weekend_prep_panel as panel_module
 
     assert panel_module._read_p5_cohort(tmp_path / "nothing.csv") == []
+
+
+# ---------------------------------------------------------------------------
+# Review round R1
+# ---------------------------------------------------------------------------
+
+
+def test_the_rejection_source_names_the_lane_the_verdict_arrived_on():
+    """R1: dropping the category made the cohort name a false claim.
+
+    `not_today` is recorded on intraday picks (223 live rows) and `dislike` on
+    swing names (34). A cohort called "not_today" therefore reads as the
+    trader's whole not-today record when it is really the INTRADAY one, and rows
+    are never rewritten - so the name has to be right the first time.
+    """
+    from rejection_cohort import rejection_cohort_source
+
+    assert rejection_cohort_source("not_today", "m5") == "focus__m5_not_today"
+    assert rejection_cohort_source("dislike", "swing") == "focus__swing_dislike"
+    # A missing category is stated, never guessed.
+    assert rejection_cohort_source("not_today", "") == "focus__unstated_not_today"
+
+
+def test_the_double_underscore_still_guards_the_prefix_match():
+    """`focus__m5_not_today`, never `focus_m5__not_today`.
+
+    `COHORT_BASE_BY_SOURCE_PREFIX` matches `startswith("focus_" + "_")`, so the
+    second spelling would fall through to a `focus_m5` prefix and silently grade
+    these rows as somebody else's cohort.
+    """
+    from human_focus_tracking import _outcome_base_cohort
+    from rejection_cohort import rejection_cohort_source
+
+    for verdict, lane in (("not_today", "m5"), ("dislike", "swing")):
+        source = rejection_cohort_source(verdict, lane)
+        assert source.startswith("focus__")
+        assert _outcome_base_cohort({"source": source}) == "human_focus_rejection"
+
+    # And the neighbours are untouched.
+    assert _outcome_base_cohort({"source": "focus_m5_anything"}) == "human_focus_m5"
+    assert _outcome_base_cohort({"source": "focus_swing_anything"}) == "human_focus_swing"
+
+
+def test_the_pass_rollup_states_its_overlap_on_the_file(tmp_path):
+    """The packet said the CSV must state it; only the code and the UI did."""
+    import csv
+
+    from ui.annotations.pass_cohort import OVERLAP_NOTE, _stamp_overlap_note
+
+    target = tmp_path / "pass_cohort_performance.csv"
+    with target.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["cohort", "sample_count"])
+        writer.writeheader()
+        writer.writerow({"cohort": "pass_all", "sample_count": "12"})
+
+    _stamp_overlap_note(target)
+
+    rows = list(csv.DictReader(target.open("r", encoding="utf-8", newline="")))
+    assert rows[0]["overlap_note"] == OVERLAP_NOTE
+    assert "must never be summed" in rows[0]["overlap_note"]
+
+    # Idempotent: a second pass must not append a second column.
+    _stamp_overlap_note(target)
+    rows = list(csv.DictReader(target.open("r", encoding="utf-8", newline="")))
+    assert list(rows[0]).count("overlap_note") == 1
+
+
+def test_stamping_the_note_never_costs_the_rollup(tmp_path):
+    """It runs after the grader has safely written the file."""
+    from ui.annotations.pass_cohort import _stamp_overlap_note
+
+    _stamp_overlap_note(tmp_path / "absent.csv")  # must not raise

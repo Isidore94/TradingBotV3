@@ -166,7 +166,7 @@ which is evidence and must not be loaded as context.
   the first completed M5 close AFTER the pass, stop at the session extreme on the
   pass side, target 2R, stop-first. When it cannot be computed the columns are
   BLANK and `intraday_unmeasured_reason` says which absence it is.
-- **`not_today` and `dislike` are separate cohorts and never pooled** - a
+- **`not_today` and `dislike` are separate cohorts and their numbers are never combined into a verdict** (corrected R1: the family's pooled BASE row does exist and is labelled where it is shown) - a
   same-day throwback and a judgement on the name are different claims.
   `unfavorite` is not graded (a membership change, not a verdict, and sideless on
   the live log), and the free-text `reason` is carried verbatim and never coded.
@@ -477,7 +477,7 @@ different fact from `no_sidecar_bars`. Whether entry should instead be the last 
 close AT the pass is a definition change and the trader's to make.
 
 **2. `scripts/rejection_cohort.py`.** `not_today` and `dislike` are separate cohorts and
-never pooled. Live: 253 gradeable rows, 219 + 34, zero sideless. `unfavorite` is NOT
+never combined into a verdict; the pooled base row is labelled rather than hidden (R1). Each source names its lane - `focus__m5_not_today`, `focus__swing_dislike`. Live: 253 gradeable rows, 219 + 34, zero sideless. `unfavorite` is NOT
 graded - a membership change rather than a verdict, and sideless on the live log - and
 the free-text `reason` is carried verbatim and never coded, because the whole value of
 those 34 dislikes is the sentence.

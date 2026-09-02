@@ -470,7 +470,7 @@ def update_pass_cohort_outcomes(
     """
     from human_focus_tracking import pick_key_with_source, update_human_focus_outcomes
 
-    return update_human_focus_outcomes(
+    result = update_human_focus_outcomes(
         reference_date=reference_date,
         daily_picks_path=Path(picks_path),
         outcomes_path=Path(outcomes_path),
@@ -479,6 +479,45 @@ def update_pass_cohort_outcomes(
         now=now,
         pick_key=pick_key_with_source,
     )
+    _stamp_overlap_note(Path(performance_path))
+    return result
+
+
+def _stamp_overlap_note(performance_path: Path) -> None:
+    """Put `OVERLAP_NOTE` on every row of the pass rollup (R1).
+
+    The packet said the CSV must state the overlap and it did not - the note
+    lived in the module, the Weekend Prep label and the AI scope, all of which
+    are places a person reads. A CSV is read by a person too, and by whatever
+    reads it next; a file whose code cohorts cannot be summed must say so ON the
+    file rather than only wherever it happens to be displayed.
+
+    Done here rather than in `HUMAN_FOCUS_PERFORMANCE_COLUMNS` because that list
+    is shared by the veto, like and rejection rollups, and only the PASS cohort
+    is multi-select - a note about overlapping cohorts on the veto file would be
+    false.
+
+    Never allowed to cost the grading it follows: this runs AFTER the rollup is
+    safely written, and a failure here leaves that file exactly as the grader
+    wrote it.
+    """
+    import csv
+
+    try:
+        if not performance_path.is_file():
+            return
+        with performance_path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        if not rows or "overlap_note" in rows[0]:
+            return
+        fieldnames = [*rows[0].keys(), "overlap_note"]
+        with performance_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({**row, "overlap_note": OVERLAP_NOTE})
+    except OSError:
+        _log.debug("pass cohort overlap note not stamped", exc_info=True)
 
 
 __all__ = [

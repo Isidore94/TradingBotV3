@@ -731,3 +731,70 @@ class VetoVocabularyTests(unittest.TestCase):
             self.assertEqual(
                 reason.hotkey, v1[code].hotkey, f"{code} moved digit - muscle memory"
             )
+
+
+class PassCohortMergeTests(unittest.TestCase):
+    """R1: the capture-time PASS merge had no test at all.
+
+    Reverting `capture_rail.py` to its base left the suite green, which means
+    nothing was holding the merge in place - the cohort would simply have
+    stopped accruing at capture time and nobody would have known until the
+    numbers were read weeks later.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.log = self.tmp / "trader_annotations.jsonl"
+        self.addCleanup(self._tmp.cleanup)
+        self.panel = _panel(self.tmp)
+        self.panel.open_symbol("NVDA")
+        self.rail = self.panel.capture_rail
+
+    def _first_pass_code(self) -> str:
+        from ui.annotations.vocabulary import load_pass_vocabulary
+
+        return load_pass_vocabulary().reasons[0].code
+
+    def test_a_pass_click_runs_the_cohort_merge(self) -> None:
+        calls: list[dict] = []
+
+        def _merge(**kwargs):
+            calls.append(kwargs)
+            from ui.annotations.pass_cohort import merge_pass_cohort_picks
+
+            return merge_pass_cohort_picks(
+                picks_path=self.tmp / "pass_cohort_picks.csv", **kwargs
+            )
+
+        self.rail._merge_pass_cohort = _merge
+        self.rail.toggle_pass_reason(self._first_pass_code())
+        row = self.rail.commit_pass()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(len(calls), 1, "the pass merge must run on the click")
+        self.assertTrue((self.tmp / "pass_cohort_picks.csv").exists())
+
+    def test_a_raising_merge_still_returns_the_row(self) -> None:
+        """An evidence store never costs the event it records.
+
+        The annotation is already on disk when the merge runs, so a merge that
+        blows up degrades to a status suffix - it must not lose the pass.
+        """
+
+        def _explode(**_kwargs):
+            raise RuntimeError("the cohort file is unwritable")
+
+        self.rail._merge_pass_cohort = _explode
+        self.rail.toggle_pass_reason(self._first_pass_code())
+        row = self.rail.commit_pass()
+
+        self.assertIsNotNone(row, "the pass row must survive a failing merge")
+        self.assertEqual(row["event_type"], "pass")
+        self.assertIn("deferred", self.rail.status_label.text())
+        self.assertTrue(
+            any(item.get("event_type") == "pass" for item in
+                [json.loads(line) for line in
+                 self.log.read_text(encoding="utf-8").splitlines() if line.strip()]),
+            "and it must still be in the annotation log",
+        )

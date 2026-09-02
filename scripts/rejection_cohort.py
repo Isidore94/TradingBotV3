@@ -63,6 +63,12 @@ REJECTION_COHORT_PREFIX = "focus_"
 #: side on the live log.
 GRADED_VERDICTS = ("not_today", "dislike")
 
+#: The lanes those verdicts actually arrive on, measured 2026-09-02 on the live
+#: log: `not_today` is M5 (223 rows) and `dislike` is swing (34). Recorded here
+#: because it is the reason the category belongs in the cohort name, not a
+#: constraint - a `swing/not_today` row would simply grade under its own name.
+OBSERVED_LANES = {"not_today": "m5", "dislike": "swing"}
+
 _SIDES = ("LONG", "SHORT")
 
 PICK_COLUMNS = [
@@ -83,10 +89,26 @@ PICK_COLUMNS = [
 ]
 
 
-def rejection_cohort_source(verdict: Any) -> str:
-    """`not_today` -> `focus__not_today`. Never pooled with `dislike`."""
-    text = str(verdict or "").strip().lower()
-    return f"{REJECTION_COHORT_PREFIX}_{text}" if text else f"{REJECTION_COHORT_PREFIX}_unstated"
+def rejection_cohort_source(verdict: Any, category: Any = "") -> str:
+    """`(not_today, m5)` -> `focus__m5_not_today`. Never pooled with `dislike`.
+
+    THE CATEGORY IS PART OF THE IDENTITY (R1). Dropping it made a false claim
+    about the live log: `not_today` is recorded on M5 rows (223) and `dislike`
+    on swing rows (34), so a cohort named for the verdict alone reads as
+    "the trader's not-today record" when it is really "the trader's INTRADAY
+    not-today record". A cohort that names the wrong population cannot be
+    compared with anything, and rows are never rewritten, so the name has to be
+    right the first time it is written.
+
+    The DOUBLE underscore stays immediately after the prefix -
+    `focus__m5_not_today`, not `focus_m5__not_today` - because
+    `COHORT_BASE_BY_SOURCE_PREFIX` matches `startswith("focus_" + "_")`. The
+    second spelling would fall through to `focus_m5` if that prefix ever
+    existed, and silently grade these rows as somebody else's cohort.
+    """
+    text = str(verdict or "").strip().lower() or "unstated"
+    lane = str(category or "").strip().lower() or "unstated"
+    return f"{REJECTION_COHORT_PREFIX}_{lane}_{text}"
 
 
 def _pick_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
@@ -192,7 +214,7 @@ def rejection_pick_rows(
         if side not in _SIDES:
             skipped_no_side += 1
             continue
-        source = rejection_cohort_source(verdict)
+        source = rejection_cohort_source(verdict, entry.get("category"))
         key = (trade_date, symbol, side, source)
         if key in rows:
             # First verdict of the day wins, as in every sibling cohort: the
