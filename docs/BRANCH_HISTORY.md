@@ -113,9 +113,9 @@ conflict was in `CURRENT_CHECKPOINT.md` - both sides' dated entries were kept.
 | `claude/theta-premium` | 5 | `19a4a7a` | Phase 0.11 theta premium optimization, T1-T7: the credit floor as a percent of the strike, support-first ranking with an uncapped spread penalty, 15 market days for credit spreads, a premium-capacity-ordered quote budget, the `premium=` report line and its Qt columns, and the spread credit scaling with the underlying | **Merged into `main` 2026-08-31** (merge commit `fad97d6`). Contained; deleted local + origin |
 
 Every one of the four passed `git merge-base --is-ancestor <branch> main` before
-deletion. `claude/gui-phase-0-9` was deliberately left alone: it is separate
-long-running work with its own open gate (SOAK 1) and was not part of this
-integration.
+deletion. `claude/gui-phase-0-9` was not part of that integration - but see the
+correction below: it is CONTAINED in `main` and what is open is its gate, not the
+branch.
 
 ## The 2026-09-02 integration (review round R1)
 
@@ -140,8 +140,15 @@ eight the same day.
 **Every one passes `git merge-base --is-ancestor <branch> main`** - checked on
 2026-09-02, all eleven. They are LEFT IN PLACE rather than deleted: nothing asked
 for the cleanup, and the proof above is what makes deleting them safe whenever
-somebody does. `claude/gui-phase-0-9` is still deliberately open with its own
-gate (SOAK 1).
+somebody does.
+
+**Corrected 2026-09-02 (R2): `claude/gui-phase-0-9` is CONTAINED in `main` too.**
+`git merge-base --is-ancestor claude/gui-phase-0-9 main` succeeds and it is 0
+commits ahead - its content reached `main` through `claude/group-tape-rebuild`,
+which was cut from it. Two documents called it unmerged for weeks. What is open
+is **gate 7 (SOAK 1)**, which is owed by work that HAS landed; a gate and a
+branch are different things, and conflating them left a branch on the deletion
+list's wrong side.
 
 ## Rule going forward
 

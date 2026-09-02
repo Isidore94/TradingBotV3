@@ -318,3 +318,90 @@ allowed to cost the event it records.
   re-resolve an episode** - the verdict comes from the review event store alone, a veto
   whose side disagrees is skipped rather than guessed, and a veto with no episode is
   left alone rather than inventing an impression.
+
+## Phase 0.13 - the four rules CLAUDE.md gained and this file did not (added R2)
+
+CLAUDE.md's `Core loop / data flow` promises that the incident, measurement and
+trader conversation behind every rule is preserved here verbatim. Four rules
+landed in Phase 0.13 without their entry. These are those entries.
+
+- **The LRSI M5 alerts are retired and every row of their evidence is kept**
+  (`bounce_bot_lib/legacy.LRSI_M5_ALERTS_RETIRED`, P0, trader 2026-09-01:
+  *"LRSI alerts seem to be mostly spam. however I enjoy them as something that can
+  boost the potential of an alert. for now let's put them on the back burner.
+  let's measure how they perform on different timeframes but no need for their M5
+  alerts."*). ONLY the GUI leg goes. The obvious implementation - flipping the
+  entry in `M5_SIGNAL_TYPE_DEFAULTS` - was verified and REJECTED: that toggle is
+  tested before the event joins `hits`, so it would have stopped DETECTION and
+  taken the outcome rows with it. The retirement sits at the emit seam, after
+  `record_alert_tier`, so the candidate row, `intraday_bounce_outcomes.csv`, the
+  learning tier and the PROVEN stamp all keep running - which is what the
+  "different timeframes" measurement the trader asked for is built on. Unlike the
+  H1 retirement beside it, `log_bounce_to_file` still runs. Un-retiring is one
+  constant, and the lane's tests monkeypatch it to False so the consequences are
+  already pinned (R1).
+
+- **A third auto-tag lane offers what the trader already SAID, and it is not a
+  link** (`journal_analytics`, P6). It matches the trade's OWN window - open date
+  to close date, never the fuzzy 16-day neighbourhood the scanner lanes search -
+  and outranks every fuzzy source; a rejection is PREFIXED (`vetoed:`, `passed:`)
+  so it can never read as an endorsement, and a pass carries ALL its codes in
+  vocabulary order (R2 - `codes[0]` had been throwing the rest away, which made a
+  two-reason pass into a different statement). `context_row_id` is a POINTER FOR A
+  READER: plan.md P5.3/P5.4 own the canonical opportunity id and a second one must
+  never be invented; only 54 of 730 take-class review rows carry an alert
+  `event_id`, so the rest point at their own natural identity.
+  **A chart housekeeping action is a LINK, not a tag.** `add_focus`, `arm_level`,
+  `arm_watch` and the toggles say the trader did something WITH the chart and name
+  no setup; 676 of 730 live rows carry no `bounce_types`, so the lane minted
+  `took:<action>` for almost all of them and - ranked first, at 0.90-0.95 - spent
+  a slot of the four-slot Tags column on it. Measured: EYPT and SMPL lost
+  `avwape_to_1stdev` to a housekeeping click, and on the bulk tagger TRV lost
+  `avwap_retest_followthrough` at 0.91 to `link:review:arm_level` at 0.95. ONE
+  predicate (`is_link_candidate`, accepting both the in-memory flag and the
+  `link:` prefix that survives the store) now rejects them in the summary, the
+  bulk lane, the bulk top pick, Accept/Accept-all and `tag_confidence`. They still
+  RENDER, with their event id: the pointer is worth seeing, it is just not a tag.
+
+- **The trader owns `trade_annotations`, and there is exactly ONE machine writer**
+  (`journal_bulk_tag`, P6a, trader 2026-09-01: *"let's get Opus to do the tagging
+  and I can review after"*). 193 trades and ONE trader-typed setup tag is what
+  prompted it. `tag_status` is `confirmed` / `provisional` / `needs_review`, and
+  the column's DEFAULT is what made it safe on a live database: every existing row
+  was typed or accepted by the trader, so it became `confirmed` the moment the
+  column appeared and no backfill had to decide that afterwards. The refusal to
+  overwrite a confirmed row lives in `JournalStore.apply_provisional_tags`, NOT in
+  the caller - an exception that depends on every caller remembering a rule is not
+  a boundary. It never promotes a shape tag (a fact about the clock at confidence
+  1.0 would outrank every scanner match while answering a different question) and
+  **never writes `tag_corrections`**, because that table is the trader's feedback
+  TO the tagger: only an EDIT teaches it, and agreeing with a guess would raise
+  that guess's own confidence forever. Below the threshold it writes NO tag, only
+  a marker - a low-confidence guess in `setup_tags` would be counted by every
+  per-setup statistic, which is the circularity the tagging rules forbid. The
+  threshold, 0.70, encodes a sentence rather than a percentile: "the tracker or a
+  focus favourite named this symbol, on the day I traded it, on the side I traded".
+  Run 2026-09-01: 24 applied, 132 marked, 0 refused, 0 corrections written.
+  "My setups" counts CONFIRMED tags only, over DISTINCT closed trades (R1 - summing
+  the buckets of a non-exclusive group measured 24 of 156 as 40% and suppressed
+  the very note that exists to say how thin it is).
+
+- **The setup registry is frozen DATA and is not authoritative yet**
+  (`setup_registry`, P7). Five naming sites, one entry each, keyed
+  `setup_id@version`; `legacy.py`'s `*_STUDY_FAMILY` constants are the fifth and
+  eight families are named ONLY there, so a registry built from the four sources
+  the packet listed would have omitted detectors that run every scan. It is
+  regenerated deliberately and reviewed as a DIFF, never rebuilt at import: a
+  crosswalk that recomputes itself from five moving sources is a sixth source, and
+  its disagreements would appear and vanish unseen. It RESOLVES NOTHING - eight
+  `known_divergences` record what each source believes, because choosing which
+  spelling is identity is a decision (P4.1's) and not a derivation - and FILLS
+  NOTHING its sources do not establish, because a guessed `supported_sides` reads
+  as established in exactly the column a later experiment trusts. An unresolvable
+  name RAISES: a silent fall back to `GENERAL` would file "two tables write
+  different things under one word" under "untagged". Its sibling
+  `research_warehouse/trial_ledger` writes one row per registered grid BEFORE any
+  outcome is inspected, refuses to rewrite a `trial_id`, and stamps `registered_at`
+  - an undated declaration and one written afterwards are indistinguishable six
+  months later, which is the whole thing the ledger exists to rule out.
+
