@@ -53,7 +53,12 @@ def _trade(symbol="AAA", side="LONG", opened="2026-08-20", closed="2026-08-22", 
         "closed_at": f"{closed}T15:00:00-04:00" if closed else "",
         "status": "CLOSED" if closed else "OPEN",
         "net_pnl": 123.45,
-        "r_multiple": 1.2,
+        # R1: the fixture used to carry `r_multiple`, a key that exists nowhere
+        # in scripts/ - so the test passed while every live row shipped a blank
+        # R. These two ARE the journal's columns, and the R is computed from
+        # them exactly as `journal_feed.r_multiple` computes it.
+        "net_pnl_cad": 123.45,
+        "planned_risk": 102.875,
     }
     row.update(extra)
     return row
@@ -555,3 +560,146 @@ def test_the_scope_behaviour_is_unchanged():
         "journal_review",
         "market_journal",
     )
+
+
+# ==========================================================================
+# Review round R1
+# ==========================================================================
+
+
+def test_a_housekeeping_click_never_evicts_a_real_setup_tag(tmp_path, monkeypatch):
+    """R1: `took:add_focus` was a minted tag, ranked FIRST, in a 4-slot summary.
+
+    676 of 730 live review rows carry no `bounce_types`, so almost every capture
+    row minted one - and because capture candidates lead, it spent a summary
+    slot on a chart housekeeping click. Measured on eight live trades: EYPT and
+    SMPL lost `avwape_to_1stdev` from their Tags column.
+    """
+    from journal_analytics import AutoTagger
+
+    tagger = AutoTagger()
+    monkeypatch.setattr(
+        tagger,
+        "load_context_rows",
+        lambda: [
+            {
+                "source": "setup_tracker",
+                "symbol": "EYPT",
+                "side": "LONG",
+                "date": date(2026, 8, 20),
+                "setup_family": "avwape_to_1stdev",
+                "priority_bucket": "favorite_setup",
+                "priority_score": 900,
+                "favorite_zone": "",
+                "retest": "",
+                "compression": False,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        tagger,
+        "load_capture_rows",
+        lambda: [
+            {
+                "symbol": "EYPT",
+                "date": date(2026, 8, 20),
+                "side": "LONG",
+                "kind": "review:add_focus",
+                "tag": "",
+                "link_only": True,
+                "event_id": "review_event:2026-08-20T13:40:00",
+            }
+        ],
+    )
+
+    suggestions = tagger.suggest_for_trade(
+        {
+            "symbol": "EYPT",
+            "direction": "LONG",
+            "opened_at": "2026-08-20T09:41:00-04:00",
+            "closed_at": "2026-08-20T15:00:00-04:00",
+        }
+    )
+    by_tag = {item["tag"]: item for item in suggestions}
+
+    # The link is still offered, and still carries its pointer.
+    link = next(item for item in suggestions if item.get("link_only"))
+    assert link["context_row_id"] == "review_event:2026-08-20T13:40:00"
+    assert link["tag"].startswith("link:")
+    # And nothing minted a `took:` tag.
+    assert not any(tag.startswith("took:") for tag in by_tag)
+    # The real setup match is still there.
+    assert any("avwape_to_1stdev" in tag for tag in by_tag)
+
+
+def test_the_stored_summary_excludes_link_only_candidates():
+    """The summary is the Tags column; a link may never occupy one of its slots."""
+    source = (ROOT_DIR / "scripts" / "journal_store.py").read_text(encoding="utf-8")
+    assert 'if not item.get("link_only")' in source
+
+
+def test_coverage_counts_trades_and_not_buckets():
+    """The packet's case: 5 tagged of 100, at 3 tags each, is 5% - not 15%."""
+    from journal_analytics import build_analytics_summary
+
+    rows = [
+        {"status": "CLOSED", "net_pnl": 1.0, "currency": "USD", "setup_tags": "a; b; c"}
+        for _ in range(5)
+    ]
+    rows += [
+        {"status": "CLOSED", "net_pnl": 1.0, "currency": "USD"} for _ in range(95)
+    ]
+    note = build_analytics_summary(rows)["group_notes"]["my setups"]
+    assert "5 OF 100" in note
+    assert "(5%)" in note
+
+
+def test_coverage_ignores_a_provisional_tag():
+    """A machine-applied tag is not the trader standing behind anything."""
+    from journal_analytics import build_analytics_summary
+
+    rows = [
+        {
+            "status": "CLOSED", "net_pnl": 1.0, "currency": "USD",
+            "setup_tags": "machine-guess", "tag_status": "provisional",
+        }
+        for _ in range(40)
+    ]
+    rows += [
+        {"status": "CLOSED", "net_pnl": 1.0, "currency": "USD"} for _ in range(60)
+    ]
+    note = build_analytics_summary(rows)["group_notes"]["my setups"]
+    assert "0 OF 100" in note
+
+
+def test_the_report_uses_the_journals_one_definition_of_r():
+    """`r_multiple` is a key that exists nowhere in scripts/."""
+    import preference_trade_outcomes as report
+
+    assert report._canonical_r({"planned_risk": 100.0, "net_pnl_cad": 250.0}) == "2.5000"
+    # Blank, never zero, when the trader never typed a risk.
+    assert report._canonical_r({"net_pnl_cad": 250.0}) == ""
+    assert report._canonical_r({"planned_risk": 0.0, "net_pnl_cad": 250.0}) == ""
+
+    source = (ROOT_DIR / "scripts" / "preference_trade_outcomes.py").read_text(encoding="utf-8")
+    assert 'trade.get("r_multiple")' not in source
+    assert 'trade.get("net_pnl_cad")' in source, "the P&L column must be CAD too"
+
+
+def test_the_report_is_resolved_by_its_named_constant():
+    """Resolving a home-folder store by name under a directory shipped a blank
+    page for six days (CLAUDE.md)."""
+    source = (ROOT_DIR / "scripts" / "ui" / "panels" / "weekend_prep_panel.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from preference_trade_outcomes import REPORT_FILE" in source
+    assert '/ "preference_trade_outcomes.csv"' not in source
+
+
+def test_the_suggestion_label_shows_the_linked_event():
+    """Gate 35 asks the trader to SEE a linked event; it was stored and never
+    rendered."""
+    source = (ROOT_DIR / "scripts" / "ui" / "panels" / "journal" / "trades_tab.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'candidate.get("context_row_id")' in source

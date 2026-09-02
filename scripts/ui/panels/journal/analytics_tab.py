@@ -253,6 +253,11 @@ class AnalyticsTab(QFrame):
     def _draw_group_chart(self) -> None:
         group_name = self.group_picker.currentText()
         rows = group_breakdown_rows(self._summary, group_name)
+        # R1: `group_notes` was written and nothing read it. The note is the
+        # whole point of the coverage check - a bar chart of five tagged trades
+        # beside a full one, at the same width, with nothing saying which is
+        # which. PREPENDED to the group's own label, as the packet asked.
+        coverage_note = str((self._summary.get("group_notes") or {}).get(group_name) or "")
         labels, values, dropped = group_chart_series(rows)
         if PYQTGRAPH_AVAILABLE:
             self.group_chart.clear()
@@ -262,6 +267,8 @@ class AnalyticsTab(QFrame):
                 self.group_chart.getAxis("bottom").setTicks([list(enumerate(labels))])
             self.group_chart.setTitle(f"Net by {group_name}" if group_name else "Net by group")
         parts = []
+        if coverage_note:
+            parts.append(coverage_note)
         if not rows:
             parts.append("No trades in this range for that grouping.")
         else:

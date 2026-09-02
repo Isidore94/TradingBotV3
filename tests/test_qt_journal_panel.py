@@ -697,3 +697,25 @@ def test_fees_tab_builds_the_broker_stated_tax_report(panel, populated, qapp, tm
     assert "from the broker's own amounts" in text
     assert "tax.csv" in text
     assert any("tax report written" in status for status in statuses)
+
+
+def test_the_thin_coverage_note_reaches_the_chart_the_reader_looks_at(panel, populated):
+    """R1: `group_notes` was computed and nothing rendered it.
+
+    The note is the entire point of the coverage check - "my setups" draws a bar
+    chart of the same width as the auto-tag one beside it, and without the
+    sentence a reader sees two charts and reads both as findings.
+    """
+    panel.analytics_tab.reload()
+    panel.analytics_tab.group_picker.setCurrentText("my setups")
+    panel.analytics_tab._draw_group_chart()
+
+    note = panel.analytics_tab.group_note.text()
+    assert "CONFIRMED TAG" in note, note
+    assert "prompt to tag more" in note
+
+    # And it is scoped to the group it is about: the auto-tag chart covers every
+    # trade and must not carry a coverage warning.
+    panel.analytics_tab.group_picker.setCurrentText("auto tags")
+    panel.analytics_tab._draw_group_chart()
+    assert "CONFIRMED TAG" not in panel.analytics_tab.group_note.text()

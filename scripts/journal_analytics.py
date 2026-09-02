@@ -313,9 +313,23 @@ class AutoTagger:
                     "date": session,
                     "side": _normalize_side(event.get("side")),
                     "kind": f"review:{action}",
-                    # The trigger the chart carried, when it had one - that is
-                    # the nearest thing to a setup name a review event has.
-                    "tag": str(event.get("bounce_types") or "").split(";")[0].strip() or f"took:{action}",
+                    # A CHART HOUSEKEEPING ACTION IS A LINK, NOT A TAG (R1).
+                    #
+                    # `add_focus`, `arm_level`, `arm_watch` and the toggles say
+                    # the trader did something WITH the chart. They say nothing
+                    # about which setup it was, and 676 of 730 live rows carry
+                    # no `bounce_types` at all - so this minted `took:add_focus`
+                    # and, ranked first as a capture candidate, spent the
+                    # four-slot summary on it. Measured on eight live trades:
+                    # EYPT and SMPL lost `avwape_to_1stdev` from their Tags
+                    # column to a housekeeping click.
+                    #
+                    # The row is still stored - it carries a `context_row_id`
+                    # worth following - but it contributes NO tag text, so it
+                    # can never evict a real setup match from the summary. Only
+                    # a like_claim, a veto and a pass name a setup.
+                    "tag": "",
+                    "link_only": True,
                     # The alert's own id when it has one - only 54 of 730 take
                     # rows do - and otherwise the row's natural identity, its
                     # timestamp, PREFIXED so a reader knows which store to open.
@@ -498,9 +512,15 @@ class AutoTagger:
             if row_side and direction and row_side != direction:
                 # A long statement about a short trade is a different claim.
                 continue
+            link_only = bool(row.get("link_only"))
             tag = str(row.get("tag") or "").strip()
-            if not tag:
+            if not tag and not link_only:
                 continue
+            if link_only:
+                # A pointer, under a name that cannot be mistaken for a setup.
+                # It is excluded from `auto_tag_summary` by the store, so it
+                # occupies no slot in the Tags column.
+                tag = f"link:{row.get('kind')}"
             # A stated judgement inside the trade's own window is the strongest
             # thing this tagger has, and it is still a SUGGESTION: the trader
             # accepts or ignores it, and nothing here writes trade_annotations.
@@ -514,6 +534,9 @@ class AutoTagger:
                 "confidence": confidence,
                 "source": f"{TRADER_CAPTURE_SOURCE}:{row.get('kind')}",
                 "context_row_id": str(row.get("event_id") or ""),
+                # Read by `refresh_auto_tags`: a link is stored as a candidate
+                # and kept out of the summary (R1).
+                "link_only": link_only,
                 "rationale": (
                     f"you said this on {said_on.isoformat()} ({row.get('kind')})"
                     + (f": {detail}" if detail else "")
@@ -791,6 +814,28 @@ def split_tags(value: Any) -> list[str]:
     return [text]
 
 
+#: The tag lane a trade's setup tags came from. Named here rather than imported
+#: from `journal_store` so this module keeps its one-way dependency: the store
+#: imports the analytics helpers, not the other way round. P6a introduces the
+#: column; on a tree without it every row reads as the trader's, which is what
+#: it was before a machine could write one.
+TAG_STATUS_CONFIRMED = "confirmed"
+
+
+def _confirmed_setup_tags(row: dict[str, Any]) -> list[str]:
+    """The tags on this trade that the TRADER stands behind.
+
+    A provisional tag lives in the same column, so counting `setup_tags` alone
+    would fold machine guesses into "my setups" - the one group in the journal
+    that is supposed to answer what the trader themself said this trade was. A
+    row with no annotation at all reports ``confirmed`` and has no tags, so it
+    lands in ``untagged`` exactly as before.
+    """
+    if str(row.get("tag_status") or TAG_STATUS_CONFIRMED) != TAG_STATUS_CONFIRMED:
+        return []
+    return _tags_for_row(row, "setup_tags")
+
+
 def _tags_for_row(row: dict[str, Any], field: str = "setup_tags") -> list[str]:
     """Every setup tag on a trade, not just the first one.
 
@@ -889,11 +934,21 @@ def _empty_dimension_notes(
         return {}
     notes: dict[str, str] = {}
     for group_name in ("my setups",):
-        rows = groups.get(group_name) or []
+        # COUNTED OVER TRADES, NOT OVER BUCKETS (R1).
+        #
+        # "My setups" is NON-EXCLUSIVE: a trade carrying three tags appears in
+        # three buckets, so summing each bucket's `closed` counted it three
+        # times. Live, 24 tagged trades of 156 measured as 40% coverage and the
+        # note therefore never appeared - the one honesty this note exists to
+        # provide was suppressed by its own arithmetic.
+        #
+        # And it ignored `tag_status` (P6a), so a machine-applied PROVISIONAL
+        # tag counted as the trader's. Coverage of confirmed tags means exactly
+        # that: distinct closed trades whose tags the trader stands behind.
         tagged = sum(
-            int(item.get("closed", 0) or 0)
-            for item in rows
-            if str(item.get("label") or "") != "untagged"
+            1
+            for row in closed
+            if _confirmed_setup_tags(row)
         )
         share = tagged / len(closed)
         if share >= CONFIRMED_TAG_COVERAGE_FLOOR:

@@ -549,6 +549,14 @@ class TradesTab(QFrame):
                 label = f"{candidate.get('tag')}  ({source.split(':', 1)[1]})"
             else:
                 label = f"{candidate.get('tag')}  ({float(candidate.get('confidence') or 0):.0%})"
+            # R1: the linked event, beside the confidence. Gate 35 asks the
+            # trader to SEE a candidate with a linked event, and the pointer was
+            # stored and never rendered anywhere. It is a pointer for a reader,
+            # never a canonical link - which is exactly why it belongs in the
+            # label rather than in a hyperlink.
+            context_row_id = str(candidate.get("context_row_id") or "").strip()
+            if context_row_id:
+                label = f"{label}  [{context_row_id}]"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, candidate.get("tag"))
             item.setToolTip(str(candidate.get("rationale") or ""))

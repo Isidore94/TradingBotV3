@@ -1418,10 +1418,13 @@ def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
     """
     import csv
 
-    import project_paths
-
     monday, friday = bounds
-    path = Path(getattr(project_paths, "OUTPUT_DIR")) / "preference_trade_outcomes.csv"
+    # BY NAMED CONSTANT (R1, CLAUDE.md). Resolving a home-folder store by
+    # rebuilding its name under a directory is what shipped a blank page for six
+    # days; the module that writes this file already exports where it is.
+    from preference_trade_outcomes import REPORT_FILE
+
+    path = Path(REPORT_FILE)
     if not path.is_file():
         return []
     try:

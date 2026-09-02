@@ -2162,7 +2162,14 @@ class JournalStore:
             for row in trade_rows:
                 trade = _row_to_dict(row)
                 suggestions = tagger.suggest_for_trade(trade, corrections=corrections)
-                setup_tags = [item["tag"] for item in suggestions]
+                # A LINK-ONLY candidate is stored and never summarised (R1).
+                # The summary is four slots wide and is the Tags column for
+                # every untagged trade; a chart housekeeping click that reached
+                # it evicted a real setup match, which is the one thing the
+                # column is for.
+                setup_tags = [
+                    item["tag"] for item in suggestions if not item.get("link_only")
+                ]
                 shape = [
                     {
                         "tag": item.tag,
