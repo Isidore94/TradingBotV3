@@ -393,12 +393,21 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
             store, {str(row.get("occurrence_id")): row for row in selected}
         ),
         # The M5-close grid plus the Phase 0.12 B3 higher-timeframe LRSI
-        # study. Both are read off the SAME occurrences and the SAME canonical
-        # M5 bars already materialised above, so the study adds simulation
-        # work and not a second data pass - which is what keeps it inside
-        # `setup_research`'s reserve. Shadow only: 16 diagnostic recipes that
-        # reach no detector, score, alert, Focus list or review queue.
-        recipes=tuple(outcomes.M5_CLOSE_RECIPES) + tuple(outcomes.HTF_LRSI_RECIPES),
+        # study, plus the Phase 0.13 P8 entry-timing grid. All three are read
+        # off the SAME occurrences and the SAME canonical M5 bars already
+        # materialised above, so a study adds simulation work and not a second
+        # data pass - which is what keeps them inside `setup_research`'s
+        # reserve. Shadow only: 16 + 12 diagnostic recipes that reach no
+        # detector, score, alert, Focus list or review queue.
+        #
+        # P8's twelve are cheap despite the grid's width: nine of them share one
+        # exit machine with the m5close rows and the other three cost one
+        # derived series each, memoised per occurrence.
+        recipes=(
+            tuple(outcomes.M5_CLOSE_RECIPES)
+            + tuple(outcomes.HTF_LRSI_RECIPES)
+            + tuple(outcomes.SETUP_ENTRY_TIMING_RECIPES)
+        ),
         as_of=stamp,
         now=stamp,
         run_id=run_id,

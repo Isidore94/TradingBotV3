@@ -262,7 +262,13 @@ def test_every_backfilled_trial_names_its_authorization():
         assert row["declared_cells"]
         assert row["declared_floors"]
         assert row["declared_window"]
-        assert row["status"] == trial_ledger.STATUS_REGISTERED
+        # `registered` or `collecting` - P8 added the second, which says the
+        # declared window's clock is running. What must NEVER be true at
+        # declaration time is a status that implies the numbers were seen.
+        assert row["status"] in {
+            trial_ledger.STATUS_REGISTERED,
+            trial_ledger.STATUS_COLLECTING,
+        }, row["trial_id"]
         # Nothing may be declared with an outcome already in it.
         assert row["outcome"] == ""
 
@@ -411,8 +417,11 @@ def test_the_trial_ledger_still_has_no_production_importer():
     """Unchanged by the merge, and the more load-bearing half of the old rule."""
     import subprocess
 
+    # IMPORT-shaped, not any mention: P8's authorization block in `outcomes.py`
+    # names the trial ledger in prose, which is exactly what a registered grid
+    # should do and is not a dependency.
     result = subprocess.run(
-        ["git", "grep", "-l", "trial_ledger", "--", "scripts/"],
+        ["git", "grep", "-lE", r"^\s*(from|import)\s+.*trial_ledger", "--", "scripts/"],
         cwd=ROOT,
         capture_output=True,
         text=True,
