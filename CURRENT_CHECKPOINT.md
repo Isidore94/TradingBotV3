@@ -36,6 +36,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
 | Active roadmap items | **Phase 0.13 packet P2 (2026-09-01 - BUILT on `claude/p2-show-me`; live gate #31 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
 | Last verified baseline | `pytest tests/ -q` **5775 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p2-show-me`, MEASURED with pytest's own exit code captured, not a piped tail's - an earlier run of this tree read 5774 with one unhandled-thread warning, which was a real defect and is fixed) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · spec-drift green · frozen exe NOT rebuilt and not required: `ai_jobs` is an existing collected package and there is no new dependency and no new non-`.py` asset. Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Working branch | **`claude/p4-swing-variables`**, off `main` at `66a0c31` - Phase 0.13 packet P4 (the variables you are not looking at). Half A capture-only, Half B all six items, both authorized by the trader - Half A explicitly, before the first edit to `master_avwap_lib/legacy.py` under the file-scoped ask-first rule. Also open and unmerged, all off `main` at the same commit: `claude/p3-fact-pack-truth` (gate #32), `claude/p2-show-me` (#31), `claude/p1-grade-what-you-said` (#30), `claude/p0-apply-decisions` (#29) and `claude/focus-declutter-lrsi-htf` (#27/#28) |
+| Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
+| Active roadmap items | **Phase 0.13 packet P4 (2026-09-01 - BUILT on `claude/p4-swing-variables`; live gate #33 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5759 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p4-swing-variables`, MEASURED with pytest's own exit code captured) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · frozen exe NOT rebuilt and not required: no new dependency, no new non-`.py` asset, no new top-level `scripts/` package. Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **DONE 2026-08-31 21:51, trader-authorized.** The checkout sits on `main` and the desk was stopped (pid 9832, the pid its own `heartbeat.json` named; its launcher parent 3476 had already exited) and relaunched through `trading_desk.cmd` - the production launcher, unchanged. New pids: **23588** (the desk) under trampoline **23796**. Verified UP three ways rather than assumed: the process outlived 60 s, a second launch printed "another TradingBotV3 desk is already running" and exited 0, and `heartbeat.json` re-stamped at 21:52:40 naming pid 23588 (it had read 21:50:40 / pid 9832 before the kill). Everything merged tonight is what is now running, and the stall watchdog is ON - this session's `ui_stalls.jsonl` is the AFTER side of gates 24-26 |
 
@@ -53,6 +57,7 @@ the dated entry named beside it.
 | 29 | **P0 trader decisions (Phase 0.13)** — one DESK session with **no LRSI line on the M5 alert bar**, `lrsi_cross_20` / `lrsi_cross_50` rows **still arriving in `intraday_bounce_outcomes.csv`** that same day, and **no BANGER branch left in the alert path** (grep `scripts/` for `banger` — only the retired `banger` review column, the `REGIME_BANGER_*` regime-pause thresholds and the trader's own quote in the `alert_repetition.py` docstring may remain) | 2026-09-01 Phase 0.13 P0 entry |
 | 30 | **P1 grading loop (Phase 0.13 P1)** — one **Weekend Prep** opened after the next scan showing: a **`human_focus_swing_vetted`** row in the picks table; a like merged into `like_cohort_picks.csv` on the DAY it was captured (its `trade_date` equal to the session, not the night before); **one** pooled `compressed` veto cohort rather than the current two; and an **`r_gaps`** array present in `review_preference_state.json` | 2026-09-01 Phase 0.13 P1 entry |
 | 31 | **P2 surfaces (Phase 0.13 P2)** — one DESK session where the trader opens all six: the two Weekend Prep judgement tables (robust columns, horizon selector, greyed sub-floor rows), the week page's named callouts, the Daytrade Tracker's **My Decisions** tabs, the A.I. Summary **gate strip**, and the M5 alert bar showing both a **take %** suffix and a **×N** fold — and `ui_stalls.jsonl` charges no seconds to any of them | 2026-09-01 Phase 0.13 P2 entry |
+| 33 | **Swing variables (Phase 0.13 P4)** — one desk scan, then: the **Attributes** tab on the Setup Tracker opens without stalling the desk and shows the greyed sub-floor rows; the scan-factor leaderboard's new `stale_horizon_observations_dropped` column carries a real count; and an `expected_r_note` on the priority report names its exit template. The new attribute keys only appear on setups recorded AFTER this lands, so the leaderboard needs a scan plus forward sessions before it can grade them | 2026-09-01 Phase 0.13 P4 entry |
 | ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-08-31** at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
@@ -629,6 +634,87 @@ Both were invisible until the selector started filtering on it.
 `scripts/` stashed: 15 tests for items 1-2, 14 for item 3, 15 for item 4 (the whole file
 fails to collect with the untracked module stashed too), 11 for items 5-6, and both
 deleted-panel guards.
+### 2026-09-01 - Phase 0.13 packet P4: the variables you are not looking at
+
+**Branch `claude/p4-swing-variables`, off `main` at `66a0c31`.** Two halves. The trader
+was asked BEFORE the first edit to `master_avwap_lib/legacy.py` (file-scoped ask-first
+rule) and answered "yes - do Half A" and "all six (B1-B6)". Live gate 33 owed. No frozen
+rebuild.
+
+**HALF A - capture only, and a golden proving it.**
+
+The Qt Setup Tracker gained an **Attributes** tab over
+`master_avwap_setup_attribute_leaderboard.csv`, which the scanner has written every scan
+since it was built and which only the legacy Tk GUI and the offline tuner ever read.
+Live: **38,617 groups, 37,049 of them (96%) under the reportable-n floor** - so the
+order is the honesty, with floor-clearing rows first and sub-floor rows greyed, labelled
+and last. Every row is KEPT.
+
+Read **off the Qt thread**, unlike its ten siblings, and the comment says why: **19.7
+MB** against 5.5 MB for the next largest and under 150 KB for the rest.
+
+Twelve variables already on the record or the row gained attribute keys - human focus
+pick/side, tracker setup family, market regime, sector, industry, ATR as a PERCENT of
+price, signed SMA200/SMA50 distance in ATR plus two booleans, and relvol - with **no
+weight and no gate**. A missing input records NOTHING rather than a zero, and a zero ATR
+never divides.
+
+The golden is the ranking itself: `p4_ranking_unchanged_v1.json`, contract-bearing,
+frozen from the PRE-Half-A code with `scripts/` stashed, carrying its own inputs and
+REPLAYED rather than compared. The Expected-R config is pinned to the shipped defaults
+rather than loaded - `expected_r_config.json`'s anchors are re-fitted by the calibration
+pass, so a golden that let it load would fail whenever the desk recalibrated. That was
+found the hard way: the first freeze read the live config outside pytest and the sandbox
+config inside it, and the golden caught the mismatch.
+
+**HALF B - six items, each behind a fixture frozen first.**
+
+**B1** The leaderboard states its own floor (`meets_n_floor`, `evidence_label`, through
+`evidence_stats.summarize`, asked of CLOSED setups). The fixture freezes the leaderboard
+AND the tuner's recommendations, and is deliberately built so the two verdicts DISAGREE:
+a 20-setup group is under the reportable floor but clears the tuner's own gates, so the
+tuner still writes its -8 rule. B1 publishes that and changes nothing about it.
+
+**B2** Family and regime views as sibling files; the existing export keeps its exact
+grain because the tuner reads it into live weights. Columns read BY NAME - the extra
+dimension prepends, so positional indices would have shifted every column one place.
+
+**B3** `stale_horizon` rows leave the scan-factor leaderboard. The horizon indexes a
+symbol's own scan rows, not exchange sessions: medians of 64 and 73 sessions for
+horizons 5 and 10, and 42-45% of rows over twice their horizon, all inside every average
+the file published. The drop count and reason travel on every row; a row whose drift
+could not be measured is KEPT. **Step (a) only**, pinned by a test - re-selecting the
+future row is a sec-7 promotion.
+
+**B4** `assigned_tier` is stamped at assignment time and preferred by the grader, with
+`tier_source` saying which. The disagreement it fixes: a favorite-bucket row held out of
+S/A for a poor expected R derived as "S" and shipped as nothing.
+
+**B5** `static_score` reaches the record and the calibration helper prefers it. The fit
+was reading the proven-quality score - which already contains realized performance - as
+structure quality, a feedback loop.
+
+**B6** `REPRESENTATIVE_EXIT_TEMPLATE_ID` names which exit plan the headline R is measured
+on. Empty means today's behaviour, so nothing moved; the resolved template is on the
+summary and in every `expected_r_note`, and `setup_docs.py` now says the headline R is
+not measured on the plan it documents.
+
+**REPORTED, NOT FORCED.** The packet named `_build_priority_tier_sections`; the function
+is `_priority_partition_tier_rows`. And B5's anchor movement **cannot be measured on this
+tree**: no record on disk carries `static_score` yet, so today every sample still takes
+the old path and the fit is unchanged - the new
+`expected_r_calibration_source_counts` is what will show the changeover as records
+accumulate. Stated rather than estimated.
+
+**One golden was regenerated, and it says so.** B6 changes the `expected_r_note` STRING,
+which the Half A golden pins. The fixture's `intentional_difference` names B6, and the
+pre-B6 NUMBERS are preserved separately in `ranking_numbers_before_b6` with a test
+asserting they still agree - so the regeneration cannot hide a moved score, bucket or
+expected R behind a text change.
+
+**Verification.** `pytest tests/ -q` **5759 passed, 72 subtests, process exit 0** ·
+`ruff` **clean** · smoke **7/7** · source `--selftest` **73/73**. Fail-before-fix with
+`scripts/` stashed: 9 of 13 Half A tests, 13 of 30 Half B tests.
 
 ### 2026-08-31 (late evening) - Desk snappiness packet 3: the last of the three
 

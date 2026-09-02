@@ -4593,6 +4593,52 @@ def _protective_band_label(side: str) -> str:
     return "LOWER_1" if normalize_side(side) == "LONG" else "UPPER_1"
 
 
+#: WHICH EXIT TEMPLATE the headline per-setup R is measured on (P4 B6).
+#:
+#: `_summarize_tracker_setup_outcome` takes the FIRST tradeable scenario
+#: carrying the representative stop label, and which one that is has always
+#: been decided by the order of the `scenarios` dict - in practice `full_band2`,
+#: while `setup_docs.py` documents the house exit as 50% at band 2, the rest
+#: toward band 3, trailing to band 1. Two different trades, one headline R,
+#: and nothing said which.
+#:
+#: EMPTY MEANS TODAY'S BEHAVIOUR EXACTLY - first match in scenario order -
+#: so this packet moves no number. It exists so the choice is a named constant
+#: someone can change deliberately, and so the resolved template travels on the
+#: summary and is printed in the Expected-R note. Setting it to a template id
+#: makes the selection explicit and IS a scoring change: expected R consumes
+#: the representative R, so it needs a golden fixture and a sec-7 promotion.
+REPRESENTATIVE_EXIT_TEMPLATE_ID = ""
+
+
+def _representative_scenario(tradeable: list, primary_stop_label: str):
+    """The one scenario the headline per-setup R is measured on.
+
+    You trade one stop and one exit plan, so this is the honest per-setup R.
+    The stop is chosen by `_representative_stop_label_for_setup`; the exit
+    template is `REPRESENTATIVE_EXIT_TEMPLATE_ID` when it is set, and otherwise
+    the first match - which is what the code has always done.
+
+    A configured template that no scenario carries falls back to the first
+    match rather than returning nothing: a setup with no representative R would
+    silently fall through to the cross-variant average, which is the number
+    this function exists to avoid.
+    """
+    matching = [
+        scenario
+        for scenario in tradeable
+        if str(scenario.get("stop_reference_label") or "") == primary_stop_label
+    ]
+    if not matching:
+        return None
+    wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
+    if wanted:
+        for scenario in matching:
+            if str(scenario.get("exit_template_id") or "") == wanted:
+                return scenario
+    return matching[0]
+
+
 def _representative_stop_label_for_setup(setup: dict) -> str:
     """Representative stop label for a tracked setup's honest per-setup R.
 
@@ -5780,6 +5826,16 @@ def build_tracker_setup_record(
         "previous_anchor_date": str(previous_anchor.get("date") or ""),
         "priority_bucket": str(row.get("priority_bucket") or ""),
         "priority_score": float(row.get("score", 0) or 0),
+        # P4 B5: the STRUCTURE points, beside the score they were turned into.
+        #
+        # `apply_expected_r_ranking` overwrites `row["score"]` with the
+        # proven-quality score and keeps the pre-blend value in
+        # `row["static_score"]`. The record stored only the overwritten one, so
+        # the expected-R calibration - which is meant to fit realized R against
+        # STRUCTURE QUALITY - was fitting it against a number that already had
+        # realized performance blended into it. Storing both is what lets the
+        # helper read the right one.
+        "static_score": _coerce_float(row.get("static_score")),
         "human_focus_pick": bool(row.get("human_focus_pick")),
         "human_focus_side": str(row.get("human_focus_side") or "").strip().upper(),
         "favorite_zone": row.get("favorite_zone") or "",
@@ -6645,16 +6701,18 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     # preference to the cross-variant average (it falls back to the average when
     # the primary stop scenario isn't present).
     primary_stop_label = _representative_stop_label_for_setup(setup)
-    representative = next(
-        (scenario for scenario in tradeable if str(scenario.get("stop_reference_label") or "") == primary_stop_label),
-        None,
-    )
+    representative = _representative_scenario(tradeable, primary_stop_label)
     rep_total_r = _clip_tracker_r_value(representative.get("total_r"), TRACKER_SCORING_R_CLIP) if representative else None
     rep_is_closed = bool(representative and _scenario_is_closed(representative.get("status")))
     representative_total_r = rep_total_r if rep_total_r is not None else avg_total_r
     representative_closed_r = rep_total_r if (rep_total_r is not None and rep_is_closed) else avg_closed_r
     return {
         "representative_stop_label": str(representative.get("stop_reference_label")) if representative else "",
+        # WHICH EXIT TEMPLATE the headline R is measured on (P4 B6). It was
+        # never stated, and the answer is decided by dict order.
+        "representative_exit_template_id": (
+            str(representative.get("exit_template_id") or "") if representative else ""
+        ),
         "representative_total_r": representative_total_r,
         "representative_closed_r": representative_closed_r,
         "tradeable_scenario_count": len(tradeable),
@@ -7706,8 +7764,26 @@ _EXPECTED_R_CONFIG_CACHE: dict | None = None
 
 
 def _expected_r_static_points_from_record(setup: dict) -> float | None:
-    """Static quality points for a stored tracker setup: its scan-time score with
-    the tracker-derived deltas removed (mirrors ``_expected_r_quality_points``)."""
+    """Static quality points for a stored tracker setup (P4 B5).
+
+    PREFERS the stored `static_score`. `apply_expected_r_ranking` overwrites
+    `row["score"]` with the PROVEN-QUALITY score - which already has realized
+    win rate and profit factor blended into it - and keeps the pre-blend
+    structure points in `row["static_score"]`. The record stored only the
+    overwritten one, so this helper subtracted two tracker deltas from a number
+    that was not the sum of them, and the expected-R calibration fitted
+    realized R against a number that already contained realized performance.
+    That is a feedback loop: good outcomes raised the score, and the fit then
+    read the raised score as structure quality.
+
+    The subtraction path is kept for records written before B5, because months
+    of them exist and approximating their structure points is honest about what
+    can be recovered. Which path produced a value is reported by
+    `expected_r_calibration_source_counts` rather than silently mixed.
+    """
+    stored = _coerce_float(setup.get("static_score"))
+    if stored is not None:
+        return float(stored)
 
     score = _coerce_float(setup.get("priority_score"))
     if score is None:
@@ -7715,6 +7791,30 @@ def _expected_r_static_points_from_record(setup: dict) -> float | None:
     score -= int(setup.get("recent_tracker_score_delta", 0) or 0)
     score -= int(setup.get("setup_type_score_delta", 0) or 0)
     return float(score)
+
+
+def expected_r_calibration_source_counts(tracker_payload: dict | None = None) -> dict[str, int]:
+    """How many calibration records carry a stored `static_score` (P4 B5).
+
+    The two paths fit different things - stored structure points, versus the
+    proven-quality score with two deltas removed - so a run that mixes them is
+    fitting a blend of two definitions. This says how much of each, so the
+    changeover is visible rather than assumed.
+    """
+    tracker = tracker_payload if isinstance(tracker_payload, dict) else load_setup_tracker_payload()
+    setups = tracker.get("setups", {}) if isinstance(tracker, dict) else {}
+    counts = {"stored_static_score": 0, "derived_from_priority_score": 0, "unusable": 0}
+    for setup in setups.values():
+        if not isinstance(setup, dict):
+            counts["unusable"] += 1
+            continue
+        if _coerce_float(setup.get("static_score")) is not None:
+            counts["stored_static_score"] += 1
+        elif _coerce_float(setup.get("priority_score")) is not None:
+            counts["derived_from_priority_score"] += 1
+        else:
+            counts["unusable"] += 1
+    return counts
 
 
 def build_expected_r_calibration_samples(tracker_payload: dict | None = None) -> list[tuple[float, float]]:
@@ -7910,17 +8010,31 @@ def _expected_r_days_since_signal(row: dict, *, reference_date: date | None = No
     return days
 
 
+def representative_exit_template_label() -> str:
+    """What the headline per-setup R is measured on, in words (P4 B6).
+
+    The realized half of Expected R is the representative scenario's R, and
+    which EXIT PLAN that scenario carries was never stated - it is whichever
+    one comes first in the scenarios dict. Naming it in the note is how a
+    reader learns that "+0.40R" is one exit plan's number and not the house
+    plan `setup_docs.py` describes.
+    """
+    configured = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
+    return configured or "first matching scenario (unpinned)"
+
+
 def _format_expected_r_note(result: dict) -> str:
     expected = float(result.get("expected_r") or 0.0)
     prior = float(result.get("prior_r") or 0.0)
     realized = result.get("realized_r")
     weight = float(result.get("blend_weight") or 0.0)
     samples = int(result.get("closed_samples") or 0)
+    template = f" [exit template: {representative_exit_template_label()}]"
     if realized is None or weight <= 0:
-        return f"ExpR {expected:+.2f}R (prior {prior:+.2f}R, no tracker sample yet)"
+        return f"ExpR {expected:+.2f}R (prior {prior:+.2f}R, no tracker sample yet){template}"
     return (
         f"ExpR {expected:+.2f}R (prior {prior:+.2f}R blended with realized "
-        f"{float(realized):+.2f}R at w={weight:.2f}, n={samples})"
+        f"{float(realized):+.2f}R at w={weight:.2f}, n={samples}){template}"
     )
 
 
@@ -8198,7 +8312,23 @@ def _flatten_tracker_attributes(setups: dict[str, dict], attribute_registry: dic
     return rows
 
 
-def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> list[dict]:
+def _build_tracker_attribute_leaderboard_rows(
+    attribute_rows: list[dict],
+    *,
+    extra_group_fields: tuple[str, ...] = (),
+) -> list[dict]:
+    """One row per (side, bucket, attribute, value) - or a finer key.
+
+    `extra_group_fields` names additional SETUP-level columns to split the key
+    by (P4 B2). Empty by default, so the existing export keeps its exact shape:
+    `analyze_master_avwap_scoring.py --apply` reads that file into live scoring
+    weights and a changed grain there would change what the tuner sees.
+
+    Why the finer views exist: the default key pools every setup family over
+    the whole 120-day retention, so "20d trend = up" is one number across an
+    AVWAPE favorite, a post-earnings break and a fallback, in every regime the
+    window contains. Those are different questions with one answer.
+    """
     if not attribute_rows:
         return []
 
@@ -8261,6 +8391,11 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
             "attribute_label": row.get("attribute_label"),
             "attribute_description": row.get("attribute_description"),
             "attribute_source_stage": row.get("attribute_source_stage"),
+            # P4 B2: setup-level context carried onto every observation so the
+            # finer views can split on it. Present on the default view too, and
+            # harmless there: it is not in `group_cols` unless a caller asks.
+            "setup_family": str(row.get("setup_family") or row.get("tracker_setup_family") or ""),
+            "market_regime_label": str(row.get("market_regime_label") or ""),
         }
 
         if attribute_type == "list":
@@ -8383,7 +8518,11 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
 
     obs_df = pd.DataFrame(observations)
     leaderboard_rows = []
+    extra_fields = tuple(
+        field for field in (extra_group_fields or ()) if field in obs_df.columns
+    )
     group_cols = [
+        *extra_fields,
         "side",
         "priority_bucket",
         "attribute_key",
@@ -8403,7 +8542,18 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
         avg_total_values = pd.to_numeric(unique_group_df["avg_total_r"], errors="coerce").dropna()
         avg_closed_values = pd.to_numeric(unique_group_df["avg_closed_r"], errors="coerce").dropna()
         priority_values = pd.to_numeric(unique_group_df["priority_score"], errors="coerce").dropna()
-        baseline = baseline_map.get((group_key[0], group_key[1]), {})
+        # BY NAME, never by position (R1). `extra_group_fields` PREPENDS to
+        # `group_cols`, so the moment a finer view is built, positions 0 and 1
+        # are the extra fields rather than (side, priority_bucket): the lookup
+        # asked for `(setup_family, side)` in a map keyed `(side, bucket)`,
+        # missed every time, and every baseline and edge column in the by-family
+        # and by-regime views shipped BLANK. A blank edge reads as "no edge",
+        # which is a worse failure than a crash - B2's whole point is that those
+        # views say something the pooled view cannot.
+        named = dict(zip(group_cols, group_key))
+        baseline = baseline_map.get(
+            (named.get("side"), named.get("priority_bucket")), {}
+        )
         baseline_avg_total_r = _coerce_float(baseline.get("avg_total_r"))
         baseline_avg_closed_r = _coerce_float(baseline.get("avg_closed_r"))
         baseline_target_hit_rate = _coerce_float(baseline.get("target_hit_rate"))
@@ -8448,15 +8598,10 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
         )
         leaderboard_rows.append(
             {
-                "side": group_key[0],
-                "priority_bucket": group_key[1],
-                "attribute_key": group_key[2],
-                "attribute_group": group_key[3],
-                "attribute_label": group_key[4],
-                "attribute_description": group_key[5],
-                "attribute_source_stage": group_key[6],
-                "value_kind": group_key[7],
-                "value_label": group_key[8],
+                # Read BY NAME: `extra_group_fields` prepends to `group_cols`,
+                # so positional indices would silently shift every column one
+                # place the first time a finer view was built.
+                **dict(zip(group_cols, group_key)),
                 "setup_count": int(unique_group_df["setup_id"].nunique()),
                 "coverage_pct": (float(unique_group_df["setup_id"].nunique()) / float(total_setups)) * 100.0,
                 "tradeable_setup_count": int(tradeable_group_df["setup_id"].nunique()),
@@ -8492,6 +8637,27 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
                     else None
                 ),
                 "sample_setups": "; ".join(sample_examples),
+                # P4 B1: the sample floor, as COLUMNS.
+                #
+                # Only numeric bucketing had a floor; categorical, bool and
+                # list rows were emitted at setup_count=1 with full averages
+                # and full edges. On the live export that is 37,049 of 38,617
+                # groups under the reportable-n floor, each carrying an edge
+                # that reads exactly like a finding.
+                #
+                # EVERY ROW IS STILL EMITTED - visibility, not suppression.
+                # This file is the tuner's input and its own gates
+                # (--min-setups / --min-closed-setups) still decide what may
+                # influence scoring; these columns decide nothing and only say
+                # which side of the floor a row sits on.
+                **_attribute_leaderboard_evidence(
+                    # `avg_closed_values` is the exact series `avg_closed_r`
+                    # above is the mean of, so the floor is asked of the sample
+                    # the row's own numbers were computed over - never a
+                    # second, differently-filtered one.
+                    avg_closed_values.tolist(),
+                    closed_setups=int(closed_group_df["setup_id"].nunique()),
+                ),
             }
         )
 
@@ -8504,6 +8670,80 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
         )
     )
     return leaderboard_rows
+
+
+#: The finer readings of the same evidence (P4 B2). Published as SEPARATE
+#: FILES so the existing export keeps its exact grain: the offline tuner reads
+#: that one into live scoring weights, and changing its key would change what
+#: the tuner sees without anyone deciding to.
+ATTRIBUTE_LEADERBOARD_VIEWS = {
+    "family": ("setup_family",),
+    "regime": ("market_regime_label",),
+}
+
+
+def attribute_leaderboard_view_path(name: str):
+    """Sibling of the main export, named by its extra dimension.
+
+    Derived from the named constant, never composed from a directory: this
+    packet's own page shipped a blank table for six days from exactly that
+    habit.
+    """
+    base = MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE
+    return base.with_name(f"{base.stem}_by_{name}{base.suffix}")
+
+
+def build_tracker_attribute_leaderboard_views(attribute_rows: list[dict]) -> dict[str, list[dict]]:
+    """The default leaderboard plus one finer view per extra dimension.
+
+    The default key - (side, priority_bucket, attribute, value) - pools every
+    setup family over the whole 120-day retention, so one number answers "does
+    a 20-day uptrend help?" across an AVWAPE favorite, a post-earnings break
+    and a diagnostic fallback, in every regime the window happens to contain.
+    Those are different questions.
+
+    Splitting them is a READING, not a replacement: the default view is emitted
+    unchanged and first, and each finer view is its own file. A finer view has
+    smaller groups by construction, which is exactly why B1's `meets_n_floor`
+    travels on every row of all of them.
+    """
+    views: dict[str, list[dict]] = {
+        "default": _build_tracker_attribute_leaderboard_rows(attribute_rows)
+    }
+    for name, fields in ATTRIBUTE_LEADERBOARD_VIEWS.items():
+        views[name] = _build_tracker_attribute_leaderboard_rows(
+            attribute_rows, extra_group_fields=fields
+        )
+    return views
+
+
+def _attribute_leaderboard_evidence(closed_values, *, closed_setups: int) -> dict:
+    """`meets_n_floor` and `evidence_label` for one leaderboard group.
+
+    Routed through `evidence_stats.summarize` - ground rule 10's contract lives
+    there once, and a second floor implemented here is a second floor to keep
+    in step. The floor is asked of CLOSED setups, because that is the
+    denominator every average and edge on the row is computed over: a group
+    with 200 open setups and 2 closed ones has measured two things.
+
+    Never raises: a leaderboard row is evidence about setups, and it must not
+    cost the export. An unreadable statistics module yields the conservative
+    answer (below floor, unlabelled) rather than none.
+    """
+    try:
+        from evidence_stats import summarize
+
+        stats = summarize(list(closed_values or []))
+        meets = bool(stats.get("meets_n_floor")) and int(closed_setups) >= int(
+            stats.get("n_floor", 0) or 0
+        )
+        return {
+            "meets_n_floor": "1" if meets else "0",
+            "evidence_label": str(stats.get("evidence_label") or ""),
+        }
+    except Exception:  # noqa: BLE001 - never cost the export
+        logging.debug("Attribute leaderboard evidence label unavailable.", exc_info=True)
+        return {"meets_n_floor": "0", "evidence_label": ""}
 
 
 def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
@@ -9448,6 +9688,15 @@ SCAN_FACTOR_LEADERBOARD_COLUMNS = [
     "success_score",
     "impact_score",
     "sample_observations",
+    # R1: the coverage line B3 builds on every row. `_write_scan_factor_csv`
+    # constructs the frame as `pd.DataFrame(rows, columns=COLUMNS)`, so a key
+    # missing from this list is dropped SILENTLY - the row dict carried these
+    # three and the exported file never had them. Appended rather than placed
+    # beside `window_end`, because every reader of this file goes by name and
+    # appending cannot move a column under anyone.
+    "observations_before_stale_filter",
+    "stale_horizon_observations_dropped",
+    "stale_horizon_drop_note",
 ]
 TIER_LIST_COLUMNS = [
     "generated_at",
@@ -9455,6 +9704,10 @@ TIER_LIST_COLUMNS = [
     "scan_date",
     "scan_row_id",
     "tier",
+    # R1: built into the row at `build_bot_tier_pick_rows` and dropped by this
+    # list. Without it a mixed file cannot be read honestly - a row graded by
+    # the old bucket derivation looks exactly like one whose tier was recorded.
+    "tier_source",
     "symbol",
     "side",
     "priority_bucket",
@@ -9478,6 +9731,10 @@ TIER_OUTCOME_COLUMNS = [
     "future_scan_date",
     "horizon_sessions",
     "tier",
+    # R1: the outcome rows unpacked `tier_source` and never wrote it - a dead
+    # local. Same reason as the pick rows: a graded outcome must say which rule
+    # produced the tier it is grading.
+    "tier_source",
     "symbol",
     "side",
     "priority_bucket",
@@ -9551,6 +9808,10 @@ SCAN_FACTOR_CATEGORICAL_FIELDS = {
     "favorite_zone": ("setup", "Favorite zone"),
     "setup_family": ("setup", "Setup family"),
     "priority_bucket": ("setup", "Priority bucket"),
+    # P4 A2, capture only. Both are already on the priority row and neither
+    # has ever been graded.
+    "sector": ("setup", "Sector"),
+    "industry": ("setup", "Industry"),
     "breakout_5d": ("structure", "5d breakout"),
     "retest_reference_level": ("structure", "Retest reference level"),
     "extreme_move_retest_level": ("pattern", "Extreme move retest level"),
@@ -9561,6 +9822,8 @@ SCAN_FACTOR_BOOL_FIELDS = {
     "spy_above_sma20": ("market", "SPY above SMA20"),
     "spy_above_sma50": ("market", "SPY above SMA50"),
     "previous_day_range_break": ("structure", "Previous-day range break"),
+    "above_sma200": ("structure", "Above SMA200"),
+    "below_sma50": ("structure", "Below SMA50"),
     "has_bounce_event_today": ("setup", "Bounce event today"),
     "pre_earnings_setup_blocked": ("earnings", "Pre-earnings blocked"),
     "post_earnings_hard_rule_blocked": ("earnings", "Post-earnings hard-rule blocked"),
@@ -9601,6 +9864,14 @@ SCAN_FACTOR_NUMERIC_FIELDS = {
     "last_close": ("price", "Last close", (10, 25, 50, 100, 200, 500)),
     "last_volume": ("liquidity", "Last volume", (500_000, 1_000_000, 3_000_000, 10_000_000)),
     "atr20": ("volatility", "ATR20", (1, 2, 5, 10, 20)),
+    # Beside the dollar buckets above, never replacing them: a $2 ATR is a
+    # quiet day on a $400 stock and a violent one on a $12 stock (P4 A2).
+    "atr20_pct_of_price": ("volatility", "ATR20 % of price", (1, 2, 3, 5, 8)),
+    "relvol": ("filters", "Relative volume (20d)", (0.5, 1.0, 1.5, 2.5, 5.0)),
+    # Trader rule 3's geometry as EVIDENCE. Signed, in ATR, so the D1 record
+    # can agree or disagree with the Alert Center's filter. No gate, no points.
+    "dist_sma200_atr": ("structure", "Distance to SMA200 (ATR)", (-8, -3, -1, 0, 1, 3, 8)),
+    "dist_sma50_atr": ("structure", "Distance to SMA50 (ATR)", (-8, -3, -1, 0, 1, 3, 8)),
     "pct_from_current_vwap": ("levels", "% from current AVWAP", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
     "pct_from_current_upper_1": ("levels", "% from current upper 1", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
     "pct_from_current_lower_1": ("levels", "% from current lower 1", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
@@ -10052,6 +10323,38 @@ def build_scan_factor_leaderboard_rows(
     if recent_obs.empty:
         return []
 
+    # ---------------------------------------------------------------- P4 B3
+    # Drop the rows whose "horizon" is fiction.
+    #
+    # `future_idx = idx + horizon` in `build_scan_factor_observation_rows`
+    # indexes this SYMBOL'S OWN scan rows, not exchange sessions, so a name
+    # that appears on a watchlist irregularly has "5 sessions later" land far
+    # away: measured live medians are horizon 5 -> 64 sessions and horizon 10
+    # -> 73, with 42-45% of rows spanning more than twice their declared
+    # horizon. `stale_horizon` has been COMPUTED on every observation since
+    # R10.D and nothing has ever filtered on it, so those rows have been inside
+    # every average this file publishes.
+    #
+    # STEP (a) ONLY, deliberately. This removes them from the leaderboard; it
+    # does NOT re-select the future row by exchange session, which would
+    # redefine every historical number the tracker has produced and is its own
+    # promotion. A row is dropped only when the flag is explicitly True -
+    # `None` means the drift could not be measured, and uncertainty is not
+    # grounds for deletion.
+    #
+    # The 2026-07-01 signal weights were justified against this file, so the
+    # numbers move. Any consequent weight change is a full plan.md sec-7
+    # promotion and is not part of this packet.
+    observations_before_stale_filter = int(len(recent_obs))
+    stale_dropped = 0
+    if "stale_horizon" in recent_obs.columns:
+        stale_mask = recent_obs["stale_horizon"] == True  # noqa: E712 - None must not match
+        stale_dropped = int(stale_mask.sum())
+        if stale_dropped:
+            recent_obs = recent_obs[~stale_mask].copy()
+    if recent_obs.empty:
+        return []
+
     source_rows = {
         str(row.get("_scan_row_id") or ""): row
         for row in frame.to_dict("records")
@@ -10157,6 +10460,16 @@ def build_scan_factor_leaderboard_rows(
                 "lookback_days": lookback_days,
                 "window_start": window_start,
                 "window_end": window_end,
+                # The coverage line: what this file is computed over, said on
+                # the file rather than inferred from it (P4 B3).
+                "observations_before_stale_filter": observations_before_stale_filter,
+                "stale_horizon_observations_dropped": stale_dropped,
+                "stale_horizon_drop_note": (
+                    f"{stale_dropped} of {observations_before_stale_filter} observation(s) "
+                    "dropped: their forward row was more than twice the declared horizon "
+                    "away, because the horizon indexes this symbol's own scan rows and not "
+                    "exchange sessions. A row whose drift could not be measured is KEPT."
+                ),
                 "horizon_sessions": int(group_key[0]),
                 "side": str(group_key[1]),
                 "factor_key": str(group_key[2]),
@@ -10257,13 +10570,40 @@ def load_scan_factor_leaderboard_rows(path: Path | None = None) -> list[dict]:
     return frame.to_dict("records")
 
 
+#: The column carrying the tier the trader actually saw (P4 B4).
+ASSIGNED_TIER_FIELD = "assigned_tier"
+
+
 def _tier_for_priority_bucket(priority_bucket: str | None) -> str:
+    """The DERIVED tier - a fallback for rows written before B4.
+
+    This is not the shipped tier and never was: the tier the trader saw is
+    decided in `_priority_partition_tier_rows`, after the expected-R demote,
+    the per-symbol de-dupe and the best-swing merge. Kept because the history
+    file holds months of rows with no `assigned_tier` column, and grading them
+    by the old rule is honest about what could be known; inventing one would
+    not be.
+    """
     bucket = str(priority_bucket or "").strip().lower()
     if bucket == "favorite_setup":
         return "S"
     if bucket == "near_favorite_zone":
         return "A"
     return ""
+
+
+def tier_for_tracker_row(row) -> tuple[str, str]:
+    """(tier, source) for one history row: the assigned tier, else the derivation.
+
+    The SOURCE travels with the tier so a mixed file reads honestly - rows
+    written before B4 are graded by the old rule and say so, rather than
+    silently looking like decisions that were recorded.
+    """
+    getter = row.get if hasattr(row, "get") else lambda key, default=None: default
+    assigned = str(getter(ASSIGNED_TIER_FIELD, "") or "").strip().upper()
+    if assigned:
+        return assigned, "assigned"
+    return _tier_for_priority_bucket(getter("priority_bucket")), "derived_from_bucket"
 
 
 def _tier_rank_value(tier: str | None) -> int:
@@ -10375,7 +10715,7 @@ def build_bot_tier_pick_rows(
     generated_at = datetime.now().isoformat(timespec="seconds")
     rows = []
     for source_row in latest_frame.to_dict("records"):
-        tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        tier, tier_source = tier_for_tracker_row(source_row)
         if not tier:
             continue
         matches = _positive_scan_factor_matches_for_source_row(
@@ -10389,6 +10729,9 @@ def build_bot_tier_pick_rows(
                 "scan_date": source_row.get("_scan_date_text"),
                 "scan_row_id": source_row.get("_scan_row_id"),
                 "tier": tier,
+                # Which tier this is: the one that shipped, or the old
+                # bucket derivation for a row written before B4.
+                "tier_source": tier_source,
                 "symbol": source_row.get("_symbol"),
                 "side": normalize_side(source_row.get("_side") or source_row.get("side")),
                 "priority_bucket": _scan_factor_text(source_row.get("priority_bucket")),
@@ -10437,7 +10780,7 @@ def build_bot_tier_outcome_rows(
         source_row = source_rows.get(str(obs.get("scan_row_id") or ""))
         if not source_row:
             continue
-        tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        tier, tier_source = tier_for_tracker_row(source_row)
         if not tier:
             continue
         horizon = int(obs.get("horizon_sessions", 0) or 0)
@@ -10458,6 +10801,7 @@ def build_bot_tier_outcome_rows(
                 "watchlist_label": obs.get("watchlist_label"),
                 "scan_date": obs.get("scan_date"),
                 "future_scan_date": obs.get("future_scan_date"),
+                "tier_source": tier_source,
                 "horizon_sessions": horizon,
                 "tier": tier,
                 "symbol": obs.get("symbol"),
@@ -11279,6 +11623,24 @@ def export_setup_tracker_views(payload: dict) -> None:
     pd.DataFrame(short_horizon_rows).to_csv(SETUP_SHORT_HORIZON_FILE, index=False)
     pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
     pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
+    # P4 B2: the same evidence read at a finer grain, as SEPARATE FILES. The
+    # export above keeps its exact shape because the offline tuner reads it
+    # into live scoring weights.
+    #
+    # GUARDED, for the reason the shadow write below is guarded: this
+    # function's caller saves the tracker payload AFTER it, so an exception
+    # here would cost the day's tracker save. These are additional readings of
+    # evidence that is already on disk - they must never cost it.
+    try:
+        for name, fields in ATTRIBUTE_LEADERBOARD_VIEWS.items():
+            view_rows = _build_tracker_attribute_leaderboard_rows(
+                attribute_rows, extra_group_fields=fields
+            )
+            pd.DataFrame(view_rows).to_csv(
+                attribute_leaderboard_view_path(name), index=False
+            )
+    except Exception:
+        logging.exception("Attribute leaderboard views could not be written.")
     # Shadow evidence, same pass, read by nothing that scores or alerts - and
     # GUARDED, because this function's caller runs `save_setup_tracker_payload`
     # AFTER it. Unguarded, one malformed setup dict reaching
@@ -28544,6 +28906,22 @@ def _priority_partition_tier_rows(
     )
     b_rows = take_rows(report_rows)
 
+    # P4 B4: WRITE DOWN THE TIER THAT SHIPPED.
+    #
+    # `_tier_for_priority_bucket` re-derives S/A from the priority bucket
+    # alone, so the tier tracker graded a tier the trader never saw: the
+    # shipped tier is decided HERE, after the expected-R demote
+    # (`_tier_worthy`), the per-symbol de-dupe (`take_rows`) and the best-swing
+    # merge. A name held out of S/A for a poor ExpR was still graded as S,
+    # and a name that lost its slot to a duplicate was graded as though it had
+    # one.
+    #
+    # Stamped at assignment time, on the row itself, so the grader can read
+    # the decision instead of guessing at it.
+    for tier_label, tier_rows in (("S", s_rows), ("A", a_rows), ("B", b_rows)):
+        for row in tier_rows:
+            row[ASSIGNED_TIER_FIELD] = tier_label
+
     return [
         {
             "label": "S Tier",
@@ -29558,6 +29936,154 @@ def build_tracker_entry_attributes(
         or top_weekly_sma50_retest_recent
     )
 
+    # ---------------------------------------------------------------- P4 A2
+    # Variables that were already on the record or the row and had no attribute
+    # key, so the leaderboard could never grade them. Capture only: no weight,
+    # no gate, no score input. The golden test in
+    # tests/test_p4_swing_variables.py pins that the priority score, bucket and
+    # expected R are byte-identical with and without this block.
+    # ------------------------------------------------------------------------
+    add(
+        "setup.human_focus_pick",
+        bool(row.get("human_focus_pick") or symbol_entry.get("human_focus_pick")),
+        group="setup",
+        label="Human focus pick",
+        value_type="bool",
+        description=(
+            "The trader had this name on a Focus list when the setup was "
+            "recorded. Evidence only - it never scored the setup."
+        ),
+    )
+    add(
+        "setup.human_focus_side",
+        str(row.get("human_focus_side") or symbol_entry.get("human_focus_side") or "").strip().upper(),
+        group="setup",
+        label="Human focus side",
+        value_type="text",
+        description="Which side the trader had the name on, when they had it.",
+    )
+    add(
+        "setup.tracker_setup_family",
+        str(row.get("tracker_setup_family") or symbol_entry.get("tracker_setup_family") or "").strip(),
+        group="setup",
+        label="Tracker setup family",
+        value_type="text",
+        description=(
+            "The family the TRACKER filed this setup under, which can differ "
+            "from the scanner's `setup_family` - grading both is how a "
+            "disagreement between them becomes visible."
+        ),
+    )
+    add(
+        "market.regime_label",
+        str(row.get("market_regime_label") or symbol_entry.get("market_regime_label") or "").strip().lower(),
+        group="market",
+        label="Market regime label",
+        value_type="text",
+        description="The market regime the desk was reading when this setup was recorded.",
+    )
+    add(
+        "setup.sector",
+        str(row.get("sector") or symbol_entry.get("sector") or "").strip(),
+        group="setup",
+        label="Sector",
+        value_type="text",
+        description="Sector classification carried on the priority row.",
+    )
+    add(
+        "setup.industry",
+        str(row.get("industry") or symbol_entry.get("industry") or "").strip(),
+        group="setup",
+        label="Industry",
+        value_type="text",
+        description="Industry classification carried on the priority row.",
+    )
+    # ATR as a PERCENT OF PRICE, beside the dollar-bucketed `atr20` and never
+    # replacing it. A $2 ATR is a quiet day on a $400 stock and a violent one
+    # on a $12 stock, so a dollar bucket pools two different things - the same
+    # unit error the trader ruled on for theta premium (a percent floor of the
+    # strike, not a flat quarter). Boundaries 1/2/3/5/8 percent.
+    _atr20_value = _coerce_float(row.get("atr20") or feature_row.get("atr20"))
+    _last_close_value = _coerce_float(row.get("last_close") or feature_row.get("last_close"))
+    add(
+        "volatility.atr20_pct_of_price",
+        (
+            (_atr20_value / _last_close_value * 100.0)
+            if _atr20_value is not None and _last_close_value
+            else None
+        ),
+        group="volatility",
+        label="ATR20 % of price",
+        value_type="number",
+        description=(
+            "ATR20 as a percent of last close. The dollar ATR bucket beside it "
+            "pools a quiet $400 name with a violent $12 one; this does not."
+        ),
+    )
+    # The trader's rule 3 (2026-08-27) - longs above the SMA200, shorts below
+    # the SMA50 - lives only in the Alert Center's chart-review filter. Recording
+    # the same geometry on the D1 record is what lets the swing evidence AGREE
+    # OR DISAGREE with it. Signed, in ATR, so it is comparable across prices.
+    _sma200_value = _coerce_float(row.get("sma200") or feature_row.get("sma200"))
+    _sma50_value = _coerce_float(row.get("sma50") or feature_row.get("sma50"))
+    _dist_sma200_atr = (
+        (_last_close_value - _sma200_value) / _atr20_value
+        if None not in (_last_close_value, _sma200_value, _atr20_value) and _atr20_value
+        else None
+    )
+    _dist_sma50_atr = (
+        (_last_close_value - _sma50_value) / _atr20_value
+        if None not in (_last_close_value, _sma50_value, _atr20_value) and _atr20_value
+        else None
+    )
+    add(
+        "structure.dist_sma200_atr",
+        _dist_sma200_atr,
+        group="structure",
+        label="Distance to SMA200 (ATR)",
+        value_type="number",
+        description=(
+            "Signed distance from last close to the daily SMA200 in ATR20 "
+            "units. Evidence for the trader's D1 trend rule; it gates nothing."
+        ),
+    )
+    add(
+        "structure.dist_sma50_atr",
+        _dist_sma50_atr,
+        group="structure",
+        label="Distance to SMA50 (ATR)",
+        value_type="number",
+        description=(
+            "Signed distance from last close to the daily SMA50 in ATR20 units."
+        ),
+    )
+    add(
+        "structure.above_sma200",
+        (None if None in (_last_close_value, _sma200_value) else bool(_last_close_value > _sma200_value)),
+        group="structure",
+        label="Above SMA200",
+        value_type="bool",
+        description="Last close above the daily SMA200 (the long leg of trader rule 3).",
+    )
+    add(
+        "structure.below_sma50",
+        (None if None in (_last_close_value, _sma50_value) else bool(_last_close_value < _sma50_value)),
+        group="structure",
+        label="Below SMA50",
+        value_type="bool",
+        description="Last close below the daily SMA50 (the short leg of trader rule 3).",
+    )
+    add(
+        "filters.relvol_20d",
+        _coerce_float(row.get("relvol") or feature_row.get("relvol")),
+        group="filters",
+        label="Relative volume (20d)",
+        value_type="number",
+        description=(
+            "Relative volume stamped on the row by the swing-quality shadow "
+            "pass. Recorded so the leaderboard can grade it; it filters nothing."
+        ),
+    )
     add(
         "setup.side",
         normalize_side(row.get("side") or symbol_entry.get("side") or ""),

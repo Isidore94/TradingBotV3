@@ -59,3 +59,6 @@ class ResearchPanel(QFrame):
         self.ticker_lookup_panel.shutdown()
         self.price_alerts_panel.shutdown()
         self.warehouse_readout_panel.shutdown()
+        # R1: it grew a reader thread in P4 B1 and was not on this list - the
+        # exact failure the comment above already describes, one panel later.
+        self.setup_tracker_panel.shutdown()
