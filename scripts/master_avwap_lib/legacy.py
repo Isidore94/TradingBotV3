@@ -8198,7 +8198,23 @@ def _flatten_tracker_attributes(setups: dict[str, dict], attribute_registry: dic
     return rows
 
 
-def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> list[dict]:
+def _build_tracker_attribute_leaderboard_rows(
+    attribute_rows: list[dict],
+    *,
+    extra_group_fields: tuple[str, ...] = (),
+) -> list[dict]:
+    """One row per (side, bucket, attribute, value) - or a finer key.
+
+    `extra_group_fields` names additional SETUP-level columns to split the key
+    by (P4 B2). Empty by default, so the existing export keeps its exact shape:
+    `analyze_master_avwap_scoring.py --apply` reads that file into live scoring
+    weights and a changed grain there would change what the tuner sees.
+
+    Why the finer views exist: the default key pools every setup family over
+    the whole 120-day retention, so "20d trend = up" is one number across an
+    AVWAPE favorite, a post-earnings break and a fallback, in every regime the
+    window contains. Those are different questions with one answer.
+    """
     if not attribute_rows:
         return []
 
@@ -8261,6 +8277,11 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
             "attribute_label": row.get("attribute_label"),
             "attribute_description": row.get("attribute_description"),
             "attribute_source_stage": row.get("attribute_source_stage"),
+            # P4 B2: setup-level context carried onto every observation so the
+            # finer views can split on it. Present on the default view too, and
+            # harmless there: it is not in `group_cols` unless a caller asks.
+            "setup_family": str(row.get("setup_family") or row.get("tracker_setup_family") or ""),
+            "market_regime_label": str(row.get("market_regime_label") or ""),
         }
 
         if attribute_type == "list":
@@ -8383,7 +8404,11 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
 
     obs_df = pd.DataFrame(observations)
     leaderboard_rows = []
+    extra_fields = tuple(
+        field for field in (extra_group_fields or ()) if field in obs_df.columns
+    )
     group_cols = [
+        *extra_fields,
         "side",
         "priority_bucket",
         "attribute_key",
@@ -8448,15 +8473,10 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
         )
         leaderboard_rows.append(
             {
-                "side": group_key[0],
-                "priority_bucket": group_key[1],
-                "attribute_key": group_key[2],
-                "attribute_group": group_key[3],
-                "attribute_label": group_key[4],
-                "attribute_description": group_key[5],
-                "attribute_source_stage": group_key[6],
-                "value_kind": group_key[7],
-                "value_label": group_key[8],
+                # Read BY NAME: `extra_group_fields` prepends to `group_cols`,
+                # so positional indices would silently shift every column one
+                # place the first time a finer view was built.
+                **dict(zip(group_cols, group_key)),
                 "setup_count": int(unique_group_df["setup_id"].nunique()),
                 "coverage_pct": (float(unique_group_df["setup_id"].nunique()) / float(total_setups)) * 100.0,
                 "tradeable_setup_count": int(tradeable_group_df["setup_id"].nunique()),
@@ -8525,6 +8545,51 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
         )
     )
     return leaderboard_rows
+
+
+#: The finer readings of the same evidence (P4 B2). Published as SEPARATE
+#: FILES so the existing export keeps its exact grain: the offline tuner reads
+#: that one into live scoring weights, and changing its key would change what
+#: the tuner sees without anyone deciding to.
+ATTRIBUTE_LEADERBOARD_VIEWS = {
+    "family": ("setup_family",),
+    "regime": ("market_regime_label",),
+}
+
+
+def attribute_leaderboard_view_path(name: str):
+    """Sibling of the main export, named by its extra dimension.
+
+    Derived from the named constant, never composed from a directory: this
+    packet's own page shipped a blank table for six days from exactly that
+    habit.
+    """
+    base = MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE
+    return base.with_name(f"{base.stem}_by_{name}{base.suffix}")
+
+
+def build_tracker_attribute_leaderboard_views(attribute_rows: list[dict]) -> dict[str, list[dict]]:
+    """The default leaderboard plus one finer view per extra dimension.
+
+    The default key - (side, priority_bucket, attribute, value) - pools every
+    setup family over the whole 120-day retention, so one number answers "does
+    a 20-day uptrend help?" across an AVWAPE favorite, a post-earnings break
+    and a diagnostic fallback, in every regime the window happens to contain.
+    Those are different questions.
+
+    Splitting them is a READING, not a replacement: the default view is emitted
+    unchanged and first, and each finer view is its own file. A finer view has
+    smaller groups by construction, which is exactly why B1's `meets_n_floor`
+    travels on every row of all of them.
+    """
+    views: dict[str, list[dict]] = {
+        "default": _build_tracker_attribute_leaderboard_rows(attribute_rows)
+    }
+    for name, fields in ATTRIBUTE_LEADERBOARD_VIEWS.items():
+        views[name] = _build_tracker_attribute_leaderboard_rows(
+            attribute_rows, extra_group_fields=fields
+        )
+    return views
 
 
 def _attribute_leaderboard_evidence(closed_values, *, closed_setups: int) -> dict:
@@ -10116,6 +10181,38 @@ def build_scan_factor_leaderboard_rows(
     if recent_obs.empty:
         return []
 
+    # ---------------------------------------------------------------- P4 B3
+    # Drop the rows whose "horizon" is fiction.
+    #
+    # `future_idx = idx + horizon` in `build_scan_factor_observation_rows`
+    # indexes this SYMBOL'S OWN scan rows, not exchange sessions, so a name
+    # that appears on a watchlist irregularly has "5 sessions later" land far
+    # away: measured live medians are horizon 5 -> 64 sessions and horizon 10
+    # -> 73, with 42-45% of rows spanning more than twice their declared
+    # horizon. `stale_horizon` has been COMPUTED on every observation since
+    # R10.D and nothing has ever filtered on it, so those rows have been inside
+    # every average this file publishes.
+    #
+    # STEP (a) ONLY, deliberately. This removes them from the leaderboard; it
+    # does NOT re-select the future row by exchange session, which would
+    # redefine every historical number the tracker has produced and is its own
+    # promotion. A row is dropped only when the flag is explicitly True -
+    # `None` means the drift could not be measured, and uncertainty is not
+    # grounds for deletion.
+    #
+    # The 2026-07-01 signal weights were justified against this file, so the
+    # numbers move. Any consequent weight change is a full plan.md sec-7
+    # promotion and is not part of this packet.
+    observations_before_stale_filter = int(len(recent_obs))
+    stale_dropped = 0
+    if "stale_horizon" in recent_obs.columns:
+        stale_mask = recent_obs["stale_horizon"] == True  # noqa: E712 - None must not match
+        stale_dropped = int(stale_mask.sum())
+        if stale_dropped:
+            recent_obs = recent_obs[~stale_mask].copy()
+    if recent_obs.empty:
+        return []
+
     source_rows = {
         str(row.get("_scan_row_id") or ""): row
         for row in frame.to_dict("records")
@@ -10221,6 +10318,16 @@ def build_scan_factor_leaderboard_rows(
                 "lookback_days": lookback_days,
                 "window_start": window_start,
                 "window_end": window_end,
+                # The coverage line: what this file is computed over, said on
+                # the file rather than inferred from it (P4 B3).
+                "observations_before_stale_filter": observations_before_stale_filter,
+                "stale_horizon_observations_dropped": stale_dropped,
+                "stale_horizon_drop_note": (
+                    f"{stale_dropped} of {observations_before_stale_filter} observation(s) "
+                    "dropped: their forward row was more than twice the declared horizon "
+                    "away, because the horizon indexes this symbol's own scan rows and not "
+                    "exchange sessions. A row whose drift could not be measured is KEPT."
+                ),
                 "horizon_sessions": int(group_key[0]),
                 "side": str(group_key[1]),
                 "factor_key": str(group_key[2]),
@@ -11343,6 +11450,24 @@ def export_setup_tracker_views(payload: dict) -> None:
     pd.DataFrame(short_horizon_rows).to_csv(SETUP_SHORT_HORIZON_FILE, index=False)
     pd.DataFrame(attribute_rows).to_csv(SETUP_ATTRIBUTES_FILE, index=False)
     pd.DataFrame(attribute_leaderboard_rows).to_csv(SETUP_ATTRIBUTE_LEADERBOARD_FILE, index=False)
+    # P4 B2: the same evidence read at a finer grain, as SEPARATE FILES. The
+    # export above keeps its exact shape because the offline tuner reads it
+    # into live scoring weights.
+    #
+    # GUARDED, for the reason the shadow write below is guarded: this
+    # function's caller saves the tracker payload AFTER it, so an exception
+    # here would cost the day's tracker save. These are additional readings of
+    # evidence that is already on disk - they must never cost it.
+    try:
+        for name, fields in ATTRIBUTE_LEADERBOARD_VIEWS.items():
+            view_rows = _build_tracker_attribute_leaderboard_rows(
+                attribute_rows, extra_group_fields=fields
+            )
+            pd.DataFrame(view_rows).to_csv(
+                attribute_leaderboard_view_path(name), index=False
+            )
+    except Exception:
+        logging.exception("Attribute leaderboard views could not be written.")
     # Shadow evidence, same pass, read by nothing that scores or alerts - and
     # GUARDED, because this function's caller runs `save_setup_tracker_payload`
     # AFTER it. Unguarded, one malformed setup dict reaching

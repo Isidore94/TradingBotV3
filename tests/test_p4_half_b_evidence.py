@@ -179,3 +179,181 @@ def test_b1_never_costs_the_export(monkeypatch):
     monkeypatch.setattr(evidence_stats, "summarize", boom)
     result = legacy._attribute_leaderboard_evidence([0.1] * 50, closed_setups=50)
     assert result == {"meets_n_floor": "0", "evidence_label": ""}
+
+
+# ==========================================================================
+# B2 - the leaderboard can be read by family and by regime
+# ==========================================================================
+def test_b2_the_default_view_keeps_its_exact_grain():
+    """The offline tuner reads THAT file into live scoring weights, so a
+    changed key there would change what the tuner sees without anyone deciding
+    to. The finer readings are separate files."""
+    fixture = _fixture(B1)
+    rows = copy.deepcopy(fixture["attribute_rows"])
+    views = legacy.build_tracker_attribute_leaderboard_views(rows)
+    default = legacy._build_tracker_attribute_leaderboard_rows(copy.deepcopy(rows))
+
+    assert _clean(views["default"]) == _clean(default)
+    assert set(views["default"][0]) == set(default[0])
+    # And it is still the frozen shape, column for column.
+    assert set(views["default"][0]) - set(fixture["leaderboard_rows"][0]) == B1_NEW_COLUMNS
+
+
+def test_b2_a_finer_view_splits_the_same_evidence():
+    """Fail-before-fix: `build_tracker_attribute_leaderboard_views` does not
+    exist and the builder takes no extra grouping."""
+    fixture = _fixture(B1)
+    rows = copy.deepcopy(fixture["attribute_rows"])
+    for index, row in enumerate(rows):
+        row["setup_family"] = "avwape_to_first_dev" if index < 30 else "post_earnings_candle_break"
+        row["market_regime_label"] = "bullish_weak" if index % 2 else "bearish_weak"
+
+    views = legacy.build_tracker_attribute_leaderboard_views(rows)
+
+    assert len(views["family"]) > len(views["default"]), "a finer key makes more groups"
+    assert "setup_family" in views["family"][0]
+    assert "market_regime_label" in views["regime"][0]
+    # Every row of every view still states its floor (B1) - a finer view has
+    # smaller groups by construction, which is exactly why that column travels.
+    for name, view in views.items():
+        for row in view:
+            assert row["meets_n_floor"] in {"0", "1"}, name
+
+
+def test_b2_columns_are_read_by_name_not_position():
+    """`extra_group_fields` PREPENDS to `group_cols`, so positional indices
+    would silently shift every column one place the first time a finer view was
+    built - a leaderboard whose `side` column held a setup family."""
+    fixture = _fixture(B1)
+    rows = copy.deepcopy(fixture["attribute_rows"])
+    for row in rows:
+        row["setup_family"] = "avwape_to_first_dev"
+
+    view = legacy._build_tracker_attribute_leaderboard_rows(
+        rows, extra_group_fields=("setup_family",)
+    )
+    assert view
+    for row in view:
+        assert row["side"] == "LONG"
+        assert row["priority_bucket"] == "favorite_setup"
+        assert row["setup_family"] == "avwape_to_first_dev"
+        assert row["attribute_key"].startswith(("trend.", "setup."))
+
+
+def test_b2_an_absent_grouping_field_is_ignored_rather_than_crashing():
+    fixture = _fixture(B1)
+    rows = copy.deepcopy(fixture["attribute_rows"])
+    view = legacy._build_tracker_attribute_leaderboard_rows(
+        rows, extra_group_fields=("a_column_that_does_not_exist",)
+    )
+    assert _clean(view) == _clean(
+        legacy._build_tracker_attribute_leaderboard_rows(copy.deepcopy(rows))
+    )
+
+
+def test_b2_view_files_are_siblings_named_by_their_dimension():
+    from project_paths import MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE as base
+
+    for name in legacy.ATTRIBUTE_LEADERBOARD_VIEWS:
+        path = legacy.attribute_leaderboard_view_path(name)
+        assert path.parent == base.parent
+        assert path.name == f"{base.stem}_by_{name}{base.suffix}"
+        assert path != base
+
+
+# ==========================================================================
+# B3 - fictional horizons leave the scan-factor leaderboard
+# ==========================================================================
+def _scan_factor_inputs(observations):
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        [
+            {
+                # `_prepare_scan_factor_history_frame` builds its own private
+                # columns, so the fixture supplies the PUBLIC ones it reads:
+                # symbol, last_close and a date column.
+                "symbol": obs["symbol"],
+                "side": obs["side"],
+                "last_close": 100.0,
+                "last_trade_date": obs["scan_date"],
+                "trend_20d": "up",
+            }
+            for obs in observations
+        ]
+    )
+    return frame, observations
+
+
+def _observation(index, *, stale, side_return, symbol=None):
+    return {
+        "observation_id": f"obs-{index}",
+        "scan_row_id": f"{(symbol or f'S{index}')}:2026-08-03",
+        "scan_date": "2026-08-03",
+        "symbol": symbol or f"S{index}",
+        "side": "LONG",
+        "horizon_sessions": 5,
+        "side_return_pct": side_return,
+        "raw_return_pct": side_return,
+        "spy_relative_side_return_pct": None,
+        "win": side_return > 0,
+        "future_scan_date": "2026-08-10",
+        "stale_horizon": stale,
+    }
+
+
+def test_b3_a_stale_horizon_row_is_dropped_and_counted():
+    """`future_idx = idx + horizon` indexes this SYMBOL'S OWN scan rows, not
+    exchange sessions: live medians are horizon 5 -> 64 sessions and horizon 10
+    -> 73, with 42-45% of rows spanning more than twice their declared horizon.
+    `stale_horizon` has been computed since R10.D and nothing filtered on it.
+
+    Fail-before-fix: the stale row is inside the averages and no count is
+    published.
+    """
+    pytest.importorskip("pandas")
+
+    observations = [_observation(index, stale=False, side_return=1.0) for index in range(12)]
+    observations.append(_observation(99, stale=True, side_return=99.0, symbol="ZZZ"))
+    frame, obs = _scan_factor_inputs(observations)
+
+    rows = legacy.build_scan_factor_leaderboard_rows(
+        frame, obs, min_observations=1, reference_date="2026-08-03"
+    )
+
+    assert rows, "the leaderboard must still be built"
+    row = rows[0]
+    assert row["stale_horizon_observations_dropped"] == 1
+    assert row["observations_before_stale_filter"] == 13
+    assert "dropped" in row["stale_horizon_drop_note"]
+    # The 99% stale row is not inside the average.
+    assert row["avg_side_return_pct"] == pytest.approx(1.0)
+
+
+def test_b3_an_unmeasurable_drift_is_KEPT():
+    """Uncertainty is not grounds for deletion: `stale_horizon` is None when
+    the drift could not be measured, and None must not match the drop."""
+    pytest.importorskip("pandas")
+
+    observations = [_observation(index, stale=None, side_return=2.0) for index in range(6)]
+    frame, obs = _scan_factor_inputs(observations)
+
+    rows = legacy.build_scan_factor_leaderboard_rows(
+        frame, obs, min_observations=1, reference_date="2026-08-03"
+    )
+    assert rows
+    assert rows[0]["stale_horizon_observations_dropped"] == 0
+    assert rows[0]["observation_count"] == 6
+
+
+def test_b3_does_not_reselect_the_future_row():
+    """Step (a) ONLY. Re-selecting the future row by exchange session would
+    redefine every historical number the tracker has produced, and the
+    2026-07-01 signal weights were justified against this file - that is its own
+    plan.md sec-7 promotion, not this packet."""
+    import inspect
+
+    source = inspect.getsource(legacy.build_scan_factor_observation_rows)
+    assert "future_idx = idx + horizon" in source, (
+        "the horizon indexing is deliberately unchanged in this packet"
+    )
