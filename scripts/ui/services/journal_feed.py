@@ -78,7 +78,51 @@ def trade_legs(trade_id: str) -> list[dict[str, Any]]:
 
 
 def save_annotation(trade_id: str, *, setup_tags: str, notes: str) -> None:
-    _store().save_trade_annotation(trade_id, setup_tags=setup_tags, notes=notes)
+    """Save the trader's tags and notes - and learn when they CORRECTED a guess.
+
+    The save itself is unchanged and still confirms the row (P6a): the trader's
+    hand on it is what makes a provisional tag theirs.
+
+    The correction is written only when the tags actually CHANGED from what the
+    machine had proposed. Saving a provisional tag unedited is the trader
+    agreeing with the tagger, and turning that into a ``tag_corrections`` row
+    would raise that tag's confidence for that symbol forever on the strength of
+    the tagger's own guess - the tagger teaching itself. A correction is
+    feedback, so it needs the trader to have actually disagreed.
+    """
+    # Imported here, like every other `journal_store` name in this module:
+    # the store is deliberately lazy so a headless import of the feed does
+    # not open a database.
+    from journal_store import TAG_STATUS_PROVISIONAL
+
+    store = _store()
+    before = store.annotation_state(trade_id)
+    tags = str(setup_tags or "").strip()
+    store.save_trade_annotation(trade_id, setup_tags=tags, notes=notes)
+    if (
+        before.get("tag_status") == TAG_STATUS_PROVISIONAL
+        and tags
+        and tags != str(before.get("setup_tags") or "").strip()
+    ):
+        trade = store.get_trade(trade_id)
+        if trade:
+            store.record_tag_corrections(trade, tags)
+
+
+def confirm_tags(trade_id: str) -> bool:
+    """One click: these provisional tags are the trader's now.
+
+    Nothing is rewritten - only the lane changes, so the adjustment record that
+    named the original suggestion still stands beside the tag it proposed.
+    """
+    return _store().confirm_tags(trade_id)
+
+
+def tag_review_state(trade_id: str) -> str:
+    """``confirmed`` / ``provisional`` / ``needs_review`` for one trade."""
+    from journal_store import TAG_STATUS_CONFIRMED
+
+    return str(_store().annotation_state(trade_id).get("tag_status") or TAG_STATUS_CONFIRMED)
 
 
 def record_trade_review(

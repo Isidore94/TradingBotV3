@@ -33,9 +33,29 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from journal_store import TRADE_SHAPE_SOURCE
+from journal_store import (
+    TAG_STATUS_NEEDS_REVIEW,
+    TAG_STATUS_PROVISIONAL,
+    TRADE_SHAPE_SOURCE,
+)
 from ui.models.journal import JournalTrade
 from ui.services import journal_feed
+
+#: The tag-review filter, in the order it is offered (P6a). The label is what
+#: the trader reads; the value is the ``tag_status`` it keeps, with "" meaning
+#: everything. "Needs review" is the tagger saying it looked and would not
+#: guess, which is a different backlog from "here is my guess, check it".
+TAG_REVIEW_FILTERS = (
+    ("All trades", ""),
+    ("Provisional tags", TAG_STATUS_PROVISIONAL),
+    ("Needs review", TAG_STATUS_NEEDS_REVIEW),
+)
+
+#: What the Tags cell says after a machine-applied tag. Text rather than colour:
+#: a ``QTableWidgetItem`` cannot be reached by ``theme.qss``, and a hardcoded
+#: brush here would be the one place in the desk that paints outside the theme.
+PROVISIONAL_BADGE = "  (provisional)"
+NEEDS_REVIEW_BADGE = "needs review"
 
 #: Actions the corrections dialog offers, with the wording the trader reads.
 CORRECTION_ACTIONS = (
@@ -332,6 +352,9 @@ class TradesTab(QFrame):
         super().__init__(parent)
         self._header = header
         self._trades: list[JournalTrade] = []
+        #: The subset the tag-review filter is showing. The table's row
+        #: indexes address THIS list, never `_trades` (P6a).
+        self._visible: list[JournalTrade] = []
         self._current: JournalTrade | None = None
 
         self.table = QTableWidget(0, 8)
@@ -342,6 +365,22 @@ class TradesTab(QFrame):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
 
+        # P6a: the review filter. It narrows the rows ALREADY LOADED and issues
+        # no query of its own - `reload()` is the expensive half of this tab and
+        # runs on the Qt thread, so a filter that re-read the store would put a
+        # measured stall behind a combo box.
+        self.tag_filter = QComboBox()
+        self.tag_filter.setObjectName("TagReviewFilter")
+        for label, value in TAG_REVIEW_FILTERS:
+            self.tag_filter.addItem(label, value)
+        self.tag_filter.currentIndexChanged.connect(self._on_tag_filter_changed)
+        self.tag_filter_note = QLabel("")
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("Tag review"))
+        filter_row.addWidget(self.tag_filter)
+        filter_row.addWidget(self.tag_filter_note)
+        filter_row.addStretch(1)
+
         self.detail = self._build_detail()
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.table)
@@ -351,6 +390,7 @@ class TradesTab(QFrame):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(filter_row)
         layout.addWidget(splitter)
 
     # -- detail pane -------------------------------------------------------
@@ -411,6 +451,20 @@ class TradesTab(QFrame):
         self.save_notes_button = QPushButton("Save tags and notes")
         self.save_notes_button.clicked.connect(self._save_annotation)
 
+        # P6a. Two doors out of a provisional tag: this one keeps the machine's
+        # wording, and editing the field and saving replaces it - which is the
+        # one that also teaches the tagger, because only a change is feedback.
+        self.provisional_note = QLabel("")
+        self.provisional_note.setObjectName("ProvisionalTagNote")
+        self.provisional_note.setWordWrap(True)
+        self.provisional_note.setVisible(False)
+        self.confirm_tags_button = QPushButton("Confirm these tags")
+        self.confirm_tags_button.setToolTip(
+            "Keep this tag as your own. Nothing is rewritten - only who it belongs to."
+        )
+        self.confirm_tags_button.clicked.connect(self._confirm_tags)
+        self.confirm_tags_button.setVisible(False)
+
         self.review_outcome = QComboBox()
         self.review_outcome.addItems(
             [
@@ -445,9 +499,11 @@ class TradesTab(QFrame):
         layout.addWidget(self.auto_tags)
         layout.addLayout(self._tag_buttons_row)
         layout.addWidget(QLabel("My tags"))
+        layout.addWidget(self.provisional_note)
         layout.addWidget(self.tags_input)
         layout.addWidget(self.notes_input)
         layout.addWidget(self.save_notes_button)
+        layout.addWidget(self.confirm_tags_button)
         review_form = QFormLayout()
         review_form.addRow("Review outcome", self.review_outcome)
         review_form.addRow("Decision reason", self.decision_reason)
@@ -471,10 +527,37 @@ class TradesTab(QFrame):
             self.statusChanged.emit(f"could not load trades: {exc}")
         self._populate_table()
 
+    def _on_tag_filter_changed(self, _index: int = -1) -> None:
+        """Re-render the rows already loaded. The signal carries an index; the
+        table does not need it, and `_populate_table` takes no argument."""
+        self._populate_table()
+
+    def _visible_trades(self) -> list[JournalTrade]:
+        """The loaded trades this filter shows. In memory; no query (P6a)."""
+        wanted = str(self.tag_filter.currentData() or "")
+        if not wanted:
+            return list(self._trades)
+        return [
+            trade
+            for trade in self._trades
+            if str(trade.raw.get("tag_status") or "") == wanted
+        ]
+
     def _populate_table(self) -> None:
         mode = self._header.currency_mode
-        self.table.setRowCount(len(self._trades))
-        for row, trade in enumerate(self._trades):
+        visible = self._visible_trades()
+        provisional = sum(
+            1
+            for trade in self._trades
+            if str(trade.raw.get("tag_status") or "") == TAG_STATUS_PROVISIONAL
+        )
+        # Counted out loud rather than silently filtered: a hidden row and an
+        # absent row look the same in a table.
+        self.tag_filter_note.setText(
+            f"{len(visible)} of {len(self._trades)} shown; {provisional} provisional"
+        )
+        self.table.setRowCount(len(visible))
+        for row, trade in enumerate(visible):
             value, label = journal_feed.convert_amount(trade, mode)
             r_value = journal_feed.r_multiple(trade)
             cells = [
@@ -486,21 +569,42 @@ class TradesTab(QFrame):
                 # "unconverted" rather than a number: I5 at the render seam.
                 f"{value:,.2f} {label}" if value is not None else label or "-",
                 f"{r_value:.2f}R" if r_value is not None else "-",
-                trade.tags,
+                self._tags_cell(trade),
             ]
             for column, text in enumerate(cells):
                 item = QTableWidgetItem(str(text))
                 if str(trade.raw.get("reconcile_status") or "") == "NEEDS_REVIEW":
                     item.setToolTip("Does not match the broker's reported position")
                 self.table.setItem(row, column, item)
+        self._visible = visible
         self.dataChanged.emit()
+
+    def _tags_cell(self, trade: JournalTrade) -> str:
+        """The Tags cell, saying whose tag it is (P6a).
+
+        A machine-applied tag reads exactly like a hand-typed one otherwise, and
+        the whole point of the bulk pass is that the trader can tell which is
+        which at a glance and forever.
+        """
+        status = str(trade.raw.get("tag_status") or "")
+        if status == TAG_STATUS_PROVISIONAL and trade.tags:
+            return f"{trade.tags}{PROVISIONAL_BADGE}"
+        if status == TAG_STATUS_NEEDS_REVIEW and not str(trade.raw.get("setup_tags") or "").strip():
+            return f"{trade.tags} - {NEEDS_REVIEW_BADGE}" if trade.tags else NEEDS_REVIEW_BADGE
+        return trade.tags
 
     def _on_selection_changed(self) -> None:
         rows = {index.row() for index in self.table.selectedIndexes()}
         if not rows:
             self._current = None
             return
-        self._current = self._trades[min(rows)]
+        # The visible list, not the loaded one: with a filter applied the two
+        # differ, and indexing the wrong one opens somebody else's trade.
+        visible = self._visible or self._trades
+        index = min(rows)
+        if index >= len(visible):
+            return
+        self._current = visible[index]
         self._show_trade(self._current)
 
     def _show_trade(self, trade: JournalTrade) -> None:
@@ -564,6 +668,7 @@ class TradesTab(QFrame):
 
         self.tags_input.setText(str(raw.get("setup_tags") or ""))
         self.notes_input.setPlainText(str(raw.get("notes") or ""))
+        self._show_tag_status(raw)
         self.review_outcome.setCurrentIndex(0)
         latest_review = journal_feed.latest_trade_review(trade.trade_id) or {}
         review_payload = latest_review.get("payload") or {}
@@ -585,6 +690,35 @@ class TradesTab(QFrame):
             self.adjustments_list.addItem(
                 f"{record.get('created_at')} {record.get('action')}{superseded} - {record.get('reason')}"
             )
+
+    def _show_tag_status(self, raw: dict) -> None:
+        """Say whose tags these are, and offer the one-click confirmation (P6a)."""
+        status = str(raw.get("tag_status") or "")
+        if status == TAG_STATUS_PROVISIONAL:
+            self.provisional_note.setText(
+                "These tags were applied for you from the scanner's own output and are "
+                "waiting for you. Confirm them to make them yours, or edit the field and "
+                "save - only an edit teaches the tagger, because only a change is feedback."
+            )
+        elif status == TAG_STATUS_NEEDS_REVIEW:
+            self.provisional_note.setText(
+                "The tagger looked at this trade and would not guess, so it left no tag. "
+                "Type your own here."
+            )
+        else:
+            self.provisional_note.setText("")
+        self.provisional_note.setVisible(bool(self.provisional_note.text()))
+        self.confirm_tags_button.setVisible(status == TAG_STATUS_PROVISIONAL)
+
+    def _confirm_tags(self) -> None:
+        if self._current is None:
+            return
+        changed = journal_feed.confirm_tags(self._current.trade_id)
+        self.statusChanged.emit(
+            "tags confirmed - they are yours now" if changed else "nothing to confirm on this trade"
+        )
+        self._refresh_header_tags()
+        self.reload()
 
     # -- actions -----------------------------------------------------------
 

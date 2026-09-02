@@ -469,6 +469,27 @@ which is evidence and must not be loaded as context.
   sentence naming the coverage. **The group is never hidden**: hiding it would
   replace a visible thin answer with an invisible one, and seeing how little is
   tagged is the prompt to tag more.
+- **The backlog is tagged, provisionally, and the mark is permanent** (P6a,
+  2026-09-01). `trade_annotations.tag_status` carries `confirmed` (the trader's),
+  `provisional` (machine-applied, awaiting review) or `needs_review` (the tagger
+  looked and would not guess - **no tag at all**). Existing rows became
+  `confirmed` through the column's DEFAULT, so nothing had to decide that after
+  the fact. `scripts/journal_bulk_tag.py` is **the single authorized exception to
+  I7**: dry run by default, idempotent, refuses a confirmed row inside the STORE
+  rather than in the caller, never promotes a shape tag, never writes
+  `tag_corrections`, and appends an inert `APPLY_PROVISIONAL_TAG` adjustment
+  naming the candidate behind every tag it applies. Threshold **0.70**, chosen to
+  encode a sentence - "the tracker or a focus favourite named this symbol, on the
+  day I traded it, on the side I traded" - not a percentile.
+- **"My setups" counts only what the trader confirmed** (P6a). `provisional
+  setups` is its own analytics group beside it with no catch-all bucket, the two
+  are **never blended**, and the chart says which is which. In the Trades tab a
+  tag-review filter narrows the rows ALREADY LOADED (no query - `reload()` is that
+  tab's expensive half and runs on the Qt thread) and counts what it hid; the Tags
+  cell says `(provisional)` in text, because a `QTableWidgetItem` cannot be
+  reached by `theme.qss`. One click confirms; an edit replaces. **Only an edit
+  teaches the tagger** - agreeing with a guess would raise that guess's own
+  confidence forever.
 - Journal schema v2 with append-only opportunity lifecycle events, idempotent broker
   Taken/Closed imports, structured reviews, free-form notes, tags, and analytics.
 - Deterministic novice explanations across Setup Tracker, Day Trade Tracker, and
@@ -1278,6 +1299,72 @@ the dependency one-way.
 `ruff` clean · smoke **7/7** · source `--selftest` **73/73** · spec-drift 17 passed.
 Fail-before-fix: with `scripts/` stashed including the new module, 29 of the 32 tests in
 `tests/test_p6_preference_to_trade.py` fail.
+### 2026-09-01 - Phase 0.13 packet P6a: tag the backlog
+
+**Branch `claude/p6a-tag-backlog`, off `main` at `66a0c31`.** Authorized by the trader:
+*"let's get Opus to do the tagging and I can review after"*. Live gate #36 owed.
+
+**The gap.** 193 trades, and exactly ONE carried a setup tag the trader typed. Every
+per-setup statistic on the desk rested on that row. The missing thing was never evidence -
+it was a human decision about 155 closed trades.
+
+**1. A permanent mark.** `trade_annotations.tag_status`, through the store's own additive
+migration list. The column's DEFAULT is what made it safe on the live database: every
+existing row was typed or accepted by the trader, so it became `confirmed` the moment the
+column appeared. Three states, the third being `needs_review` - the tagger saying it
+looked and would not guess, carrying no tag.
+
+**2. `scripts/journal_bulk_tag.py`.** Dry run by default, idempotent, and bounded: the
+refusal to overwrite a confirmed row lives in `JournalStore.apply_provisional_tags` rather
+than in the caller, because an exception that depends on every caller remembering a rule
+is not a boundary. It never promotes a shape tag (`midday` is a fact about the clock at
+confidence 1.0 and would outrank every scanner match while answering a different
+question), and it **never writes `tag_corrections`** - that table is the trader's feedback
+TO the tagger, and a machine writing it is the tagger teaching itself.
+
+**THE MEASURED RUN, 2026-09-01.** Threshold **0.70**. Live histogram of the top
+setup-lane candidate over the 52 closed trades that had one:
+
+```
+  0.20   1 | 0.25   1 | 0.30   1 | 0.40   1 | 0.45   2 | 0.50   5 | 0.55   3
+  0.60  10 | 0.65   2 | ----- threshold 0.70 ----- | 0.70   5 | 0.75   2
+  0.80   5 | 0.85   6 | 0.90   3 | 0.95   5
+```
+
+156 closed trades considered, 0 already tagged by the trader (their one tagged trade is
+still open), 104 with no scanner candidate at all. **Applied 24 provisional tags, marked
+132 needs_review, refused 0**, and wrote 24 adjustment rows and **zero** tag corrections -
+the one correction in the store is the trader's own from 2026-08-22. The journal was
+copied to `trade_journal.sqlite3.p6a-backup-20260901_214926` first.
+
+The threshold encodes a sentence rather than a percentile: tracker + same day + same side
+is 0.72 and a focus favourite is 0.68 before its bucket bonus, while the SAME tracker row
+one day later reaches 0.66. Everything under the line still gets looked at - it gets a
+marker instead of a guess.
+
+**3. The review surface.** A tag-review filter and a count above the Trades table, because
+a hidden row and an absent row look the same in a table. It narrows the rows ALREADY
+LOADED and issues no query. The Tags cell says `(provisional)` in text rather than colour -
+a `QTableWidgetItem` cannot be reached by `theme.qss`, and a brush here would be the one
+place in the desk painting outside the theme. One click confirms; an edit replaces and
+teaches, and **only an edit teaches**.
+
+**4. Analytics.** "my setups" groups on CONFIRMED tags only; "provisional setups" is its
+own group with no catch-all bucket. Never blended, and the chart says so.
+
+**VERIFIED DIFFERENCE FROM THE PACKET.** Its binding rules say the list-trades load runs
+off the Qt thread. **It does not.** `TradesTab.reload()` calls `journal_feed.load_trades`
+synchronously (line 468 before this change) and `AnalyticsTab` does the same (line 182);
+the Journal's only worker is the migration one. Nothing here makes that worse - the new
+surface adds one indexed single-row read per selection and no reload - but moving that
+load to a worker is its own packet.
+
+One existing test pinned `nonexclusive_groups` to exactly two entries and now asserts the
+invariant rather than the length.
+
+**Verification.** `pytest tests/ -q` **5737 passed, 72 subtests, process exit 0** · `ruff`
+clean · smoke **7/7** · source `--selftest` **73/73**. Fail-before-fix: with `scripts/`
+stashed including the new module, all 17 tests in `tests/test_journal_bulk_tag.py` fail.
 
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.

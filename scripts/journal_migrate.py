@@ -230,6 +230,13 @@ NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     # compete with it. Every surface renders it beside a match confidence or
     # says "no match".
     ("auto_tag_candidates", "context_row_id", "TEXT NOT NULL DEFAULT ''"),
+    # P6a (2026-09-01): which lane a setup tag came from. The DEFAULT is what
+    # makes this safe on a live database - every row that already exists was
+    # typed or accepted by the trader, so it becomes `confirmed` the moment the
+    # column appears, and no backfill pass has to decide that after the fact.
+    # Only the bulk tagger ever writes `provisional`, which is what keeps a
+    # machine-applied tag distinguishable from a hand-typed one forever (I7).
+    ("trade_annotations", "tag_status", "TEXT NOT NULL DEFAULT 'confirmed'"),
 )
 
 TRADER_TAX_STATUS_SETTING = "journal_trader_tax_statuses"

@@ -33,6 +33,22 @@ from project_paths import JOURNAL_DB_FILE, JOURNAL_EXPORT_DIR
 JOURNAL_SCHEMA_VERSION = 3
 EPSILON = 0.0000001
 
+#: The three states a setup tag can be in (P6a). A tag is either the trader's
+#: (`confirmed`), the bulk tagger's best candidate awaiting review
+#: (`provisional`), or absent because the tagger declined to guess
+#: (`needs_review`, which carries NO setup tag). The distinction is permanent by
+#: design: R7 invariant I7 says the trader owns `trade_annotations`, and the one
+#: authorized machine writer must therefore stay identifiable forever rather
+#: than dissolving into the trader's own vocabulary after a rebuild.
+TAG_STATUS_CONFIRMED = "confirmed"
+TAG_STATUS_PROVISIONAL = "provisional"
+TAG_STATUS_NEEDS_REVIEW = "needs_review"
+
+#: The adjustment action the bulk tagger appends for every tag it applies.
+#: Assembly never reads it - it is not in ``EXECUTION_ADJUSTMENT_ACTIONS`` and
+#: it is not ``FORCE_CLOSE`` - so it is an audit record and nothing else.
+PROVISIONAL_TAG_ADJUSTMENT = "APPLY_PROVISIONAL_TAG"
+
 #: ``auto_tag_candidates.source`` prefix for the fact-derived lane. The stored
 #: value is ``trade_shape:<kind>``; the prefix is what orders the two lanes and
 #: what the UI reads to say where a suggestion came from.
@@ -366,7 +382,13 @@ class JournalStore:
                     trade_id TEXT PRIMARY KEY,
                     setup_tags TEXT NOT NULL DEFAULT '',
                     notes TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    -- P6a: `confirmed` (the trader's), `provisional` (the bulk
+                    -- tagger's, awaiting review) or `needs_review` (the tagger
+                    -- looked and would not guess). Defaulted here as well as in
+                    -- the migration so a database created fresh and one migrated
+                    -- forward carry the same column with the same default.
+                    tag_status TEXT NOT NULL DEFAULT 'confirmed'
                 );
 
                 CREATE TABLE IF NOT EXISTS auto_tag_candidates (
@@ -1036,7 +1058,18 @@ class JournalStore:
     #: trader believes they made, and which quietly does nothing, is worse than
     #: one that was never accepted.
     ADJUSTMENT_ACTIONS = frozenset(
-        {"VOID_EXECUTION", "EDIT_EXECUTION", "ADD_EXECUTION", "FORCE_CLOSE", "REASSIGN_GROUP", "SUPERSEDE"}
+        {
+            "VOID_EXECUTION", "EDIT_EXECUTION", "ADD_EXECUTION", "FORCE_CLOSE",
+            "REASSIGN_GROUP", "SUPERSEDE",
+            # P6a. An audit record only: assembly reads
+            # ``EXECUTION_ADJUSTMENT_ACTIONS`` and ``FORCE_CLOSE``, and this is
+            # neither, so a bulk-tag record can never move a fill or close a
+            # position, and it targets a TRADE rather than a position. It is
+            # here rather than nowhere because a machine writing
+            # into a trader-owned table without leaving a trail is the thing I7
+            # exists to prevent.
+            PROVISIONAL_TAG_ADJUSTMENT,
+        }
     )
 
     #: The one action assembly deliberately ignores. It exists because an undo
@@ -1045,7 +1078,12 @@ class JournalStore:
     #: empty payload closes the position all over again, which is exactly what
     #: the first version of this code did and what its test caught.
     INERT_ADJUSTMENT_ACTION = "SUPERSEDE"
-    ADJUSTMENT_TARGET_KINDS = frozenset({"EXECUTION", "TRADE_GROUP"})
+    #: What an adjustment can be about. ``TRADE`` is P6a's: a bulk-tag record
+    #: is about ONE assembled trade, and neither of the other two says that -
+    #: an execution is a fill and a TRADE_GROUP is the whole position, so two
+    #: trades on the same symbol in the same account share one. Assembly reads
+    #: neither this kind nor its action, so the record is inert by construction.
+    ADJUSTMENT_TARGET_KINDS = frozenset({"EXECUTION", "TRADE_GROUP", "TRADE"})
 
     #: Which target kind each action addresses. FORCE_CLOSE closes a position;
     #: everything else edits a row.
@@ -1055,6 +1093,7 @@ class JournalStore:
         "ADD_EXECUTION": "EXECUTION",
         "REASSIGN_GROUP": "EXECUTION",
         "FORCE_CLOSE": "TRADE_GROUP",
+        PROVISIONAL_TAG_ADJUSTMENT: "TRADE",
         # SUPERSEDE inherits the kind of whatever it retires, so it is absent
         # here and handled explicitly below.
     }
@@ -1801,7 +1840,10 @@ class JournalStore:
                 f"""
                 SELECT t.*, COALESCE(a.setup_tags, '') AS setup_tags, COALESCE(a.notes, '') AS notes,
                        a.planned_entry AS planned_entry, a.planned_stop AS planned_stop,
-                       a.planned_risk AS planned_risk, COALESCE(a.risk_source, '') AS risk_source
+                       a.planned_risk AS planned_risk, COALESCE(a.risk_source, '') AS risk_source,
+                       -- A trade with no annotation row at all has nothing a
+                       -- machine wrote, so it reads as the trader's (P6a).
+                       COALESCE(a.tag_status, 'confirmed') AS tag_status
                 FROM trades t
                 LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id
                 {where_sql}
@@ -1902,17 +1944,133 @@ class JournalStore:
         with self.connection() as conn:
             conn.execute(
                 """
-                INSERT INTO trade_annotations(trade_id, setup_tags, notes, updated_at)
-                VALUES(?, ?, ?, ?)
+                INSERT INTO trade_annotations(trade_id, setup_tags, notes, updated_at, tag_status)
+                VALUES(?, ?, ?, ?, 'confirmed')
                 ON CONFLICT(trade_id) DO UPDATE SET
                     setup_tags = excluded.setup_tags,
                     notes = excluded.notes,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    -- This is the trader's own hand on the row, so whatever the
+                    -- bulk tagger left here stops being provisional (P6a). It is
+                    -- set unconditionally rather than only when the tags changed:
+                    -- saving the row unedited is the trader saying "yes, that one".
+                    tag_status = 'confirmed'
                     -- planned_entry/stop/risk are absent on purpose: saving a
                     -- note must not erase the plan the trader typed earlier.
                 """,
                 (trade_id, str(setup_tags or "").strip(), str(notes or "").strip(), _now_iso()),
             )
+
+    def annotation_state(self, trade_id: str) -> dict[str, str]:
+        """This trade's setup tags and which lane they came from (P6a).
+
+        One row by primary key, so a caller on the Qt thread deciding whether to
+        offer a Confirm button is not paying for ``list_trades``. A trade with no
+        annotation row has never been written by anyone, so it answers
+        ``confirmed`` - there is nothing provisional about an absence.
+        """
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT setup_tags, tag_status FROM trade_annotations WHERE trade_id = ?",
+                (str(trade_id),),
+            ).fetchone()
+        if row is None:
+            return {"setup_tags": "", "tag_status": TAG_STATUS_CONFIRMED}
+        found = _row_to_dict(row)
+        return {
+            "setup_tags": str(found.get("setup_tags") or ""),
+            "tag_status": str(found.get("tag_status") or TAG_STATUS_CONFIRMED),
+        }
+
+    def apply_provisional_tags(self, trade_id: str, setup_tags: str) -> bool:
+        """Write machine-applied tags, and REFUSE to touch a confirmed one.
+
+        The refusal is here rather than in the caller on purpose. This is the
+        single authorized exception to I7 (the trader owns ``trade_annotations``),
+        and an exception that depends on every caller remembering a rule is not a
+        boundary. Returns whether anything was written.
+
+        ``notes`` is deliberately absent from the UPDATE: a note is the trader's
+        prose and no machine has any business rewriting it, even blank.
+        """
+        tags = str(setup_tags or "").strip()
+        if not tags:
+            return False
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT setup_tags, tag_status FROM trade_annotations WHERE trade_id = ?",
+                (str(trade_id),),
+            ).fetchone()
+            if row is not None:
+                existing = _row_to_dict(row)
+                status = str(existing.get("tag_status") or TAG_STATUS_CONFIRMED)
+                if status == TAG_STATUS_CONFIRMED and str(existing.get("setup_tags") or "").strip():
+                    return False
+            conn.execute(
+                """
+                INSERT INTO trade_annotations(trade_id, setup_tags, notes, updated_at, tag_status)
+                VALUES(?, ?, '', ?, ?)
+                ON CONFLICT(trade_id) DO UPDATE SET
+                    setup_tags = excluded.setup_tags,
+                    updated_at = excluded.updated_at,
+                    tag_status = excluded.tag_status
+                """,
+                (str(trade_id), tags, _now_iso(), TAG_STATUS_PROVISIONAL),
+            )
+        return True
+
+    def mark_tags_needing_review(self, trade_id: str) -> bool:
+        """Say "I looked and I will not guess" - WITHOUT writing a setup tag.
+
+        The marker is a state of the tag rather than a tag, which is why it
+        lives in the same column: a low-confidence guess parked in ``setup_tags``
+        would be counted by every per-setup statistic in the journal, and that is
+        precisely the circularity the tagging rules forbid. Returns whether
+        anything was written, so a second bulk run over unchanged evidence is a
+        no-op rather than a duplicate row.
+        """
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT setup_tags, tag_status FROM trade_annotations WHERE trade_id = ?",
+                (str(trade_id),),
+            ).fetchone()
+            if row is not None:
+                existing = _row_to_dict(row)
+                status = str(existing.get("tag_status") or TAG_STATUS_CONFIRMED)
+                if status == TAG_STATUS_NEEDS_REVIEW:
+                    return False
+                if str(existing.get("setup_tags") or "").strip():
+                    # Something is already there - the trader's, or a provisional
+                    # tag from a run with better evidence. Neither is improved by
+                    # being replaced with "I do not know".
+                    return False
+            conn.execute(
+                """
+                INSERT INTO trade_annotations(trade_id, setup_tags, notes, updated_at, tag_status)
+                VALUES(?, '', '', ?, ?)
+                ON CONFLICT(trade_id) DO UPDATE SET
+                    updated_at = excluded.updated_at,
+                    tag_status = excluded.tag_status
+                """,
+                (str(trade_id), _now_iso(), TAG_STATUS_NEEDS_REVIEW),
+            )
+        return True
+
+    def confirm_tags(self, trade_id: str) -> bool:
+        """One click: the provisional tags on this trade are now the trader's.
+
+        Nothing is rewritten and nothing is deleted - only the lane changes, so
+        the tag the machine proposed and the tag the trader kept are the same
+        string, and the adjustment record naming the original suggestion still
+        stands beside it.
+        """
+        with self.connection() as conn:
+            cursor = conn.execute(
+                "UPDATE trade_annotations SET tag_status = ?, updated_at = ? "
+                "WHERE trade_id = ? AND tag_status <> ?",
+                (TAG_STATUS_CONFIRMED, _now_iso(), str(trade_id), TAG_STATUS_CONFIRMED),
+            )
+            return bool(cursor.rowcount)
 
     def record_opportunity_event(
         self,
@@ -2061,14 +2219,16 @@ class JournalStore:
 
         def bump(tag: str, lane: str) -> None:
             entry = counts.setdefault(
-                tag, {"tag": tag, "own": 0, "auto": 0, "derived": is_shape_tag(tag)}
+                tag,
+                {"tag": tag, "own": 0, "auto": 0, "provisional": 0, "derived": is_shape_tag(tag)},
             )
             entry[lane] += 1
 
         with self.connection() as conn:
             rows = conn.execute(
                 """
-                SELECT COALESCE(a.setup_tags, '') AS setup_tags, t.auto_tag_summary
+                SELECT COALESCE(a.setup_tags, '') AS setup_tags, t.auto_tag_summary,
+                       COALESCE(a.tag_status, 'confirmed') AS tag_status
                 FROM trades t
                 LEFT JOIN trade_annotations a ON a.trade_id = t.trade_id
                 """
@@ -2076,14 +2236,26 @@ class JournalStore:
         for raw in rows:
             row = _row_to_dict(raw)
             own = split_tags(row.get("setup_tags"))
+            # A provisional tag sits in ``setup_tags`` but is NOT the trader's
+            # vocabulary yet, so it gets its own lane (P6a). ``own`` therefore
+            # still means "typed or accepted by a human", which is what the
+            # rename tool is allowed to touch and what a tag count should mean.
+            own_lane = (
+                "provisional"
+                if str(row.get("tag_status") or "") == TAG_STATUS_PROVISIONAL
+                else "own"
+            )
             for tag in own:
-                bump(tag, "own")
+                bump(tag, own_lane)
             if not own:
                 for tag in split_tags(row.get("auto_tag_summary")):
                     bump(tag, "auto")
         return sorted(
             counts.values(),
-            key=lambda entry: (-(entry["own"] + entry["auto"]), entry["tag"].lower()),
+            key=lambda entry: (
+                -(entry["own"] + entry["auto"] + entry["provisional"]),
+                entry["tag"].lower(),
+            ),
         )
 
     def rename_tag(self, old: str, new: str) -> int:

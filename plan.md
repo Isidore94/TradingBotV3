@@ -994,6 +994,28 @@ comment corrected here is what surfaced it - is the trader's call.
 **Live gate (#35):** the trader imports a real day and one trade shows a `trader_capture`
 candidate with a linked event; the nightly report lists that day's likes with a
 traded/not-traded column.
+### Phase 0.13 packet P6a — Tag the backlog (2026-09-01) — BUILT, live gate owed
+
+Authorized by the trader: *"let's get Opus to do the tagging and I can review after"*.
+Built on `claude/p6a-tag-backlog`. One trade in 193 carried a setup tag the trader typed.
+
+1. **`tag_status` on `trade_annotations`** - `confirmed` / `provisional` /
+   `needs_review`, arriving through the store's additive migration list, existing rows
+   defaulting to `confirmed`.
+2. **`scripts/journal_bulk_tag.py`** - the SINGLE authorized exception to invariant I7.
+   Dry run by default, idempotent, refuses a confirmed row in the store, never writes
+   `tag_corrections`, appends an inert `APPLY_PROVISIONAL_TAG` adjustment per tag.
+   Threshold 0.70. **Run on 2026-09-01: 24 applied, 132 marked `needs_review`.**
+3. **The review surface** in the Trades tab, and the analytics split ("my setups" is
+   confirmed-only; "provisional setups" is its own group).
+
+**Owed and NOT part of this packet:** the Journal's trade list still loads on the Qt
+thread (`TradesTab.reload`, `AnalyticsTab._reload`) - measured, reported, and untouched
+here; moving it to a worker is its own packet. Coding the 132 `needs_review` trades needs
+either scan files that reach back further or the trader's own words.
+
+**Live gate (#36):** the trader opens the Provisional filter on the desk and confirms or
+edits at least ten; the "my setups" chart populates from confirmed rows only.
 
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 

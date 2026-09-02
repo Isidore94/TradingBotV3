@@ -814,24 +814,30 @@ def split_tags(value: Any) -> list[str]:
     return [text]
 
 
-#: The tag lane a trade's setup tags came from. Named here rather than imported
-#: from `journal_store` so this module keeps its one-way dependency: the store
-#: imports the analytics helpers, not the other way round. P6a introduces the
-#: column; on a tree without it every row reads as the trader's, which is what
-#: it was before a machine could write one.
+#: The three tag lanes (P6a), named here rather than imported from
+#: ``journal_store`` so this module keeps its one-way dependency: the store
+#: imports the analytics helpers, not the other way round.
 TAG_STATUS_CONFIRMED = "confirmed"
+TAG_STATUS_PROVISIONAL = "provisional"
 
 
 def _confirmed_setup_tags(row: dict[str, Any]) -> list[str]:
-    """The tags on this trade that the TRADER stands behind.
+    """The tags on this trade that the TRADER stands behind (P6a).
 
-    A provisional tag lives in the same column, so counting `setup_tags` alone
-    would fold machine guesses into "my setups" - the one group in the journal
-    that is supposed to answer what the trader themself said this trade was. A
-    row with no annotation at all reports ``confirmed`` and has no tags, so it
-    lands in ``untagged`` exactly as before.
+    A provisional tag lives in the same column, so grouping on ``setup_tags``
+    alone would fold 100+ machine guesses into "my setups" - the one group in
+    the journal that is supposed to answer what the trader themself said this
+    trade was. A row with no annotation at all reports ``confirmed`` and has no
+    tags, so it lands in ``untagged`` exactly as before.
     """
     if str(row.get("tag_status") or TAG_STATUS_CONFIRMED) != TAG_STATUS_CONFIRMED:
+        return []
+    return _tags_for_row(row, "setup_tags")
+
+
+def _provisional_setup_tags(row: dict[str, Any]) -> list[str]:
+    """The tags a machine applied and nobody has reviewed yet (P6a)."""
+    if str(row.get("tag_status") or TAG_STATUS_CONFIRMED) != TAG_STATUS_PROVISIONAL:
         return []
     return _tags_for_row(row, "setup_tags")
 
@@ -863,7 +869,15 @@ def build_analytics_summary(
         # as meaningless as the overall one, so say why and stop.
         summary["overall"] = {**summary["overall"], "net_pnl": None, "gross_win": None, "gross_loss": None}
     group_specs = {
-        "my setups": lambda row: _tags_for_row(row, "setup_tags") or ["untagged"],
+        # CONFIRMED only. The provisional lane is its own group below and the
+        # two are never blended: a per-setup win rate that mixes what the trader
+        # said with what a machine guessed is not a statement about either.
+        "my setups": lambda row: _confirmed_setup_tags(row) or ["untagged"],
+        # No "untagged" fallback here on purpose: a trade with no provisional
+        # tag belongs in no bucket of this group at all, and a catch-all bucket
+        # holding every other trade would be the biggest bar on the chart while
+        # meaning nothing.
+        "provisional setups": _provisional_setup_tags,
         "auto tags": lambda row: _tags_for_row(row, "auto_tag_summary") or ["untagged"],
         "account": lambda row: str(row.get("account_label") or row.get("account_number") or "unknown"),
         "broker": lambda row: str(row.get("broker") or "unknown"),
@@ -901,6 +915,12 @@ def build_analytics_summary(
         summary["groups"][group_name] = rows
     summary["nonexclusive_groups"] = ["my setups", "auto tags"]
     summary["group_notes"] = _empty_dimension_notes(trades, summary["groups"])
+    summary["nonexclusive_groups"] = ["my setups", "provisional setups", "auto tags"]
+    #: Groups whose buckets are machine-applied and awaiting review. The chart
+    #: says so out loud - a bar chart of "provisional setups" beside one of "my
+    #: setups" is otherwise two answers to the same question with nothing to
+    #: separate them.
+    summary["provisional_groups"] = ["provisional setups"]
     return summary
 
 

@@ -49,6 +49,18 @@ detector/scoring/alert file is touched.
   any blended view carries an explicit badge.
 - **I7 Trader-owned fields** (tags, notes, reviews, planned stop/risk, tax-status
   overrides) are never written by any import/rebuild path.
+  - **The one authorized exception (P6a, 2026-09-01):** `scripts/journal_bulk_tag.py`
+    may write `trade_annotations.setup_tags` for a CLOSED trade that has no confirmed
+    tag, and only ever as `tag_status='provisional'`. The exception is bounded three
+    ways and all three are tested: `JournalStore.apply_provisional_tags` REFUSES a
+    confirmed row (the refusal is in the store, not in the caller); the mark is
+    permanent, so no analytics group counts a provisional tag as the trader's and
+    `distinct_tags` keeps it out of the `own` lane the rename tool reads; and the
+    tagger never writes `tag_corrections`, because that table is the trader's feedback
+    TO the tagger and a machine writing it is the tagger teaching itself. Below its
+    confidence threshold it writes no tag at all - only a `needs_review` marker.
+    Every application appends an inert `APPLY_PROVISIONAL_TAG` adjustment naming the
+    candidate, its confidence and its rationale.
 - **I8 Nightly job**: runs only via the `journal_import` runner slot inside the
   off-hours window (`scripts/ai_jobs`); no new timer, no new thread owner, no new
   ntfy sender. Zero-execution night = `ok`.
