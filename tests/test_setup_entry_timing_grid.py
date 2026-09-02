@@ -552,3 +552,29 @@ def test_the_build_registers_the_trial_ledger():
     assert source.index("outcome_coverage.record_firing") < source.index(
         "trial_ledger.backfill"
     )
+
+
+def test_one_unreadable_close_does_not_void_every_bar_before_it():
+    """R1: `qualifies` bailed out if ANY close in the series was None.
+
+    That reads as "no controlled pullback ever happened" rather than as a gap in
+    the data - and it recomputed both EMAs over the whole series for every bar
+    it tested. The EMA is now built once, over the readable PREFIX, so a gap
+    ends the measurable range instead of erasing it.
+    """
+    from research_warehouse.outcomes import _entry_after_m30_ema_pullback
+
+    as_of = datetime(2026, 8, 12, tzinfo=timezone.utc)
+    bars = _pullback_bars(final_close=130.0)
+    entry, _session = _entry_after_m30_ema_pullback(_occurrence(), bars, as_of=as_of)
+    assert entry is not None, "the fixture must find its entry to begin with"
+
+    # Now add a LATER session whose closes are unreadable. The entry is before
+    # that gap, so it must still be found: on the un-fixed code a single None
+    # anywhere in the series made every bar fail.
+    damaged = [dict(bar) for bar in bars]
+    for index in range(6):
+        damaged.append(_session_m5(10, index * 5, 130.0, 130.5, 129.5, None))
+    still, _ = _entry_after_m30_ema_pullback(_occurrence(), damaged, as_of=as_of)
+    assert still is not None, "a later gap must not erase an earlier measurement"
+    assert still["interval_end"] == entry["interval_end"], "and it is the SAME entry"

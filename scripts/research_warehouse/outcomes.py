@@ -1336,12 +1336,35 @@ def _entry_after_m30_ema_pullback(occurrence: dict, ordered: list[dict], *, as_o
     and unmeasurable means no row.
     """
 
+    # R1: computed ONCE for the series, not once per candidate bar. It was
+    # inside `qualifies`, so both EMAs were rebuilt over the whole series for
+    # every bar tested - and worse, ONE unreadable close anywhere in the series
+    # made every bar return False, which reads as "no controlled pullback ever
+    # happened" rather than as a gap in the data.
+    #
+    # An unreadable close now ends the usable series at that point instead of
+    # voiding it: the EMA is computed over the completed prefix, and a bar after
+    # the gap is simply not offered an EMA to be measured against. Absence stays
+    # absence, and it stops contaminating the bars that ARE measurable.
+    cache: dict = {}
+
+    def _emas(series):
+        if "fast" not in cache:
+            usable: list[float] = []
+            for row in series:
+                value = _number(row.get("close"))
+                if value is None:
+                    break
+                usable.append(float(value))
+            cache["fast"] = _ema_series(usable, 15)
+            cache["slow"] = _ema_series(usable, 21)
+        return cache["fast"], cache["slow"]
+
     def qualifies(bar, level, side, index, series):
-        closes = [_number(row.get("close")) for row in series]
-        if any(value is None for value in closes):
+        fast, slow = _emas(series)
+        if index >= len(fast) or index >= len(slow):
+            # Past the point where the closes stopped being readable.
             return False
-        fast = _ema_series([float(v) for v in closes], 15)
-        slow = _ema_series([float(v) for v in closes], 21)
         ema_fast, ema_slow = fast[index], slow[index]
         if ema_fast is None or ema_slow is None:
             return False
