@@ -251,6 +251,16 @@ def test_the_ranking_is_byte_identical_to_the_frozen_golden():
 
     assert signature == fixture["ranking_signature"]
 
+    # And separately: every NUMBER still matches the values frozen before B6
+    # touched the note text, so a regenerated golden cannot hide a moved score,
+    # bucket or expected R behind a string change.
+    numeric_keys = [key for key in RANKING_KEYS if key != "expected_r_note"]
+    numbers = [
+        {"symbol": row["symbol"], **{key: row[key] for key in numeric_keys}}
+        for row in signature
+    ]
+    assert numbers == fixture["ranking_numbers_before_b6"]
+
 
 def test_the_golden_replays_the_inputs_it_was_frozen_with():
     """The fixture's raw inputs are hashed, so an edited input is a changed

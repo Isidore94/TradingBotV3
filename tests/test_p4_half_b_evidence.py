@@ -357,3 +357,215 @@ def test_b3_does_not_reselect_the_future_row():
     assert "future_idx = idx + horizon" in source, (
         "the horizon indexing is deliberately unchanged in this packet"
     )
+
+
+# ==========================================================================
+# B4 - the tier tracker grades the tier that shipped
+# ==========================================================================
+def test_b4_the_assigned_tier_is_written_at_assignment_time():
+    """`_tier_for_priority_bucket` re-derives S/A from the bucket alone, so the
+    tracker graded a tier the trader never saw. The shipped tier is decided
+    after the expected-R demote, the per-symbol de-dupe and the best-swing
+    merge.
+
+    Fail-before-fix: no row carries `assigned_tier`.
+    """
+    best = {"symbol": "AAA", "score": 120, "expected_r": 0.5, "priority_bucket": "favorite_setup"}
+    actionable = {"symbol": "BBB", "score": 100, "expected_r": 0.4, "priority_bucket": "favorite_setup"}
+    report = {"symbol": "CCC", "score": 60, "expected_r": 0.1, "priority_bucket": "near_favorite_zone"}
+
+    sections = legacy._priority_partition_tier_rows(
+        actionable_rows=[actionable],
+        report_rows=[report],
+        high_conviction_rows=[],
+        best_swing_rows=[best],
+    )
+
+    by_label = {section["label"]: section["rows"] for section in sections}
+    assert by_label["S Tier"][0][legacy.ASSIGNED_TIER_FIELD] == "S"
+    assert by_label["A Tier"][0][legacy.ASSIGNED_TIER_FIELD] == "A"
+    assert by_label["B Tier"][0][legacy.ASSIGNED_TIER_FIELD] == "B"
+
+
+def test_b4_a_demoted_row_is_not_stamped_S():
+    """The exact disagreement B4 exists for: a favorite-bucket row held out of
+    S/A for a poor expected R derives as "S" and shipped as nothing."""
+    demoted = {
+        "symbol": "AAA",
+        "score": 120,
+        "expected_r": legacy.TIER_S_DEMOTE_EXPECTED_R_BELOW - 1.0,
+        "priority_bucket": "favorite_setup",
+    }
+    sections = legacy._priority_partition_tier_rows(
+        actionable_rows=[],
+        report_rows=[],
+        high_conviction_rows=[],
+        best_swing_rows=[demoted],
+    )
+    by_label = {section["label"]: section["rows"] for section in sections}
+
+    assert by_label["S Tier"] == []
+    assert demoted.get(legacy.ASSIGNED_TIER_FIELD) is None
+    # The derivation, which is what the tracker used to grade it by, still
+    # says S - that is the number this packet makes visible.
+    assert legacy._tier_for_priority_bucket(demoted["priority_bucket"]) == "S"
+    assert legacy.tier_for_tracker_row(demoted) == ("S", "derived_from_bucket")
+
+
+def test_b4_the_grader_prefers_the_assigned_tier_and_says_which():
+    assert legacy.tier_for_tracker_row({"assigned_tier": "A", "priority_bucket": "favorite_setup"}) == (
+        "A",
+        "assigned",
+    )
+    assert legacy.tier_for_tracker_row({"priority_bucket": "favorite_setup"}) == (
+        "S",
+        "derived_from_bucket",
+    )
+    assert legacy.tier_for_tracker_row({"priority_bucket": "general"}) == ("", "derived_from_bucket")
+
+
+def test_b4_the_fallback_is_kept_for_the_months_of_rows_without_the_column():
+    """Grading old rows by the old rule is honest about what could be known;
+    inventing an assigned tier for them would not be."""
+    import inspect
+
+    source = inspect.getsource(legacy.tier_for_tracker_row)
+    assert "_tier_for_priority_bucket" in source
+
+
+# ==========================================================================
+# B5 - calibration reads structure points, not the proven-quality score
+# ==========================================================================
+def test_b5_the_record_stores_the_structure_points():
+    """`apply_expected_r_ranking` overwrites `row["score"]` with the
+    proven-quality score - which already has realized win rate and profit
+    factor blended in - and keeps the pre-blend structure points in
+    `row["static_score"]`. The record stored only the overwritten one, so the
+    calibration fitted realized R against a number that already contained
+    realized performance: a feedback loop.
+
+    Fail-before-fix: `static_score` is not on the record.
+    """
+    record = legacy.build_tracker_setup_record(
+        {
+            "symbol": "AAA",
+            "side": "LONG",
+            "score": 64.0,
+            "static_score": 120.0,
+            "priority_bucket": "favorite_setup",
+        },
+        {"last_close": 50.0},
+        {},
+        "2026-09-01T00:00:00",
+        None,
+        scan_date="2026-09-01",
+    )
+    assert record is not None
+    assert record["priority_score"] == 64.0
+    assert record["static_score"] == 120.0
+
+
+def test_b5_the_helper_prefers_the_stored_structure_points():
+    stored = legacy._expected_r_static_points_from_record(
+        {"priority_score": 64.0, "static_score": 120.0, "recent_tracker_score_delta": 5}
+    )
+    assert stored == 120.0, "the stored points are used as-is, deltas already excluded"
+
+
+def test_b5_an_old_record_still_calibrates_by_the_old_path():
+    """Months of records have no `static_score`. Approximating their structure
+    points is honest about what can be recovered; refusing them would throw
+    away the calibration sample."""
+    derived = legacy._expected_r_static_points_from_record(
+        {"priority_score": 100.0, "recent_tracker_score_delta": 5, "setup_type_score_delta": 3}
+    )
+    assert derived == 92.0
+
+
+def test_b5_reports_how_much_of_each_path_the_sample_used():
+    """The two paths fit different things, so a run that mixes them is fitting a
+    blend of two definitions. The changeover has to be visible."""
+    counts = legacy.expected_r_calibration_source_counts(
+        {
+            "setups": {
+                "a": {"static_score": 120.0, "priority_score": 64.0},
+                "b": {"priority_score": 90.0},
+                "c": {},
+            }
+        }
+    )
+    assert counts == {
+        "stored_static_score": 1,
+        "derived_from_priority_score": 1,
+        "unusable": 1,
+    }
+
+
+# ==========================================================================
+# B6 - the representative exit template is named
+# ==========================================================================
+def test_b6_the_default_moves_nothing():
+    """An empty constant means "first match in scenario order", which is exactly
+    what the code has always done."""
+    assert legacy.REPRESENTATIVE_EXIT_TEMPLATE_ID == ""
+
+    scenarios = [
+        {"stop_reference_label": "LOWER_1", "exit_template_id": "full_band2", "tradeable": True},
+        {"stop_reference_label": "LOWER_1", "exit_template_id": "half_band2_trail", "tradeable": True},
+    ]
+    assert legacy._representative_scenario(scenarios, "LOWER_1") is scenarios[0]
+
+
+def test_b6_a_pinned_template_is_chosen_explicitly(monkeypatch):
+    monkeypatch.setattr(legacy, "REPRESENTATIVE_EXIT_TEMPLATE_ID", "half_band2_trail")
+    scenarios = [
+        {"stop_reference_label": "LOWER_1", "exit_template_id": "full_band2", "tradeable": True},
+        {"stop_reference_label": "LOWER_1", "exit_template_id": "half_band2_trail", "tradeable": True},
+    ]
+    assert legacy._representative_scenario(scenarios, "LOWER_1") is scenarios[1]
+
+
+def test_b6_a_pinned_template_nobody_carries_falls_back_rather_than_vanishing(monkeypatch):
+    """A setup with no representative R falls through to the cross-variant
+    average, which is the number this selection exists to avoid."""
+    monkeypatch.setattr(legacy, "REPRESENTATIVE_EXIT_TEMPLATE_ID", "a_template_nobody_has")
+    scenarios = [
+        {"stop_reference_label": "LOWER_1", "exit_template_id": "full_band2", "tradeable": True},
+    ]
+    assert legacy._representative_scenario(scenarios, "LOWER_1") is scenarios[0]
+
+
+def test_b6_no_matching_stop_label_is_still_nothing():
+    assert legacy._representative_scenario(
+        [{"stop_reference_label": "UPPER_1", "tradeable": True}], "LOWER_1"
+    ) is None
+
+
+def test_b6_the_expected_r_note_names_its_template():
+    """The realized half of Expected R is the representative scenario's R, and
+    which EXIT PLAN that is was never stated. Fail-before-fix: the note ends at
+    the sample count."""
+    note = legacy._format_expected_r_note(
+        {"expected_r": 0.4, "prior_r": 0.4, "realized_r": None, "blend_weight": 0.0}
+    )
+    assert "exit template" in note
+    assert legacy.representative_exit_template_label() in note
+
+
+def test_b6_the_summary_reports_the_template_it_measured():
+    summary = legacy._summarize_tracker_setup_outcome(
+        {
+            "side": "LONG",
+            "favorite_signals": [],
+            "scenarios": {
+                "a": {
+                    "stop_reference_label": legacy._protective_band_label("LONG"),
+                    "exit_template_id": "full_band2",
+                    "tradeable": True,
+                    "status": "closed",
+                    "total_r": 0.8,
+                },
+            },
+        }
+    )
+    assert summary["representative_exit_template_id"] == "full_band2"

@@ -18,6 +18,17 @@ Ground rules shared by every setup (the tracker's exit discipline):
 - Default profit plan is the measured-best baseline template: take 50% at the
   2nd favorable deviation band, run the rest toward the 3rd band with the
   stop trailed to the 1st band after the partial.
+- **The HEADLINE R is not measured on that plan** (P4 B6, 2026-09-01). The
+  tracker simulates several exit templates per setup, and the representative R
+  that Expected R consumes is the FIRST tradeable scenario carrying the
+  representative stop label - decided by scenario order, in practice the
+  full-run-to-band-2 template rather than the 50%-partial plan above. The two
+  are different trades. `legacy.REPRESENTATIVE_EXIT_TEMPLATE_ID` names the
+  choice and defaults to today's behaviour so nothing moved; the resolved
+  template is printed in every `expected_r_note` and carried on the outcome
+  summary as `representative_exit_template_id`. Pinning it to the documented
+  plan would change Expected R and needs a golden fixture and a sec-7
+  promotion.
 - Every setup times out at ``TIME_STOP_SESSIONS`` sessions if neither stop nor
   target resolves it.
 """

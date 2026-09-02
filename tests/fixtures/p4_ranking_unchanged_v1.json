@@ -2,7 +2,8 @@
  "acquired_at": "2026-09-01T00:00:00-07:00",
  "as_of": "2026-09-01T00:00:00-07:00",
  "expected_keys": [
-  "ranking_signature"
+  "ranking_signature",
+  "ranking_numbers_before_b6"
  ],
  "expected_r_config": {
   "freshness": {
@@ -39,7 +40,7 @@
  },
  "feature_version": "master_avwap_expected_r_ranking_v1",
  "intent": "FROZEN FROM THE PRE-HALF-A CODE. P4 Half A registers twelve variables that were already on the record or the row and gives none of them a weight; this fixture is the proof. plan.md sec 5 / decision 0009: no scoring or ranking behaviour change without a golden fixture first. If a later edit gives one of these variables a weight, this fails first. Regenerate ONLY as part of a deliberate scoring packet with a sec-7 promotion behind it.",
- "intentional_difference": "",
+ "intentional_difference": "P4 B6 appends the representative exit template to `expected_r_note`, and that string is the ONLY difference from the pre-P4 freeze. Every NUMBER is preserved separately in `ranking_numbers_before_b6`, taken from the fixture as it stood before B6, and the test asserts the two still agree - so this regeneration cannot hide a moved score, bucket or expected R. Half A itself moved nothing at all; the original freeze was byte-identical.",
  "numeric_tolerance": 0.0,
  "priority_rows": [
   {
@@ -101,10 +102,9 @@
   }
  ],
  "provider_assumptions": "Synthetic priority rows only; no broker, network or home-folder read. The Expected-R config is PINNED to DEFAULT_EXPECTED_R_CONFIG rather than loaded, because expected_r_config.json's prior_anchors are re-fitted by the calibration pass and a recalibration is a real event, not a regression - pinning them makes this fixture measure the ranking CODE, which is what it exists to protect.",
- "ranking_signature": [
+ "ranking_numbers_before_b6": [
   {
    "expected_r": 0.5,
-   "expected_r_note": "ExpR +0.50R (prior +0.50R, no tracker sample yet)",
    "expected_r_rank_score": 0.5,
    "priority_bucket": "favorite_setup",
    "proven_quality_score": 64.0,
@@ -116,7 +116,6 @@
   },
   {
    "expected_r": 0.237,
-   "expected_r_note": "ExpR +0.24R (prior +0.24R, no tracker sample yet)",
    "expected_r_rank_score": 0.237,
    "priority_bucket": "high_conviction",
    "proven_quality_score": 59.0,
@@ -128,7 +127,44 @@
   },
   {
    "expected_r": 0.05,
-   "expected_r_note": "ExpR +0.05R (prior +0.05R, no tracker sample yet)",
+   "expected_r_rank_score": 0.05,
+   "priority_bucket": "near_favorite",
+   "proven_quality_score": 56.0,
+   "score": 56.0,
+   "static_score": 80.0,
+   "symbol": "CCC",
+   "tracker_profit_factor": null,
+   "tracker_win_rate": null
+  }
+ ],
+ "ranking_signature": [
+  {
+   "expected_r": 0.5,
+   "expected_r_note": "ExpR +0.50R (prior +0.50R, no tracker sample yet) [exit template: first matching scenario (unpinned)]",
+   "expected_r_rank_score": 0.5,
+   "priority_bucket": "favorite_setup",
+   "proven_quality_score": 64.0,
+   "score": 64.0,
+   "static_score": 120.0,
+   "symbol": "AAA",
+   "tracker_profit_factor": null,
+   "tracker_win_rate": null
+  },
+  {
+   "expected_r": 0.237,
+   "expected_r_note": "ExpR +0.24R (prior +0.24R, no tracker sample yet) [exit template: first matching scenario (unpinned)]",
+   "expected_r_rank_score": 0.237,
+   "priority_bucket": "high_conviction",
+   "proven_quality_score": 59.0,
+   "score": 59.0,
+   "static_score": 95.0,
+   "symbol": "BBB",
+   "tracker_profit_factor": null,
+   "tracker_win_rate": null
+  },
+  {
+   "expected_r": 0.05,
+   "expected_r_note": "ExpR +0.05R (prior +0.05R, no tracker sample yet) [exit template: first matching scenario (unpinned)]",
    "expected_r_rank_score": 0.05,
    "priority_bucket": "near_favorite",
    "proven_quality_score": 56.0,

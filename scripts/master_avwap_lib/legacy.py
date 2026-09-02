@@ -4593,6 +4593,52 @@ def _protective_band_label(side: str) -> str:
     return "LOWER_1" if normalize_side(side) == "LONG" else "UPPER_1"
 
 
+#: WHICH EXIT TEMPLATE the headline per-setup R is measured on (P4 B6).
+#:
+#: `_summarize_tracker_setup_outcome` takes the FIRST tradeable scenario
+#: carrying the representative stop label, and which one that is has always
+#: been decided by the order of the `scenarios` dict - in practice `full_band2`,
+#: while `setup_docs.py` documents the house exit as 50% at band 2, the rest
+#: toward band 3, trailing to band 1. Two different trades, one headline R,
+#: and nothing said which.
+#:
+#: EMPTY MEANS TODAY'S BEHAVIOUR EXACTLY - first match in scenario order -
+#: so this packet moves no number. It exists so the choice is a named constant
+#: someone can change deliberately, and so the resolved template travels on the
+#: summary and is printed in the Expected-R note. Setting it to a template id
+#: makes the selection explicit and IS a scoring change: expected R consumes
+#: the representative R, so it needs a golden fixture and a sec-7 promotion.
+REPRESENTATIVE_EXIT_TEMPLATE_ID = ""
+
+
+def _representative_scenario(tradeable: list, primary_stop_label: str):
+    """The one scenario the headline per-setup R is measured on.
+
+    You trade one stop and one exit plan, so this is the honest per-setup R.
+    The stop is chosen by `_representative_stop_label_for_setup`; the exit
+    template is `REPRESENTATIVE_EXIT_TEMPLATE_ID` when it is set, and otherwise
+    the first match - which is what the code has always done.
+
+    A configured template that no scenario carries falls back to the first
+    match rather than returning nothing: a setup with no representative R would
+    silently fall through to the cross-variant average, which is the number
+    this function exists to avoid.
+    """
+    matching = [
+        scenario
+        for scenario in tradeable
+        if str(scenario.get("stop_reference_label") or "") == primary_stop_label
+    ]
+    if not matching:
+        return None
+    wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
+    if wanted:
+        for scenario in matching:
+            if str(scenario.get("exit_template_id") or "") == wanted:
+                return scenario
+    return matching[0]
+
+
 def _representative_stop_label_for_setup(setup: dict) -> str:
     """Representative stop label for a tracked setup's honest per-setup R.
 
@@ -5780,6 +5826,16 @@ def build_tracker_setup_record(
         "previous_anchor_date": str(previous_anchor.get("date") or ""),
         "priority_bucket": str(row.get("priority_bucket") or ""),
         "priority_score": float(row.get("score", 0) or 0),
+        # P4 B5: the STRUCTURE points, beside the score they were turned into.
+        #
+        # `apply_expected_r_ranking` overwrites `row["score"]` with the
+        # proven-quality score and keeps the pre-blend value in
+        # `row["static_score"]`. The record stored only the overwritten one, so
+        # the expected-R calibration - which is meant to fit realized R against
+        # STRUCTURE QUALITY - was fitting it against a number that already had
+        # realized performance blended into it. Storing both is what lets the
+        # helper read the right one.
+        "static_score": _coerce_float(row.get("static_score")),
         "human_focus_pick": bool(row.get("human_focus_pick")),
         "human_focus_side": str(row.get("human_focus_side") or "").strip().upper(),
         "favorite_zone": row.get("favorite_zone") or "",
@@ -6645,16 +6701,18 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     # preference to the cross-variant average (it falls back to the average when
     # the primary stop scenario isn't present).
     primary_stop_label = _representative_stop_label_for_setup(setup)
-    representative = next(
-        (scenario for scenario in tradeable if str(scenario.get("stop_reference_label") or "") == primary_stop_label),
-        None,
-    )
+    representative = _representative_scenario(tradeable, primary_stop_label)
     rep_total_r = _clip_tracker_r_value(representative.get("total_r"), TRACKER_SCORING_R_CLIP) if representative else None
     rep_is_closed = bool(representative and _scenario_is_closed(representative.get("status")))
     representative_total_r = rep_total_r if rep_total_r is not None else avg_total_r
     representative_closed_r = rep_total_r if (rep_total_r is not None and rep_is_closed) else avg_closed_r
     return {
         "representative_stop_label": str(representative.get("stop_reference_label")) if representative else "",
+        # WHICH EXIT TEMPLATE the headline R is measured on (P4 B6). It was
+        # never stated, and the answer is decided by dict order.
+        "representative_exit_template_id": (
+            str(representative.get("exit_template_id") or "") if representative else ""
+        ),
         "representative_total_r": representative_total_r,
         "representative_closed_r": representative_closed_r,
         "tradeable_scenario_count": len(tradeable),
@@ -7706,8 +7764,26 @@ _EXPECTED_R_CONFIG_CACHE: dict | None = None
 
 
 def _expected_r_static_points_from_record(setup: dict) -> float | None:
-    """Static quality points for a stored tracker setup: its scan-time score with
-    the tracker-derived deltas removed (mirrors ``_expected_r_quality_points``)."""
+    """Static quality points for a stored tracker setup (P4 B5).
+
+    PREFERS the stored `static_score`. `apply_expected_r_ranking` overwrites
+    `row["score"]` with the PROVEN-QUALITY score - which already has realized
+    win rate and profit factor blended into it - and keeps the pre-blend
+    structure points in `row["static_score"]`. The record stored only the
+    overwritten one, so this helper subtracted two tracker deltas from a number
+    that was not the sum of them, and the expected-R calibration fitted
+    realized R against a number that already contained realized performance.
+    That is a feedback loop: good outcomes raised the score, and the fit then
+    read the raised score as structure quality.
+
+    The subtraction path is kept for records written before B5, because months
+    of them exist and approximating their structure points is honest about what
+    can be recovered. Which path produced a value is reported by
+    `expected_r_calibration_source_counts` rather than silently mixed.
+    """
+    stored = _coerce_float(setup.get("static_score"))
+    if stored is not None:
+        return float(stored)
 
     score = _coerce_float(setup.get("priority_score"))
     if score is None:
@@ -7715,6 +7791,30 @@ def _expected_r_static_points_from_record(setup: dict) -> float | None:
     score -= int(setup.get("recent_tracker_score_delta", 0) or 0)
     score -= int(setup.get("setup_type_score_delta", 0) or 0)
     return float(score)
+
+
+def expected_r_calibration_source_counts(tracker_payload: dict | None = None) -> dict[str, int]:
+    """How many calibration records carry a stored `static_score` (P4 B5).
+
+    The two paths fit different things - stored structure points, versus the
+    proven-quality score with two deltas removed - so a run that mixes them is
+    fitting a blend of two definitions. This says how much of each, so the
+    changeover is visible rather than assumed.
+    """
+    tracker = tracker_payload if isinstance(tracker_payload, dict) else load_setup_tracker_payload()
+    setups = tracker.get("setups", {}) if isinstance(tracker, dict) else {}
+    counts = {"stored_static_score": 0, "derived_from_priority_score": 0, "unusable": 0}
+    for setup in setups.values():
+        if not isinstance(setup, dict):
+            counts["unusable"] += 1
+            continue
+        if _coerce_float(setup.get("static_score")) is not None:
+            counts["stored_static_score"] += 1
+        elif _coerce_float(setup.get("priority_score")) is not None:
+            counts["derived_from_priority_score"] += 1
+        else:
+            counts["unusable"] += 1
+    return counts
 
 
 def build_expected_r_calibration_samples(tracker_payload: dict | None = None) -> list[tuple[float, float]]:
@@ -7910,17 +8010,31 @@ def _expected_r_days_since_signal(row: dict, *, reference_date: date | None = No
     return days
 
 
+def representative_exit_template_label() -> str:
+    """What the headline per-setup R is measured on, in words (P4 B6).
+
+    The realized half of Expected R is the representative scenario's R, and
+    which EXIT PLAN that scenario carries was never stated - it is whichever
+    one comes first in the scenarios dict. Naming it in the note is how a
+    reader learns that "+0.40R" is one exit plan's number and not the house
+    plan `setup_docs.py` describes.
+    """
+    configured = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
+    return configured or "first matching scenario (unpinned)"
+
+
 def _format_expected_r_note(result: dict) -> str:
     expected = float(result.get("expected_r") or 0.0)
     prior = float(result.get("prior_r") or 0.0)
     realized = result.get("realized_r")
     weight = float(result.get("blend_weight") or 0.0)
     samples = int(result.get("closed_samples") or 0)
+    template = f" [exit template: {representative_exit_template_label()}]"
     if realized is None or weight <= 0:
-        return f"ExpR {expected:+.2f}R (prior {prior:+.2f}R, no tracker sample yet)"
+        return f"ExpR {expected:+.2f}R (prior {prior:+.2f}R, no tracker sample yet){template}"
     return (
         f"ExpR {expected:+.2f}R (prior {prior:+.2f}R blended with realized "
-        f"{float(realized):+.2f}R at w={weight:.2f}, n={samples})"
+        f"{float(realized):+.2f}R at w={weight:.2f}, n={samples}){template}"
     )
 
 
@@ -10428,13 +10542,40 @@ def load_scan_factor_leaderboard_rows(path: Path | None = None) -> list[dict]:
     return frame.to_dict("records")
 
 
+#: The column carrying the tier the trader actually saw (P4 B4).
+ASSIGNED_TIER_FIELD = "assigned_tier"
+
+
 def _tier_for_priority_bucket(priority_bucket: str | None) -> str:
+    """The DERIVED tier - a fallback for rows written before B4.
+
+    This is not the shipped tier and never was: the tier the trader saw is
+    decided in `_priority_partition_tier_rows`, after the expected-R demote,
+    the per-symbol de-dupe and the best-swing merge. Kept because the history
+    file holds months of rows with no `assigned_tier` column, and grading them
+    by the old rule is honest about what could be known; inventing one would
+    not be.
+    """
     bucket = str(priority_bucket or "").strip().lower()
     if bucket == "favorite_setup":
         return "S"
     if bucket == "near_favorite_zone":
         return "A"
     return ""
+
+
+def tier_for_tracker_row(row) -> tuple[str, str]:
+    """(tier, source) for one history row: the assigned tier, else the derivation.
+
+    The SOURCE travels with the tier so a mixed file reads honestly - rows
+    written before B4 are graded by the old rule and say so, rather than
+    silently looking like decisions that were recorded.
+    """
+    getter = row.get if hasattr(row, "get") else lambda key, default=None: default
+    assigned = str(getter(ASSIGNED_TIER_FIELD, "") or "").strip().upper()
+    if assigned:
+        return assigned, "assigned"
+    return _tier_for_priority_bucket(getter("priority_bucket")), "derived_from_bucket"
 
 
 def _tier_rank_value(tier: str | None) -> int:
@@ -10546,7 +10687,7 @@ def build_bot_tier_pick_rows(
     generated_at = datetime.now().isoformat(timespec="seconds")
     rows = []
     for source_row in latest_frame.to_dict("records"):
-        tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        tier, tier_source = tier_for_tracker_row(source_row)
         if not tier:
             continue
         matches = _positive_scan_factor_matches_for_source_row(
@@ -10560,6 +10701,9 @@ def build_bot_tier_pick_rows(
                 "scan_date": source_row.get("_scan_date_text"),
                 "scan_row_id": source_row.get("_scan_row_id"),
                 "tier": tier,
+                # Which tier this is: the one that shipped, or the old
+                # bucket derivation for a row written before B4.
+                "tier_source": tier_source,
                 "symbol": source_row.get("_symbol"),
                 "side": normalize_side(source_row.get("_side") or source_row.get("side")),
                 "priority_bucket": _scan_factor_text(source_row.get("priority_bucket")),
@@ -10608,7 +10752,7 @@ def build_bot_tier_outcome_rows(
         source_row = source_rows.get(str(obs.get("scan_row_id") or ""))
         if not source_row:
             continue
-        tier = _tier_for_priority_bucket(source_row.get("priority_bucket"))
+        tier, tier_source = tier_for_tracker_row(source_row)
         if not tier:
             continue
         horizon = int(obs.get("horizon_sessions", 0) or 0)
@@ -28732,6 +28876,22 @@ def _priority_partition_tier_rows(
         ]
     )
     b_rows = take_rows(report_rows)
+
+    # P4 B4: WRITE DOWN THE TIER THAT SHIPPED.
+    #
+    # `_tier_for_priority_bucket` re-derives S/A from the priority bucket
+    # alone, so the tier tracker graded a tier the trader never saw: the
+    # shipped tier is decided HERE, after the expected-R demote
+    # (`_tier_worthy`), the per-symbol de-dupe (`take_rows`) and the best-swing
+    # merge. A name held out of S/A for a poor ExpR was still graded as S,
+    # and a name that lost its slot to a duplicate was graded as though it had
+    # one.
+    #
+    # Stamped at assignment time, on the row itself, so the grader can read
+    # the decision instead of guessing at it.
+    for tier_label, tier_rows in (("S", s_rows), ("A", a_rows), ("B", b_rows)):
+        for row in tier_rows:
+            row[ASSIGNED_TIER_FIELD] = tier_label
 
     return [
         {
