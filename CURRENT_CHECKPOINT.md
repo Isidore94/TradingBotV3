@@ -18,11 +18,11 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - both 2026-08-31 evening lines were merged into it by trader instruction: the snappiness line (packets 1-3, stacked, fast-forward from `claude/desk-snappiness-3`) and then Phase 0.11 theta premium (`claude/theta-premium`, a real merge). Only the two shared ledgers conflicted - this file - and both sides' dated entries were kept. `main` already carried today's swing picks (both passes), the day-trade pass, the Strength Board move and the desk-lockup fix |
+| Working branch | **`claude/p7-setup-registry`**, off `main` at `66a0c31` - Phase 0.13 packet P7 (one name per setup). Also open and unmerged, all off `main` at the same commit: `claude/p6a-tag-backlog` (gate #36), `claude/p6-preference-to-trade` (#35), `claude/p5-pass-cohorts` (#34), `claude/p4-swing-variables` (#33), `claude/p3-fact-pack-truth` (#32), `claude/p2-show-me` (#31), `claude/p1-grade-what-you-said` (#30), `claude/p0-apply-decisions` (#29) and `claude/focus-declutter-lrsi-htf` (#27/#28). **Two merge hazards to know about:** P7 edits `packaging/tradingbotv3.spec` (the only packet that does), and **BD-80 is already double-claimed** by `claude/focus-declutter-lrsi-htf` (78-80) and `claude/p3-fact-pack-truth` (80-84) - one of those two must renumber on merge. P7 starts at BD-85 to avoid being a third claimant |
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
-| Active roadmap items | **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
-| Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
+| Active roadmap items | **Phase 0.13 packet P7 (2026-09-01 - BUILT on `claude/p7-setup-registry`; NO live gate, and **`plan.md P4.1` is where the registry becomes authoritative**)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5625 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p7-setup-registry`) with THREE FILES DESELECTED - `test_ai_jobs_runner.py`, `test_ai_evidence_coverage.py` and `test_ai_jobs_store_window.py`, whose 32 tests stand down whenever the desk's nightly AI run holds the machine-local `ai_jobs_runner` writer lock, as it did all evening. **Verified environmental rather than assumed: the same tests fail with every P7 change stashed.** Re-run those three files once the nightly finishes. `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · spec-drift **17** (the spec was EDITED this packet - see the frozen-exe row). Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Frozen exe | **THE SPEC CHANGED THIS PACKET (P7) AND THE EXE HAS NOT BEEN REBUILT SINCE.** `packaging/tradingbotv3.spec` now sweeps non-`.py` assets at the scripts/ ROOT (bundling to `"."`, where a frozen top-level module's `__file__` parent lands), because `setup_registry_v1.json` is the first such asset. The spec-drift guard passes 17/17 and the source selftest is 73/73, but **a real rebuild + frozen selftest is owed before this branch merges** - packaging trigger 2. Previously: **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **DONE 2026-08-31 21:51, trader-authorized.** The checkout sits on `main` and the desk was stopped (pid 9832, the pid its own `heartbeat.json` named; its launcher parent 3476 had already exited) and relaunched through `trading_desk.cmd` - the production launcher, unchanged. New pids: **23588** (the desk) under trampoline **23796**. Verified UP three ways rather than assumed: the process outlived 60 s, a second launch printed "another TradingBotV3 desk is already running" and exited 0, and `heartbeat.json` re-stamped at 21:52:40 naming pid 23588 (it had read 21:50:40 / pid 9832 before the kill). Everything merged tonight is what is now running, and the stall watchdog is ON - this session's `ui_stalls.jsonl` is the AFTER side of gates 24-26 |
 
 ### Open gates, newest first
@@ -58,6 +58,80 @@ the dated entry named beside it.
 | 21 | **Day-trade pass** — one desk session where the trader records a real pass from the Alert Center capture tab: the ticked reasons and the note reach `trader_annotations.jsonl`, the chart STAYS UP, and a pass taken while an M5 chart is drawn carries its bars into `trader_annotation_bars/` | 2026-08-31 pass entry |
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
+
+### 2026-09-01 - Phase 0.13 packet P7: one name per setup
+
+**Branch `claude/p7-setup-registry`, off `main` at `66a0c31`.** Two READ-ONLY modules.
+Nothing in production imports either, no runtime behaviour changed, and **there is no
+live gate** - green tests are the whole gate.
+
+**PLAN.MD P4.1 IS WHERE THE REGISTRY BECOMES AUTHORITATIVE.** Until then it describes
+what the code already believes. P4.1 owns two things P7 deliberately did not do:
+choosing which spelling is identity for each of the eight recorded divergences, and
+filling the columns left blank.
+
+**1. The crosswalk.** `scripts/setup_registry.py` over a frozen
+`setup_registry_v1.json` - 57 entries keyed `setup_id@version` - generated by
+`scripts/build_setup_registry.py` and reviewed as a diff. It is never rebuilt at
+import: a crosswalk that recomputes itself from five moving sources is a sixth source,
+whose disagreements appear and vanish without anyone seeing them.
+
+**THE PACKET NAMED FOUR SOURCES; THE CODE HAS FIVE.** `legacy.py` declares study
+families as `*_STUDY_FAMILY` constants - 17 of them, and **eight are named nowhere
+else**: `htf_trend_retest`, `hv_level_proximity`, `hv_level_break`,
+`cloud_flat_proximity`, `compression_break`, `trendline_break`,
+`relative_avwap_retest`, `relative_avwap_break`. A registry built from the four sources
+the packet listed would have shipped a crosswalk that omits detectors running every
+scan. Read by regex - no import of a 27k-line module, no write to it.
+
+**Two refusals, which are the same rule twice.** It resolves no disagreement: eight
+`known_divergences` record what each source believes (three aliases pointing at another
+family's page, four families the scanner tags but nothing documents, and one pair
+Appendix C states that `SETUP_DOC_ALIASES` does not carry) and leave the choice to
+P4.1. And it fills no column the sources do not establish - supported sides, timeframe
+roles, the exact completed-bar trigger and the primary recipe are EMPTY on every row
+and listed under `unestablished`. A guessed side reads as established in exactly the
+column a later experiment trusts. An unresolvable name RAISES rather than falling back
+to `GENERAL`, which would file "two tables write different things under one word" under
+"untagged".
+
+**2. The look-counter.** `scripts/research_warehouse/trial_ledger.py`: one append-only
+JSONL row per registered grid, written at REGISTRATION time. `register` refuses to
+rewrite an existing `trial_id` - editing a declaration after the numbers arrive is how a
+grid of 54 cells becomes a grid of 3 in the record - and a test bans the module from
+reading an outcome at all. Four grids backfilled with their real authorization pointers
+(M5-close 54 cells, HTF LRSI 16, AVWAP band challenger 3, the v1 recipe library 5),
+because a family-lifetime count starting today would report each as never looked at.
+Every recipe id resolves to exactly ONE row; `owners_of` returns every claimant, since
+the interesting failure is two owners rather than none.
+
+**THE PACKAGING GUARD FIRED AND THE SPEC WAS FIXED, NOT THE TEST.** The frozen JSON is
+the first non-`.py` runtime asset at the scripts/ ROOT, and the spec's sweep only walked
+package directories. It now sweeps the root too, bundling to `"."` because a frozen
+top-level module's `__file__` parent IS the bundle root - swept rather than named, so
+the next root-level asset is covered the day it lands. It was NOT added to the unbundled
+allowlist: that is only for files the frozen app provably never reads, and P4.1 will
+make production read this one. **A rebuild + frozen selftest is owed before merge.**
+
+**VERIFIED DIFFERENCES FROM THE PACKET, none forced.** P3's temporary role map is on
+`claude/p3-fact-pack-truth` and NOT on `main`, so `setup_research.py` here has no
+`family_role` to replace; `setup_registry.fact_pack_role` is built and tested as the
+drop-in and keeps the fact pack's own `TRADE` spelling where Appendix C writes
+`TRADE_SETUP`, so the swap changes no output and belongs to whichever branch merges
+second. `HTF_LRSI_RECIPES` is likewise not on `main`; the ledger declares that grid
+anyway. And the packet's role vocabulary (TRADE / STUDY) differs from Appendix C's,
+which the packet said not to deviate from - the spec's vocabulary won and study-ness is
+a STATUS.
+
+**SUITE NOTE, MEASURED NOT ASSUMED.** 32 tests across `test_ai_jobs_runner.py`,
+`test_ai_evidence_coverage.py` and `test_ai_jobs_store_window.py` stand down while the
+machine-local `ai_jobs_runner` writer lock is held - the desk's nightly AI run held it
+throughout this build, confirmed by taking the lock directly. **The same tests fail with
+every P7 change stashed**, so this is the environment and not a regression. Everything
+else: **5625 passed, exit 0** · `ruff` clean · smoke **7/7** · source `--selftest`
+**73/73** · spec-drift **17**. Fail-before-fix: with `scripts/` stashed, 24 of the 25
+new tests fail (the 25th asserts nothing in production imports them, which is trivially
+true when they do not exist).
 
 ### 2026-08-31 (late evening) - Desk snappiness packet 3: the last of the three
 
