@@ -148,6 +148,33 @@ which is evidence and must not be loaded as context.
 - Visual Alert Center and review queue, chart-armed watches, persistent History,
   structured review decisions, review scoreboard, and annotation-only/FIFO policy
   gate.
+- **Every verdict the trader can record now has a forward record** (P5,
+  2026-09-01). Veto and like already did; the day-trade **pass**, **not_today**
+  and **dislike** did not. Two new trios - `pass_cohort_*` and
+  `rejection_cohort_*` - graded by the ONE existing
+  `update_human_focus_outcomes`, summarised through `evidence_stats`, registered
+  in `COHORT_BASE_BY_SOURCE_PREFIX` by APPENDING, with two nightly slots appended
+  to `default_slots()`.
+- **A pass grades in k+1 cohorts and they must never be summed.** A day-trade
+  pass is multi-select, so it is written into one cohort per reason code AND into
+  the pooled `pass_all`; only `pass_all`'s n counts passes. The overlap travels
+  in the module docstring, in a `reason_code_count` column on every row, and in
+  `OVERLAP_NOTE`, which the Weekend Prep note and the AI scope label read rather
+  than retype. **The pass vocabulary is a separate family and is never folded
+  into the veto's.**
+- **A pass also carries a same-session grade when the desk held bars**: entry at
+  the first completed M5 close AFTER the pass, stop at the session extreme on the
+  pass side, target 2R, stop-first. When it cannot be computed the columns are
+  BLANK and `intraday_unmeasured_reason` says which absence it is.
+- **`not_today` and `dislike` are separate cohorts and never pooled** - a
+  same-day throwback and a judgement on the name are different claims.
+  `unfavorite` is not graded (a membership change, not a verdict, and sideless on
+  the live log), and the free-text `reason` is carried verbatim and never coded.
+- **`update_human_focus_outcomes` takes an optional `pick_key`**, defaulting to
+  the existing identity so every caller is unchanged. A MULTI-SOURCE cohort - one
+  where the same name on the same date legitimately grades under several sources -
+  passes `pick_key_with_source`; without it a multi-code pass would collapse to
+  one outcome row and k of its k+1 cohorts would vanish.
 - Main-only price-level polling with cross-up/cross-down, one fire per arm, urgent
   ntfy push, persistent main-desk presentation, and manual re-arm.
 - Auto modes OFF/DESK/AWAY/EVENING, honest global status, EVENING early scan and
@@ -416,6 +443,76 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-01 - Phase 0.13 packet P5: pass and not-today get graded
+
+**Branch `claude/p5-pass-cohorts`, off `main` at `66a0c31`.** Two new cohorts,
+completing the set: every verdict the trader can record now has a forward record.
+Live gate #34 owed.
+
+**The gap.** The veto cohort has graded what was thrown away since it shipped and the
+like cohort what was endorsed. Three verdicts had nothing: the day-trade **pass**
+("I really like this stock for a daytrade but it has this ONE issue", 2026-08-31),
+**not_today** (223 rows on the live log) and **dislike** (34 rows, carrying the most
+information-dense free text the trader writes).
+
+**1. `ui/annotations/pass_cohort.py`.** A pass is MULTI-SELECT, so it grades under each
+of its reason codes AND under a pooled `pass_all` - k+1 rows. The code cohorts therefore
+OVERLAP AND MUST NEVER BE SUMMED, and that fact travels three ways: the module
+docstring, a `reason_code_count` column on every row, and `OVERLAP_NOTE`, which the
+Weekend Prep note and the AI scope label both READ rather than retype. Identity on write
+is (vocab_version, reason_code); no version returns the historical unversioned form so a
+row already on disk keeps grading where it was filed.
+
+The intraday grade: entry at the first completed M5 close AFTER the pass - never a bar
+that had not finished - stop at the session extreme on the pass side up to entry, target
+2R, STOP FIRST on a bar touching both.
+
+**MEASURED AND REPORTED:** on the live desk that grade is currently always blank, and
+the reason is structural. The sidecar is written from the bars the desk was ALREADY
+HOLDING when the pass was recorded, so every bar in it starts BEFORE the pass and the
+entry bar the rule asks for is never inside it. Rather than an ambiguous blank, every row
+carries `intraday_unmeasured_reason` - `sidecar_ends_before_the_entry_bar`, which is a
+different fact from `no_sidecar_bars`. Whether entry should instead be the last completed
+close AT the pass is a definition change and the trader's to make.
+
+**2. `scripts/rejection_cohort.py`.** `not_today` and `dislike` are separate cohorts and
+never pooled. Live: 253 gradeable rows, 219 + 34, zero sideless. `unfavorite` is NOT
+graded - a membership change rather than a verdict, and sideless on the live log - and
+the free-text `reason` is carried verbatim and never coded, because the whole value of
+those 34 dislikes is the sentence.
+
+**3. The one change to existing code.** `update_human_focus_outcomes` keyed outcome rows
+on (trade_date, symbol, side), and every row of one multi-code pass shares all three, so
+they would collapse into one and k of the k+1 cohorts would vanish. A new `pick_key`
+parameter DEFAULTS TO None - every existing caller unchanged - and the two P5 cohorts
+pass `pick_key_with_source`. The outcome numbers are identical across those rows, so what
+the wider key preserves is which cohorts were graded, not which figures.
+
+The rejection sources are `focus__not_today` / `focus__dislike` and the DOUBLE underscore
+is load-bearing: the prefix matcher tests `startswith(prefix + "_")`, so `focus_` claims
+exactly those and cannot reach `focus_swing`, `focus_m5` or `focus_pick`. Pinned by a
+test.
+
+**4. Surfaces and wiring.** Two nightly slots appended (5-minute reserve, deterministic,
+no model - asserted). Capture-time merge for a pass, mirroring the veto's, through one
+shared helper. Two Weekend Prep tables showing the six columns PLUS `meets_n_floor` and
+`evidence_label`, sub-floor rows greyed. Both performance files added to the evidence
+report and to `ai_summary`'s `trader_judgement` scope - along with the LIKE file, since
+that scope read the veto trio only and so asked "were your rejections wrong?" without
+ever asking "were your endorsements right?".
+
+**Six existing tests pinned the old sets and were updated - the authorized change, not
+drift.** Three asserted an absolute slot prefix: P5's cohorts sit before
+`evidence_report` because the report READS them, which moves later slots' INDEX without
+reordering any existing PAIR, so they now assert the pairwise order - the actual
+invariant, and one that will not need editing next time a cohort is added. Three asserted
+the judgement scope held exactly three sources; they now compare against the scope's own
+declaration.
+
+**Verification.** `pytest tests/ -q` **5749 passed, 72 subtests, process exit 0** ·
+`ruff` clean · smoke **7/7** · source `--selftest` **73/73** · spec-drift 17 passed.
+
 
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.

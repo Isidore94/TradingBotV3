@@ -789,6 +789,31 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+### Phase 0.13 packet P5 — Pass and not-today get graded (2026-09-01) — BUILT, live gate owed
+
+Authorized by the trader pasting the packet. Built on `claude/p5-pass-cohorts`. Two new
+cohorts complete the set: every verdict the trader can record now has a forward record.
+
+1. **`pass_cohort`** over the annotation log's `pass` rows. Multi-select, so a pass
+   grades in k code cohorts AND the pooled `pass_all` — the code cohorts OVERLAP and must
+   never be summed. Identity on write is (vocab_version, reason_code). Beside the daily
+   horizons it carries a same-session grade when a bar sidecar exists.
+2. **`rejection_cohort`** over `pick_feedback.jsonl`. `not_today` and `dislike` are
+   separate cohorts, never pooled; `unfavorite` is not graded; the free-text reason is
+   carried and never coded.
+3. Two nightly slots appended, two Weekend Prep tables, both files added to the evidence
+   report and the `trader_judgement` scope (with the like file, which was also missing).
+
+**Owed and NOT part of this packet:** the same-session grade cannot currently be computed
+— the bar sidecar holds only bars from BEFORE the pass, so the entry bar it asks for is
+never in it. Every row says so through `intraday_unmeasured_reason`. Whether entry should
+instead be the last completed close AT the pass is a definition change and the trader's
+call; coding the free-text dislike reasons is likewise its own packet with a vocabulary
+behind it.
+
+**Live gate (#34):** the trader records two real passes and one not-today on the desk;
+the next morning both cohorts have rows and Weekend Prep shows them.
+
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads
