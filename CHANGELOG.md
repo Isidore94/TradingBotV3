@@ -699,6 +699,36 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-02 - Review round R2: two guards, then the stale sentences
+
+**1. An empty `assigned_tier` cell was about to become a tier called NAN**, and this
+landed ahead of the 07:30 scan. The live feature-history file has no such column; the
+first scan after P4 widens it, and `pd.read_csv` reads every older row's empty cell
+back as a float NaN - TRUTHY, and `str(nan)` is `"nan"`. Reproduced on `main`: a NAN
+tier reaches the outcome rows, and on the packet's measurement 40 of 42 of them.
+`tier_for_tracker_row` now accepts only the vocabulary the stamper writes (S, A, B).
+Both row shapes are tested, because "key absent" and "key present and empty" are
+different values and only the second one broke.
+
+**2. A link is not a tag at any seam.** R1 covered `auto_tag_summary`; the bulk lane,
+the bulk `max(confidence)` pick, Accept-all and `tag_confidence` each let one through.
+A link arrives at 0.90-0.95, so it beat every scanner match beneath it - TRV lost
+`avwap_retest_followthrough` at 0.91. ONE predicate now answers it, accepting both the
+in-memory flag and the `link:` prefix that survives the store. Links still render with
+their event id. A pass carries ALL its codes in vocabulary order.
+
+**3. The sweep**: seven copies of the corrected "never pooled" sentence, four stale
+`focus__not_today` spellings, a dead double assignment, an unlocked in-place CSV
+rewrite made atomic and made to REPORT its failures, a globally-capped adjustment query
+made trade-scoped, a 169 ms journal read moved off the Qt thread, four DESK_INTERNALS
+entries, and three wrong claims (the frozen selftest is not 29/29,
+`claude/gui-phase-0-9` IS contained in `main`, and a pass merges through
+`_merge_cohort_safely` too).
+
+**Verification.** `pytest tests/ -q` **6109 passed, exit 0, zero failures** with the
+`ai_jobs_runner` lock free · `ruff` clean · smoke **7/7** · source `--selftest`
+**74/74**. No packaging trigger.
+
 ### 2026-09-02 - Review round R1: the blockers, then the whole of Phase 0.13 onto `main`
 
 **Eleven blockers across five packets, each reproduced before it was fixed, then eight

@@ -1054,6 +1054,27 @@ three more looks against the same k.
 the 20-minute reserve; the trial-ledger row exists with status `collecting`; and **no
 cell is read for a verdict before the declared window closes.**
 
+### Phase 0.13 review round R2 (2026-09-02) — TWO GUARDS, BUILT
+
+Authorized by the trader pasting the review.
+
+1. **An empty `assigned_tier` cell is absent, not a tier called NAN.** The live
+   feature-history file has no such column; the first scan after P4 widens it and
+   every older row reads back as a float NaN, which is TRUTHY and stringifies to
+   `"nan"`. `tier_for_tracker_row` now accepts only the vocabulary the stamper
+   writes (S, A, B) and treats everything else as absent. Landed before the 07:30
+   scan.
+2. **A link is not a tag at any seam.** One predicate rejects link candidates in
+   the bulk lane, the bulk top pick, Accept/Accept-all and `tag_confidence` - R1
+   had covered only `auto_tag_summary`. A pass now carries ALL its codes.
+
+Plus the stale sentences, the atomic overlap-note write, the trade-scoped
+adjustment query, the Qt-thread backlog read, and four DESK_INTERNALS entries.
+
+**No new live gates.** Gate 38 additionally watches the Setup Tracker's
+current-picks count after the first scan (the NAN fix) and the Weekend Prep
+backlog toggle line in `ui_stalls.jsonl`.
+
 ### Phase 0.13 review round R1 (2026-09-02) — BLOCKERS FIXED, ALL PACKETS MERGED
 
 Authorized by the trader pasting the review. Eleven blockers across P4, P5, P6, P7 and
