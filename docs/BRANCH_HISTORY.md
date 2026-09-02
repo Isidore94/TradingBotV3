@@ -117,6 +117,32 @@ deletion. `claude/gui-phase-0-9` was deliberately left alone: it is separate
 long-running work with its own open gate (SOAK 1) and was not part of this
 integration.
 
+## The 2026-09-02 integration (review round R1)
+
+Eleven branches, all cut from `66a0c31`, all now on `main`. Phase 0.12, P3 and P7
+merged in the morning; R1 fixed the blockers on the rest and merged the remaining
+eight the same day.
+
+| Branch | Tip | What it held | Disposition |
+|---|---|---|---|
+| `claude/focus-declutter-lrsi-htf` | `ce275b1` | Phase 0.12 A+B: the Focus surfaces stop growing, and the higher-timeframe LRSI entry study (16 shadow recipes) | merged into `main` 2026-09-02; containment proven |
+| `claude/p0-apply-decisions` | `e4dc2fe` | P0: BANGER retired, LRSI M5 alerts silenced with every row of evidence kept, click-away recorded as a pass | merged into `main` 2026-09-02; containment proven |
+| `claude/p1-grade-what-you-said` | `9439385` | P1: the swing-like cohort, the capture-time like merge, versioned veto pooling, and 640 decisions the scoreboard was reading as silence | merged into `main` 2026-09-02; containment proven |
+| `claude/p2-show-me` | `774296c` | P2: the Decisions pane, the five AI phase gates, the M5 take rate and the repetition fold | merged into `main` 2026-09-02; containment proven |
+| `claude/p3-fact-pack-truth` | `eb7bd43` | P3: the nightly fact pack states its own evidence shape (BD-81..85 after the merge renumber) | merged into `main` 2026-09-02; containment proven |
+| `claude/p4-swing-variables` | `56b17d2` | P4: twelve tracker attributes, the finer leaderboard views, the shipped tier - plus R1's three blocker fixes | merged into `main` 2026-09-02; containment proven |
+| `claude/p5-pass-cohorts` | `5d0a9f9` | P5: the pass and rejection cohorts - plus R1's cohort rename, pooled-row label and the missing merge test | merged into `main` 2026-09-02; containment proven |
+| `claude/p6-preference-to-trade` | `abaf966` | P6: exact-id auto-tag candidates, the preference/trade report, the honest empty dimension - plus R1's four blocker fixes | merged into `main` 2026-09-02; containment proven |
+| `claude/p6a-tag-backlog` | `b303423` | P6a: provisional tags, the bulk tagger and the review surface (24 tags applied to the live journal) | merged into `main` 2026-09-02; containment proven |
+| `claude/p7-setup-registry` | `cb271b0` | P7: the setup crosswalk and the trial ledger - plus R1's registered_at | merged into `main` 2026-09-02; containment proven |
+| `claude/p8-param-grid` | `9629f78` | P8: the first setup-parameter grid - plus R1's ledger wiring, the real assertion and the memoisation | merged into `main` 2026-09-02; containment proven |
+
+**Every one passes `git merge-base --is-ancestor <branch> main`** - checked on
+2026-09-02, all eleven. They are LEFT IN PLACE rather than deleted: nothing asked
+for the cleanup, and the proof above is what makes deleting them safe whenever
+somebody does. `claude/gui-phase-0-9` is still deliberately open with its own
+gate (SOAK 1).
+
 ## Rule going forward
 
 A branch may be deleted once `git merge-base --is-ancestor <branch> main` succeeds —
