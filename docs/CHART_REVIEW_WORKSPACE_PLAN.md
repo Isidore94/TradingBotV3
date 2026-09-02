@@ -550,3 +550,49 @@ rosters were reconciled. Future asset/package changes must follow
 | Rail wiring, like-writes-one-annotation-row-and-nothing-else, no focus writer importable, failure surfaced, drawer default hidden | `tests/test_chart_review_workspace.py` |
 | Setups drawer: off-GUI-thread bounded snapshot read, setup-id keys rendered as symbols, byte ceiling refused | `tests/test_chart_review_workspace.py` |
 | Page/nav registration alignment | `tests/test_chart_review_workspace.py`, `tests/test_qt_focus_panel.py` |
+
+## 11. P10 — one like, one dislike, from every screen (2026-09-02)
+
+This plan has described `trader_annotations.jsonl` as the chart-review stream
+since it was written. **It is now the desk's stream**: the Master AVWAP ★ and ✕,
+"Not today" on a review chart, and the capture rail all write into it through one
+writer, `ui/annotations/verdicts.py`.
+
+### Schema v1, extended additively
+
+`SCHEMA_VERSION` stays **1**. Three additions, and a test proves every live
+reader still answers with them present:
+
+| Field | Meaning |
+|---|---|
+| `surface` | which screen: `master_avwap_setups`, `chart_review`, `focus_panel`, `m5_alert_bar`, `rail`. Validated on write — an unknown value is refused, because rows are never rewritten |
+| `supersedes` | the `event_id` of the click this note belongs to. A note is a SECOND row; the click row is never edited |
+| `scan_date`, `tracker_setup_id`, `canonical_setup_id`, `priority_bucket`, `score`, `expected_r` | the scanner row under the click, copied from what the desk was already showing. Absent when there was no row — a capture click never fetches |
+
+`surface` is a COLUMN and never a cohort. The trader's rule is that a star and a
+like are the same thing; splitting them at write time would make the question
+"does the screen matter?" unanswerable, because rows are never rewritten.
+
+### The veto vocabulary now has a codeless lane
+
+An **uncoded** veto is legal. It carries no `reason_code` and, deliberately, no
+`vocab_version`: `_rebuild_pooled_performance` pools on that pair, so a version
+on a codeless row would file it in a pool it was never part of. It grades under
+`veto_uncoded` and is never pooled with a coded cohort.
+
+This does not weaken the coded path. A `reason_code` that is present is still
+validated against the loaded vocabulary, and a reason that requires a note still
+requires one.
+
+### The note box
+
+After the row is written, and only where no quick button was used. Empty or
+cancelled writes nothing, and the click already counted — the trader's own rule:
+*"sometimes I may not want to write a note but the fact I clicked like should be
+processed by the bot eventually."*
+
+### Still analysis-only
+
+Everything in this file's hard boundary holds unchanged. Nothing written here
+mutes, suppresses, scores, gates, ranks or alerts, and `review_policy.json` still
+has no suppression field.

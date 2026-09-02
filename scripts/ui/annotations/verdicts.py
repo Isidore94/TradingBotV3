@@ -152,8 +152,15 @@ def record_like(
     m5_bars: Any = (),
     timeframe: str = "",
     path: Path = TRADER_ANNOTATIONS_FILE,
+    **extra: Any,
 ) -> dict[str, Any] | None:
     """One like, from one screen. Returns the written row, or None.
+
+    `**extra` passes the rail's own fields through untouched - `last_price`,
+    `ref_level_id`, `ref_level_family`. They are the CHART's context rather than
+    the screen's, only the rail has them, and `build_annotation` already
+    validates every one; naming them here would be a second list to keep in step
+    with that one.
 
     `like_mode` defaults to QUICK because every surface added by P10 is a
     one-click verb: a star, a heart, a keystroke. Only the rail's Alt+K path
@@ -178,6 +185,7 @@ def record_like(
         timeframe=timeframe,
         m5_bars=m5_bars,
         path=path,
+        **extra,
     )
 
 
@@ -193,6 +201,7 @@ def record_dislike(
     vocabulary: Any = None,
     timeframe: str = "",
     path: Path = TRADER_ANNOTATIONS_FILE,
+    **extra: Any,
 ) -> dict[str, Any] | None:
     """One dislike, from one screen. A veto row, coded or not.
 
@@ -215,6 +224,7 @@ def record_dislike(
         scan_context=scan_context,
         timeframe=timeframe,
         path=path,
+        **extra,
     )
 
 

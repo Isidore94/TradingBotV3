@@ -476,6 +476,17 @@ class FocusReviewPage(_StepPage):
         self.claim_caveat = QLabel("")
         self.claim_caveat.setObjectName("MutedLabel")
         self.claim_caveat.setWordWrap(True)
+
+        # P10 C3: "your likes: best day and entry so far". ELIGIBLE cells only -
+        # a cell under the floor is not a weak answer, it is no answer, and this
+        # page is read on a Sunday when there is time to act on what it says.
+        # BLANK when nothing is eligible, which is the normal state for the first
+        # twenty sessions and says so.
+        self.after_like_table = QTableWidget(0, len(AFTER_LIKE_COLUMNS))
+        self.after_like_table.setHorizontalHeaderLabels(AFTER_LIKE_HEADERS)
+        self.after_like_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.after_like_note = QLabel("")
+        self.after_like_note.setWordWrap(True)
         #: The last full read, kept so the horizon selector re-renders without
         #: touching disk. Selecting a horizon is a VIEW change.
         self._cohort_rows: list[dict] = []
@@ -548,6 +559,9 @@ class FocusReviewPage(_StepPage):
         self._layout.addWidget(self.like_table, 1)
         self._layout.addWidget(self.like_note)
         self._layout.addWidget(self.claim_caveat)
+        self._layout.addWidget(QLabel("Your likes: best day and entry so far"))
+        self._layout.addWidget(self.after_like_table, 1)
+        self._layout.addWidget(self.after_like_note)
         self._layout.addWidget(QLabel("Day-trade passes, graded forward"))
         self._layout.addWidget(self.pass_table, 1)
         self._layout.addWidget(self.pass_note)
@@ -591,6 +605,10 @@ class FocusReviewPage(_StepPage):
             "cohort": _read_veto_cohort(),
             "like": _read_like_cohort(),
             "claim_caveat": _claim_picklist_caveat(),
+            # P10 C3. On the WORKER: it opens a JSON file that can be tens of
+            # megabytes, and the Qt thread never reads a file this page can wait
+            # for.
+            "after_like": _read_after_like_block(),
             "pass": _read_pass_cohort(),
             "rejection": _read_rejection_cohort(),
             "preference": _read_preference_trade_rows(self.service.week_bounds),
@@ -605,6 +623,7 @@ class FocusReviewPage(_StepPage):
         self._render_cohort(data.get("cohort") or [])
         self._render_like_cohort(data.get("like") or [])
         self.claim_caveat.setText(str(data.get("claim_caveat") or ""))
+        self._render_after_like(data.get("after_like") or {})
         self._render_pass_cohort(data.get("pass") or [])
         self._render_rejection_cohort(data.get("rejection") or [])
         self._render_preference_trades(data.get("preference") or [])
@@ -815,6 +834,17 @@ class FocusReviewPage(_StepPage):
             "about the reason, not a verdict on the decision. "
             + _floor_sentence_simple(rows)
         )
+
+    def _render_after_like(self, pack) -> None:
+        """"Your likes: best day and entry so far". Eligible cells only."""
+        rows, note = after_like_view(pack)
+        self.after_like_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            for column, key in enumerate(AFTER_LIKE_COLUMNS):
+                value = row.get(key)
+                text = "" if value is None else str(value)
+                self.after_like_table.setItem(index, column, QTableWidgetItem(text))
+        self.after_like_note.setText(note)
 
     def _render_rejection_cohort(self, rows) -> None:
         """NOT-TODAY and DISLIKE, kept apart on purpose.
@@ -1277,6 +1307,52 @@ class WeekAheadPage(_StepPage):
         self.report.setMarkdown(markdown or "The weekly prep returned nothing.")
 
 
+#: P10 C3. Deliberately short: this table answers ONE question and a wide table
+#: invites reading a second one out of it.
+AFTER_LIKE_COLUMNS = ("day_offset", "entry", "n_episodes", "trimmed_mean_r", "win_rate")
+AFTER_LIKE_HEADERS = ["Day after", "Entry", "Likes", "Mean R", "Win rate"]
+
+
+def after_like_view(pack) -> tuple[list[dict], str]:
+    """(rows, note) for the after-like table, from the nightly fact pack.
+
+    ELIGIBLE CELLS ONLY. A cell under the evidence floor is not a weak answer,
+    it is no answer, and this page is read on a Sunday when there is time to act
+    on what it says - which is exactly when a thin cell does damage.
+
+    A blank table is the normal state until the registered window closes, and
+    the note says which of the two blanks it is: no likes graded yet, or likes
+    graded and no cell over the floor. Those are different facts and a reader
+    deciding whether the machinery is working needs to know which.
+    """
+    block = (pack or {}).get("after_like") or {}
+    cells = list(block.get("cells") or ())
+    eligible = [cell for cell in cells if cell.get("eligible")]
+    if not cells:
+        return [], (
+            "No liked names have been graded yet. The grid was registered on "
+            "2026-09-02 and its window is 20 sessions."
+        )
+    if not eligible:
+        return [], (
+            f"{block.get('episodes', 0)} like episode(s) graded across "
+            f"{len(cells)} cell(s), and no cell has cleared the evidence floor "
+            "yet. Discovery, not a verdict - and no cell may be read for one "
+            "before the registered window closes."
+        )
+    ordered = sorted(
+        eligible,
+        key=lambda cell: (
+            -(cell.get("trimmed_mean_r") or 0.0),
+            cell.get("day_offset", 0),
+        ),
+    )
+    return ordered, (
+        f"{len(ordered)} cell(s) over the floor, of {len(cells)}. DISCOVERY: "
+        "ranked by trimmed mean R, and the window has not closed."
+    )
+
+
 class WeekendPrepPanel(QFrame):
     """The stepper rail and the five pages."""
 
@@ -1612,6 +1688,33 @@ def _read_veto_cohort() -> list[dict[str, str]]:
         row.update(_cohort_robust_fields(raw))
         rows.append(row)
     return rows
+
+
+def _read_after_like_block() -> dict:
+    """The newest nightly fact pack, for its `after_like` block only.
+
+    Reads the LATEST pack by name and returns `{}` for anything it cannot get -
+    a missing pack, an unreadable one, the warehouse disabled. A blank table
+    with a note is the right answer to "the research has not run yet"; an
+    exception here would take the whole Weekend Prep read down with it, and the
+    other seven tables on this page have nothing to do with this one.
+    """
+    try:
+        import json
+
+        from ai_jobs import store as ai_store
+
+        root = ai_store.retros_dir() / "setup_research"
+        packs = sorted(
+            path
+            for path in root.rglob("*.json")
+            if "narration" not in path.name
+        )
+        if not packs:
+            return {}
+        return json.loads(packs[-1].read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - one table, never the page
+        return {}
 
 
 def _read_like_cohort() -> list[dict[str, str]]:

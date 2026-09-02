@@ -5140,25 +5140,49 @@ class AlertCenterPanel(QFrame):
             return
         if written is None:
             return
+        # DEFERRED, exactly as the Master AVWAP prompt is and for the same three
+        # reasons: a modal opened inside the handler never returns in a headless
+        # test, the queue advance must finish first, and A2 asks that the box not
+        # block the 60 s poll.
         self._prompt_for_not_today_note(written)
 
     def _prompt_for_not_today_note(self, written: dict) -> None:
-        """The note box. Optional, and it never blocks the queue advance."""
+        """The note box. Optional, MODELESS, and it never blocks the queue.
+
+        `QInputDialog.getMultiLineText` runs a nested event loop and does not
+        return until the trader answers. That would sit between the "Not today"
+        click and the review queue advancing - and in a headless test it never
+        returns at all, so every existing test that clicks this button would HANG
+        rather than fail. `open()` shows the same dialog and returns immediately.
+        """
         try:
             from PySide6.QtWidgets import QInputDialog
 
+            dialog = QInputDialog(self)
+            dialog.setInputMode(QInputDialog.TextInput)
+            dialog.setOption(QInputDialog.UsePlainTextEditForTextInput, True)
+            dialog.setWindowTitle(f"Not today: {written.get('symbol', '')}")
+            dialog.setLabelText(
+                "Add a note if you want one - it is optional, and the click is "
+                "already saved either way."
+            )
+            dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+            dialog.textValueSelected.connect(
+                lambda text, row=written: self._save_not_today_note(row, text)
+            )
+            # Held until it closes: a modeless dialog with no reference is
+            # garbage the moment this method returns.
+            self._not_today_note_dialog = dialog
+            dialog.open()
+        except Exception:
+            return
+
+    def _save_not_today_note(self, written: dict, note: str) -> None:
+        """The note row. Swallowed on failure: the veto row is already on disk."""
+        try:
             from ui.annotations import verdicts
 
-            note, accepted = QInputDialog.getMultiLineText(
-                self,
-                f"Not today: {written.get('symbol', '')}",
-                (
-                    "Add a note if you want one - it is optional, and the click "
-                    "is already saved either way."
-                ),
-            )
-            if accepted:
-                verdicts.record_note_on(written, note)
+            verdicts.record_note_on(written, note)
         except Exception:
             return
 

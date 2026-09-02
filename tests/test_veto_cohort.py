@@ -126,12 +126,27 @@ class VetoPickRowTests(unittest.TestCase):
         rows, skipped = veto_pick_rows(
             [
                 {"event_type": EVENT_VETO, "symbol": "", "reason_code": "volume_dry", "side": "LONG", "session_date": "2026-08-07"},
-                {"event_type": EVENT_VETO, "symbol": "NVDA", "reason_code": "", "side": "LONG", "session_date": "2026-08-07"},
                 {"event_type": EVENT_VETO, "symbol": "NVDA", "reason_code": "volume_dry", "side": "LONG", "session_date": ""},
             ],
             now=NOW,
         )
         self.assertEqual(rows, [])
+
+    def test_a_codeless_veto_is_graded_rather_than_ignored(self):
+        """CHANGED BY P10, deliberately.
+
+        A row with no `reason_code` used to be dropped here with the rows that
+        have no symbol and no date - which put "Not today", the desk's most-used
+        dismissal, outside every forward record. It now grades under
+        `veto_uncoded`, its own cohort, never pooled with a coded one.
+        """
+        rows, skipped = veto_pick_rows(
+            [
+                {"event_type": EVENT_VETO, "symbol": "NVDA", "reason_code": "", "side": "LONG", "session_date": "2026-08-07"},
+            ],
+            now=NOW,
+        )
+        self.assertEqual([row["source"] for row in rows], ["veto_uncoded"])
         self.assertEqual(skipped, 0)
 
 

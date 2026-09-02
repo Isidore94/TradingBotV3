@@ -2452,3 +2452,91 @@ rationalisation.
 `_entry_after_m30_ema_pullback`, `_ema_series`);
 `research_warehouse/trial_ledger.py` (the registered row).
 
+
+## BD-90 — A like links to an occurrence by a stated BASIS, and absence is a row
+
+**Decision (P10 B2, 2026-09-02).** `like_links` writes one row per like: the same
+family the click recorded (`exact_family`), else any family by nearest trigger
+(`any_family`), else `none`. The window is **one session back and five forward**.
+
+**Why.** Nothing in the tree joined a like to a warehouse occurrence — the
+round-1 audit's item 6, still unbuilt when P10 landed. Without it a like is a
+symbol and a timestamp: what the setup looked like cannot be asked, and what a
+different entry would have done cannot be simulated.
+
+The asymmetric window is the trader's own: *"if I like a stock one day it may not
+be for 3-5 days later that the best entry is."* Back one session because a like
+is usually made on a setup that has already triggered and the trader may be
+reading the previous close.
+
+**A like with no occurrence is written with basis `none`.** A study that dropped
+the unmatched likes would report on the subset the scanner happened to find,
+which is precisely the population whose behaviour differs. `candidates_in_window`
+rides along because `any_family` with eleven candidates is a much weaker claim
+than with one, and the count is the only thing that says so. A like the join
+cannot ADDRESS — no side, no symbol, no id — is skipped rather than written as
+`none`, so a phantom never enters the denominator.
+
+**Bronze, not a new gold schema.** The slice datasets are frozen (plan sec 7.1)
+and the bronze namespace exists so an additive artifact needs no schema change:
+`bronze_like_occurrence_link` on the shared `BRONZE_RECORD`, link fields in the
+JSON payload, record hash over that payload so a re-run is idempotent.
+
+**Reopen if** the `none` share stays high after several weeks — that would mean
+the window or the side rule is wrong, not that the trader likes unfindable names.
+
+## BD-91 — `read_rows` can name its time column; the predicate stays a comparison
+
+**Decision (P10, 2026-09-02).** `ResearchStore.read_rows` gains
+`time_column="interval_start"`. The default is what every caller before P10 used,
+so all of them are unchanged.
+
+**Why.** The bar datasets are not the only ones with a time worth narrowing on.
+`setup_occurrence` carries `trigger_at` and `event_at` and no `interval_start` at
+all, so a caller wanting a date window there had to pull the partition into
+Python and filter it — the exact cost BD-74 exists to prevent.
+
+It is a NAME, never an expression: the predicate built from it is the same
+half-open `[start, end)` comparison, so a caller cannot express a filter that
+silently means something other than the Python one it replaces.
+
+## BD-92 — An after-like outcome row is keyed by the LIKE EPISODE, not the occurrence
+
+**Decision (P10 C2, 2026-09-02).** After-like rows carry
+`occurrence_id = afterlike|SYMBOL|SIDE|like_date` — the dependency cluster —
+rather than the linked occurrence's own id.
+
+**Why.** `outcome_path`'s grain is `(occurrence_id, recipe_id,
+outcome_definition_id)`. Two likes on two days that link to the same occurrence
+produce genuinely different rows, because each offset is measured from its own
+like's session; under the occurrence's id they collide on that grain and the
+second silently replaces the first.
+
+It also keeps an after-like row from being mistaken for an occurrence outcome by
+any join on `occurrence_id`, and it makes the episode count free: distinct
+`occurrence_id` values ARE distinct likes, which is what the declared floors
+count.
+
+**Consequence, stated rather than hidden:** `outcome_path` has no column for the
+linked occurrence, so the family behind an after-like row is not recoverable from
+the row alone. The fact pack's `after_like` block says so in a `family_split`
+field instead of quietly omitting the split. The join exists — through
+`bronze_like_occurrence_link` — and is a reader's step.
+
+## BD-93 — The unlinked bucket is a COUNT, because the declared stop needs an anchor
+
+**Decision (P10 C2, 2026-09-02).** The after-like grid grades LINKED likes only.
+Unlinked ones are counted by named reason and reported beside the cells.
+
+**Why.** The registered grid declares one structural stop, `current_anchor:1`,
+and that level comes from the occurrence's own tracker geometry. A like the
+scanner never found has no anchor, so there is nothing to place the stop at.
+
+Both alternatives were worse. A substitute stop for the unlinked bucket would
+mean the grid no longer has ONE stop model, so an unlinked-vs-linked difference
+could be a difference in stops rather than in the names. Dropping them silently
+would hide how many of the trader's likes the scanner never found — which is
+itself one of the more interesting things this study can report.
+
+**Reopen if** a stop model that needs no tracker geometry is registered for this
+grid — as its own trial, not as a patch to this one.

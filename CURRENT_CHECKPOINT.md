@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - both remaining branches merged 2026-09-02: **`claude/p9-quick-like`** (Phase 0.13 packet P9, the quick like) and **`claude/r3-narration-budget`** (review round R3, the research narration). `main` now holds every Phase 0.13 packet P0-P9 plus R1, R2 and R3 |
-| Also in flight | **NOTHING unmerged.** `claude/gui-phase-0-9` is CONTAINED in `main` (`git merge-base --is-ancestor` succeeds, 0 ahead) - what is open there is GATE 7 (SOAK 1), not the branch, and a gate owed by landed work is not an open branch |
+| Working branch | **`claude/p10-after-the-like`**, off `main` - Phase 0.13 packet **P10** (what happens after I like it). `main` holds every earlier Phase 0.13 packet P0-P9 plus R1, R2 and R3, merged 2026-09-02 |
+| Also in flight | **NOTHING else unmerged.** `claude/gui-phase-0-9` is CONTAINED in `main` (`git merge-base --is-ancestor` succeeds, 0 ahead) - what is open there is GATE 7 (SOAK 1), not the branch |
 | Active roadmap items | **Phase 0.13 packets P0-P9: ALL MERGED, live gates #29-#40 owed**; **integration gate #38** (one DESK session on the merged tree after a restart); Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **6147 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `main` after both merges) - the `ai_jobs_runner` lock probed FREE immediately before the run. **The exit code is the point here**: the first run on the merged tree printed 6,145 passed and then died with a Windows fast-fail, and the cause was not either branch - see the merge entry below. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger. Previous: **6104 passed** on the R2 tree |
+| Last verified baseline | `pytest tests/ -q` **6206 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/p10-after-the-like`) - the `ai_jobs_runner` lock probed FREE immediately before the run. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger (every new module is inside an already-collected package). Previous: **6147 passed** on `main` after the merges |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 04:09, trader-authorized ("Go ahead and restart the desk").** The checkout was moved to `main` at `125ffa0` FIRST and verified (selftest 74/74, smoke 7/7, ruff clean) - restarting onto the branch it happened to be sitting on would have put the wrong code on the desk. Old pid 17132 (up since 2026-09-01 11:09) stopped; relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **25884** (the desk) under trampoline **9140**. Verified UP THREE WAYS rather than assumed: the process outlived the launch by minutes, `heartbeat.json` re-stamps every ~4 min naming pid 25884 (it had read pid 17132 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0. **The desk now knows `tag_status`, so P6a's 24 provisional tags render as provisional rather than as the trader's own** - which is what the restart was for. The nightly AI run was a SEPARATE process and was not disturbed; it finished normally at ~04:08 |
 
@@ -32,6 +32,9 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 43 | **A REFUSAL, not a check (P10 C)** - no after-like cell may be read for a verdict before the declared 20-session window closes, including by the agent that built it and including if an early cell looks good | 2026-09-02 P10 entry |
+| 42 | **The after-like grid collects (P10 C)** - one overnight run writing `bronze_like_occurrence_link` rows and after-like outcome rows inside the 20-minute reserve, with the `after_like_entry_grid_v1` ledger row present and status `collecting` | 2026-09-02 P10 entry |
+| 41 | **One like, one dislike, from every screen (P10 A)** - one DESK session where a star in Master AVWAP, a like on the chart-review rail and a "Not today" each leave EXACTLY ONE annotation row with the right `surface`; the note box appears only where no quick button was used; and Escape leaves the click counted | 2026-09-02 P10 entry |
 | 40 | **The narration fits (R3)** - one overnight `setup_research` run that publishes **exactly ONE pack** for the date and a `.narration.json` beside it. Three siblings, or an `ok` whose reason contains `narration absent`, means the view is still too large - and the refusal message names the size, the budget and the eligible-cell count, so it says which. Also check the pack carries `built_by_commit` and a non-empty `recipe_ids` | 2026-09-02 R3 entry |
 | 39 | **Quick like (Phase 0.13 P9)** - one DESK session: the trader quick-likes one SWING chart and one M5 chart. Both rows reach `trader_annotations.jsonl` with `like_mode` quick, the M5 one carries `m5_bars_ref`, BOTH charts retire, and nothing appears in Focus. The next morning `like_cohort_picks.csv` holds both, the M5 one has `m5_bars_completed_ref`, and **its intraday columns are numbers rather than blank** - which is also what closes gate 34's open definition question | 2026-09-02 P9 entry |
 | 38 | **The merged tree, on the desk (R1, extended by R2)** — one DESK session after the restart with the stall watchdog ON and quiet on every new surface: the Weekend Prep pass/rejection/preference tables, the journal's Provisional filter, the Decisions pane, the M5 take-rate row and the Strength Board section. **R2 adds two specific things to watch**: the Setup Tracker's current-picks count after the FIRST scan of the day (it should be the real tier count, not one row per symbol - that is the NAN guard), and the Weekend Prep backlog-toggle line in `ui_stalls.jsonl`, which should now be absent | 2026-09-02 R2 entry |
@@ -136,6 +139,85 @@ the same k.
 **Verification.** `pytest tests/ -q` **5800 passed**, the only failures being the 32
 `ai_jobs` tests that stand down while the nightly holds the machine-local writer lock ·
 `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix: 17 of 18.
+
+### 2026-09-02 - Phase 0.13 packet P10: what happens after I like it
+
+**Branch `claude/p10-after-the-like`, off `main`.** Live gates 41-43 owed. No
+frozen rebuild: every new module sits inside an already-collected package, and
+there is no new dependency and no new asset.
+
+**WHAT WAS TRUE BEFORE, MEASURED ON THE TREE.** A like or a dislike could be
+written three ways and only one of them was graded. The Master AVWAP star and X
+wrote a review event with `setup_context_fields` and - for the X - a
+`pick_feedback` row, and reached **no graded cohort at all**; so a star on a D1
+setup, the most considered judgement the trader makes all day, left no forward
+record while the same opinion two panels away did. "Not today" wrote a
+`pick_feedback` verdict whose reason is the hardcoded string `"not today"` - never
+a code, never a word of the trader's own. Only the capture rail's like wrote a
+`trader_annotations` row.
+
+**PART A - ONE WRITER, AND THE SCREEN IS A COLUMN.** `ui/annotations/verdicts.py`.
+Every like and dislike writes one row carrying `surface`; an unknown screen is
+REFUSED, because rows are never rewritten and a typo would be a permanent sixth
+screen no rollup knows about. The trader's rule is that a star and a like are the
+same thing, so `surface` never splits a cohort at write time - splitting them
+would make "does the screen matter?" unanswerable.
+
+Nothing existing changed meaning. The review event, the `pick_feedback` row and
+the Focus removal all still happen, and several surfaces plus the review
+scoreboard and the Focus store depend on them.
+
+**The note is a SECOND row and the CLICK GOES FIRST.** If the box came first,
+Escape would mean the click never happened - precisely the case the trader
+described. It opens only where no quick button was used: a coded dislike has
+already said why in the vocabulary the scoreboard counts.
+
+**An UNCODED veto is legal and carries no `vocab_version`.** A version stamp on a
+row that cites no vocabulary would file it in a pool it was never part of, since
+`_rebuild_pooled_performance` pools on exactly that pair. It grades as
+`veto_uncoded`, never with a coded cohort: a coded veto says which of nine things
+was wrong, an uncoded one says only that the trader moved on.
+
+**PART B - A LIKE KNOWS WHICH SETUP IT WAS.** B1 stamps the scanner row under the
+click, all of it copied from what the desk was already showing, because **a
+capture click never fetches**. B2's `like_links` writes one row per like with a
+stated basis and a window of one session back and five forward - the trader's own
+range - and **a like with no occurrence is written with basis `none`**, because a
+study that dropped them would report on the subset the scanner happened to find.
+B3's `occurrence_features` is the round-1 audit's item 6, unbuilt until now: the
+latest snapshot on or before the trigger, refusing a later REVISION of the right
+session as firmly as a later session, since both were computed with knowledge the
+decision moment did not have.
+
+**PART C - WHAT HAPPENED AFTER THE LIKE.** `after_like_entry_grid_v1` is in the
+ledger before any outcome exists: 20 cells, ONE stop and ONE target so a winning
+cell cannot have won on either, floors on the LIKE EPISODE, a 20-session window
+fixed at registration. The simulator reuses P8's selectors and P8's exit machine;
+the offset restricts where the selector may look and never what the simulator
+sees, because the simulator finds the entry bar's index in its own list. Parity
+with P8's control is pinned field-for-field.
+
+**THREE DIFFERENCES FROM THE PACKET, EACH MEASURED.** (1) The packet asked for a
+"new frozen schema" for B2; the slice datasets ARE frozen (sec 7.1) and the bronze
+namespace exists so an additive artifact needs none. (2) The packet said B1's
+fields are "the same fields `setup_context_fields` already collects" - they are
+not: no `scan_date`, no `tracker_setup_id`, no canonical id, and `bucket` rather
+than `priority_bucket`. (3) **The unlinked bucket is a COUNT rather than graded
+cells** (BD-93): the declared stop is `current_anchor:1`, which comes from the
+occurrence's tracker geometry, and a like the scanner never found has no anchor. A
+substitute stop would end the grid's one-stop model; dropping them silently would
+hide how many likes the scanner missed.
+
+**ONE DEFECT FOUND WHILE BUILDING, AND IT IS WORTH RECORDING.** The first note
+dialogs used `QInputDialog.getMultiLineText`, which runs a nested event loop and
+does not return until answered. Every existing test that clicks a star or a "Not
+today" HUNG rather than failed - the run sat at 27% for half an hour with 5
+seconds of CPU. They are modeless now (`open()` plus a signal), which is also what
+A2 asked for: the box must not block the queue or the 60 s poll.
+
+**Verification.** `pytest tests/ -q` **6206 passed, 72 subtests, exit 0, zero
+failures**, lock probed FREE immediately before the run · `ruff` clean · smoke
+**7/7** · `--selftest` **74/74**.
 
 ### 2026-09-02 - The merge, and the test run that started a real scan
 
