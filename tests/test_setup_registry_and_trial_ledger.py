@@ -1,7 +1,10 @@
 """Phase 0.13 packet P7 - one name per setup, and one row per registered grid.
 
-Both modules are READ-ONLY crosswalks that nothing in production imports yet, so
-what these tests protect is not behaviour - it is the claim the registry makes:
+Both are READ-ONLY crosswalks. As of the 2026-09-02 merge the registry has
+exactly two readers - the fact pack's role lookup and the selftest's asset check,
+both pinned below - and the trial ledger still has none.
+
+What these tests protect is not behaviour; it is the claim the registry makes:
 that every name any of the five naming sites uses resolves to exactly one entry,
 and that every recipe belongs to exactly one declared trial. A registry that is
 wrong about that is worse than no registry, because a later packet will freeze
