@@ -143,6 +143,41 @@ CALLOUT_CLASSES = (
     ("r_gaps", "R GAPS - taken and passed measure far apart, whatever the take rate"),
 )
 
+#: R1: the R gaps are SPLIT BY SIGN before they are printed.
+#:
+#: `find_callouts` sorts them by absolute difference, so the two directions
+#: interleave - and they mean opposite things. A gap where the TAKEN half
+#: measures better says the trader's selection is working on that segment; one
+#: where the PASSED half measures better is a segment they are turning down and
+#: should not be. The second is the expensive one, and a single such row sorted
+#: below seventeen of the first is a finding nobody will ever reach.
+#:
+#: Split at RENDER time, not in `review_learning`: the state file's shape is
+#: read by the report, the AI package and this page, and none of them needs a
+#: new key to say something the sign already says.
+R_GAP_SPLIT = (
+    ("__r_gaps_costly", "R GAPS you are PAYING FOR - the passed half measures better"),
+    ("__r_gaps_confirming", "R GAPS that CONFIRM you - the taken half measures better"),
+)
+
+
+def split_r_gaps(entries) -> dict[str, list]:
+    """`r_gaps` into the costly direction and the confirming one."""
+    costly, confirming = [], []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        difference = entry.get("r_difference")
+        try:
+            value = float(difference)
+        except (TypeError, ValueError):
+            continue
+        (costly if value < 0 else confirming).append(entry)
+    # Widest first WITHIN each direction, so neither buries the other.
+    costly.sort(key=lambda item: float(item["r_difference"]))
+    confirming.sort(key=lambda item: float(item["r_difference"]), reverse=True)
+    return {"__r_gaps_costly": costly, "__r_gaps_confirming": confirming}
+
 
 def _callout_measure(entry) -> str:
     """What the callout measured, in the units it was measured in.
@@ -188,8 +223,14 @@ def callout_lines(state) -> list[str]:
     if overall is not None:
         lines.append(f"  Your overall take rate this window: {float(overall) * 100:.0f}%")
     found = False
-    for key, title in CALLOUT_CLASSES:
-        entries = state.get(key)
+    # The R gaps are split by sign and printed as two classes (R1); every other
+    # class prints as it always did.
+    classes = [pair for pair in CALLOUT_CLASSES if pair[0] != "r_gaps"]
+    split = split_r_gaps(state.get("r_gaps"))
+    if state.get("r_gaps") is not None:
+        classes.extend(R_GAP_SPLIT)
+    for key, title in classes:
+        entries = split[key] if key in split else state.get(key)
         if entries is None:
             continue
         lines.append("")

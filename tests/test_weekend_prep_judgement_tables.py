@@ -291,3 +291,51 @@ def test_a_forward_percent_callout_prints_in_percent_not_R():
 def test_a_malformed_state_is_no_lines_rather_than_a_crash():
     assert panel_module.callout_lines(None) == []
     assert panel_module.callout_lines("not a state") == []
+
+
+def test_the_r_gaps_are_split_by_sign_so_the_costly_ones_lead():
+    """R1: `find_callouts` sorts by ABSOLUTE difference, so the two directions
+    interleave - and they mean opposite things.
+
+    A gap where the TAKEN half measures better says the trader's selection is
+    working. One where the PASSED half measures better is a segment they are
+    turning down and should not be. The second is the expensive one, and a
+    single such row sorted below seventeen of the first is a finding nobody
+    will ever reach.
+    """
+    from ui.panels.weekend_prep_panel import callout_lines, split_r_gaps
+
+    confirming = [
+        {
+            "dimension": "setup", "segment": f"good{index}", "take_rate": 0.5,
+            "shown": 40, "r_difference": 1.0 + index * 0.1,
+            "taken_r_avg": 1.0, "passed_r_avg": -0.2, "taken_r_n": 12, "passed_r_n": 11,
+        }
+        for index in range(17)
+    ]
+    costly = {
+        "dimension": "setup", "segment": "expensive", "take_rate": 0.5, "shown": 40,
+        "r_difference": -0.6, "taken_r_avg": -0.3, "passed_r_avg": 0.3,
+        "taken_r_n": 12, "passed_r_n": 11,
+    }
+    state = {
+        "overall_take_rate": 0.4,
+        "blind_spots": [],
+        "leaks": [],
+        # Sorted the way `find_callouts` sorts them: widest ABSOLUTE gap first,
+        # which buries the one that costs money.
+        "r_gaps": sorted(
+            [*confirming, costly], key=lambda e: abs(e["r_difference"]), reverse=True
+        ),
+    }
+
+    split = split_r_gaps(state["r_gaps"])
+    assert [e["segment"] for e in split["__r_gaps_costly"]] == ["expensive"]
+    assert len(split["__r_gaps_confirming"]) == 17
+
+    lines = callout_lines(state)
+    text = "\n".join(lines)
+    assert "PAYING FOR" in text and "CONFIRM you" in text
+    # The costly section comes FIRST, and the row is in it rather than buried.
+    assert text.index("PAYING FOR") < text.index("CONFIRM you")
+    assert text.index("expensive") < text.index("good0")
