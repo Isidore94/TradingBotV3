@@ -283,6 +283,15 @@ class AnalyticsTab(QFrame):
                 "One trade can carry several tags here, so these buckets overlap and "
                 "do not sum to the headline."
             )
+        if group_name in (self._summary.get("provisional_groups") or []):
+            # P6a. Said on the chart itself rather than only in the group's name:
+            # this is the one breakdown on the page whose buckets nobody has
+            # agreed to yet, and a bar is a bar.
+            parts.append(
+                "These tags were applied for you and are still waiting for review - "
+                "confirm or correct them in the Trades tab, where they are marked "
+                "provisional. They are never counted under \"my setups\"."
+            )
         self.group_note.setText(" ".join(parts))
 
     def _export_group_csv(self) -> None:

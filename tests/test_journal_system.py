@@ -214,7 +214,19 @@ class JournalSystemTests(unittest.TestCase):
         self.assertEqual(set(mine), {"avwap-reclaim", "earnings-gap"})
         self.assertEqual(set(automatic), {"favorite_setup", "high-rvol"})
         self.assertTrue(all(row["trades"] == 1 for row in [*mine.values(), *automatic.values()]))
-        self.assertEqual(summary["nonexclusive_groups"], ["my setups", "auto tags"])
+        # P6a appended a third overlapping group. The assertion is that every
+        # tag group is declared non-exclusive - a trade carries several tags in
+        # any of them - rather than that the list has exactly two entries, which
+        # is the thing that changes each time a lane is added.
+        self.assertEqual(
+            summary["nonexclusive_groups"],
+            ["my setups", "provisional setups", "auto tags"],
+        )
+        for name in summary["nonexclusive_groups"]:
+            self.assertIn(name, summary["groups"])
+        # A trade with no `tag_status` is the trader's, so nothing here is
+        # provisional and that group is empty rather than absent.
+        self.assertEqual(summary["groups"]["provisional setups"], [])
 
     def test_regime_mid_and_short_carry_forward(self):
         with tempfile.TemporaryDirectory() as temp_dir:

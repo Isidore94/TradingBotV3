@@ -697,3 +697,95 @@ def test_fees_tab_builds_the_broker_stated_tax_report(panel, populated, qapp, tm
     assert "from the broker's own amounts" in text
     assert "tax.csv" in text
     assert any("tax report written" in status for status in statuses)
+
+
+# ---------------------------------------------------------------------------
+# P6a - the provisional review surface
+# ---------------------------------------------------------------------------
+
+
+def _provisional(store, symbol, tag="avwap-reclaim"):
+    """Tag one of the fixture's trades the way the bulk pass would."""
+    trade = next(t for t in store.list_trades() if t["symbol"] == symbol)
+    assert store.apply_provisional_tags(trade["trade_id"], tag)
+    return trade["trade_id"]
+
+
+def test_the_provisional_filter_narrows_the_rows_and_counts_what_it_hid(panel, populated):
+    """A hidden row and an absent row look the same in a table, so it says so."""
+    _provisional(populated, "AAPL")
+    panel.trades_tab.reload()
+    assert panel.trades_tab.table.rowCount() == 2
+
+    panel.trades_tab.tag_filter.setCurrentIndex(1)  # Provisional tags
+
+    assert panel.trades_tab.table.rowCount() == 1
+    assert panel.trades_tab.table.item(0, 1).text() == "AAPL"
+    assert "1 of 2 shown" in panel.trades_tab.tag_filter_note.text()
+    assert "1 provisional" in panel.trades_tab.tag_filter_note.text()
+
+
+def test_a_machine_applied_tag_says_so_in_the_table(panel, populated):
+    _provisional(populated, "AAPL")
+    panel.trades_tab.reload()
+
+    cells = {
+        panel.trades_tab.table.item(row, 1).text(): panel.trades_tab.table.item(row, 7).text()
+        for row in range(panel.trades_tab.table.rowCount())
+    }
+    assert "(provisional)" in cells["AAPL"]
+    assert "avwap-reclaim" in cells["AAPL"]
+    assert "(provisional)" not in cells["AMD"]
+
+
+def test_selecting_a_filtered_row_opens_that_trade_and_not_the_row_beneath_it(panel, populated):
+    """The table indexes the VISIBLE list; indexing the loaded one opens someone else's trade."""
+    _provisional(populated, "AMD")
+    panel.trades_tab.reload()
+    panel.trades_tab.tag_filter.setCurrentIndex(1)
+
+    panel.trades_tab.table.selectRow(0)
+
+    assert panel.trades_tab._current is not None
+    assert panel.trades_tab._current.symbol == "AMD"
+
+
+def test_one_click_confirms_the_tag_and_the_badge_goes_away(panel, populated, qapp):
+    trade_id = _provisional(populated, "AAPL")
+    panel.trades_tab.reload()
+    panel.trades_tab.tag_filter.setCurrentIndex(1)
+    panel.trades_tab.table.selectRow(0)
+    # The pane offers the confirmation and explains what it is. `isVisible()`
+    # is False for every widget here because the panel is never shown, so the
+    # assertion is on what the code decided, not on what the compositor did.
+    assert panel.trades_tab.confirm_tags_button.isVisibleTo(panel.trades_tab)
+    assert "waiting for you" in panel.trades_tab.provisional_note.text()
+
+    panel.trades_tab._confirm_tags()
+    qapp.processEvents()
+
+    state = populated.annotation_state(trade_id)
+    assert state == {"setup_tags": "avwap-reclaim", "tag_status": "confirmed"}
+    panel.trades_tab.tag_filter.setCurrentIndex(0)
+    cells = {
+        panel.trades_tab.table.item(row, 1).text(): panel.trades_tab.table.item(row, 7).text()
+        for row in range(panel.trades_tab.table.rowCount())
+    }
+    assert "(provisional)" not in cells["AAPL"]
+
+
+def test_editing_a_provisional_tag_teaches_the_tagger_and_agreeing_does_not(populated):
+    """Only a CHANGE is feedback. Agreeing would be the tagger teaching itself."""
+    from ui.services import journal_feed as feed
+
+    agreed = _provisional(populated, "AAPL", tag="machine-guess")
+    feed.save_annotation(agreed, setup_tags="machine-guess", notes="")
+    assert populated.list_tag_corrections() == []
+
+    corrected = _provisional(populated, "AMD", tag="machine-guess")
+    feed.save_annotation(corrected, setup_tags="what it really was", notes="")
+
+    corrections = populated.list_tag_corrections()
+    assert [row["setup_tag"] for row in corrections] == ["what it really was"]
+    assert corrections[0]["symbol"] == "AMD"
+    assert populated.annotation_state(corrected)["tag_status"] == "confirmed"
