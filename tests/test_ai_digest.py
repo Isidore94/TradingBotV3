@@ -389,10 +389,18 @@ def test_the_digest_slot_is_appended_and_never_reorders_the_slate():
 
     names = [slot.name for slot in default_slots()]
     assert names[0] == "journal_import", "the one sanctioned exception stays first"
-    assert names[:6] == [
+    # P5 inserted `pass_cohort_grading` and `rejection_cohort_grading`
+    # after the like slot and BEFORE `evidence_report` - which is where
+    # they have to be, because the report READS what the cohorts produced
+    # and a report ahead of its inputs would describe last night's
+    # evidence. That moves the later slots' INDEX without reordering any
+    # existing PAIR, and the pairwise order is the invariant.
+    ORDERED = [
         "journal_import", "ai_summary", "ticker_briefs",
         "veto_cohort_grading", "like_cohort_grading", "evidence_report",
-    ], "later phases append; they never reorder these"
+    ]
+    positions = [names.index(item) for item in ORDERED]
+    assert positions == sorted(positions), "later phases append; they never reorder these"
     assert "daily_digest" in names
     assert names.index("daily_digest") > names.index("evidence_report")
 

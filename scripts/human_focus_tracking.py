@@ -54,6 +54,20 @@ COHORT_BASE_BY_SOURCE_PREFIX = (
     # the order decides which base prefix claims a source, so inserting one
     # above would silently re-home existing rows.
     ("human_focus_like", "like"),
+    # P5: the two remaining verdicts. A PASS is "I like this name but not this
+    # setup" and a REJECTION is "not today" / "I dislike this" - neither is a
+    # veto and neither is a like, and folding either into those would average
+    # opposite judgements. APPENDED, like every family before them.
+    #
+    # `pass` sits above `focus_pick` for the same ordering reason as the rest;
+    # it cannot collide with it because no focus source begins "pass".
+    ("human_focus_pass", "pass"),
+    # The rejection sources are `focus__not_today` / `focus__dislike` - the
+    # DOUBLE underscore is load-bearing. `_outcome_base_cohort` matches
+    # `source.startswith(prefix + "_")`, so this prefix claims exactly the
+    # sources whose seventh character is another underscore and cannot reach
+    # `focus_swing`, `focus_m5` or `focus_pick`. Pinned by a test.
+    ("human_focus_rejection", "focus_"),
     ("human_focus_pick", "focus_pick"),
 )
 HUMAN_FOCUS_DAILY_PICK_COLUMNS = [
@@ -513,6 +527,23 @@ def _compute_pick_outcome(
     return row
 
 
+def pick_key_with_source(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    """`_pick_key` plus the row's own source. For MULTI-SOURCE cohorts.
+
+    The default key is (trade_date, symbol, side), which is right for a store
+    where one name has one row per day. The pass cohort is not such a store: a
+    day-trade pass is MULTI-SELECT, so one pass grades under each of its reason
+    codes and under the pooled `pass_all`, and every one of those rows shares a
+    date, a symbol and a side. Under the default key they would collapse into
+    one outcome row and k of the k+1 cohorts would silently vanish.
+
+    The outcome NUMBERS are identical across those rows - the forward returns
+    of one name from one date do not depend on why it was passed on - so what
+    the wider key preserves is which cohorts were graded, not which figures.
+    """
+    return (*_pick_key(row), str(row.get("source") or "").strip())
+
+
 def update_human_focus_outcomes(
     *,
     reference_date: Any = None,
@@ -523,11 +554,20 @@ def update_human_focus_outcomes(
     daily_bars_dir: Path = MASTER_AVWAP_DAILY_BARS_DIR,
     recent_calendar_days: int = 45,
     now: datetime | None = None,
+    pick_key=None,
 ) -> dict[str, Any]:
+    """Grade a picks file forward and rebuild its performance rollup.
+
+    `pick_key` overrides the row identity. It defaults to `_pick_key` so every
+    existing caller is unchanged; a MULTI-SOURCE cohort - one where the same
+    name on the same date legitimately grades under several sources - passes
+    `pick_key_with_source`. See that function for why the pass cohort needs it.
+    """
+    key_for = pick_key or _pick_key
     reference = _market_date(reference_date)
     daily_bars_dir = Path(daily_bars_dir)
     picks = _read_csv_rows(Path(daily_picks_path))
-    existing = {_pick_key(row): dict(row) for row in _read_csv_rows(Path(outcomes_path))}
+    existing = {key_for(row): dict(row) for row in _read_csv_rows(Path(outcomes_path))}
     updated_at = _now_text(now)
     updated_count = 0
     stale_before = reference - timedelta(days=recent_calendar_days)
@@ -548,7 +588,7 @@ def update_human_focus_outcomes(
 
     for pick in picks:
         pick_date = _parse_date(pick.get("trade_date"))
-        key = _pick_key(pick)
+        key = key_for(pick)
         if pick_date is None or not key[1]:
             continue
         existing_row = existing.get(key, {})
@@ -564,7 +604,10 @@ def update_human_focus_outcomes(
         existing[key] = outcome
         updated_count += 1
 
-    outcome_rows = sorted(existing.values(), key=lambda row: (_pick_key(row)[0], _pick_key(row)[2], _pick_key(row)[1]))
+    outcome_rows = sorted(
+        existing.values(),
+        key=lambda row: (_pick_key(row)[0], _pick_key(row)[2], _pick_key(row)[1], str(row.get("source") or "")),
+    )
     _write_csv_rows(Path(outcomes_path), HUMAN_FOCUS_OUTCOME_COLUMNS, outcome_rows)
     performance_rows = build_human_focus_performance_rows(outcome_rows, updated_at=updated_at)
     _write_csv_rows(Path(performance_path), HUMAN_FOCUS_PERFORMANCE_COLUMNS, performance_rows)

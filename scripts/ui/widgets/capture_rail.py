@@ -131,6 +131,7 @@ class CaptureRail(QFrame):
         annotations_path: Any = None,
         veto_cohort_merge: Callable[..., dict] | None = None,
         like_cohort_merge: Callable[..., dict] | None = None,
+        pass_cohort_merge: Callable[..., dict] | None = None,
         bind_action_shortcuts: bool = True,
         parent: QWidget | None = None,
     ) -> None:
@@ -182,6 +183,14 @@ class CaptureRail(QFrame):
             from ui.annotations.like_cohort import merge_like_cohort_picks
 
             self._merge_like_cohort = merge_like_cohort_picks
+        # P5: the PASS cohort merged on the same click, for the same reason the
+        # veto is. Idempotent, so the nightly slot re-running it adds nothing.
+        if pass_cohort_merge is not None:
+            self._merge_pass_cohort = pass_cohort_merge
+        else:
+            from ui.annotations.pass_cohort import merge_pass_cohort_picks
+
+            self._merge_pass_cohort = merge_pass_cohort_picks
 
         try:
             self._vocabulary = load_veto_vocabulary()
@@ -740,6 +749,9 @@ class CaptureRail(QFrame):
     def _merge_like_cohort_safely(self) -> str:
         """The like's half, identical in shape to the veto's (2026-09-01)."""
         return self._merge_cohort_safely(self._merge_like_cohort)
+    def _merge_pass_cohort_safely(self) -> str:
+        """The PASS cohort's half, identical in shape to the veto's (P5)."""
+        return self._merge_cohort_safely(self._merge_pass_cohort)
 
     def _merge_cohort_safely(self, merge) -> str:
         """Forward tracking is capture-side and must never break a capture.
@@ -874,6 +886,7 @@ class CaptureRail(QFrame):
         self.clear_pass_selection()
         attached = row.get("m5_bar_count")
         detail = f"  ({attached} M5 bars attached)" if attached else "  (timestamp only)"
+        detail += self._merge_pass_cohort_safely()
         self._set_status(f"PASS {row['symbol']} - {', '.join(codes)}{detail}")
         return row
 

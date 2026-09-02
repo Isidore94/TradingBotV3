@@ -219,6 +219,10 @@ def run_evidence_report(
     for name, loader in (
         ("veto", _read_veto_cohort_rows),
         ("like", _read_like_cohort_rows),
+        # P5, APPENDED. With these the report covers every verdict the trader
+        # can record rather than only the two that had graders first.
+        ("pass", _read_pass_cohort_rows),
+        ("rejection", _read_rejection_cohort_rows),
     ):
         try:
             cohorts[name] = loader()
@@ -301,6 +305,37 @@ def _read_like_cohort_rows() -> list[dict[str, str]]:
     from project_paths import LIKE_COHORT_PERFORMANCE_FILE
 
     path = Path(LIKE_COHORT_PERFORMANCE_FILE)
+    if not path.is_file():
+        return []
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _read_pass_cohort_rows() -> list[dict[str, str]]:
+    """The day-trade PASS rollup.
+
+    Its code cohorts OVERLAP by construction - a pass with k codes is in k of
+    them plus `pass_all` - so a reader must never sum them. The fact pack
+    carries that sentence beside the rows.
+    """
+    import csv
+
+    from project_paths import PASS_COHORT_PERFORMANCE_FILE
+
+    path = Path(PASS_COHORT_PERFORMANCE_FILE)
+    if not path.is_file():
+        return []
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _read_rejection_cohort_rows() -> list[dict[str, str]]:
+    """The NOT-TODAY and DISLIKE rollup. Separate cohorts, never pooled."""
+    import csv
+
+    from project_paths import REJECTION_COHORT_PERFORMANCE_FILE
+
+    path = Path(REJECTION_COHORT_PERFORMANCE_FILE)
     if not path.is_file():
         return []
     with path.open("r", newline="", encoding="utf-8") as handle:
