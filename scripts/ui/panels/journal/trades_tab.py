@@ -815,14 +815,34 @@ class TradesTab(QFrame):
         self._accept(tags)
 
     def _accept(self, tags: list) -> None:
+        """Accept suggestions onto the trade. A LINK is never one (R2).
+
+        Links render in the list - they carry an event id worth following - and
+        they are the FIRST item there, because the capture lane leads. So
+        "Accept all" wrote a link into the trader's own tag column, and so did
+        Accept-selected if the trader clicked the top row. Filtered here rather
+        than hidden from the list: the pointer is worth seeing, it is just not a
+        tag.
+        """
         if self._current is None:
             return
-        wanted = [str(tag).strip() for tag in tags if str(tag or "").strip()]
+        from journal_analytics import is_link_candidate
+
+        offered = [str(tag).strip() for tag in tags if str(tag or "").strip()]
+        wanted = [tag for tag in offered if not is_link_candidate(tag)]
         if not wanted:
+            if offered:
+                self.statusChanged.emit(
+                    "those are links to what you said, not setup tags - nothing accepted"
+                )
             return
         combined = journal_feed.accept_auto_tags(self._current.trade_id, wanted)
         self.tags_input.setText(combined)
-        self.statusChanged.emit(f"accepted {len(wanted)} suggestion(s)")
+        skipped = len(offered) - len(wanted)
+        self.statusChanged.emit(
+            f"accepted {len(wanted)} suggestion(s)"
+            + (f"; skipped {skipped} link(s)" if skipped else "")
+        )
         self._refresh_header_tags()
         self.reload()
 

@@ -2356,7 +2356,14 @@ class JournalStore:
                 top_summary = "; ".join(
                     _merge_auto_tag_summary(setup_tags, [item["tag"] for item in shape])
                 )
-                top_confidence = suggestions[0]["confidence"] if suggestions else None
+                # The confidence of the top SETUP suggestion, never a link's
+                # (R2). `suggestions[0]` is the capture lane's leading entry,
+                # which is a link on any trade that has one - so `tag_confidence`
+                # reported how sure the tagger was that the trader had clicked
+                # something, under a column every reader takes to mean how sure
+                # it is about the SETUP.
+                ranked = [item for item in suggestions if not item.get("link_only")]
+                top_confidence = ranked[0]["confidence"] if ranked else None
                 conn.execute("DELETE FROM auto_tag_candidates WHERE trade_id = ?", (trade["trade_id"],))
                 for item in suggestions:
                     conn.execute(

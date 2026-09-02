@@ -843,3 +843,63 @@ def test_the_bulk_tag_record_is_visible_on_the_trade_it_explains(panel, populate
         for index in range(panel.trades_tab.adjustments_list.count())
     ]
     assert any(PROVISIONAL_TAG_ADJUSTMENT in text for text in listed), listed
+
+
+def test_accept_all_never_writes_a_link_into_the_traders_tags(panel, populated):
+    """R2: the link is FIRST in the list, because the capture lane leads.
+
+    So "Accept all" wrote a pointer into the trader's own tag column - and so
+    did Accept-selected on the top row. The link still RENDERS, with its event
+    id: it is worth seeing, it is just not a tag.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidgetItem
+
+    trade = next(t for t in populated.list_trades() if t["symbol"] == "AAPL")
+    panel.trades_tab.reload()
+    row = next(
+        index for index in range(panel.trades_tab.table.rowCount())
+        if panel.trades_tab.table.item(index, 1).text() == "AAPL"
+    )
+    panel.trades_tab.table.selectRow(row)
+
+    # The pane as the capture lane builds it: the link first.
+    panel.trades_tab.auto_tags.clear()
+    for tag in ("link:review:arm_level", "avwape_to_1stdev"):
+        item = QListWidgetItem(tag)
+        item.setData(Qt.UserRole, tag)
+        panel.trades_tab.auto_tags.addItem(item)
+
+    statuses = []
+    panel.trades_tab.statusChanged.connect(statuses.append)
+    panel.trades_tab._accept_all_tags()
+
+    stored = populated.annotation_state(trade["trade_id"])["setup_tags"]
+    assert "link:" not in stored, stored
+    assert "avwape_to_1stdev" in stored
+    assert any("skipped 1 link" in text for text in statuses), statuses
+
+
+def test_accepting_only_a_link_writes_nothing_and_says_so(panel, populated):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidgetItem
+
+    trade = next(t for t in populated.list_trades() if t["symbol"] == "AMD")
+    panel.trades_tab.reload()
+    row = next(
+        index for index in range(panel.trades_tab.table.rowCount())
+        if panel.trades_tab.table.item(index, 1).text() == "AMD"
+    )
+    panel.trades_tab.table.selectRow(row)
+
+    panel.trades_tab.auto_tags.clear()
+    item = QListWidgetItem("link:review:add_focus")
+    item.setData(Qt.UserRole, "link:review:add_focus")
+    panel.trades_tab.auto_tags.addItem(item)
+
+    statuses = []
+    panel.trades_tab.statusChanged.connect(statuses.append)
+    panel.trades_tab._accept_all_tags()
+
+    assert populated.annotation_state(trade["trade_id"])["setup_tags"] == ""
+    assert any("not setup tags" in text for text in statuses), statuses
