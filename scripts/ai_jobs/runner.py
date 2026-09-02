@@ -529,6 +529,20 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Forward-grade the trader's LIKE cohort (deterministic, no model)",
             max_attempts=3,
         ),
+        # P9, APPENDED before the pass slot - which is where it has to be,
+        # because it FEEDS it: a capture sidecar ends at the click, so the
+        # entry bar the intraday grade asks for is never in it, and this puts
+        # the rest of the session on disk before the grade looks. The same
+        # night completes and grades; the alternative is the morning after.
+        #
+        # Later phases append; they never reorder. Deterministic, no model.
+        JobSlot(
+            name="sidecar_completion",
+            run=cohorts.run_sidecar_completion,
+            reserve_minutes=5.0,
+            description="Finish yesterday's capture sidecars to the close (deterministic, no model)",
+            max_attempts=3,
+        ),
         # P5, APPENDED after the like slot. Later phases append; they never
         # reorder these. With these two every verdict the trader can record now
         # has a forward record: veto, like, pass, not-today and dislike.

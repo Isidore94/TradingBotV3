@@ -405,3 +405,91 @@ landed in Phase 0.13 without their entry. These are those entries.
   - an undated declaration and one written afterwards are indistinguishable six
   months later, which is the whole thing the ledger exists to rule out.
 
+## P9 - the quick like, and the sidecar that finishes after the close
+
+- **One key says "something about this was good", and that is the whole verb**
+  (`capture_rail.commit_quick_like`, Alt+L, trader 2026-09-02: *"anytime I like
+  and claim a setup or like a day trade setup I just want to let the bot and the
+  future AI know 'something about this was good' and then we can figure out what
+  about it / what's the best entry later."*). It writes `like_claim` with
+  `like_mode: "quick"`, no claim and no why. **This supersedes R9.2(a)'s "a like
+  needs a why" for the QUICK path only** - the claimed path is untouched, and its
+  why is still required for the reason it always was: 31 dislike strings were
+  lost to a field nothing insisted on, and a claim nobody can check later is the
+  same mistake with a label on it.
+
+  Alt+L was chosen because it is UNBOUND: the whole inventory in `scripts/ui` is
+  Ctrl+F, Ctrl+J, Ctrl+R, Ctrl+Return, F9, Alt+E and the rail's Alt+V/K/N/P. Two
+  live bindings for one sequence is an ambiguous shortcut and Qt fires NEITHER,
+  so a clash costs the trader both verbs silently.
+
+  Everything a claimed like does to the review, this does - and none of it needed
+  code: the chart RETIRES and `like_advance` is recorded because both are keyed
+  on the event type, and the symbol is marked reviewed today because `like_claim`
+  was already in `_ANNOTATION_DECISIONS`. Everything a like has never done, it
+  still does not: no Focus, no park, no watch, no alert, no watchlist. A LIKE
+  CARRIES ZERO PRIVILEGES (plan.md P3.1), and a one-key verb is worthless if the
+  trader has to wonder what else it did.
+
+  `like_mode` is ADDITIVE and the schema version stays 1. That is proven, not
+  asserted: a test hands the loader, the like cohort, the auto-tagger's capture
+  lane and the pass cohort a row carrying the new key and each returns its normal
+  answer. A row written before P9 has no `like_mode`, and absence reads as
+  `claimed` - a claim was REQUIRED until this packet, so there is no other
+  possibility. `store.like_mode_of` is the single place that says so.
+
+  A quick like grades under `like_unclaimed`, where an unnamed like already went.
+  It contributes a LINK to the auto-tagger - a pointer with an event id and NO
+  tag text - because it names no setup, and "liked" in a Tags column would mean
+  nothing about the setup while outranking the scanner match beneath it (R2).
+
+  **The key and the button are two verbs, on purpose** (trader, 2026-09-02:
+  *"ensure we also just have a button on the visual chart as well. Maybe it can
+  have a pop up with a note I can put in similar to what we have in master
+  avwapsetups"*). **Alt+L stays instant** - a key that stops to ask a question is
+  not a one-key verb, and the whole value of the shortcut is that it costs
+  nothing. **The button opens a box** for an OPTIONAL note, using
+  `QInputDialog.getMultiLineText`, the same control the setup tracker's dislike
+  detail uses, so the gesture is already familiar. OK with an empty box is a
+  plain quick like; CANCEL records NOTHING, because a dialog that wrote a row on
+  cancel would be unusable for "let me look at this first".
+
+  An optional note is NOT R9.2(a)'s required why returning: that rule requires a
+  reason for a CLAIM, and this path makes none. There are two buttons and one
+  implementation - the chart's calls the rail's `prompt_quick_like`, because the
+  capture rail owns capture and a second route to the same write is a second
+  thing to keep in step. On the chart it is APPENDED to the existing verb row:
+  still ONE row between the charts and the tab strip, and every button that was
+  already there keeps its spot.
+
+- **A capture sidecar is finished after the close, and the original is never
+  rewritten** (`ui/annotations/sidecar_completion.py`, nightly slot
+  `sidecar_completion`). `pass_cohort`'s intraday columns were blank on EVERY
+  live pass, with the reason `sidecar_ends_before_the_entry_bar`. That was not a
+  defect in the grade: the sidecar holds the bars the desk was ALREADY HOLDING at
+  the click, so the entry bar the rule asks for - the first completed M5 close
+  AFTER the click - is by construction never inside it. Gate 34 recorded this as
+  an open definition question (should entry be the last close AT the click?).
+
+  It does not have to be. The rest of the session exists after the close; it was
+  simply not in the desk's hands at the moment the key was pressed. The slot
+  appends those bars from the research lake - narrowed ARROW-SIDE by symbol and
+  interval range through `read_rows`, never a materialised list (BD-74) - or from
+  the desk's own bar cache when the lake has not ingested that session yet, which
+  is the normal case the morning after.
+
+  **The completed bars go to a NEW file and a NEW field**
+  (`<event_id>.completed.json`, `m5_bars_completed_ref`). The row's original
+  `m5_bars_ref` keeps meaning "what the desk was holding at the click" - a fact
+  about that moment, not ours to edit - and the two together show exactly how
+  much of the session the trader could actually see. One reader
+  (`read_completed_bars`) prefers the completed file and falls back to the
+  snapshot, so no grader has to remember which to open; remembering is what
+  produces two graders that disagree.
+
+  Idempotent, fail-open, and every refusal counted by its own reason: no research
+  store, an unreachable share, no bars anywhere, already complete, already
+  completed. An unfinished sidecar is a gap; one padded from nowhere would be
+  worse than a blank grade. The slot sits BEFORE `pass_cohort_grading` because it
+  feeds it - the same night completes and grades, rather than the morning after.
+

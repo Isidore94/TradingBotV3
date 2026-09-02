@@ -487,7 +487,18 @@ def test_both_slots_are_appended_and_nothing_was_reordered():
         "veto_cohort_grading",
         "like_cohort_grading",
     ]
-    assert names[5:7] == ["pass_cohort_grading", "rejection_cohort_grading"]
+    # PAIRWISE, not by index (P9 inserted `sidecar_completion` between the like
+    # slot and the pass slot - it FEEDS the pass grade - which moves these two
+    # without reordering any existing pair). The invariant is the order, and an
+    # index assertion has now had to be edited by three packets in a row.
+    order = [names.index(name) for name in (
+        "veto_cohort_grading",
+        "like_cohort_grading",
+        "sidecar_completion",
+        "pass_cohort_grading",
+        "rejection_cohort_grading",
+    )]
+    assert order == sorted(order), names
     for name in ("pass_cohort_grading", "rejection_cohort_grading"):
         slot = next(item for item in default_slots() if item.name == name)
         assert slot.reserve_minutes == 5.0

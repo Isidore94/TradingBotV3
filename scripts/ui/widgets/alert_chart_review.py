@@ -180,6 +180,31 @@ class AlertChartReview(QWidget):
             lambda: self.alert is not None and self.removeTodayRequested.emit(self.alert)
         )
 
+        # P9's quick like, ON THE CHART (trader, 2026-09-02: "ensure we also
+        # just have a button on the visual chart as well"). APPENDED to the verb
+        # row rather than inserted among it: every existing button keeps its
+        # spot, which is what that row's muscle-memory rule is for. It is still
+        # ONE row - CLAUDE.md's limit between the charts and the tab strip.
+        #
+        # It calls the rail directly, like the rail's own buttons do, rather
+        # than emitting a request the panel has to route: the capture rail owns
+        # capture, and a second route to the same write is a second thing to
+        # keep in step. The chart retires afterwards through `captured` ->
+        # `_on_captured`, exactly as a claimed like does.
+        self.quick_like_button = QPushButton("♥ Like")
+        self.quick_like_button.setToolTip(
+            "Something about this chart was good. Opens a box for an optional "
+            "note; no setup to pick and no reason required. Alt+L does the same "
+            "with no box. Nothing is added to Focus or any watchlist, and the "
+            "chart moves on."
+        )
+        # Late-bound: the rail is constructed further down this __init__, and
+        # the same lambda idiom the other verb buttons use resolves at click
+        # time rather than at wiring time.
+        self.quick_like_button.clicked.connect(
+            lambda: self.capture_rail.prompt_quick_like()
+        )
+
         self.cross_focus_button = QPushButton(self._cross_labels[0])
         self.cross_focus_button.setCheckable(True)
         self.cross_focus_button.clicked.connect(
@@ -309,6 +334,7 @@ class AlertChartReview(QWidget):
         buttons.addWidget(self.skip_button)
         buttons.addWidget(self.remove_today_button)
         buttons.addWidget(self.cross_focus_button)
+        buttons.addWidget(self.quick_like_button)
         buttons.addStretch(1)
         buttons.addWidget(self.hidden_button)
         buttons.addWidget(self.armed_summary)

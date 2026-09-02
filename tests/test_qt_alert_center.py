@@ -2677,3 +2677,57 @@ def test_rearming_from_the_chart_restarts_the_expiry_clock(monkeypatch):
     saved = panel.price_alert_service.saved[0]
     assert saved["armed_above"] is False
     assert saved["armed_at"] == "2026-08-01"
+
+
+def test_the_chart_carries_a_quick_like_button_on_its_one_verb_row(tmp_path):
+    """Trader, 2026-09-02: "ensure we also just have a button on the visual
+    chart as well".
+
+    On the EXISTING verb row - CLAUDE.md allows at most one row between the
+    charts and the tab strip - and APPENDED, so every button that was already
+    there keeps its spot.
+    """
+    from ui.widgets.alert_chart_review import AlertChartReview
+
+    review = AlertChartReview()
+    try:
+        assert review.quick_like_button is not None
+        assert "Like" in review.quick_like_button.text()
+
+        # The SAME row as the other verbs - found by asking which layout holds
+        # the focus button, rather than by walking a nesting that can change.
+        from PySide6.QtWidgets import QHBoxLayout
+
+        row = next(
+            layout
+            for layout in review.findChildren(QHBoxLayout)
+            if layout.indexOf(review.focus_button) >= 0
+        )
+        assert row.indexOf(review.quick_like_button) >= 0, "it is on the verb row"
+
+        # And LAST among the verbs: muscle memory for add / skip / not-today is
+        # untouched, which is that row's stated rule.
+        for existing in (
+            review.focus_button,
+            review.skip_button,
+            review.remove_today_button,
+            review.cross_focus_button,
+        ):
+            assert row.indexOf(existing) < row.indexOf(review.quick_like_button)
+    finally:
+        review.deleteLater()
+
+
+def test_the_chart_button_routes_to_the_rails_prompt(tmp_path):
+    """One implementation, two buttons. A second route to the same write is a
+    second thing to keep in step."""
+    from ui.widgets.alert_chart_review import AlertChartReview
+
+    review = AlertChartReview()
+    try:
+        called = []
+        review.capture_rail.prompt_quick_like = lambda: called.append(True)
+        review.quick_like_button.click()
+        assert called == [True]
+    finally:
+        review.deleteLater()

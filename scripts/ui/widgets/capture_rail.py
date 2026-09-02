@@ -74,12 +74,15 @@ from ui.annotations.setup_claims import (  # noqa: F401  (re-exported for hosts/
     setup_claim_groups,
 )
 from ui.annotations.store import (
+    AnnotationError,
     EVENT_LIKE_CLAIM,
     EVENT_NOTE,
     EVENT_PASS,
     EVENT_VETO,
-    AnnotationError,
+    LIKE_MODE_CLAIMED,
+    LIKE_MODE_QUICK,
     record_annotation,
+    record_annotation_with_bars,
     record_pass_annotation,
 )
 from ui.annotations.vocabulary import (
@@ -380,6 +383,18 @@ class CaptureRail(QFrame):
         self.like_button = QPushButton("Like + claim setup")
         self.like_button.clicked.connect(self.commit_like)
         inner.addWidget(self.like_button)
+
+        # The quick like's own button, beside the claimed one it is NOT. Every
+        # other verb on this rail has a button as well as a key; this one had
+        # only a key until the trader asked for both (2026-09-02).
+        self.quick_like_button = QPushButton("♥ Quick like  (Alt+L)")
+        self.quick_like_button.setToolTip(
+            "Records that something about this chart was good, without naming "
+            "the setup. Opens a box for an optional note. Alt+L does the same "
+            "thing with no box. Nothing is added to Focus or any watchlist."
+        )
+        self.quick_like_button.clicked.connect(self.prompt_quick_like)
+        inner.addWidget(self.quick_like_button)
         return frame
 
     def _note_section(self) -> QFrame:
@@ -474,6 +489,12 @@ class CaptureRail(QFrame):
             ("Alt+K", self.focus_like),
             ("Alt+N", self.focus_note),
             ("Alt+P", self.focus_pass),
+            # P9. Alt+L is UNBOUND everywhere in scripts/ui - the whole
+            # inventory is Ctrl+F, Ctrl+J, Ctrl+R, Ctrl+Return, F9, Alt+E and
+            # these four - and two live bindings for one sequence is an
+            # ambiguous shortcut that fires NEITHER, so a clash would silently
+            # cost the trader both verbs.
+            ("Alt+L", self.commit_quick_like),
         )
 
     def _bind_shortcuts(self) -> None:
@@ -811,6 +832,120 @@ class CaptureRail(QFrame):
         self.like_note_input.setFocus()
         self._set_status("This like needs a why - type it, then Enter.")
 
+    def commit_quick_like(self, note: str = "") -> dict | None:
+        """One key: "something about this was good", and nothing else.
+
+        Trader, 2026-09-02: *"anytime I like and claim a setup or like a day
+        trade setup I just want to let the bot and the future AI know
+        'something about this was good' and then we can figure out what about
+        it / what's the best entry later."*
+
+        This SUPERSEDES R9.2(a)'s "why is required" for this path only. The
+        claimed path - Alt+K, digit, why, Enter - is untouched, and the reason
+        it still demands a why is unchanged: a claim without one is a label
+        nobody can check later.
+
+        Everything a claimed like does to the review, this does too. The chart
+        RETIRES (a like retires, a note never does), the symbol is marked
+        reviewed today through the existing `_ANNOTATION_DECISIONS`, and the
+        review event is `like_advance` so the scoreboard counts it as a take.
+
+        And everything a like has never done, this does not do either: NO Focus
+        placement, no park, no watch, no alert, no watchlist. A like carries
+        zero privileges (plan.md P3.1), and the whole value of a one-key verb is
+        lost if the trader has to wonder what else it did.
+
+        On an M5 chart it saves the bars the desk is already holding, exactly as
+        a pass does - the trader asked for that explicitly. On a D1 chart it
+        writes no sidecar: a D1 chart's bars are not what the intraday grade
+        needs, and an empty sidecar would be a reference that lies.
+
+        `note` is OPTIONAL and defaults to nothing, which is not a
+        contradiction of R9.2(a): that rule REQUIRES a why on a claimed like,
+        and this path has no claim to justify. The keystroke passes none - one
+        key has to stay one key - and the chart button offers a box in case the
+        trader has a sentence in mind (trader, 2026-09-02: *"maybe it can have a
+        pop up with a note I can put in"*).
+        """
+        row = self._record_like(
+            claimed_setup_id="", note=note, like_mode=LIKE_MODE_QUICK
+        )
+        if row is None:
+            return None
+        detail = self._merge_like_cohort_safely()
+        attached = row.get("m5_bar_count")
+        if attached:
+            detail = f"  ({attached} M5 bars attached){detail}"
+        self._set_status(
+            f"Liked (quick) {row['symbol']} - claim it later with Alt+K{detail}"
+        )
+        return row
+
+    def prompt_quick_like(self) -> dict | None:
+        """Ask for an optional note, then quick-like. The BUTTON's route.
+
+        Trader, 2026-09-02: *"maybe it can have a pop up with a note I can put in
+        similar to what we have in master avwapsetups"* - which is
+        `QInputDialog.getMultiLineText`, the same control the setup tracker's
+        dislike detail uses, so the gesture is one the trader already knows.
+
+        The note is OPTIONAL: OK with an empty box is a plain quick like, and
+        CANCEL records NOTHING. A dialog that wrote a row on cancel would make
+        the button unusable for "let me look at this first".
+
+        **Alt+L does not come through here.** A keystroke that stops to ask a
+        question is not a one-key verb, and the whole point of the shortcut is
+        that it costs nothing. The button is for the times the trader has a
+        sentence in mind; the key is for the times they do not.
+        """
+        if not self._symbol:
+            self._set_status("No symbol in focus.", ok=False)
+            return None
+        from PySide6.QtWidgets import QInputDialog
+
+        note, accepted = QInputDialog.getMultiLineText(
+            self,
+            f"Like {self._symbol}",
+            (
+                "Something about this was good.\n\n"
+                "Add a note if you want one - it is optional, and you can claim "
+                "the setup later with Alt+K. Leave it empty to just record the "
+                "like."
+            ),
+            "",
+        )
+        if not accepted:
+            return None
+        return self.commit_quick_like(note=str(note or "").strip())
+
+    def _record_like(self, **fields: Any) -> dict | None:
+        """Write a like row, with the M5 sidecar when the chart is an M5 one.
+
+        One writer for both like paths so a claimed like and a quick like can
+        never disagree about how a like is stored.
+        """
+        if not self._symbol:
+            self._set_status("No symbol in focus.", ok=False)
+            return None
+        common = {**self._common_fields(), "side": self._side, **fields}
+        try:
+            if str(self._timeframe or "").upper() == "M5":
+                row = record_annotation_with_bars(
+                    EVENT_LIKE_CLAIM, m5_bars=self.cached_m5_bars(), **common
+                )
+            else:
+                row = record_annotation(EVENT_LIKE_CLAIM, **common)
+        except AnnotationError as exc:
+            self._set_status(str(exc), ok=False)
+            return None
+        if row is None:
+            self._set_status(
+                "NOT SAVED - the annotation log could not be written.", ok=False
+            )
+            return None
+        self.captured.emit(EVENT_LIKE_CLAIM, row)
+        return row
+
     def commit_like(self) -> dict | None:
         setup_id = self.selected_setup_id()
         if not setup_id:
@@ -824,11 +959,10 @@ class CaptureRail(QFrame):
             # A like without a why is not a like - the chart stays.
             self._prompt_for_why()
             return None
-        row = self._record(
-            EVENT_LIKE_CLAIM,
+        row = self._record_like(
             claimed_setup_id=str(setup_id),
-            side=self._side,
             note=why,
+            like_mode=LIKE_MODE_CLAIMED,
         )
         if row is None:
             return None

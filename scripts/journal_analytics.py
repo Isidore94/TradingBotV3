@@ -251,8 +251,18 @@ class AutoTagger:
             if not symbol or session is None:
                 continue
             kind = str(annotation.get("event_type") or "")
+            link_only = False
             if kind == "like_claim":
-                tag = str(annotation.get("claimed_setup_id") or "").strip() or "liked"
+                claimed = str(annotation.get("claimed_setup_id") or "").strip()
+                # A QUICK like (P9) says "something about this was good" and
+                # names no setup, so it contributes a LINK - a pointer with an
+                # event id and NO tag text - exactly as a chart housekeeping
+                # action does (R2). Reading "liked" as a setup name would put a
+                # word in the Tags column that means nothing about the setup and
+                # would outrank the scanner match beneath it, which is the bug
+                # R2 spent a packet removing.
+                tag = claimed or ""
+                link_only = not claimed
             elif kind == "veto":
                 code = str(annotation.get("reason_code") or "").strip()
                 tag = f"vetoed:{code}" if code else "vetoed"
@@ -279,6 +289,7 @@ class AutoTagger:
                     "side": _normalize_side(annotation.get("side")),
                     "kind": kind,
                     "tag": tag,
+                    "link_only": link_only,
                     "event_id": str(annotation.get("event_id") or ""),
                     "detail": str(annotation.get("note") or ""),
                 }

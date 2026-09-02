@@ -770,3 +770,76 @@ class PassBarSidecarTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuickLikeBarSidecarTests(unittest.TestCase):
+    """P9: a quick like on an M5 chart saves the bars, exactly as a pass does.
+
+    Trader, 2026-09-02, asked for this explicitly. The FIELD NAME stays
+    `m5_bars_ref` and the sidecar directory stays the pass one, so no reader
+    forks: what changed is which event types can own a sidecar.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "trader_annotations.jsonl"
+        self.addCleanup(self._tmp.cleanup)
+
+    def _bars(self, count: int = 3) -> list[dict]:
+        return [
+            {
+                "dt": datetime(2026, 9, 2, 9, 30) + timedelta(minutes=5 * index),
+                "open": 10.0, "high": 10.5, "low": 9.9, "close": 10.2,
+                "volume": 1000.0 + index,
+            }
+            for index in range(count)
+        ]
+
+    def test_a_quick_like_can_own_a_sidecar(self) -> None:
+        from ui.annotations.store import LIKE_MODE_QUICK, record_annotation_with_bars
+
+        row = record_annotation_with_bars(
+            EVENT_LIKE_CLAIM,
+            symbol="NVDA",
+            side="LONG",
+            like_mode=LIKE_MODE_QUICK,
+            m5_bars=self._bars(30),
+            path=self.path,
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row["like_mode"], "quick")
+        self.assertIn("m5_bars_ref", row)
+        # Sidecar FIRST, row second - a reference in the stream never lies.
+        self.assertTrue((self.path.parent / row["m5_bars_ref"]).is_file())
+        self.assertEqual(row["m5_bar_count"], 30)
+
+    def test_with_nothing_cached_the_row_still_writes(self) -> None:
+        from ui.annotations.store import LIKE_MODE_QUICK, record_annotation_with_bars
+
+        row = record_annotation_with_bars(
+            EVENT_LIKE_CLAIM,
+            symbol="NVDA",
+            side="LONG",
+            like_mode=LIKE_MODE_QUICK,
+            m5_bars=[],
+            path=self.path,
+        )
+        self.assertIsNotNone(row)
+        self.assertNotIn("m5_bars_ref", row)
+        self.assertEqual(
+            len(load_annotations(self.path, event_types=(EVENT_LIKE_CLAIM,))), 1
+        )
+
+    def test_the_pass_writer_still_works_under_its_own_name(self) -> None:
+        """Every existing caller keeps the name it uses."""
+        from ui.annotations.store import record_pass_annotation
+
+        vocab = load_pass_vocabulary()
+        row = record_pass_annotation(
+            symbol="AAPL",
+            reason_codes=[vocab.reasons[0].code],
+            m5_bars=self._bars(30),
+            path=self.path,
+        )
+        self.assertEqual(row["event_type"], EVENT_PASS)
+        self.assertIn("m5_bars_ref", row)

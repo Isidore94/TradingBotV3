@@ -24,6 +24,7 @@ import json
 import sys
 import time
 import unittest
+import unittest.mock
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -855,3 +856,165 @@ class PassCohortMergeTests(unittest.TestCase):
                  self.log.read_text(encoding="utf-8").splitlines() if line.strip()]),
             "and it must still be in the annotation log",
         )
+
+
+class QuickLikeTests(unittest.TestCase):
+    """P9 - one key that says "something about this was good".
+
+    Trader, 2026-09-02: *"anytime I like and claim a setup or like a day trade
+    setup I just want to let the bot and the future AI know 'something about
+    this was good' and then we can figure out what about it / what's the best
+    entry later."*
+    """
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.log = self.tmp / "trader_annotations.jsonl"
+        self.addCleanup(self._tmp.cleanup)
+        self.panel = _panel(self.tmp)
+        self.panel.open_symbol("NVDA")
+        self.rail = self.panel.capture_rail
+
+    def _rows(self) -> list[dict]:
+        if not self.log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    def test_one_key_writes_a_like_with_no_claim_and_no_why(self) -> None:
+        row = self.rail.commit_quick_like()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["event_type"], "like_claim")
+        self.assertEqual(row["like_mode"], "quick")
+        self.assertNotIn("claimed_setup_id", row)
+        self.assertEqual(row.get("note", ""), "")
+        self.assertEqual([r["event_id"] for r in self._rows()], [row["event_id"]])
+
+    def test_the_status_line_says_the_claim_path_still_exists(self) -> None:
+        self.rail.commit_quick_like()
+        self.assertIn("Alt+K", self.rail.status_label.text())
+        self.assertIn("quick", self.rail.status_label.text().lower())
+
+    def test_the_claimed_path_is_untouched(self) -> None:
+        """R9.2(a)'s "why is required" is superseded for the QUICK path only."""
+        self.assertIsNone(self.rail.commit_like())  # no digit
+        self.rail.setup_list.setCurrentRow(0)
+        self.assertIsNone(self.rail.commit_like())  # no why
+        self.rail.like_note_input.setText("held the band all day")
+        row = self.rail.commit_like()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["like_mode"], "claimed")
+        self.assertTrue(row["claimed_setup_id"])
+        self.assertEqual(row["note"], "held the band all day")
+
+    def test_a_quick_like_binds_a_key_nothing_else_uses(self) -> None:
+        """Two live bindings for one sequence fire NEITHER, so a clash would
+        silently cost the trader both verbs."""
+        sequences = [sequence for sequence, _handler in self.rail.action_shortcuts()]
+        self.assertIn("Alt+L", sequences)
+        self.assertEqual(len(sequences), len(set(sequences)))
+
+    def test_a_quick_like_places_nothing(self) -> None:
+        """A like carries zero privileges (plan.md P3.1)."""
+        self.rail.commit_quick_like()
+        row = self._rows()[0]
+        for forbidden in ("focus", "watchlist", "parked", "armed", "alert"):
+            self.assertNotIn(forbidden, json.dumps(row).lower())
+
+
+class QuickLikeButtonTests(unittest.TestCase):
+    """The button and its optional note (trader, 2026-09-02).
+
+    *"Ensure we also just have a button on the visual chart as well. Maybe it
+    can have a pop up with a note I can put in similar to what we have in master
+    avwapsetups."*
+    """
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.log = self.tmp / "trader_annotations.jsonl"
+        self.addCleanup(self._tmp.cleanup)
+        self.panel = _panel(self.tmp)
+        self.panel.open_symbol("NVDA")
+        self.rail = self.panel.capture_rail
+
+    def _rows(self) -> list[dict]:
+        if not self.log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    def _answer(self, text, accepted=True):
+        """Stand in for the popup, which is the same control the setup
+        tracker's dislike detail uses."""
+        return lambda *a, **k: (text, accepted)
+
+    def test_the_rail_has_a_button_beside_the_claimed_one(self) -> None:
+        self.assertTrue(self.rail.quick_like_button.isEnabled())
+        self.assertIn("Alt+L", self.rail.quick_like_button.text())
+
+    def test_the_popup_note_is_saved_on_the_row(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        with unittest.mock.patch.object(
+            QInputDialog, "getMultiLineText", self._answer("big base, watching the 20")
+        ):
+            row = self.rail.prompt_quick_like()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["like_mode"], "quick")
+        self.assertEqual(row["note"], "big base, watching the 20")
+        self.assertNotIn("claimed_setup_id", row)
+
+    def test_an_empty_note_is_a_plain_quick_like(self) -> None:
+        """The note is OPTIONAL - R9.2(a)'s required why is about a CLAIM."""
+        from PySide6.QtWidgets import QInputDialog
+
+        with unittest.mock.patch.object(
+            QInputDialog, "getMultiLineText", self._answer("   ")
+        ):
+            row = self.rail.prompt_quick_like()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row.get("note", ""), "")
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_cancel_records_nothing(self) -> None:
+        """A dialog that wrote on cancel would be unusable for "let me look"."""
+        from PySide6.QtWidgets import QInputDialog
+
+        with unittest.mock.patch.object(
+            QInputDialog, "getMultiLineText", self._answer("typed then thought better", False)
+        ):
+            row = self.rail.prompt_quick_like()
+
+        self.assertIsNone(row)
+        self.assertEqual(self._rows(), [])
+
+    def test_the_keystroke_never_opens_the_popup(self) -> None:
+        """A key that stops to ask a question is not a one-key verb."""
+        from PySide6.QtWidgets import QInputDialog
+
+        def _boom(*a, **k):
+            raise AssertionError("Alt+L must not prompt")
+
+        with unittest.mock.patch.object(QInputDialog, "getMultiLineText", _boom):
+            row = self.rail.commit_quick_like()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row.get("note", ""), "")
+
+    def test_the_button_refuses_with_no_symbol(self) -> None:
+        rail = self.panel.capture_rail
+        rail.set_context(symbol="")
+        self.assertIsNone(rail.prompt_quick_like())
+        self.assertEqual(self._rows(), [])

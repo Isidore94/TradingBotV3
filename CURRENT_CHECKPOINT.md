@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - review round **R2** (2026-09-02) landed two guards and a sweep of stale sentences on top of R1's integration, which had put every Phase 0.13 packet (P0-P8) on `main`. R2 was built on `claude/r2-guards` in a scratch worktree and merged. Nothing is unmerged |
+| Working branch | **`claude/p9-quick-like`**, off `main` at `13cbc50` - Phase 0.13 packet P9 (quick like). `main` already holds every earlier Phase 0.13 packet plus review rounds R1 and R2; nothing else is unmerged |
 | Also in flight | **NOTHING. `claude/gui-phase-0-9` is CONTAINED in `main`** - `git merge-base --is-ancestor` succeeds and it is 0 ahead, because its content arrived through `claude/group-tape-rebuild`, which was cut from it. This row said the branch was unmerged and it was wrong (corrected R2). **What is open is GATE 7 (SOAK 1), not the branch** - a gate is owed by work that has landed, and the two are not the same thing |
 | Active roadmap items | **Phase 0.13 packets P0-P8: ALL MERGED 2026-09-02, live gates #29-#37 owed** (gates #33 and #37 are now SATISFIABLE, which they were not before R1 - see their rows); **integration gate #38** (one DESK session on the merged tree after a restart); Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **6104 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02 05:17, desk `.venv`, on the R2 tree) - **run with the `ai_jobs_runner` writer lock FREE and the lock re-checked immediately before the run**, which is what makes it a baseline. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger in R2. Previous: **6091 passed** on `main` at `125ffa0` |
+| Last verified baseline | `pytest tests/ -q` **6130 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/p9-quick-like`) - **the lock was re-checked immediately before the run**, not inferred from an earlier wait · `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · spec-drift **17** · no packaging trigger (the one new module is inside the already-collected `ui.annotations`). Previous: **6104 passed** on the R2 tree |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 04:09, trader-authorized ("Go ahead and restart the desk").** The checkout was moved to `main` at `125ffa0` FIRST and verified (selftest 74/74, smoke 7/7, ruff clean) - restarting onto the branch it happened to be sitting on would have put the wrong code on the desk. Old pid 17132 (up since 2026-09-01 11:09) stopped; relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **25884** (the desk) under trampoline **9140**. Verified UP THREE WAYS rather than assumed: the process outlived the launch by minutes, `heartbeat.json` re-stamps every ~4 min naming pid 25884 (it had read pid 17132 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0. **The desk now knows `tag_status`, so P6a's 24 provisional tags render as provisional rather than as the trader's own** - which is what the restart was for. The nightly AI run was a SEPARATE process and was not disturbed; it finished normally at ~04:08 |
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 39 | **Quick like (Phase 0.13 P9)** - one DESK session: the trader quick-likes one SWING chart and one M5 chart. Both rows reach `trader_annotations.jsonl` with `like_mode` quick, the M5 one carries `m5_bars_ref`, BOTH charts retire, and nothing appears in Focus. The next morning `like_cohort_picks.csv` holds both, the M5 one has `m5_bars_completed_ref`, and **its intraday columns are numbers rather than blank** - which is also what closes gate 34's open definition question | 2026-09-02 P9 entry |
 | 38 | **The merged tree, on the desk (R1, extended by R2)** — one DESK session after the restart with the stall watchdog ON and quiet on every new surface: the Weekend Prep pass/rejection/preference tables, the journal's Provisional filter, the Decisions pane, the M5 take-rate row and the Strength Board section. **R2 adds two specific things to watch**: the Setup Tracker's current-picks count after the FIRST scan of the day (it should be the real tier count, not one row per symbol - that is the NAN guard), and the Weekend Prep backlog-toggle line in `ui_stalls.jsonl`, which should now be absent | 2026-09-02 R2 entry |
 | 37 | **First setup-parameter grid (Phase 0.13 P8)** — one overnight run publishes rows for every declared cell inside the 20-minute reserve, and the trial-ledger row exists with status `collecting`. **The third condition is a refusal, not a check: no cell may be read for a verdict before the declared 20-session window closes** — including by me, and including if an early cell looks good | 2026-09-02 Phase 0.13 P8 entry |
 | 28 | **HTF LRSI study (Phase 0.12 B)** — one overnight `setup_research` run that publishes `htf_lrsi_*` outcome rows inside the existing 20-minute reserve, with `bar_derived` rows under `timeframe=H2` present and no stub in the oscillator's input; then a first read of whether any cell clears the evidence floor | 2026-09-01 Phase 0.12 entry |
@@ -134,6 +135,75 @@ the same k.
 **Verification.** `pytest tests/ -q` **5800 passed**, the only failures being the 32
 `ai_jobs` tests that stand down while the nightly holds the machine-local writer lock ·
 `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix: 17 of 18.
+
+### 2026-09-02 - Phase 0.13 packet P9: quick like
+
+**Branch `claude/p9-quick-like`, off `main` at `13cbc50`.** Live gate 39 owed. No
+frozen rebuild: the one new module sits inside the already-collected
+`ui.annotations` package, and there is no new dependency and no new asset.
+
+**THE VERB.** Alt+L writes `like_claim` with `like_mode: "quick"` - no claim, no
+why. Trader's own words: *"I just want to let the bot and the future AI know
+'something about this was good' and then we can figure out what about it / what's
+the best entry later."* This **supersedes R9.2(a)'s why-required for the QUICK
+path only**; Alt+K still demands a digit and a why, for the reason it always has.
+
+**AND A BUTTON, asked for the same day**: on the chart's verb row (appended, so
+every existing button keeps its spot, and still ONE row) and on the rail beside
+the claimed like. It opens a box for an OPTIONAL note - `QInputDialog`, the same
+control the setup tracker's dislike detail uses - and CANCEL records nothing. The
+key never prompts: a key that stops to ask is not a one-key verb. An optional note
+is not R9.2(a)'s required why returning; that rule is about a CLAIM, and this path
+makes none.
+
+Alt+L is unbound everywhere in `scripts/ui` - the whole inventory is Ctrl+F,
+Ctrl+J, Ctrl+R, Ctrl+Return, F9, Alt+E and the rail's four - and two live bindings
+for one sequence fire NEITHER, so a clash would have cost the trader both verbs
+without saying anything.
+
+**What it does, and what it deliberately does not.** The chart retires,
+`like_advance` is recorded so the scoreboard counts a take, and the symbol is
+marked reviewed today - all three for free, because each is keyed on the event
+type and `like_claim` was already in `_ANNOTATION_DECISIONS`. Nothing is placed:
+no Focus, no park, no watch, no alert. **A like carries zero privileges** (P3.1),
+and a one-key verb is worthless if the trader has to wonder what else it did.
+
+**SCHEMA_VERSION STAYS 1, PROVEN RATHER THAN ASSERTED.** A test hands every reader
+in the chain - the loader, the like cohort, the auto-tagger's capture lane, the
+pass cohort - a row carrying the new key, and each returns its normal answer. A
+row written before P9 has no `like_mode` at all, and absence reads as `claimed`
+because a claim was REQUIRED until this packet; `like_mode_of` is the one place
+that says so.
+
+**THE INTRADAY GRADE IS NOW REACHABLE, WHICH ANSWERS GATE 34.** `pass_cohort`
+returned blank on every live pass with `sidecar_ends_before_the_entry_bar` - not a
+defect in the grade but the shape of the evidence, since the sidecar holds what
+the desk was HOLDING at the click and the entry bar is the first close AFTER it.
+The new `sidecar_completion` slot appends the rest of that session after the
+close, from the research lake (narrowed Arrow-side by symbol and interval, never a
+materialised list) or the desk's own cache when the lake has not ingested yet -
+which is the normal case the morning after.
+
+**The original snapshot is never rewritten.** Completion writes a NEW file and a
+NEW field; `m5_bars_ref` keeps meaning "what the desk held at the click", and the
+two together show how much of the session the trader could actually see. The slot
+sits BEFORE `pass_cohort_grading` because it feeds it, so one night completes and
+grades. Idempotent, fail-open, every refusal counted by its own reason.
+
+**The joins.** A quick like contributes a LINK to the auto-tagger, never a tag -
+it names no setup, and "liked" in a Tags column would mean nothing while
+outranking the scanner match beneath it (R2). `like_mode` is a picks column so a
+later rollup can split quick from claimed without rewriting a row. Weekend Prep
+and `ai_summary`'s judgement scope both now say the `like_unclaimed` cohort is NOT
+a setup's edge.
+
+Two order tests updated: the slot order is asserted PAIRWISE now (an index
+assertion has been edited by three packets running), and the caveat test asserts
+CONTENT rather than a count.
+
+**Verification.** `pytest tests/ -q` **6130 passed, 72 subtests, exit 0, zero
+failures** with the lock FREE · `ruff` clean · smoke **7/7** · `--selftest`
+**74/74** · spec-drift **17**. Fail-before-fix: 17 of 18.
 
 ### 2026-09-02 - Review round R2: two guards, then the stale sentences
 

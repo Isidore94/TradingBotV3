@@ -1363,7 +1363,10 @@ class AlertCenterPanel(QFrame):
     # no mouse.
     # ------------------------------------------------------------------
     def _bind_capture_shortcuts(self) -> None:
-        """Own Alt+V / Alt+K / Alt+S / Alt+N at PANEL scope.
+        """Own the rail's verb keys at PANEL scope - whatever they are.
+
+        The list comes from `action_shortcuts()` and is never restated here, so
+        P9's Alt+L was bound the day it was added without this method changing.
 
         The rail is on a tab page now, and a QShortcut bound inside a page the
         trader is not looking at never fires - so the keys would have silently
@@ -1402,7 +1405,7 @@ class AlertCenterPanel(QFrame):
         Panel scope with WidgetWithChildrenShortcut, exactly like the capture
         keys: a QShortcut bound inside a hidden tab page never fires. Ctrl+J is
         unbound everywhere else in scripts/ui (Ctrl+R, Ctrl+F, F9, Ctrl+Return
-        and Alt+V/K/S/N are the whole inventory) - two live bindings for one
+        and the rail's Alt+V/K/N/P/L are the whole inventory) - two live bindings for one
         sequence is an ambiguous shortcut and Qt fires NEITHER.
         """
         shortcut = QShortcut(QKeySequence("Ctrl+J"), self)

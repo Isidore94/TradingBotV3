@@ -44,7 +44,7 @@ from project_paths import (
     TRADER_ANNOTATIONS_FILE,
 )
 from local_writer_lock import LocalLockUnavailable, local_writer_lock, lock_key_for_path
-from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
+from ui.annotations.store import EVENT_LIKE_CLAIM, like_mode_of, load_annotations
 
 #: The mirror trio, re-exported from `project_paths` where the veto trio also
 #: lives. Every reader addresses them by CONSTANT.
@@ -64,6 +64,13 @@ PICK_COLUMNS = [
     # Ground rule 7: UTC and the market session, both, on every row.
     "claimed_at_utc",
     "session_date",
+    # P9: HOW the like was made - `claimed` (Alt+K, a digit, a why) or `quick`
+    # (one key, no claim). The COHORT is unchanged: a quick like still grades
+    # under `like_unclaimed`, which is where an unnamed like already went. This
+    # column is what lets a later rollup split the two WITHOUT rewriting a row,
+    # and the split matters because they are different statements: a claimed
+    # like says which setup, a quick like says only that something was good.
+    "like_mode",
 ]
 
 
@@ -156,6 +163,7 @@ def like_pick_rows(
             "symbol": symbol,
             "side": side,
             "source": like_cohort_source(annotation.get("claimed_setup_id")),
+            "like_mode": like_mode_of(annotation),
             "snapshotted_at": stamp_local,
             "active_at_snapshot": "1",
             "claimed_at_utc": stamp_utc,
