@@ -1322,7 +1322,8 @@ parameter DEFAULTS TO None - every existing caller unchanged - and the two P5 co
 pass `pick_key_with_source`. The outcome numbers are identical across those rows, so what
 the wider key preserves is which cohorts were graded, not which figures.
 
-The rejection sources are `focus__not_today` / `focus__dislike` and the DOUBLE underscore
+The rejection sources are `focus__m5_not_today` / `focus__swing_dislike` - R1 put the
+LANE back into the name - and the DOUBLE underscore
 is load-bearing: the prefix matcher tests `startswith(prefix + "_")`, so `focus_` claims
 exactly those and cannot reach `focus_swing`, `focus_m5` or `focus_pick`. Pinned by a
 test.

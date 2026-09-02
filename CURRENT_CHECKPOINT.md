@@ -807,8 +807,9 @@ the P5 cohorts pass `pick_key_with_source`. The outcome NUMBERS are identical ac
 those rows, so what the wider key preserves is which cohorts were graded, not which
 figures.
 
-Both families registered by APPENDING. The rejection sources are `focus__not_today` /
-`focus__dislike` and the **double underscore is load-bearing**: the matcher tests
+Both families registered by APPENDING. The rejection sources are
+`focus__m5_not_today` / `focus__swing_dislike` (R1 put the LANE back into the name)
+and the **double underscore is load-bearing**: the matcher tests
 `startswith(prefix + "_")`, so `focus_` claims exactly those and cannot reach
 `focus_swing`, `focus_m5` or `focus_pick`.
 

@@ -951,7 +951,6 @@ def build_analytics_summary(
             )
         )
         summary["groups"][group_name] = rows
-    summary["nonexclusive_groups"] = ["my setups", "auto tags"]
     summary["group_notes"] = _empty_dimension_notes(trades, summary["groups"])
     summary["nonexclusive_groups"] = ["my setups", "provisional setups", "auto tags"]
     #: Groups whose buckets are machine-applied and awaiting review. The chart

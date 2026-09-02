@@ -62,7 +62,8 @@ COHORT_BASE_BY_SOURCE_PREFIX = (
     # `pass` sits above `focus_pick` for the same ordering reason as the rest;
     # it cannot collide with it because no focus source begins "pass".
     ("human_focus_pass", "pass"),
-    # The rejection sources are `focus__not_today` / `focus__dislike` - the
+    # The rejection sources are `focus__m5_not_today` / `focus__swing_dislike`
+    # - they name the LANE the verdict arrived on (R1) - and the
     # DOUBLE underscore is load-bearing. `_outcome_base_cohort` matches
     # `source.startswith(prefix + "_")`, so this prefix claims exactly the
     # sources whose seventh character is another underscore and cannot reach
