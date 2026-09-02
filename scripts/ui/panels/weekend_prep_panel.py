@@ -130,6 +130,9 @@ class _StepPage(QFrame):
         worker is a normal page, not a broken one.
         """
         join_worker(getattr(self, "_worker", None))
+        # R2: the tag list has its own worker, and a thread that outlives the
+        # widget it was going to update is exactly what this method exists for.
+        join_worker(getattr(self, "_tag_worker", None))
 
 
 #: The callout classes, in the order they are printed. `r_gaps` is the third
@@ -929,6 +932,9 @@ class WalkawayPage(_StepPage):
     """Step 3: how the exits went, plus the weekly auto-tag review."""
 
     def __init__(self, service, parent=None) -> None:
+        #: The tag list's own worker handle (R2). Separate from the page's
+        #: `_worker` so a backlog toggle and a reload cannot cancel each other.
+        self._tag_worker = None
         super().__init__("walkaway", service, parent)
         self.subtitle.setText(
             "Trades CLOSED inside the reviewed week. A position opened this week and still "
@@ -1015,22 +1021,47 @@ class WalkawayPage(_StepPage):
         self._reload_tags()
 
     def _reload_tags(self) -> None:
-        """Fill the auto-tag list from whichever scope is selected.
+        """Fill the auto-tag list from whichever scope is selected. OFF THE QT THREAD.
 
         Its own method so toggling the backlog never replays the walk-away:
         that is a market-history run behind a worker thread, and the tag list
         is a database read. Same reason `_confirm_tag` does not reload.
-        """
-        monday, friday = self.service.week_bounds
-        try:
-            if self.backlog_toggle.isChecked():
-                self._tag_rows = journal_feed.pending_tag_candidates()
-            else:
-                self._tag_rows = journal_feed.week_tag_candidates(monday, friday)
-        except Exception as exc:  # noqa: BLE001
-            self.tag_note.setText(f"Auto-tag proposals unavailable: {exc}")
-            self._tag_rows = []
 
+        R2: that database read was on the Qt thread - measured at 169 ms cold,
+        charged to a checkbox. It goes through the same `_ReadWorker` idiom every
+        other read on this page uses. Single-flight, like `reload`: a second
+        toggle while one is in flight is ignored rather than queued, because the
+        answer the second one wants is the one already being fetched.
+        """
+        if self._tag_worker is not None and self._tag_worker.isRunning():
+            return
+        monday, friday = self.service.week_bounds
+        backlog = self.backlog_toggle.isChecked()
+        worker = _ReadWorker(
+            lambda: self._read_tag_rows(backlog, monday, friday), self
+        )
+        worker.finished_with.connect(self._on_tag_rows_ready)
+        worker.failed.connect(self._on_tag_rows_failed)
+        self._tag_worker = worker
+        worker.start()
+
+    @staticmethod
+    def _read_tag_rows(backlog: bool, monday, friday) -> list:
+        """The journal read itself. Runs on the worker; touches no widget."""
+        if backlog:
+            return journal_feed.pending_tag_candidates()
+        return journal_feed.week_tag_candidates(monday, friday)
+
+    def _on_tag_rows_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        self.tag_note.setText(f"Auto-tag proposals unavailable: {message}")
+        self._tag_rows = []
+        self.tag_table.setRowCount(0)
+
+    def _on_tag_rows_ready(self, rows: object) -> None:  # pragma: no cover - signal seam
+        self._tag_rows = list(rows or [])
+        self._render_tag_rows()
+
+    def _render_tag_rows(self) -> None:
         self.tag_table.setRowCount(len(self._tag_rows))
         for index, row in enumerate(self._tag_rows):
             suggested = "; ".join(str(c.get("tag")) for c in row["candidates"][:3])
