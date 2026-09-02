@@ -110,6 +110,19 @@ for _package in FIRST_PARTY_PACKAGES:
         _rel = _asset.parent.relative_to(_pkg_dir)
         datas.append((str(_asset), str(Path(_package) / _rel) if _rel.parts else _package))
         _assets.append(_asset)
+# The same rule one level up: a non-.py asset sitting at the scripts/ ROOT, next
+# to the top-level modules rather than inside a package. `setup_registry.py`
+# reads its frozen JSON with a __file__-relative path, and a frozen top-level
+# module's __file__ parent IS the bundle root - so these land at "." rather than
+# under a package name. Swept rather than named one file at a time, for the same
+# reason the package sweep above is: the next root-level asset is covered the day
+# it lands instead of the first frozen run that needs it.
+for _asset in sorted(SCRIPTS.glob("*")):
+    if not _asset.is_file() or _asset.suffix.lower() in (".py", ".pyc"):
+        continue
+    datas.append((str(_asset), "."))
+    _assets.append(_asset)
+
 # The desk renders unstyled without the stylesheet and dies on the missing file,
 # so treat its absence as a build failure rather than shipping a broken exe.
 if not any(a.name == "theme.qss" for a in _assets):
