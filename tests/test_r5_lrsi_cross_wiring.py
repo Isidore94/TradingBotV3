@@ -195,15 +195,28 @@ class TestTheSweep:
 
 
 class TestTheLane:
-    """The lane the engine would ride if it were un-retired. The tag family
-    still has to be right, so these build the payload the emit path builds
-    rather than reading a callback that no longer fires."""
+    """The lane the engine WOULD ride if the retirement were lifted.
 
-    def test_the_alert_would_ride_the_new_tag_family(self, at_the_crossing):
-        assert M5_SIGNAL_TAG == "m5_signal"
-        assert not M5_SIGNAL_TAG.startswith("d1_flag")
+    R1: these had become assertions about a payload the tests built themselves,
+    which is close to a tautology - `M5_SIGNAL_TAG == "m5_signal"` would pass
+    with the emit path deleted. They now monkeypatch `LRSI_M5_ALERTS_RETIRED`
+    to False and assert the REAL emit, so un-retiring the engine is a
+    one-constant change whose consequences are already pinned. That matters
+    because the trader retired the alerts and kept the evidence explicitly to
+    decide later; the lane has to still work when they do.
+    """
 
-    def test_the_ui_reads_it_as_an_ordinary_m5_alert(self, at_the_crossing):
+    def test_the_alert_would_ride_the_new_tag_family(self, at_the_crossing, monkeypatch):
+        monkeypatch.setattr(legacy, "LRSI_M5_ALERTS_RETIRED", False)
+        bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
+        bot.check_lrsi_cross_setups()
+
+        assert bot.emitted, "un-retired, the engine must reach the GUI"
+        tags = {tag for _payload, tag in bot.emitted}
+        assert tags == {M5_SIGNAL_TAG} == {"m5_signal"}
+        assert not any(str(tag).startswith("d1_flag") for tag in tags)
+
+    def test_the_ui_reads_it_as_an_ordinary_m5_alert(self, at_the_crossing, monkeypatch):
         """No D1 routing, no chart-watch privilege, no entry-assist bypass."""
         from ui.models.bounce import (
             BounceAlert,
@@ -211,11 +224,12 @@ class TestTheLane:
             is_entry_assist_text,
         )
 
+        monkeypatch.setattr(legacy, "LRSI_M5_ALERTS_RETIRED", False)
         bot = stub_bot({"AAA": bars_from(CHURN_THEN_RUN)}, longs=["AAA"])
         bot.check_lrsi_cross_setups()
-        message = learning_only_messages(bot)[0]
 
-        alert = BounceAlert.from_callback({"text": message}, M5_SIGNAL_TAG)
+        payload, tag = bot.emitted[0]
+        alert = BounceAlert.from_callback(payload, tag)
         assert alert.is_d1 is False
         assert is_chart_watch_alert(alert) is False
         assert is_entry_assist_text(alert.raw_text) is False
