@@ -1228,14 +1228,35 @@ class JournalStore:
         )
 
     def list_adjustments(
-        self, *, target_uid: str = "", include_superseded: bool = True, limit: int = 500
+        self,
+        *,
+        target_uid: str = "",
+        target_uids: Iterable[str] | None = None,
+        include_superseded: bool = True,
+        limit: int = 500,
     ) -> list[dict[str, Any]]:
-        """The audit trail, newest first, for the Health tab and the trade pane."""
+        """The audit trail, newest first, for the Health tab and the trade pane.
+
+        ``target_uids`` filters on SEVERAL targets at once (R2). One trade is
+        addressed by three kinds of uid - the trade itself, its position's group
+        key, and each of its execution uids - and the trade pane was fetching the
+        newest 25 rows GLOBALLY and then filtering in Python. Once the journal
+        held more than 25 adjustments, a trade's own record could fall off the
+        list before the pane ever saw it: 27 exist on the applied copy, so the
+        P6a record explaining a provisional tag was already disappearing.
+
+        Additive: the singular parameter is unchanged and every existing caller
+        keeps working.
+        """
         clauses: list[str] = []
         params: list[Any] = []
+        wanted = [str(item).strip() for item in (target_uids or ()) if str(item or "").strip()]
         if str(target_uid or "").strip():
-            clauses.append("target_uid = ?")
-            params.append(str(target_uid).strip())
+            wanted.append(str(target_uid).strip())
+        if wanted:
+            unique = list(dict.fromkeys(wanted))
+            clauses.append(f"target_uid IN ({', '.join('?' for _ in unique)})")
+            params.extend(unique)
         if not include_superseded:
             clauses.append("COALESCE(superseded_by, '') = ''")
         where = "WHERE " + " AND ".join(clauses) if clauses else ""

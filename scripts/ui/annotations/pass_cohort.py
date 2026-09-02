@@ -484,7 +484,7 @@ def update_pass_cohort_outcomes(
 
 
 def _stamp_overlap_note(performance_path: Path) -> None:
-    """Put `OVERLAP_NOTE` on every row of the pass rollup (R1).
+    """Put `OVERLAP_NOTE` on every row of the pass rollup.
 
     The packet said the CSV must state the overlap and it did not - the note
     lived in the module, the Weekend Prep label and the AI scope, all of which
@@ -497,27 +497,51 @@ def _stamp_overlap_note(performance_path: Path) -> None:
     is multi-select - a note about overlapping cohorts on the veto file would be
     false.
 
-    Never allowed to cost the grading it follows: this runs AFTER the rollup is
-    safely written, and a failure here leaves that file exactly as the grader
-    wrote it.
-    """
-    import csv
+    WRITTEN THE WAY EVERY OTHER WRITER IN THIS MODULE WRITES (R2): under the
+    file's own writer lock, through a temp file and `os.replace`. The first
+    version rewrote the rollup IN PLACE and unlocked - a window in which the
+    file on disk is neither the old one nor the new one, over a file the nightly
+    slot and the desk both read, which is the exact shape of the 2026-08-27
+    feature-history corruption.
 
+    Never allowed to cost the grading it follows: it runs AFTER the rollup is
+    safely written, and every failure leaves that file exactly as the grader
+    wrote it. A LOCK it cannot take, or a file it cannot parse, is REPORTED -
+    returning the reason rather than swallowing it - because the slot has
+    already succeeded by then and a silent no-op here reads as "the note is on
+    the file".
+    """
+    import os
+
+    target = Path(performance_path)
     try:
-        if not performance_path.is_file():
+        if not target.is_file():
             return
-        with performance_path.open("r", encoding="utf-8", newline="") as handle:
+        with target.open("r", encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
-        if not rows or "overlap_note" in rows[0]:
-            return
-        fieldnames = [*rows[0].keys(), "overlap_note"]
-        with performance_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in rows:
-                writer.writerow({**row, "overlap_note": OVERLAP_NOTE})
-    except OSError:
-        _log.debug("pass cohort overlap note not stamped", exc_info=True)
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        _log.warning("pass cohort overlap note not stamped: %s", exc)
+        return
+    if not rows or "overlap_note" in rows[0]:
+        return
+
+    fieldnames = [*rows[0].keys(), "overlap_note"]
+    try:
+        with local_writer_lock(lock_key_for_path(target), timeout_seconds=1.0):
+            tmp = target.with_name(target.name + ".tmp")
+            with tmp.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow({**row, "overlap_note": OVERLAP_NOTE})
+            os.replace(tmp, target)
+    except LocalLockUnavailable:
+        _log.warning(
+            "pass cohort overlap note not stamped: another writer holds %s", target
+        )
+    except OSError as exc:
+        _log.warning("pass cohort overlap note not stamped: %s", exc)
+
 
 
 __all__ = [

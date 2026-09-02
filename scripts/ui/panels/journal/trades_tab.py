@@ -698,18 +698,21 @@ class TradesTab(QFrame):
         self.decision_reason.setText(str(latest_review.get("reason") or ""))
 
         self.adjustments_list.clear()
-        for record in journal_feed.list_adjustments(limit=25):
-            if record.get("target_uid") not in {
-                # R1: P6a's bulk-tag records target the TRADE, and this filter
-                # knew only about positions and executions - so the audit row
-                # explaining where a provisional tag came from was invisible on
-                # the very trade being reviewed, which is where the trader is
-                # standing when they ask the question.
-                trade.trade_id,
-                journal_feed.group_key_for(trade),
-                *[str(leg.get("execution_uid") or "") for leg in legs],
-            }:
-                continue
+        # FILTERED IN THE QUERY, THEN LIMITED (R2). This fetched the newest 25
+        # adjustments in the whole journal and filtered them in Python, so once
+        # the store held more than 25 a trade's own record fell off the list
+        # before the pane could see it - 27 exist on the applied copy, and the
+        # P6a record explaining a provisional tag was already disappearing.
+        #
+        # One trade is addressed by three kinds of uid: itself (P6a's bulk-tag
+        # records), its position's group key (FORCE_CLOSE), and each of its
+        # execution uids.
+        targets = [
+            trade.trade_id,
+            journal_feed.group_key_for(trade),
+            *[str(leg.get("execution_uid") or "") for leg in legs],
+        ]
+        for record in journal_feed.list_adjustments(target_uids=targets, limit=25):
             superseded = " (undone)" if record.get("superseded_by") else ""
             self.adjustments_list.addItem(
                 f"{record.get('created_at')} {record.get('action')}{superseded} - {record.get('reason')}"
