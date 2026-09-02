@@ -36,6 +36,7 @@ from project_paths import (
 from review_events import record_review_event, setup_context_fields
 from pick_feedback import reviewed_symbols_today
 from market_session import get_default_hourly_scan_schedule, get_default_stop_time_label, get_market_session_window
+from ui.annotations import verdicts
 from ui.annotations.vocabulary import VocabularyError, load_veto_vocabulary
 from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
@@ -1191,6 +1192,12 @@ class MasterAvwapPanel(QWidget):
         self._record_review_event(
             "dislike", row, detail
         )
+        # P10 A1. A CODE WAS ALREADY CHOSEN on this path, so no note box opens
+        # here - the picklist and its detail field are the quick buttons, and
+        # the detail the trader typed is carried in as the note.
+        self._record_verdict_annotation(
+            row, kind="dislike", reason_code=reason_code, note=reason
+        )
         feedback_reason = str(reason or "").strip()
         if reason_code:
             feedback_reason = f"[{str(reason_code).strip().lower()}] {feedback_reason}".strip()
@@ -1210,6 +1217,81 @@ class MasterAvwapPanel(QWidget):
         self.status_label.setText(message)
         self.statusChanged.emit(message)
 
+    def _record_verdict_annotation(
+        self,
+        row: SetupRow,
+        *,
+        kind: str,
+        reason_code: str = "",
+        note: str = "",
+    ) -> None:
+        """One annotation row for a star or an X, then the note box - P10 A1/A2.
+
+        The ROW GOES FIRST and the dialog second. Trader: *"sometimes I may not
+        want to write a note but the fact I clicked like should be processed by
+        the bot eventually."* If the note box came first, Escape would mean the
+        click never happened, and that is precisely the case they described.
+
+        The box only opens when NO quick button was used - a coded dislike has
+        already said why in the vocabulary the scoreboard counts, and asking
+        again would be asking twice for one answer.
+
+        Every failure here is swallowed. This panel's job is the Focus placement
+        and the review event, both already done by the time this runs; an
+        evidence store never costs the event it records.
+        """
+        try:
+            side = "LONG" if str(row.side).upper().startswith("LONG") else "SHORT"
+            context = verdicts.scan_context_from_row(row)
+            if kind == "like":
+                written = verdicts.record_like(
+                    symbol=row.symbol,
+                    side=side,
+                    surface=verdicts.SURFACE_MASTER_AVWAP,
+                    timeframe="D1",
+                    scan_context=context,
+                )
+            else:
+                written = verdicts.record_dislike(
+                    symbol=row.symbol,
+                    side=side,
+                    surface=verdicts.SURFACE_MASTER_AVWAP,
+                    timeframe="D1",
+                    reason_code=reason_code,
+                    note=note,
+                    scan_context=context,
+                )
+        except Exception:
+            return
+        if written is None or reason_code:
+            return
+        self._prompt_for_verdict_note(written)
+
+    def _prompt_for_verdict_note(self, written: dict) -> None:
+        """The optional note, as a SECOND row - never an edit of the first.
+
+        Trader: *"I SHOULD get a little pop-up that lets me write a note if I am
+        not using the quick buttons. same if I like a stock."*
+
+        Empty or cancelled writes nothing, and the click already counted.
+        """
+        symbol = str(written.get("symbol") or "")
+        verb = "Liked" if written.get("event_type") == "like_claim" else "Disliked"
+        note, accepted = QInputDialog.getMultiLineText(
+            self,
+            f"{verb} {symbol}",
+            (
+                f"{verb} {symbol}. Add a note if you want one - it is optional, "
+                "and the click is already saved either way."
+            ),
+        )
+        if not accepted:
+            return
+        try:
+            verdicts.record_note_on(written, note)
+        except Exception:
+            pass
+
     def _add_row_to_focus(self, proxy_index, category: str = "swing") -> None:
         if self.focus_service is None or not proxy_index.isValid():
             return
@@ -1225,6 +1307,15 @@ class MasterAvwapPanel(QWidget):
                 row,
                 {"on": True, "origin": "setups", "category": category, "added": bool(added)},
             )
+            # P10 A1: the star is a LIKE, and the same like as one made on the
+            # chart-review rail. Until now it wrote a review event and no graded
+            # row at all, so the most considered judgement the trader makes all
+            # day - a star on a D1 setup - left no forward record while the same
+            # opinion two panels away did. Written AFTER the Focus add and the
+            # review event, both of which must not be blocked by it, and its own
+            # failure is swallowed inside `_record_verdict_annotation`: an
+            # evidence store never costs the event it records.
+            self._record_verdict_annotation(row, kind="like")
             message = (
                 f"Liked {row.symbol}: added to {bucket} Focus {side}s - its alerts now flag gold in the Alert Center."
                 if added

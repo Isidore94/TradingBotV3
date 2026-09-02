@@ -67,7 +67,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui import theme
-from ui.annotations import setup_claims
+from ui.annotations import setup_claims, verdicts
 from ui.annotations.setup_claims import (  # noqa: F401  (re-exported for hosts/tests)
     EXTRA_CLAIM_IDS,
     MAIN_CLAIM_GROUP,
@@ -82,7 +82,6 @@ from ui.annotations.store import (
     LIKE_MODE_CLAIMED,
     LIKE_MODE_QUICK,
     record_annotation,
-    record_annotation_with_bars,
     record_pass_annotation,
 )
 from ui.annotations.vocabulary import (
@@ -153,6 +152,12 @@ class CaptureRail(QFrame):
         self._timeframe = "D1"
         self._ref_level_id = ""
         self._ref_level_family = ""
+        # P10: which screen this rail's verbs report, and the scanner row behind
+        # the chart when the host has one. `rail` is the honest default - a
+        # verdict typed on the rail itself came from the rail - and a host that
+        # owns a different screen overrides it through `set_scan_context`.
+        self._surface = verdicts.SURFACE_RAIL
+        self._scan_context: dict[str, Any] = {}
         # True only for the duration of a "veto but day-trade it" commit.
         # `captured` fires synchronously from inside commit_veto(), i.e.
         # BEFORE commit_veto_day_trade() can emit its own request, so a host
@@ -688,6 +693,22 @@ class CaptureRail(QFrame):
     # ------------------------------------------------------------------
     # captures
     # ------------------------------------------------------------------
+    def set_scan_context(self, context: Any = None, *, surface: str = "") -> None:
+        """The scanner row behind the chart, and which screen this rail serves.
+
+        P10 B1. The host sets it when it charts something it HAS a row for; a
+        bare symbol lookup sets nothing and the fields are simply absent, which
+        is the honest answer rather than a row of empty strings.
+
+        `surface` is an override for a host that is not the capture rail itself -
+        the chart's own verb row reports `chart_review`, because that is the
+        screen the trader clicked on, and a rollup asking "is the trader a better
+        judge from the setups table or the chart?" needs that to be true.
+        """
+        self._scan_context = dict(context or {})
+        if surface:
+            self._surface = verdicts._validated_surface(surface)
+
     def _common_fields(self) -> dict[str, Any]:
         fields: dict[str, Any] = {
             "symbol": self._symbol,
@@ -928,13 +949,19 @@ class CaptureRail(QFrame):
             self._set_status("No symbol in focus.", ok=False)
             return None
         common = {**self._common_fields(), "side": self._side, **fields}
+        common.setdefault("surface", self._surface)
+        common.setdefault("scan_context", dict(self._scan_context or {}))
         try:
-            if str(self._timeframe or "").upper() == "M5":
-                row = record_annotation_with_bars(
-                    EVENT_LIKE_CLAIM, m5_bars=self.cached_m5_bars(), **common
-                )
-            else:
-                row = record_annotation(EVENT_LIKE_CLAIM, **common)
+            # P10 A1: through the ONE writer, so the rail's like and a star in
+            # Master AVWAP are the same row shape and grade in one bucket. The
+            # M5 branch is unchanged - `record_like` passes the bars along to the
+            # same `record_annotation_with_bars` this used directly.
+            row = verdicts.record_like(
+                m5_bars=self.cached_m5_bars()
+                if str(self._timeframe or "").upper() == "M5"
+                else (),
+                **common,
+            )
         except AnnotationError as exc:
             self._set_status(str(exc), ok=False)
             return None
