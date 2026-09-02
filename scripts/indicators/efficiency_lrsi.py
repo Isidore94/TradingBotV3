@@ -45,7 +45,45 @@ FEATURE_VERSION = "efficiency_lrsi_tc2000_v1"
 
 #: The crossing levels the trader reads. Up through 20 is the strongest tell
 #: (a name coming out of pure churn); up through 50 is the ordinary one.
+#: **Live M5 levels - do not change these.** The M5 signal engines are
+#: calibrated to them.
 CROSS_LEVELS: tuple[float, ...] = (20.0, 50.0)
+
+#: Levels the SHADOW research lane reads (Phase 0.12 B3), additive to the live
+#: pair. 80 is the "this move is nearly perfectly efficient" line; the research
+#: grid uses cross-up through 20/50 for its long legs and cross-DOWN through
+#: 50/80 for its short legs.
+#:
+#: **Why the short legs are unmirrored, and what that costs.** The formula
+#: clamps the numerator at zero, so this series is not symmetric: a perfectly
+#: efficient DOWN move and a motionless one both read 0. There are therefore
+#: two genuinely different short features available, and they are not
+#: interchangeable:
+#:
+#: * the MIRRORED-close idiom the live M5 engines use - negate the closes and
+#:   read cross-UP - which measures how efficient the DOWN move is; and
+#: * this series read with cross-DOWN, which measures the UP move's efficiency
+#:   collapsing.
+#:
+#: The research grid takes the second. Three reasons, in order of weight:
+#:
+#: 1. **The four legs have to be comparable.** A grid whose long legs read one
+#:    series and whose short legs read another is not asking one question about
+#:    one line; it is two studies sharing a table, and "does this line pay on
+#:    the short side?" stops being answerable from it.
+#: 2. **The mirrored idiom is already the live engines'.** Re-running it here
+#:    would produce a shadow result that reads like evidence about a champion
+#:    detector when it is not, which is exactly the confusion plan.md sec 7
+#:    exists to prevent.
+#: 3. **It matches how the trader reads the oscillator** - "the efficiency is
+#:    going" - in the same units as the long legs, on the same series.
+#:
+#: The cost is real and stated: this measures EXHAUSTION, not down-momentum,
+#: and it fires earlier. `tests/fixtures/efficiency_lrsi_research_v1.json`
+#: pins the gap on one series - the unmirrored down-cross at bar 27, the
+#: mirrored up-cross at bar 29. If the study wants down-momentum later, that
+#: is a SECOND registered feature, never a reinterpretation of this one.
+RESEARCH_CROSS_LEVELS: tuple[float, ...] = (20.0, 50.0, 80.0)
 
 
 @dataclass(frozen=True)

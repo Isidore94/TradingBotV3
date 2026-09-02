@@ -14,7 +14,12 @@ Semantics chosen for wake-up safety:
   always news. Re-arm from the panel (or Re-arm All for the next night).
 - Entries are trader-owned. Nothing here ever removes an entry - the engine
   only flips armed flags and records trigger history (plan.md sec 5 spirit:
-  user-entered names are never auto-removed).
+  user-entered names are never auto-removed). That is still true of the
+  trading-day EXPIRY added 2026-09-01 (Phase 0.12 A2): an alert that has sat
+  armed for 10 trading days without firing is DISARMED, never deleted. It
+  leaves the Armed surface - which is what the trader asked for - and keeps
+  its levels, its note and its trigger history exactly where they were, so
+  re-arming it is one click and nothing has to be retyped.
 - Everything below is pure (store I/O aside) so the trigger rules are tested
   without Qt or network.
 """
@@ -25,7 +30,7 @@ import csv
 import json
 import logging
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
@@ -53,10 +58,20 @@ def normalize_price_alert(raw: Mapping[str, Any]) -> dict[str, Any] | None:
 
     above = _level(raw.get("above"))
     below = _level(raw.get("below"))
+    # A2: when the arm started, so the trading-day expiry has something to
+    # measure. A row written before this field existed gets TODAY, never an
+    # older guess - guessing backwards would disarm the trader's alerts on
+    # the first load after the upgrade.
+    armed_at = str(raw.get("armed_at") or "").strip()[:10]
+    try:
+        date.fromisoformat(armed_at)
+    except ValueError:
+        armed_at = date.today().isoformat()
     return {
         "symbol": symbol,
         "above": above,
         "below": below,
+        "armed_at": armed_at,
         # A side with no level is never armed, whatever the flag says.
         "armed_above": bool(raw.get("armed_above", True)) and above is not None,
         "armed_below": bool(raw.get("armed_below", True)) and below is not None,
@@ -110,6 +125,65 @@ def armed_symbols(entries: Iterable[Mapping[str, Any]]) -> list[str]:
         }
         - {""}
     )
+
+
+def mark_armed_now(entry: dict[str, Any], *, today: date | None = None) -> dict[str, Any]:
+    """Restart one entry's trading-day clock. Mutates and returns the entry.
+
+    Called wherever a side is armed - a new alert, a changed level, "Re-arm
+    selected". Without it a re-armed alert would still carry the stamp that
+    expired it and would be disarmed again on the next poll.
+    """
+    entry["armed_at"] = (today or date.today()).isoformat()
+    return entry
+
+
+def expire_stale_alerts(
+    entries: Iterable[Mapping[str, Any]],
+    *,
+    today: date | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Disarm alerts that have sat armed past their trading-day window.
+
+    Returns ``(entries, expiry rows)``. Both sides of one entry share its
+    ``armed_at``, so an entry expires whole. An entry with nothing armed is
+    already off the Armed surface and writes no row - expiring it again every
+    poll would be an unbounded stream of rows about nothing.
+
+    Uncertainty never deletes: an ``armed_at`` the calendar cannot reason
+    about leaves the entry armed (see `armed_alert_expiry.is_expired`).
+    """
+    import armed_alert_expiry
+
+    reference = today or date.today()
+    updated: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    for raw in entries:
+        entry = normalize_price_alert(raw)
+        if entry is None:
+            continue
+        if not (entry["armed_above"] or entry["armed_below"]):
+            updated.append(entry)
+            continue
+        verdict = armed_alert_expiry.is_expired(
+            entry.get("armed_at"), armed_alert_expiry.PRICE_ALERT_KIND, today=reference
+        )
+        if verdict is not True:
+            updated.append(entry)
+            continue
+        entry["armed_above"] = False
+        entry["armed_below"] = False
+        updated.append(entry)
+        rows.append(
+            armed_alert_expiry.expiry_row(
+                store="price_alerts",
+                symbol=entry["symbol"],
+                kind=armed_alert_expiry.PRICE_ALERT_KIND,
+                armed_at=entry.get("armed_at"),
+                expired_at=reference,
+            )
+        )
+    return updated, rows
 
 
 def evaluate_price_alerts(

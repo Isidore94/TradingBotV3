@@ -38,7 +38,13 @@ def _load() -> tuple[list[dict], dict[str, dict], dict[str, dict[str, str]], dic
     store = ResearchStore.open()
     if store is None:
         raise RuntimeError("research warehouse is disabled")
-    recipes = [recipe.recipe_id for recipe in outcomes.M5_CLOSE_RECIPES]
+    # The M5-close grid plus the Phase 0.12 B3 higher-timeframe LRSI study.
+    # Reading a recipe id here only widens a read of rows the warehouse has
+    # already published; it authorizes nothing. Every HTF row is diagnostic.
+    recipes = [
+        recipe.recipe_id
+        for recipe in tuple(outcomes.M5_CLOSE_RECIPES) + tuple(outcomes.HTF_LRSI_RECIPES)
+    ]
     latest = list(outcomes.latest_outcomes(store, recipe_ids=recipes).values())
     years = {(_now().year - 1), _now().year}
     occurrence_map: dict[str, dict] = {}

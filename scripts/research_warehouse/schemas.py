@@ -85,7 +85,9 @@ GAP_RESOLUTIONS = ("BACKFILLED", "PERMANENT", "POLICY")
 LEVEL_FAMILIES = ("SESSION", "HORIZONTAL_STORE", "MA_LEVEL", "TRENDLINE", "WATCH_JSON")
 ANCHOR_TYPES = ("EARNINGS_CURRENT", "EARNINGS_PREVIOUS")  # slice scope, LD-09
 VWAP_ALGORITHMS = ("STANDARD", "DYNAMIC", "EOD")
-DERIVED_TIMEFRAMES = ("M15", "M30", "H1", "H4", "W1")
+# H2 joined 2026-09-01 (BD-78): the locked plan cut it for having no consumer
+# and the Phase 0.12 B3 LRSI study is one. Additive - nothing was renamed.
+DERIVED_TIMEFRAMES = ("M15", "M30", "H1", "H2", "H4", "W1")
 
 # M1 symbol-hash buckets (sec 7.1 partition spec). No M1 dataset exists in the
 # slice; the constant lives here so the bucket count is fixed once.

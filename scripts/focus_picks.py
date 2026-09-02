@@ -30,7 +30,7 @@ import logging
 import os
 from datetime import date, datetime
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 
 from project_paths import (
     FOCUS_LONGS_FILE,
@@ -137,6 +137,95 @@ def _auto_pick_state_path_for(focus_longs_path: Path) -> Path:
     return Path(focus_longs_path).with_name("focus_auto_picks.json")
 
 
+# ------------------------------------------------------------- the fade clock
+# Phase 0.12 A3 (trader, 2026-09-01). A Focus list only means "the names I am
+# watching" while something takes names off it. A pick that has fired no alert
+# and printed no pullback event for ten trading days is not being watched; it
+# is furniture, and it is what makes the list too long to read.
+#
+# So every entry carries a CLOCK. It starts at add time and is reset by
+# activity - a fired Focus D1 flag, an armed-watch hit, or the trader's own
+# "keep in Focus" on the review chart. Ten trading days without a reset and the
+# pick moves to a FADED list rather than vanishing: the trader can restore it
+# (fresh clock) or discard it, and either way an append-only row says what
+# happened.
+#
+# Three deliberate choices:
+#
+# * **The clock is SESSIONS** (`market_calendar.trading_days_between`). A
+#   long weekend is not two days of silence.
+# * **Uncertainty never fades.** A stamp the calendar cannot reason about
+#   keeps the pick. Every fade removes something the trader may have typed, so
+#   this fails closed in the only direction that is safe.
+# * **The removal is the store's own.** It goes through `_uninject_from_shared`
+#   like every other removal, so a name the trader maintains in the broad
+#   watchlist independently is untouched (plan.md sec 5).
+#
+# Fading a name the TRADER typed is normally forbidden. It is allowed here by
+# an explicit trader authorization on 2026-09-01, and only here: no other
+# automatic path gains the right, and `remove_if_auto_adopted` still refuses
+# anything without a marker.
+FADE_TRADING_DAYS = 10
+
+#: Schema by NAME, never by number.
+SCHEMA_FOCUS_FADE_EVENT = "focus_fade_event_v1"
+
+EVENT_FADED = "focus_pick_faded"
+EVENT_RESTORED = "focus_pick_restored"
+EVENT_DISCARDED = "focus_pick_discarded"
+
+
+def _atomic_json_write(path: Path, payload: object) -> None:
+    """Best-effort atomic JSON write. A lost write costs a sidecar, never a pick."""
+    try:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staged = target.with_name(target.name + ".tmp")
+        staged.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(staged, target)
+    except OSError:
+        pass
+
+
+def _pick_clock_path_for(focus_longs_path: Path) -> Path:
+    return Path(focus_longs_path).with_name("focus_pick_clocks.json")
+
+
+def _faded_path_for(focus_longs_path: Path) -> Path:
+    return Path(focus_longs_path).with_name("focus_faded.json")
+
+
+def _fade_events_path_for(focus_longs_path: Path) -> Path:
+    return Path(focus_longs_path).with_name("focus_fade_events.jsonl")
+
+
+def _as_date(value: object) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()[:10]
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _sessions_since(start: date, today: date) -> int | None:
+    """Trading days between two dates, or None when the calendar refuses."""
+    try:
+        from market_calendar import trading_days_between
+
+        return trading_days_between(start, today)
+    except Exception as exc:  # SessionCalendarError, or the module unavailable
+        logging.debug("Focus fade could not date %s: %s", start, exc)
+        return None
+
+
 def _read_m5_market_date(path: Path) -> str | None:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -202,6 +291,13 @@ class FocusPickStore:
         self._m5_state_path = _m5_state_path_for(focus_longs_path)
         self._auto_pick_path = _auto_pick_state_path_for(focus_longs_path)
         self._auto_picks: dict[str, dict] = {}
+        # A3: the fade clock and the faded list. This store is their single
+        # writer - the panel asks, it decides and writes.
+        self._pick_clock_path = _pick_clock_path_for(focus_longs_path)
+        self._faded_path = _faded_path_for(focus_longs_path)
+        self._fade_events_path = _fade_events_path_for(focus_longs_path)
+        self._pick_clocks: dict[str, dict] = {}
+        self._faded: list[dict] = []
         self._lists: dict[str, dict[str, list[str]]] = {
             category: {"long": [], "short": []} for category in FOCUS_CATEGORIES
         }
@@ -216,11 +312,14 @@ class FocusPickStore:
                 self._lists[category][side] = read_watchlist_symbols(path)
         self._membership = self._load_membership()
         self._auto_picks = self._load_auto_picks()
+        self._pick_clocks = self._load_pick_clocks()
+        self._faded = self._load_faded()
         # m5 is a day-trade list: a new calendar day starts it empty. This
         # runs on every store construction (GUI start each morning), so the
         # clear also physically un-injects yesterday's picks from
         # longs/shorts.txt before the first scan reads them.
         self.expire_m5_if_new_day()
+        self._sync_pick_clocks()
 
     def expire_m5_if_new_day(self, today: date | None = None) -> int:
         """Reset the m5 (day-trade) lists when the calendar day has rolled.
@@ -248,6 +347,7 @@ class FocusPickStore:
                 owner = self._membership_owner(sym, side, "m5")
                 joined_at = self._episode_started_at(sym, side, "m5")
                 self._uninject_from_shared(sym, side, "m5", defer_membership_save=True)
+                self._forget_pick_clock(sym, side, "m5", defer_save=True)
                 self._emit_membership(
                     _expired_event(
                         symbol=sym,
@@ -264,6 +364,7 @@ class FocusPickStore:
             self._write_focus(side, "m5")
         if removed:
             self._save_membership()
+            self._save_pick_clocks()
         # The markers describe picks that no longer exist. Keeping them would
         # let yesterday's provenance authorize removing a name the trader types
         # this morning, which is the one thing the sidecar exists to prevent.
@@ -335,7 +436,14 @@ class FocusPickStore:
         return None
 
     # ----------------------------------------------------------------- writes
-    def add(self, symbol: object, side: object, category: object = "m5") -> bool:
+    def add(
+        self,
+        symbol: object,
+        side: object,
+        category: object = "m5",
+        *,
+        today: date | None = None,
+    ) -> bool:
         """Add one symbol to a focus side (+ inject into the matching shared watchlist).
 
         Returns True if the symbol was newly added, False if it was already there.
@@ -346,6 +454,7 @@ class FocusPickStore:
         if not sym or sym in self._lists[category][side]:
             return False
         self._lists[category][side].append(sym)
+        self._start_pick_clock(sym, side, category, today=today, reason="added")
         self._write_focus(side, category)
         self._inject_into_shared(sym, side, category)
         self._emit_membership(
@@ -365,7 +474,14 @@ class FocusPickStore:
         self._notify()
         return True
 
-    def add_many(self, symbols: object, side: object, category: object = "m5") -> list[str]:
+    def add_many(
+        self,
+        symbols: object,
+        side: object,
+        category: object = "m5",
+        *,
+        today: date | None = None,
+    ) -> list[str]:
         """Add multiple symbols (e.g. a paste). Returns the newly added symbols."""
         side = normalize_focus_side(side)
         category = normalize_focus_category(category)
@@ -376,11 +492,15 @@ class FocusPickStore:
         for sym in incoming:
             if sym and sym not in self._lists[category][side]:
                 self._lists[category][side].append(sym)
+                self._start_pick_clock(
+                    sym, side, category, today=today, reason="added", defer_save=True
+                )
                 self._inject_into_shared(sym, side, category, defer_membership_save=True)
                 added.append(sym)
         if added:
             self._write_focus(side, category)
             self._save_membership()
+            self._save_pick_clocks()
             stamp = datetime.now().astimezone().isoformat(timespec="seconds")
             for sym in added:
                 self._emit_membership(
@@ -412,6 +532,7 @@ class FocusPickStore:
         self._write_focus(side, category)
         self._uninject_from_shared(sym, side, category)
         self._forget_auto_marker(sym, side, category)
+        self._forget_pick_clock(sym, side, category)
         left_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self._emit_membership(
             _left_event(
@@ -516,10 +637,12 @@ class FocusPickStore:
                 self._write_focus(side, category)
                 self._uninject_from_shared(sym, side, category, defer_membership_save=True)
                 self._forget_auto_marker(sym, side, category, defer_save=True)
+                self._forget_pick_clock(sym, side, category, defer_save=True)
                 removed += 1
         if removed:
             self._save_membership()
             self._save_auto_picks()
+            self._save_pick_clocks()
             self._notify()
         return removed
 
@@ -533,12 +656,341 @@ class FocusPickStore:
         for sym in symbols:
             self._uninject_from_shared(sym, side, category, defer_membership_save=True)
             self._forget_auto_marker(sym, side, category, defer_save=True)
+            self._forget_pick_clock(sym, side, category, defer_save=True)
         self._save_membership()
         self._save_auto_picks()
+        self._save_pick_clocks()
         self._lists[category][side] = []
         self._write_focus(side, category)
         self._notify()
         return len(symbols)
+
+    # ------------------------------------------------------ the fade clock A3
+    def pick_clock(self, symbol: object, side: object, category: object = "m5") -> date | None:
+        """The date this pick's ten sessions are counted from, or None.
+
+        It is the later of "when it was added" and "when it last said
+        something" - the same field, moved forward by activity.
+        """
+        sym = normalize_symbol(symbol)
+        if not sym:
+            return None
+        try:
+            key = _membership_key(
+                sym, normalize_focus_side(side), normalize_focus_category(category)
+            )
+        except ValueError:
+            return None
+        record = self._pick_clocks.get(key)
+        return _as_date(record.get("clock_from")) if isinstance(record, dict) else None
+
+    def note_focus_activity(
+        self,
+        symbol: object,
+        side: object | None = None,
+        category: object | None = None,
+        *,
+        reason: str = "",
+        today: date | None = None,
+    ) -> int:
+        """This pick said something. Restart its clock. Returns entries moved.
+
+        Side and category are optional because the callers that have news -
+        a fired Focus D1 flag, an armed-watch hit - know the SYMBOL and often
+        nothing more. With neither given, every entry for that symbol resets,
+        which is the honest reading: the name spoke.
+        """
+        sym = normalize_symbol(symbol)
+        if not sym:
+            return 0
+        sides = ("long", "short") if side is None else (normalize_focus_side(side),)
+        categories = (
+            FOCUS_CATEGORIES if category is None else (normalize_focus_category(category),)
+        )
+        stamp = (today or date.today()).isoformat()
+        reason_text = str(reason or "activity")
+        moved = 0
+        for cat in categories:
+            for side_key in sides:
+                if sym not in self._lists[cat][side_key]:
+                    continue
+                record = self._pick_clocks.setdefault(
+                    _membership_key(sym, side_key, cat),
+                    {"symbol": sym, "side": side_key, "category": cat},
+                )
+                if record.get("clock_from") == stamp and record.get("reason") == reason_text:
+                    continue
+                record["clock_from"] = stamp
+                record["reason"] = reason_text
+                moved += 1
+        if moved:
+            self._save_pick_clocks()
+        return moved
+
+    def fade_stale_picks(
+        self,
+        *,
+        today: date | None = None,
+        trading_days: int = FADE_TRADING_DAYS,
+    ) -> list[dict]:
+        """Move every pick that has been silent too long to the faded list.
+
+        Returns one row per faded entry (already written to the evidence
+        stream). A pick whose clock the calendar cannot read is KEPT - see the
+        module comment on the fade clock.
+        """
+        reference = today or date.today()
+        faded: list[dict] = []
+        for category in FOCUS_CATEGORIES:
+            for side in ("long", "short"):
+                for sym in list(self._lists[category][side]):
+                    key = _membership_key(sym, side, category)
+                    record = self._pick_clocks.get(key) or {}
+                    start = _as_date(record.get("clock_from"))
+                    if start is None:
+                        # No readable clock: stamp it today rather than fade a
+                        # pick whose age nobody knows.
+                        self._start_pick_clock(
+                            sym,
+                            side,
+                            category,
+                            today=reference,
+                            reason="repaired",
+                            defer_save=True,
+                        )
+                        continue
+                    elapsed = _sessions_since(start, reference)
+                    if elapsed is None or elapsed < int(trading_days):
+                        continue
+                    row = {
+                        "schema": SCHEMA_FOCUS_FADE_EVENT,
+                        "event": EVENT_FADED,
+                        "symbol": sym,
+                        "side": side,
+                        "category": category,
+                        "owner": self._membership_owner(sym, side, category),
+                        "clock_from": start.isoformat(),
+                        "clock_reason": str(record.get("reason") or "added"),
+                        "faded_on": reference.isoformat(),
+                        "trading_days": int(trading_days),
+                        "sessions_silent": int(elapsed),
+                    }
+                    self._fade_one(sym, side, category, row)
+                    faded.append(row)
+        self._save_pick_clocks()
+        if faded:
+            self._save_faded()
+            self._notify()
+        return faded
+
+    def faded_picks(self) -> list[dict]:
+        """The faded list, newest last. Display and the faded review read this."""
+        return [dict(row) for row in self._faded]
+
+    def restore_faded(
+        self,
+        symbol: object,
+        side: object,
+        category: object = "m5",
+        *,
+        today: date | None = None,
+    ) -> bool:
+        """Put a faded pick back in Focus with a FRESH clock.
+
+        A restore is not a fade-proof: it buys another full window, no more.
+        """
+        row = self._take_faded(symbol, side, category)
+        if row is None:
+            return False
+        self.add(row["symbol"], row["side"], row["category"], today=today)
+        self._append_fade_event(
+            {
+                **row,
+                "event": EVENT_RESTORED,
+                "restored_on": (today or date.today()).isoformat(),
+            }
+        )
+        self._save_faded()
+        self._notify()
+        return True
+
+    def discard_faded(self, symbol: object, side: object, category: object = "m5") -> bool:
+        """Clear one entry off the faded list. The evidence row stays."""
+        row = self._take_faded(symbol, side, category)
+        if row is None:
+            return False
+        self._append_fade_event(
+            {**row, "event": EVENT_DISCARDED, "discarded_on": date.today().isoformat()}
+        )
+        self._save_faded()
+        self._notify()
+        return True
+
+    # -- fade internals ---------------------------------------------------
+    def _fade_one(self, sym: str, side: str, category: str, row: dict) -> None:
+        owner = row.get("owner", "")
+        joined_at = self._episode_started_at(sym, side, category)
+        self._lists[category][side] = [
+            item for item in self._lists[category][side] if item != sym
+        ]
+        self._write_focus(side, category)
+        self._uninject_from_shared(sym, side, category)
+        self._forget_auto_marker(sym, side, category)
+        self._forget_pick_clock(sym, side, category, defer_save=True)
+        left_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        self._emit_membership(
+            _left_event(
+                symbol=sym,
+                side=side,
+                category=category,
+                owner=owner,
+                episode="",
+                joined_at=joined_at,
+                left_at=left_at,
+                reason="focus_fade",
+                sessions_on_list=_sessions_between(joined_at, left_at),
+            )
+        )
+        self._faded = [
+            item
+            for item in self._faded
+            if not (
+                item.get("symbol") == sym
+                and item.get("side") == side
+                and item.get("category") == category
+            )
+        ]
+        self._faded.append(dict(row))
+        self._append_fade_event(row)
+
+    def _take_faded(self, symbol: object, side: object, category: object) -> dict | None:
+        sym = normalize_symbol(symbol)
+        if not sym:
+            return None
+        try:
+            side_key = normalize_focus_side(side)
+            cat = normalize_focus_category(category)
+        except ValueError:
+            return None
+        kept: list[dict] = []
+        found: dict | None = None
+        for item in self._faded:
+            if (
+                found is None
+                and item.get("symbol") == sym
+                and item.get("side") == side_key
+                and item.get("category") == cat
+            ):
+                found = dict(item)
+                continue
+            kept.append(item)
+        if found is None:
+            return None
+        self._faded = kept
+        return found
+
+    def _start_pick_clock(
+        self,
+        sym: str,
+        side: str,
+        category: str,
+        *,
+        today: date | None = None,
+        reason: str = "added",
+        defer_save: bool = False,
+    ) -> None:
+        self._pick_clocks[_membership_key(sym, side, category)] = {
+            "symbol": sym,
+            "side": side,
+            "category": category,
+            "clock_from": (today or date.today()).isoformat(),
+            "reason": str(reason or "added"),
+        }
+        if not defer_save:
+            self._save_pick_clocks()
+
+    def _forget_pick_clock(
+        self, sym: str, side: str, category: str, *, defer_save: bool = False
+    ) -> None:
+        if self._pick_clocks.pop(_membership_key(sym, side, category), None) is None:
+            return
+        if not defer_save:
+            self._save_pick_clocks()
+
+    def _sync_pick_clocks(self, today: date | None = None) -> None:
+        """Every current pick has a clock; no clock outlives its pick.
+
+        A pick already on the list when this shipped gets TODAY. Guessing
+        backwards would fade the trader's whole list on the first slow tick,
+        which is exactly the failure the "never guess older" rule exists for.
+        """
+        wanted: set[str] = set()
+        changed = False
+        for category in FOCUS_CATEGORIES:
+            for side in ("long", "short"):
+                for sym in self._lists[category][side]:
+                    key = _membership_key(sym, side, category)
+                    wanted.add(key)
+                    if key not in self._pick_clocks:
+                        self._start_pick_clock(
+                            sym,
+                            side,
+                            category,
+                            today=today,
+                            reason="present_at_upgrade",
+                            defer_save=True,
+                        )
+                        changed = True
+        for key in list(self._pick_clocks):
+            if key not in wanted:
+                self._pick_clocks.pop(key, None)
+                changed = True
+        if changed:
+            self._save_pick_clocks()
+
+    def _load_pick_clocks(self) -> dict[str, dict]:
+        try:
+            payload = json.loads(self._pick_clock_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        picks = payload.get("picks") if isinstance(payload, dict) else None
+        if not isinstance(picks, dict):
+            return {}
+        return {
+            str(key): dict(value) for key, value in picks.items() if isinstance(value, dict)
+        }
+
+    def _save_pick_clocks(self) -> None:
+        _atomic_json_write(self._pick_clock_path, {"picks": self._pick_clocks})
+
+    def _load_faded(self) -> list[dict]:
+        try:
+            payload = json.loads(self._faded_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        rows = payload.get("picks") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return []
+        return [dict(row) for row in rows if isinstance(row, dict) and row.get("symbol")]
+
+    def _save_faded(self) -> None:
+        _atomic_json_write(self._faded_path, {"picks": self._faded})
+
+    def _append_fade_event(self, row: Mapping[str, object]) -> None:
+        """One append-only row. Never blocks and never raises into the fade.
+
+        Same rule as every other evidence store here: a failed append costs the
+        record, never the thing it records.
+        """
+        payload = dict(row)
+        payload.setdefault("schema", SCHEMA_FOCUS_FADE_EVENT)
+        payload["event_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        try:
+            self._fade_events_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._fade_events_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, sort_keys=True) + "\n")
+        except OSError:
+            logging.info("Focus fade event not written for %s", payload.get("symbol"))
 
     # -------------------------------------------------------------- observers
     def add_listener(self, callback: Callable[[], None]) -> None:

@@ -3,8 +3,8 @@
 Two jobs live here, both EOD build-job work:
 
 * publish ``trading_session`` rows from the versioned exchange calendar;
-* derive ``bar_derived`` - M15/M30/H1 from canonical M5, and W1 from canonical
-  D1 - under an explicit ``aggregation_contract_id``.
+* derive ``bar_derived`` - M15/M30/H1/H2/H4 from canonical M5, and W1 from
+  canonical D1 - under an explicit ``aggregation_contract_id``.
 
 The contract is the point. A derived bar is only meaningful next to the rule
 that produced it, so every row records the contract, how many constituents were
@@ -50,7 +50,11 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
 QUALITY_COMPLETE = "COMPLETE"
 QUALITY_PARTIAL = "PARTIAL"
 
-TIMEFRAME_MINUTES = {"M15": 15, "M30": 30, "H1": 60, "H4": 240}
+# H2 was CUT by the locked plan (sec 5.2) for having no consumer. Phase 0.12
+# B3 - the higher-timeframe LRSI entry study - is that consumer, which is the
+# cut's own stated reopen condition (BD-78). It is additive: no existing
+# timeframe, contract id or partition changes.
+TIMEFRAME_MINUTES = {"M15": 15, "M30": 30, "H1": 60, "H2": 120, "H4": 240}
 #: H4 activates post-slice with the H4 feature series (sec 19.4).
 SLICE_TIMEFRAMES = ("M15", "M30", "H1")
 

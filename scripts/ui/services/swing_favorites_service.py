@@ -37,6 +37,11 @@ import swing_favorites
 #: from every other manually added swing name.
 FOCUS_LIKE_ORIGIN = "vetted"
 
+#: The origin a retraction written by the Focus fade carries (A3). It is not
+#: `ORIGIN_TRADER` because the trader did not do it, and a store whose rows all
+#: claimed to be theirs could not answer "did I drop this, or did it time out?"
+ORIGIN_FADE = "focus_fade"
+
 
 def default_trades_provider(session_date: str, days: int) -> list[dict[str, Any]]:
     """Journal trades opened in the bounded window, or [] when unanswerable.
@@ -172,6 +177,45 @@ class SwingFavoritesService(QObject):
         self._record(sym, side_text, swing_favorites.ACTION_REMOVE, session_date)
         self.favoritesChanged.emit()
         return True
+
+    def retract_faded_picks(self, faded: Iterable[Mapping[str, Any]]) -> int:
+        """Append a RETRACTION row for every faded pick this store ever held.
+
+        The Focus entry is already gone - the fade owns that - so this writes
+        evidence only, and never an edit: "added on the 3rd, faded on the 17th"
+        stays two rows in the order they happened, exactly as a hand removal
+        does. A symbol this store never recorded is skipped; the fade covers
+        every Focus pick and only some of them were ever hand-vetted here.
+        """
+        known = {
+            (row.get("symbol"), row.get("side"))
+            for row in swing_favorites.load_rows(self._path)
+            if row.get("action") == swing_favorites.ACTION_ADD
+        }
+        written = 0
+        for row in faded or ():
+            if str(row.get("category") or "") != "swing":
+                continue
+            symbol = swing_favorites.normalize_symbol(row.get("symbol"))
+            side = swing_favorites.normalize_side(row.get("side"))
+            if not symbol or not side or (symbol, side) not in known:
+                continue
+            # TODAY's session, never the session it was added in: the
+            # retraction is a thing that happened now, and an entry is never
+            # backdated.
+            recorded = swing_favorites.record_favorite(
+                symbol=symbol,
+                side=side,
+                action=swing_favorites.ACTION_REMOVE,
+                session_date=self.session_date(),
+                origin=ORIGIN_FADE,
+                path=self._path,
+            )
+            if recorded is not None:
+                written += 1
+        if written:
+            self.favoritesChanged.emit()
+        return written
 
     def _record(self, symbol: str, side: str, action: str, session_date: str) -> None:
         row = swing_favorites.record_favorite(

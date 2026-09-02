@@ -194,6 +194,19 @@ class PriceAlertService(QObject):
                 self._writer_refusal_logged = True
                 logging.info("Price alerts idle on this machine: %s", refusal)
             return
+        # A2 (2026-09-01): an alert that has sat armed for 10 trading days
+        # without firing is disarmed, so the Armed board keeps meaning "what I
+        # am waiting on". It runs HERE - after the writer check, on the timer
+        # this service already owns - so no second component writes the store
+        # and no new timer appears. Nothing is deleted; see `price_alerts`.
+        surviving = self._expire_stale(entries)
+        if surviving is not None:
+            # An empty list is a real answer - every armed level just expired -
+            # so `or` would be wrong here and would poll the old symbol set.
+            symbols = surviving
+        if not symbols:
+            self._last_check_note = "no armed alert levels"
+            return
         self._checking = True
 
         def worker() -> None:
@@ -205,6 +218,32 @@ class PriceAlertService(QObject):
                 self._checking = False
 
         threading.Thread(target=worker, name="price-alerts", daemon=True).start()
+
+    def _expire_stale(self, entries: list[dict[str, Any]]) -> list[str] | None:
+        """Disarm what has run out of sessions. Returns the surviving armed
+        symbols, or ``None`` when nothing changed.
+
+        Never raises into the poll: an expiry pass that fails costs the
+        cleanup, never the alerting behind it.
+        """
+        try:
+            updated, rows = price_alerts.expire_stale_alerts(entries)
+        except Exception:
+            logging.debug("Price alert expiry pass failed", exc_info=True)
+            return None
+        if not rows:
+            return None
+        try:
+            import armed_alert_expiry
+
+            armed_alert_expiry.record_expiries(rows)
+        except Exception:
+            logging.debug("Price alert expiry rows were not written", exc_info=True)
+        price_alerts.save_price_alerts(updated)
+        self.entriesChanged.emit()
+        names = ", ".join(sorted({str(row.get("symbol") or "") for row in rows}))
+        logging.info("Price alerts disarmed after their session window: %s", names)
+        return price_alerts.armed_symbols(updated)
 
     def _check(self, symbols: list[str]) -> None:
         quotes = price_alerts.fetch_last_quotes(symbols, log=logging.info)

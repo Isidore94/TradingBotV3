@@ -43,6 +43,7 @@ class FocusStrengthBoard(QWidget):
 
     symbolActivated = Signal(str, str)
     reviewAllRequested = Signal()  # walk every Focus pick through the chart
+    fadedReviewRequested = Signal()  # walk the faded list through the chart
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -55,21 +56,44 @@ class FocusStrengthBoard(QWidget):
         self.meta_label = QLabel("--:--")
         self.meta_label.setObjectName("MutedLabel")
         # One-click chart walkthrough of every Focus pick (2026-07-31 user
-        # request: review Focus picks from the desk itself).
-        self.review_button = QPushButton("Review ▶")
+        # request: review Focus picks from the desk itself). Since 2026-09-01
+        # it carries its COUNT: "Review" alone said nothing about whether there
+        # was anything to review, so the trader had to click to find out.
+        self.review_button = QPushButton("Focus pick review (0)")
         self.review_button.setToolTip(
             "Queue every Focus pick (Swing + M5) onto the review chart - "
             "walk them one by one with the usual buttons."
         )
         self.review_button.clicked.connect(self.reviewAllRequested)
+        # A4: the faded list gets its own door beside it. A pick that faded is
+        # not gone - it is waiting for a yes or a no.
+        self.faded_button = QPushButton("Faded review (0)")
+        self.faded_button.setToolTip(
+            "Picks that went ten trading days without an alert or a pullback "
+            "event. ★ restores one with a fresh clock; ✕ clears it "
+            "off the list. Nothing was deleted."
+        )
+        self.faded_button.clicked.connect(self.fadedReviewRequested)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(6)
         header.addWidget(self.title_label)
         header.addStretch(1)
-        header.addWidget(self.review_button)
         header.addWidget(self.meta_label)
+
+        # The two review doors STACK under the title rather than sitting on it.
+        # This board's floor is MIN_BOARD_WIDTH (170px scaled) inside an alert
+        # column whose own floor is 360px, and everything left of that column is
+        # chart. Two labelled buttons plus the timestamp do not fit on one line
+        # at that width: Qt would not elide them, it would push the column wider
+        # and take the difference from the charts - the exact cost the Strength
+        # Board section was placed to avoid. Stacked, each reads at 170px.
+        buttons = QVBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(2)
+        buttons.addWidget(self.review_button)
+        buttons.addWidget(self.faded_button)
 
         self.board = QTextBrowser()
         self.board.setOpenLinks(False)
@@ -84,6 +108,7 @@ class FocusStrengthBoard(QWidget):
         layout.setContentsMargins(8, 0, 0, 0)
         layout.setSpacing(4)
         layout.addLayout(header)
+        layout.addLayout(buttons)
         layout.addWidget(self.board, 1)
 
         self.apply_scaled_metrics()
@@ -106,7 +131,23 @@ class FocusStrengthBoard(QWidget):
         self._focus_service = service
         if service is not None:
             service.focusChanged.connect(self._render_coalescer.request)
+            # The faded count moves on a fade, a restore and a discard. All
+            # three also change the active lists, so `focusChanged` already
+            # covers it - but a store that grows a fade-only path later would
+            # otherwise leave the button stale, and both signals fold into the
+            # SAME coalescer, so a change that fires both is still one render.
+            faded_signal = getattr(service, "picksFaded", None)
+            if faded_signal is not None:
+                faded_signal.connect(lambda *_: self._render_coalescer.request())
         self._render()
+
+    def request_refresh(self) -> None:
+        """Ask for a coalesced re-render. The seam every outside signal uses.
+
+        Coalesced at the LISTENER, like every other rebuild in the desk: a
+        burst of Focus mutations is one board, not one per mutation.
+        """
+        self._render_coalescer.request()
 
     def flush_pending_refresh(self) -> None:
         """Run an owed coalesced render now. The seam the tests drive."""
@@ -135,6 +176,34 @@ class FocusStrengthBoard(QWidget):
         board = self.current_board()
         self.meta_label.setText(_meta_text(board))
         self.board.setHtml(_board_html(board))
+        self._render_counts()
+
+    def _render_counts(self) -> None:
+        """The two button counts. List lengths only - no per-symbol work.
+
+        Both are cheap reads of lists the store already holds in memory, which
+        is why this can ride the render rather than needing a pass of its own.
+        """
+        focus_count = 0
+        faded_count = 0
+        if self._focus_service is not None:
+            try:
+                by_category = self._focus_service.all_focus_by_category()
+                seen: set[str] = set()
+                for sides in by_category.values():
+                    for names in sides.values():
+                        seen.update(names)
+                focus_count = len(seen)
+            except Exception:
+                focus_count = 0
+            try:
+                faded_count = len(self._focus_service.faded_picks())
+            except Exception:
+                faded_count = 0
+        self.review_button.setText(f"Focus pick review ({focus_count})")
+        self.review_button.setEnabled(focus_count > 0)
+        self.faded_button.setText(f"Faded review ({faded_count})")
+        self.faded_button.setEnabled(faded_count > 0)
 
     def _on_anchor_clicked(self, url) -> None:
         if url.scheme().lower() != "snapshot":

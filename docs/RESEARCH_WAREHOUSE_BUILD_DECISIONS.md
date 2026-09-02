@@ -2021,3 +2021,101 @@ name at most three next tests. It cannot write live policy.
 **Where.** `cli.py::_run_outcomes`; `store.py::read_rows`;
 `ai_jobs/setup_research.py`; `ai_jobs/runner.py`; AST and behavior guards in
 `tests/test_setup_research_pipeline.py`.
+
+## BD-78 — H2 is reopened, because the reopen condition it was cut on now holds
+
+**Date:** 2026-09-01 (Phase 0.12 B1).
+
+**Decision.** `H2` (120 minutes) joins `aggregate.TIMEFRAME_MINUTES` and
+`schemas.DERIVED_TIMEFRAMES`. The locked plan CUT it (sec 5.2) with a stated
+reason - no consumer - and the Phase 0.12 B3 higher-timeframe LRSI entry study
+is one. Nothing is re-litigated: the cut's own condition is met, and the change
+is purely additive. No existing timeframe, aggregation contract id, partition
+layout or published row changes.
+
+RTH is 6.5 hours, so two-hour buckets do not divide the session. H2 yields
+three full buckets and a 30-minute STUB (15:30-16:00), exactly as H1 yields six
+full hours and a stub, and H4 two buckets one of which is a 150-minute stub.
+The stub machinery already existed and is reused unchanged: the stub keeps its
+true duration and carries `is_stub`.
+
+**The study excludes stubs from its oscillator input.** That is a B3 decision
+rather than an aggregation one - the bar is still published, because a bar the
+warehouse can build is evidence - but an EMA fed a 30-minute bar inside an H2
+series would be measuring a duration that changes with the time of day, which
+is not what "completed bars only" means.
+
+**Reopen/close trigger.** If the B3 study is retired without a successor, H2
+loses its consumer again and becomes a candidate for re-cutting. It is not
+removed automatically: published `bar_derived` rows under `timeframe=H2` are
+evidence and a partition is never deleted to tidy a constant.
+
+**Where.** `research_warehouse/aggregate.py`, `research_warehouse/schemas.py`,
+`tests/test_warehouse_aggregate.py`.
+
+## BD-79 — The HTF LRSI study's short legs are unmirrored, and that is a feature choice
+
+**Date:** 2026-09-01 (Phase 0.12 B2/B3).
+
+**Decision.** The 16-recipe higher-timeframe LRSI grid reads ONE series -
+`indicators/efficiency_lrsi` over the derived bar closes - for every leg. Longs
+take `cross_up` through 50 and 20; shorts take `cross_down` through 50 and 80.
+The mirrored-close idiom the live M5 engines use for their short detectors is
+NOT used here.
+
+**Why this is a decision and not a detail.** The formula clamps its numerator
+at zero, so the series is not symmetric: a perfectly efficient DOWN move and a
+motionless one both read 0. There are therefore two genuinely different short
+features available, and they answer different questions - the mirrored one
+measures how efficient the down move is, the unmirrored down-cross measures the
+UP move's efficiency collapsing. `tests/fixtures/efficiency_lrsi_research_v1.json`
+holds one series where the unmirrored down-cross fires at bar 27 and the
+mirrored up-cross at bar 29, so the gap is a number rather than an argument.
+
+Three reasons for the unmirrored reading, in order of weight:
+
+1. **The four legs have to be comparable.** A grid whose long legs read one
+   series and whose short legs read another is two studies sharing a table,
+   and "does this line pay on the short side?" stops being answerable from it.
+2. **The mirrored idiom is already the live engines'.** Re-running it in a
+   shadow lane would produce a result that reads like evidence about a champion
+   detector when it is not - the exact confusion plan.md sec 7 exists to stop.
+3. **It matches how the trader reads the oscillator** - "the efficiency is
+   going" - in the same units as the long legs.
+
+**The cost, stated.** This measures EXHAUSTION, not down-momentum, and it fires
+earlier. If the study later wants down-momentum, that is a SECOND registered
+feature with its own recipes, never a reinterpretation of these rows.
+
+**Live behaviour is untouched.** `CROSS_LEVELS` stays `(20.0, 50.0)`;
+`RESEARCH_CROSS_LEVELS` is additive and read only by the shadow lane. No
+`m5_signal_engines` behaviour changed.
+
+**Where.** `indicators/efficiency_lrsi.py::RESEARCH_CROSS_LEVELS`;
+`research_warehouse/outcomes.py::HTF_LRSI_RECIPES`,
+`::simulate_htf_lrsi_entry`; `tests/test_warehouse_htf_lrsi.py`;
+`tests/fixtures/efficiency_lrsi_research_v1.json`.
+
+## BD-80 — The HTF LRSI rows are not registered in `outcome_semantics`
+
+**Date:** 2026-09-01 (Phase 0.12 B4).
+
+**Decision.** No family is added to `outcome_semantics.FAMILY_SPECS` for this
+study, including the `lrsi_cross_80` its docstring names as a hypothetical.
+
+**Why.** `outcome_semantics` classifies TRACKER/bounce families - the `family`
+an outcome row carries out of `_make_bounce_event_id` - and decides what may be
+averaged as a trade. The B3 rows are warehouse `outcome_path` rows keyed by
+`recipe_id`; they never acquire a family and never reach `claim_kind`. The
+existing M5-close recipe grid is registered nowhere either, for the same
+reason. Registering `lrsi_cross_80` now would assert a claim kind for a family
+with no producer anywhere in the tree, which is a statement this registry is
+specifically built not to make on a guess.
+
+**Reopen trigger.** If a live M5 engine ever emits an `lrsi_cross_80` family -
+which would require a separate authorization, since the live `CROSS_LEVELS` are
+unchanged - it must be registered in the same commit, or it reads
+`unconfigured` and its rows are excluded from every mean.
+
+**Where.** `outcome_semantics.py` (unchanged, deliberately);
+`tests/test_warehouse_htf_lrsi.py::test_no_recipe_here_can_reach_a_champion`.

@@ -139,3 +139,43 @@ def test_describe_names_why_a_day_is_not_a_session():
     assert "weekend" in describe(date(2026, 8, 8))
     assert "holiday" in describe(date(2026, 11, 26))
     assert "regular NYSE session" in describe(date(2026, 8, 7))
+
+
+# ---------------------------------------------------------------------------
+# trading_days_between: the clock every armed-alert expiry and Focus fade runs
+# on (Phase 0.12). Weekday arithmetic would expire a 5-day watch armed on a
+# Friday before Wednesday, and would count Thanksgiving as a session.
+# ---------------------------------------------------------------------------
+def test_trading_days_between_counts_sessions_after_the_start():
+    import market_calendar
+
+    # Mon 2026-08-03 .. Fri 2026-08-07: four sessions after the start.
+    assert market_calendar.trading_days_between(date(2026, 8, 3), date(2026, 8, 7)) == 4
+
+
+def test_trading_days_between_skips_the_weekend():
+    import market_calendar
+
+    # Fri 2026-08-07 -> Mon 2026-08-10 is ONE session, not three days.
+    assert market_calendar.trading_days_between(date(2026, 8, 7), date(2026, 8, 10)) == 1
+
+
+def test_trading_days_between_skips_a_holiday():
+    import market_calendar
+
+    # Thanksgiving 2026 is Thu 2026-11-26. Wed 25th -> Fri 27th is ONE session.
+    assert market_calendar.trading_days_between(date(2026, 11, 25), date(2026, 11, 27)) == 1
+
+
+def test_trading_days_between_is_zero_on_the_same_day_and_never_negative():
+    import market_calendar
+
+    assert market_calendar.trading_days_between(date(2026, 8, 5), date(2026, 8, 5)) == 0
+    assert market_calendar.trading_days_between(date(2026, 8, 7), date(2026, 8, 5)) == 0
+
+
+def test_trading_days_between_refuses_outside_the_validated_range():
+    import market_calendar
+
+    with pytest.raises(market_calendar.SessionCalendarError):
+        market_calendar.trading_days_between(date(2026, 8, 3), date(2099, 1, 4))

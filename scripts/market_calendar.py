@@ -171,6 +171,42 @@ def previous_session(day: date) -> date:
     )
 
 
+def trading_days_between(start: date, end: date) -> int:
+    """How many trading sessions fall AFTER ``start``, up to and including ``end``.
+
+    The clock every "expire this N trading days from now" rule runs on
+    (Phase 0.12: armed-alert expiry, Focus fade). Weekday arithmetic gets this
+    wrong twice - it counts Thanksgiving as a session, and a five-session watch
+    armed on a Friday would come due on the following Friday rather than the
+    Friday after.
+
+    ``start`` itself is never counted: a watch armed today has zero sessions
+    behind it, whatever time of day it was armed. An ``end`` at or before
+    ``start`` is 0, never a negative - "not yet due" is the only meaningful
+    reading of a clock that has not started.
+
+    Raises :class:`SessionCalendarError` when either endpoint is outside the
+    validated range, so a caller fails CLOSED. That matters here: every caller
+    of this function deletes something when it answers, and uncertainty must
+    never delete.
+    """
+    if isinstance(start, datetime):
+        start = start.date()
+    if isinstance(end, datetime):
+        end = end.date()
+    _check_range(start)
+    _check_range(end)
+    if end <= start:
+        return 0
+    sessions = 0
+    cursor = start + timedelta(days=1)
+    while cursor <= end:
+        if is_session(cursor):
+            sessions += 1
+        cursor += timedelta(days=1)
+    return sessions
+
+
 def session_close(day: date) -> datetime:
     """Regular close of ``day``, as an aware ET datetime."""
     return datetime.combine(day, REGULAR_CLOSE, tzinfo=MARKET_TZ)

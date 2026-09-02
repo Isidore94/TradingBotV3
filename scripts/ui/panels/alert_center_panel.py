@@ -43,7 +43,6 @@ from chart_watch import (
     D1EventWatch,
     D1LevelWatch,
     D1_EVENT_KINDS,
-    D1_EXTENSION_KINDS,
     D1_LEVEL_KINDS,
     D1_PULLBACK_KINDS,
     WATCH_KINDS,
@@ -100,6 +99,7 @@ from ui.models.bounce import (
     BounceAlert,
     CHART_WATCH_TAG,
     FOCUS_D1_EVENT_TAG,
+    FOCUS_FADED_TAG,
     FOCUS_REVIEW_TAG,
     MANUAL_CHART_TAG,
     SYMBOL_RE,
@@ -452,6 +452,11 @@ class AlertCenterPanel(QFrame):
     # {symbol, label, time_text} dict d1_push_event builds. Emitted for every
     # qualifying alert in every mode; Auto Pilot owns the AWAY-only gate.
     d1EventRecorded = Signal(object)
+    #: The faded list changed (a fade, a restore, a discard), so the button
+    #: count can repaint. The active Focus lists change too, so `focusChanged`
+    #: already fires - this exists so a surface that only shows the FADED
+    #: count does not have to listen to every Focus mutation.
+    focusFadedChanged = Signal()
 
     def __init__(
         self,
@@ -884,6 +889,11 @@ class AlertCenterPanel(QFrame):
             self.focus_strength.set_focus_service(self.focus_service)
         self.focus_strength.symbolActivated.connect(self._show_board_symbol_snapshot)
         self.focus_strength.reviewAllRequested.connect(self.review_focus_picks)
+        self.focus_strength.fadedReviewRequested.connect(self.review_faded_picks)
+        # A fade/restore/discard changes a count the board paints. It rides
+        # the board's OWN coalescer (`set_focus_service`), so a burst is one
+        # render - the coalescing lives at the listener.
+        self.focusFadedChanged.connect(self.focus_strength.request_refresh)
 
         # The M5 Strength Board moved in under it (trader, 2026-08-31: "it
         # really should be modified to fit in the 'strength' window in the
@@ -1006,6 +1016,15 @@ class AlertCenterPanel(QFrame):
         # needed. Rides the same 60s cadence as the armed D1 watches.
         self._d1_watch_timer.timeout.connect(self._poll_focus_d1_interest)
         start_staggered(self._d1_watch_timer, 77_000)
+        # A3: the fade check. Deliberately NOT on the 60s tick above - it walks
+        # every Focus entry and asks a calendar, which has no business inside a
+        # per-symbol poll loop. Half-hourly is far finer than a clock measured
+        # in trading DAYS needs; the day roll runs it too, so a desk left open
+        # over a session boundary does not wait for the next tick.
+        self._focus_fade_timer = QTimer(self)
+        self._focus_fade_timer.setInterval(1_800_000)
+        self._focus_fade_timer.timeout.connect(self.run_focus_fade_check)
+        start_staggered(self._focus_fade_timer, 300_000)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.chart_review)
@@ -1736,7 +1755,7 @@ class AlertCenterPanel(QFrame):
           is waiting on.
         """
         return (
-            str(alert.tag or "") == FOCUS_REVIEW_TAG
+            str(alert.tag or "") in (FOCUS_REVIEW_TAG, FOCUS_FADED_TAG)
             or is_chart_watch_alert(alert)
         )
 
@@ -2080,6 +2099,7 @@ class AlertCenterPanel(QFrame):
             AUTO_PICK_TAG,
             MANUAL_CHART_TAG,
             FOCUS_REVIEW_TAG,
+            FOCUS_FADED_TAG,
             FOCUS_D1_EVENT_TAG,
         ):
             return False
@@ -2571,9 +2591,17 @@ class AlertCenterPanel(QFrame):
         if is_auto_pick_alert(alert):
             self._resolve_auto_pick(alert, True)
             return
+        # Faded walkthrough: the primary verb RESTORES the pick, with a fresh
+        # ten-session clock. A restore is not a fade-proof.
+        if alert.tag == FOCUS_FADED_TAG:
+            self._restore_faded_review_alert(alert)
+            return
         # Focus walkthrough: the pick is already in Focus - "keep" just
-        # records the verdict and walks on.
+        # records the verdict and walks on. It also RESETS the fade clock:
+        # the trader looking at the chart and saying "keep" is the strongest
+        # statement of interest the desk ever gets (A3).
         if alert.tag == FOCUS_REVIEW_TAG:
+            self._note_focus_activity(alert.symbol, reason="kept_in_focus")
             self._record_review_event(
                 "focus_review_keep",
                 alert=alert,
@@ -3394,23 +3422,165 @@ class AlertCenterPanel(QFrame):
         else:
             self.statusChanged.emit("Focus review: no Focus picks to show.")
 
+    def _note_focus_activity(self, symbol: str, *, reason: str = "") -> None:
+        """Restart one Focus pick's fade clock. Never raises into a poll."""
+        if self.focus_service is None:
+            return
+        try:
+            self.focus_service.note_focus_activity(symbol, reason=reason)
+        except Exception:
+            logging.debug("Focus fade clock not reset for %s", symbol, exc_info=True)
+
+    def run_focus_fade_check(self) -> list:
+        """Move Focus picks silent past their window to the faded list.
+
+        Runs on the half-hourly timer and on the day roll. The store owns the
+        decision and the writes; this is the caller. A failure here costs the
+        housekeeping, never the picks.
+        """
+        if self.focus_service is None:
+            return []
+        try:
+            faded = self.focus_service.fade_stale_picks()
+        except Exception:
+            logging.debug("Focus fade check failed", exc_info=True)
+            return []
+        if faded:
+            names = ", ".join(sorted({str(row.get("symbol") or "") for row in faded}))
+            self._record_review_event(
+                "focus_picks_faded",
+                detail={"count": len(faded), "symbols": names},
+            )
+            self.statusChanged.emit(
+                f"{len(faded)} quiet Focus pick(s) faded: {names}. "
+                "Open “Faded review” to restore or discard them."
+            )
+            self.focusFadedChanged.emit()
+        return faded
+
+    def _restore_faded_review_alert(self, alert: BounceAlert) -> None:
+        side = str(alert.payload.get("faded_side") or "long")
+        category = str(alert.payload.get("faded_category") or "m5")
+        restored = False
+        if self.focus_service is not None:
+            try:
+                restored = bool(
+                    self.focus_service.restore_faded(alert.symbol, side, category)
+                )
+            except Exception:
+                restored = False
+        self._record_review_event(
+            "faded_review_restore",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+            detail={"restored": restored, "side": side, "category": category},
+        )
+        self.statusChanged.emit(
+            f"★ {alert.symbol}: back in {category} Focus with a fresh clock."
+            if restored
+            else f"{alert.symbol}: it was no longer on the faded list."
+        )
+        self.focusFadedChanged.emit()
+        self._advance_review_queue()
+
+    def _discard_faded_review_alert(self, alert: BounceAlert) -> None:
+        side = str(alert.payload.get("faded_side") or "long")
+        category = str(alert.payload.get("faded_category") or "m5")
+        discarded = False
+        if self.focus_service is not None:
+            try:
+                discarded = bool(
+                    self.focus_service.discard_faded(alert.symbol, side, category)
+                )
+            except Exception:
+                discarded = False
+        self._record_review_event(
+            "faded_review_discard",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+            detail={"discarded": discarded, "side": side, "category": category},
+        )
+        self.statusChanged.emit(f"✕ {alert.symbol}: cleared off the faded list.")
+        self.focusFadedChanged.emit()
+        self._advance_review_queue()
+
+    def review_faded_picks(self) -> None:
+        """Walk the faded list onto the review chart.
+
+        Through `_enqueue_review_alert` - the one door - with its own tag, so
+        the restore/discard verbs know which list they are acting on and the
+        movers-only filter leaves it alone (a faded pick is by definition one
+        that has not been moving).
+        """
+        if self.focus_service is None:
+            self.statusChanged.emit("Faded review: no Focus store attached.")
+            return
+        try:
+            faded = self.focus_service.faded_picks()
+        except Exception:
+            faded = []
+        queued = 0
+        now_text = datetime.now().strftime("%H:%M:%S")
+        for row in faded:
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if not symbol or not SYMBOL_RE.fullmatch(symbol):
+                continue
+            side = str(row.get("side") or "long")
+            category = str(row.get("category") or "m5")
+            self._enqueue_review_alert(
+                BounceAlert(
+                    time_text=now_text,
+                    symbol=symbol,
+                    side="LONG" if side == "long" else "SHORT",
+                    trigger=(
+                        f"Faded {category} {side} - quiet since "
+                        f"{row.get('clock_from') or 'unknown'}"
+                    ),
+                    timeframe="D1" if category == "swing" else "M5",
+                    tag=FOCUS_FADED_TAG,
+                    raw_text=f"FADED {symbol} ({category} {side})",
+                    payload={"faded_side": side, "faded_category": category},
+                )
+            )
+            queued += 1
+        if queued:
+            self._record_review_event("faded_review_started", detail={"count": queued})
+            self.statusChanged.emit(
+                f"Reviewing {queued} faded pick(s) - ★ restores, ✕ discards."
+            )
+        else:
+            self.statusChanged.emit("Faded review: nothing has faded.")
+
     def _poll_focus_d1_interest(self, now=None) -> None:
-        """Flag Focus picks on ANYTHING remotely interesting on the D1 - once
-        they have taken out yesterday's extreme in their own direction.
+        """Flag Focus picks on a D1 PULLBACK - once they have taken out
+        yesterday's extreme in their own direction.
 
-        Every Focus name is implicitly watched for the whole D1 event set
-        (15EMA reject, 5d/20d extremes, SMA50/100/200 breaks, AVWAPE line/1σ
-        bounces and breaks) - no arming needed. Each (symbol, event) flags at
-        most once per session; hits land in the D1 Focus feed and the chart
-        queue.
+        **Pullbacks only** (trader, 2026-09-01, Phase 0.12 A1). Every Focus
+        name is implicitly watched for the pullback set - a 15EMA reject, an
+        AVWAPE or 1σ bounce - and nothing else. The EXTENSION set (a new 5d or
+        20d extreme, a close through an SMA, through the AVWAPE line or
+        through 1σ) no longer fires automatically at all: those are the alerts
+        that filled the Focus feed with "still going" news about names the
+        trader had already seen, and the trader now arms the ones they want
+        per symbol.
 
-        On top of that, ONE extension event per name per day (trader rule
-        2026-08-05): the first "the move is going" flag - new range high/low,
-        or a close through a major line - spends the whole extension set for
-        that pick. Everything after it would be the same news about a name
-        that is now extended. The pullback set stays live, so the pick can
-        still speak when it comes back to something: a 15EMA reject, an AVWAPE
-        or 1σ bounce.
+        That gate is at the flag-GENERATION seam, not a filter downstream. An
+        extension kind is never evaluated here, so no extension flag is
+        written and nothing has to be suppressed later.
+
+        An armed extension watch is the ONE surviving route, and it is a
+        different poll: `_poll_d1_event_watches` evaluates
+        `d1_event_watches.json` and is untouched by this rule. Keeping the two
+        lanes disjoint is what makes double-firing structurally impossible.
+
+        The 2026-08-05 "one extension event per name per day" rule (FRPT) was
+        a ration on this lane; with the lane closed it has nothing left to
+        ration and is gone.
+
+        Each (symbol, event) still flags at most once per session; hits land in
+        the D1 Focus feed and the chart queue.
 
         The prev-day gate (trader rule 2026-08-05) is what keeps that set from
         emptying itself into the open: a long inside yesterday's range flags
@@ -3446,20 +3616,16 @@ class AlertCenterPanel(QFrame):
                 if break_open_at is None:
                     held += 1
                     continue
+                # A1: the automatic lane is the pullback set. Iterating
+                # `D1_PULLBACK_KINDS` rather than filtering `D1_EVENT_KINDS`
+                # is the point - an extension kind is never constructed, so it
+                # cannot be evaluated, flagged, or suppressed.
                 pending_kinds = [
                     kind
                     for kind in D1_EVENT_KINDS
-                    if f"{symbol}|{kind}" not in self._focus_d1_flags
+                    if kind in D1_PULLBACK_KINDS
+                    and f"{symbol}|{kind}" not in self._focus_d1_flags
                 ]
-                # One extension event per name per day. Once a pick has told
-                # you it is breaking out, every further "still breaking out"
-                # event is the same information about a name that is now
-                # extended; only the pullback events (15EMA reject, AVWAPE /
-                # 1σ bounce) still say something new.
-                if self._focus_extension_spent(symbol):
-                    pending_kinds = [
-                        kind for kind in pending_kinds if kind in D1_PULLBACK_KINDS
-                    ]
                 if not pending_kinds or not d1_bars:
                     continue
                 avwape_anchor = None
@@ -3473,7 +3639,6 @@ class AlertCenterPanel(QFrame):
                 # The window opens at the break, not at midnight: everything
                 # the name did while inside yesterday's range stays unflagged.
                 armed_at = max(day_start, break_open_at)
-                extension_spent = False
                 # Item 1b: ten kinds per symbol used to re-enter
                 # `d1_event_levels` ten times with identical arguments - a sort
                 # of ~490 bars, 5d/20d extremes, three SMAs, an EMA15 recursion
@@ -3481,12 +3646,6 @@ class AlertCenterPanel(QFrame):
                 # here and dropped when the symbol's loop ends.
                 levels_cache: dict = {}
                 for kind in pending_kinds:
-                    # Spent within this pass too: two extension kinds routinely
-                    # hit the same bar (a new 5d high IS often a new 20d high),
-                    # and the rule is one extension event, not one per kind.
-                    # Pullback kinds keep evaluating either way.
-                    if extension_spent and kind in D1_EXTENSION_KINDS:
-                        continue
                     watch = D1EventWatch(symbol=symbol, kind=kind, armed_at=armed_at)
                     try:
                         hit = evaluate_d1_event_watch(
@@ -3503,7 +3662,9 @@ class AlertCenterPanel(QFrame):
                         continue
                     self._focus_d1_flags.add(f"{symbol}|{kind}")
                     hits.append((symbol, side_label, kind, hit))
-                    extension_spent = extension_spent or kind in D1_EXTENSION_KINDS
+                    # A3: the pick just said something, so its ten-session
+                    # fade clock restarts here.
+                    self._note_focus_activity(symbol, reason="focus_d1_flag")
         self._focus_gate_held = held
         # Every Focus name has just been re-measured against yesterday's range.
         # Surfaces that show the "moving" flag repaint from here rather than
@@ -3533,18 +3694,6 @@ class AlertCenterPanel(QFrame):
                     payload={"focus_d1_kind": kind},
                 )
             )
-
-    def _focus_extension_spent(self, symbol: str) -> bool:
-        """Has this Focus pick already flagged an extension event today?
-
-        Reads the same day-scoped registry the once-per-kind rule uses, so it
-        survives a GUI restart mid-session: a name that printed its new 20-day
-        high at 06:30 does not get to announce the same breakout again after
-        lunch just because the desk was restarted.
-        """
-        return any(
-            f"{symbol}|{kind}" in self._focus_d1_flags for kind in D1_EXTENSION_KINDS
-        )
 
     def _save_focus_d1_flags(self) -> None:
         if self._focus_d1_flags_path is None:
@@ -3907,6 +4056,9 @@ class AlertCenterPanel(QFrame):
 
     def _chart_watch_alert(self, hit, moment: datetime) -> BounceAlert:
         watch = hit.watch
+        # A3: an armed watch firing on a Focus name is the name speaking. Every
+        # armed poll builds its alert here, so one call covers all three.
+        self._note_focus_activity(watch.symbol, reason="armed_watch_hit")
         resolved = str(getattr(hit, "resolved_side", "") or "").upper()
         side = str(getattr(watch, "side", "") or "")
         if side not in ("LONG", "SHORT"):
@@ -4159,6 +4311,14 @@ class AlertCenterPanel(QFrame):
             entry[direction] = level
             if old_level != level:
                 entry[f"armed_{direction}"] = True
+                # A2: arming restarts the trading-day expiry clock - the
+                # board's merge stamps this too, and without it a level
+                # re-armed from the chart would still carry the date that
+                # expired it and be disarmed again on the next poll. The
+                # unchanged-level branch deliberately leaves the stamp alone.
+                import price_alerts
+
+                price_alerts.mark_armed_now(entry)
         if not service.save_entries(entries):
             self.statusChanged.emit(
                 f"{symbol}: phone price alert NOT saved - the price-alert "
@@ -4418,10 +4578,73 @@ class AlertCenterPanel(QFrame):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # A2 (2026-09-01): an arm has a life, measured in SESSIONS.
+    #
+    # The trader's Armed inventory is supposed to read as "the exact conditions
+    # I am waiting on". A watch armed six weeks ago on a thesis that has since
+    # gone stale is noise in that list, so a 5-day extreme watch is given 5
+    # trading days, a 20-day one 10, and everything else 10.
+    #
+    # Policy lives in `armed_alert_expiry`; this is the seam that applies it to
+    # the panel's own stores. It runs at the head of each poll that already
+    # owns one, so no new timer appears. Uncertainty never deletes: an entry
+    # the calendar cannot date is kept, and every removal writes an
+    # append-only row naming symbol, kind, armed_at and expired_at.
+    def _expire_armed_watches(
+        self,
+        store: str,
+        watches: list,
+        *,
+        kind_of=None,
+        now: datetime | None = None,
+    ) -> tuple[list, list[dict]]:
+        try:
+            import armed_alert_expiry
+
+            moment = now or datetime.now()
+            kept, rows = armed_alert_expiry.partition(
+                watches, store=store, today=moment.date(), kind_of=kind_of
+            )
+        except Exception:
+            # A broken expiry pass must never cost the poll behind it.
+            logging.debug("Armed-alert expiry pass failed for %s", store, exc_info=True)
+            return list(watches), []
+        if not rows:
+            return kept, []
+        armed_alert_expiry.record_expiries(rows)
+        for row in rows:
+            self._record_review_event(
+                "armed_alert_expired",
+                symbol=str(row.get("symbol") or ""),
+                detail={
+                    "store": row.get("store"),
+                    "kind": row.get("kind"),
+                    "armed_at": row.get("armed_at"),
+                    "expired_at": row.get("expired_at"),
+                    "trading_days": row.get("trading_days"),
+                },
+            )
+        names = ", ".join(sorted({str(row.get("symbol") or "") for row in rows}))
+        self.statusChanged.emit(
+            f"{len(rows)} armed alert(s) expired and were retired: {names}."
+        )
+        return kept, rows
+
     def _poll_d1_level_watches(self, now: datetime | None = None) -> None:
         if not self._d1_level_watches:
             return
         moment = now or datetime.now()
+        kept, expired = self._expire_armed_watches(
+            "d1_level_watches", self._d1_level_watches, now=moment
+        )
+        if expired:
+            self._d1_level_watches = kept
+            self._save_d1_level_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+            if not self._d1_level_watches:
+                return
         remaining: list[D1LevelWatch] = []
         triggered = []
         for watch in self._d1_level_watches:
@@ -4529,6 +4752,16 @@ class AlertCenterPanel(QFrame):
         if not self._d1_event_watches:
             return
         moment = now or datetime.now()
+        kept, expired = self._expire_armed_watches(
+            "d1_event_watches", self._d1_event_watches, now=moment
+        )
+        if expired:
+            self._d1_event_watches = kept
+            self._save_d1_event_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+            if not self._d1_event_watches:
+                return
         remaining: list[D1EventWatch] = []
         triggered = []
         # One reference-level build per symbol per tick, shared across every
@@ -4696,6 +4929,21 @@ class AlertCenterPanel(QFrame):
         if not self._any_bounce_watches:
             return
         moment = now or datetime.now()
+        # An any-bounce watch covers a SET of levels, so it has no single
+        # `kind`; it files under the default 10-session window by name.
+        kept, expired = self._expire_armed_watches(
+            "any_bounce_watches",
+            self._any_bounce_watches,
+            kind_of=lambda watch: "any_bounce",
+            now=moment,
+        )
+        if expired:
+            self._any_bounce_watches = kept
+            self._save_any_bounce_watches()
+            self._refresh_review_armed_kinds()
+            self.armedWatchesChanged.emit()
+            if not self._any_bounce_watches:
+                return
         remaining: list[AnyBounceWatch] = []
         triggered = []
         for watch in self._any_bounce_watches:
@@ -4759,6 +5007,12 @@ class AlertCenterPanel(QFrame):
         # queue, and leave the symbol's ordinary alerting untouched.
         if is_auto_pick_alert(alert):
             self._resolve_auto_pick(alert, False)
+            return
+        # Faded walkthrough: the dismiss verb DISCARDS - it clears the entry
+        # off the faded list. The pick is already out of Focus, so nothing is
+        # removed here; the append-only evidence row stays either way.
+        if alert.tag == FOCUS_FADED_TAG:
+            self._discard_faded_review_alert(alert)
             return
         # Focus walkthrough: the dismiss verb DELETES the pick from Focus
         # (every bucket/side; un-injects its watchlist entries; logs the
@@ -4967,6 +5221,9 @@ class AlertCenterPanel(QFrame):
         self._refresh_ignored_button()
         # The M5 alert bar is day-scoped like the queue it replaced.
         self.m5AlertsDayRolled.emit()
+        # A3: the fade clock is measured in sessions, so the day roll is
+        # exactly when a pick can come due.
+        self.run_focus_fade_check()
 
     def _park_review_symbol(self, symbol: str) -> None:
         """Keep a symbol's chart out of the review queue for the day."""

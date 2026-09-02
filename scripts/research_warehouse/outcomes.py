@@ -114,6 +114,11 @@ class Recipe:
     #: control.  Neither field changes a champion detector.
     stop_selector: str = ""
     stop_atr_multiple: float | None = None
+    #: Phase 0.12 B3, higher-timeframe LRSI entry study. Declarative, so the
+    #: recipe id and the rule that produced a row can never drift apart.
+    htf_timeframe: str = ""
+    cross_level: float | None = None
+    cross_direction: str = ""  # "up" | "down"
     note: str = ""
 
 
@@ -232,6 +237,105 @@ def _m5_close_recipes() -> tuple[Recipe, ...]:
 
 
 M5_CLOSE_RECIPES = _m5_close_recipes()
+
+
+# ---------------------------------------------------------------------------
+# Phase 0.12 B3: higher-timeframe LRSI entry study. SHADOW ONLY.
+#
+# The question is the trader's, asked 2026-09-01: is there anything in entering
+# a Focus-style setup on an LRSI cross at M30/H1/H2/H4 rather than on M5? This
+# lane answers it with outcome rows and nothing else. It reaches no detector,
+# no score, no alert, no Focus list and no review queue, and promotion is
+# plan.md sec 7's job, not this module's.
+#
+# **Bounded, never a Cartesian search.** Four timeframes x four entries is the
+# whole grid - 16 registered recipes, each with ONE stop model and ONE target,
+# following the `DIAGNOSTIC_ATR_STOP_V1` precedent. Every one carries
+# `is_diagnostic=True`.
+#
+# **Alternative recipes on one occurrence are correlated diagnostics of ONE
+# episode, never extra samples.** That is the module's standing rule and it
+# binds hardest here: sixteen readings of one setup are sixteen views of one
+# trade, and averaging them as sixteen trades would manufacture confidence out
+# of nothing.
+#
+# **The long and short legs read the SAME series.** The efficiency formula
+# clamps at zero, so an unmirrored down-cross measures the UP move's efficiency
+# collapsing rather than a down move's strength - a different feature from the
+# live M5 engines' mirrored-close idiom, and deliberately so. The decision, its
+# cost and its fixture are in `indicators/efficiency_lrsi.RESEARCH_CROSS_LEVELS`.
+#
+# **Stubs are excluded from the LRSI input.** RTH is 6.5 hours, so H2 and H4
+# both end each session with a short bucket. An H4 "bar" covering 13:30-16:00
+# is not an H4 bar; feeding it to an EMA would make the oscillator measure a
+# duration that changes with the time of day. Completed bars only, and a stub
+# is a completed bucket of the wrong length.
+HTF_LRSI_TIMEFRAMES = ("M30", "H1", "H2", "H4")
+
+#: (side, direction, level). Longs read the crossing UP through the two levels
+#: the trader already reads; shorts read the crossing DOWN through 50 and 80.
+HTF_LRSI_ENTRIES = (
+    ("LONG", "up", 50.0),
+    ("LONG", "up", 20.0),
+    ("SHORT", "down", 50.0),
+    ("SHORT", "down", 80.0),
+)
+
+#: One target, not the three the M5-close grid carries. The prompt authorizing
+#: this named SIXTEEN recipes, and 4 x 4 x 3 is forty-eight; sixteen is also
+#: what keeps the nightly inside `setup_research`'s reserve. 2.0R is the middle
+#: of `M5_CLOSE_TARGETS_R` and the same target the fixed-R control already
+#: uses, so the two are directly comparable. Widening to the full set is this
+#: one constant.
+HTF_LRSI_TARGETS_R = (2.0,)
+
+#: The single stop model: the signal bar's own extreme, pushed out a quarter of
+#: an ATR, exactly as `DIAGNOSTIC_ATR_STOP_V1` does on M5. ATR is measured on
+#: the SAME timeframe as the entry - an M5 ATR under an H4 entry would size the
+#: risk off a bar the recipe never looks at.
+HTF_LRSI_STOP_ATR_MULTIPLE = 0.25
+
+
+def _htf_lrsi_recipes() -> tuple[Recipe, ...]:
+    """The bounded registered grid; never a free Cartesian search."""
+    recipes: list[Recipe] = []
+    for timeframe in HTF_LRSI_TIMEFRAMES:
+        for side, direction, level in HTF_LRSI_ENTRIES:
+            for target in HTF_LRSI_TARGETS_R:
+                recipes.append(
+                    Recipe(
+                        recipe_id=(
+                            f"htf_lrsi_{timeframe.lower()}_{direction}{level:g}"
+                            f"_{target:g}r_v1"
+                        ),
+                        timeframe="HTF_LRSI",
+                        analysis_unit=ANALYSIS_UNIT_OPPORTUNITY,
+                        entry=(
+                            f"{timeframe.lower()}_efficiency_lrsi_cross_"
+                            f"{direction}_{level:g}_bar_close"
+                        ),
+                        stop=(
+                            f"signal_bar_extreme_plus_"
+                            f"{HTF_LRSI_STOP_ATR_MULTIPLE:g}_atr_{timeframe.lower()}_14"
+                        ),
+                        management=f"fixed_{target:g}r_target",
+                        time_stop_sessions=SWING_TIME_STOP_SESSIONS,
+                        target_r=target,
+                        stop_atr_multiple=HTF_LRSI_STOP_ATR_MULTIPLE,
+                        htf_timeframe=timeframe,
+                        cross_level=level,
+                        cross_direction=direction,
+                        is_diagnostic=True,
+                        note=(
+                            f"shadow-only HTF LRSI study; {side} leg; derived "
+                            "bars exclude session stubs"
+                        ),
+                    )
+                )
+    return tuple(recipes)
+
+
+HTF_LRSI_RECIPES = _htf_lrsi_recipes()
 
 RECIPES = {
     recipe.recipe_id: recipe
@@ -1020,6 +1124,289 @@ def simulate_m5_close_opportunity(
     return row
 
 
+def _htf_series(
+    m5_bars,
+    timeframe: str,
+    *,
+    as_of: datetime,
+    exclude_stubs: bool = True,
+) -> list[dict]:
+    """Rolling multi-session derived bars for one symbol, oldest first.
+
+    Built the way `market_bias_context._derived` builds its rolling series:
+    session by session through `aggregate.derive_session_bars`, so the derived
+    bars this study reads are the SAME bars the warehouse would publish, under
+    the same aggregation contract.
+
+    Stubs are dropped. RTH is 6.5 hours, so H2 and H4 each end a session with a
+    short bucket; a 30-minute bar sitting in an H2 series would make the EMA
+    measure a duration that changes with the time of day, and completed-bars-
+    only means completed bars of the RIGHT length.
+    """
+    try:  # package import
+        from . import aggregate
+    except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+        import aggregate  # type: ignore
+
+    by_day: dict[date, list[dict]] = {}
+    for row in m5_bars or []:
+        start = row.get("interval_start")
+        if not isinstance(start, datetime) or not row.get("is_complete", True):
+            continue
+        session = xcal.session_for(start)
+        if session is None:
+            continue
+        by_day.setdefault(session.session_date, []).append(row)
+    series: list[dict] = []
+    for day in sorted(by_day):
+        session = xcal.trading_session(day)
+        if session is None:
+            continue
+        derived = aggregate.derive_session_bars(
+            by_day[day], session, timeframe, as_of=as_of, computed_at=as_of
+        )
+        for row in derived:
+            if exclude_stubs and row.get("is_stub"):
+                continue
+            series.append(row)
+    series.sort(key=lambda row: row["interval_end"])
+    return series
+
+
+def _htf_cross_index(series: list[dict], recipe: Recipe, eligible_from: datetime) -> int | None:
+    """Index of the first qualifying LRSI cross at or after ``eligible_from``.
+
+    Point-in-time: the oscillator is computed over the whole series, but a
+    cross is only usable when the bar that produced it CLOSED after the setup
+    became known. A cross printed before then is history the recipe could not
+    have traded.
+    """
+    try:
+        from indicators.efficiency_lrsi import compute_efficiency_lrsi
+    except ImportError:  # pragma: no cover - indicators ship with the tree
+        return None
+    closes = [_number(row.get("close")) for row in series]
+    if any(value is None for value in closes) or len(closes) < 2:
+        return None
+    result = compute_efficiency_lrsi([float(value) for value in closes])
+    level = float(recipe.cross_level if recipe.cross_level is not None else 50.0)
+    indices = (
+        result.cross_up_indices(level)
+        if recipe.cross_direction == "up"
+        else result.cross_down_indices(level)
+    )
+    for index in indices:
+        end = series[index].get("interval_end")
+        if isinstance(end, datetime) and end >= eligible_from:
+            return index
+    return None
+
+
+def simulate_htf_lrsi_entry(
+    occurrence: dict,
+    m5_bars,
+    recipe: Recipe,
+    *,
+    as_of: datetime,
+    computed_at: datetime | None = None,
+    run_id: str = "",
+    series_cache: dict | None = None,
+) -> dict | None:
+    """Phase 0.12 B3: enter on a higher-timeframe LRSI cross. SHADOW ONLY.
+
+    Entry is the CLOSE of the derived bar that printed the cross - a completed
+    bar, never a forming one. The stop is that bar's own extreme pushed out a
+    quarter of an ATR(14) measured on the same timeframe, and it is a hard
+    stop, so the primary read on a bar that could contain both exits is
+    STOP_FIRST, exactly as everywhere else in this module.
+
+    Returns ``None`` - no row at all - when the timeframe's series is too short
+    to answer, when no qualifying cross has printed yet, or when the ATR is
+    unmeasurable. An unanswerable question produces no evidence rather than a
+    zero.
+    """
+    stamp = computed_at or utc_now()
+    cutoff = as_of if as_of.tzinfo else as_of.replace(tzinfo=timezone.utc)
+    side = "LONG" if recipe.cross_direction == "up" else "SHORT"
+    trigger = occurrence.get("trigger_at")
+    if not isinstance(trigger, datetime):
+        return None
+    eligible_from = trigger if trigger.tzinfo else trigger.replace(tzinfo=timezone.utc)
+
+    # The grid runs four entries per timeframe, so without a memo the same
+    # rolling series would be rebuilt four times for one occurrence. The cache
+    # is per-occurrence and per-cutoff, handed in by the caller and dropped
+    # with the occurrence - never a module-level cache that could serve one
+    # occurrence's bars to another.
+    cache_key = (str(occurrence.get("symbol") or ""), recipe.htf_timeframe, cutoff)
+    if series_cache is not None and cache_key in series_cache:
+        series = series_cache[cache_key]
+    else:
+        series = _htf_series(m5_bars, recipe.htf_timeframe, as_of=cutoff)
+        series = [row for row in series if row.get("interval_end") <= cutoff]
+        if series_cache is not None:
+            series_cache[cache_key] = series
+    entry_index = _htf_cross_index(series, recipe, eligible_from)
+    if entry_index is None:
+        return None
+    entry_bar = series[entry_index]
+    entry_price = _number(entry_bar.get("close"))
+    atr = _atr14_at_entry(series, entry_index)
+    if entry_price is None or atr is None:
+        return None
+    extreme = _number(entry_bar.get("low") if side == "LONG" else entry_bar.get("high"))
+    if extreme is None:
+        return None
+    padding = atr * float(recipe.stop_atr_multiple or HTF_LRSI_STOP_ATR_MULTIPLE)
+    stop_price = extreme - padding if side == "LONG" else extreme + padding
+    distance = abs(entry_price - stop_price)
+    if distance <= 0 or recipe.target_r is None:
+        return None
+    direction = 1.0 if side == "LONG" else -1.0
+    target_price = entry_price + direction * float(recipe.target_r) * distance
+    entry_at = entry_bar["interval_end"]
+    entry_session = xcal.session_for(entry_bar["interval_start"])
+    if entry_session is None:
+        return None
+
+    time_stop = int(recipe.time_stop_sessions or SWING_TIME_STOP_SESSIONS)
+    future: list[tuple[dict, object]] = []
+    post_entry_days: list[date] = []
+    for bar in series[entry_index + 1 :]:
+        session = xcal.session_for(bar["interval_start"])
+        if session is None:
+            continue
+        if (
+            session.session_date != entry_session.session_date
+            and session.session_date not in post_entry_days
+        ):
+            if len(post_entry_days) >= time_stop:
+                break
+            post_entry_days.append(session.session_date)
+        future.append((bar, session))
+
+    result_state = STATE_OPEN
+    first_hit = None
+    first_hit_at = None
+    path_resolution = PATH_EXACT
+    lower = upper = gross = None
+    mfe = mae = 0.0
+    time_to_mfe = None
+    resolved_at = None
+    for bar, _session in future:
+        high_r = _r(bar.get("high"), entry_price, distance, side)
+        low_r = _r(bar.get("low"), entry_price, distance, side)
+        if None not in (high_r, low_r):
+            favourable, adverse = max(high_r, low_r), min(high_r, low_r)
+            if favourable > mfe:
+                mfe = favourable
+                time_to_mfe = int((bar["interval_end"] - entry_at).total_seconds() // 60)
+            mae = min(mae, adverse)
+        target_hit = _reached(bar, target_price, side, favourable=True)
+        stop_hit = _reached(bar, stop_price, side, favourable=False)
+        stop_exit = stop_price
+        open_price = _number(bar.get("open"))
+        if open_price is not None and _beyond_stop(open_price, stop_price, side):
+            stop_exit = open_price
+        if target_hit and stop_hit:
+            result_state = STATE_AMBIGUOUS_BAR
+            first_hit = "STOP"
+            first_hit_at = resolved_at = bar["interval_end"]
+            path_resolution = PATH_AMBIGUOUS
+            lower = _r(stop_exit, entry_price, distance, side)
+            upper = float(recipe.target_r)
+            gross = lower
+            break
+        if stop_hit:
+            result_state = STATE_STOPPED
+            first_hit = "STOP"
+            first_hit_at = resolved_at = bar["interval_end"]
+            gross = _r(stop_exit, entry_price, distance, side)
+            break
+        if target_hit:
+            result_state = STATE_TARGETED
+            first_hit = "TARGET"
+            first_hit_at = resolved_at = bar["interval_end"]
+            gross = float(recipe.target_r)
+            break
+
+    maturity = _project_session_close(entry_session.session_date, time_stop)
+    if result_state == STATE_OPEN and len(post_entry_days) >= time_stop and future:
+        result_state = STATE_EXPIRED
+        first_hit = "NEITHER"
+        resolved_at = future[-1][0]["interval_end"]
+        gross = _r(future[-1][0].get("close"), entry_price, distance, side)
+    elif result_state == STATE_OPEN and maturity is not None and is_matured(
+        {"maturity_at": maturity}, as_of
+    ):
+        result_state = STATE_TRUNCATED
+
+    row = {
+        "occurrence_id": occurrence.get("occurrence_id"),
+        "recipe_id": recipe.recipe_id,
+        "outcome_definition_id": OUTCOME_DEFINITION_ID,
+        "analysis_unit": recipe.analysis_unit,
+        "entry_at": entry_at,
+        "entry_price": entry_price,
+        "stop_price": stop_price,
+        "stop_distance": distance,
+        "mfe_r": mfe,
+        "mae_r": mae,
+        "time_to_mfe_min": time_to_mfe,
+        "first_hit": first_hit,
+        "first_hit_at": first_hit_at,
+        "path_resolution": path_resolution,
+        "r_lower_bound": lower,
+        "r_upper_bound": upper,
+        "gross_r": gross,
+        "net_r": None if gross is None else net_r(
+            gross,
+            distance,
+            entry_price,
+            observed_half_spread=None,
+            entry_slippage_half_spreads=ENTRY_SLIPPAGE_HALF_SPREADS,
+        ),
+        "cost_model_id": OUTCOME_DEFINITION_ID,
+        "result_state": result_state,
+        "maturity_at": resolved_at or maturity,
+        "censor_reason": None,
+        "computed_at": stamp,
+        "input_capture_mode_worst": _worst_capture_mode(
+            bar.get("input_capture_mode_worst") or bar.get("capture_mode") for bar in series
+        ),
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+    }
+    for column, minutes in INTRADAY_CHECKPOINTS:
+        eligible = [
+            bar
+            for bar, _session in future
+            if bar["interval_end"] <= entry_at + timedelta(minutes=minutes)
+        ]
+        row[column] = (
+            _r(eligible[-1].get("close"), entry_price, distance, side) if eligible else None
+        )
+    entry_day_bars = [
+        bar for bar, session in future if session.session_date == entry_session.session_date
+    ]
+    row["r_at_eod"] = (
+        _r(entry_day_bars[-1].get("close"), entry_price, distance, side)
+        if entry_day_bars
+        else None
+    )
+    by_day: dict[date, dict] = {}
+    for bar, session in future:
+        by_day[session.session_date] = bar
+    closes = [by_day[day] for day in sorted(by_day) if day != entry_session.session_date]
+    for column, sessions in SWING_CHECKPOINTS:
+        row[column] = (
+            _r(closes[sessions - 1].get("close"), entry_price, distance, side)
+            if len(closes) >= sessions
+            else None
+        )
+    return row
+
+
 def simulate_intraday_bounce(
     occurrence: dict,
     bounce_event: dict,
@@ -1363,6 +1750,8 @@ def build_outcomes(
     rows = []
     for occurrence in occurrence_list:
         symbol = str(occurrence.get("symbol") or "")
+        # Scoped to this occurrence and dropped with it (B3 derived series).
+        htf_series_cache: dict = {}
         for recipe in selected:
             key = (str(occurrence.get("occurrence_id")), recipe.recipe_id, OUTCOME_DEFINITION_ID)
             previous = existing.get(key)
@@ -1379,6 +1768,19 @@ def build_outcomes(
                     computed_at=stamp,
                     intraday_bars=(m5_by_symbol or {}).get(symbol),
                     run_id=run_id,
+                )
+            elif recipe.timeframe == "HTF_LRSI":
+                # Shadow lane (Phase 0.12 B3). Sourced from the SAME canonical
+                # M5 bars as every other recipe and aggregated through the
+                # warehouse's own contract - never a second bar source.
+                computed = simulate_htf_lrsi_entry(
+                    occurrence,
+                    (m5_by_symbol or {}).get(symbol) or [],
+                    recipe,
+                    as_of=cutoff,
+                    computed_at=stamp,
+                    run_id=run_id,
+                    series_cache=htf_series_cache,
                 )
             elif recipe.timeframe == "M5_OPPORTUNITY":
                 computed = simulate_m5_close_opportunity(
@@ -1438,6 +1840,11 @@ __all__ = [
     "DIAGNOSTIC_ATR_STOP_V1",
     "ENTRY_SLIPPAGE_HALF_SPREADS",
     "HALF_SPREAD_BPS",
+    "HTF_LRSI_ENTRIES",
+    "HTF_LRSI_RECIPES",
+    "HTF_LRSI_STOP_ATR_MULTIPLE",
+    "HTF_LRSI_TARGETS_R",
+    "HTF_LRSI_TIMEFRAMES",
     "INTRADAY_BOUNCE_V1",
     "M5_CLOSE_RECIPES",
     "M5_CLOSE_STOP_RANKS",

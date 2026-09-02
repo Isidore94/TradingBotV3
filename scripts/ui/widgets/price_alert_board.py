@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import price_alerts
+
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -206,17 +208,20 @@ class PriceAlertBoard(QFrame):
         existing = next((entry for entry in entries if entry.get("symbol") == symbol), None)
         if existing is None:
             entries.append(
-                {
-                    "symbol": symbol,
-                    "above": above,
-                    "below": below,
-                    "armed_above": above is not None,
-                    "armed_below": below is not None,
-                    "note": "",
-                    "history": [],
-                }
+                price_alerts.mark_armed_now(
+                    {
+                        "symbol": symbol,
+                        "above": above,
+                        "below": below,
+                        "armed_above": above is not None,
+                        "armed_below": below is not None,
+                        "note": "",
+                        "history": [],
+                    }
+                )
             )
         else:
+            rearmed = False
             for side, level in (("above", above), ("below", below)):
                 old_level = existing.get(side)
                 existing[side] = level
@@ -224,6 +229,11 @@ class PriceAlertBoard(QFrame):
                     existing[f"armed_{side}"] = False
                 elif old_level != level:
                     existing[f"armed_{side}"] = True
+                    rearmed = True
+            if rearmed:
+                # A2: arming restarts the trading-day clock, or the entry
+                # would be disarmed again by the stamp that expired it.
+                price_alerts.mark_armed_now(existing)
         if self.service.save_entries(entries):
             self.symbol_input.setEditText("")
             self.above_input.clear()
@@ -256,6 +266,7 @@ class PriceAlertBoard(QFrame):
             if entry.get("symbol") in selected:
                 entry["armed_above"] = entry.get("above") is not None
                 entry["armed_below"] = entry.get("below") is not None
+                price_alerts.mark_armed_now(entry)
         self.service.save_entries(entries)
 
     def _prefill_selected(self) -> None:
