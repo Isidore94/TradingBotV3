@@ -843,6 +843,41 @@ second. Same for `HTF_LRSI_RECIPES`, whose grid the ledger already declares.
 **Live gate: none.** Green tests are the whole gate; this packet changes no runtime
 behaviour.
 
+### Phase 0.13 packet P8 / Phase 6.1 addendum — First setup-parameter grid (2026-09-02) — BUILT, live gate owed
+
+Authorized by the trader pasting the packet on **2026-09-02**; that paste date is the
+grid's authorization pointer and is recorded in its trial-ledger row. Built on
+`claude/p8-param-grid`, off `main` AFTER Phase 0.12, P3 and P7 landed - the packet
+declared those as preconditions and they were not met until that morning's merge.
+
+**Declared family:** `AVWAPE_TO_FIRST_DEV`, LONG - the registry's
+`avwape_to_first_dev@1` (P7). 840 occurrences over 622 dependency clusters, the
+largest cell in the lake.
+
+**Declared question:** does an entry that waits for confirmation (M15 acceptance
+close, M5 retest of the trigger, or M30 EMA15/21 controlled pullback) earn more net R
+per episode than the first completed M5 close of the next session, under one
+structural stop?
+
+**Declared cells (12):** 4 entry moments x 3 targets, stop fixed at
+`current_anchor:1`. **Declared floors:** n_episodes >= 30, >= 5 symbols, >= 5 entry
+sessions, counted on `dependency_cluster_id`. **Declared window:** the first 20
+trading sessions after the packet landed, fixed at registration.
+
+Shadow only: every recipe is `is_diagnostic=True`, nothing is registered in
+`outcome_semantics` (BD-80), and no row reaches a detector, score, alert, Focus list
+or review queue. Recorded as **BD-88** and **BD-89**.
+
+**Owed and NOT part of this packet:** the conditioning axis. The packet allows ONE
+ATR-normalised bucket from the daily feature snapshot, attached point-in-time, three
+buckets and not a lattice - it is not built, because nothing yet says the question
+needs it, and a conditioning axis added before the unconditioned answer exists is
+three more looks against the same k.
+
+**Live gate (#37):** one overnight run publishes rows for every declared cell inside
+the 20-minute reserve; the trial-ledger row exists with status `collecting`; and **no
+cell is read for a verdict before the declared window closes.**
+
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads

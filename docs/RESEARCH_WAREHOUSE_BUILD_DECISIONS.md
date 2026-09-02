@@ -2361,3 +2361,79 @@ rather than the first, because the interesting failure is not "no owner" but
 **Where.** `scripts/research_warehouse/trial_ledger.py`,
 `tests/test_setup_registry_and_trial_ledger.py`.
 
+## BD-88 — A parameter grid varies ONE factor, and its control is the code it challenges
+
+**Date:** 2026-09-02 (Phase 0.13 packet P8).
+
+**Decision.** The entry-timing grid holds the stop (`current_anchor:1`), the
+time stop, the exit machine and the checkpoints identical across all twelve
+cells; only the entry moment and the target vary, and the target is the axis the
+grid is compared ALONG rather than a second experiment. The control cells
+(`m5_first_close`) do not reimplement the next-session entry - they call the
+existing `simulate_m5_close_opportunity` with the existing rank-1 selector, so
+they reproduce the `m5close_current_anchor1_*` rows by construction. The three
+challengers call the SAME function through one new optional `entry_selector`.
+
+**Why.** A grid that varied the stop as well could not answer the question it
+declared: a cell that won might have won on the stop, and nothing in the row
+would say which. And a control that is a separate implementation is not a
+control - two copies of an exit loop eventually disagree, and the disagreement
+would present itself as a finding about entries. Delegation makes parity a
+property of the code rather than a claim a test has to keep re-checking; the
+test then pins it anyway, because "by construction" is only true until someone
+edits one of the two paths.
+
+**The golden fixture was pinned from code that had never heard of P8.**
+`build_setup_entry_timing_fixture.py` imports `outcomes.py` as `main` has it
+(through `git show`, into a temp package) and freezes the three rank-1 rows from
+THAT. The packet asked for a fixture before the simulator; the arithmetic that
+actually needed protecting was the arithmetic that already ships, since P8 adds a
+parameter to a function every published `m5close_*` row came from.
+
+**Reopen trigger.** If a later packet needs to vary the stop inside this family,
+it is a NEW grid with its own trial-ledger row and its own k, not a widening of
+this one.
+
+**Where.** `research_warehouse/outcomes.py` (`SETUP_ENTRY_TIMING_*`,
+`simulate_setup_entry_timing`, the `entry_selector` parameter),
+`scripts/build_setup_entry_timing_fixture.py`,
+`tests/fixtures/setup_entry_timing_parity_v1.json`,
+`tests/test_setup_entry_timing_grid.py`.
+
+## BD-89 — A confirmation entry is defined by what it REFUSES, and its denominator is the control's
+
+**Date:** 2026-09-02 (Phase 0.13 packet P8).
+
+**Decision.** Each of the three confirmation entries is spelled out rather than
+implied. Acceptance is a completed M15 CLOSE beyond the trigger, not a wick
+through it. A retest is a completed M5 bar that TAGS the trigger level and still
+CLOSES holding it. A controlled pullback is a completed M30 bar with the EMAs in
+trend order, an extreme reaching the band and a close still beyond it - a bar
+that closes THROUGH the band is a break. All three read the warehouse's own
+derived bars with stubs excluded, and all three are eligible only STRICTLY after
+the occurrence's trigger. `_ema_series` returns `None` until its window is full,
+so a family with fewer than 21 completed M30 bars produces NO ROW.
+
+**Why the strict-after rule.** A derived bar whose interval ENDS at the trigger
+instant is the signal bar itself. Entering on it would be entering on the
+information that created the setup, which is the look-ahead this whole module
+exists to prevent - and it is a rule the M5 control already had
+(`interval_end > trigger`), so the derived path matching it is consistency, not
+caution.
+
+**THE FAILURE MODE THIS GRID IS MOST LIKELY TO PRODUCE, recorded before any
+number exists.** A waiting entry can look better purely because it SKIPS the
+episodes that went straight down: the confirmation never printed, so no row was
+written, and the loss is missing from the average rather than counted. The
+control's rows-per-cluster is therefore the denominator to read FIRST, and a
+challenger with materially fewer rows is reporting survivorship rather than edge.
+The second failure mode is the three challengers agreeing so strongly that they
+are one look and not three. Both are in the trial-ledger row, written at
+registration, because a failure mode named after the numbers arrive is a
+rationalisation.
+
+**Where.** `research_warehouse/outcomes.py` (`_entry_from_derived`,
+`_entry_after_m15_acceptance`, `_entry_after_m5_retest`,
+`_entry_after_m30_ema_pullback`, `_ema_series`);
+`research_warehouse/trial_ledger.py` (the registered row).
+
