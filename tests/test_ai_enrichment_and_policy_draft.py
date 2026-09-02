@@ -393,10 +393,18 @@ def test_both_slots_are_appended_and_never_reorder_the_slate():
     from ai_jobs.runner import default_slots
 
     names = [slot.name for slot in default_slots()]
-    assert names[:6] == [
+    # P5 inserted `pass_cohort_grading` and `rejection_cohort_grading`
+    # after the like slot and BEFORE `evidence_report` - which is where
+    # they have to be, because the report READS what the cohorts produced
+    # and a report ahead of its inputs would describe last night's
+    # evidence. That moves the later slots' INDEX without reordering any
+    # existing PAIR, and the pairwise order is the invariant.
+    ORDERED = [
         "journal_import", "ai_summary", "ticker_briefs",
         "veto_cohort_grading", "like_cohort_grading", "evidence_report",
     ]
+    positions = [names.index(item) for item in ORDERED]
+    assert positions == sorted(positions), "later phases append; they never reorder these"
     assert names.index("journal_enrichment") > names.index("daily_digest")
     assert names.index("review_policy_draft") > names.index("daily_digest")
 

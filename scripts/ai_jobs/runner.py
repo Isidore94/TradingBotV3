@@ -528,6 +528,23 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Forward-grade the trader's LIKE cohort (deterministic, no model)",
             max_attempts=3,
         ),
+        # P5, APPENDED after the like slot. Later phases append; they never
+        # reorder these. With these two every verdict the trader can record now
+        # has a forward record: veto, like, pass, not-today and dislike.
+        JobSlot(
+            name="pass_cohort_grading",
+            run=cohorts.run_pass_cohort_grading,
+            reserve_minutes=5.0,
+            description="Forward-grade day-trade PASSES (deterministic, no model)",
+            max_attempts=3,
+        ),
+        JobSlot(
+            name="rejection_cohort_grading",
+            run=cohorts.run_rejection_cohort_grading,
+            reserve_minutes=5.0,
+            description="Forward-grade NOT-TODAY and DISLIKE (deterministic, no model)",
+            max_attempts=3,
+        ),
         # R10.I, APPENDED last. Later phases append; they never reorder. It runs
         # after both cohorts because it READS what they produced - a report
         # ahead of its inputs would describe last night's evidence.

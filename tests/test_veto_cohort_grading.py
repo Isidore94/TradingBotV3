@@ -392,14 +392,25 @@ def test_the_scope_funds_the_distilled_answers_before_the_raw_log():
     import ai_summary
 
     specs = ai_summary._source_specs()["trader_judgement"]
-    assert [source_id for source_id, _label, _path in specs] == [
+    ordered = [source_id for source_id, _label, _path in specs]
+
+    # P5 added the like, pass and rejection rollups: the scope read the veto
+    # trio only, which asks "were your rejections wrong?" and never "were your
+    # endorsements right?" - the flattering half of the question. What this
+    # test protects is the ORDERING RULE, not the membership snapshot.
+    assert ordered[0] == "judgement.veto_performance"
+    assert ordered[-1] == "judgement.annotations", "the raw stream funds last"
+    distilled = set(ordered[:-1])
+    assert distilled >= {
         "judgement.veto_performance",
         "judgement.veto_outcomes",
-        "judgement.annotations",
-    ]
+        "judgement.like_performance",
+        "judgement.pass_performance",
+        "judgement.rejection_performance",
+    }
 
 
-def test_the_scope_resolves_all_three_sources():
+def test_the_scope_resolves_every_source_it_declares():
     import ai_summary
 
     package = ai_summary.build_evidence_package(["trader_judgement"])
@@ -407,12 +418,16 @@ def test_the_scope_resolves_all_three_sources():
     seen = set(coverage["usable_source_ids"]) | {
         row["source_id"] for row in coverage["excluded"]
     }
-    assert seen == {
-        "judgement.veto_performance",
-        "judgement.veto_outcomes",
-        "judgement.annotations",
+    # Every source the scope declares is accounted for - usable or excluded and
+    # named. P5 widened the scope from the veto trio to every verdict, so this
+    # compares against the DECLARATION rather than a frozen list.
+    declared = {
+        source_id for source_id, _label, _path in ai_summary._source_specs()["trader_judgement"]
     }
-    assert coverage["counts"]["requested"] == 3
+    assert seen == declared
+    # Every declared source is requested. P5 widened the scope from the veto
+    # trio to every verdict, so the count follows the declaration.
+    assert coverage["counts"]["requested"] == len(declared)
 
 
 def test_missing_cohort_files_degrade_rather_than_break(tmp_path, monkeypatch):
@@ -523,6 +538,10 @@ def test_the_scope_can_be_selected_on_demand():
         # report after that, and LOCAL-AI Phase 2 the daily digest last. Later
         # phases append; they never reorder the ones above.
         "like_cohort_grading",
+        # P5's two cohorts, appended after the like mirror and before the
+        # report that reads them.
+        "pass_cohort_grading",
+        "rejection_cohort_grading",
         "evidence_report",
         "daily_digest",
         # LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run gated:

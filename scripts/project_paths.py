@@ -452,6 +452,16 @@ VETO_COHORT_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "veto_cohort_performance.csv"
 LIKE_COHORT_PICKS_FILE = RUNTIME_DATA_DIR / "like_cohort_picks.csv"
 LIKE_COHORT_OUTCOMES_FILE = RUNTIME_DATA_DIR / "like_cohort_outcomes.csv"
 LIKE_COHORT_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "like_cohort_performance.csv"
+# P5: the two remaining verdicts, each its own trio. A PASS is "I like this
+# name but not this setup" and a REJECTION is "not today" / "I dislike this";
+# neither is a veto and neither is a like, and pooling either with those would
+# average opposite judgements into one unreadable number.
+PASS_COHORT_PICKS_FILE = RUNTIME_DATA_DIR / "pass_cohort_picks.csv"
+PASS_COHORT_OUTCOMES_FILE = RUNTIME_DATA_DIR / "pass_cohort_outcomes.csv"
+PASS_COHORT_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "pass_cohort_performance.csv"
+REJECTION_COHORT_PICKS_FILE = RUNTIME_DATA_DIR / "rejection_cohort_picks.csv"
+REJECTION_COHORT_OUTCOMES_FILE = RUNTIME_DATA_DIR / "rejection_cohort_outcomes.csv"
+REJECTION_COHORT_PERFORMANCE_FILE = RUNTIME_DATA_DIR / "rejection_cohort_performance.csv"
 MASTER_AVWAP_BUCKET_STATE_FILE = RUNTIME_DATA_DIR / "master_avwap_bucket_state.json"
 
 SECTOR_ETF_MAP_FILE = DATA_DIR / "sector_etf_map.json"

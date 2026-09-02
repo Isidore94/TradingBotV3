@@ -285,3 +285,171 @@ def _write_pick_subset(path: Path, columns: Any, rows: list[dict[str, Any]]) -> 
         writer.writeheader()
         for row in rows:
             writer.writerow({column: row.get(column, "") for column in fieldnames})
+
+
+def _run_cohort_grading(
+    *,
+    label: str,
+    merge,
+    grade,
+    picks: Path,
+    outcomes: Path,
+    performance: Path,
+    bars_dir: Path,
+    now,
+) -> dict[str, Any]:
+    """The shape both P5 cohorts share with the veto and like slots.
+
+    Merge first, then grade only the rows that carry a side. A pick with no
+    side is COUNTED AND NAMED, never graded: forward returns are side-adjusted
+    and a blank side reads as LONG downstream, so grading one would manufacture
+    a direction the trader never expressed.
+
+    Deterministic and idempotent - no model is called, and running twice in one
+    night produces identical files.
+    """
+    merged = merge(picks_path=picks, now=now)
+    rows = _read_pick_rows(picks)
+    if not rows:
+        return {
+            "status": "skipped",
+            "reason": (
+                f"no {label} cohort picks yet at {picks.name}"
+                + (
+                    f"; {merged['skipped_no_side']} row(s) carry no side"
+                    if merged.get("skipped_no_side")
+                    else ""
+                )
+            ),
+            "picks": 0,
+            "skipped_no_side": merged.get("skipped_no_side", 0),
+        }
+
+    gradeable, ungradeable = partition_by_gradeable_side(rows)
+    if not gradeable:
+        return {
+            "status": "skipped",
+            "reason": (
+                f"{len(ungradeable)} {label} pick(s) carry no side and none can "
+                "be graded; a side is never assumed"
+            ),
+            "picks": len(rows),
+            "skipped_no_side": len(ungradeable),
+        }
+
+    staged = None
+    try:
+        source = picks
+        if ungradeable:
+            staged = picks.with_name(picks.name + ".gradeable.tmp")
+            _write_pick_subset(staged, rows[0].keys(), gradeable)
+            source = staged
+        result = grade(
+            reference_date=None,
+            picks_path=source,
+            outcomes_path=outcomes,
+            performance_path=performance,
+            daily_bars_dir=bars_dir,
+            now=now,
+        )
+    finally:
+        if staged is not None:
+            try:
+                staged.unlink()
+            except OSError:
+                pass
+
+    return {
+        "status": "ok",
+        "picks": len(rows),
+        "added": merged.get("added", 0),
+        "skipped_no_side": len(ungradeable),
+        "outcome_rows": result.get("outcome_rows", 0),
+        "performance_rows": result.get("performance_rows", 0),
+        "reason": (
+            f"{len(gradeable)} {label} pick(s) graded; "
+            f"{result.get('performance_rows', 0)} performance row(s)"
+            + (f"; {len(ungradeable)} skipped for no side" if ungradeable else "")
+        ),
+    }
+
+
+def run_pass_cohort_grading(
+    *,
+    now=None,
+    picks_path=None,
+    outcomes_path=None,
+    performance_path=None,
+    daily_bars_dir=None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Grade every day-trade PASS forward. P5.
+
+    The third verdict. The veto cohort grades what was thrown away and the like
+    cohort what was endorsed; a pass is neither - it is "I like this name but
+    not this setup" - and until now nothing measured whether the one issue the
+    trader passed on actually mattered.
+
+    A pass with k reason codes produces k+1 rows: one per code and one pooled
+    `pass_all`. The code cohorts therefore OVERLAP and must never be summed;
+    only `pass_all` counts passes. See `ui.annotations.pass_cohort`.
+    """
+    from project_paths import MASTER_AVWAP_DAILY_BARS_DIR
+    from ui.annotations.pass_cohort import (
+        PASS_COHORT_OUTCOMES_FILE,
+        PASS_COHORT_PERFORMANCE_FILE,
+        PASS_COHORT_PICKS_FILE,
+        merge_pass_cohort_picks,
+        update_pass_cohort_outcomes,
+    )
+
+    return _run_cohort_grading(
+        label="pass",
+        merge=merge_pass_cohort_picks,
+        grade=update_pass_cohort_outcomes,
+        picks=Path(picks_path or PASS_COHORT_PICKS_FILE),
+        outcomes=Path(outcomes_path or PASS_COHORT_OUTCOMES_FILE),
+        performance=Path(performance_path or PASS_COHORT_PERFORMANCE_FILE),
+        bars_dir=Path(daily_bars_dir or MASTER_AVWAP_DAILY_BARS_DIR),
+        now=now,
+    )
+
+
+def run_rejection_cohort_grading(
+    *,
+    now=None,
+    picks_path=None,
+    outcomes_path=None,
+    performance_path=None,
+    daily_bars_dir=None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Grade NOT-TODAY and DISLIKE forward. P5.
+
+    The fourth and fifth verdicts, and the last two that had no forward record
+    at all: 223 not-todays and 34 dislikes on the live log. They are separate
+    cohorts and never pooled - a same-day throwback and a judgement on the name
+    are different claims. See `rejection_cohort`.
+    """
+    from project_paths import (
+        MASTER_AVWAP_DAILY_BARS_DIR,
+        REJECTION_COHORT_OUTCOMES_FILE,
+        REJECTION_COHORT_PERFORMANCE_FILE,
+        REJECTION_COHORT_PICKS_FILE,
+    )
+    from rejection_cohort import (
+        merge_rejection_cohort_picks,
+        update_rejection_cohort_outcomes,
+    )
+
+    return _run_cohort_grading(
+        label="rejection",
+        merge=merge_rejection_cohort_picks,
+        grade=update_rejection_cohort_outcomes,
+        picks=Path(picks_path or REJECTION_COHORT_PICKS_FILE),
+        outcomes=Path(outcomes_path or REJECTION_COHORT_OUTCOMES_FILE),
+        performance=Path(performance_path or REJECTION_COHORT_PERFORMANCE_FILE),
+        bars_dir=Path(daily_bars_dir or MASTER_AVWAP_DAILY_BARS_DIR),
+        now=now,
+    )
+

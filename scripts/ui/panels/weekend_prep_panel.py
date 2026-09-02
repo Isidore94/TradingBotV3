@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -324,6 +325,25 @@ class FocusReviewPage(_StepPage):
         self.like_note = QLabel("")
         self.like_note.setWordWrap(True)
 
+        # P5: the other two verdicts. With these four tables the page shows
+        # every judgement the trader can record - thrown away, endorsed, passed
+        # on, and thrown back - rather than only the two that had graders first.
+        self.pass_table = QTableWidget(0, len(P5_COHORT_COLUMNS))
+        self.pass_table.setHorizontalHeaderLabels(
+            ["Pass reason", *P5_COHORT_HEADERS[1:]]
+        )
+        self.pass_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.pass_note = QLabel("")
+        self.pass_note.setWordWrap(True)
+
+        self.rejection_table = QTableWidget(0, len(P5_COHORT_COLUMNS))
+        self.rejection_table.setHorizontalHeaderLabels(
+            ["Verdict", *P5_COHORT_HEADERS[1:]]
+        )
+        self.rejection_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.rejection_note = QLabel("")
+        self.rejection_note.setWordWrap(True)
+
         # Packet W2: R8 sec 6's last two DEFERRED joins. The cohorts above are
         # the two judgement mirrors - what was thrown away, what was endorsed.
         # These are the picks THEMSELVES: how they behaved, and what the trader
@@ -357,6 +377,12 @@ class FocusReviewPage(_StepPage):
         self._layout.addWidget(QLabel("Liked picks, graded forward"))
         self._layout.addWidget(self.like_table, 1)
         self._layout.addWidget(self.like_note)
+        self._layout.addWidget(QLabel("Day-trade passes, graded forward"))
+        self._layout.addWidget(self.pass_table, 1)
+        self._layout.addWidget(self.pass_note)
+        self._layout.addWidget(QLabel("Not-today and dislike, graded forward"))
+        self._layout.addWidget(self.rejection_table, 1)
+        self._layout.addWidget(self.rejection_note)
         self._layout.addWidget(QLabel("Focus picks, graded forward"))
         self._layout.addWidget(self.performance_table, 1)
         self._layout.addWidget(self.performance_note)
@@ -390,6 +416,8 @@ class FocusReviewPage(_StepPage):
         return {
             "cohort": _read_veto_cohort(),
             "like": _read_like_cohort(),
+            "pass": _read_pass_cohort(),
+            "rejection": _read_rejection_cohort(),
             "performance": _read_focus_performance(),
             "feedback": _read_pick_feedback_week(self.service.week_bounds),
             "week": _join_focus_week(self.service.week_bounds),
@@ -400,6 +428,8 @@ class FocusReviewPage(_StepPage):
         data = payload if isinstance(payload, dict) else {}
         self._render_cohort(data.get("cohort") or [])
         self._render_like_cohort(data.get("like") or [])
+        self._render_pass_cohort(data.get("pass") or [])
+        self._render_rejection_cohort(data.get("rejection") or [])
         self._render_performance(data.get("performance") or [])
         self._render_feedback(data.get("feedback") or [])
         self._render_week(data.get("week") or [])
@@ -549,6 +579,56 @@ class FocusReviewPage(_StepPage):
             "n is small per family and a blank is a horizon that has not matured. "
             "The two tables are the mirror pair - what you threw away, and what "
             "you endorsed."
+        )
+
+    def _render_pass_cohort(self, rows) -> None:
+        """The day-trade PASS cohort - "did the issue I passed on matter?".
+
+        The overlap warning is not a footnote here, it is the first thing the
+        note says: a pass with k reason codes is in k code cohorts AND in
+        `pass_all`, so the code rows share samples and adding them up is
+        arithmetic on the same passes several times over.
+        """
+        _fill_p5_cohort_table(self.pass_table, rows)
+        if not rows:
+            self.pass_note.setText(
+                "No graded PASS cohort yet. It is written by the overnight "
+                "pass_cohort_grading slot, and a pass needs forward sessions "
+                "before it means anything - this is an absent measurement, not "
+                "a week without passes."
+            )
+            return
+        pooled = sum(1 for row in rows if str(row.get("cohort") or "").endswith("_all"))
+        self.pass_note.setText(
+            f"{len(rows)} row(s). {_p5_overlap_note()} "
+            f"{pooled} pooled row(s) here count PASSES; every other row counts "
+            "(pass, reason) pairs. Returns are side-adjusted, so POSITIVE means "
+            "the name you passed on WOULD have worked - read that as discovery "
+            "about the reason, not a verdict on the decision. "
+            + _floor_sentence_simple(rows)
+        )
+
+    def _render_rejection_cohort(self, rows) -> None:
+        """NOT-TODAY and DISLIKE, kept apart on purpose.
+
+        A same-day throwback and a judgement on the name are different claims,
+        and `pick_feedback` has kept them distinct since packet R2. Pooling
+        them here would undo that in the one place a reader looks.
+        """
+        _fill_p5_cohort_table(self.rejection_table, rows)
+        if not rows:
+            self.rejection_note.setText(
+                "No graded NOT-TODAY / DISLIKE cohort yet. It is written by the "
+                "overnight rejection_cohort_grading slot - an absent "
+                "measurement, not a record without rejections."
+            )
+            return
+        self.rejection_note.setText(
+            f"{len(rows)} row(s). `not_today` is ONE session thrown back and "
+            "`dislike` is the name itself; they are separate cohorts and are "
+            "never pooled. Returns are side-adjusted, so POSITIVE means the "
+            "pick you turned down WOULD have worked. "
+            + _floor_sentence_simple(rows)
         )
 
     def _render_cohort(self, rows) -> None:
@@ -1334,6 +1414,128 @@ def _focus_row(key, pick, outcome, *, orphan: bool) -> dict[str, Any]:
     }
 
 
+
+
+#: The six columns the older cohort tables use, PLUS the two evidence columns
+#: `human_focus_tracking` has written since R10.C and those tables drop. A new
+#: table has no legacy shape to preserve, so it shows them from the first row.
+P5_COHORT_COLUMNS = (
+    "cohort",
+    "side",
+    "horizon",
+    "n",
+    "win_rate",
+    "avg_return",
+    "profit_factor",
+    "meets_n_floor",
+    "evidence",
+)
+P5_COHORT_HEADERS = (
+    "Cohort",
+    "Side",
+    "Horizon",
+    "n",
+    "Win rate",
+    "Avg return",
+    "PF",
+    "Floor",
+    "Evidence",
+)
+
+
+def _p5_overlap_note() -> str:
+    """The overlap sentence, from the module that owns it - never retyped."""
+    try:
+        from ui.annotations.pass_cohort import OVERLAP_NOTE
+
+        return str(OVERLAP_NOTE)
+    except Exception:  # noqa: BLE001 - a note is never worth a blank page
+        return (
+            "A pass with several reason codes appears in several cohorts, so "
+            "they overlap and must never be summed."
+        )
+
+
+def _floor_sentence_simple(rows) -> str:
+    under = sum(1 for row in rows if str(row.get("meets_n_floor") or "") != "1")
+    if not rows or not under:
+        return "Every row shown clears the reportable-n floor."
+    return (
+        f"{under} of {len(rows)} row(s) are UNDER the reportable-n floor and are "
+        "greyed: a cohort below the floor is not a weak finding, it is not a "
+        "finding."
+    )
+
+
+def _fill_p5_cohort_table(table, rows) -> None:
+    """Write a P5 cohort table, greying anything under its own floor.
+
+    The grey is a FOREGROUND ROLE on the item, never a per-widget stylesheet -
+    a stylesheet per row is the cost the fluidity rules forbid.
+    """
+    from ui import theme
+
+    try:
+        muted = QColor(theme.color("text_muted"))
+    except Exception:  # noqa: BLE001
+        muted = None
+    table.setRowCount(len(rows))
+    for index, row in enumerate(rows):
+        under_floor = str(row.get("meets_n_floor") or "") != "1"
+        for column, key in enumerate(P5_COHORT_COLUMNS):
+            item = QTableWidgetItem(str(row.get(key) or ""))
+            if under_floor and muted is not None:
+                item.setForeground(muted)
+            table.setItem(index, column, item)
+    apply_width_rule_to_table_widget(table, text_columns=(0,), elide_columns=(0,))
+
+
+def _read_p5_cohort(path) -> list[dict[str, str]]:
+    """One P5 cohort rollup, by NAMED CONSTANT.
+
+    Read-only and forgiving like every other reader on this page: an
+    unreadable or missing file is a quieter page, not an error worth stopping
+    the routine for. Nothing here computes a statistic the CSV does not carry
+    (ground rule 6) - the columns are reformatted, never derived.
+    """
+    import csv
+
+    target = Path(path)
+    if not target.is_file():
+        return []
+    try:
+        with target.open("r", encoding="utf-8", newline="") as handle:
+            raw_rows = list(csv.DictReader(handle))
+    except OSError:
+        return []
+    return [
+        {
+            "cohort": str(raw.get("cohort") or "").strip(),
+            "side": str(raw.get("side") or "").strip(),
+            "horizon": str(raw.get("horizon_sessions") or "").strip(),
+            "n": str(raw.get("sample_count") or "").strip(),
+            "win_rate": _cohort_pct(raw.get("win_rate")),
+            "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
+            "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+            "meets_n_floor": str(raw.get("meets_n_floor") or "").strip(),
+            "evidence": str(raw.get("evidence_label") or "").strip(),
+        }
+        for raw in raw_rows
+    ]
+
+
+def _read_pass_cohort() -> list[dict[str, str]]:
+    """The day-trade PASS rollup (P5)."""
+    import project_paths
+
+    return _read_p5_cohort(project_paths.PASS_COHORT_PERFORMANCE_FILE)
+
+
+def _read_rejection_cohort() -> list[dict[str, str]]:
+    """The NOT-TODAY / DISLIKE rollup (P5)."""
+    import project_paths
+
+    return _read_p5_cohort(project_paths.REJECTION_COHORT_PERFORMANCE_FILE)
 
 
 def _read_focus_performance() -> list[dict[str, str]]:

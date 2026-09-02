@@ -50,6 +50,9 @@ from project_paths import (
     TRADER_ANNOTATIONS_FILE,
     VETO_COHORT_OUTCOMES_FILE,
     VETO_COHORT_PERFORMANCE_FILE,
+    LIKE_COHORT_PERFORMANCE_FILE,
+    PASS_COHORT_PERFORMANCE_FILE,
+    REJECTION_COHORT_PERFORMANCE_FILE,
 )
 
 
@@ -833,9 +836,38 @@ def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
                 "Veto cohort forward returns",
                 VETO_COHORT_OUTCOMES_FILE,
             ),
+            # Every verdict, not just the rejections. The scope was built when
+            # the veto trio was the only graded judgement; reading it alone
+            # asks the model "were your rejections wrong?" and never "were your
+            # endorsements right?", which is the flattering half of the
+            # question. P5 completes the set.
+            (
+                "judgement.like_performance",
+                "Like cohort performance by claimed setup",
+                LIKE_COHORT_PERFORMANCE_FILE,
+            ),
+            (
+                "judgement.pass_performance",
+                (
+                    "Day-trade PASS cohort performance by reason code. A pass "
+                    "with k codes appears in k code cohorts AND in pass_all, so "
+                    "the code cohorts OVERLAP and must never be summed - only "
+                    "pass_all's n counts passes."
+                ),
+                PASS_COHORT_PERFORMANCE_FILE,
+            ),
+            (
+                "judgement.rejection_performance",
+                (
+                    "NOT-TODAY and DISLIKE cohort performance. Separate cohorts, "
+                    "never pooled: a same-day throwback and a judgement on the "
+                    "name are different claims."
+                ),
+                REJECTION_COHORT_PERFORMANCE_FILE,
+            ),
             (
                 "judgement.annotations",
-                "Trader capture log (vetoes, setup claims, notes)",
+                "Trader capture log (vetoes, passes, setup claims, notes)",
                 TRADER_ANNOTATIONS_FILE,
             ),
         ],

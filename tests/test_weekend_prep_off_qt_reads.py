@@ -189,6 +189,10 @@ FOCUS_READS = (
     "_join_focus_week",
     "_read_veto_cohort",
     "_read_like_cohort",
+    # P5's two cohorts, APPENDED: a reader added to this page and left off this
+    # list is a file read back on the Qt thread that nothing would catch.
+    "_read_pass_cohort",
+    "_read_rejection_cohort",
     "_read_focus_performance",
     "_read_pick_feedback_week",
 )
