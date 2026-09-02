@@ -202,6 +202,10 @@ BACKFILL_TRIALS: tuple[Mapping[str, Any], ...] = (
     {
         "trial_id": "setup_entry_timing_avwape_first_dev_long_v1",
         "schema": SCHEMA,
+        # The paste date, which IS this grid's authorization pointer. Not
+        # backfill: this is the one row whose declaration really was made on the
+        # day it is stamped with.
+        "registered_at": "2026-09-02T00:00:00+00:00",
         "family": "AVWAPE_TO_FIRST_DEV",
         "question": (
             "For a D1 AVWAPE-to-first-dev LONG occurrence, does an entry that WAITS "

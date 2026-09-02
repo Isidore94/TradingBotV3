@@ -33,6 +33,16 @@ FIXTURE = ROOT / "tests" / "fixtures" / "setup_entry_timing_parity_v1.json"
 
 #: The three cells the P8 control must reproduce. Rank-1 current-anchor stops at
 #: the three shared targets - the same selector every P8 cell carries.
+#: THE COMMIT the expected rows are pinned FROM, not a moving branch (R1).
+#:
+#: This read `main` originally, which was correct on the day it ran and becomes
+#: a self-portrait the moment P8 merges: a rerun would then compare the new code
+#: against itself and pass no matter what it had broken. `1837b63` is the tip of
+#: `main` immediately before P8 was cut - the last commit that had never heard of
+#: this grid. Moving it forward is a deliberate act, not a side effect of a
+#: merge.
+PINNED_BASELINE = "1837b63"
+
 PARITY_RECIPE_IDS = (
     "m5close_current_anchor1_1r_v1",
     "m5close_current_anchor1_2r_v1",
@@ -138,7 +148,7 @@ def _pre_change_module():
     import shutil
 
     committed = subprocess.run(
-        ["git", "show", "main:scripts/research_warehouse/outcomes.py"],
+        ["git", "show", f"{PINNED_BASELINE}:scripts/research_warehouse/outcomes.py"],
         cwd=ROOT, capture_output=True, text=True, check=True,
     ).stdout
     tmp = Path(tempfile.mkdtemp(prefix="p8-parity-"))

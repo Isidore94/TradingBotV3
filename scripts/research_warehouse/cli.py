@@ -39,6 +39,7 @@ try:  # package import
         queries,
         schemas,
         tracker_adapter,
+        trial_ledger,
     )
     from .aggregate import build_derived_bars, build_trading_sessions, build_weekly_bars
     from .ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots
@@ -61,6 +62,7 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     from spool import seal_spool  # type: ignore
     from store import ResearchStore  # type: ignore
     import outcome_coverage  # type: ignore
+    import trial_ledger  # type: ignore
 
 LOCK_NAME = "research_build.lock"
 JOB_TYPE = "research_warehouse_build"
@@ -563,6 +565,27 @@ def run_build(
                 run_id=run_id,
                 now=stamp,
             )
+            # THE TRIAL LEDGER, WRITTEN BY THE BUILD (R1).
+            #
+            # Gate 37 asks for a ledger row after one overnight run, and nothing
+            # in production wrote one - the module existed and only tests called
+            # it, so the declarations that are supposed to predate every outcome
+            # would have been written after them, by hand, whenever somebody
+            # remembered. Here they are written by the same run that produces the
+            # rows they govern, and BEFORE the report is finished.
+            #
+            # Idempotent by construction: `register` refuses a trial_id the
+            # ledger already carries, so every firing after the first writes
+            # nothing. Never allowed to cost the build, exactly like the line
+            # above it.
+            try:
+                report.steps["trial_ledger"] = {
+                    "registered": trial_ledger.backfill(target.root)
+                }
+            except Exception:  # noqa: BLE001
+                # Swallowed like the coverage line above: an evidence store
+                # never costs the build that feeds it.
+                report.steps["trial_ledger"] = {"registered": [], "status": "skipped"}
             report.steps["backups"] = _run_backups(target, stamp)
             report.steps["retired"] = vars(target.collect_retired(now=stamp))
             _record_job("COMPLETED", {"run_id": run_id})

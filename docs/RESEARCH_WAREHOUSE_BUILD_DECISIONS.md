@@ -2394,6 +2394,21 @@ parameter to a function every published `m5close_*` row came from.
 it is a NEW grid with its own trial-ledger row and its own k, not a widening of
 this one.
 
+**Correction, review round R1 (2026-09-02).** This entry originally said the
+derived series were memoised per occurrence. **They were not** -
+`_entry_from_derived` called `_htf_series` fresh on every cell, so one
+occurrence rebuilt the same M15 series three times and the same M30 series three
+more. Measured: **2.06 s per occurrence, of which ~0.8 s was rebuilding series
+already built.** The cache `simulate_htf_lrsi_entry` uses is now threaded
+through the same way - handed in by the caller, keyed by symbol/timeframe/cutoff,
+dropped with the occurrence, never module-level. A test counts the `_htf_series`
+calls and fails if the M15 series is built more than once for one occurrence.
+
+The parity fixture's baseline was also a moving target: it read `main`, which is
+correct until P8 merges and then becomes a self-portrait - a rerun would compare
+the new code against itself. It is pinned to `1837b63`, the last commit that had
+never heard of this grid.
+
 **Where.** `research_warehouse/outcomes.py` (`SETUP_ENTRY_TIMING_*`,
 `simulate_setup_entry_timing`, the `entry_selector` parameter),
 `scripts/build_setup_entry_timing_fixture.py`,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -246,9 +246,24 @@ def test_no_p8_family_is_registered_in_outcome_semantics():
     from research_warehouse import outcomes
 
     families = {spec.family for spec in outcome_semantics.FAMILY_SPECS}
-    assert outcomes.SETUP_ENTRY_TIMING_FAMILY not in families or True
+    # R1: this line was `... not in families or True`, which is true for every
+    # possible value and asserted nothing. BD-80's rule is about the RECIPE ids,
+    # which is what a warehouse `outcome_path` row is keyed by; the setup family
+    # name is a warehouse canonical id and is not registered here either.
+    assert outcomes.SETUP_ENTRY_TIMING_FAMILY not in families
     for recipe in outcomes.SETUP_ENTRY_TIMING_RECIPES:
         assert recipe.recipe_id not in families
+    # And nothing in the grid may acquire a claim kind - that is the seam
+    # BD-80 actually guards.
+    # `unconfigured` is the honest answer for a source nothing registered, and
+    # it is the answer that keeps these rows out of every trade statistic:
+    # `claim_kind` decides what may be averaged as a trade at all.
+    assert (
+        outcome_semantics.claim_kind(
+            {"source": outcomes.SETUP_ENTRY_TIMING_RECIPES[0].recipe_id}
+        )
+        == "unconfigured"
+    )
 
 
 def test_the_grid_reaches_no_live_surface():
@@ -314,3 +329,226 @@ def test_the_fixture_is_contract_bearing():
     from conftest import validate_fixture_contract
 
     validate_fixture_contract(_fixture(), "setup_entry_timing_parity_v1")
+
+
+# ---------------------------------------------------------------------------
+# Review round R1: the entries are asserted on hand-built bars, not inferred
+# ---------------------------------------------------------------------------
+
+
+TRIGGER_AT = datetime(2026, 8, 3, 20, 0, tzinfo=timezone.utc)
+LEVEL = 100.0
+
+
+def _m5(start_minute: int, open_: float, high: float, low: float, close: float) -> dict:
+    """One completed RTH M5 bar on 2026-08-04, `start_minute` after the open."""
+    start = datetime(2026, 8, 4, 13, 30, tzinfo=timezone.utc) + timedelta(minutes=start_minute)
+    return {
+        "interval_start": start,
+        "interval_end": start + timedelta(minutes=5),
+        "open": open_, "high": high, "low": low, "close": close,
+        "volume": 1000, "is_complete": True, "capture_mode": "LIVE",
+    }
+
+
+def _occurrence(**extra) -> dict:
+    row = {
+        "occurrence_id": "r1-0001",
+        "symbol": "TESTR1",
+        "canonical_setup_id": "AVWAPE_TO_FIRST_DEV",
+        "side": "LONG",
+        "trigger_at": TRIGGER_AT,
+        "entry_price_ref": LEVEL,
+        "dependency_cluster_id": "r1-cluster",
+    }
+    row.update(extra)
+    return row
+
+
+def test_m15_acceptance_picks_the_bar_that_closes_the_m15_bucket():
+    """An M15 close is the LAST M5 bar of its bucket, and only a completed one.
+
+    The bars are engineered so the 13:45 bucket closes BELOW the level and the
+    14:00 bucket closes above it: the entry must be the M5 bar ending 14:00, not
+    13:45 (which did not accept) and not 14:15 (which is later than the first
+    acceptance).
+    """
+    from research_warehouse.outcomes import _entry_after_m15_acceptance
+
+    bars = []
+    # 13:30-13:45 : below the level throughout.
+    for index in range(3):
+        bars.append(_m5(index * 5, 99.0, 99.4, 98.8, 99.2))
+    # 13:45-14:00 : rises and CLOSES above the level on the last bar.
+    bars.append(_m5(15, 99.3, 99.8, 99.2, 99.6))
+    bars.append(_m5(20, 99.6, 100.4, 99.5, 99.9))
+    bars.append(_m5(25, 99.9, 100.9, 99.8, 100.7))
+    # 14:00-14:15 : also above, but later.
+    for index in range(3):
+        bars.append(_m5(30 + index * 5, 100.7, 101.5, 100.6, 101.2))
+
+    entry, session = _entry_after_m15_acceptance(
+        _occurrence(), bars, as_of=datetime(2026, 8, 10, tzinfo=timezone.utc)
+    )
+    assert entry is not None and session is not None
+    assert entry["interval_end"] == datetime(2026, 8, 4, 14, 0, tzinfo=timezone.utc)
+
+
+def test_m15_acceptance_refuses_the_bucket_that_ends_at_the_trigger():
+    """A derived bar ending AT the trigger is the signal bar itself."""
+    from research_warehouse.outcomes import _entry_after_m15_acceptance
+
+    bars = [_m5(index * 5, 101.0, 101.5, 100.8, 101.2) for index in range(6)]
+    # Move the trigger to the instant the first M15 bucket closes.
+    occurrence = _occurrence(trigger_at=datetime(2026, 8, 4, 13, 45, tzinfo=timezone.utc))
+
+    entry, _session = _entry_after_m15_acceptance(
+        occurrence, bars, as_of=datetime(2026, 8, 10, tzinfo=timezone.utc)
+    )
+    assert entry is not None
+    assert entry["interval_end"] > datetime(2026, 8, 4, 13, 45, tzinfo=timezone.utc)
+
+
+def test_the_m5_retest_picks_the_bar_that_tags_the_level_and_closes_holding_it():
+    """low <= 100 and close > 100, and not the bar before it."""
+    from research_warehouse.outcomes import _entry_after_m5_retest
+
+    bars = [
+        _m5(0, 100.5, 100.9, 100.4, 100.8),    # entry bar; never comes back
+        _m5(5, 100.8, 101.0, 100.5, 100.6),    # still above; no tag
+        _m5(10, 100.6, 100.7, 99.9, 100.3),    # TAGS 99.9 and closes 100.3
+        _m5(15, 100.3, 101.2, 100.2, 101.0),   # later
+    ]
+    entry, session = _entry_after_m5_retest(
+        _occurrence(), bars, as_of=datetime(2026, 8, 10, tzinfo=timezone.utc)
+    )
+    assert entry is not None and session is not None
+    assert entry["low"] == 99.9
+    assert entry["close"] == 100.3
+
+
+def test_the_m5_retest_refuses_a_bar_that_closes_through_the_level():
+    from research_warehouse.outcomes import _entry_after_m5_retest
+
+    bars = [
+        _m5(0, 100.5, 100.9, 100.4, 100.8),
+        _m5(5, 100.6, 100.7, 99.5, 99.7),      # tagged and FAILED to hold
+    ]
+    entry, _session = _entry_after_m5_retest(
+        _occurrence(), bars, as_of=datetime(2026, 8, 10, tzinfo=timezone.utc)
+    )
+    assert entry is None
+
+
+def _session_m5(day: int, minute: int, open_: float, high: float, low: float, close: float) -> dict:
+    start = datetime(2026, 8, day, 13, 30, tzinfo=timezone.utc) + timedelta(minutes=minute)
+    return {
+        "interval_start": start,
+        "interval_end": start + timedelta(minutes=5),
+        "open": open_, "high": high, "low": low, "close": close,
+        "volume": 1000, "is_complete": True, "capture_mode": "LIVE",
+    }
+
+
+def _pullback_bars(final_close: float) -> list[dict]:
+    """A rising trend over three sessions, then one engineered touch-and-hold.
+
+    THREE sessions on purpose: RTH is 6.5 hours, which is thirteen M30 buckets,
+    and the EMA pair needs twenty-one - a single session can never answer this
+    question, which is itself the `SETUP_ENTRY_TIMING_MIN_EMA_BARS` rule doing
+    its job.
+
+    The rise puts EMA15 above EMA21 (trend order). The last bucket dips to the
+    band and closes wherever the caller says, which is the only thing that
+    differs between a controlled pullback and a break.
+    """
+    bars: list[dict] = []
+    price = 90.0
+    for day in (4, 5, 6):
+        minute = 0
+        for _bucket in range(13):
+            for _index in range(6):
+                bars.append(_session_m5(day, minute, price, price + 0.2, price - 0.2, price + 0.15))
+                price += 0.15
+                minute += 5
+    # The engineered bucket, on a fourth session: a deep low into the rising
+    # EMAs, closing where told.
+    minute = 0
+    for index in range(6):
+        low = 100.0 if index == 3 else price - 0.2
+        close = final_close if index == 5 else price
+        bars.append(_session_m5(7, minute, price, price + 0.2, low, close))
+        minute += 5
+    return bars
+
+
+def test_the_m30_pullback_fires_on_a_touch_that_holds_and_not_on_a_break():
+    """A bar that closes THROUGH the band is a break, not a controlled pullback."""
+    from research_warehouse.outcomes import _entry_after_m30_ema_pullback
+
+    as_of = datetime(2026, 8, 10, tzinfo=timezone.utc)
+    held, _session = _entry_after_m30_ema_pullback(
+        _occurrence(), _pullback_bars(final_close=130.0), as_of=as_of
+    )
+    broke, _ = _entry_after_m30_ema_pullback(
+        _occurrence(), _pullback_bars(final_close=95.0), as_of=as_of
+    )
+    assert held is not None, "a touch that closes back above the band is the entry"
+    assert broke is None, "a close through the band is a break, and no entry"
+
+
+def test_the_derived_series_are_built_once_per_occurrence():
+    """BD-88 claimed memoisation the code did not have."""
+    from research_warehouse import outcomes
+
+    calls: list[str] = []
+    real = outcomes._htf_series
+
+    def counted(bars, timeframe, **kwargs):
+        calls.append(timeframe)
+        return real(bars, timeframe, **kwargs)
+
+    outcomes._htf_series = counted
+    try:
+        occurrence, bars = _inputs()
+        cache: dict = {}
+        for target in ("1r", "2r", "3r"):
+            outcomes.simulate_setup_entry_timing(
+                occurrence,
+                bars,
+                _recipe(f"setupentry_m15_acceptance_close_{target}_v1"),
+                as_of=_as_of(),
+                computed_at=_as_of(),
+                run_id="t",
+                series_cache=cache,
+            )
+    finally:
+        outcomes._htf_series = real
+
+    assert calls.count("M15") == 1, f"the M15 series was rebuilt {calls.count('M15')} times"
+
+
+def test_the_parity_fixture_is_pinned_to_a_commit_and_not_to_a_branch():
+    """R1: reading `main` becomes a self-portrait the moment P8 merges.
+
+    A rerun would then compare the new code against itself and pass however
+    badly it had broken. The baseline is a commit that never heard of this grid,
+    and moving it forward has to be a deliberate act.
+    """
+    import build_setup_entry_timing_fixture as builder
+
+    assert builder.PINNED_BASELINE == "1837b63"
+    source = (ROOT / "scripts" / "build_setup_entry_timing_fixture.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"main:scripts/research_warehouse/outcomes.py"' not in source
+
+
+def test_the_build_registers_the_trial_ledger():
+    """Gate 37 needs a row and nothing in production wrote one."""
+    source = (ROOT / "scripts" / "research_warehouse" / "cli.py").read_text(encoding="utf-8")
+    assert "trial_ledger.backfill(target.root)" in source
+    # Beside the coverage line, in the same never-costs-the-build shape.
+    assert source.index("outcome_coverage.record_firing") < source.index(
+        "trial_ledger.backfill"
+    )

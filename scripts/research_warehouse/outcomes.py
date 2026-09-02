@@ -1273,7 +1273,7 @@ def _ema_series(values: list[float], length: int) -> list[float | None]:
     return out
 
 
-def _entry_after_m15_acceptance(occurrence: dict, ordered: list[dict], *, as_of: datetime):
+def _entry_after_m15_acceptance(occurrence: dict, ordered: list[dict], *, as_of: datetime, series_cache: dict | None = None):
     """First completed M15 close beyond the trigger level, on the trade side.
 
     "Acceptance" is the plainest form of waiting for confirmation: a completed
@@ -1287,13 +1287,14 @@ def _entry_after_m15_acceptance(occurrence: dict, ordered: list[dict], *, as_of:
         ordered,
         timeframe="M15",
         as_of=as_of,
+        series_cache=series_cache,
         qualifies=lambda bar, level, side, _index, _series: _beyond(
             _number(bar.get("close")), level, side
         ),
     )
 
 
-def _entry_after_m5_retest(occurrence: dict, ordered: list[dict], *, as_of: datetime):
+def _entry_after_m5_retest(occurrence: dict, ordered: list[dict], *, as_of: datetime, series_cache: dict | None = None):
     """First completed M5 bar that comes BACK to the trigger and closes holding it.
 
     The other confirmation entries wait for strength; this one waits for the
@@ -1323,7 +1324,7 @@ def _entry_after_m5_retest(occurrence: dict, ordered: list[dict], *, as_of: date
     return None, None
 
 
-def _entry_after_m30_ema_pullback(occurrence: dict, ordered: list[dict], *, as_of: datetime):
+def _entry_after_m30_ema_pullback(occurrence: dict, ordered: list[dict], *, as_of: datetime, series_cache: dict | None = None):
     """First completed M30 bar that touches the EMA15/21 band and closes above it.
 
     "Controlled pullback" is spelled out rather than implied: the two EMAs must
@@ -1363,6 +1364,7 @@ def _entry_after_m30_ema_pullback(occurrence: dict, ordered: list[dict], *, as_o
         as_of=as_of,
         qualifies=qualifies,
         min_bars=SETUP_ENTRY_TIMING_MIN_EMA_BARS,
+        series_cache=series_cache,
     )
 
 
@@ -1381,6 +1383,7 @@ def _entry_from_derived(
     as_of: datetime,
     qualifies,
     min_bars: int = 1,
+    series_cache: dict | None = None,
 ):
     """Find a qualifying DERIVED bar, then hand back the M5 bar it ends on.
 
@@ -1399,10 +1402,25 @@ def _entry_from_derived(
     if not isinstance(trigger, datetime):
         return None, None
     eligible_from = trigger if trigger.tzinfo else trigger.replace(tzinfo=timezone.utc)
-    series = [
-        row for row in _htf_series(ordered, timeframe, as_of=as_of)
-        if row.get("interval_end") <= as_of
-    ]
+    # MEMOISED PER OCCURRENCE (R1), the way `simulate_htf_lrsi_entry` does it.
+    # BD-88 said the derived series were memoised and they were not: this grid
+    # runs three targets per entry variant, so one occurrence rebuilt the same
+    # M15 series three times and the same M30 series three more. Measured at
+    # 2.06 s per occurrence, ~0.8 s of it rebuilding series already built.
+    #
+    # The cache is handed in by the caller, keyed by symbol/timeframe/cutoff and
+    # dropped with the occurrence - never a module-level cache that could serve
+    # one occurrence's bars to another.
+    cache_key = (str(occurrence.get("symbol") or ""), timeframe, as_of)
+    if series_cache is not None and cache_key in series_cache:
+        series = series_cache[cache_key]
+    else:
+        series = [
+            row for row in _htf_series(ordered, timeframe, as_of=as_of)
+            if row.get("interval_end") <= as_of
+        ]
+        if series_cache is not None:
+            series_cache[cache_key] = series
     if len(series) < max(1, int(min_bars)):
         return None, None
     by_end = {row.get("interval_end"): row for row in ordered}
@@ -1443,6 +1461,7 @@ def simulate_setup_entry_timing(
     as_of: datetime,
     computed_at: datetime | None = None,
     run_id: str = "",
+    series_cache: dict | None = None,
 ) -> dict | None:
     """Phase 0.13 P8: one setup, one stop, four entry moments. SHADOW ONLY.
 
@@ -1460,7 +1479,16 @@ def simulate_setup_entry_timing(
         return None
     if str(occurrence.get("side") or "").upper() != SETUP_ENTRY_TIMING_SIDE:
         return None
-    selector = SETUP_ENTRY_TIMING_SELECTORS.get(recipe.entry_variant)
+    chosen = SETUP_ENTRY_TIMING_SELECTORS.get(recipe.entry_variant)
+    selector = (
+        None
+        if chosen is None
+        else (
+            lambda occ, bars, *, as_of: chosen(
+                occ, bars, as_of=as_of, series_cache=series_cache
+            )
+        )
+    )
     return simulate_m5_close_opportunity(
         occurrence,
         m5_bars,
@@ -2141,6 +2169,10 @@ def build_outcomes(
                     as_of=cutoff,
                     computed_at=stamp,
                     run_id=run_id,
+                    # The SAME per-occurrence cache the HTF study uses, so the
+                    # twelve cells of one occurrence build each derived series
+                    # once (R1).
+                    series_cache=htf_series_cache,
                 )
             elif recipe.timeframe == "M5_OPPORTUNITY":
                 computed = simulate_m5_close_opportunity(
