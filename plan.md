@@ -35,6 +35,29 @@ The operating topology is now simple:
   and the DAS `\\MINI-PC\Trading Bot Data` is the durable storage tier;
 - the Tk GUI remains a temporary compatibility path during migration.
 
+**What the program is for, in the trader's words (decision 0016, 2026-09-02).** The
+trader answered twelve questions one at a time; the record is
+[`docs/decisions/0016-trader-vision-and-priorities.md`](docs/decisions/0016-trader-vision-and-priorities.md)
+and it is the tie-breaker for every prioritisation call. The short form:
+
+1. Get **which names are shown** right before **when to enter**.
+2. A name was right to show when it **moved** (a held D1 level then the move, for a
+   swing; a held intraday level then the maximum favourable excursion, for a day
+   trade); the trader's likes only say where to look. **Win rate** is the headline
+   swing statistic, because losses run about 1.5x the best wins.
+3. One click from any screen teaches the bot what the trader likes; words are
+   optional; the click is always processed.
+4. "What is working lately" (a rolling ~20 sessions, no regime label) lives on the
+   **Trading Desk** and in Weekend Prep with a display-only priority switch - never a
+   mute, never a filter. The Research tab is not a trader surface.
+5. The trader sits on the Capture tab; the Alerts, D1 Focus, Armed tabs and the
+   Universe page are unused; the Strength Board must match the trader's own TC2000
+   scan (decision 0016 item 9) before it is compared to it.
+6. Tagging is the slow part of journaling: the P6a tagger runs nightly, the trader
+   corrects. Weekend Prep gets one Refresh, a verdict card and readable tables; the
+   Market Journal is one box; Away Recap shows more names with charts for a 10-30
+   minute evening review.
+
 ## 2. Status vocabulary
 
 These labels must not be collapsed:
@@ -55,24 +78,20 @@ test counts belong in `CURRENT_CHECKPOINT.md`. Only unfinished work belongs here
 
 ## 3. Current-state summary
 
-As of the reconciliation date:
+As of 2026-09-02:
 
-- the active branch is `testing-week-2026-08-17`, not yet merged to `main` — the
-  single consolidated release candidate since 2026-08-15, carrying testing-week,
-  R1, R1.1, R2, R7 and R8. `testing-week-2026-08-10` and the R1/R7 branch names
-  used below are historical: those branches were deleted once proven contained,
-  and their tips remain reachable by SHA (see `CURRENT_CHECKPOINT.md` rollback
-  points). `phase05-r2-focus-gating-strength-board` survives only as the desk's
-  running branch until the Monday merge;
-- the Windows desk gate is green at 2611 tests plus 7 subtests, smoke 7/7, and
-  frozen self-test 29/29;
-- subsequent 2026-08-10 presentation and phone-report fixes have not changed the
-  recorded gate yet;
-- the warehouse Phases 0–8, Chart Review A1–A5, durability steps 1–4, and Local-AI
-  Phase 1 are implemented, but their remaining live gates below still apply;
+- `main` is the running branch: the desk launches from source on `main` by trader
+  decision (2026-08-26), and every Phase 0.13 packet (P0-P9, review rounds R1-R3) is
+  merged. `CURRENT_CHECKPOINT.md`'s "Active state at a glance" block carries the
+  measured baseline (6,091 tests, exit 0, on 2026-09-02) and the open live gates;
+- the frozen exe is a verification artifact only, rebuilt when a packaging trigger
+  is hit (last: P7's registry asset, 74/74 frozen self-test);
+- the research warehouse Phases 0-8, Chart Review, durability and Local-AI Phases
+  1-2 are implemented; their live gates are listed in the checkpoint;
 - legacy SPY pause detection and D1 wick alerts remain the production champions;
 - `market_state` and `greatness_monitor` remain shadow-only;
-- the research warehouse and AI outputs remain additive/read-only and advisory.
+- the research warehouse and AI outputs remain additive/read-only and advisory;
+- the trader's stated priorities are decision 0016 (Section 1 above).
 
 See `CHANGELOG.md` for the full implemented inventory and revision history.
 
