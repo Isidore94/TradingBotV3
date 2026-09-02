@@ -8492,6 +8492,27 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
                     else None
                 ),
                 "sample_setups": "; ".join(sample_examples),
+                # P4 B1: the sample floor, as COLUMNS.
+                #
+                # Only numeric bucketing had a floor; categorical, bool and
+                # list rows were emitted at setup_count=1 with full averages
+                # and full edges. On the live export that is 37,049 of 38,617
+                # groups under the reportable-n floor, each carrying an edge
+                # that reads exactly like a finding.
+                #
+                # EVERY ROW IS STILL EMITTED - visibility, not suppression.
+                # This file is the tuner's input and its own gates
+                # (--min-setups / --min-closed-setups) still decide what may
+                # influence scoring; these columns decide nothing and only say
+                # which side of the floor a row sits on.
+                **_attribute_leaderboard_evidence(
+                    # `avg_closed_values` is the exact series `avg_closed_r`
+                    # above is the mean of, so the floor is asked of the sample
+                    # the row's own numbers were computed over - never a
+                    # second, differently-filtered one.
+                    avg_closed_values.tolist(),
+                    closed_setups=int(closed_group_df["setup_id"].nunique()),
+                ),
             }
         )
 
@@ -8504,6 +8525,35 @@ def _build_tracker_attribute_leaderboard_rows(attribute_rows: list[dict]) -> lis
         )
     )
     return leaderboard_rows
+
+
+def _attribute_leaderboard_evidence(closed_values, *, closed_setups: int) -> dict:
+    """`meets_n_floor` and `evidence_label` for one leaderboard group.
+
+    Routed through `evidence_stats.summarize` - ground rule 10's contract lives
+    there once, and a second floor implemented here is a second floor to keep
+    in step. The floor is asked of CLOSED setups, because that is the
+    denominator every average and edge on the row is computed over: a group
+    with 200 open setups and 2 closed ones has measured two things.
+
+    Never raises: a leaderboard row is evidence about setups, and it must not
+    cost the export. An unreadable statistics module yields the conservative
+    answer (below floor, unlabelled) rather than none.
+    """
+    try:
+        from evidence_stats import summarize
+
+        stats = summarize(list(closed_values or []))
+        meets = bool(stats.get("meets_n_floor")) and int(closed_setups) >= int(
+            stats.get("n_floor", 0) or 0
+        )
+        return {
+            "meets_n_floor": "1" if meets else "0",
+            "evidence_label": str(stats.get("evidence_label") or ""),
+        }
+    except Exception:  # noqa: BLE001 - never cost the export
+        logging.debug("Attribute leaderboard evidence label unavailable.", exc_info=True)
+        return {"meets_n_floor": "0", "evidence_label": ""}
 
 
 def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
