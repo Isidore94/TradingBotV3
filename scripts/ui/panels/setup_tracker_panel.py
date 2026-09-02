@@ -783,7 +783,14 @@ def _rank_attribute_leaderboard(rows: list[dict[str, Any]]) -> list[dict[str, An
     prepared: list[dict[str, Any]] = []
     for row in rows:
         closed = _float(row.get("closed_tradeable_setup_count"), 0.0)
-        meets = closed >= floor
+        # THE FILE'S OWN VERDICT FIRST (R1). B1 made the export state
+        # `meets_n_floor` per row; recomputing it here as well means two floors
+        # that can disagree, and the one the reader would believe is the greyed
+        # row rather than the column. The local comparison stays as the fallback
+        # for a file written before B1 - which has no such column, and for which
+        # a recomputed floor is the only answer available.
+        stated = str(row.get("meets_n_floor") or "").strip()
+        meets = stated in {"1", "true", "True"} if stated else closed >= floor
         prepared.append(
             {
                 **row,

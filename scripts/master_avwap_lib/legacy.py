@@ -8542,7 +8542,18 @@ def _build_tracker_attribute_leaderboard_rows(
         avg_total_values = pd.to_numeric(unique_group_df["avg_total_r"], errors="coerce").dropna()
         avg_closed_values = pd.to_numeric(unique_group_df["avg_closed_r"], errors="coerce").dropna()
         priority_values = pd.to_numeric(unique_group_df["priority_score"], errors="coerce").dropna()
-        baseline = baseline_map.get((group_key[0], group_key[1]), {})
+        # BY NAME, never by position (R1). `extra_group_fields` PREPENDS to
+        # `group_cols`, so the moment a finer view is built, positions 0 and 1
+        # are the extra fields rather than (side, priority_bucket): the lookup
+        # asked for `(setup_family, side)` in a map keyed `(side, bucket)`,
+        # missed every time, and every baseline and edge column in the by-family
+        # and by-regime views shipped BLANK. A blank edge reads as "no edge",
+        # which is a worse failure than a crash - B2's whole point is that those
+        # views say something the pooled view cannot.
+        named = dict(zip(group_cols, group_key))
+        baseline = baseline_map.get(
+            (named.get("side"), named.get("priority_bucket")), {}
+        )
         baseline_avg_total_r = _coerce_float(baseline.get("avg_total_r"))
         baseline_avg_closed_r = _coerce_float(baseline.get("avg_closed_r"))
         baseline_target_hit_rate = _coerce_float(baseline.get("target_hit_rate"))
@@ -9677,6 +9688,15 @@ SCAN_FACTOR_LEADERBOARD_COLUMNS = [
     "success_score",
     "impact_score",
     "sample_observations",
+    # R1: the coverage line B3 builds on every row. `_write_scan_factor_csv`
+    # constructs the frame as `pd.DataFrame(rows, columns=COLUMNS)`, so a key
+    # missing from this list is dropped SILENTLY - the row dict carried these
+    # three and the exported file never had them. Appended rather than placed
+    # beside `window_end`, because every reader of this file goes by name and
+    # appending cannot move a column under anyone.
+    "observations_before_stale_filter",
+    "stale_horizon_observations_dropped",
+    "stale_horizon_drop_note",
 ]
 TIER_LIST_COLUMNS = [
     "generated_at",
@@ -9684,6 +9704,10 @@ TIER_LIST_COLUMNS = [
     "scan_date",
     "scan_row_id",
     "tier",
+    # R1: built into the row at `build_bot_tier_pick_rows` and dropped by this
+    # list. Without it a mixed file cannot be read honestly - a row graded by
+    # the old bucket derivation looks exactly like one whose tier was recorded.
+    "tier_source",
     "symbol",
     "side",
     "priority_bucket",
@@ -9707,6 +9731,10 @@ TIER_OUTCOME_COLUMNS = [
     "future_scan_date",
     "horizon_sessions",
     "tier",
+    # R1: the outcome rows unpacked `tier_source` and never wrote it - a dead
+    # local. Same reason as the pick rows: a graded outcome must say which rule
+    # produced the tier it is grading.
+    "tier_source",
     "symbol",
     "side",
     "priority_bucket",
@@ -10773,6 +10801,7 @@ def build_bot_tier_outcome_rows(
                 "watchlist_label": obs.get("watchlist_label"),
                 "scan_date": obs.get("scan_date"),
                 "future_scan_date": obs.get("future_scan_date"),
+                "tier_source": tier_source,
                 "horizon_sessions": horizon,
                 "tier": tier,
                 "symbol": obs.get("symbol"),

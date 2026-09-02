@@ -2669,7 +2669,28 @@ def _run_master_impl(
         "swing_quality_ema_distance_atr",
         "daytrade_candidate",
         "setup_candidate_json",
+        # R1: the tier that actually shipped. Appended, so a history file
+        # written before this exists simply has no column and grades as
+        # `derived_from_bucket`, which is what `tier_for_tracker_row` already
+        # says it should do.
+        ASSIGNED_TIER_FIELD,
     ]
+
+    # R1 / P4 B4: carry the SHIPPED tier onto the feature row.
+    #
+    # `_priority_partition_tier_rows` stamps `assigned_tier` during the priority
+    # report above (line ~2368), which is where the tier is actually decided -
+    # after the expected-R demote, the per-symbol de-dupe and the best-swing
+    # merge. But the grader reads the feature-history CSV, and that file is
+    # built from `feature_rows` through the `feature_columns` allowlist below,
+    # which had no such column. So B4 stamped a decision nothing could ever
+    # read: `tier_for_tracker_row` fell through to the bucket derivation on
+    # every row, forever.
+    for row in priority_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        feature_row = feature_rows_by_symbol.get(symbol)
+        if isinstance(feature_row, dict) and row.get(ASSIGNED_TIER_FIELD):
+            feature_row[ASSIGNED_TIER_FIELD] = row.get(ASSIGNED_TIER_FIELD)
 
     df_features = pd.DataFrame(feature_rows, columns=feature_columns)
     _write_dataframe_csv_atomic(df_features, D1_FEATURES_FILE, index=False)
