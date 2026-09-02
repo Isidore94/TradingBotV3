@@ -1602,7 +1602,9 @@ eligible only at n>=30, at least five symbols and at least five entry sessions.
 That floor permits narration, never confirmation or promotion. When no cell is
 eligible, facts still publish and **no model is called**.
 
-Above the floor, the medium local tier receives only the bounded fact pack. It
+Above the floor, the medium local tier receives a bounded **view** of the fact
+pack - see §8.1; the sentence that said it received the pack itself was true when
+written and became the defect that produced three sheared nights. It
 may explain the deterministic numbers and suggest at most three future
 registered tests. It cannot change a scanner, score, alert, Focus, watchlist,
 review queue, stop, target, bot state or order. Facts state the study contract:
@@ -1613,4 +1615,59 @@ Owed live gate: one completed bucket cycle with healthy warehouse writes, then
 one overnight artifact whose coverage and eligibility counts match a direct
 warehouse read. The current M5 lake begins in August 2026, so older tracker
 episodes must remain absent/unknown rather than being narrated as losses.
+
+### 8.1 Amended 2026-09-02 (R3) — the narration outgrew the model
+
+The pack is the deterministic product and it grew: P3 added the ineligible block,
+the excluded families and the coverage detail, and P8's grid grew it again. On
+2026-09-01 it encoded to **437,125 chars (~176,800 tokens)** against a window that
+reads about 78,000, and the local server **sheared it silently** — three runs,
+03:55, 04:30 and 05:00, 29 minutes of lake reads, three superseding packs, no
+narration on any of them.
+
+**The model now receives `narration_view(pack)`, never the pack.** The view is
+what a person reads first: the gate, coverage, the evidence shape, the excluded
+families, **every eligible cell** — those are the finding — and **counts** of what
+was dropped, so the model can say "and 71 thin cells were not shown" instead of
+being handed 71 thin cells. Deliberately absent: the ineligible rows, the
+market-context cells and the raw outcome list. Those are input to the arithmetic,
+never its answer, and they are all still in the pack on disk.
+
+The cells are also **deduplicated**, which is where most of the remaining size
+was. Four prose constants — the eligibility rule, the n-floor note, the
+profit-factor convention, the bootstrap interval — are module constants
+interpolated into every cell: ~900 identical characters inside each
+1,900-character cell. They are stated **once** under `conventions`. A constant two
+cells disagree on is **never** hoisted; it stays inline on all of them, because
+stating it once would silently restate one of them. Measured on the 2026-09-01
+pack: **437,125 → 38,184 chars**, headroom from six more cells to about forty.
+
+**Over budget is a refusal, not an attempt.** `_evidence_package` raises
+`NarrationTooLarge` before any provider call. A prompt above what the model can
+read is not a longer answer, it is a sheared one, and words generated from a
+sheared prompt are not trustworthy even when they validate. The evidence hash is
+taken over **what was actually sent** — hashing the pack while sending a view
+would make that traceability a lie.
+
+**A missing narration is not a failed job.** It returned `degraded_no_narrative`
+under `max_attempts=3`, so the runner re-ran a **ten-minute lake pass** twice more
+to fail identically; that is where the three packs and the 29 minutes came from.
+It now returns `ok` with `narration absent: <reason>`. The deterministic pack is
+the product; the narration is words over it, and the digest slot already works
+this way. **If a narration retry is ever wanted it must read the pack already on
+disk. It must never re-enter the lake.**
+
+**Provenance.** Two packs from the same night disagreed by 3,067 outcome rows —
+9,372 at 03:55 on the pre-merge checkout, 12,439 at 04:30 on `main`, because P8's
+grid landed in between — and nothing in either said so. Every pack now carries
+`built_by_commit` (read once per process, failing **open** to `"unknown"`, because
+a less traceable pack beats no pack) and `recipe_ids`, carried from the coverage
+the caller passed in. `recipe_ids` is **never re-derived from the module**: that
+would state the grid this *code* knows rather than the one these *rows* came from,
+which is the one thing the field exists to distinguish.
+
+Owed live gate: **one overnight run that publishes exactly ONE pack and a
+narration beside it.** Three siblings, or a `narration absent` line, means the
+view is still too large — and the refusal message names the size, the budget and
+the eligible-cell count, so it says which.
 
