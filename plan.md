@@ -789,6 +789,30 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+### Phase 0.13 packet P6 — Preference to trade (2026-09-01) — BUILT, live gate owed
+
+Authorized by the trader pasting the packet. Built on `claude/p6-preference-to-trade`.
+Three stores each held a third of one question; nothing put the three on one row.
+
+1. **Exact-id auto-tag candidates.** A fifth `AutoTagger` source, `trader_capture`, over
+   the statements the trader already made about the symbol INSIDE the trade's own window.
+   Ranked above every fuzzy lane, rejections prefixed, `context_row_id` carried as a
+   reader's pointer only - plan.md P5.3/P5.4 keep the canonical id.
+2. **`preference_trade_outcomes`** - a nightly deterministic slot and Weekend Prep table:
+   one row per statement, joined to the journal and to the cohort paper grade, every row
+   rendering its match confidence or "no match".
+3. **An honest empty-dimension banner** on the journal's "My setups" group below 10%
+   confirmed-tag coverage. The group is never hidden.
+
+**Owed and NOT part of this packet:** the canonical opportunity id (P5.3/P5.4) is what
+would turn the report's stated confidence into a link; coding the free-text reasons is a
+separate packet; and whether `market_journal` should remain in the nightly scope - the
+comment corrected here is what surfaced it - is the trader's call.
+
+**Live gate (#35):** the trader imports a real day and one trade shows a `trader_capture`
+candidate with a linked event; the nightly report lists that day's likes with a
+traded/not-traded column.
+
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads
