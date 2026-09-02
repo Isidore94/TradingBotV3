@@ -176,9 +176,88 @@ class StrengthBoardService(QObject):
             self.statusChanged.emit(self.status_text())
 
 
+#: A year of daily bars: the 200 SMA needs 200 closes and a year holds about
+#: 252. Daily rows are a fraction of the 5m payload, so this second batched
+#: download is cheap next to the one it rides beside - and it is the only way to
+#: measure a D1 floor without an IB request, which this service does not make.
+DAILY_FETCH_PERIOD = "1y"
+
+
+def board_universe() -> list[str]:
+    """`universe_all.txt` PLUS every name on the trader's own watchlists.
+
+    Decision 0016 answer 9 and packet V1: *"scan universe_all.txt PLUS every
+    symbol in the trader's watchlists (longs/shorts/swing lists) so nothing the
+    trader follows is missing."* The universe is built to a liquidity and market
+    cap specification; a name the trader is watching for their own reasons may
+    not clear it, and the board it never appears on is the one they are reading.
+
+    Order is preserved and duplicates dropped, so the batching sees each symbol
+    once. A watchlist that cannot be read contributes nothing and never raises -
+    a missing longs.txt must not empty the board.
+    """
+    from watchlist_utils import read_watchlist_symbols
+
+    from project_paths import UNIVERSE_ALL_FILE, get_master_avwap_watchlist_paths
+
+    seen: dict[str, None] = {}
+    # The four the Master AVWAP scanner already reads, through its own accessor
+    # rather than a second list of constants that could drift from it.
+    for path in (UNIVERSE_ALL_FILE, *get_master_avwap_watchlist_paths()):
+        try:
+            names = read_watchlist_symbols(path)
+        except Exception:
+            continue
+        for name in names:
+            text = str(name or "").strip().upper()
+            if text:
+                seen.setdefault(text, None)
+    return list(seen)
+
+
+def _daily_closes(
+    pool: list[str],
+    downloader,
+    *,
+    chunk_size: int,
+) -> dict[str, list[float]]:
+    """Batched daily closes for the D1 SMA floors. Zero IB traffic, as ever.
+
+    A chunk that fails contributes nothing and is logged: the symbols in it lose
+    their SMA floors and are shown greyed with "cannot measure the D1 200 SMA",
+    which is the honest outcome. Failing the whole board because one chunk timed
+    out would be worse than a partly greyed one.
+    """
+    closes: dict[str, list[float]] = {}
+    for start in range(0, len(pool), chunk_size):
+        chunk = pool[start : start + chunk_size]
+        try:
+            data = downloader(chunk, period=DAILY_FETCH_PERIOD, interval="1d")
+        except Exception as exc:
+            logging.warning(
+                "Strength board daily chunk %s..%s failed: %s", chunk[0], chunk[-1], exc
+            )
+            continue
+        for symbol in chunk:
+            try:
+                frame = data[symbol] if len(chunk) > 1 else data
+            except Exception:
+                continue
+            values = [
+                row.get("close")
+                for row in core._frame_rows(frame)
+                if row.get("close") is not None
+            ]
+            if values:
+                closes[symbol] = [float(value) for value in values]
+    return closes
+
+
 def build_board(
     *,
     fraction: float = strength_scan.STRENGTH_TOP_FRACTION,
+    rvol_fraction: float = strength_scan.RVOL_TOP_FRACTION,
+    session_volume_fraction: float = strength_scan.SESSION_VOLUME_TOP_FRACTION,
     symbols: list[str] | None = None,
     downloader: Callable[..., Any] | None = None,
     now: datetime | None = None,
@@ -188,11 +267,7 @@ def build_board(
     Plain function rather than a method so the whole pipeline is testable
     without Qt, a timer or a thread.
     """
-    from watchlist_utils import read_watchlist_symbols
-
-    from project_paths import UNIVERSE_ALL_FILE
-
-    pool = symbols if symbols is not None else read_watchlist_symbols(UNIVERSE_ALL_FILE)
+    pool = symbols if symbols is not None else board_universe()
     pool = [str(item or "").strip().upper() for item in pool]
     pool = [item for item in pool if item]
     if not pool:
@@ -222,8 +297,20 @@ def build_board(
             if len(completed) >= strength_scan.STRENGTH_ATR_PERIOD + 1:
                 bars_by_symbol[symbol] = completed
 
-    board = strength_scan.build_strength_board(bars_by_symbol, fraction=fraction)
+    # The D1 floors, over the symbols that actually reached the board - not the
+    # whole pool. A name with no measurable M5 strength is not on the board, so
+    # fetching its year of daily bars would be a download nobody reads.
+    daily = _daily_closes(sorted(bars_by_symbol), downloader, chunk_size=chunk_size)
+
+    board = strength_scan.build_strength_board(
+        bars_by_symbol,
+        fraction=fraction,
+        daily_closes_by_symbol=daily,
+        rvol_fraction=rvol_fraction,
+        session_volume_fraction=session_volume_fraction,
+    )
     board["offered"] = len(pool)
+    board["daily_measured"] = len(daily)
     board["as_of"] = moment.isoformat(timespec="seconds")
     return board
 

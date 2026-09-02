@@ -43,6 +43,16 @@ __all__ = [
     "STRENGTH_EMA_SPAN",
     "STRENGTH_FETCH_PERIOD",
     "STRENGTH_TOP_FRACTION",
+    "D1_SMA_PERIODS",
+    "MIN_PRICE",
+    "RVOL_BARS",
+    "RVOL_PRIOR_SESSIONS",
+    "RVOL_TOP_FRACTION",
+    "SESSION_M5_BARS",
+    "SESSION_VOLUME_TOP_FRACTION",
+    "floor_checks",
+    "relative_volume",
+    "session_volume",
     "atr",
     "build_strength_board",
     "displaced_close",
@@ -72,7 +82,38 @@ STRENGTH_TOP_FRACTION = 0.25
 #: 2026-08-15: 5d gives every symbol >= 50 bars (median 390) and costs 27.6 s
 #: over the whole 1,506-symbol universe. Spanning sessions is also correct
 #: rather than merely convenient - TC2000's M5 displacement and ATR span them too.
-STRENGTH_FETCH_PERIOD = "5d"
+STRENGTH_FETCH_PERIOD = "1mo"
+#: THE PERIOD GREW FROM 5d TO 1mo, and it had to (V1, decision 0016 answer 9).
+#: The trader's relative volume compares each of the last 12 bars with the SAME
+#: bar offset over the **prior 15 sessions**, so the series needs sixteen
+#: sessions of M5 bars; `5d` holds five and every RVOL would have been blank.
+#: yfinance serves 5m bars for 60 days, so `1mo` is inside the provider's limit.
+#: The cost is real and is stated rather than hidden: the 5d fetch measured
+#: 27.6 s over 1,506 symbols on 2026-08-15, and this moves about six times the
+#: rows. The board's refresh cadence is unchanged.
+STRENGTH_FETCH_PERIOD_BEFORE_RVOL = "5d"
+
+#: Completed M5 bars in one regular session: 6.5 h / 5 min.
+SESSION_M5_BARS = 78
+#: The trader's TC2000 relative volume, restated: `AVG(V / mean(V78, V156, ...
+#: V1170), 12)` - each of the last 12 bars against the same bar offset over the
+#: prior 15 sessions, averaged.
+RVOL_BARS = 12
+RVOL_PRIOR_SESSIONS = 15
+#: Keep the busier half, on both the per-bar RVOL and today's session volume.
+RVOL_TOP_FRACTION = 0.50
+SESSION_VOLUME_TOP_FRACTION = 0.50
+
+#: The trader's price floor. A dollar figure, not a percentile.
+MIN_PRICE = 5.0
+
+#: The daily simple moving averages the price must be above (long) or below
+#: (short). **ASSUMPTION, stated so one line can correct it:** the trader wrote
+#: "above the 200 and 100 SMA" without naming a timeframe, and D1 is the reading
+#: that makes them structural rather than another intraday filter. The 15 EMA is
+#: assumed M5 for the mirror reason - it is the intraday trigger line. Decision
+#: 0016 answer 9 records both as open.
+D1_SMA_PERIODS = (100, 200)
 
 
 def _finite(value: Any) -> float | None:
@@ -244,6 +285,130 @@ def ema(values: Sequence[float], span: int) -> float | None:
     return result
 
 
+def relative_volume(
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    bar_count: int = RVOL_BARS,
+    session_bars: int = SESSION_M5_BARS,
+    prior_sessions: int = RVOL_PRIOR_SESSIONS,
+) -> float | None:
+    """The trader's TC2000 relative volume, or None when it cannot be measured.
+
+    `AVG(V / mean(V78, V156, ... V1170), 12)`: each of the last 12 completed
+    bars divided by the mean volume at the same bar offset over the prior 15
+    sessions, and those twelve ratios averaged.
+
+    **POSITIONAL, exactly as TC2000 is.** `V78` means "the volume 78 bars ago",
+    not "the volume at this time of day yesterday". On a clean series of regular
+    sessions the two are the same thing. On a half day - 3.25 hours, 39 bars -
+    they are not, and every offset past that half day is shifted by 39 bars, so
+    a 10:00 bar is compared with a 13:00 bar. That is a real divergence from what
+    a reader assumes the number means, and it is TC2000's divergence too: parity
+    with the trader's scan is the requirement, so it is documented here rather
+    than silently corrected into a different number.
+
+    **None, never zero, when there is not enough history.** A blank says "not
+    measured"; a zero says "no relative volume", which would rank the symbol at
+    the bottom of a filter it was never eligible for. The same rule covers a
+    prior window whose mean volume is zero - a halted or untraded name divides by
+    nothing, and its ratio is unmeasurable rather than infinite.
+    """
+    if bar_count <= 0 or session_bars <= 0 or prior_sessions <= 0:
+        return None
+    needed = bar_count + session_bars * prior_sessions
+    if len(bars) < needed:
+        return None
+    volumes = [_finite(bar.get("volume")) for bar in bars]
+    if any(volume is None for volume in volumes[-needed:]):
+        return None
+    ratios: list[float] = []
+    for step in range(bar_count):
+        index = len(volumes) - 1 - step
+        prior = [
+            volumes[index - session_bars * back]
+            for back in range(1, prior_sessions + 1)
+        ]
+        average = sum(prior) / float(prior_sessions)  # type: ignore[arg-type]
+        if average <= 0:
+            return None
+        ratios.append(float(volumes[index]) / average)  # type: ignore[arg-type]
+    return sum(ratios) / float(len(ratios))
+
+
+def session_volume(bars: Sequence[Mapping[str, Any]]) -> float | None:
+    """Today's completed-bar volume, for the second half of the RVOL filter.
+
+    The trader's rule has two parts and they are different questions: the RVOL
+    asks whether each bar is busier than its own history, and this asks whether
+    the SESSION is busy at all. A name can clear the first on twelve quiet bars
+    that are merely less quiet than usual.
+    """
+    sessions = _session_groups(bars)
+    if not sessions:
+        return None
+    total = 0.0
+    for bar in sessions[-1]:
+        volume = _finite(bar.get("volume"))
+        if volume is None:
+            return None
+        total += volume
+    return total
+
+
+def floor_checks(
+    row: Mapping[str, Any],
+    side: str,
+    *,
+    min_price: float = MIN_PRICE,
+) -> dict[str, Any]:
+    """The trader's floors, each as a NAMED boolean plus what failed.
+
+    Named rather than folded into one pass/fail because the board shows a failing
+    row GREYED with its reason instead of hiding it (decision 0010: a display
+    filter is not a suppression). A single boolean could not say which line the
+    trader should look at.
+
+    Missing data FAILS and says so - `cannot measure the 200 SMA` is a different
+    sentence from `below the 200 SMA`, and only the second is a fact about the
+    stock.
+    """
+    short = str(side or "").strip().lower().startswith("short")
+    last = _finite(row.get("last"))
+    checks: dict[str, bool] = {}
+    failed: list[str] = []
+
+    if last is None:
+        return {
+            "floors": {"price": False, "sma200": False, "sma100": False, "ema15": False},
+            "failed_floors": ["no completed close"],
+            "passes_floors": False,
+        }
+
+    checks["price"] = last > float(min_price)
+    if not checks["price"]:
+        failed.append(f"price ${last:.2f} is not over ${min_price:.0f}")
+
+    for key, label, value in (
+        ("sma200", "the D1 200 SMA", _finite(row.get("sma200_d1"))),
+        ("sma100", "the D1 100 SMA", _finite(row.get("sma100_d1"))),
+        ("ema15", "the M5 15 EMA", _finite(row.get("ema15"))),
+    ):
+        if value is None:
+            checks[key] = False
+            failed.append(f"cannot measure {label}")
+            continue
+        ok = last < value if short else last > value
+        checks[key] = ok
+        if not ok:
+            failed.append(f"{'not below' if short else 'not above'} {label}")
+
+    return {
+        "floors": checks,
+        "failed_floors": failed,
+        "passes_floors": not failed,
+    }
+
+
 def _session_groups(bars: Sequence[Mapping[str, Any]]) -> list[list[Mapping[str, Any]]]:
     """Split ascending bars into per-date groups."""
     groups: list[list[Mapping[str, Any]]] = []
@@ -265,6 +430,7 @@ def score_symbol(
     body_bars: int = STRENGTH_BODY_BARS,
     atr_period: int = STRENGTH_ATR_PERIOD,
     ema_span: int = STRENGTH_EMA_SPAN,
+    daily_closes: Sequence[Any] | None = None,
 ) -> dict[str, Any] | None:
     """One board row's raw measurements, or None if it cannot be measured.
 
@@ -275,6 +441,7 @@ def score_symbol(
     score = strength_score(bars, body_bars=body_bars, atr_period=atr_period)
     if score is None:
         return None
+    _daily = [value for value in (_finite(item) for item in (daily_closes or ())) if value is not None]
     sessions = _session_groups(bars)
     if len(sessions) < 2:
         return None  # no prior session, so no yesterday's high/low to compare
@@ -330,6 +497,15 @@ def score_symbol(
         "ema15": ema(closes, ema_span),  # type: ignore[arg-type]
         "day_pct": day_pct,
         "bars": len(bars),
+        # V1: the trader's own relative volume, and the two daily levels the
+        # floors need. All three are BLANK rather than zero when they cannot be
+        # measured - a blank says "not measured" and a zero says "measured, and
+        # it is nothing", which is a different claim about the stock.
+        "rvol": relative_volume(bars),
+        "session_volume": session_volume(bars),
+        "sma100_d1": sma(_daily, 100) if _daily else None,
+        "sma200_d1": sma(_daily, 200) if _daily else None,
+        "daily_bars": len(_daily),
     }
 
 
@@ -371,6 +547,9 @@ def build_strength_board(
     body_bars: int = STRENGTH_BODY_BARS,
     atr_period: int = STRENGTH_ATR_PERIOD,
     ema_span: int = STRENGTH_EMA_SPAN,
+    daily_closes_by_symbol: Mapping[str, Sequence[Any]] | None = None,
+    rvol_fraction: float = RVOL_TOP_FRACTION,
+    session_volume_fraction: float = SESSION_VOLUME_TOP_FRACTION,
 ) -> dict[str, Any]:
     """Score everything, cut to the top/bottom fraction, then filter.
 
@@ -387,16 +566,47 @@ def build_strength_board(
     rows: dict[str, dict[str, Any]] = {}
     for symbol, bars in (bars_by_symbol or {}).items():
         row = score_symbol(
-            symbol, list(bars or []), body_bars=body_bars, atr_period=atr_period, ema_span=ema_span
+            symbol,
+            list(bars or []),
+            body_bars=body_bars,
+            atr_period=atr_period,
+            ema_span=ema_span,
+            daily_closes=(daily_closes_by_symbol or {}).get(str(symbol or "").strip().upper()),
         )
         if row is None:
             continue
         rows[row["symbol"]] = row
         scored.append((row["symbol"], row["strength"]))
 
+    # V1: the two volume cuts, taken over the SAME measurable population the
+    # strength cut is taken over, and before any filter - "top 50%" has to mean
+    # top 50% of what was measured, exactly as the 25% strength cut does.
+    #
+    # A symbol whose RVOL is BLANK is not in the cut and not against it: it is
+    # unmeasured. Treating a blank as a zero would put every name with under
+    # sixteen sessions of history at the bottom of a ranking it was never in.
+    rvol_scored = [
+        (symbol, row["rvol"]) for symbol, row in rows.items() if row.get("rvol") is not None
+    ]
+    volume_scored = [
+        (symbol, row["session_volume"])
+        for symbol, row in rows.items()
+        if row.get("session_volume") is not None
+    ]
+    top_rvol = {
+        symbol for symbol, _value in percentile_cut(rvol_scored, fraction=rvol_fraction, side="long")
+    }
+    top_volume = {
+        symbol
+        for symbol, _value in percentile_cut(
+            volume_scored, fraction=session_volume_fraction, side="long"
+        )
+    }
+
     board: dict[str, Any] = {
         "offered": len(bars_by_symbol or {}),
         "measured": len(scored),
+        "rvol_measured": len(rvol_scored),
     }
     for side in ("long", "short"):
         kept: list[dict[str, Any]] = []
@@ -404,12 +614,34 @@ def build_strength_board(
         for symbol, _score in percentile_cut(scored, fraction=fraction, side=side):
             row = dict(rows[symbol])
             passes, reason = _passes_filters(row, side)
+            row.update(floor_checks(row, side))
+            # The two volume cuts join the floors: they are the trader's own
+            # filters, and a row that misses one is shown greyed with the reason
+            # rather than dropped. **This is a display filter, never a
+            # suppression** (decision 0010) - the row is in the board, carrying
+            # why it is not a pick.
+            row["in_top_rvol"] = symbol in top_rvol
+            row["in_top_session_volume"] = symbol in top_volume
+            if row.get("rvol") is None:
+                row["failed_floors"] = [*row["failed_floors"], "relative volume not measurable"]
+            elif not row["in_top_rvol"]:
+                row["failed_floors"] = [*row["failed_floors"], "not in the busier half by RVOL"]
+            if row.get("session_volume") is None:
+                row["failed_floors"] = [*row["failed_floors"], "session volume not measurable"]
+            elif not row["in_top_session_volume"]:
+                row["failed_floors"] = [*row["failed_floors"], "not in the busier half today"]
             if not passes:
-                filtered += 1
-                continue
+                row["failed_floors"] = [*row["failed_floors"], reason]
+            row["passes_floors"] = not row["failed_floors"]
             row["side"] = side
             row["filter_reason"] = reason
+            if not row["passes_floors"]:
+                filtered += 1
             kept.append(row)
         board[side] = kept
+        # The COUNT of greyed rows keeps its old name and its old meaning: how
+        # many of the top-fraction rows are not picks. What changed is that they
+        # are still in the list, so the trader can see what nearly qualified.
         board[f"{side}_filtered_out"] = filtered
+        board[f"{side}_picks"] = sum(1 for row in kept if row["passes_floors"])
     return board
