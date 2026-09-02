@@ -194,7 +194,12 @@ def test_digested_alerts_are_all_still_recorded(panel, monkeypatch):
     assert len(queued) == 2
 
 
-def test_a_banger_skips_the_digest(panel, monkeypatch):
+def test_the_banger_token_no_longer_skips_the_digest(panel, monkeypatch):
+    """BANGER retired 2026-09-01. A name whose text happens to carry the word
+    is an ordinary alert and is digested with the rest of the open burst.
+
+    Fail-before-fix: on the un-fixed code the second add produced a new row.
+    """
     import alert_repetition
 
     monkeypatch.setattr(
@@ -203,6 +208,18 @@ def test_a_banger_skips_the_digest(panel, monkeypatch):
     panel.add_alert(_alert(symbol="AAPL"))
     before = _rows(panel)
     panel.add_alert(_alert(symbol="NVDA", extra=" BANGER"))
+    assert _rows(panel) == before
+
+
+def test_a_proven_alert_still_skips_the_digest(panel, monkeypatch):
+    import alert_repetition
+
+    monkeypatch.setattr(
+        alert_repetition.RepetitionLedger, "_in_digest_window", lambda self, now: True
+    )
+    panel.add_alert(_alert(symbol="AAPL"))
+    before = _rows(panel)
+    panel.add_alert(_alert(symbol="NVDA", extra=" PROVEN"))
     assert _rows(panel) == before + 1
 
 

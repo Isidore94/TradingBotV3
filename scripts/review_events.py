@@ -250,7 +250,12 @@ def alert_context_fields(alert) -> dict[str, Any]:
     match = _TIER_RE.search(raw_text)
     fields["tier"] = match.group(1).upper() if match else ""
     fields["proven"] = bool(_PROVEN_RE.search(raw_text))
-    fields["banger"] = "BANGER" in raw_text.upper()
+    # RETIRED 2026-09-01 (trader: "We can probably remove this because idk what
+    # it is"). The column stays, always False, so every reader of the 8,818
+    # historical rows keeps working and the row shape does not move. Nothing
+    # in the tree ever emitted the token - 0 of those rows carried True - so
+    # writing the constant loses no information.
+    fields["banger"] = False
     fields["tag"] = str(getattr(alert, "tag", "") or "")
     fields["timeframe"] = str(getattr(alert, "timeframe", "") or "")
     fields["is_d1"] = bool(getattr(alert, "is_d1", False))

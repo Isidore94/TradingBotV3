@@ -57,19 +57,20 @@ def _pump_until(predicate, timeout=10.0):
     return bool(predicate())
 
 
-def test_tier_extraction_and_banger_detection():
+def test_tier_extraction():
     try:
-        from ui.panels.alert_center_panel import extract_alert_tier, is_banger_alert
+        from ui.panels import alert_center_panel
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             return
         raise
+    extract_alert_tier = alert_center_panel.extract_alert_tier
 
     assert extract_alert_tier(_alert("[S-TIER] AAOI: Bounce confirmed (short)")) == "S"
     assert extract_alert_tier(_alert("[b-tier] X: Bounce confirmed")) == "B"
     assert extract_alert_tier(_alert("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA")) == ""
-    assert is_banger_alert(_alert("[B-TIER] RW BANGER AAOI (short): SPY paused"))
-    assert not is_banger_alert(_alert("[S-TIER] AAOI: Bounce confirmed"))
+    # BANGER retired 2026-09-01: the matcher is gone, not renamed.
+    assert not hasattr(alert_center_panel, "is_banger_alert")
 
 
 def test_min_tier_filter_policy():
@@ -83,17 +84,36 @@ def test_min_tier_filter_policy():
     s_alert = _alert("[S-TIER] AAA: Bounce confirmed (long)")
     b_alert = _alert("[B-TIER] BBB: Bounce confirmed (long)")
     d_alert = _alert("[D-TIER] DDD: Bounce confirmed (short)")
-    banger = _alert("[C-TIER] RW BANGER CCC (short): SPY paused")
     untiered = _alert("MASTER_AVWAP_D1_BUCKET_UPGRADE: NVDA (long) Favorite setup upgrade", "d1_flag_long")
 
-    assert all(alert_passes_min_tier(a, "all") for a in (s_alert, b_alert, d_alert, banger, untiered))
+    assert all(alert_passes_min_tier(a, "all") for a in (s_alert, b_alert, d_alert, untiered))
     assert alert_passes_min_tier(s_alert, "A")
     assert not alert_passes_min_tier(b_alert, "A")
     assert not alert_passes_min_tier(d_alert, "B")
-    # Bangers always pass; untiered info passes everything except S-only.
-    assert alert_passes_min_tier(banger, "S")
+    # Untiered info passes everything except S-only.
     assert alert_passes_min_tier(untiered, "A")
     assert not alert_passes_min_tier(untiered, "S")
+
+
+def test_the_banger_token_no_longer_bypasses_the_tier_gate():
+    """BANGER retired 2026-09-01 (trader: "We can probably remove this because
+    idk what it is"). It was a literal token match with no producer anywhere in
+    the tree - 0 of 8,818 review rows carried it - so the tier bypass and the
+    always-sound it granted were unreachable privilege. A C-tier alert whose
+    text happens to contain the word is now an ordinary C-tier alert.
+
+    Fail-before-fix: on the un-fixed code both assertions below are False.
+    """
+    try:
+        from ui.panels.alert_center_panel import alert_is_loud, alert_passes_min_tier
+    except ModuleNotFoundError as exc:
+        if exc.name == "PySide6":
+            return
+        raise
+
+    banger = _alert("[C-TIER] RW BANGER CCC (short): SPY paused")
+    assert not alert_passes_min_tier(banger, "S")
+    assert not alert_is_loud(banger)
 
 
 def test_proven_bounces_bypass_tier_gate_and_sound():
@@ -146,7 +166,7 @@ def test_entry_assist_output_bypasses_tier_gate_and_parses_clean():
     assert ordinary.symbol == "AAA"
 
 
-def test_loud_alerts_are_sa_bangers_or_ready_d1():
+def test_loud_alerts_are_sa_proven_or_ready_d1():
     try:
         from ui.panels.alert_center_panel import alert_is_loud
     except ModuleNotFoundError as exc:
@@ -156,7 +176,7 @@ def test_loud_alerts_are_sa_bangers_or_ready_d1():
 
     assert alert_is_loud(_alert("[S-TIER] AAA: Bounce confirmed"))
     assert alert_is_loud(_alert("[A-TIER] AAA: Bounce confirmed"))
-    assert alert_is_loud(_alert("[D-TIER] RS BANGER MSTR (long)"))
+    assert alert_is_loud(_alert("[D-TIER] PROVEN MSTR (long): Bounce confirmed"))
     assert not alert_is_loud(_alert("[B-TIER] AAA: Bounce confirmed"))
     # A level-cross trigger is developing evidence; only the final bucket
     # upgrade is a D1 Focus/loud moment.
@@ -523,7 +543,7 @@ def test_focus_privilege_waits_for_the_previous_day_extreme(tmp_path, monkeypatc
 
     panel = AlertCenterPanel(parked_symbols_path=tmp_path / "parked.json")
     panel.focus_service = _FocusService()
-    # S tier / bangers only. Set directly rather than through the combo box:
+    # S tier / PROVEN only. Set directly rather than through the combo box:
     # the widget persists the choice to machine-local settings, which would
     # leak this filter into every panel a later test builds.
     monkeypatch.setattr(panel, "_min_tier_mode", lambda: "S")

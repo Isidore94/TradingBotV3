@@ -78,7 +78,6 @@ class _Row:
     count: int = 1
     best_rank: int = 0
     best_tier: str = ""
-    had_banger: bool = False
     had_proven: bool = False
 
 
@@ -139,7 +138,6 @@ class RepetitionLedger:
         symbol: str,
         side: str = "",
         tier: str = "",
-        is_banger: bool = False,
         is_proven: bool = False,
         privileged: bool = False,
         now: datetime | None = None,
@@ -159,13 +157,12 @@ class RepetitionLedger:
 
         if row is None:
             row = _Row(first_seen=now, best_rank=rank, best_tier=str(tier or "").upper())
-            row.had_banger = bool(is_banger)
             row.had_proven = bool(is_proven)
             self._rows[key] = row
             if privileged:
                 return RepeatDecision(ACTION_NEW, 1, now, row.best_tier, "trader-armed or focus")
-            if is_banger or is_proven:
-                return RepeatDecision(ACTION_NEW, 1, now, row.best_tier, "banger or proven")
+            if is_proven:
+                return RepeatDecision(ACTION_NEW, 1, now, row.best_tier, "proven")
             if self._in_digest_window(now):
                 if symbol and symbol not in self._digest:
                     self._digest.append(symbol)
@@ -181,19 +178,19 @@ class RepetitionLedger:
             )
 
         # The escalation list, exhaustive by trader decision 2026-08-16:
-        # a strictly higher best tier, the FIRST banger, the FIRST proven.
-        # "First" matters - without it a repeatedly-banger name re-sounds
-        # forever, which is the exact spam this exists to remove.
+        # a strictly higher best tier and the FIRST proven. "First" matters -
+        # without it a repeatedly-proven name re-sounds forever, which is the
+        # exact spam this exists to remove. The third member of this list was
+        # the first BANGER; that class was retired 2026-09-01 (trader: "We can
+        # probably remove this because idk what it is") - it had a matcher and
+        # no producer, so the branch could never fire.
         reasons: list[str] = []
         if rank > row.best_rank:
             reasons.append(f"tier {tier}")
             row.best_rank = rank
             row.best_tier = str(tier or "").upper()
-        if is_banger and not row.had_banger:
-            reasons.append("first banger")
         if is_proven and not row.had_proven:
             reasons.append("first proven")
-        row.had_banger = row.had_banger or bool(is_banger)
         row.had_proven = row.had_proven or bool(is_proven)
 
         if reasons:

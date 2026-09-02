@@ -80,6 +80,28 @@ def _fake_alert(**overrides):
 # ---------------------------------------------------------------------------
 # Writer module
 # ---------------------------------------------------------------------------
+def test_the_banger_column_is_retired_but_still_written(tmp_path):
+    """BANGER retired 2026-09-01 (trader: "We can probably remove this because
+    idk what it is"). The column survives so every reader of the 8,818
+    historical rows keeps working and the row shape does not move - but it is
+    now the constant False, even when the alert text carries the word.
+
+    Fail-before-fix: on the un-fixed code this row read True.
+    """
+    path = tmp_path / "events.jsonl"
+    row = record_review_event(
+        "skip",
+        alert=_fake_alert(raw_text="[C-TIER] RW BANGER AAOI (short): SPY paused"),
+        dwell_ms=1,
+        queue_len=0,
+        now=datetime(2026, 9, 1, 10, 15),
+        path=path,
+    )
+    assert row is not None
+    assert "banger" in row
+    assert row["banger"] is False
+
+
 def test_record_review_event_snapshots_structured_alert_context(tmp_path):
     path = tmp_path / "events.jsonl"
     row = record_review_event(
@@ -98,6 +120,7 @@ def test_record_review_event_snapshots_structured_alert_context(tmp_path):
     # The decision-relevant numbers land as real fields, not a text blob.
     assert row["tier"] == "A"
     assert row["proven"] is True
+    # RETIRED 2026-09-01: the column stays for the historical rows, always False.
     assert row["banger"] is False
     assert row["event_id"] == "evt-123"
     assert row["bounce_types"] == "dynamic_vwap_upper_band"

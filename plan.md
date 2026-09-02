@@ -842,6 +842,33 @@ second. Same for `HTF_LRSI_RECIPES`, whose grid the ledger already declares.
 
 **Live gate: none.** Green tests are the whole gate; this packet changes no runtime
 behaviour.
+### Phase 0.13 — Trader decisions of 2026-09-01 (packet P0) — BUILT, live gate owed
+
+Authorized by the trader in chat on 2026-09-01 (three quoted decisions). Built on
+`claude/p0-apply-decisions`. Nothing here is a threshold change and nothing reaches a
+detector's scoring.
+
+1. **BANGER retired.** A top-alert class with a matcher and no producer: the literal
+   token match, the tier-gate bypass, the always-sound and both repetition escalations
+   are removed. The `banger` review-event column survives as a constant `False` so the
+   historical rows and the schema id are unchanged. PROVEN is the top class.
+2. **LRSI M5 alerts retired, evidence kept.** `LRSI_M5_ALERTS_RETIRED` gates the emit
+   seam only. Detection, the candidate row, `intraday_bounce_outcomes.csv`, the tier
+   and the PROVEN stamp keep running; the detection toggles stay `True` because they
+   gate detection, not delivery. The "measure them on different timeframes" half of
+   the decision is the Phase 0.12 packet B warehouse study, already built.
+3. **Clicking away is a pass** — recorded in `docs/DESK_INTERNALS.md`; no code change.
+   The `clicked_away_from_m5_alert` reason string is frozen (`review_learning` keys
+   on it).
+
+**Owed and deliberately not built:** LRSI as a context suffix on other M5 alerts (the
+"boost" the trader described). `_format_bounce_alert_message` takes no bars, so it
+needs plumbing through the champion alert callers — a champion-path change, not a
+display tweak. Bring it back as its own packet if the trader still wants it.
+
+**Live gate (#29):** one DESK session with no LRSI line on the M5 alert bar, `lrsi`
+rows still arriving in `intraday_bounce_outcomes.csv` that day, and no BANGER branch
+left in the alert path (grep).
 
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
