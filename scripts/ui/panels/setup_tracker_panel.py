@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from project_paths import (
     HUMAN_FOCUS_OUTCOMES_FILE,
     HUMAN_FOCUS_PERFORMANCE_FILE,
     MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
+    MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE,
     MASTER_AVWAP_SETUP_STATS_FILE,
     MASTER_AVWAP_SETUP_TRACKER_FILE,
     MASTER_AVWAP_TIER_CATCH_RATE_FILE,
@@ -53,6 +55,19 @@ BAND_VARIANT_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_
 SETUP_PLAYBOOKS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
 SHORT_HORIZON_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_short_horizon.csv")
 SHORT_TERM_MIN_SAMPLES = 6
+
+#: The attribute leaderboard the scanner has written every scan since it was
+#: built, and which nothing on this desk has ever shown: ~190 attributes x
+#: side x bucket, each with its own edge against the baseline. Until now its
+#: only readers were the legacy Tk GUI and the offline tuner.
+#:
+#: **It is 19.7 MB / 38,617 rows on the live desk**, which is why this one
+#: export is read OFF the Qt thread while its ten siblings stay inline. That is
+#: not a style choice: the next largest is the playbook file at 5.5 MB and the
+#: rest are under 150 KB, so parsing this one on the render path would freeze
+#: the desk for seconds on every refresh and tab visit. Phase 0.9 G-P2.3 still
+#: owns moving the whole page off-thread; this is the row that cannot wait.
+ATTRIBUTE_LEADERBOARD_ROWS_SHOWN = 400
 
 
 CURRENT_PICK_COLUMNS = (
@@ -190,6 +205,32 @@ BAND_VARIANT_COLUMNS = (
     ("exit_template_id", "Exit Template"),
 )
 
+ATTRIBUTE_LEADERBOARD_COLUMNS = (
+    ("attribute_label", "Attribute"),
+    ("value_label", "Value"),
+    ("side", "Side"),
+    ("priority_bucket", "Bucket"),
+    ("setup_count", "n"),
+    ("closed_tradeable_setup_count", "n Closed"),
+    ("meets_n_floor_label", "Floor"),
+    ("avg_closed_r", "Closed R"),
+    ("avg_closed_r_edge", "Closed R Edge"),
+    ("target_hit_rate_edge", "Target% Edge"),
+    ("stop_rate_edge", "Stop% Edge"),
+    ("sample_setups", "Examples"),
+)
+
+ATTRIBUTE_LEADERBOARD_EXPLANATION = (
+    "Every attribute the scanner records at entry, graded against the baseline for its "
+    "own side and bucket. EDGE columns are this value minus the baseline, so positive "
+    "Closed R Edge means setups with this attribute closed better than the rest. "
+    "Ranked by Closed R Edge, best first. "
+    "ROWS UNDER THE SAMPLE FLOOR ARE GREYED AND SORTED LAST: a one-setup group with a "
+    "huge edge is not a weak finding, it is not a finding. Nothing here scores, ranks, "
+    "gates or alerts - it is the evidence the tuner reads, shown to the trader who "
+    "generated it."
+)
+
 HUMAN_PICK_COLUMNS = (
     ("cohort", "Cohort"),
     ("side", "Side"),
@@ -254,6 +295,8 @@ TOOLTIP_KEYS = {
 
 class SetupTrackerPanel(QFrame):
     statusChanged = Signal(str)
+    #: The attribute leaderboard read lands here, off the worker thread.
+    _attributesLoaded = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -295,6 +338,13 @@ class SetupTrackerPanel(QFrame):
 
         self.status_label = QLabel("Tracker exports have not been loaded yet.")
         self.status_label.setObjectName("MutedLabel")
+        # The attribute tab's own line: it arrives after the rest of the page,
+        # so a shared status label would either lie or overwrite.
+        self.attribute_status_label = QLabel("")
+        self.attribute_status_label.setObjectName("MutedLabel")
+        self.attribute_status_label.setWordWrap(True)
+        self.attribute_rows: list[dict[str, Any]] = []
+        self._attributes_thread: threading.Thread | None = None
 
         self.tabs = QTabWidget()
         self.current_table, self.current_model = self._make_table(CURRENT_PICK_COLUMNS)
@@ -307,6 +357,9 @@ class SetupTrackerPanel(QFrame):
         self.catch_rate_table, self.catch_rate_model = self._make_table(CATCH_RATE_COLUMNS)
         self.human_pick_table, self.human_pick_model = self._make_table(HUMAN_PICK_COLUMNS)
         self.band_variant_table, self.band_variant_model = self._make_table(BAND_VARIANT_COLUMNS)
+        self.attribute_table, self.attribute_model = self._make_table(
+            ATTRIBUTE_LEADERBOARD_COLUMNS
+        )
 
         self.tabs.addTab(self.current_table, "Current Picks")
         self.tabs.addTab(
@@ -370,6 +423,14 @@ class SetupTrackerPanel(QFrame):
             ),
             "Band Variant",
         )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                ATTRIBUTE_LEADERBOARD_EXPLANATION,
+                self.attribute_table,
+                footer=self.attribute_status_label,
+            ),
+            "Attributes",
+        )
 
         # Right-hand setup detail: appears when a row is clicked; for symbol
         # picks it shows the family mechanics plus THIS symbol's stop/target
@@ -391,8 +452,15 @@ class SetupTrackerPanel(QFrame):
                 lambda index, explanation_kind=kind: self._on_research_row_clicked(index, explanation_kind)
             )
 
+        self._attributesLoaded.connect(self._on_attributes_loaded)
         self._build_layout()
         self.refresh()
+
+    def shutdown(self) -> None:
+        """Let no read outlive the panel it was going to update."""
+        thread = getattr(self, "_attributes_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
 
     def _build_layout(self) -> None:
         header = SectionHeader(
@@ -450,7 +518,7 @@ class SetupTrackerPanel(QFrame):
         table.setShowGrid(False)
         return table, model
 
-    def _make_explained_tab(self, description: str, table: DataTable) -> QWidget:
+    def _make_explained_tab(self, description: str, table: DataTable, *, footer=None) -> QWidget:
         tab = QWidget()
         label = QLabel(description)
         label.setObjectName("MutedLabel")
@@ -460,7 +528,69 @@ class SetupTrackerPanel(QFrame):
         layout.setSpacing(8)
         layout.addWidget(label)
         layout.addWidget(table, 1)
+        if footer is not None:
+            layout.addWidget(footer)
         return tab
+
+    def start_attribute_refresh(self) -> None:
+        """Read the attribute leaderboard OFF the Qt thread. Single-flight.
+
+        Every other export on this page is parsed inline, and deliberately so -
+        Phase 0.9 G-P2.3 owns moving the page as a whole. This one is the
+        exception because of its SIZE: 19.7 MB and 38,617 rows on the live
+        desk, against 5.5 MB for the next largest and under 150 KB for the
+        rest. Parsing it on the render path would freeze the desk for seconds
+        on every refresh, spinbox step and tab visit.
+        """
+        thread = getattr(self, "_attributes_thread", None)
+        if thread is not None and thread.is_alive():
+            return
+        self.attribute_status_label.setText("Reading the attribute leaderboard...")
+        self._attributes_thread = threading.Thread(
+            target=self._attributes_worker,
+            name="tracker-attribute-leaderboard",
+            daemon=True,
+        )
+        self._attributes_thread.start()
+
+    def _attributes_worker(self) -> None:
+        payload: dict[str, Any] = {"rows": [], "message": ""}
+        try:
+            payload["rows"] = _rank_attribute_leaderboard(
+                _load_csv_rows_cached(MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE)
+            )
+        except Exception as exc:  # noqa: BLE001 - a table is never worth a panel
+            payload["message"] = f"Attribute leaderboard unreadable: {exc}"
+        try:
+            self._attributesLoaded.emit(payload)
+        except RuntimeError:
+            # The panel was deleted while the read was in flight; nothing left
+            # to update, so the payload is dropped rather than raised.
+            pass
+
+    def _on_attributes_loaded(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        rows = list(data.get("rows") or [])
+        self.attribute_rows = rows
+        self.attribute_model.set_rows(rows[:ATTRIBUTE_LEADERBOARD_ROWS_SHOWN])
+        self.attribute_table.fit_columns()
+        message = str(data.get("message") or "")
+        if message:
+            self.attribute_status_label.setText(message)
+            return
+        if not rows:
+            self.attribute_status_label.setText(
+                "No attribute leaderboard on disk yet. The scanner writes it every "
+                "scan - this is an absent export, not a scan without attributes."
+            )
+            return
+        under = sum(1 for row in rows if not row.get("_meets_floor"))
+        shown = min(len(rows), ATTRIBUTE_LEADERBOARD_ROWS_SHOWN)
+        self.attribute_status_label.setText(
+            f"{len(rows):,} attribute/value group(s); showing the top {shown:,} by "
+            f"closed-R edge. {under:,} are UNDER the reportable-n floor "
+            f"(n < {_attribute_floor()}), greyed and sorted last."
+        )
 
     def refresh(self) -> None:
         min_closed = int(self.min_closed_input.value())
@@ -494,6 +624,9 @@ class SetupTrackerPanel(QFrame):
         self.tier_performance_model.set_rows(self.tier_performance_rows)
         self.catch_rate_model.set_rows(self.catch_rate_rows)
         self.band_variant_model.set_rows(self.band_variant_rows[:300])
+        # The attribute leaderboard is read on a worker (19.7 MB live); the
+        # table fills when it arrives.
+        self.start_attribute_refresh()
         for table in (
             self.current_table,
             self.human_pick_table,
@@ -604,6 +737,77 @@ def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
         return []
     with Path(path).open(newline="", encoding="utf-8-sig") as handle:
         return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _attribute_floor() -> int:
+    """The reportable-n floor, from the ONE place that owns it.
+
+    Computed in the panel only until B1 puts `meets_n_floor` in the CSV itself.
+    A failed import falls back to the same constant's value rather than to no
+    floor at all: showing an n=1 row ungreyed is the failure this exists to
+    prevent.
+    """
+    try:
+        from evidence_stats import MIN_REPORTABLE_N
+
+        return int(MIN_REPORTABLE_N)
+    except Exception:  # noqa: BLE001
+        return 30
+
+
+def _rank_attribute_leaderboard(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Best closed-R edge first, with sub-floor groups greyed and last.
+
+    The ORDER is the honesty. The export emits categorical, bool and list rows
+    at `setup_count=1` with full averages and edges (only numeric bucketing has
+    a floor today - B1 fixes the export itself), so sorting purely by edge puts
+    a single lucky setup at the top of a 38,617-row table.
+
+    Rows are KEPT, never dropped: this is visibility, not suppression. A group
+    under the floor is not a weak finding, it is not a finding, and the label
+    says which it is.
+
+    Presentation only - nothing here re-reads the file or writes one.
+    """
+    floor = _attribute_floor()
+
+    def _edge(row: dict[str, Any]):
+        text = str(row.get("avg_closed_r_edge") or "").strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            return None
+
+    prepared: list[dict[str, Any]] = []
+    for row in rows:
+        closed = _float(row.get("closed_tradeable_setup_count"), 0.0)
+        meets = closed >= floor
+        prepared.append(
+            {
+                **row,
+                "_meets_floor": meets,
+                # Read by TrackerTableModel's ForegroundRole: the whole row is
+                # muted, not just the count, because it is the EDGE a reader's
+                # eye lands on.
+                "_muted_row": not meets,
+                # A word, not a tick: "n=4" reads as a measurement and "below
+                # floor" reads as what it is.
+                "meets_n_floor_label": "ok" if meets else f"below floor (<{floor})",
+            }
+        )
+    return sorted(
+        prepared,
+        key=lambda row: (
+            0 if row["_meets_floor"] else 1,
+            _edge(row) is None,
+            -(_edge(row) or 0.0),
+            -_float(row.get("closed_tradeable_setup_count"), 0.0),
+            str(row.get("attribute_label") or ""),
+            str(row.get("value_label") or ""),
+        ),
+    )
 
 
 def _rank_band_variants(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

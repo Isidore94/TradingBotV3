@@ -9551,6 +9551,10 @@ SCAN_FACTOR_CATEGORICAL_FIELDS = {
     "favorite_zone": ("setup", "Favorite zone"),
     "setup_family": ("setup", "Setup family"),
     "priority_bucket": ("setup", "Priority bucket"),
+    # P4 A2, capture only. Both are already on the priority row and neither
+    # has ever been graded.
+    "sector": ("setup", "Sector"),
+    "industry": ("setup", "Industry"),
     "breakout_5d": ("structure", "5d breakout"),
     "retest_reference_level": ("structure", "Retest reference level"),
     "extreme_move_retest_level": ("pattern", "Extreme move retest level"),
@@ -9561,6 +9565,8 @@ SCAN_FACTOR_BOOL_FIELDS = {
     "spy_above_sma20": ("market", "SPY above SMA20"),
     "spy_above_sma50": ("market", "SPY above SMA50"),
     "previous_day_range_break": ("structure", "Previous-day range break"),
+    "above_sma200": ("structure", "Above SMA200"),
+    "below_sma50": ("structure", "Below SMA50"),
     "has_bounce_event_today": ("setup", "Bounce event today"),
     "pre_earnings_setup_blocked": ("earnings", "Pre-earnings blocked"),
     "post_earnings_hard_rule_blocked": ("earnings", "Post-earnings hard-rule blocked"),
@@ -9601,6 +9607,14 @@ SCAN_FACTOR_NUMERIC_FIELDS = {
     "last_close": ("price", "Last close", (10, 25, 50, 100, 200, 500)),
     "last_volume": ("liquidity", "Last volume", (500_000, 1_000_000, 3_000_000, 10_000_000)),
     "atr20": ("volatility", "ATR20", (1, 2, 5, 10, 20)),
+    # Beside the dollar buckets above, never replacing them: a $2 ATR is a
+    # quiet day on a $400 stock and a violent one on a $12 stock (P4 A2).
+    "atr20_pct_of_price": ("volatility", "ATR20 % of price", (1, 2, 3, 5, 8)),
+    "relvol": ("filters", "Relative volume (20d)", (0.5, 1.0, 1.5, 2.5, 5.0)),
+    # Trader rule 3's geometry as EVIDENCE. Signed, in ATR, so the D1 record
+    # can agree or disagree with the Alert Center's filter. No gate, no points.
+    "dist_sma200_atr": ("structure", "Distance to SMA200 (ATR)", (-8, -3, -1, 0, 1, 3, 8)),
+    "dist_sma50_atr": ("structure", "Distance to SMA50 (ATR)", (-8, -3, -1, 0, 1, 3, 8)),
     "pct_from_current_vwap": ("levels", "% from current AVWAP", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
     "pct_from_current_upper_1": ("levels", "% from current upper 1", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
     "pct_from_current_lower_1": ("levels", "% from current lower 1", (-10, -5, -2, -1, 0, 1, 2, 5, 10)),
@@ -29558,6 +29572,154 @@ def build_tracker_entry_attributes(
         or top_weekly_sma50_retest_recent
     )
 
+    # ---------------------------------------------------------------- P4 A2
+    # Variables that were already on the record or the row and had no attribute
+    # key, so the leaderboard could never grade them. Capture only: no weight,
+    # no gate, no score input. The golden test in
+    # tests/test_p4_swing_variables.py pins that the priority score, bucket and
+    # expected R are byte-identical with and without this block.
+    # ------------------------------------------------------------------------
+    add(
+        "setup.human_focus_pick",
+        bool(row.get("human_focus_pick") or symbol_entry.get("human_focus_pick")),
+        group="setup",
+        label="Human focus pick",
+        value_type="bool",
+        description=(
+            "The trader had this name on a Focus list when the setup was "
+            "recorded. Evidence only - it never scored the setup."
+        ),
+    )
+    add(
+        "setup.human_focus_side",
+        str(row.get("human_focus_side") or symbol_entry.get("human_focus_side") or "").strip().upper(),
+        group="setup",
+        label="Human focus side",
+        value_type="text",
+        description="Which side the trader had the name on, when they had it.",
+    )
+    add(
+        "setup.tracker_setup_family",
+        str(row.get("tracker_setup_family") or symbol_entry.get("tracker_setup_family") or "").strip(),
+        group="setup",
+        label="Tracker setup family",
+        value_type="text",
+        description=(
+            "The family the TRACKER filed this setup under, which can differ "
+            "from the scanner's `setup_family` - grading both is how a "
+            "disagreement between them becomes visible."
+        ),
+    )
+    add(
+        "market.regime_label",
+        str(row.get("market_regime_label") or symbol_entry.get("market_regime_label") or "").strip().lower(),
+        group="market",
+        label="Market regime label",
+        value_type="text",
+        description="The market regime the desk was reading when this setup was recorded.",
+    )
+    add(
+        "setup.sector",
+        str(row.get("sector") or symbol_entry.get("sector") or "").strip(),
+        group="setup",
+        label="Sector",
+        value_type="text",
+        description="Sector classification carried on the priority row.",
+    )
+    add(
+        "setup.industry",
+        str(row.get("industry") or symbol_entry.get("industry") or "").strip(),
+        group="setup",
+        label="Industry",
+        value_type="text",
+        description="Industry classification carried on the priority row.",
+    )
+    # ATR as a PERCENT OF PRICE, beside the dollar-bucketed `atr20` and never
+    # replacing it. A $2 ATR is a quiet day on a $400 stock and a violent one
+    # on a $12 stock, so a dollar bucket pools two different things - the same
+    # unit error the trader ruled on for theta premium (a percent floor of the
+    # strike, not a flat quarter). Boundaries 1/2/3/5/8 percent.
+    _atr20_value = _coerce_float(row.get("atr20") or feature_row.get("atr20"))
+    _last_close_value = _coerce_float(row.get("last_close") or feature_row.get("last_close"))
+    add(
+        "volatility.atr20_pct_of_price",
+        (
+            (_atr20_value / _last_close_value * 100.0)
+            if _atr20_value is not None and _last_close_value
+            else None
+        ),
+        group="volatility",
+        label="ATR20 % of price",
+        value_type="number",
+        description=(
+            "ATR20 as a percent of last close. The dollar ATR bucket beside it "
+            "pools a quiet $400 name with a violent $12 one; this does not."
+        ),
+    )
+    # The trader's rule 3 (2026-08-27) - longs above the SMA200, shorts below
+    # the SMA50 - lives only in the Alert Center's chart-review filter. Recording
+    # the same geometry on the D1 record is what lets the swing evidence AGREE
+    # OR DISAGREE with it. Signed, in ATR, so it is comparable across prices.
+    _sma200_value = _coerce_float(row.get("sma200") or feature_row.get("sma200"))
+    _sma50_value = _coerce_float(row.get("sma50") or feature_row.get("sma50"))
+    _dist_sma200_atr = (
+        (_last_close_value - _sma200_value) / _atr20_value
+        if None not in (_last_close_value, _sma200_value, _atr20_value) and _atr20_value
+        else None
+    )
+    _dist_sma50_atr = (
+        (_last_close_value - _sma50_value) / _atr20_value
+        if None not in (_last_close_value, _sma50_value, _atr20_value) and _atr20_value
+        else None
+    )
+    add(
+        "structure.dist_sma200_atr",
+        _dist_sma200_atr,
+        group="structure",
+        label="Distance to SMA200 (ATR)",
+        value_type="number",
+        description=(
+            "Signed distance from last close to the daily SMA200 in ATR20 "
+            "units. Evidence for the trader's D1 trend rule; it gates nothing."
+        ),
+    )
+    add(
+        "structure.dist_sma50_atr",
+        _dist_sma50_atr,
+        group="structure",
+        label="Distance to SMA50 (ATR)",
+        value_type="number",
+        description=(
+            "Signed distance from last close to the daily SMA50 in ATR20 units."
+        ),
+    )
+    add(
+        "structure.above_sma200",
+        (None if None in (_last_close_value, _sma200_value) else bool(_last_close_value > _sma200_value)),
+        group="structure",
+        label="Above SMA200",
+        value_type="bool",
+        description="Last close above the daily SMA200 (the long leg of trader rule 3).",
+    )
+    add(
+        "structure.below_sma50",
+        (None if None in (_last_close_value, _sma50_value) else bool(_last_close_value < _sma50_value)),
+        group="structure",
+        label="Below SMA50",
+        value_type="bool",
+        description="Last close below the daily SMA50 (the short leg of trader rule 3).",
+    )
+    add(
+        "filters.relvol_20d",
+        _coerce_float(row.get("relvol") or feature_row.get("relvol")),
+        group="filters",
+        label="Relative volume (20d)",
+        value_type="number",
+        description=(
+            "Relative volume stamped on the row by the swing-quality shadow "
+            "pass. Recorded so the leaderboard can grade it; it filters nothing."
+        ),
+    )
     add(
         "setup.side",
         normalize_side(row.get("side") or symbol_entry.get("side") or ""),

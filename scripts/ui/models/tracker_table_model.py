@@ -89,6 +89,12 @@ class TrackerTableModel(QAbstractTableModel):
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole:
+            # A row the source marked as under its evidence floor is MUTED
+            # whole, ahead of every other colour rule: a green +0.97R edge on
+            # a four-setup group reads as a finding, and it is not one. Opt-in
+            # per row (`_muted_row`), so no existing table changes.
+            if row.get("_muted_row"):
+                return QColor(theme.color("text_muted"))
             if key == "side":
                 side = str(value or "").upper()
                 if side in {"LONG", "SHORT"}:
