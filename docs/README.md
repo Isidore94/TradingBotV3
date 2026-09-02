@@ -123,7 +123,8 @@ trackers:
 12. [layered requirements with pinned constraints](decisions/0012-layered-requirements-with-constraints-pin.md);
 13. [root-roadmap authority](decisions/0013-plan-md-authority-hierarchy.md);
 14. [separate DAS research lake](decisions/0014-das-research-lake.md);
-15. [no cloud sync — the DAS file server is the durable storage tier](decisions/0015-no-cloud-sync-das-file-server-storage.md).
+15. [no cloud sync — the DAS file server is the durable storage tier](decisions/0015-no-cloud-sync-das-file-server-storage.md);
+16. [the trader's vision and priorities, in their own words](decisions/0016-trader-vision-and-priorities.md).
 
 ## Maintenance rule
 
