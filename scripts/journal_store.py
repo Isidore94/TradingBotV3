@@ -13,7 +13,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from journal_analytics import AutoTagger, split_tags
+from journal_analytics import TRADER_CAPTURE_SOURCE, AutoTagger, split_tags
 from journal_trade_shape import is_shape_tag, shape_tags
 from journal_identity import (
     contract_multiplier as _contract_multiplier_shared,
@@ -37,6 +37,13 @@ EPSILON = 0.0000001
 #: value is ``trade_shape:<kind>``; the prefix is what orders the two lanes and
 #: what the UI reads to say where a suggestion came from.
 TRADE_SHAPE_SOURCE = "trade_shape"
+
+#: P6's EXACT-ID lane, RE-EXPORTED from `journal_analytics`, which owns it and
+#: which this module already imports from. The stored value is
+#: ``trader_capture:<kind>`` - veto, like_claim, pass or a take-class review
+#: event - and it ranks ABOVE every fuzzy source because it is the trader's own
+#: statement about that name on that day, not a scanner row that happened to
+#: fall in a window.
 
 #: How many auto tags the stored summary carries. It is the Tags column for
 #: any trade the trader has not annotated, which is every row of an imported
@@ -369,6 +376,9 @@ class JournalStore:
                     source TEXT NOT NULL DEFAULT '',
                     rationale TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
+                    -- P6: the trader statement this candidate came from, when
+                    -- there is one. A POINTER, never a canonical link.
+                    context_row_id TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (trade_id, tag)
                 );
 
@@ -2173,8 +2183,9 @@ class JournalStore:
                     conn.execute(
                         """
                         INSERT OR REPLACE INTO auto_tag_candidates(
-                            trade_id, tag, confidence, source, rationale, created_at
-                        ) VALUES(?, ?, ?, ?, ?, ?)
+                            trade_id, tag, confidence, source, rationale, created_at,
+                            context_row_id
+                        ) VALUES(?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             trade["trade_id"],
@@ -2183,6 +2194,7 @@ class JournalStore:
                             item.get("source", ""),
                             item.get("rationale", ""),
                             _now_iso(),
+                            str(item.get("context_row_id") or ""),
                         ),
                     )
                 conn.execute(
@@ -2243,22 +2255,28 @@ class JournalStore:
         return [_row_to_dict(row) for row in rows]
 
     def list_auto_tag_candidates(self, trade_id: str) -> list[dict[str, Any]]:
-        """Suggestions for one trade: setup lane first, then the shape lane.
+        """Suggestions for one trade, by LANE: capture, then setup, then shape.
 
-        Ordering is by LANE before confidence. Shape tags are facts and carry
-        a confidence of 1.0, so a plain ``ORDER BY confidence DESC`` would put
+        Ordering is by lane before confidence. Shape tags are facts and carry a
+        confidence of 1.0, so a plain ``ORDER BY confidence DESC`` would put
         ``midday`` above every setup match the scanner found -- and the setup
-        match is the answer the trader opened the pane for. Within a lane the
-        ranking is unchanged.
+        match is the answer the trader opened the pane for.
+
+        P6 put the CAPTURE lane above both. A `trader_capture` candidate is the
+        trader's own statement about that symbol on that day - a veto, a
+        like+claim, a pass, or a chart they took action on - matched by exact
+        event id rather than by a symbol falling inside a 16-day window. When
+        the trader has already said what they thought of a name, that outranks
+        anything inferred about it. Within a lane the ranking is unchanged.
         """
         with self.connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM auto_tag_candidates
                 WHERE trade_id = ?
-                ORDER BY (source LIKE ? ) ASC, confidence DESC, tag
+                ORDER BY (source LIKE ?) DESC, (source LIKE ?) ASC, confidence DESC, tag
                 """,
-                (trade_id, f"{TRADE_SHAPE_SOURCE}:%"),
+                (trade_id, f"{TRADER_CAPTURE_SOURCE}:%", f"{TRADE_SHAPE_SOURCE}:%"),
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 

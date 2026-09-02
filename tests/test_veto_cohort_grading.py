@@ -523,6 +523,9 @@ def test_the_scope_can_be_selected_on_demand():
         # report after that, and LOCAL-AI Phase 2 the daily digest last. Later
         # phases append; they never reorder the ones above.
         "like_cohort_grading",
+        # P6's join, appended after the cohorts and before the report that
+        # reads what they produced.
+        "preference_trade_outcomes",
         "evidence_report",
         "daily_digest",
         # LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run gated:

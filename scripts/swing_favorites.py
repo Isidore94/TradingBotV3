@@ -249,6 +249,54 @@ def _trade_open_date(trade: Mapping[str, Any]) -> str:
     return ""
 
 
+def taken_trade_ids(
+    favorites: Iterable[Mapping[str, Any]],
+    trades: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str], str]:
+    """(symbol, side) -> the trade_id behind the "took" badge (P6).
+
+    The badge already answered "did I trade this one?"; this says WHICH trade,
+    so the chip can point at the row instead of leaving the trader to find it.
+
+    Read-only and DISPLAY-ONLY, exactly as `taken_keys` is - the note above
+    that function applies here word for word. It computes no statistic: it
+    returns an identifier the journal already minted, and a number computed
+    here would be a per-pick performance claim that belongs in `evidence_stats`
+    and nowhere near a chip.
+
+    Matched by the SAME rule `taken_keys` uses, and it must stay that way: a
+    badge that appeared under one rule and linked under another would point at
+    a trade that is not the one it is marking. An unreadable open date marks
+    and links nothing - uncertainty is never confirmation.
+    """
+    latest: dict[str, tuple[str, str]] = {}
+    for trade in trades:
+        symbol = normalize_symbol(trade.get("symbol"))
+        opened = _trade_open_date(trade)
+        # The id is EXTRA, never a condition. The badge answers "did I trade
+        # this?" and a trade whose id cannot be read is still a trade that
+        # happened - requiring one here would silently un-mark chips, which is
+        # a worse answer than marking one with no link.
+        trade_id = str(trade.get("trade_id") or "").strip()
+        if not symbol or not opened:
+            continue
+        current = latest.get(symbol)
+        if current is None or opened > current[0]:
+            latest[symbol] = (opened, trade_id)
+
+    marks: dict[tuple[str, str], str] = {}
+    for favorite in favorites:
+        symbol = normalize_symbol(favorite.get("symbol"))
+        side = normalize_side(favorite.get("side"))
+        picked = str(favorite.get("session_date") or "").strip()
+        if not symbol or not side or not picked:
+            continue
+        found = latest.get(symbol)
+        if found and found[0] >= picked:
+            marks[(symbol, side)] = found[1]
+    return marks
+
+
 def taken_keys(
     favorites: Iterable[Mapping[str, Any]],
     trades: Iterable[Mapping[str, Any]],

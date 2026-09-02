@@ -127,10 +127,17 @@ def test_the_slot_is_appended_last_and_never_reorders_the_others():
     # Phase 2's `daily_digest` was appended after this slot on 2026-08-24, so
     # this is no longer last - which is the rule working, not breaking: later
     # phases append, and the ones already here never move.
-    assert names.index("evidence_report") == 5
     # It reads what the cohorts produced, so it runs after them: a report ahead
-    # of its inputs would describe last night's evidence.
-    assert names.index("like_cohort_grading") < names.index("evidence_report")
+    # of its inputs would describe last night's evidence. P6 appended another
+    # slot that reads them too, so the assertion is the RELATION and not the
+    # index - an index would have to be edited every time a slot is added
+    # before it, which is exactly when this guarantee matters most.
+    for earlier in (
+        "veto_cohort_grading",
+        "like_cohort_grading",
+        "preference_trade_outcomes",
+    ):
+        assert names.index(earlier) < names.index("evidence_report"), earlier
 
 
 def test_the_slot_reserves_the_five_minute_class_and_calls_no_model():

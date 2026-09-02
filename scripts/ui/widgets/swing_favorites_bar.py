@@ -93,15 +93,28 @@ class SwingFavoriteChip(QFrame):
         layout.addWidget(remove_button)
 
         self._taken: bool | None = None
+        self._taken_trade_id: str = ""
         self.set_taken(taken)
 
-    def set_taken(self, taken: bool) -> None:
-        """Show or hide the taken mark. A no-op when it has not changed."""
+    def set_taken(self, taken: bool, trade_id: str = "") -> None:
+        """Show or hide the taken mark. A no-op when it has not changed.
+
+        `trade_id` names the journal row the badge is about (P6), and rides on
+        the mark's TOOLTIP: the badge stays display-only and computes nothing,
+        and an id in a tooltip is a pointer the trader can follow rather than a
+        number that could be mistaken for a result.
+        """
         taken = bool(taken)
-        if taken == self._taken:
+        trade_id = str(trade_id or "")
+        if taken == self._taken and trade_id == getattr(self, "_taken_trade_id", ""):
             return
         self._taken = taken
+        self._taken_trade_id = trade_id
         self.taken_label.setVisible(taken)
+        self.taken_label.setToolTip(
+            f"Traded - journal trade {trade_id}" if taken and trade_id
+            else ("Traded (the journal row could not be identified)" if taken else "")
+        )
         self.setProperty("taken", "true" if taken else "false")
         # Re-polish only when the look actually changed; on a stable strip
         # that is never.
@@ -213,6 +226,8 @@ class SwingFavoritesBar(QWidget):
 
         self._side = "long"
         self._taken: set[tuple[str, str]] = set()
+        #: (symbol, side) -> journal trade_id, for the badge's tooltip.
+        self._taken_trade_ids: dict[tuple[str, str], str] = {}
         self._announced_shown = False
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -288,17 +303,33 @@ class SwingFavoritesBar(QWidget):
         if [(chip.symbol, chip.side) for chip in current] != wanted:
             self._apply_diff(wanted)
         for chip in self._current_chips():
-            chip.set_taken((chip.symbol, chip.side) in self._taken)
+            key = (chip.symbol, chip.side)
+            chip.set_taken(key in self._taken, self._taken_trade_ids.get(key, ""))
         self.count_label.setText(str(len(wanted)))
 
-    def set_taken(self, taken: Iterable[tuple[str, str]]) -> None:
-        """Re-point the taken marks. No layout work, ever."""
-        self._taken = {
-            (str(symbol).strip().upper(), str(side).strip().lower())
-            for symbol, side in (taken or ())
-        }
+    def set_taken(self, taken) -> None:
+        """Re-point the taken marks. No layout work, ever.
+
+        Accepts either the historical SET of (symbol, side) or a MAPPING of
+        those to a journal trade_id (P6). Both are supported deliberately: the
+        set is what every existing caller and test passes, and a mapping only
+        adds the id the badge's tooltip names. Which one arrived changes
+        nothing about which chips are marked.
+        """
+        pairs = list((taken or {}).items()) if hasattr(taken, "items") else [
+            (pair, "") for pair in (taken or ())
+        ]
+        self._taken = set()
+        self._taken_trade_ids = {}
+        for pair, trade_id in pairs:
+            symbol, side = pair
+            key = (str(symbol).strip().upper(), str(side).strip().lower())
+            self._taken.add(key)
+            if trade_id:
+                self._taken_trade_ids[key] = str(trade_id)
         for chip in self._current_chips():
-            chip.set_taken((chip.symbol, chip.side) in self._taken)
+            key = (chip.symbol, chip.side)
+            chip.set_taken(key in self._taken, self._taken_trade_ids.get(key, ""))
 
     def _apply_diff(self, wanted: list[tuple[str, str]]) -> None:
         wanted_set = set(wanted)

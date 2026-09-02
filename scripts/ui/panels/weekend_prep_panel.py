@@ -324,6 +324,15 @@ class FocusReviewPage(_StepPage):
         self.like_note = QLabel("")
         self.like_note.setWordWrap(True)
 
+        # P6: what was said, whether it was taken, and what it then did. The
+        # cohorts above answer "was I right"; this answers the question before
+        # it - "did I act on what I said at all?".
+        self.preference_table = QTableWidget(0, len(PREFERENCE_COLUMNS))
+        self.preference_table.setHorizontalHeaderLabels(list(PREFERENCE_HEADERS))
+        self.preference_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.preference_note = QLabel("")
+        self.preference_note.setWordWrap(True)
+
         # Packet W2: R8 sec 6's last two DEFERRED joins. The cohorts above are
         # the two judgement mirrors - what was thrown away, what was endorsed.
         # These are the picks THEMSELVES: how they behaved, and what the trader
@@ -357,6 +366,9 @@ class FocusReviewPage(_StepPage):
         self._layout.addWidget(QLabel("Liked picks, graded forward"))
         self._layout.addWidget(self.like_table, 1)
         self._layout.addWidget(self.like_note)
+        self._layout.addWidget(QLabel("What I said, what I did, what happened"))
+        self._layout.addWidget(self.preference_table, 1)
+        self._layout.addWidget(self.preference_note)
         self._layout.addWidget(QLabel("Focus picks, graded forward"))
         self._layout.addWidget(self.performance_table, 1)
         self._layout.addWidget(self.performance_note)
@@ -390,6 +402,7 @@ class FocusReviewPage(_StepPage):
         return {
             "cohort": _read_veto_cohort(),
             "like": _read_like_cohort(),
+            "preference": _read_preference_trade_rows(self.service.week_bounds),
             "performance": _read_focus_performance(),
             "feedback": _read_pick_feedback_week(self.service.week_bounds),
             "week": _join_focus_week(self.service.week_bounds),
@@ -400,6 +413,7 @@ class FocusReviewPage(_StepPage):
         data = payload if isinstance(payload, dict) else {}
         self._render_cohort(data.get("cohort") or [])
         self._render_like_cohort(data.get("like") or [])
+        self._render_preference_trades(data.get("preference") or [])
         self._render_performance(data.get("performance") or [])
         self._render_feedback(data.get("feedback") or [])
         self._render_week(data.get("week") or [])
@@ -549,6 +563,40 @@ class FocusReviewPage(_StepPage):
             "n is small per family and a blank is a horizon that has not matured. "
             "The two tables are the mirror pair - what you threw away, and what "
             "you endorsed."
+        )
+
+    def _render_preference_trades(self, rows) -> None:
+        """What was said, whether it was taken, and what it did (P6).
+
+        Every row shows its MATCH CONFIDENCE or says "no match": the join is a
+        judgement - the trader could have taken the name that week for an
+        unrelated reason - and a bare trade id would read as a fact. Nothing
+        here mints an identifier; plan.md P5.3/P5.4 own the canonical one.
+        """
+        self.preference_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            for column, key in enumerate(PREFERENCE_COLUMNS):
+                self.preference_table.setItem(
+                    index, column, QTableWidgetItem(str(row.get(key) or ""))
+                )
+        apply_width_rule_to_table_widget(
+            self.preference_table, text_columns=(0, 3), elide_columns=(3,)
+        )
+        if not rows:
+            self.preference_note.setText(
+                "No preference/trade report for this week yet. It is written by the "
+                "overnight preference_trade_outcomes slot - an absent report, not a "
+                "week without opinions."
+            )
+            return
+        taken = sum(1 for row in rows if str(row.get("traded") or "") == "yes")
+        self.preference_note.setText(
+            f"{len(rows)} statement(s) this week; {taken} were traded and "
+            f"{len(rows) - taken} were not. The not-traded rows are the "
+            "interesting ones - a paper return beside a blank trade id is a "
+            "setup you named and skipped. Match confidence is a JUDGEMENT, not "
+            "a link: a trade on the same name that week may have been taken for "
+            "another reason entirely, and 'no match' is a real answer."
         )
 
     def _render_cohort(self, rows) -> None:
@@ -1334,6 +1382,82 @@ def _focus_row(key, pick, outcome, *, orphan: bool) -> dict[str, Any]:
     }
 
 
+
+
+#: The preference/trade report's columns on this page. A subset: the CSV
+#: carries the ids and the raw numbers, and the page carries what a person
+#: reads on a Saturday.
+PREFERENCE_COLUMNS = (
+    "session_date",
+    "symbol",
+    "side",
+    "statement",
+    "traded",
+    "match_confidence",
+    "journal_r",
+    "paper_forward_return_h5",
+)
+PREFERENCE_HEADERS = (
+    "Date",
+    "Symbol",
+    "Side",
+    "What you said",
+    "Traded",
+    "Match conf.",
+    "Journal R",
+    "Paper 5d",
+)
+
+
+def _read_preference_trade_rows(bounds) -> list[dict[str, str]]:
+    """This week's rows of the preference/trade report (P6).
+
+    Week-scoped on `session_date` - the session the statement is ABOUT - never
+    on `generated_at`, which is when the report last ran. Read-only and
+    forgiving like every other reader on this page.
+    """
+    import csv
+
+    import project_paths
+
+    monday, friday = bounds
+    path = Path(getattr(project_paths, "OUTPUT_DIR")) / "preference_trade_outcomes.csv"
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            raw_rows = list(csv.DictReader(handle))
+    except OSError:
+        return []
+
+    rows: list[dict[str, str]] = []
+    for raw in raw_rows:
+        stamp = str(raw.get("session_date") or "")[:10]
+        try:
+            when = datetime.fromisoformat(stamp).date()
+        except ValueError:
+            continue
+        if not (monday <= when <= friday):
+            continue
+        statement = str(raw.get("statement") or "")
+        detail = str(raw.get("statement_detail") or "")
+        rows.append(
+            {
+                "session_date": stamp,
+                "symbol": str(raw.get("symbol") or ""),
+                "side": str(raw.get("side") or ""),
+                "statement": f"{statement} ({detail})" if detail else statement,
+                "traded": str(raw.get("traded") or ""),
+                # "no match" travels as words, never as a blank that could read
+                # as an unmeasured cell.
+                "match_confidence": str(raw.get("match_confidence") or "")
+                or str(raw.get("match_basis") or ""),
+                "journal_r": str(raw.get("journal_r") or ""),
+                "paper_forward_return_h5": str(raw.get("paper_forward_return_h5") or ""),
+            }
+        )
+    rows.sort(key=lambda row: (row["session_date"], row["symbol"]))
+    return rows
 
 
 def _read_focus_performance() -> list[dict[str, str]]:

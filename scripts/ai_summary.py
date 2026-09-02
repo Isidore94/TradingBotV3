@@ -188,8 +188,12 @@ SCOPE_LABELS = {
     # raw store - see the funding notes at their source specs.
     "walkaway": "Walk-away analysis output (how the exits went)",
     "setup_performance": "Setup scoreboard and evidence-report output",
-    # R10.I. Free-text journal entries reach an AI scope OPT-IN ONLY - a
-    # recorded trader decision (plan.md L1118-1126), unchanged.
+    # R10.I made free-text journal entries an AI scope. The comment here said
+    # "OPT-IN ONLY" and that has been WRONG since R10.H: `briefs.DEFAULT_SCOPES`
+    # carries `market_journal` on the nightly run, so it goes to the local model
+    # every night without anyone selecting it. Corrected 2026-09-01 (P6) - the
+    # code is the fact and the comment was the defect. Whether it SHOULD be
+    # nightly is the trader's decision and this changes no behaviour.
     "market_journal": "Market journal entries and the day's machine context",
 }
 
