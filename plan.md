@@ -1059,7 +1059,10 @@ cell is read for a verdict before the declared window closes.**
 Authorized by the trader pasting the packet, on their own decision: a like should
 be able to say *"something about this was good"* without naming the setup.
 
-1. **Alt+L** writes `like_claim` with `like_mode: "quick"`, no claim, no why.
+1. **Alt+L** writes `like_claim` with `like_mode: "quick"`, no claim, no why -
+   and a **BUTTON** on the chart's verb row and on the rail does the same behind a
+   popup that takes an OPTIONAL note (trader follow-up, same day). The key never
+   prompts; the button always does; cancel records nothing.
    Supersedes R9.2(a)'s why-required for THIS PATH ONLY; Alt+K is untouched. The
    chart retires, `like_advance` is recorded, the symbol is marked reviewed - and
    nothing is placed, because a like carries zero privileges (P3.1).

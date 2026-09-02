@@ -726,7 +726,11 @@ let the bot and the future AI know 'something about this was good' and then we c
 figure out what about it / what's the best entry later."*
 
 **Alt+L** - unbound everywhere else in `scripts/ui`, and two live bindings for one
-sequence fire NEITHER, so a clash would have cost both verbs silently. It writes
+sequence fire NEITHER, so a clash would have cost both verbs silently. **A BUTTON
+too**, on the chart's verb row and on the rail (trader follow-up the same day),
+opening a box for an OPTIONAL note through the same `QInputDialog` the setup
+tracker's dislike detail uses. The KEY never prompts and the BUTTON always does;
+cancel records nothing. It writes
 `like_claim` with `like_mode: "quick"`, no claim and no why, **superseding
 R9.2(a)'s why-required for that path only**. Everything a claimed like does to the
 review it does too - retire, `like_advance`, reviewed-today - and NONE of that

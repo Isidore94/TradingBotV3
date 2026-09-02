@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Working branch | **`claude/p9-quick-like`**, off `main` at `13cbc50` - Phase 0.13 packet P9 (quick like). `main` already holds every earlier Phase 0.13 packet plus review rounds R1 and R2; nothing else is unmerged |
 | Also in flight | **NOTHING. `claude/gui-phase-0-9` is CONTAINED in `main`** - `git merge-base --is-ancestor` succeeds and it is 0 ahead, because its content arrived through `claude/group-tape-rebuild`, which was cut from it. This row said the branch was unmerged and it was wrong (corrected R2). **What is open is GATE 7 (SOAK 1), not the branch** - a gate is owed by work that has landed, and the two are not the same thing |
 | Active roadmap items | **Phase 0.13 packets P0-P8: ALL MERGED 2026-09-02, live gates #29-#37 owed** (gates #33 and #37 are now SATISFIABLE, which they were not before R1 - see their rows); **integration gate #38** (one DESK session on the merged tree after a restart); Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **6122 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/p9-quick-like`) - **the lock was re-checked immediately before the run**, not inferred from an earlier wait · `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · spec-drift **17** · no packaging trigger (the one new module is inside the already-collected `ui.annotations`). Previous: **6104 passed** on the R2 tree |
+| Last verified baseline | `pytest tests/ -q` **6130 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/p9-quick-like`) - **the lock was re-checked immediately before the run**, not inferred from an earlier wait · `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · spec-drift **17** · no packaging trigger (the one new module is inside the already-collected `ui.annotations`). Previous: **6104 passed** on the R2 tree |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 04:09, trader-authorized ("Go ahead and restart the desk").** The checkout was moved to `main` at `125ffa0` FIRST and verified (selftest 74/74, smoke 7/7, ruff clean) - restarting onto the branch it happened to be sitting on would have put the wrong code on the desk. Old pid 17132 (up since 2026-09-01 11:09) stopped; relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **25884** (the desk) under trampoline **9140**. Verified UP THREE WAYS rather than assumed: the process outlived the launch by minutes, `heartbeat.json` re-stamps every ~4 min naming pid 25884 (it had read pid 17132 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0. **The desk now knows `tag_status`, so P6a's 24 provisional tags render as provisional rather than as the trader's own** - which is what the restart was for. The nightly AI run was a SEPARATE process and was not disturbed; it finished normally at ~04:08 |
 
@@ -148,6 +148,14 @@ why. Trader's own words: *"I just want to let the bot and the future AI know
 the best entry later."* This **supersedes R9.2(a)'s why-required for the QUICK
 path only**; Alt+K still demands a digit and a why, for the reason it always has.
 
+**AND A BUTTON, asked for the same day**: on the chart's verb row (appended, so
+every existing button keeps its spot, and still ONE row) and on the rail beside
+the claimed like. It opens a box for an OPTIONAL note - `QInputDialog`, the same
+control the setup tracker's dislike detail uses - and CANCEL records nothing. The
+key never prompts: a key that stops to ask is not a one-key verb. An optional note
+is not R9.2(a)'s required why returning; that rule is about a CLAIM, and this path
+makes none.
+
 Alt+L is unbound everywhere in `scripts/ui` - the whole inventory is Ctrl+F,
 Ctrl+J, Ctrl+R, Ctrl+Return, F9, Alt+E and the rail's four - and two live bindings
 for one sequence fire NEITHER, so a clash would have cost the trader both verbs
@@ -193,7 +201,7 @@ Two order tests updated: the slot order is asserted PAIRWISE now (an index
 assertion has been edited by three packets running), and the caveat test asserts
 CONTENT rather than a count.
 
-**Verification.** `pytest tests/ -q` **6122 passed, 72 subtests, exit 0, zero
+**Verification.** `pytest tests/ -q` **6130 passed, 72 subtests, exit 0, zero
 failures** with the lock FREE · `ruff` clean · smoke **7/7** · `--selftest`
 **74/74** · spec-drift **17**. Fail-before-fix: 17 of 18.
 

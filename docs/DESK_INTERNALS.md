@@ -443,6 +443,25 @@ landed in Phase 0.13 without their entry. These are those entries.
   tag text - because it names no setup, and "liked" in a Tags column would mean
   nothing about the setup while outranking the scanner match beneath it (R2).
 
+  **The key and the button are two verbs, on purpose** (trader, 2026-09-02:
+  *"ensure we also just have a button on the visual chart as well. Maybe it can
+  have a pop up with a note I can put in similar to what we have in master
+  avwapsetups"*). **Alt+L stays instant** - a key that stops to ask a question is
+  not a one-key verb, and the whole value of the shortcut is that it costs
+  nothing. **The button opens a box** for an OPTIONAL note, using
+  `QInputDialog.getMultiLineText`, the same control the setup tracker's dislike
+  detail uses, so the gesture is already familiar. OK with an empty box is a
+  plain quick like; CANCEL records NOTHING, because a dialog that wrote a row on
+  cancel would be unusable for "let me look at this first".
+
+  An optional note is NOT R9.2(a)'s required why returning: that rule requires a
+  reason for a CLAIM, and this path makes none. There are two buttons and one
+  implementation - the chart's calls the rail's `prompt_quick_like`, because the
+  capture rail owns capture and a second route to the same write is a second
+  thing to keep in step. On the chart it is APPENDED to the existing verb row:
+  still ONE row between the charts and the tab strip, and every button that was
+  already there keeps its spot.
+
 - **A capture sidecar is finished after the close, and the original is never
   rewritten** (`ui/annotations/sidecar_completion.py`, nightly slot
   `sidecar_completion`). `pass_cohort`'s intraday columns were blank on EVERY

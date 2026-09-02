@@ -383,6 +383,18 @@ class CaptureRail(QFrame):
         self.like_button = QPushButton("Like + claim setup")
         self.like_button.clicked.connect(self.commit_like)
         inner.addWidget(self.like_button)
+
+        # The quick like's own button, beside the claimed one it is NOT. Every
+        # other verb on this rail has a button as well as a key; this one had
+        # only a key until the trader asked for both (2026-09-02).
+        self.quick_like_button = QPushButton("♥ Quick like  (Alt+L)")
+        self.quick_like_button.setToolTip(
+            "Records that something about this chart was good, without naming "
+            "the setup. Opens a box for an optional note. Alt+L does the same "
+            "thing with no box. Nothing is added to Focus or any watchlist."
+        )
+        self.quick_like_button.clicked.connect(self.prompt_quick_like)
+        inner.addWidget(self.quick_like_button)
         return frame
 
     def _note_section(self) -> QFrame:
@@ -820,7 +832,7 @@ class CaptureRail(QFrame):
         self.like_note_input.setFocus()
         self._set_status("This like needs a why - type it, then Enter.")
 
-    def commit_quick_like(self) -> dict | None:
+    def commit_quick_like(self, note: str = "") -> dict | None:
         """One key: "something about this was good", and nothing else.
 
         Trader, 2026-09-02: *"anytime I like and claim a setup or like a day
@@ -847,8 +859,17 @@ class CaptureRail(QFrame):
         a pass does - the trader asked for that explicitly. On a D1 chart it
         writes no sidecar: a D1 chart's bars are not what the intraday grade
         needs, and an empty sidecar would be a reference that lies.
+
+        `note` is OPTIONAL and defaults to nothing, which is not a
+        contradiction of R9.2(a): that rule REQUIRES a why on a claimed like,
+        and this path has no claim to justify. The keystroke passes none - one
+        key has to stay one key - and the chart button offers a box in case the
+        trader has a sentence in mind (trader, 2026-09-02: *"maybe it can have a
+        pop up with a note I can put in"*).
         """
-        row = self._record_like(claimed_setup_id="", note="", like_mode=LIKE_MODE_QUICK)
+        row = self._record_like(
+            claimed_setup_id="", note=note, like_mode=LIKE_MODE_QUICK
+        )
         if row is None:
             return None
         detail = self._merge_like_cohort_safely()
@@ -859,6 +880,43 @@ class CaptureRail(QFrame):
             f"Liked (quick) {row['symbol']} - claim it later with Alt+K{detail}"
         )
         return row
+
+    def prompt_quick_like(self) -> dict | None:
+        """Ask for an optional note, then quick-like. The BUTTON's route.
+
+        Trader, 2026-09-02: *"maybe it can have a pop up with a note I can put in
+        similar to what we have in master avwapsetups"* - which is
+        `QInputDialog.getMultiLineText`, the same control the setup tracker's
+        dislike detail uses, so the gesture is one the trader already knows.
+
+        The note is OPTIONAL: OK with an empty box is a plain quick like, and
+        CANCEL records NOTHING. A dialog that wrote a row on cancel would make
+        the button unusable for "let me look at this first".
+
+        **Alt+L does not come through here.** A keystroke that stops to ask a
+        question is not a one-key verb, and the whole point of the shortcut is
+        that it costs nothing. The button is for the times the trader has a
+        sentence in mind; the key is for the times they do not.
+        """
+        if not self._symbol:
+            self._set_status("No symbol in focus.", ok=False)
+            return None
+        from PySide6.QtWidgets import QInputDialog
+
+        note, accepted = QInputDialog.getMultiLineText(
+            self,
+            f"Like {self._symbol}",
+            (
+                "Something about this was good.\n\n"
+                "Add a note if you want one - it is optional, and you can claim "
+                "the setup later with Alt+K. Leave it empty to just record the "
+                "like."
+            ),
+            "",
+        )
+        if not accepted:
+            return None
+        return self.commit_quick_like(note=str(note or "").strip())
 
     def _record_like(self, **fields: Any) -> dict | None:
         """Write a like row, with the M5 sidecar when the chart is an M5 one.
