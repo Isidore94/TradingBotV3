@@ -670,6 +670,64 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-02 - Review round R1: the blockers, then the whole of Phase 0.13 onto `main`
+
+**Eleven blockers across five packets, each reproduced before it was fixed, then eight
+merges.** With Phase 0.12, P3 and P7 already in, every Phase 0.13 packet is now on
+`main`.
+
+**P4 - three values that were computed and then thrown away.** The stale-horizon
+coverage line was built onto every leaderboard row and dropped by
+`pd.DataFrame(rows, columns=...)`. The tier that actually shipped was stamped where the
+grader could never read it, so `tier_for_tracker_row` fell through to the bucket
+derivation on every row forever - and `tier_source` was dropped by one column list and
+left as a dead local in the other. And the attribute leaderboard looked its baseline up
+by POSITION in a key that `extra_group_fields` PREPENDS to, so every edge in the
+by-family and by-regime views shipped blank. A blank edge reads as "no edge".
+
+**P5 - the cohort name had to be right the first time.** Rows are never rewritten and
+`rejection_cohort_source` dropped the category, so both verdicts filed under the verdict
+alone: `not_today` is recorded on intraday picks (223 rows) and `dislike` on swing names
+(34), and a cohort called "not_today" claims a record it does not have. Fixed BEFORE the
+slot's first nightly run; nothing had been graded, and nothing was rewritten. Also: the
+"never pooled" note sat above a pooled base row, which is now LABELLED rather than
+hidden; and the capture-time PASS merge had no test at all.
+
+**P6 - a link is not a tag, and a blank R is not an R.** A chart housekeeping click was
+minting `took:<action>` on 676 of 730 review rows and, ranked first, spending a slot of
+a four-slot Tags column on it - EYPT and SMPL lost `avwape_to_1stdev` to one. The
+coverage note was computed and never rendered, and its arithmetic summed BUCKETS of a
+non-exclusive group, measuring 24 tagged trades of 156 as 40% and suppressing itself.
+And `journal_r` read a key that exists nowhere in `scripts/`, with a fixture that
+invented it.
+
+**P7 - a declaration with no date.** Every ledger row now carries `registered_at`,
+stamped by the ledger and not by the caller, with backfilled rows carrying the date
+their work was authorized.
+
+**P8 - a gate nothing could satisfy.** Gate 37 asked for a ledger row and nothing in
+production wrote one; `cli.run_build` registers them now, beside the coverage line.
+`assert ... or True` became a real assertion. And BD-88's claim that the derived series
+were memoised was false - 2.06 s per occurrence, ~0.8 s of it rebuilding - so the cache
+is real now and the entry is corrected rather than quietly made true.
+
+**The merges.** Ledger conflicts kept both sides throughout. The code conflicts were all
+ADDITIVE and were resolved by hand: P1's like-cohort half beside P5's pass-cohort half
+in `capture_rail`; P2's, P5's and P6's tables in `weekend_prep_panel`; P5's two cohort
+slots and P6's preference slot in `runner.py`, in the order the data requires; both
+journal migrations, in order; and P6a as the ONE owner of the tag-lane helpers, with
+P6's temporary copy dropped.
+
+**Two premises stopped being true when branches met, which is the point of merging them
+together.** P5 asserted the default pick key collapses a multi-code pass into one row -
+P1 had widened that key for a different reason and it no longer does. And
+`test_warehouse_restore` pins the build's step list, which P8's wiring extended.
+
+**Verification.** 6053 passed · `ruff` clean · smoke 7/7 · source `--selftest` 74/74 ·
+no exe rebuild required (no packaging trigger; P7's was already rebuilt). The 32
+`ai_jobs` tests that stand down under the writer lock are **not** counted as a baseline:
+the nightly run held it from 22:00 through this round.
+
 ### 2026-09-02 - Phase 0.13 packet P8: the first setup-parameter grid
 
 **Branch `claude/p8-param-grid`, off `main` AFTER the morning's integration** - the

@@ -1052,6 +1052,28 @@ three more looks against the same k.
 the 20-minute reserve; the trial-ledger row exists with status `collecting`; and **no
 cell is read for a verdict before the declared window closes.**
 
+### Phase 0.13 review round R1 (2026-09-02) — BLOCKERS FIXED, ALL PACKETS MERGED
+
+Authorized by the trader pasting the review. Eleven blockers across P4, P5, P6, P7 and
+P8, each reproduced before it was fixed, then eight merges onto `main` in the order the
+trader set: P0, P1, P2, P4, P5, P6, P6a, P8. **Every Phase 0.13 packet is now on
+`main`.**
+
+Two gates changed status rather than closing:
+
+- **#33 (P4)** is now SATISFIABLE. It asked for a tier-tracker session; the assigned
+  tier never reached the feature history, so the gate could not have passed however the
+  session went.
+- **#37 (P8)** is now SATISFIABLE. It asked for a trial-ledger row and nothing in
+  production wrote one.
+
+**One new gate, #38:** one DESK session on the merged tree after the restart, stall
+watchdog quiet on every new surface.
+
+**Owed and NOT done in this round:** the full suite with the `ai_jobs_runner` writer
+lock FREE. It was held from 22:00 straight through by the nightly run, and the 32 tests
+that stand down under it are explicitly not being called a baseline.
+
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
 The theta sold-put/PCS report surfaces ~$0.25 credits with untradeable spreads
