@@ -92,7 +92,9 @@ COMPOSITE_DIMENSIONS = (
 # PROVEN segments (2026-07-09, user rule "see the best bounces live"): a
 # segment with real sample size, strong average AND non-negative median R is a
 # proven winner - a live bounce matching one gets stamped PROVEN, upgraded,
-# and bypasses the Alert Center tier gate like a banger. Includes the
+# and bypasses the Alert Center tier gate the way the retired BANGER class
+# used to (P0 removed that class on 2026-09-01; this path is unchanged and the
+# comparison is kept only because it names the behaviour). Includes the
 # dimensions the tier composite does NOT blend (combos, swing traits, setup
 # family), because that is where the best measured results live
 # (trendline_break_recent +1.93R n=31, dynamic_vwap_upper_band +0.88R n=59,
@@ -309,8 +311,9 @@ def evaluate_bounce_quality(
     by sample size; unknown segments simply do not contribute, so a bounce
     with no history lands in the neutral B/C range instead of failing.
     A bounce matching any PROVEN segment (see PROVEN_* thresholds) is flagged
-    so the alert path can stamp it and the Alert Center treats it like a
-    banger - unless a mute fires (proven negatives keep the veto).
+    so the alert path can stamp it and the Alert Center gives it the bypass
+    the retired BANGER class used to get - unless a mute fires (proven
+    negatives keep the veto). The class is gone as of P0; the bypass is not.
     """
     segments = (state or {}).get("segments") or {}
     direction = str(direction or "").strip().lower()

@@ -99,7 +99,7 @@ def test_rows_sharing_one_episode_count_once():
 
 def test_the_floor_still_counts_ROWS_in_this_packet():
     """Moving it is a change to what the model may narrate and belongs in its
-    own packet (BD-80). Publishing both is what makes that decidable."""
+    own packet (BD-81). Publishing both is what makes that decidable."""
     outcomes, occurrences = _thick("AVWAPE_TO_FIRST_DEV", "r1", cluster_per_row=False)
     pack = setup_research.build_fact_pack(outcomes, occurrences, {}, now=NOW)
 

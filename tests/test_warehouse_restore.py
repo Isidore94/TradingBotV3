@@ -177,7 +177,12 @@ def test_the_build_job_runs_the_whole_step_list(store, tmp_path, monkeypatch):
     expected = [
         "reconcile", "spool", "bronze", "snapshots", "bar_d1", "sessions",
             "derived", "weekly", "anchors", "features_daily", "features_intraday",
-            "occurrences", "outcomes", "backups", "retired",
+            # P8/R1 appended `trial_ledger` after `outcomes` and before the
+            # housekeeping steps: it registers the declarations that govern the
+            # rows `outcomes` just wrote, from the same run that wrote them -
+            # the only place a pre-declaration can honestly be made. Never
+            # allowed to cost the build.
+            "occurrences", "outcomes", "trial_ledger", "backups", "retired",
     ]
     assert list(report.steps) == expected, "the step list is a dependency order"
 

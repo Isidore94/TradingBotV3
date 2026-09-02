@@ -26,8 +26,15 @@ MIN_SESSIONS = 5
 #: the eligible block is published WHOLE (it has never approached this - the
 #: 2026-08-31 pack had 9) and the ineligible block carries its own smaller cap.
 #: A run that ever pushed the eligible block past this would be reporting a
-#: different problem, so the assertion below states it rather than truncating
-#: the answer silently.
+#: different problem.
+#:
+#: R1: the comment said "the assertion below states it" and there is no such
+#: assertion, and `MAX_POLICY_ROWS` itself is read by nothing - the eligible
+#: block is bounded by `MAX_INELIGIBLE_POLICY_ROWS` and by the floor, not by
+#: this. It is kept because the number is the stated intent and deleting it
+#: would delete the intent with it, but a comment describing a guard that does
+#: not exist is worse than no comment: the guard would have to be written, and
+#: writing it is a behaviour change nobody has authorized.
 MAX_POLICY_ROWS = 80
 MAX_CONTEXT_ROWS = 80
 #: How many INELIGIBLE policy cells ride along under the eligible block. They
@@ -37,7 +44,7 @@ MAX_CONTEXT_ROWS = 80
 #: real answer.
 MAX_INELIGIBLE_POLICY_ROWS = 40
 
-#: Family roles, until the setup registry of packet P7 owns them.
+#: Why this job knows about roles at all. The MAP itself is gone (R1).
 #:
 #: Appendix C is normative and already says what these two are: General/Untagged
 #: is a "Diagnostic fallback" that "must not become a pooled 'setup' edge", and
@@ -49,8 +56,10 @@ MAX_INELIGIBLE_POLICY_ROWS = 40
 #: Deliberately a SMALL EXPLICIT MAP and not a heuristic: anything not named
 #: here is a trade setup, so a family added tomorrow is measured rather than
 #: silently excluded, and excluding a real setup would need someone to type its
-#: name. **P7's registry replaces this map**; when it lands, this constant goes
-#: and the role comes from the registry row.
+#: name. **P7's registry HAS replaced the map** (merged 2026-09-02):
+#: `family_role` below reads `setup_registry.fact_pack_role`, and what survives
+#: here is only the WORDING - the reason each non-trade role is excluded, which
+#: the pack prints beside the family it excluded.
 ROLE_TRADE = "TRADE"
 NON_TRADE_ROLE_REASONS = {
     "FALLBACK": "Appendix C: diagnostic fallback - must not become a pooled 'setup' edge.",
@@ -230,7 +239,7 @@ def _summarize(rows: list[dict]) -> dict[str, Any]:
     # The FLOOR STILL COUNTS ROWS in this packet, on purpose: moving it is a
     # change to which cells are eligible - i.e. to what the model is allowed to
     # narrate - and it belongs in its own packet with its own before/after.
-    # Publishing both is what makes that packet decidable. See BD-80.
+    # Publishing both is what makes that packet decidable. See BD-81.
     stats["n_episodes"] = len(
         {
             str(row.get("dependency_cluster_id") or "")
@@ -244,7 +253,7 @@ def _summarize(rows: list[dict]) -> dict[str, Any]:
         f"{MIN_SESSIONS} entry sessions; still discovery, never confirmation. "
         "`n_episodes` is reported beside `n` and does NOT yet gate: rows on one "
         "episode are correlated diagnostics, so n_episodes is the honest sample "
-        "size and moving the floor onto it is a separate, scoped change (BD-80)."
+        "size and moving the floor onto it is a separate, scoped change (BD-81)."
     )
     return stats
 
@@ -392,7 +401,7 @@ def build_fact_pack(
     # warning is about reading cells TOGETHER - nine ATR variants of one family
     # are nine readings of the same 33 moves, not 297 samples. So the pack
     # publishes the shape of its whole evidence base as well, because that is
-    # the number a reader comparing rows needs. See BD-80.
+    # the number a reader comparing rows needs. See BD-81.
     trade_occurrences = {str(row.get("occurrence_id") or "") for row in trade_rows}
     trade_episodes = {
         str(row.get("dependency_cluster_id") or "")
