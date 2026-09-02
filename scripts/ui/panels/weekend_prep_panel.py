@@ -1105,7 +1105,17 @@ def _join_focus_week(bounds) -> list[dict[str, Any]]:
         except OSError:
             return []
 
-    def _key(raw) -> tuple[str, str, str] | None:
+    def _key(raw) -> tuple[str, str, str, str] | None:
+        """The pick/outcome identity, INCLUDING the category slot.
+
+        A name can sit on both the swing and the M5 list on the same day, and
+        since 2026-09-01 that is two pick rows and two outcome rows. Joining on
+        (date, symbol, side) alone would hand one of them the other's forward
+        returns, so the family from `human_focus_tracking` - the one canonical
+        implementation - is part of the key.
+        """
+        from human_focus_tracking import pick_source_family
+
         stamp = str(raw.get("trade_date") or raw.get("date") or "")[:10]
         symbol = str(raw.get("symbol") or "").strip().upper()
         if not stamp or not symbol:
@@ -1116,16 +1126,21 @@ def _join_focus_week(bounds) -> list[dict[str, Any]]:
             return None
         if not (monday <= when <= friday):
             return None
-        return (stamp, symbol, str(raw.get("side") or "").strip().lower())
+        return (
+            stamp,
+            symbol,
+            str(raw.get("side") or "").strip().lower(),
+            pick_source_family(raw.get("source")),
+        )
 
-    outcomes: dict[tuple[str, str, str], dict[str, str]] = {}
+    outcomes: dict[tuple[str, str, str, str], dict[str, str]] = {}
     for raw in _rows(project_paths.HUMAN_FOCUS_OUTCOMES_FILE):
         key = _key(raw)
         if key is not None:
             outcomes[key] = raw
 
     joined: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     for raw in _rows(project_paths.HUMAN_FOCUS_DAILY_PICKS_FILE):
         key = _key(raw)
         if key is None:
@@ -1302,7 +1317,7 @@ def _cohort_ratio(value) -> str:
 
 
 def _focus_row(key, pick, outcome, *, orphan: bool) -> dict[str, Any]:
-    stamp, symbol, side = key
+    stamp, symbol, side, _family = key
 
     def _return(name: str) -> str:
         if not outcome:

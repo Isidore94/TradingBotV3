@@ -89,6 +89,40 @@ def test_a_pick_carries_its_outcome_on_one_row(tmp_path, monkeypatch):
     assert rows[1]["h1"] == ""
 
 
+def test_the_same_name_on_both_lists_keeps_its_own_outcome(tmp_path, monkeypatch):
+    """Since 2026-09-01 a name can carry a swing row AND an M5 row for one day.
+    The join has to be per category or one of them shows the other's returns -
+    and they are opposite trades, so that is not a rounding error.
+
+    Fail-before-fix: on the un-fixed join both rows read +1.25%.
+    """
+    import project_paths
+
+    _redirect(monkeypatch, project_paths, tmp_path)
+    _write(
+        tmp_path / "human_focus_daily_picks.csv",
+        "trade_date,symbol,side,source,snapshotted_at,active_at_snapshot",
+        [
+            "2026-08-11,AMGN,long,focus_m5,2026-08-11T08:02:14,1",
+            "2026-08-11,AMGN,long,focus_swing_vetted,2026-08-11T11:33:06,1",
+        ],
+    )
+    _write(
+        tmp_path / "human_focus_outcomes.csv",
+        "trade_date,symbol,side,source,h1_return,h3_return,h5_return,h10_return,matured_horizons",
+        [
+            "2026-08-11,AMGN,long,focus_m5,0.0125,,,,1",
+            "2026-08-11,AMGN,long,focus_swing_vetted,-0.0300,,,,1",
+        ],
+    )
+
+    rows = _join_focus_week(WEEK)
+    by_source = {row["source"]: row for row in rows}
+    assert set(by_source) == {"focus_m5", "focus_swing_vetted"}
+    assert by_source["focus_m5"]["h1"] == "+1.25%"
+    assert by_source["focus_swing_vetted"]["h1"] == "-3.00%"
+
+
 def test_an_outcome_without_a_pick_snapshot_is_kept_and_marked(tmp_path, monkeypatch):
     import project_paths
 

@@ -144,10 +144,19 @@ def _canonical_cohort_map() -> dict[str, str]:
             source = veto_cohort_source(reason.code, version)
             canonical = canonical_by_definition.setdefault(definition, source)
             mapping[source] = canonical
-            # Rows written before the key carried a version were written when
-            # v1 was the only vocabulary, so they belong with v1's definition.
-            if version == min(versions):
-                mapping[veto_cohort_source(reason.code)] = canonical
+            # Rows written before the key carried a version belong with the
+            # EARLIEST version that defines their code - not with the earliest
+            # version overall. `compressed` arrived in v2, so gating on
+            # `version == min(versions)` never mapped the unversioned
+            # `veto_compressed` at all and its three pre-versioning picks
+            # graded as a cohort of their own forever: the live rollup carried
+            # `human_focus_veto_compressed` (n=3, PF 165) beside
+            # `human_focus_veto_v2_compressed` (n=18, PF 0.39) - the same
+            # judgement, read as two opposite ones. `setdefault` on a loop that
+            # walks versions in ascending order IS "the earliest that defines
+            # it", and it stays correct for a code introduced in any future
+            # version.
+            mapping.setdefault(veto_cohort_source(reason.code), canonical)
     return mapping
 
 

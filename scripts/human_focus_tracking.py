@@ -189,11 +189,44 @@ def _side_label(side: Any) -> str:
     return "SHORT" if text.startswith("SHORT") else "LONG"
 
 
-def _pick_key(row: dict[str, Any]) -> tuple[str, str, str]:
+def pick_source_family(source: Any) -> str:
+    """The category slot a row occupies, with any like-origin suffix removed.
+
+    ``focus_swing_vetted`` and ``focus_swing`` are the SAME slot - the origin
+    refines the cohort name, it does not create a second swing membership - so
+    a re-snapshot of a name already recorded under one origin must not append a
+    second swing row for the day. Anything outside the two focus categories
+    (legacy ``focus_pick``, the veto and like families graded by this same
+    math) is its own slot, returned unchanged.
+    """
+    text = str(source or "").strip()
+    for prefix, _category in CATEGORY_BY_SOURCE_PREFIX:
+        if text == prefix or text.startswith(prefix + "_"):
+            return prefix
+    return text
+
+
+def _pick_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    """(trade_date, symbol, side, category slot).
+
+    **The category is part of the identity** (R10.E audit F3, fixed 2026-09-01).
+    Without it one name on both the swing and the M5 list collapses to a single
+    row and whichever list was snapshotted second is silently discarded. The
+    live proof: on 2026-09-01 AMGN LONG was liked into swing Focus with origin
+    ``vetted`` at 11:33, the day already held an ``focus_m5`` AMGN LONG row
+    from 08:02, and the swing row was dropped - so the
+    ``human_focus_swing_vetted`` cohort the like exists to build had zero rows
+    in the entire file. `focus_membership_events` had already diagnosed this
+    and keys its own episodes by category; this is the pick store catching up.
+
+    The same key runs over the OUTCOMES file, where both cohorts now grade
+    forward independently instead of sharing one row.
+    """
     return (
         str(row.get("trade_date") or "").strip(),
         str(row.get("symbol") or "").strip().upper(),
         _side_label(row.get("side")),
+        pick_source_family(row.get("source")),
     )
 
 
@@ -276,6 +309,11 @@ def snapshot_human_focus_picks(
     fully-default call. A plain `focus_map` (legacy callers) keeps the old
     untagged "focus_pick" source. With force=False this runs once per market
     date; force=True merges current names without duplicating rows.
+
+    **One row per (date, symbol, side, CATEGORY).** A name on both the swing
+    and the M5 list gets one row for each, so the two grade separately; a name
+    re-snapshotted into the list it is already on gets nothing new, whatever
+    like origin the second snapshot carries. See `_pick_key`.
     """
     trade_date = _market_date(market_date)
     trade_date_text = trade_date.isoformat()
@@ -317,7 +355,10 @@ def snapshot_human_focus_picks(
         shorts = sorted({str(symbol or "").strip().upper() for symbol in (focus.get("short") or []) if str(symbol or "").strip()})
         for side, symbols in (("LONG", longs), ("SHORT", shorts)):
             for symbol in symbols:
-                key = (trade_date_text, symbol, side)
+                # Keyed on the category slot, not the full source: a name
+                # already recorded under one like origin must not gain a
+                # second row for the same list on the same day.
+                key = (trade_date_text, symbol, side, base_source)
                 if key in rows_by_key:
                     continue
                 origin = origins.get((symbol, side, category), "") if category else ""

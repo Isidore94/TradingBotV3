@@ -28,6 +28,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
 | Active roadmap items | **Phase 0.13 packet P0 (2026-09-01 - BUILT on `claude/p0-apply-decisions`; live gate #29 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
 | Last verified baseline | `pytest tests/ -q` **5720 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p0-apply-decisions`, MEASURED - the run completed cleanly with no Qt-teardown crash) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · frozen exe NOT rebuilt this packet and not required: no packaging trigger was hit (no new dependency, no new non-`.py` runtime asset, no new top-level `scripts/` package). The +5 over `main`'s 5715 is P0's own net test count. Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
+| Working branch | **`claude/p1-grade-what-you-said`**, off `main` at `66a0c31` - Phase 0.13 packet P1 (grade what you already said): four defects in the loop between a decision the trader makes and the evidence that grades it. Authorized by the trader pasting the packet. Also open and unmerged: `claude/p0-apply-decisions` (Phase 0.13 packet P0, gate #29) and `claude/focus-declutter-lrsi-htf` (Phase 0.12 A+B, gates #27 and #28). All three branch off `main` at the same commit and touch disjoint files |
+| Also in flight | `claude/gui-phase-0-9` (Phase 0.9, tip `48c0ad4`) - separate long-running work with its own open gate (SOAK 1), deliberately untouched by this integration |
+| Active roadmap items | **Phase 0.13 packet P1 (2026-09-01 - BUILT on `claude/p1-grade-what-you-said`; live gate #30 owed)**; **Desk snappiness packets 1, 2 and 3 (2026-08-31 — MERGED to `main`; live gates #24, #25 and #26 owed)**; **Phase 0.11 theta premium optimization (2026-08-31, T1-T7 — MERGED to `main`; live gate #23 owed)**; **Strength Board into the Desk (2026-08-31, R2 Part B amendment - BUILT, live gate owed)**; **Day-trade pass capture (2026-08-31, Phase 0.5 item 14 — BUILT, live gate owed)**; **Today's swing picks (2026-08-31, Phase 0.5 item 13 — BUILT, live gate owed)**; **Desk lockup fix (2026-08-31, Phase 0.8 GUI fluidity)**; R7 journal auto-tagging + statement import (2026-08-28); Phase 3.2 + Phase 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **5737 passed, 72 subtests, process exit 0** (2026-09-01, desk `.venv`, on `claude/p1-grade-what-you-said`, MEASURED - the run completed with no Qt-teardown crash) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · frozen exe NOT rebuilt and not required: no packaging trigger was hit. The +22 over `main`'s 5715 is P1's own net test count. The trader's live evidence files were hashed before and after the full run and are byte-unchanged - the suite redirects `TRADINGBOTV3_DATA_DIR` (`tests/conftest.py:57`), which is what keeps a capture-time cohort merge out of the home folder. Previous baseline: `pytest tests/ -q` **5715 passed, 72 subtests** (2026-08-31, desk `.venv`, on `main` at the theta merge `fad97d6`) · `ruff` **clean** · smoke **7/7** · source `--selftest` **73/73** · **frozen `--selftest` 73/73, exit 0** · spec-drift **17**. Measured on the MERGED tree rather than inferred: the gate ran twice, once after the snappiness fast-forward (**5686**) and again after the theta merge (**5715** - theta's 29 on top). `ruff` **0.16.5 is installed, pinned, and the repo is CLEAN**. Previous baseline: **5590 passed, 72 subtests** on `main` before this evening; **5456** earlier the same day with source `--selftest` **72/72**. The 2026-08-28 Linux CI count was 5419 with 2 pre-existing font-metric failures |
 | Frozen exe | **CURRENT** - rebuilt 2026-08-31 at the merge tip `fad97d6` (412 MB onedir), `selftest OK: 73/73 checks passed (frozen)`, exit 0. The 73 was MEASURED against the unfrozen count on the same tree, never recalled. Previously rebuilt at `534e0e0` (73/73) and `d0a2ae6` (72/72). Smart App Control was READ at this build, not remembered: `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` → `VerifiedAndReputablePolicyState = 0` (`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`), so SAC is OFF and the exe would launch - and because SAC verdicts are per file HASH that says nothing about the next build. Still a verification artifact only: the desk runs from SOURCE by trader decision, and the source launch is what is live |
 | Desk restart | **DONE 2026-08-31 21:51, trader-authorized.** The checkout sits on `main` and the desk was stopped (pid 9832, the pid its own `heartbeat.json` named; its launcher parent 3476 had already exited) and relaunched through `trading_desk.cmd` - the production launcher, unchanged. New pids: **23588** (the desk) under trampoline **23796**. Verified UP three ways rather than assumed: the process outlived 60 s, a second launch printed "another TradingBotV3 desk is already running" and exited 0, and `heartbeat.json` re-stamped at 21:52:40 naming pid 23588 (it had read 21:50:40 / pid 9832 before the kill). Everything merged tonight is what is now running, and the stall watchdog is ON - this session's `ui_stalls.jsonl` is the AFTER side of gates 24-26 |
 
@@ -43,6 +47,7 @@ the dated entry named beside it.
 | 32 | **Fact-pack truth (Phase 0.13 P3)** — one overnight `setup_research` run whose Markdown **opens with the eligible block**, shows **`n_episodes` beside `n`**, **names the excluded families** (GENERAL, FAVORITE_ZONE_WATCH) and prints the **bucket-coverage line** with a real count rather than UNKNOWN (which needs at least one warehouse build after this lands); plus the trader confirming the Research readout panel lists **more than two families** on 'All families' | 2026-09-01 Phase 0.13 P3 entry |
 | ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-09-02** on the merged tree: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, and the new check LOADS `setup_registry_v1.json` from inside the frozen process rather than trusting the `datas` rule. Previously met 2026-08-31 at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 29 | **P0 trader decisions (Phase 0.13)** — one DESK session with **no LRSI line on the M5 alert bar**, `lrsi_cross_20` / `lrsi_cross_50` rows **still arriving in `intraday_bounce_outcomes.csv`** that same day, and **no BANGER branch left in the alert path** (grep `scripts/` for `banger` — only the retired `banger` review column, the `REGIME_BANGER_*` regime-pause thresholds and the trader's own quote in the `alert_repetition.py` docstring may remain) | 2026-09-01 Phase 0.13 P0 entry |
+| 30 | **P1 grading loop (Phase 0.13 P1)** — one **Weekend Prep** opened after the next scan showing: a **`human_focus_swing_vetted`** row in the picks table; a like merged into `like_cohort_picks.csv` on the DAY it was captured (its `trade_date` equal to the session, not the night before); **one** pooled `compressed` veto cohort rather than the current two; and an **`r_gaps`** array present in `review_preference_state.json` | 2026-09-01 Phase 0.13 P1 entry |
 | ~~1~~ | ~~Frozen rebuild + frozen selftest~~ — **MET AGAIN 2026-08-31** at `d0a2ae6` (the merge point): 419 MB, `selftest OK: 72/72 checks passed (frozen)`, exit 0, SAC reads OFF. Previously met 2026-08-28 at `fff07b8` | done |
 | 2 | **Warehouse canary** — one post-scan run verifying occurrence/context/outcome writes and bounded memory; then all symbol buckets filled; then one overnight fact pack compared against warehouse counts | Phase 3.2 (2026-08-27 tracker entry) |
 | 3 | **Desk memory** — one DESK session, first swing-scan slot, confirming the 8–13 GB jump is gone | 2026-08-27 afternoon (memory) entry |
@@ -432,6 +437,110 @@ proven to fail with `scripts/` stashed: five for BANGER
 `test_the_banger_token_no_longer_skips_the_digest`, `test_tier_extraction`) and seven in
 `test_r5_lrsi_cross_wiring.py`, including
 `test_a_crossing_logs_an_outcome_row_and_produces_no_gui_callback`.
+### 2026-09-01 - Phase 0.13 packet P1: grade what you already said
+
+**Branch `claude/p1-grade-what-you-said`, off `main` at `66a0c31`.** Four defects in the
+loop between a decision the trader makes and the evidence that grades it. Every premise
+was reproduced at code level AND against the live stores before anything was edited.
+Live gate 30 owed. No frozen rebuild: no packaging trigger was hit.
+
+**1. Today's swing picks never reached `human_focus_swing_vetted`.**
+`human_focus_tracking._pick_key` returned (trade_date, symbol, side) with no category,
+so a name already on one Focus list swallowed its row on the other. Live: AMGN LONG was
+liked into swing Focus with origin `vetted` at 11:33:06, the day already held a
+`focus_m5` AMGN LONG row from 08:02:14, and the swing row was dropped -
+**`grep -c vetted` on `human_focus_daily_picks.csv` reads 0 across all 4,083 rows**.
+The cohort that origin exists to build has never had one row.
+
+The diagnosis already existed in the tree: `focus_membership_events.py`'s docstring
+names it as audit F3 and keys its own episodes by category. The pick store never caught
+up. The key now carries the category slot - the base source with any like-origin suffix
+removed, so `focus_swing_vetted` and `focus_swing` are ONE swing membership and a
+re-snapshot cannot duplicate a row. The same key runs over the outcomes file, so both
+cohorts grade forward independently. No column or schema moves: every historical row
+carries `source` and re-keys to the slot it already occupied.
+
+Two joins followed the rows. `weekend_prep_panel._join_focus_week` would have handed one
+category the other's forward returns - opposite trades, not a rounding error - and now
+uses the one canonical `pick_source_family`. `journal_walkaway.load_focus_positions`
+would have replayed a two-list name as two positions and double-weighted it; the trader
+was in one position, so it dedupes.
+
+**TWO PACKET PREMISES DIFFERED FROM THE CODE.** Reported, not forced. (b) The
+swing-favorites write-through ALREADY EXISTS and works: `_place_in_focus` ->
+`FocusPickStore.add` -> `focusChanged` -> the Focus panel's coalesced
+`_apply_focus_change` -> `snapshot_today(force=True)`, which passes `force` and so is
+never stopped by the `already_snapshotted` early return. QFIN on 2026-08-31 is the
+proof - liked 11:26:19, pick row stamped 11:26:20. Nothing was added to that path. And
+QFIN's `focus_swing_manual` is not a live code path: `FOCUS_LIKE_ORIGIN` read `"manual"`
+until commit `edc7999`, which landed at **11:36** that day, **ten minutes after** the
+like. It has read `"vetted"` ever since (AMGN's 09-01 row proves it), so there is nothing
+to fix at the source and the existing row is correctly left alone.
+
+**2. A like merged overnight; a veto merged on the click.** `like_cohort_picks.csv` was
+last written **2026-08-27** (53 rows) against like_claim annotations recorded through
+09-01, so a like was invisible to its own cohort for up to a day - and indefinitely on
+any day the overnight job did not run. The two cohorts are read side by side on Weekend
+Prep. `commit_like` now merges through the same `_merge_cohort_safely` the veto uses, so
+they cannot drift; failure degrades to a "(cohort update deferred)" suffix because the
+annotation row is already on disk, and `merge_like_cohort_picks` takes the writer lock
+now that it has two callers. The nightly slot stays; both are idempotent.
+
+**3. Unversioned veto codes pooled only with the lowest vocabulary.** The unversioned
+mapping was written only while walking `min(versions)`, so a code introduced later got
+none at all. Live: `human_focus_veto_compressed` (n=3, PF 165 at h3) beside
+`human_focus_veto_v2_compressed` (n=18, PF 0.39) - one judgement read as two opposite
+ones, the three-sample half looking spectacular. A `setdefault` on the already-ascending
+walk IS "the earliest version that defines this code". Verified against the loaded
+vocabularies: `veto_compressed` -> `veto_v2_compressed`, `veto_sma_incoming` ->
+`veto_v3_sma_incoming`, `veto_volume_dry` -> `veto_v1_volume_dry` unchanged. Neither new
+test asserts a literal `vocab_version`; both load and DISCOVER the late codes.
+
+**4. The scoreboard ignored ~640 explicit decisions and could not see an R gap.** Seven
+action families joined the take/reject sets, each classified from what its WRITER does
+in `alert_center_panel.py`: `auto_pick_pass` 254, `arm_d1_event` 160,
+`focus_review_remove` 88, `focus_review_keep` 71, `auto_pick_approve` 63,
+`arm_any_bounce` 22, `veto_day_trade` 4. `veto_day_trade` is a REJECT because the
+episode being graded is the D1 chart that was shown; its M5 interest is a different
+claim on a different timeframe. Machine events, `*_fired`, `*_expired` and every
+`disarm_*` are excluded and pinned by a test. Measured: takes **645 -> 845** of 2,607
+shown, take rate **0.247 -> 0.324**.
+
+New **`r_gap`** callout class: both sides >= 8 measured R and |taken - passed| >= 0.5R,
+with NO reference to the take rate, so it surfaces what the take-rate classes are
+structurally unable to see.
+
+**The packet's live case moves once the action sets are fixed, and that is stated rather
+than papered over.** `bounce_type=lrsi_cross_20` at taken -0.376R (n=8) vs passed
++0.962R (n=24) reproduces EXACTLY on the un-fixed sets and the new class catches it at a
+-1.34R gap while blind_spots and leaks are both empty. Under the corrected sets seven of
+those lrsi charts turn out to have been ARMED rather than passed, taken becomes +0.519R
+(n=12) and the gap closes - the apparent edge was an artefact of the misread decisions,
+which is what the action-set fix exists to remove. The class is pinned to the packet's
+literal numbers in a test, so it is proven on that case either way. On the live store
+today it produces **18 callouts while blind_spots and leaks produce 0**, so it is
+currently the only class saying anything.
+
+`r_gap` is REPORT-ONLY: a field on `review_preference_state.json` and a section in the
+report, deliberately absent from `draft_policy_from_state`, `review_guidance` and the AI
+evidence package, because those write priority deltas into `review_policy.json`, which
+this packet may not touch. A test asserts none of the three mentions it.
+
+Coded vetoes now feed the `dislike_reason` dimension. The join was MEASURED first:
+**202 of 212 join to an existing episode, 198 of those to a SHOWN one, side matching on
+202 of 202 with zero mismatches**, so the packet's stop-and-report condition did not
+apply; 199 attach inside the 90-day window (the dimension previously had only the 33
+`dislike` events). It annotates and never re-resolves - the verdict still comes from the
+review event store alone; a side disagreement is SKIPPED rather than guessed, a veto with
+no episode is left alone rather than inventing an impression, and an unreadable log is 0.
+
+**Verification.** `pytest tests/ -q` **5737 passed, 72 subtests, process exit 0** ·
+`ruff` **clean** · smoke **7/7** · source `--selftest` **73/73**. Fail-before-fix with
+`scripts/` stashed: 3 tests for #1, 3 for #2, 2 for #3, 12 for #4. The trader's live
+`like_cohort_picks.csv`, `veto_cohort_picks.csv` and `human_focus_daily_picks.csv` were
+read before and after the full run and are unchanged - the suite redirects
+`TRADINGBOTV3_DATA_DIR` (`tests/conftest.py:57`), which is what keeps a capture-time
+cohort merge out of the home folder.
 
 ### 2026-08-31 (late evening) - Desk snappiness packet 3: the last of the three
 

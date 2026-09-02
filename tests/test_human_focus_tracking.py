@@ -123,6 +123,101 @@ def test_snapshot_tags_swing_and_m5_sources_and_cohorts_grade_separately(tmp_pat
     assert {row["cohort"] for row in legacy_rows} == {"human_focus_pick"}
 
 
+def test_a_swing_like_after_the_m5_snapshot_gets_its_own_row(tmp_path):
+    """R10.E audit F3, live on 2026-09-01. AMGN LONG was already on the M5 list
+    when the trader liked it into swing Focus with origin `vetted`; the pick key
+    carried no category, so the swing row collided with the 08:02 M5 row and was
+    dropped. `human_focus_swing_vetted` - the whole point of that origin - had
+    zero rows in the entire file.
+
+    Fail-before-fix: on the un-fixed code the second snapshot adds 0 rows and no
+    `focus_swing_vetted` source exists for the date.
+    """
+    from human_focus_tracking import (
+        build_human_focus_performance_rows,
+        snapshot_human_focus_picks,
+        update_human_focus_outcomes,
+    )
+
+    picks_path = tmp_path / "human_focus_daily_picks.csv"
+    state_path = tmp_path / "state.json"
+
+    # 08:02 - the morning M5 snapshot.
+    snapshot_human_focus_picks(
+        market_date="2026-06-01",
+        focus_maps_by_category={"swing": {"long": set()}, "m5": {"long": {"AMGN"}}},
+        now=datetime(2026, 6, 1, 8, 2, 14),
+        snapshot_state_path=state_path,
+        daily_picks_path=picks_path,
+    )
+
+    # 11:33 - the trader likes it onto today's swing list. The write-through is
+    # the Focus panel's forced re-snapshot, which is what `force=True` is here.
+    result = snapshot_human_focus_picks(
+        market_date="2026-06-01",
+        focus_maps_by_category={"swing": {"long": {"AMGN"}}, "m5": {"long": {"AMGN"}}},
+        like_origins={("AMGN", "LONG", "swing"): "vetted"},
+        force=True,
+        now=datetime(2026, 6, 1, 11, 33, 6),
+        snapshot_state_path=state_path,
+        daily_picks_path=picks_path,
+    )
+
+    assert result["added"] == 1
+    rows = _read_csv(picks_path)
+    assert {row["source"] for row in rows} == {"focus_m5", "focus_swing_vetted"}
+    assert len(rows) == 2, "one row per category, and neither swallows the other"
+
+    # And it grades as its own cohort, which is what the origin exists for.
+    dates = pd.date_range("2026-06-01", periods=11, freq="B")
+    frames = {"AMGN": pd.DataFrame({"datetime": dates, "close": list(range(100, 111))})}
+    update_human_focus_outcomes(
+        reference_date="2026-06-16",
+        daily_frames_by_symbol=frames,
+        daily_picks_path=picks_path,
+        outcomes_path=tmp_path / "outcomes.csv",
+        performance_path=tmp_path / "performance.csv",
+        daily_bars_dir=tmp_path / "daily_bars",
+    )
+    cohorts = {row["cohort"] for row in _read_csv(tmp_path / "performance.csv")}
+    assert "human_focus_swing_vetted" in cohorts
+    assert "human_focus_m5" in cohorts
+    # Both rows graded: the outcomes file is keyed the same way, so one cohort
+    # no longer eats the other's forward returns.
+    outcomes = _read_csv(tmp_path / "outcomes.csv")
+    assert {row["source"] for row in outcomes} == {"focus_m5", "focus_swing_vetted"}
+    assert build_human_focus_performance_rows(outcomes)
+
+
+def test_a_re_snapshot_under_a_new_origin_does_not_duplicate_the_row(tmp_path):
+    """The category slot ignores the like-origin suffix, so a name already on
+    the swing list gets nothing new when a later snapshot names an origin for
+    it. Keying on the full source would have written a second swing row."""
+    from human_focus_tracking import snapshot_human_focus_picks
+
+    picks_path = tmp_path / "human_focus_daily_picks.csv"
+    state_path = tmp_path / "state.json"
+    swing = {"swing": {"long": {"NVDA"}}}
+    snapshot_human_focus_picks(
+        market_date="2026-06-01",
+        focus_maps_by_category=swing,
+        snapshot_state_path=state_path,
+        daily_picks_path=picks_path,
+    )
+    result = snapshot_human_focus_picks(
+        market_date="2026-06-01",
+        focus_maps_by_category=swing,
+        like_origins={("NVDA", "LONG", "swing"): "vetted"},
+        force=True,
+        snapshot_state_path=state_path,
+        daily_picks_path=picks_path,
+    )
+    assert result["added"] == 0
+    rows = _read_csv(picks_path)
+    assert len(rows) == 1
+    assert rows[0]["source"] == "focus_swing"
+
+
 def test_snapshot_like_origins_split_cohorts_by_alert_source(tmp_path):
     from human_focus_tracking import snapshot_human_focus_picks, update_human_focus_outcomes
 

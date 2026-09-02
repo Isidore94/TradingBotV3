@@ -57,6 +57,7 @@ from project_paths import (  # noqa: E402
     INTRADAY_BOUNCE_OUTCOMES_FILE,
     REVIEW_LEARNING_REPORT_FILE,
     REVIEW_PREFERENCE_STATE_FILE,
+    TRADER_ANNOTATIONS_FILE,
 )
 from review_events import load_review_events, review_event_store_mtime  # noqa: E402
 
@@ -78,6 +79,15 @@ BLIND_SPOT_MIN_PASSED_FWD_PCT = 1.5
 LEAK_TAKE_RATIO = 1.4
 LEAK_MAX_TAKEN_R = -0.15
 LEAK_MAX_TAKEN_FWD_PCT = -1.0
+# The third callout class (2026-09-01). A blind spot and a leak both start from
+# the TAKE RATE and only then look at R, so a segment the trader takes at about
+# their normal rate is invisible to both - however badly the taken half measures
+# against the passed half. `bounce_type=lrsi_cross_20` was the live case: taken
+# -0.376R (n=8) against passed +0.962R (n=24), a 1.34R gap, silent in both
+# lists. This class asks the R question DIRECTLY and never consults the take
+# rate, so it can only ever add a callout the other two would have missed.
+MIN_OUTCOME_SAMPLES = 8
+R_GAP_MIN_DIFFERENCE = 0.5
 # Forward-return horizons (trading sessions) for D1/swing-graded alerts.
 FORWARD_HORIZONS = (3, 5)
 
@@ -89,9 +99,64 @@ FORWARD_HORIZONS = (3, 5)
 # and the line below scored it as a rejection: across 2026-07-24..08-21 that is
 # 40 of 52 likes read as their own opposite - the strongest positive signal in
 # the store, counted as a dismissal.
-TAKE_ACTIONS = {"add_focus", "arm_watch", "arm_level", "like_advance"}
+#
+# Seven more actions joined on 2026-09-01. Every one was an EXPLICIT decision
+# the trader made on a chart, scored as `shown_only` - i.e. as silence - which
+# is the same class of error as the `like_advance` one above and about 640
+# decisions wide. Each was read at its writer in `alert_center_panel.py` before
+# being classified; what the writer DOES is the classification, not what the
+# name suggests:
+#
+#   auto_pick_approve (63)   TAKE. `_record_auto_pick_verdict(approved=True)`
+#                            resolves the staged pick and WRITES IT TO A
+#                            WATCHLIST. The strongest yes the auto-pick
+#                            walkthrough has.
+#   auto_pick_pass (254)     REJECT. The same writer with approved=False:
+#                            "not today - this auto pick will not be proposed
+#                            again this session; watchlists untouched."
+#   focus_review_keep (71)   TAKE. The Focus walkthrough's "★ kept in Focus" -
+#                            the pick was already the trader's and they looked
+#                            at it and left it there on purpose.
+#   focus_review_remove (88) REJECT. The same walkthrough's dismiss verb, which
+#                            calls `remove_everywhere`: the pick is DELETED
+#                            from every bucket and its watchlist entries are
+#                            un-injected.
+#   arm_d1_event (160)       TAKE. The trader armed an alert on that exact D1
+#                            condition. Identical in kind to `arm_watch` and
+#                            `arm_level`, which have always been takes.
+#   arm_any_bounce (22)      TAKE. Same gesture, the any-bounce flavour: fires
+#                            once on whichever of their levels holds.
+#   veto_day_trade (4)       REJECT. "Veto D1 - but M5 today" (2026-08-31). The
+#                            episode being graded is the D1 chart that was
+#                            shown, and the trader vetoed it; the M5 interest
+#                            is a DIFFERENT claim on a different timeframe and
+#                            is carried by the annotation store, not by this
+#                            row. Scoring it a take would say the D1 setup was
+#                            taken, which is the opposite of what happened.
+#
+# Deliberately NOT added: `focus_d1_flag`, `auto_pick_auto_focus`,
+# `regime_pause_auto_focus`, `watch_fired`, `level_fired`, `d1_event_fired`,
+# `armed_alert_expired`, `hold_expired`, `watch_expired` - none is a decision
+# the trader made, and `disarm_*` is a later change of mind about an arm rather
+# than a verdict on the chart that was shown.
+TAKE_ACTIONS = {
+    "add_focus",
+    "arm_watch",
+    "arm_level",
+    "like_advance",
+    "auto_pick_approve",
+    "focus_review_keep",
+    "arm_d1_event",
+    "arm_any_bounce",
+}
 TOGGLE_TAKE_ACTIONS = {"favorite", "toggle_d1_focus", "toggle_m5_focus"}
-REJECT_ACTIONS = {"dislike", "remove_today"}
+REJECT_ACTIONS = {
+    "dislike",
+    "remove_today",
+    "auto_pick_pass",
+    "focus_review_remove",
+    "veto_day_trade",
+}
 
 
 @dataclass
@@ -292,6 +357,70 @@ def _expected_r_band(value: float | None) -> list[str]:
     if value < 1.0:
         return ["decent(0.5-1)"]
     return ["strong(>1)"]
+
+
+def attach_annotation_veto_reasons(
+    episodes: list[Episode],
+    path: Path = TRADER_ANNOTATIONS_FILE,
+) -> int:
+    """Fold Chart Review veto reason codes into the `dislike_reason` dimension.
+
+    212 coded vetoes sit in `trader_annotations.jsonl` carrying the single most
+    specific thing the trader ever says about a chart - WHY it was refused -
+    and the scoreboard's `dislike_reason` dimension was fed only by the 33
+    `dislike` review events. So the question "which of my stated reasons for
+    passing actually predicted anything?" had 33 rows to answer it instead of
+    245.
+
+    The join is (session_date, symbol, side) onto an episode that already
+    exists, and **the side must agree**. Measured before it was built: 202 of
+    212 vetoes join, 198 of those to a SHOWN episode, and the side matches on
+    202 of 202 with zero mismatches. The 10 that find no episode are left
+    alone - inventing one would manufacture an impression the trader never got.
+
+    **It annotates and never re-resolves.** The episode's take/reject/skip
+    verdict comes from the review event store and is untouched here: the
+    annotation stream is analysis-only evidence and must never gate, score or
+    decide anything (CLAUDE.md). All this adds is a segment label, so a veto
+    reason can be read against R and forward % the same way a `dislike` code
+    already is.
+
+    Returns the number of episodes annotated. A missing or unreadable file is
+    zero, never an error: the scoreboard is a reading of the record, and a
+    record that will not open is a quieter board rather than a failed run.
+    """
+    by_key: dict[tuple[str, str], Episode] = {
+        (episode.trade_date, episode.symbol): episode for episode in episodes
+    }
+    if not by_key:
+        return 0
+    try:
+        from ui.annotations.store import EVENT_VETO, load_annotations
+
+        annotations = load_annotations(Path(path), event_types=(EVENT_VETO,))
+    except Exception:
+        return 0
+
+    touched: set[tuple[str, str]] = set()
+    for annotation in annotations:
+        symbol = str(annotation.get("symbol") or "").strip().upper()
+        session_date = str(annotation.get("session_date") or "").strip()
+        code = str(annotation.get("reason_code") or "").strip().lower()
+        if not symbol or not session_date or not code:
+            continue
+        episode = by_key.get((session_date, symbol))
+        if episode is None:
+            continue
+        side = str(annotation.get("side") or "").strip().upper()
+        if side and episode.side and side != episode.side:
+            # Two different directional claims on one name in one day. Nothing
+            # here can say which chart the veto was about, so it is skipped
+            # rather than attached to the wrong one.
+            continue
+        existing = set(_split_bounce_types(episode.dislike_reasons))
+        episode.dislike_reasons = ";".join(sorted(existing | {code}))
+        touched.add((session_date, symbol))
+    return len(touched)
 
 
 DIMENSIONS: dict[str, Callable[[Episode], list[str]]] = {
@@ -508,10 +637,19 @@ def aggregate_dimensions(episodes: list[Episode]) -> dict[str, Any]:
     }
 
 
-def find_callouts(aggregate: dict[str, Any]) -> tuple[list[dict], list[dict]]:
-    """(blind_spots, leaks): where revealed preference and measurement disagree."""
+def find_callouts(
+    aggregate: dict[str, Any],
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """(blind_spots, leaks, r_gaps): where revealed preference and measurement disagree.
+
+    The first two start from the TAKE RATE and only then look at R, so a
+    segment taken at about the trader's normal rate cannot appear in either -
+    however far apart the taken and passed halves measure. `r_gaps` asks the R
+    question on its own and is therefore strictly additive: it can only surface
+    a segment the other two were structurally unable to see.
+    """
     overall = aggregate.get("overall_take_rate") or 0.0
-    blind_spots, leaks = [], []
+    blind_spots, leaks, r_gaps = [], [], []
     for dim, table in (aggregate.get("dimensions") or {}).items():
         for segment, stats in table.items():
             if stats["shown"] < MIN_CALLOUT_EPISODES:
@@ -562,9 +700,30 @@ def find_callouts(aggregate: dict[str, Any]) -> tuple[list[dict], list[dict]]:
                             "taken_fwd_n": taken["fwd_n"],
                         }
                     )
+            # The R gap, asked directly and never through the take rate.
+            if (
+                taken["r_n"] >= MIN_OUTCOME_SAMPLES
+                and passed["r_n"] >= MIN_OUTCOME_SAMPLES
+                and taken["r_avg"] is not None
+                and passed["r_avg"] is not None
+            ):
+                difference = round(taken["r_avg"] - passed["r_avg"], 3)
+                if abs(difference) >= R_GAP_MIN_DIFFERENCE:
+                    r_gaps.append(
+                        {
+                            **entry,
+                            "taken_r_avg": taken["r_avg"],
+                            "taken_r_n": taken["r_n"],
+                            "passed_r_avg": passed["r_avg"],
+                            "passed_r_n": passed["r_n"],
+                            "r_difference": difference,
+                        }
+                    )
     blind_spots.sort(key=lambda e: e.get("passed_r_avg") or e.get("passed_fwd_avg_pct") or 0, reverse=True)
     leaks.sort(key=lambda e: e.get("taken_r_avg") or e.get("taken_fwd_avg_pct") or 0)
-    return blind_spots, leaks
+    # Widest disagreement first, in either direction.
+    r_gaps.sort(key=lambda e: abs(e["r_difference"]), reverse=True)
+    return blind_spots, leaks, r_gaps
 
 
 def watch_conversion(rows: Iterable[dict]) -> dict[str, Any]:
@@ -605,6 +764,7 @@ def build_review_learning_state(
     *,
     events_path: Path = ALERT_REVIEW_EVENTS_FILE,
     outcomes_path: Path = INTRADAY_BOUNCE_OUTCOMES_FILE,
+    annotations_path: Path = TRADER_ANNOTATIONS_FILE,
     window_days: int = DEFAULT_WINDOW_DAYS,
     load_frame=None,
     now: datetime | None = None,
@@ -617,10 +777,13 @@ def build_review_learning_state(
         if str(row.get("trade_date") or "") >= cutoff
     ]
     episodes = build_episodes(rows)
+    # Before aggregation: the veto codes are a DIMENSION, so they have to be on
+    # the episodes when the segments are cut. They change no resolution.
+    annotation_matches = attach_annotation_veto_reasons(episodes, annotations_path)
     outcome_matches = attach_bounce_outcomes(episodes, outcomes_path)
     forward_matches = attach_forward_returns(episodes, load_frame=load_frame)
     aggregate = aggregate_dimensions(episodes)
-    blind_spots, leaks = find_callouts(aggregate)
+    blind_spots, leaks, r_gaps = find_callouts(aggregate)
     return {
         "schema": REVIEW_LEARNING_SCHEMA,
         "generated_at": moment.isoformat(timespec="seconds"),
@@ -628,9 +791,11 @@ def build_review_learning_state(
         "event_rows": len(rows),
         "outcome_matches": outcome_matches,
         "forward_matches": forward_matches,
+        "annotation_veto_matches": annotation_matches,
         **aggregate,
         "blind_spots": blind_spots,
         "leaks": leaks,
+        "r_gaps": r_gaps,
         "watch_conversion": watch_conversion(rows),
     }
 
@@ -684,7 +849,8 @@ def render_report(state: dict[str, Any]) -> str:
         f"Window: last {state.get('window_days')} days · {state.get('shown', 0)} charts shown, "
         f"{state.get('takes', 0)} taken (overall take rate {_fmt_rate(state.get('overall_take_rate'))}) · "
         f"{state.get('outcome_matches', 0)} intraday outcomes joined, "
-        f"{state.get('forward_matches', 0)} D1 names forward-graded.",
+        f"{state.get('forward_matches', 0)} D1 names forward-graded, "
+        f"{state.get('annotation_veto_matches', 0)} coded vetoes joined.",
         "take% is shrunk toward your overall rate (k=10); R = vs the alert's own stop;",
         "fwd = side-adjusted % return after "
         f"{FORWARD_HORIZONS[0]} sessions for D1 names. Passed = skip/remove/no action.",
@@ -719,6 +885,22 @@ def render_report(state: dict[str, Any]) -> str:
             lines.append(
                 f"  {entry['dimension']}={entry['segment']}: take {_fmt_rate(entry['take_rate'])} "
                 f"of {entry['shown']} shown; {measure}"
+            )
+    else:
+        lines.append("  none at current sample sizes.")
+    lines.append("")
+    lines.append(
+        "== R GAPS (taken and passed measure far apart, whatever the take rate) =="
+    )
+    r_gaps = state.get("r_gaps") or []
+    if r_gaps:
+        for entry in r_gaps:
+            lines.append(
+                f"  {entry['dimension']}={entry['segment']}: taken "
+                f"{_fmt_r(entry['taken_r_avg'])} (n={entry['taken_r_n']}) vs passed "
+                f"{_fmt_r(entry['passed_r_avg'])} (n={entry['passed_r_n']}) - gap "
+                f"{_fmt_r(entry['r_difference'])}; take "
+                f"{_fmt_rate(entry['take_rate'])} of {entry['shown']} shown"
             )
     else:
         lines.append("  none at current sample sizes.")
