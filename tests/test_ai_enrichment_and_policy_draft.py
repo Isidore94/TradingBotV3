@@ -393,15 +393,22 @@ def test_both_slots_are_appended_and_never_reorder_the_slate():
     from ai_jobs.runner import default_slots
 
     names = [slot.name for slot in default_slots()]
-    # P5 inserted `pass_cohort_grading` and `rejection_cohort_grading`
-    # after the like slot and BEFORE `evidence_report` - which is where
-    # they have to be, because the report READS what the cohorts produced
-    # and a report ahead of its inputs would describe last night's
-    # evidence. That moves the later slots' INDEX without reordering any
-    # existing PAIR, and the pairwise order is the invariant.
+    # P5 inserted the two cohort slots and P6 inserted
+    # `preference_trade_outcomes` after them, all BEFORE `evidence_report` -
+    # which is where they have to be, because the report READS what they
+    # produce and a report ahead of its inputs would describe last night's
+    # evidence. `preference_trade_outcomes` sits after the cohorts for the same
+    # reason, one level down: it reads their outcome files.
+    #
+    # Each insertion moves the later slots' INDEX without reordering any
+    # existing PAIR, so the assertion is pairwise. That is the real invariant
+    # and it does not need editing the next time a slot is added - which is the
+    # third time in three packets that it would have.
     ORDERED = [
         "journal_import", "ai_summary", "ticker_briefs",
-        "veto_cohort_grading", "like_cohort_grading", "evidence_report",
+        "veto_cohort_grading", "like_cohort_grading",
+        "pass_cohort_grading", "rejection_cohort_grading",
+        "preference_trade_outcomes", "evidence_report",
     ]
     positions = [names.index(item) for item in ORDERED]
     assert positions == sorted(positions), "later phases append; they never reorder these"

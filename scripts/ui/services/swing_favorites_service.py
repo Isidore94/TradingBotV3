@@ -84,10 +84,14 @@ class _TakenWorker(QThread):
     def run(self) -> None:  # pragma: no cover - exercised through its seam
         try:
             trades = self._provider(self._session_date, self._days)
-            marks = swing_favorites.taken_keys(self._favorites, trades)
+            # The IDS, not just the keys (P6): the badge already knew a trade
+            # existed and now names which one. Same matching rule, from the
+            # same module - a badge that appeared under one rule and linked
+            # under another would point at the wrong trade.
+            marks = swing_favorites.taken_trade_ids(self._favorites, trades)
         except Exception as exc:  # noqa: BLE001
             logging.debug("Swing favorites taken-join failed: %s", exc)
-            marks = set()
+            marks = {}
         self.done.emit(marks)
 
 
@@ -112,7 +116,8 @@ class SwingFavoritesService(QObject):
         self._focus_service = focus_service
         self._path = Path(path) if path is not None else swing_favorites.SWING_FAVORITES_FILE
         self._trades_provider = trades_provider or default_trades_provider
-        self._taken: set[tuple[str, str]] = set()
+        #: (symbol, side) -> journal trade_id. Display only; no statistic.
+        self._taken: dict[tuple[str, str], str] = {}
         self._worker: _TakenWorker | None = None
 
     # -- reads -------------------------------------------------------------
@@ -129,7 +134,13 @@ class SwingFavoritesService(QObject):
         )
 
     def taken(self) -> set[tuple[str, str]]:
+        """Which (symbol, side) were traded. The KEYS, unchanged for callers
+        that only ask that question; `taken_trade_ids` carries the ids."""
         return set(self._taken)
+
+    def taken_trade_ids(self) -> dict[tuple[str, str], str]:
+        """(symbol, side) -> journal trade_id, for the badge tooltip (P6)."""
+        return dict(self._taken)
 
     # -- writes ------------------------------------------------------------
     def add(self, text: object, side: object) -> list[str]:
@@ -263,19 +274,19 @@ class SwingFavoritesService(QObject):
         favorites = self.favorites()
         if not favorites:
             if self._taken:
-                self._taken = set()
-                self.takenChanged.emit(set())
+                self._taken = {}
+                self.takenChanged.emit({})
             return
         session_date = self.session_date()
         days = swing_favorites.TAKEN_LOOKBACK_DAYS
         if blocking:
             try:
-                marks = swing_favorites.taken_keys(
+                marks = swing_favorites.taken_trade_ids(
                     favorites, self._trades_provider(session_date, days)
                 )
             except Exception as exc:  # noqa: BLE001
                 logging.debug("Swing favorites taken-join failed: %s", exc)
-                marks = set()
+                marks = {}
             self._on_taken(marks)
             return
         if self._worker is not None and self._worker.isRunning():
@@ -287,11 +298,16 @@ class SwingFavoritesService(QObject):
         worker.start()
 
     def _on_taken(self, marks) -> None:
-        marks = set(marks or ())
+        """Publish the marks, now carrying a trade_id each (P6).
+
+        A mapping is emitted where a set used to be; the bar accepts either, so
+        a host that only cares which chips are marked is unaffected.
+        """
+        marks = dict(marks or {}) if hasattr(marks, "items") else {pair: "" for pair in (marks or ())}
         if marks == self._taken:
             return
         self._taken = marks
-        self.takenChanged.emit(set(marks))
+        self.takenChanged.emit(dict(marks))
 
     def _release_worker(self) -> None:
         worker, self._worker = self._worker, None

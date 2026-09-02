@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 from collections import defaultdict
 from datetime import date, datetime
@@ -158,6 +159,17 @@ def _date_distance_score(trade_date: date, context_date: date, lookback_days: in
     return max(0.04, 0.22 * (1.0 - (delta_days / max(1, lookback_days))))
 
 
+#: ``auto_tag_candidates.source`` prefix for P6's EXACT-ID lane. The stored
+#: value is ``trader_capture:<kind>`` - veto, like_claim, pass, or a take-class
+#: review action - and it ranks ABOVE every fuzzy source because it is the
+#: trader's own statement about that name on that day.
+#:
+#: Defined HERE and re-exported by `journal_store`, not the other way round:
+#: `journal_store` already imports from this module, so the dependency runs one
+#: way only.
+TRADER_CAPTURE_SOURCE = "trader_capture"
+
+
 class AutoTagger:
     """Suggest journal setup tags from existing bot outputs without importing scanner code."""
 
@@ -176,6 +188,161 @@ class AutoTagger:
         self.intraday_bounces_path = Path(intraday_bounces_path)
         self.lookback_calendar_days = int(lookback_calendar_days)
         self._context_rows: list[dict[str, Any]] | None = None
+        self._capture_rows: list[dict[str, Any]] | None = None
+
+    def load_capture_rows(self) -> list[dict[str, Any]]:
+        """The trader's OWN statements about a name, with their event ids.
+
+        A separate list from `load_context_rows` because it is a different kind
+        of evidence. Those are scanner rows a trade fell near; these are things
+        the trader typed about that symbol on that day - a veto, a like+claim, a
+        pass, or a chart they took action on. Matched by exact event id rather
+        than by a symbol landing inside a 16-day window, which is why they rank
+        above every fuzzy source.
+
+        Read-only over two append-only stores. Any failure yields NOTHING
+        rather than raising: the auto-tagger runs behind an OK button, and a
+        suggestion source that cannot be read must cost its own suggestions and
+        never the pane.
+        """
+        if self._capture_rows is not None:
+            return self._capture_rows
+        rows: list[dict[str, Any]] = []
+        rows.extend(self._load_annotation_capture_rows())
+        rows.extend(self._load_review_capture_rows())
+        self._capture_rows = rows
+        return rows
+
+    def _load_annotation_capture_rows(self) -> list[dict[str, Any]]:
+        """Vetoes, like+claims and passes from `trader_annotations.jsonl`.
+
+        The tag each contributes is what the trader actually said:
+
+        * a **like_claim** contributes its `claimed_setup_id` - they named the
+          setup, so that IS the tag;
+        * a **veto** contributes ``vetoed:<code>`` and a **pass**
+          ``passed:<code>``, prefixed so a rejection can never be mistaken for
+          an endorsement in a Tags column.
+
+        The reason codes are carried verbatim; nothing here interprets or
+        pools them.
+        """
+        try:
+            from project_paths import TRADER_ANNOTATIONS_FILE
+            from ui.annotations.store import (
+                EVENT_LIKE_CLAIM,
+                EVENT_PASS,
+                EVENT_VETO,
+                load_annotations,
+            )
+
+            annotations = load_annotations(
+                Path(TRADER_ANNOTATIONS_FILE),
+                event_types=(EVENT_VETO, EVENT_LIKE_CLAIM, EVENT_PASS),
+            )
+        except Exception:  # noqa: BLE001 - a suggestion source is never fatal
+            logging.debug("Trader annotations unavailable to the auto-tagger.", exc_info=True)
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for annotation in annotations:
+            symbol = _normalize_symbol(annotation.get("symbol"))
+            session = _parse_date(annotation.get("session_date"))
+            if not symbol or session is None:
+                continue
+            kind = str(annotation.get("event_type") or "")
+            if kind == "like_claim":
+                tag = str(annotation.get("claimed_setup_id") or "").strip() or "liked"
+            elif kind == "veto":
+                code = str(annotation.get("reason_code") or "").strip()
+                tag = f"vetoed:{code}" if code else "vetoed"
+            elif kind == "pass":
+                codes = [
+                    str(code or "").strip()
+                    for code in (annotation.get("reason_codes") or [])
+                    if str(code or "").strip()
+                ]
+                tag = f"passed:{codes[0]}" if codes else "passed"
+            else:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "date": session,
+                    "side": _normalize_side(annotation.get("side")),
+                    "kind": kind,
+                    "tag": tag,
+                    "event_id": str(annotation.get("event_id") or ""),
+                    "detail": str(annotation.get("note") or ""),
+                }
+            )
+        return rows
+
+    def _load_review_capture_rows(self) -> list[dict[str, Any]]:
+        """TAKE-class review events - the charts the trader acted on.
+
+        The take set is `review_learning`'s, read rather than restated: it is
+        the one place that decides what counts as the trader saying yes to a
+        chart, and a second copy here would drift from it.
+        """
+        try:
+            from review_events import load_review_events
+            from review_learning import TAKE_ACTIONS, TOGGLE_TAKE_ACTIONS
+
+            events = load_review_events()
+        except Exception:  # noqa: BLE001
+            logging.debug("Review events unavailable to the auto-tagger.", exc_info=True)
+            return []
+
+        rows: list[dict[str, Any]] = []
+        for event in events:
+            action = str(event.get("action") or "")
+            if action in TOGGLE_TAKE_ACTIONS:
+                detail = event.get("detail")
+                if not (isinstance(detail, dict) and detail.get("on")):
+                    continue
+            elif action not in TAKE_ACTIONS:
+                continue
+            symbol = _normalize_symbol(event.get("symbol"))
+            session = _parse_date(event.get("trade_date"))
+            if not symbol or session is None:
+                continue
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "date": session,
+                    "side": _normalize_side(event.get("side")),
+                    "kind": f"review:{action}",
+                    # A CHART HOUSEKEEPING ACTION IS A LINK, NOT A TAG (R1).
+                    #
+                    # `add_focus`, `arm_level`, `arm_watch` and the toggles say
+                    # the trader did something WITH the chart. They say nothing
+                    # about which setup it was, and 676 of 730 live rows carry
+                    # no `bounce_types` at all - so this minted `took:add_focus`
+                    # and, ranked first as a capture candidate, spent the
+                    # four-slot summary on it. Measured on eight live trades:
+                    # EYPT and SMPL lost `avwape_to_1stdev` from their Tags
+                    # column to a housekeeping click.
+                    #
+                    # The row is still stored - it carries a `context_row_id`
+                    # worth following - but it contributes NO tag text, so it
+                    # can never evict a real setup match from the summary. Only
+                    # a like_claim, a veto and a pass name a setup.
+                    "tag": "",
+                    "link_only": True,
+                    # The alert's own id when it has one - only 54 of 730 take
+                    # rows do - and otherwise the row's natural identity, its
+                    # timestamp, PREFIXED so a reader knows which store to open.
+                    # An empty pointer would look exactly like a fuzzy
+                    # candidate, which is the one thing this lane is not.
+                    "event_id": (
+                        str(event.get("event_id") or "")
+                        or f"review_event:{str(event.get('ts') or '').strip()}"
+                    ),
+                    "detail": str(event.get("tier") or ""),
+                }
+            )
+        return rows
 
     def load_context_rows(self) -> list[dict[str, Any]]:
         """The scanner-output rows the tagger matches trades against.
@@ -319,6 +486,64 @@ class AutoTagger:
             return []
 
         candidates: dict[str, dict[str, Any]] = {}
+
+        # ---------------------------------------------------------- P6 -----
+        # The EXACT-ID lane first: what the trader themselves said about this
+        # symbol while the trade was open. Matched on the trade's OWN WINDOW -
+        # open date to close date, not a 16-day neighbourhood - because an
+        # event id is only worth carrying when the statement and the trade
+        # really are about the same episode.
+        #
+        # A capture candidate carries `context_row_id`, which every surface
+        # renders beside its confidence. It is a POINTER for a reader, never a
+        # canonical link: plan.md P5.3/P5.4 own the canonical opportunity id.
+        opened = trade_date
+        closed = _parse_date(trade.get("closed_at")) or opened
+        window_start, window_end = (opened, closed) if opened <= closed else (closed, opened)
+        for row in self.load_capture_rows():
+            if row.get("symbol") != symbol:
+                continue
+            said_on = row.get("date")
+            if not isinstance(said_on, date):
+                continue
+            if not (window_start <= said_on <= window_end):
+                continue
+            row_side = row.get("side") or ""
+            if row_side and direction and row_side != direction:
+                # A long statement about a short trade is a different claim.
+                continue
+            link_only = bool(row.get("link_only"))
+            tag = str(row.get("tag") or "").strip()
+            if not tag and not link_only:
+                continue
+            if link_only:
+                # A pointer, under a name that cannot be mistaken for a setup.
+                # It is excluded from `auto_tag_summary` by the store, so it
+                # occupies no slot in the Tags column.
+                tag = f"link:{row.get('kind')}"
+            # A stated judgement inside the trade's own window is the strongest
+            # thing this tagger has, and it is still a SUGGESTION: the trader
+            # accepts or ignores it, and nothing here writes trade_annotations.
+            confidence = 0.95 if row_side and direction else 0.90
+            current = candidates.get(tag)
+            if current is not None and float(current.get("confidence", 0.0) or 0.0) >= confidence:
+                continue
+            detail = str(row.get("detail") or "").strip()
+            candidates[tag] = {
+                "tag": tag,
+                "confidence": confidence,
+                "source": f"{TRADER_CAPTURE_SOURCE}:{row.get('kind')}",
+                "context_row_id": str(row.get("event_id") or ""),
+                # Read by `refresh_auto_tags`: a link is stored as a candidate
+                # and kept out of the summary (R1).
+                "link_only": link_only,
+                "rationale": (
+                    f"you said this on {said_on.isoformat()} ({row.get('kind')})"
+                    + (f": {detail}" if detail else "")
+                    + "; inside this trade's own window"
+                ),
+            }
+
         for row in self.load_context_rows():
             if _normalize_symbol(row.get("symbol")) != symbol:
                 continue
@@ -350,12 +575,17 @@ class AutoTagger:
                 f"{source}; {symbol}; context {context_date.isoformat()}; "
                 f"{row.get('setup_family') or 'setup'}"
             )
+            if str(current.get("source") or "").startswith(f"{TRADER_CAPTURE_SOURCE}:") if current else False:
+                # A fuzzy match never displaces the trader's own statement,
+                # whatever its computed confidence.
+                continue
             if current is None or confidence > float(current.get("confidence", 0.0) or 0.0):
                 candidates[tag] = {
                     "tag": tag,
                     "confidence": confidence,
                     "source": source,
                     "rationale": rationale,
+                    "context_row_id": "",
                 }
 
         for correction in corrections or []:
@@ -375,11 +605,18 @@ class AutoTagger:
                     "confidence": min(0.80, 0.40 + boost),
                     "source": "manual_correction",
                     "rationale": "Historical manual correction for this symbol.",
+                    "context_row_id": "",
                 }
 
         ordered = sorted(
             candidates.values(),
-            key=lambda item: (-float(item.get("confidence", 0.0) or 0.0), str(item.get("tag") or "")),
+            key=lambda item: (
+                # The capture lane leads: the trader's own statement about this
+                # name on this day outranks anything inferred about it.
+                0 if str(item.get("source") or "").startswith(f"{TRADER_CAPTURE_SOURCE}:") else 1,
+                -float(item.get("confidence", 0.0) or 0.0),
+                str(item.get("tag") or ""),
+            ),
         )
         return ordered[: max(1, int(limit))]
 
@@ -577,6 +814,28 @@ def split_tags(value: Any) -> list[str]:
     return [text]
 
 
+#: The tag lane a trade's setup tags came from. Named here rather than imported
+#: from `journal_store` so this module keeps its one-way dependency: the store
+#: imports the analytics helpers, not the other way round. P6a introduces the
+#: column; on a tree without it every row reads as the trader's, which is what
+#: it was before a machine could write one.
+TAG_STATUS_CONFIRMED = "confirmed"
+
+
+def _confirmed_setup_tags(row: dict[str, Any]) -> list[str]:
+    """The tags on this trade that the TRADER stands behind.
+
+    A provisional tag lives in the same column, so counting `setup_tags` alone
+    would fold machine guesses into "my setups" - the one group in the journal
+    that is supposed to answer what the trader themself said this trade was. A
+    row with no annotation at all reports ``confirmed`` and has no tags, so it
+    lands in ``untagged`` exactly as before.
+    """
+    if str(row.get("tag_status") or TAG_STATUS_CONFIRMED) != TAG_STATUS_CONFIRMED:
+        return []
+    return _tags_for_row(row, "setup_tags")
+
+
 def _tags_for_row(row: dict[str, Any], field: str = "setup_tags") -> list[str]:
     """Every setup tag on a trade, not just the first one.
 
@@ -641,7 +900,67 @@ def build_analytics_summary(
         )
         summary["groups"][group_name] = rows
     summary["nonexclusive_groups"] = ["my setups", "auto tags"]
+    summary["group_notes"] = _empty_dimension_notes(trades, summary["groups"])
     return summary
+
+
+#: Below this share of closed trades, a confirmed-tag dimension is not a
+#: breakdown of the trader's setups - it is a breakdown of the handful they
+#: happened to tag. Live on 2026-09-01: ONE confirmed tag across 193 trades.
+CONFIRMED_TAG_COVERAGE_FLOOR = 0.10
+
+
+def _empty_dimension_notes(
+    trades: list[dict[str, Any]], groups: dict[str, list[dict[str, Any]]]
+) -> dict[str, str]:
+    """One sentence per group whose coverage is too thin to read as a chart.
+
+    "My setups" renders beside a full "auto tags" chart, so two charts of the
+    same width sit side by side while one of them rests on a single trade. The
+    reader is not told; they see a bar and read it as a finding.
+
+    THE GROUP IS NEVER HIDDEN. Hiding it would replace a visible thin answer
+    with an invisible one, and the whole point is that the trader can see how
+    little they have tagged - that is the prompt to tag more. The note is
+    PREPENDED to the group's own label, using the same refusal-message
+    mechanism `resolve_pnl_key` already uses to explain a total it will not
+    compute.
+
+    Coverage is measured against CLOSED trades, which is the denominator every
+    number in these groups is computed over.
+    """
+    closed = [row for row in trades if str(row.get("status") or "").upper() == "CLOSED"]
+    if not closed:
+        return {}
+    notes: dict[str, str] = {}
+    for group_name in ("my setups",):
+        # COUNTED OVER TRADES, NOT OVER BUCKETS (R1).
+        #
+        # "My setups" is NON-EXCLUSIVE: a trade carrying three tags appears in
+        # three buckets, so summing each bucket's `closed` counted it three
+        # times. Live, 24 tagged trades of 156 measured as 40% coverage and the
+        # note therefore never appeared - the one honesty this note exists to
+        # provide was suppressed by its own arithmetic.
+        #
+        # And it ignored `tag_status` (P6a), so a machine-applied PROVISIONAL
+        # tag counted as the trader's. Coverage of confirmed tags means exactly
+        # that: distinct closed trades whose tags the trader stands behind.
+        tagged = sum(
+            1
+            for row in closed
+            if _confirmed_setup_tags(row)
+        )
+        share = tagged / len(closed)
+        if share >= CONFIRMED_TAG_COVERAGE_FLOOR:
+            continue
+        notes[group_name] = (
+            f"ONLY {tagged} OF {len(closed)} CLOSED TRADES CARRY A CONFIRMED TAG "
+            f"({share * 100:.0f}%). This is a breakdown of those few, not of your "
+            "setups - read it as a prompt to tag more, never as a ranking. The "
+            "auto-tag chart beside it covers every trade and is the one to read "
+            "until this catches up."
+        )
+    return notes
 
 
 def _fmt_money(value: Any) -> str:

@@ -538,10 +538,12 @@ def test_the_scope_can_be_selected_on_demand():
         # report after that, and LOCAL-AI Phase 2 the daily digest last. Later
         # phases append; they never reorder the ones above.
         "like_cohort_grading",
-        # P5's two cohorts, appended after the like mirror and before the
-        # report that reads them.
+        # P5's two, completing the set of verdicts that have a forward record.
         "pass_cohort_grading",
         "rejection_cohort_grading",
+        # P6's join, after the cohorts whose outcome files it reads and before
+        # the report that reads all of them.
+        "preference_trade_outcomes",
         "evidence_report",
         "daily_digest",
         # LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run gated:

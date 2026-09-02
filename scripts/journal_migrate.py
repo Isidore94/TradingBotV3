@@ -221,6 +221,15 @@ NEW_COLUMNS_V3: tuple[tuple[str, str, str], ...] = (
     ("trade_annotations", "planned_stop", "REAL"),
     ("trade_annotations", "planned_risk", "REAL"),
     ("trade_annotations", "risk_source", "TEXT NOT NULL DEFAULT ''"),
+    # P6: the id of the trader statement a candidate came from - a veto, a
+    # like+claim, a pass or a take-class review event. NULLABLE and empty for
+    # every fuzzy candidate, because only the exact-id lane has one.
+    #
+    # It is a POINTER FOR A READER, never a canonical link: plan.md P5.3/P5.4
+    # own the canonical opportunity id and a second one invented here would
+    # compete with it. Every surface renders it beside a match confidence or
+    # says "no match".
+    ("auto_tag_candidates", "context_row_id", "TEXT NOT NULL DEFAULT ''"),
 )
 
 TRADER_TAX_STATUS_SETTING = "journal_trader_tax_statuses"

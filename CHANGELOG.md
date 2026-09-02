@@ -443,6 +443,32 @@ which is evidence and must not be loaded as context.
   machine's, `rename_tag` (rename or retire across every trade, trader-typed tags
   only), a Manage-tags dialog, Accept-all, and an accepted suggestion that stops
   re-proposing itself.
+- **A fifth auto-tag lane that is not a guess** (P6, 2026-09-01). `trader_capture`
+  offers what the trader ALREADY SAID about the symbol - a veto, a like_claim, a
+  pass or a take-class review decision - when the statement falls inside THE
+  TRADE'S OWN WINDOW (open date to close date), never the fuzzy neighbourhood the
+  scanner lanes search. It ranks ABOVE every fuzzy source and a fuzzy match can
+  never displace it. A rejection is PREFIXED (`vetoed:` / `passed:`) so it can
+  never read as an endorsement in a Tags column. Each candidate carries
+  `context_row_id`, **a pointer for a reader and never a canonical link** - plan.md
+  P5.3/P5.4 own the canonical id. Nothing here writes `trade_annotations`, and no
+  tag is derived from an outcome.
+- **"What I said, what I did, what happened"** (P6, 2026-09-01,
+  `scripts/preference_trade_outcomes.py`, nightly deterministic slot + a Weekend
+  Prep table). One row per statement across four channels - like_claim, pass, swing
+  favorite, `pick_feedback` like - joined to the journal and to the cohort paper
+  grade. **Every row renders its match confidence or says "no match"**, with
+  `match_basis` naming what the match rested on; the join is a JUDGEMENT, because
+  a trade on the same name that week may have been taken for another reason.
+  Read-only, mints no identifier, and an unmatured paper grade is blank rather than
+  zero. The swing strip's "took" badge now names its trade in a tooltip through the
+  SAME matching rule that put the badge there - the id is EXTRA and never a
+  condition for the mark.
+- **A dimension resting on almost nothing says so** (P6, 2026-09-01). Below 10%
+  confirmed-tag coverage the journal's "My setups" group is prefixed with one
+  sentence naming the coverage. **The group is never hidden**: hiding it would
+  replace a visible thin answer with an invisible one, and seeing how little is
+  tagged is the prompt to tag more.
 - Journal schema v2 with append-only opportunity lifecycle events, idempotent broker
   Taken/Closed imports, structured reviews, free-form notes, tags, and analytics.
 - Deterministic novice explanations across Setup Tracker, Day Trade Tracker, and
@@ -1196,6 +1222,62 @@ declaration.
 **Verification.** `pytest tests/ -q` **5749 passed, 72 subtests, process exit 0** ·
 `ruff` clean · smoke **7/7** · source `--selftest` **73/73** · spec-drift 17 passed.
 
+### 2026-09-01 - Phase 0.13 packet P6: from what the trader said to what they traded
+
+**Branch `claude/p6-preference-to-trade`, off `main` at `66a0c31`.** Three stores each
+held a third of one question and nothing put the three on one row. Live gate #35 owed.
+
+**1. Exact-id candidates in the auto-tagger.** A fifth source, `trader_capture`: for the
+trade's symbol, any veto / like_claim / pass or take-class review event whose session
+falls inside THE TRADE'S OWN WINDOW - open date to close date, not the fuzzy 16-day
+neighbourhood the scanner lanes search, because an event id is only worth carrying when
+the statement and the trade really are about the same episode. It ranks above every fuzzy
+source and a fuzzy match can never displace it. A like_claim contributes its claimed
+setup id; a veto contributes `vetoed:<code>` and a pass `passed:<code>`, **prefixed so a
+rejection can never read as an endorsement**. Live: **1,229 capture rows, and 8 of 193
+trades now carry a capture candidate.**
+
+The candidate carries `context_row_id`, a new nullable column arriving through the store's
+OWN additive migration list rather than an in-place edit. It is **a pointer for a reader,
+never a canonical link** - plan.md P5.3/P5.4 own the canonical id and a second one
+invented here would compete with it. Only **54 of 730** take-class review rows carry an
+alert `event_id`, so the rest point at their own natural identity
+(`review_event:<ts>`); an empty pointer would look exactly like a fuzzy candidate.
+Nothing writes `trade_annotations` - the tagger suggests, the trader accepts.
+
+**2. The nightly report.** `preference_trade_outcomes.py`, following `journal_walkaway`'s
+read-only pattern: one row per statement across four channels, joined to the journal and
+to the cohort grade. **Live on this desk: 558 statements in 90 days, 13 traded, 545 not -
+and the not-traded rows are the point.** Every row renders its **match confidence or "no
+match"**, with `match_basis` naming what the match rested on (same-session 0.9, in-window
+0.7, side-unknown 0.5, opposite side 0.35). Nothing mints an identifier and a test bans
+`uuid` / `hashlib` / `opportunity_id` from the module outright. Swing favourites are
+resolved PER SESSION through the store's own `favorites_for_session`, so a name added and
+retracted is not reported as a pick the trader never took; an unmatured paper grade is
+blank, never zero. Registered as a deterministic slot BEFORE `evidence_report`, which it
+feeds, and surfaced as a Weekend Prep table.
+
+**3. The honest empty-dimension banner.** "My setups" renders beside a full auto-tag chart
+of the same width while resting on almost nothing - live, **0 of 156 closed trades carry a
+confirmed tag**. Below 10% coverage the group's label is prefixed with one sentence saying
+so, through the same refusal-message mechanism `resolve_pnl_key` uses. The group is never
+hidden.
+
+**Also:** `ai_summary`'s comment said the `market_journal` scope is "OPT-IN ONLY". That has
+been wrong since R10.H - `briefs.DEFAULT_SCOPES` carries it on the nightly run - so the
+COMMENT was the defect and is corrected. No behaviour changed; whether it should be
+nightly is the trader's decision.
+
+**Four existing tests pinned absolute slot positions and were updated** - the same
+authorized change as P5's. They now assert the pairwise order, which is the real
+invariant. A circular import had to be resolved: `journal_store` already imports from
+`journal_analytics`, so `TRADER_CAPTURE_SOURCE` is defined there and re-exported, keeping
+the dependency one-way.
+
+**Verification.** `pytest tests/ -q` **5747 passed, 72 subtests, process exit 0** ·
+`ruff` clean · smoke **7/7** · source `--selftest` **73/73** · spec-drift 17 passed.
+Fail-before-fix: with `scripts/` stashed including the new module, 29 of the 32 tests in
+`tests/test_p6_preference_to_trade.py` fail.
 
 Dated entries for the two most recent build days, newest first. Older dated entries
 move to the archive; the durable statement of what they built is in the inventory above.

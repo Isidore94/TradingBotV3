@@ -461,6 +461,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     """
     from ai_jobs import briefs, cohorts, digest, enrichment, evidence_report, policy_draft, setup_research
     from journal_runner import run_nightly_journal_import
+    from preference_trade_outcomes import run_preference_trade_outcomes
 
     return [
         JobSlot(
@@ -543,6 +544,19 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=cohorts.run_rejection_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade NOT-TODAY and DISLIKE (deterministic, no model)",
+            max_attempts=3,
+        ),
+        # P6, APPENDED after the cohort slots and BEFORE the evidence report,
+        # which is where it belongs: it READS the cohort outcome files for the
+        # paper half of each row. Later phases append; they never reorder.
+        JobSlot(
+            name="preference_trade_outcomes",
+            run=run_preference_trade_outcomes,
+            reserve_minutes=5.0,
+            description=(
+                "What I said, what I did, what happened - statements joined to "
+                "trades with a stated match confidence (deterministic, no model)"
+            ),
             max_attempts=3,
         ),
         # R10.I, APPENDED last. Later phases append; they never reorder. It runs
