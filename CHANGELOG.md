@@ -608,6 +608,18 @@ which is evidence and must not be loaded as context.
   reads, every job invoker, live tee wiring, and off-GUI-thread spool I/O.
 - Phases 0–8 are code-complete on the testing-week branch. The broker check,
   confirmation items, and 20-session pilot remain open.
+- **The model is narrated a VIEW of the fact pack, never the pack** (R3, 2026-09-02).
+  The pack is the deterministic product and it outgrew the window - 437,125 chars
+  against ~78,000 readable - so the server sheared it silently three nights running.
+  `narration_view` sends the gate, coverage, evidence shape, excluded families, EVERY
+  eligible cell and COUNTS of what was dropped; the ineligible rows, context cells and
+  raw outcomes stay on disk. The four prose constants each cell repeats verbatim are
+  stated ONCE under `conventions` (a constant two cells disagree on is never hoisted).
+  437,125 -> 38,184 chars. Over budget **raises before any provider call**, and the
+  evidence hash is over WHAT WAS SENT. A missing narration returns **`ok`**, never a
+  retryable status: this job is a ten-minute lake pass, and re-reading the lake cannot
+  shorten a prompt. Every pack carries `built_by_commit` (fails open to `"unknown"`)
+  and the `recipe_ids` its rows came from, **never re-derived from the module**.
 - **The nightly fact pack states its own evidence shape** (2026-09-01, BD-81…85).
   Every cell reports `n_episodes` beside `n`, and the pack reports `evidence_shape` -
   rows, occurrences, episodes and rows-per-occurrence - because the correlation the ERD
@@ -717,6 +729,86 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-02 - The merge, and the test run that started a real scan
+
+`main` takes P9 (quick like) and R3 (the narration budget). Three documentation
+conflicts, each resolved by keeping BOTH entries.
+
+**The merged tree printed 6,145 passed and then killed its own process** -
+`QThread: Destroyed while thread '' is still running`, exit `0xC0000409`. Each branch
+alone had exited 0, so it read as an interaction between them. It was not.
+
+Five test files build a real `MainWindow` with a live `AutopilotService`, and nothing
+shuts them down. A later `processEvents()` let a surviving timer tick; `_maybe_auto_arm`
+saw it was after 07:00 on a weekday, flipped Auto Pilot ON, and `_maybe_run_swing_slot`
+**started a real master scan** - a child process against the live tape, on the machine
+running the desk. A 20-minute scan outlives a 6-minute suite, so its thread was still
+running at teardown.
+
+**It depends on the wall clock.** Every clean run this week was between 04:00 and 05:00,
+before the arm hour; the first run after lunch crashed, and so did every run after it,
+including code that had passed at breakfast.
+
+The guard is a machine-local setting, not a patched method: `conftest` writes
+`qt_autopilot_auto_arm: false` into the temp LOCALAPPDATA it already isolates. Stubbing
+`_maybe_auto_arm` would have deleted the behaviour from the tests that check it; a
+setting only moves the default, and a test that wants arming turns it back on. Both new
+tests fail without the guard.
+
+Desk construction is still **not** inert under pytest - the timers still run. This
+closes the one door that leads out of the process.
+
+**Verification.** `pytest tests/ -q` **6147 passed, 72 subtests, process exit 0** ·
+`ruff` clean · smoke **7/7** · `--selftest` **74/74**.
+
+### 2026-09-02 - Review round R3: the research narration outgrew the model
+
+**Branch `claude/r3-narration-budget`, off `main`.** Live gate #40 owed.
+
+On 2026-09-01 `setup_research` ran three times - 03:55, 04:30, 05:00 - published
+three superseding packs, spent 29 minutes reading the lake and produced **no
+narration at all**. Every attempt logged the same line: *"the local server truncated
+the prompt: sent ~176827 tokens (442068 chars), server reported seeing 32771"*. Two
+independent faults behind one symptom.
+
+**The package sent the whole pack.** P3 added the ineligible block, the excluded
+families and the coverage detail; P8's grid grew it again. `narration_view` sends what
+a person reads first instead - gate, coverage, evidence shape, excluded families,
+**every eligible cell**, and **counts** of what was dropped, so the model can say "and
+71 thin cells were not shown" rather than being handed 71 thin cells. The cells are
+deduplicated too: four prose constants are interpolated into every one of them, ~900
+identical chars inside each 1,900-char cell, so they are stated **once** under
+`conventions`. **A constant two cells disagree on is never hoisted** - it stays inline
+on all of them, because stating it once would silently restate one. **437,125 ->
+38,184 chars**; headroom went from six more cells to about forty. Over budget now
+**raises before any provider call**: a sheared prompt is not a shorter answer, it is
+an untrustworthy one. The hash is over what was actually **sent**.
+
+**A missing narration is not a failed job.** `degraded_no_narrative` under
+`max_attempts=3` re-ran a **ten-minute lake pass** twice more to fail identically -
+that is where the three packs and the 29 minutes came from. It returns `ok` with
+`narration absent: <reason>`. If a narration retry is ever wanted it must read the
+pack on disk; **it must never re-enter the lake.**
+
+**Provenance.** Two packs from one night disagreed by 3,067 outcome rows - 9,372 on
+the pre-merge checkout, 12,439 on `main` after P8 landed - and neither said why.
+`built_by_commit` (once per process, fails **open**) and `recipe_ids` now travel with
+the pack and into the view.
+
+**And the synthesis counter was reading a LIST as a COUNT** (item 4, committed
+separately). `matured_horizons` is a comma-joined field like `"20,60"`; `_matured`
+compared it as a number, so a date graded at horizon 20 alone read as `"20" > 0` -
+true - while `"0,60"` read as truthy too. It now asks whether ANY listed horizon is
+non-zero. The live counter measures **4** graded dates, matching a hand count
+(2026-08-20, 08-21, 08-27, 08-31). **The prompt expected 5; the code was right and
+the expectation was stale** - and the count can legitimately FALL as evidence
+accrues, which is now pinned by a property test.
+
+**Verification.** `pytest tests/ -q` **6119 passed, 72 subtests, process exit 0, zero
+failures**, with the `ai_jobs_runner` lock FREE and re-checked immediately before the
+run · `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix:
+**all 11** new narration tests fail against the un-fixed tree, and the two synthesis
+tests fail against theirs. No packaging trigger.
 ### 2026-09-02 - Phase 0.13 packet P9: quick like
 
 **Branch `claude/p9-quick-like`, off `main` at `13cbc50`.** Live gate #39 owed.

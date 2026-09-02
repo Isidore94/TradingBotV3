@@ -66,6 +66,50 @@ os.environ["TRADINGBOT_DISABLE_BACKGROUND_MAINTENANCE"] = "1"
 # monkeypatch and set their own, so this default cannot mask them.
 os.environ.setdefault("TRADINGBOT_DESIGNATED_WRITER", socket.gethostname())
 os.environ.setdefault("TRADINGBOT_WRITER_ROLE", "designated_writer")
+
+
+
+def _forbid_the_autopilot_from_arming_itself() -> None:
+    """Write the ONE machine-local setting a test process must not default.
+
+    Symptom, 2026-09-02: the suite printed 6,145 passed and the process then
+    died with `QThread: Destroyed while thread '' is still running` and a
+    Windows fast-fail exit code. The cause was not a test. Five test files build
+    a real `MainWindow`, which builds a real `AutopilotService` with live
+    timers, and nothing shuts them down. A later test called
+    `QApplication.processEvents()`, the surviving timer ticked,
+    `_maybe_auto_arm` found it was after 07:00 on a weekday and flipped Auto
+    Pilot ON, and `_maybe_run_swing_slot` **started a real master scan** -
+    `run_autopilot_scan` -> `_run_master_scan_subprocess`, an actual child
+    process against the live tape. The scan outlives the session, so its QThread
+    is still running when the interpreter tears down.
+
+    That is why the failure looked like a merge conflict between two branches
+    and was not one: **it depends on the WALL CLOCK.** Every clean run that week
+    happened between 04:00 and 05:00, before the 07:00 arm hour. The first run
+    after lunch crashed, and every run after it crashed the same way.
+
+    `qt_autopilot_auto_arm` defaults to True in production, which is correct
+    there and indefensible here - a test run must never be able to reach for IB,
+    spend the scan budget, or race the desk that is running on the same machine.
+    LOCALAPPDATA already points at an empty temp dir, so writing the file is
+    enough; `project_paths` reads it on first use and caches on the file's own
+    stamp. A test that wants the arming behaviour sets the key itself through
+    monkeypatch, which restores this value afterwards.
+
+    This does NOT make desk construction inert under pytest - the timers still
+    run and still do everything else. It closes the one door that leads out of
+    the process.
+    """
+    settings_dir = Path(_TEST_LOCAL_APPDATA) / "TradingBotV3"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "local_settings.json").write_text(
+        json.dumps({"qt_autopilot_auto_arm": False}, indent=1) + chr(10),
+        encoding="utf-8",
+    )
+
+
+_forbid_the_autopilot_from_arming_itself()
 atexit.register(shutil.rmtree, _TEST_SHARED_DIR, ignore_errors=True)
 atexit.register(shutil.rmtree, _TEST_DIAGNOSTICS_DIR, ignore_errors=True)
 atexit.register(shutil.rmtree, _TEST_LOCAL_APPDATA, ignore_errors=True)

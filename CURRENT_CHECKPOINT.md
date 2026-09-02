@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/p9-quick-like`**, off `main` at `13cbc50` - Phase 0.13 packet P9 (quick like). `main` already holds every earlier Phase 0.13 packet plus review rounds R1 and R2; nothing else is unmerged |
-| Also in flight | **NOTHING. `claude/gui-phase-0-9` is CONTAINED in `main`** - `git merge-base --is-ancestor` succeeds and it is 0 ahead, because its content arrived through `claude/group-tape-rebuild`, which was cut from it. This row said the branch was unmerged and it was wrong (corrected R2). **What is open is GATE 7 (SOAK 1), not the branch** - a gate is owed by work that has landed, and the two are not the same thing |
-| Active roadmap items | **Phase 0.13 packets P0-P8: ALL MERGED 2026-09-02, live gates #29-#37 owed** (gates #33 and #37 are now SATISFIABLE, which they were not before R1 - see their rows); **integration gate #38** (one DESK session on the merged tree after a restart); Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **6130 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/p9-quick-like`) - **the lock was re-checked immediately before the run**, not inferred from an earlier wait · `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · spec-drift **17** · no packaging trigger (the one new module is inside the already-collected `ui.annotations`). Previous: **6104 passed** on the R2 tree |
+| Working branch | **`main`** - both remaining branches merged 2026-09-02: **`claude/p9-quick-like`** (Phase 0.13 packet P9, the quick like) and **`claude/r3-narration-budget`** (review round R3, the research narration). `main` now holds every Phase 0.13 packet P0-P9 plus R1, R2 and R3 |
+| Also in flight | **NOTHING unmerged.** `claude/gui-phase-0-9` is CONTAINED in `main` (`git merge-base --is-ancestor` succeeds, 0 ahead) - what is open there is GATE 7 (SOAK 1), not the branch, and a gate owed by landed work is not an open branch |
+| Active roadmap items | **Phase 0.13 packets P0-P9: ALL MERGED, live gates #29-#40 owed**; **integration gate #38** (one DESK session on the merged tree after a restart); Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
+| Last verified baseline | `pytest tests/ -q` **6147 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `main` after both merges) - the `ai_jobs_runner` lock probed FREE immediately before the run. **The exit code is the point here**: the first run on the merged tree printed 6,145 passed and then died with a Windows fast-fail, and the cause was not either branch - see the merge entry below. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger. Previous: **6104 passed** on the R2 tree |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 04:09, trader-authorized ("Go ahead and restart the desk").** The checkout was moved to `main` at `125ffa0` FIRST and verified (selftest 74/74, smoke 7/7, ruff clean) - restarting onto the branch it happened to be sitting on would have put the wrong code on the desk. Old pid 17132 (up since 2026-09-01 11:09) stopped; relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **25884** (the desk) under trampoline **9140**. Verified UP THREE WAYS rather than assumed: the process outlived the launch by minutes, `heartbeat.json` re-stamps every ~4 min naming pid 25884 (it had read pid 17132 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0. **The desk now knows `tag_status`, so P6a's 24 provisional tags render as provisional rather than as the trader's own** - which is what the restart was for. The nightly AI run was a SEPARATE process and was not disturbed; it finished normally at ~04:08 |
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 40 | **The narration fits (R3)** - one overnight `setup_research` run that publishes **exactly ONE pack** for the date and a `.narration.json` beside it. Three siblings, or an `ok` whose reason contains `narration absent`, means the view is still too large - and the refusal message names the size, the budget and the eligible-cell count, so it says which. Also check the pack carries `built_by_commit` and a non-empty `recipe_ids` | 2026-09-02 R3 entry |
 | 39 | **Quick like (Phase 0.13 P9)** - one DESK session: the trader quick-likes one SWING chart and one M5 chart. Both rows reach `trader_annotations.jsonl` with `like_mode` quick, the M5 one carries `m5_bars_ref`, BOTH charts retire, and nothing appears in Focus. The next morning `like_cohort_picks.csv` holds both, the M5 one has `m5_bars_completed_ref`, and **its intraday columns are numbers rather than blank** - which is also what closes gate 34's open definition question | 2026-09-02 P9 entry |
 | 38 | **The merged tree, on the desk (R1, extended by R2)** — one DESK session after the restart with the stall watchdog ON and quiet on every new surface: the Weekend Prep pass/rejection/preference tables, the journal's Provisional filter, the Decisions pane, the M5 take-rate row and the Strength Board section. **R2 adds two specific things to watch**: the Setup Tracker's current-picks count after the FIRST scan of the day (it should be the real tier count, not one row per symbol - that is the NAN guard), and the Weekend Prep backlog-toggle line in `ui_stalls.jsonl`, which should now be absent | 2026-09-02 R2 entry |
 | 37 | **First setup-parameter grid (Phase 0.13 P8)** — one overnight run publishes rows for every declared cell inside the 20-minute reserve, and the trial-ledger row exists with status `collecting`. **The third condition is a refusal, not a check: no cell may be read for a verdict before the declared 20-session window closes** — including by me, and including if an early cell looks good | 2026-09-02 Phase 0.13 P8 entry |
@@ -135,6 +136,115 @@ the same k.
 **Verification.** `pytest tests/ -q` **5800 passed**, the only failures being the 32
 `ai_jobs` tests that stand down while the nightly holds the machine-local writer lock ·
 `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix: 17 of 18.
+
+### 2026-09-02 - The merge, and the test run that started a real scan
+
+**`main` now holds P9 and R3.** Both were built, verified and pushed on their own
+branches; both are merged here. The merge itself was three documentation conflicts,
+each resolved by keeping BOTH entries rather than choosing.
+
+**THE MERGED TREE PRINTED 6,145 PASSED AND THEN KILLED ITS OWN PROCESS.** Zero
+failures, then `QThread: Destroyed while thread '' is still running` and exit
+`0xC0000409`. Each branch alone had exited 0, so the obvious read was an interaction
+between them. **It was not.**
+
+Five test files build a real `MainWindow`, which builds a real `AutopilotService` with
+live timers, and nothing shuts them down. A later test called
+`QApplication.processEvents()`; a surviving timer ticked; `_maybe_auto_arm` saw it was
+after 07:00 on a weekday and flipped Auto Pilot **ON**; `_maybe_run_swing_slot` then
+**started a real master scan** - `run_autopilot_scan` -> `_run_master_scan_subprocess`,
+an actual child process against the live tape, on the same machine as the running desk.
+A 20-minute scan outlives a 6-minute suite, so its `QThread` was still running when the
+interpreter tore down, and Qt aborted.
+
+**It depends on the WALL CLOCK, which is the whole reason it looked like a merge
+problem.** Every clean run this week happened between 04:00 and 05:00, before the arm
+hour. The first run after lunch crashed, and every run after it crashed identically -
+including runs of code that had passed at breakfast. Proving it took a probe that
+stamped the running test onto `ScanService._start` and reported at session end, because
+a print inside a test is swallowed by pytest's capture.
+
+**The guard is one machine-local setting, not a patched method.** `conftest` already
+points LOCALAPPDATA at an empty temp dir; it now writes
+`qt_autopilot_auto_arm: false` there. Defaulting True is right in production and
+indefensible in a test process, which must never reach for IB, spend the scan budget or
+race the desk. A patched `_maybe_auto_arm` would have deleted the behaviour from the
+tests that exist to check it; a setting only moves the default, so a test that wants
+arming turns it back on - and one of the two new tests proves exactly that.
+
+**What is NOT fixed here:** desk construction is still not inert under pytest. The
+timers still run and still do everything else, which `conftest` has openly said since
+2026-08-10. This closes the one door that leads out of the process.
+
+### 2026-09-02 - Review round R3: the research narration outgrew the model
+
+**Branch `claude/r3-narration-budget`, off `main`.** Live gate 40 owed. No frozen
+rebuild: no new module, no new asset, no new dependency.
+
+**THE EVIDENCE.** On 2026-09-01 `setup_research` ran at 03:55, 04:30 and 05:00,
+published three superseding packs, spent 29 minutes reading the lake, and produced no
+narration on any of them. Each logged *"the local server truncated the prompt: sent
+~176827 tokens (442068 chars), server reported seeing 32771"*. Two independent faults
+wearing one face.
+
+**1. THE PACKAGE SENT THE WHOLE PACK.** The pack is the deterministic product and it
+grew - P3 added the ineligible block, the excluded families and the coverage detail;
+P8's grid grew it again - to 437,125 chars against a window that reads about 78,000.
+`narration_view` sends what a person reads first: the gate, coverage, the evidence
+shape, the excluded families, **every eligible cell** (those ARE the finding), and
+**counts** of what was dropped, so the model can say "and 71 thin cells were not
+shown" instead of being handed 71 thin cells. Absent by design: the ineligible rows,
+the market-context cells, the raw outcome list - input to the arithmetic, never its
+answer, and all still in the pack on disk.
+
+**The cells are deduplicated, which is where most of the rest went.** Four prose
+constants - the eligibility rule, the n-floor note, the profit-factor convention, the
+bootstrap interval - are module constants interpolated into every cell: ~900 identical
+characters inside each 1,900-character cell, one paragraph written 33 times. Stated
+ONCE under `conventions`. **A constant two cells disagree on is never hoisted**; it
+stays inline on all of them, because stating it once would silently restate one of
+them. Measured on the 2026-09-01 pack: **437,125 -> 38,184 chars**, headroom from six
+more cells to about forty.
+
+**Over budget is a refusal, not an attempt.** `NarrationTooLarge` is raised before any
+provider call, and the test asserts the stub was never touched. A prompt above what
+the model can read is not a longer answer, it is a silently sheared one, and words
+generated from a sheared prompt are not trustworthy even when they validate. **The
+evidence hash is taken over what was actually SENT** - hashing the pack while sending
+a view would make that traceability a lie.
+
+**2. A MISSING NARRATION IS NOT A FAILED JOB.** It returned `degraded_no_narrative`
+under `max_attempts=3`, so the runner re-ran the WHOLE job twice more - and this job
+is a ten-minute lake pass. That is the three packs and the 29 minutes, failing
+identically each time, because re-reading the lake cannot shorten a prompt. It returns
+`ok` with `narration absent: <reason>`. The digest slot already works this way; the
+difference that matters is that the digest's retry is cheap and this one is not, so
+this returns a status the runner will not re-attempt at all. **If a narration retry is
+ever wanted it must read the pack already on disk. It must never re-enter the lake.**
+
+**3. PROVENANCE.** Two packs from one night disagreed by 3,067 outcome rows - 9,372 at
+03:55 on the pre-merge checkout, 12,439 at 04:30 on `main` because P8's grid landed in
+between - and nothing in either said so, so a reader could not tell a change in the
+evidence from a change in the code that measured it. `built_by_commit` is read once
+per process and fails **OPEN** to `"unknown"` (a less traceable pack beats no pack);
+`recipe_ids` is carried from the coverage the caller passed and is **never re-derived
+from the module**, because re-deriving would state the grid this CODE knows rather
+than the one these ROWS came from - the one thing the field exists to distinguish.
+
+**4. THE SYNTHESIS COUNTER WAS READING A LIST AS A COUNT** (committed separately).
+`matured_horizons` is a comma-joined field like `"20,60"`, and `_matured` compared it
+as a number: a date graded at horizon 20 alone read as `"20" > 0` - true - and `"0,60"`
+read as truthy as well. It now asks whether ANY listed horizon is non-zero. **The
+prompt expected 5 graded dates and 4 with matured horizons; the live counter measures
+4, and a hand count agrees** (2026-08-20, 08-21, 08-27, 08-31). The code was right and
+the expectation was stale. The count can also legitimately FALL as evidence accrues -
+a date whose horizons are all still `0` drops out - which is pinned by a property test
+rather than left as a surprise.
+
+**Verification.** `pytest tests/ -q` **6119 passed, 72 subtests, exit 0, zero
+failures**, lock probed FREE immediately before the run · `ruff` clean · smoke **7/7**
+· `--selftest` **74/74**. Fail-before-fix: **all 11** narration tests fail against the
+un-fixed tree.
 
 ### 2026-09-02 - Phase 0.13 packet P9: quick like
 

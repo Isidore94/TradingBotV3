@@ -89,10 +89,29 @@ def _now(value: datetime | None = None) -> datetime:
 
 
 def _matured(row: Mapping[str, Any]) -> bool:
-    try:
-        return int(float(row.get("matured_horizons") or 0)) > 0
-    except (TypeError, ValueError):
+    """Did any horizon on this row actually grade?
+
+    `matured_horizons` is a LIST, not a count: `human_focus_tracking` writes
+    `",".join(matured)`, so the values on disk are `"1"`, `"1,3"`, `"1,3,5"`.
+
+    This used to be `int(float(value)) > 0`, which RAISES on every one of those
+    except a bare `"1"` - and the raise was swallowed as "not matured". So the
+    counter saw only rows with exactly ONE matured horizon, and it went DOWN as
+    evidence accrued: a row whose value grew from `"1"` to `"1,3"` stopped
+    parsing and left the count. That is exactly what the desk showed - 2 of 10
+    on 2026-09-01, 1 of 10 on 2026-09-02 - while the files held 176 matured veto
+    rows and 53 matured like rows across FOUR distinct sessions.
+
+    A predicate that can flip to False as more evidence arrives is wrong by
+    construction, whatever number it happens to produce.
+    """
+    raw = row.get("matured_horizons")
+    if raw is None:
         return False
+    return any(
+        part.strip() and part.strip() != "0"
+        for part in str(raw).split(",")
+    )
 
 
 def graded_sessions(veto_rows: Sequence[Mapping[str, Any]],

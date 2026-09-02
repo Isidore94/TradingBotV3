@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 _log = logging.getLogger(__name__)
 
@@ -134,6 +134,10 @@ def _load() -> tuple[list[dict], dict[str, dict], dict[str, dict[str, str]], dic
         "bias_definition_id": market_bias_context.BIAS_DEFINITION_ID,
     }
     coverage.update(_coverage_state(store, latest, occurrence_map))
+    # The grid is carried out with the rows so the pack can state WHICH recipe
+    # ids these outcomes came from (R3) - two packs from one night differed by
+    # 3,067 rows because the grid had changed under them, and neither said so.
+    coverage = {**coverage, "recipe_ids": recipes}
     return latest, occurrence_map, contexts, coverage
 
 
@@ -269,6 +273,7 @@ def build_fact_pack(
     contexts: Mapping[str, Mapping[str, str]],
     *,
     coverage: Mapping[str, Any] | None = None,
+    recipe_ids: Sequence[str] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     moment = _now(now)
@@ -425,6 +430,18 @@ def build_fact_pack(
     return {
         "schema": FACTS_SCHEMA,
         "generated_at": moment.isoformat(timespec="seconds"),
+        # WHICH CODE BUILT THIS, and over WHICH GRID (R3). Two packs from one
+        # night disagreed by 3,067 outcome rows - 9,372 at 03:55 on the
+        # pre-merge checkout and 12,439 at 04:30 on `main`, because P8's grid
+        # had landed in between - and nothing in either pack said so. A reader
+        # comparing them had no way to tell a real change in the evidence from a
+        # change in the code that measured it.
+        "built_by_commit": _built_by_commit(),
+        # What was LOADED, from the caller - never re-derived from the module
+        # here. Re-deriving would state the grid this CODE knows about rather
+        # than the grid these ROWS came from, which is the one thing the field
+        # exists to distinguish. Empty means the caller did not say.
+        "recipe_ids": list(recipe_ids or ()),
         "entry_contract": "first completed M5 close in the next regular session",
         "market_context_timeframes": ["M5", "M30", "H1", "H4", "D1"],
         "data_contract": {
@@ -606,8 +623,215 @@ def _coverage_lines(pack: Mapping[str, Any]) -> list[str]:
     return [f"{part}\n" for part in parts]
 
 
+class NarrationTooLarge(RuntimeError):
+    """The narration view will not fit the local model. Refuse, do not send."""
+
+
+# The per-cell prose that is identical in every cell by construction: each is a
+# module constant interpolated into `stats`, not a measurement. Written once per
+# cell they were half the narration view; the dotted paths address them inside
+# the nested `stats` block where they live.
+_SHARED_CELL_PROSE = (
+    "stats.eligibility_rule",
+    "stats.n_floor_note",
+    "stats.profit_factor.convention",
+    "stats.bootstrap.interval",
+    "stats.schema",
+)
+
+
+def _dig(row: Any, path: str) -> Any:
+    for part in path.split("."):
+        if not isinstance(row, Mapping) or part not in row:
+            return _MISSING
+        row = row[part]
+    return row
+
+
+def _drop(row: Any, path: str) -> Any:
+    """`row` without `path`, copying only the containers along the way."""
+    head, _, rest = path.partition(".")
+    if not isinstance(row, Mapping) or head not in row:
+        return row
+    copied = dict(row)
+    if rest:
+        copied[head] = _drop(copied[head], rest)
+    else:
+        copied.pop(head, None)
+    return copied
+
+
+_MISSING = object()
+
+
+def _hoist_shared_conventions(
+    cells: list[Any],
+) -> tuple[list[Any], dict[str, Any]]:
+    """Lift the prose every cell shares out of the cells, once.
+
+    Returns the trimmed cells and the hoisted block. A path is hoisted only when
+    EVERY cell carries it and they all agree - one dissenting cell keeps the path
+    inline on all of them, because a convention stated once must be true of
+    everything under it. With no cells nothing is hoisted and the block is empty.
+    """
+    if not cells:
+        return list(cells), {}
+    conventions: dict[str, Any] = {}
+    for path in _SHARED_CELL_PROSE:
+        values = [_dig(cell, path) for cell in cells]
+        first = values[0]
+        if first is _MISSING or any(value != first for value in values):
+            continue
+        conventions[path] = first
+    if not conventions:
+        return list(cells), {}
+    trimmed = []
+    for cell in cells:
+        for path in conventions:
+            cell = _drop(cell, path)
+        trimmed.append(cell)
+    conventions["_note"] = (
+        "These are stated once and are true of every cell in "
+        "`eligible_policies`; they were removed from the cells themselves, "
+        "where they had been repeated verbatim."
+    )
+    return trimmed, conventions
+
+
+def narration_view(pack: Mapping[str, Any]) -> dict[str, Any]:
+    """What the model is asked to narrate - a VIEW, never the whole pack.
+
+    The pack is the deterministic product and it grew: P3 added the ineligible
+    block, the excluded families and the coverage detail, and the recipe grid
+    grew again with P8. On 2026-09-01 the whole pack encoded to ~442,000 chars
+    (~176,800 tokens) against a 65,536-token window, and the server SHEARED it -
+    three nights running, three superseding packs, no narration.
+
+    A narration does not need the pack. It needs what a person would read first:
+
+    * the GATE - whether there is enough evidence to say anything at all;
+    * COVERAGE and EVIDENCE_SHAPE - what this was computed over;
+    * every ELIGIBLE policy cell, because those ARE the finding;
+    * the excluded-families block, because a family excluded by role is a fact
+      about the question and not about performance;
+    * COUNTS of what was dropped, so the model can say "and 71 thin cells were
+      not shown" rather than being handed 71 thin cells.
+
+    Deliberately absent: the ineligible block's ROWS (bounded at 40 and still the
+    bulk of the text, and the reason they are published is for a human to scan,
+    not for a model to average) and the raw outcome list (12,439 rows on the
+    2026-09-02 pack - the input to the arithmetic, never its answer).
+
+    The eligible cells are also DEDUPLICATED, which is where most of the
+    remaining size went. Every cell repeats the same four prose constants - the
+    eligibility rule, the n-floor note, the profit-factor convention and the
+    bootstrap interval - and on the 2026-09-01 pack that was ~900 identical
+    characters inside each 1,900-character cell, 30,000 chars of one paragraph
+    written 33 times. They are stated ONCE under `conventions` and removed from
+    the cells, so nothing is lost and the view halved (65,816 -> ~33,000 chars),
+    which is the difference between six cells of headroom and sixty.
+
+    A constant that DISAGREES between cells is never unified: it stays inline on
+    the cells that differ and is left out of `conventions` entirely. Hoisting a
+    definition two cells do not share would silently restate one of them.
+    """
+    eligible = list(pack.get("eligible_policies") or ())
+    ineligible = list(pack.get("ineligible_policies") or ())
+    contexts = list(pack.get("market_context_cells") or ())
+    trimmed, conventions = _hoist_shared_conventions(eligible)
+    return {
+        "schema": pack.get("schema"),
+        "generated_at": pack.get("generated_at"),
+        "built_by_commit": pack.get("built_by_commit"),
+        "recipe_ids": list(pack.get("recipe_ids") or ()),
+        "entry_contract": pack.get("entry_contract"),
+        "data_contract": dict(pack.get("data_contract") or {}),
+        "gate": dict(pack.get("gate") or {}),
+        "coverage": dict(pack.get("coverage") or {}),
+        "evidence_shape": dict(pack.get("evidence_shape") or {}),
+        "non_trade_families": list(pack.get("non_trade_families") or ()),
+        "non_trade_families_note": pack.get("non_trade_families_note"),
+        "eligible_policies": trimmed,
+        "conventions": conventions,
+        "not_a_control_signal": pack.get("not_a_control_signal"),
+        "omitted": {
+            "ineligible_policies": len(ineligible),
+            "market_context_cells": len(contexts),
+            "outcome_rows": int((pack.get("coverage") or {}).get("outcomes") or 0),
+            "eligible_policy_cells_dropped": pack.get("eligible_policy_cells_dropped"),
+            "ineligible_policy_cells_dropped": pack.get(
+                "ineligible_policy_cells_dropped"
+            ),
+            "why": (
+                "The ineligible cells, the market-context cells and the raw "
+                "outcome rows are all in the pack on disk. They are omitted here "
+                "because they are input rather than finding, and sending them is "
+                "what sheared the prompt."
+            ),
+        },
+    }
+
+
+_BUILT_BY_COMMIT: str | None = None
+
+
+def _built_by_commit() -> str:
+    """The short commit of the code building this pack, or "unknown".
+
+    Read ONCE per process and cached: it cannot change while the process runs,
+    and a subprocess per pack would be a git call inside a nightly job for a
+    value that is constant.
+
+    Fails OPEN to "unknown". A missing commit is a slightly less traceable pack;
+    a raise here would cost the pack entirely, and the pack is the product.
+    """
+    global _BUILT_BY_COMMIT
+    if _BUILT_BY_COMMIT is not None:
+        return _BUILT_BY_COMMIT
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        _BUILT_BY_COMMIT = (result.stdout or "").strip() or "unknown"
+    except Exception:  # noqa: BLE001 - provenance never costs the pack
+        _BUILT_BY_COMMIT = "unknown"
+    return _BUILT_BY_COMMIT
+
+
 def _evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
-    encoded = json.dumps(pack, sort_keys=True, default=str).encode("utf-8")
+    """The package the model receives. Its content is the VIEW, not the pack.
+
+    The hash is taken over WHAT WAS ACTUALLY SENT, so a narration can always be
+    traced to the exact bytes that produced it - hashing the pack while sending
+    a view would make that traceability a lie.
+
+    Refuses over budget rather than sending and hoping. `ai_summary` already
+    computes what the local model can read (`local_evidence_budget_chars`, capped
+    to the context window); a prompt above it is not a longer answer, it is a
+    silently sheared one, and output generated from a sheared prompt is not
+    trustworthy even when it validates.
+    """
+    import ai_summary
+
+    view = narration_view(pack)
+    encoded = json.dumps(view, sort_keys=True, default=str).encode("utf-8")
+    budget = ai_summary.local_evidence_budget_chars()
+    if len(encoded) > budget:
+        raise NarrationTooLarge(
+            f"the narration view is {len(encoded)} chars against a budget of "
+            f"{budget}; refusing to send a prompt the model would shear. The "
+            f"deterministic pack is published and complete "
+            f"({len(view.get('eligible_policies') or ())} eligible cell(s)). "
+            f"Raise "
+            f"'{ai_summary.LOCAL_EVIDENCE_BUDGET_SETTING_KEY}' or the model's "
+            "num_ctx, or narrate fewer cells."
+        )
     source_sha = hashlib.sha256(encoded).hexdigest()
     source = {
         "source_id": FACT_SOURCE_ID,
@@ -619,7 +843,7 @@ def _evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
         "session_date": str(pack.get("generated_at"))[:10],
         "sha256": source_sha,
         "truncated": False,
-        "content": dict(pack),
+        "content": view,
     }
     package = {
         "schema_version": "ai_evidence_package_v2",
@@ -711,7 +935,12 @@ def run_setup_research(
     try:
         outcome_rows, occurrence_map, contexts, coverage = inputs or _load()
         pack = build_fact_pack(
-            outcome_rows, occurrence_map, contexts, coverage=coverage, now=moment
+            outcome_rows,
+            occurrence_map,
+            contexts,
+            coverage=coverage,
+            recipe_ids=(coverage or {}).get("recipe_ids"),
+            now=moment,
         )
         target_root = Path(root) if root is not None else _default_root()
         stamp = session_date or moment.date().isoformat()
@@ -733,8 +962,29 @@ def run_setup_research(
         narration_path = _superseding(json_path.with_name(f"{json_path.stem}.narration.json"))
         outputs.append(str(_publish(narration_path, json.dumps(narration, indent=1, sort_keys=True, default=str) + "\n")))
     except Exception as exc:  # noqa: BLE001
+        # STATUS OK, AND NO RETRY (R3). The deterministic pack IS this job's
+        # product; the narration is words over it. Returning
+        # `degraded_no_narrative` under `max_attempts=3` made the runner re-run
+        # the WHOLE job twice more - and this job is a ten-minute lake pass, so
+        # on 2026-09-01 one truncated prompt produced three superseding packs at
+        # 03:55, 04:30 and 05:00, 29 minutes of reads, and three identical
+        # failures. Re-reading the lake cannot fix a prompt that is too long.
+        #
+        # The digest already works this way and says so in the runner: its facts
+        # are written even when the model is down. This is the same shape, with
+        # one difference that matters - the digest's retry is CHEAP and this
+        # one is not, so this returns ok rather than a status the runner will
+        # re-attempt at all.
+        #
+        # If a narration retry is ever wanted it must read the pack already on
+        # disk and call the model again. It must never re-enter the lake.
         _log.info("Setup research narration unavailable (%s).", exc)
-        return {"status": "degraded_no_narrative", "model": "", "reason": f"{base}; narration absent: {exc}", "outputs": outputs}
+        return {
+            "status": "ok",
+            "model": "",
+            "reason": f"{base}; narration absent: {exc}",
+            "outputs": outputs,
+        }
     return {"status": "ok", "model": str(narration.get("model") or ""), "reason": base + "; narrated", "outputs": outputs}
 
 

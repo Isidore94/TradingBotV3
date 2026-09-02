@@ -814,6 +814,20 @@ Recorded as BD-81 … BD-85.
 eligible block, shows `n_episodes` beside `n`, names the excluded families and prints
 the bucket-coverage line; and the trader confirms the readout panel lists more than two
 families.
+
+**Amended by R3 (2026-09-02) — gate 32 was never reachable as written.** The pack this
+phase grew is the same pack the narration was sending whole, so from 2026-08-31 every
+run sheared its prompt and published nothing but siblings. Gate 32 asks about the
+**Markdown**, which was always written and is unaffected; it is still owed and still
+satisfiable. What R3 adds is **gate 40**: one overnight run that publishes **exactly
+one** pack for the date, with a narration beside it. Read them together on the same
+night — the Markdown answers 32, the file count answers 40.
+
+**Not built here, and named so it is not rediscovered as an idea:** a narration retry
+that re-reads the pack from disk and calls the model again. It would be correct and it
+is cheap, and it is deliberately absent because the retry that existed was the fault —
+a second attempt is only safe once something can vary between the two, and today
+nothing can.
 ### Phase 0.13 packet P7 — One name per setup (2026-09-01) — BUILT, no live gate
 
 Authorized by the trader pasting the packet. Built on `claude/p7-setup-registry`.
