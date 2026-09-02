@@ -725,7 +725,7 @@ entries, and three wrong claims (the frozen selftest is not 29/29,
 `claude/gui-phase-0-9` IS contained in `main`, and a pass merges through
 `_merge_cohort_safely` too).
 
-**Verification.** `pytest tests/ -q` **6109 passed, exit 0, zero failures** with the
+**Verification.** `pytest tests/ -q` **6104 passed, 72 subtests, exit 0, zero failures** with the
 `ai_jobs_runner` lock free · `ruff` clean · smoke **7/7** · source `--selftest`
 **74/74**. No packaging trigger.
 
