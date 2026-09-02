@@ -313,6 +313,22 @@ def _walkaway_caveat() -> str:
     )
 
 
+#: P9. A quick like is one key that says "something about this was good" and
+#: names no setup, so it grades under `like_unclaimed` alongside every other
+#: unnamed like. A model reading that cohort's return as a SETUP's edge would be
+#: attributing a number to a claim nobody made - which is the same error the
+#: offered-claim caveat exists to prevent, one verb along.
+_QUICK_LIKE_CAVEAT = (
+    "The `like_unclaimed` cohort contains QUICK likes: one keystroke meaning "
+    "'something about this chart was good', with no setup named and no reason "
+    "given. Its forward return is NOT a setup's edge and must never be reported "
+    "as one - it is the record of moments the trader marked as worth revisiting. "
+    "A claimed like (which names a setup and states a why) is a different "
+    "statement and grades in its own cohort; the `like_mode` column on the picks "
+    "file separates them."
+)
+
+
 def scope_caveats(scope: str) -> tuple[str, ...]:
     """Machine-written caveats for one scope, built fresh at package time.
 
@@ -320,7 +336,7 @@ def scope_caveats(scope: str) -> tuple[str, ...]:
     live source; a module-level dict would freeze it at import.
     """
     if scope == "trader_judgement":
-        return (_offered_claim_caveat(), _VETO_D1_M5_CAVEAT)
+        return (_offered_claim_caveat(), _VETO_D1_M5_CAVEAT, _QUICK_LIKE_CAVEAT)
     if scope == "setup_performance":
         return (_setup_performance_caveat(),)
     if scope == "walkaway":

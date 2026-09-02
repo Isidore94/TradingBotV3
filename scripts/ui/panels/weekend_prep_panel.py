@@ -767,12 +767,23 @@ class FocusReviewPage(_StepPage):
                 )
             )
             return
+        unclaimed = [row for row in shown if str(row.get("cohort") or "").endswith("_unclaimed")]
+        quick_sentence = (
+            " The `like_unclaimed` row is where a QUICK like lands (P9): one key "
+            "that says something about the chart was good, without naming what. "
+            "**It is not a setup's edge** - read it as a count of moments worth "
+            "revisiting, and claim them with Alt+K when you know what they were."
+            if unclaimed
+            else ""
+        )
         self.like_note.setText(
             f"{len(shown)} row(s) at the {self._cohort_horizon()}-session horizon, "
             f"of {len(rows)} across all horizons, one per claimed setup family. "
             "Returns are side-adjusted, so POSITIVE means the pick you liked "
             "WORKED - the opposite reading from the veto table above, where "
-            "positive means the one you rejected would have. "
+            "positive means the one you rejected would have."
+            + quick_sentence
+            + " "
             + _floor_sentence(shown)
             + " The two tables are the mirror pair - what you threw away, and "
             "what you endorsed."

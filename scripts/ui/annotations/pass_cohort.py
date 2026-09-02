@@ -343,7 +343,7 @@ def pass_pick_rows(
     other cohorts do: the annotation log keeps every pass in full, and the
     cohort grades the name once.
     """
-    from ui.annotations import pass_bars
+    from ui.annotations import sidecar_completion
 
     moment = now or datetime.now(timezone.utc)
     if moment.tzinfo is None:
@@ -371,7 +371,15 @@ def pass_pick_rows(
             if str(code or "").strip()
         ]
         version = annotation.get("vocab_version")
-        sidecar = pass_bars.read_pass_bars(annotation, annotations_path=annotations_path)
+        # THE COMPLETED SIDECAR WHEN THERE IS ONE (P9). The snapshot ends at the
+        # click, so the entry bar this grade asks for - the first completed close
+        # AFTER the click - was never in it, and every live pass graded blank.
+        # The nightly `sidecar_completion` slot appends the rest of the session
+        # to a NEW file; this reads that when it exists and the snapshot
+        # otherwise, through one reader so no grader has to remember which.
+        sidecar = sidecar_completion.read_completed_bars(
+            annotation, annotations_path=annotations_path
+        )
         passed_at = None
         created = str(annotation.get("created_at") or "").strip()
         if created:

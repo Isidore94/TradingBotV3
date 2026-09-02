@@ -60,6 +60,36 @@ from ui.annotations.vocabulary import (
 )
 
 SCHEMA_VERSION = 1
+
+#: How a LIKE was made (P9, trader 2026-09-02: *"anytime I like and claim a setup
+#: or like a day trade setup I just want to let the bot and the future AI know
+#: 'something about this was good' and then we can figure out what about it /
+#: what's the best entry later"*).
+#:
+#: `claimed` is the original path - Alt+K, a digit, a why - and is unchanged in
+#: every respect. `quick` is one key and nothing else: no claim, no why.
+#:
+#: SCHEMA_VERSION STAYS 1. This is an ADDITIVE key on a JSONL row, and every
+#: reader in the tree takes the row as a mapping and asks for the fields it
+#: wants - none enumerates them, none rejects an unknown one. A version bump
+#: would force every reader to learn a number that changes nothing about how it
+#: reads. A row written before P9 has no `like_mode` at all, and absence means
+#: `claimed`, because a claim was REQUIRED until this packet.
+LIKE_MODE_CLAIMED = "claimed"
+LIKE_MODE_QUICK = "quick"
+LIKE_MODES = (LIKE_MODE_CLAIMED, LIKE_MODE_QUICK)
+
+
+def like_mode_of(row) -> str:
+    """The mode a like row was made in. Absence reads as `claimed`.
+
+    One place, because four readers now need the answer and a second copy of
+    "if it has no mode it is claimed" would eventually disagree.
+    """
+    if not hasattr(row, "get"):
+        return LIKE_MODE_CLAIMED
+    mode = str(row.get("like_mode") or "").strip().lower()
+    return mode if mode in LIKE_MODES else LIKE_MODE_CLAIMED
 ANNOTATION_SOURCE = "chart_review"
 
 EVENT_VETO = "veto"
@@ -218,6 +248,7 @@ def build_annotation(
     m5_first_bar: str = "",
     m5_last_bar: str = "",
     claimed_setup_id: str = "",
+    like_mode: str = "",
     stop_price: Any = None,
     side: Any = "",
     last_price: Any = None,
@@ -271,10 +302,21 @@ def build_annotation(
         row["vocabulary_id"] = vocab.vocabulary_id
 
     if kind == EVENT_LIKE_CLAIM:
+        mode = str(like_mode or "").strip().lower() or LIKE_MODE_CLAIMED
+        if mode not in LIKE_MODES:
+            raise AnnotationError(f"unknown like_mode {like_mode!r}; expected one of {LIKE_MODES}")
         claim = str(claimed_setup_id or "").strip().lower()
-        if not claim:
+        if mode == LIKE_MODE_CLAIMED and not claim:
+            # Unchanged for the claimed path: naming the setup is the whole
+            # point of it.
             raise AnnotationError("like_claim requires a claimed_setup_id")
-        row["claimed_setup_id"] = claim
+        if mode == LIKE_MODE_QUICK and claim:
+            # A quick like that carried a claim would be a claimed like wearing
+            # the wrong label, and every split by mode would be wrong after it.
+            raise AnnotationError("a quick like carries no claimed_setup_id")
+        row["like_mode"] = mode
+        if claim:
+            row["claimed_setup_id"] = claim
     elif claimed_setup_id:
         # A veto or a hypothetical stop may also name the setup it is about.
         row["claimed_setup_id"] = str(claimed_setup_id).strip().lower()
@@ -393,13 +435,14 @@ def record_annotation(
     return row if append_annotation_row(row, path=path) else None
 
 
-def record_pass_annotation(
+def record_annotation_with_bars(
+    event_type: str,
     *,
     m5_bars: Any = (),
     path: Path = TRADER_ANNOTATIONS_FILE,
     **fields: Any,
 ) -> dict[str, Any] | None:
-    """Write one day-trade pass, attaching cached M5 bars when there are any.
+    """Write one annotation, attaching cached M5 bars when there are any.
 
     The id is minted HERE rather than inside :func:`build_annotation` because
     the sidecar is named after it and has to be on disk before the row that
@@ -407,14 +450,18 @@ def record_pass_annotation(
     the one that cannot lie.
 
     A sidecar that fails to write costs the bars and never the row: the
-    trader's stated reason for passing is the evidence, and the chart behind
-    it is a bonus the desk could only ever offer when it happened to be
-    holding one.
+    trader's stated judgement is the evidence, and the chart behind it is a
+    bonus the desk could only ever offer when it happened to be holding one.
+
+    Generalised from `record_pass_annotation` for P9's quick like, which the
+    trader asked to save bars the same way. The FIELD NAME stays `m5_bars_ref`
+    and the sidecar directory stays the pass one, so no reader forks: what
+    changes is which event types can own a sidecar, not what a sidecar is.
     """
     from ui.annotations import pass_bars
 
     event_id = str(fields.pop("event_id", "") or "").strip() or uuid.uuid4().hex
-    row = build_annotation(EVENT_PASS, event_id=event_id, **fields)
+    row = build_annotation(event_type, event_id=event_id, **fields)
     reference = pass_bars.write_pass_bars(
         event_id,
         list(m5_bars or ()),
@@ -426,6 +473,11 @@ def record_pass_annotation(
     if reference:
         row.update(reference)
     return row if append_annotation_row(row, path=path) else None
+
+
+def record_pass_annotation(**kwargs: Any) -> dict[str, Any] | None:
+    """One day-trade pass, bars attached. The name every existing caller uses."""
+    return record_annotation_with_bars(EVENT_PASS, **kwargs)
 
 
 def load_annotations(

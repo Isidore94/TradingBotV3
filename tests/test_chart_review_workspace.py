@@ -855,3 +855,72 @@ class PassCohortMergeTests(unittest.TestCase):
                  self.log.read_text(encoding="utf-8").splitlines() if line.strip()]),
             "and it must still be in the annotation log",
         )
+
+
+class QuickLikeTests(unittest.TestCase):
+    """P9 - one key that says "something about this was good".
+
+    Trader, 2026-09-02: *"anytime I like and claim a setup or like a day trade
+    setup I just want to let the bot and the future AI know 'something about
+    this was good' and then we can figure out what about it / what's the best
+    entry later."*
+    """
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.log = self.tmp / "trader_annotations.jsonl"
+        self.addCleanup(self._tmp.cleanup)
+        self.panel = _panel(self.tmp)
+        self.panel.open_symbol("NVDA")
+        self.rail = self.panel.capture_rail
+
+    def _rows(self) -> list[dict]:
+        if not self.log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    def test_one_key_writes_a_like_with_no_claim_and_no_why(self) -> None:
+        row = self.rail.commit_quick_like()
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["event_type"], "like_claim")
+        self.assertEqual(row["like_mode"], "quick")
+        self.assertNotIn("claimed_setup_id", row)
+        self.assertEqual(row.get("note", ""), "")
+        self.assertEqual([r["event_id"] for r in self._rows()], [row["event_id"]])
+
+    def test_the_status_line_says_the_claim_path_still_exists(self) -> None:
+        self.rail.commit_quick_like()
+        self.assertIn("Alt+K", self.rail.status_label.text())
+        self.assertIn("quick", self.rail.status_label.text().lower())
+
+    def test_the_claimed_path_is_untouched(self) -> None:
+        """R9.2(a)'s "why is required" is superseded for the QUICK path only."""
+        self.assertIsNone(self.rail.commit_like())  # no digit
+        self.rail.setup_list.setCurrentRow(0)
+        self.assertIsNone(self.rail.commit_like())  # no why
+        self.rail.like_note_input.setText("held the band all day")
+        row = self.rail.commit_like()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["like_mode"], "claimed")
+        self.assertTrue(row["claimed_setup_id"])
+        self.assertEqual(row["note"], "held the band all day")
+
+    def test_a_quick_like_binds_a_key_nothing_else_uses(self) -> None:
+        """Two live bindings for one sequence fire NEITHER, so a clash would
+        silently cost the trader both verbs."""
+        sequences = [sequence for sequence, _handler in self.rail.action_shortcuts()]
+        self.assertIn("Alt+L", sequences)
+        self.assertEqual(len(sequences), len(set(sequences)))
+
+    def test_a_quick_like_places_nothing(self) -> None:
+        """A like carries zero privileges (plan.md P3.1)."""
+        self.rail.commit_quick_like()
+        row = self._rows()[0]
+        for forbidden in ("focus", "watchlist", "parked", "armed", "alert"):
+            self.assertNotIn(forbidden, json.dumps(row).lower())

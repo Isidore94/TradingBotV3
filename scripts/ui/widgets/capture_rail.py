@@ -74,12 +74,15 @@ from ui.annotations.setup_claims import (  # noqa: F401  (re-exported for hosts/
     setup_claim_groups,
 )
 from ui.annotations.store import (
+    AnnotationError,
     EVENT_LIKE_CLAIM,
     EVENT_NOTE,
     EVENT_PASS,
     EVENT_VETO,
-    AnnotationError,
+    LIKE_MODE_CLAIMED,
+    LIKE_MODE_QUICK,
     record_annotation,
+    record_annotation_with_bars,
     record_pass_annotation,
 )
 from ui.annotations.vocabulary import (
@@ -474,6 +477,12 @@ class CaptureRail(QFrame):
             ("Alt+K", self.focus_like),
             ("Alt+N", self.focus_note),
             ("Alt+P", self.focus_pass),
+            # P9. Alt+L is UNBOUND everywhere in scripts/ui - the whole
+            # inventory is Ctrl+F, Ctrl+J, Ctrl+R, Ctrl+Return, F9, Alt+E and
+            # these four - and two live bindings for one sequence is an
+            # ambiguous shortcut that fires NEITHER, so a clash would silently
+            # cost the trader both verbs.
+            ("Alt+L", self.commit_quick_like),
         )
 
     def _bind_shortcuts(self) -> None:
@@ -811,6 +820,74 @@ class CaptureRail(QFrame):
         self.like_note_input.setFocus()
         self._set_status("This like needs a why - type it, then Enter.")
 
+    def commit_quick_like(self) -> dict | None:
+        """One key: "something about this was good", and nothing else.
+
+        Trader, 2026-09-02: *"anytime I like and claim a setup or like a day
+        trade setup I just want to let the bot and the future AI know
+        'something about this was good' and then we can figure out what about
+        it / what's the best entry later."*
+
+        This SUPERSEDES R9.2(a)'s "why is required" for this path only. The
+        claimed path - Alt+K, digit, why, Enter - is untouched, and the reason
+        it still demands a why is unchanged: a claim without one is a label
+        nobody can check later.
+
+        Everything a claimed like does to the review, this does too. The chart
+        RETIRES (a like retires, a note never does), the symbol is marked
+        reviewed today through the existing `_ANNOTATION_DECISIONS`, and the
+        review event is `like_advance` so the scoreboard counts it as a take.
+
+        And everything a like has never done, this does not do either: NO Focus
+        placement, no park, no watch, no alert, no watchlist. A like carries
+        zero privileges (plan.md P3.1), and the whole value of a one-key verb is
+        lost if the trader has to wonder what else it did.
+
+        On an M5 chart it saves the bars the desk is already holding, exactly as
+        a pass does - the trader asked for that explicitly. On a D1 chart it
+        writes no sidecar: a D1 chart's bars are not what the intraday grade
+        needs, and an empty sidecar would be a reference that lies.
+        """
+        row = self._record_like(claimed_setup_id="", note="", like_mode=LIKE_MODE_QUICK)
+        if row is None:
+            return None
+        detail = self._merge_like_cohort_safely()
+        attached = row.get("m5_bar_count")
+        if attached:
+            detail = f"  ({attached} M5 bars attached){detail}"
+        self._set_status(
+            f"Liked (quick) {row['symbol']} - claim it later with Alt+K{detail}"
+        )
+        return row
+
+    def _record_like(self, **fields: Any) -> dict | None:
+        """Write a like row, with the M5 sidecar when the chart is an M5 one.
+
+        One writer for both like paths so a claimed like and a quick like can
+        never disagree about how a like is stored.
+        """
+        if not self._symbol:
+            self._set_status("No symbol in focus.", ok=False)
+            return None
+        common = {**self._common_fields(), "side": self._side, **fields}
+        try:
+            if str(self._timeframe or "").upper() == "M5":
+                row = record_annotation_with_bars(
+                    EVENT_LIKE_CLAIM, m5_bars=self.cached_m5_bars(), **common
+                )
+            else:
+                row = record_annotation(EVENT_LIKE_CLAIM, **common)
+        except AnnotationError as exc:
+            self._set_status(str(exc), ok=False)
+            return None
+        if row is None:
+            self._set_status(
+                "NOT SAVED - the annotation log could not be written.", ok=False
+            )
+            return None
+        self.captured.emit(EVENT_LIKE_CLAIM, row)
+        return row
+
     def commit_like(self) -> dict | None:
         setup_id = self.selected_setup_id()
         if not setup_id:
@@ -824,11 +901,10 @@ class CaptureRail(QFrame):
             # A like without a why is not a like - the chart stays.
             self._prompt_for_why()
             return None
-        row = self._record(
-            EVENT_LIKE_CLAIM,
+        row = self._record_like(
             claimed_setup_id=str(setup_id),
-            side=self._side,
             note=why,
+            like_mode=LIKE_MODE_CLAIMED,
         )
         if row is None:
             return None

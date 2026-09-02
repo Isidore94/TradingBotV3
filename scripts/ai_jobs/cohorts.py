@@ -374,6 +374,82 @@ def _run_cohort_grading(
     }
 
 
+def run_sidecar_completion(
+    *,
+    now=None,
+    annotations_path=None,
+    lake_reader=None,
+    cache_reader=None,
+    **_ignored: Any,
+) -> dict[str, Any]:
+    """Finish yesterday's capture sidecars, so the intraday grade can be made.
+
+    P9 item 4. A capture sidecar holds the bars the desk was ALREADY HOLDING at
+    the moment of the click, so the entry bar the intraday rule asks for - the
+    first completed M5 close AFTER the click - was never inside it, and every
+    live pass graded blank with `sidecar_ends_before_the_entry_bar`.
+
+    Placed BEFORE `pass_cohort_grading` on purpose: the same night that
+    completes a sidecar grades it, so the trader sees a number the next morning
+    rather than the morning after that. Later phases append; they never reorder.
+
+    Deterministic and calls no model. Never allowed to cost the grading behind
+    it: every refusal is counted by reason and the slot still reports ok, because
+    "the lake has not ingested last night yet" is a normal state and not a
+    failure of the night.
+    """
+    from project_paths import TRADER_ANNOTATIONS_FILE
+    from ui.annotations import sidecar_completion
+    from ui.annotations.store import (
+        EVENT_LIKE_CLAIM,
+        EVENT_PASS,
+        load_annotations,
+        like_mode_of,
+    )
+
+    path = Path(annotations_path or TRADER_ANNOTATIONS_FILE)
+    try:
+        annotations = load_annotations(path, event_types=(EVENT_PASS, EVENT_LIKE_CLAIM))
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "skipped", "reason": f"annotations unreadable: {exc}"}
+
+    # Only the rows that CAN own a sidecar: a pass, and a QUICK like. A claimed
+    # like on a D1 chart has no bars and never will.
+    rows = [
+        row
+        for row in annotations
+        if str(row.get("m5_bars_ref") or "").strip()
+        and (
+            str(row.get("event_type")) == EVENT_PASS
+            or like_mode_of(row) == "quick"
+        )
+    ]
+    if not rows:
+        return {"status": "ok", "reason": "no capture sidecars to complete", "rows": 0}
+
+    kwargs = {"annotations_path": path, "now": now}
+    if lake_reader is not None:
+        kwargs["lake_reader"] = lake_reader
+    if cache_reader is not None:
+        kwargs["cache_reader"] = cache_reader
+    report = sidecar_completion.complete_sidecars(rows, **kwargs)
+
+    completed = report.get("completed") or {}
+    reasons = report.get("reasons") or {}
+    detail = ", ".join(f"{count} {reason}" for reason, count in sorted(reasons.items()))
+    return {
+        "status": "ok",
+        "reason": (
+            f"completed {len(completed)} of {len(rows)} capture sidecar(s)"
+            + (f"; {detail}" if detail else "")
+        ),
+        "rows": len(rows),
+        "completed": len(completed),
+        "completions": completed,
+        "skipped_reasons": reasons,
+    }
+
+
 def run_pass_cohort_grading(
     *,
     now=None,

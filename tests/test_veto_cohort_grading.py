@@ -444,15 +444,21 @@ def test_missing_cohort_files_degrade_rather_than_break(tmp_path, monkeypatch):
     assert "judgement.veto_performance" not in package["coverage"]["usable_source_ids"]
 
 
-def test_the_two_caveats_travel_with_the_scope_as_data():
+def test_the_scope_caveats_travel_as_data():
     """They are machine-written facts about the capture UI, in the same sense
-    ``coverage`` is - not something the model is asked to infer."""
+    ``coverage`` is - not something the model is asked to infer.
+
+    P9 added a third: a quick like names no setup, so its cohort must never be
+    read as a setup's edge. The assertion is on CONTENT rather than on a count -
+    a count has now had to be edited by every packet that adds a verb.
+    """
     import ai_summary
 
     package = ai_summary.build_evidence_package(["trader_judgement"])
     caveats = package.get("scope_caveats") or []
     joined = " ".join(caveats)
-    assert len(caveats) == 2
+    assert len(caveats) >= 3
+    assert "like_unclaimed" in joined and "NOT a setup's edge" in joined
     assert "Main swing" in joined and "user interface" in joined
     # The picklist widened on 2026-08-21; a caveat that still described the
     # old, narrower control would be a machine-written falsehood shipped as
@@ -511,7 +517,8 @@ def test_a_picklist_it_cannot_read_is_declared_unknown(monkeypatch):
     package = ai_summary.build_evidence_package(["trader_judgement"])
     caveats = package.get("scope_caveats") or []
     joined = " ".join(caveats)
-    assert len(caveats) == 2
+    # P9 added a third; the point of this test is the REFUSAL, not the count.
+    assert len(caveats) >= 2
     assert "could not be read" in joined
     # It must not invent the list it just failed to read.
     assert "Post-Earnings 52w Break" not in joined
@@ -538,6 +545,9 @@ def test_the_scope_can_be_selected_on_demand():
         # report after that, and LOCAL-AI Phase 2 the daily digest last. Later
         # phases append; they never reorder the ones above.
         "like_cohort_grading",
+        # P9's, before the pass slot it FEEDS: it puts the rest of the session
+        # on disk so the intraday grade has an entry bar to find.
+        "sidecar_completion",
         # P5's two, completing the set of verdicts that have a forward record.
         "pass_cohort_grading",
         "rejection_cohort_grading",
