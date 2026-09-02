@@ -229,6 +229,38 @@ which is evidence and must not be loaded as context.
   Chart Review's coded vetoes now feed the `dislike_reason` dimension through a
   measured (session_date, symbol, side) join - 202 of 212, zero side
   mismatches - annotating only, never re-resolving an episode.
+- **Weekend Prep's two judgement tables show the robust half** (2026-09-01):
+  median, trimmed mean, symbols, sessions, top-symbol share, block CI and the
+  evidence label, all written since R10.C and previously dropped. ONE horizon at
+  a time (default h3) with a selector that re-renders from memory. `meets_n_floor`
+  is not a column - it decides the ORDER and the greying, so a cohort under the
+  floor sorts after every cohort above it and rows above it order by the TRIMMED
+  mean. The liked table carries the same bounded-picklist caveat the AI gets,
+  through the one `ai_summary._offered_claim_caveat`.
+- **The week page names its callouts** instead of counting them: segment,
+  dimension, shown, take rate, and what each half measured. It reads the classes
+  defensively, so a scoreboard written with or without P1's `r_gaps` renders.
+- **"My Decisions" sits beside the Daytrade Tracker** (2026-09-01): one tab per
+  scoreboard dimension over `review_preference_state.json`, columns shown / takes
+  / take rate / taken R (n) / passed R (n) / gap, badged `probation` by set
+  membership in `M5_SIGNAL_TYPE_DEFAULTS - BOUNCE_TYPE_DEFAULTS`. Read on a
+  daemon thread; the button also calls `refresh_review_learning_if_stale` exactly
+  as `app.py` does, while construction only READS.
+- **The five AI phase gates have a surface** (`ai_jobs/gate_counters.py`,
+  2026-09-01): digest, enrichment, weekly synthesis, policy draft and evidence
+  window, on one strip on the A.I. Summary page with each gate's own statement as
+  the tooltip. Every number is READ from the source that owns it - the synthesis
+  count through the same two functions the job uses, the draft and evidence counts
+  parsed from the PUBLISHED files. An unreadable source says "unavailable", never
+  zero.
+- **The M5 alert bar shows the take rate and folds repeats** (2026-09-01). A row
+  ends "take 28%" when the Alert Center already has guidance CACHED for that
+  symbol, and is silent otherwise - never a 0%. A repeat of the same symbol+side
+  folds into its row with a ×N badge and returns to the top carrying the newest
+  alert; the other side of the same name is a different row. **Presentation only**:
+  every event reached the review-queue door, the outcome CSV and the review-event
+  store first, the folded row's tooltip says so, and Copy-all still lists one
+  symbol per row.
 - Main-only price-level polling with cross-up/cross-down, one fire per arm, urgent
   ntfy push, persistent main-desk presentation, and manual re-arm.
 - Auto modes OFF/DESK/AWAY/EVENING, honest global status, EVENING early scan and
@@ -886,6 +918,89 @@ tests proven to fail with `scripts/` stashed: 3 for #1, 3 for #2, 2 for #3, 12 f
 No frozen rebuild - no packaging trigger was hit. The trader's live evidence files were
 checked before and after and are byte-unchanged (the suite redirects
 `TRADINGBOTV3_DATA_DIR`, `tests/conftest.py:57`).
+### 2026-09-01 - Phase 0.13 packet P2: show me
+
+**Branch `claude/p2-show-me`, off `main` at `66a0c31`.** Six display changes, each
+read-only over a file something else already writes. Nothing reaches a detector,
+score, alert, Focus list, review queue or `review_policy.json`. Live gate #31 owed.
+
+**1. The two judgement tables show the robust half.** `_read_veto_cohort` and
+`_read_like_cohort` projected six columns and dropped `median_return`,
+`trimmed_mean_return`, `ci_low`/`ci_high`, `symbols`, `sessions`, `top_symbol_share`,
+`evidence_label` and `meets_n_floor` - every one written by `human_focus_tracking`
+since R10.C, and most already on screen in the Focus performance table on the SAME
+page. What survived was a bare mean on a ratio, which is exactly the statistic R10.C
+published the robust half to stop anyone reading alone.
+
+All of them render now, through one shared `_cohort_robust_fields` so the two tables
+cannot drift. The view is ONE horizon with a selector (default h3) that re-renders from
+memory - a view change never touches disk on the Qt thread. `meets_n_floor` is
+deliberately not a column: it decides the ORDER and the greying, so the live
+`human_focus_veto_compressed` row (n=3, PF 165) sorts after every cohort that cleared
+the floor instead of wherever the CSV put it, and the note says a row below the floor is
+not a weak finding but not a finding. Rows above it order by the TRIMMED mean. The
+liked table carries the bounded-picklist caveat the AI gets on every package, through
+the one existing `ai_summary._offered_claim_caveat`.
+
+**2. The callouts are named.** `_build_summary_text` printed "Blind Spots: 3" over a
+store that has always known which segment, how often it was shown, and what each half
+measured. `callout_lines` builds those rows on the worker, from the state file only, and
+reads the classes DEFENSIVELY so the page works against a scoreboard written with or
+without P1's `r_gaps`.
+
+**3. "My Decisions" beside the Daytrade Tracker.** `review_preference_state.json` had no
+surface outside a text report. One tab per dimension (13), same shape as the tracker
+tabs, ordered by how often the segment was shown. `gap` is the one derived number and it
+is computed only when both sides carry a measured average. Off the Qt thread both times;
+construction READS while only the button rebuilds. The probation badge is set membership
+over `M5_SIGNAL_TYPE_DEFAULTS - BOUNCE_TYPE_DEFAULTS` - no threshold, no second list.
+
+**4. The AI phase gates get a surface.** New `ai_jobs/gate_counters.py`, pure and
+Qt-free. Live on this desk, read not typed: **Digest 6/10 · Enrichment 6/10 · Weekly
+synthesis 2/10 · Policy draft 5/10 · Evidence window 6/10**. The synthesis count goes
+through `_read_cohort` + `graded_sessions`, the two functions `run_weekly_synthesis`
+uses, because a second counting rule could disagree with the document it reports on; the
+draft and evidence counts are parsed from the PUBLISHED files rather than recomputed. An
+unreadable source says "unavailable" with its reason - a blank cell reads as zero, and
+zero is a claim.
+
+**5. The take-rate suffix. THE CODE DISAGREED WITH THE PACKET AND IS REPORTED, NOT
+FORCED.** The packet's premise was that guidance is computed before
+`m5AlertPosted.emit`. It is not: the emit is at `alert_center_panel.py:2018` and
+`_enqueue_review_alert` returns for an M5 alert at 2026, before `_queue_score` - the only
+enqueue-path caller of `_guidance_for` - is reached. So `_attach_cached_take_prob` reads
+`_review_guidance.get` and NEVER `_guidance_for`, whose `_refresh()` stats two files and
+can re-read a 34 KB JSON per alert on the Qt thread. The consequence is stated rather
+than hidden: the suffix appears for a symbol the desk has already charted this session
+and is silent otherwise, which is the honest rendering of "not measured".
+
+**6. The repetition fold.** The main feed has folded repeats since 2026-08-16; the bar,
+which is narrower and read faster, drew one line per alert. A repeat of the same
+symbol+side now folds with a ×N badge and returns to the top carrying the newest alert -
+so a tier upgrade rewrites the row with the stronger one. Keyed on symbol AND side,
+because a name that flips direction is a different claim and folding those would hide the
+flip. **Presentation only**, and the bar's docstring still says so: every event reached
+`_enqueue_review_alert`, the outcome CSV and the review-event store first, and a folded
+row's tooltip says it folds rather than drops. One existing test encoded the old
+one-row-per-alert rule and was rewritten to the new one - the authorized behaviour
+change, not drift - with the invariant it protected now held by
+`test_the_fold_is_presentation_only`.
+
+**Found by the suite, and fixed:** both new workers could emit into a deleted panel
+(`RuntimeError: Signal source has been deleted` out of a daemon thread). `shutdown`
+joins, but deletion can win the race; both guard the emit now and drop the payload,
+proven deterministically with `shiboken6.delete`.
+
+**Two fixtures were wrong and are corrected, not worked around.**
+`test_focus_review_keeps_its_rows_when_a_refresh_fails` used `"horizon": "h3"`, which
+nothing writes - `human_focus_tracking` writes plain integers and the live rollups carry
+"1"/"3"/"5". `test_table_width_rule_pages` rendered cohort rows with no `horizon` at all.
+Both were invisible until the selector started filtering on it.
+
+**Verification.** `pytest tests/ -q` **5775 passed, 72 subtests, process exit 0** (desk
+`.venv`) · `ruff` clean · smoke **7/7** · source `--selftest` **73/73** · spec-drift
+green. No frozen rebuild: `ai_jobs` is an existing collected package, and there is no new
+dependency and no new non-`.py` asset.
 
 
 Dated entries for the two most recent build days, newest first. Older dated entries

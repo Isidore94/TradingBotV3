@@ -223,9 +223,14 @@ def test_focus_review_keeps_its_rows_when_a_refresh_fails(service, monkeypatch):
     """The graded cohort is not week-scoped. A bad week must not erase it."""
     from ui.panels import weekend_prep_panel as panel_module
 
+    # "3", not "h3": `human_focus_tracking` writes `horizon_sessions` as a
+    # plain integer string and the live rollups carry 1/3/5. The old fixture
+    # said "h3", which nothing writes; it was invisible only because the table
+    # ignored the horizon until the P2 selector started filtering on it.
     good = [{"cohort": "gap_fade", "side": "long", "n": "7",
              "win_rate": "0.43", "avg_return": "0.10", "profit_factor": "1.2",
-             "horizon": "h3"}]
+             "horizon": "3", "meets_n_floor": "1", "_meets_floor": True,
+             "_sort_value": 0.1}]
     monkeypatch.setattr(panel_module, "_read_veto_cohort", lambda: good)
     for name in ("_join_focus_week", "_read_like_cohort",
                  "_read_focus_performance", "_read_pick_feedback_week"):

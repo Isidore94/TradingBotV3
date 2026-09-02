@@ -898,6 +898,32 @@ proven either way.
 **Live gate (#30):** one Weekend Prep opened after the next scan showing a
 `human_focus_swing_vetted` row, a like merged on the day it was captured, one pooled
 `compressed` cohort, and the `r_gap` callout present in `review_preference_state.json`.
+### Phase 0.13 packet P2 — Show me (2026-09-01) — BUILT, live gate owed
+
+Authorized by the trader pasting the packet. Built on `claude/p2-show-me`. Six display
+changes, each read-only over a file something else already writes; nothing reaches a
+detector, score, alert, Focus list, review queue or `review_policy.json`.
+
+1. **Weekend Prep's judgement tables show the robust half** — median, trimmed mean,
+   symbols, sessions, top share, block CI, evidence label — one horizon at a time,
+   floor-clearing rows first and by trimmed mean, sub-floor rows greyed and last.
+2. **The week page names its callouts** instead of printing two integers.
+3. **"My Decisions"** — one tab per scoreboard dimension beside the Daytrade Tracker,
+   read off-thread, with a probation badge by set membership.
+4. **The five AI phase gates** get a strip on the A.I. Summary page
+   (`ai_jobs/gate_counters.py`), every number read from the source that owns it.
+5. **A take-rate suffix on the M5 bar row**, from the CACHED guidance only.
+6. **A repetition fold on the M5 bar** — presentation only; the bar's
+   "deletes nothing, mutes nothing, records nothing, withholds nothing" contract is
+   unchanged and its docstring says so.
+
+**Reported, not forced:** the packet assumed guidance is computed before the M5 emit. It
+is not — the emit precedes `_queue_score`, so the suffix reads the cache and is silent
+for a symbol the desk has not charted yet. Computing it there would put a two-file stat
+and a 34 KB JSON re-read on the Qt thread per alert.
+
+**Live gate (#31):** one DESK session where the trader opens each of the six surfaces
+and `ui_stalls.jsonl` charges no seconds to any of them.
 
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 

@@ -45,16 +45,25 @@ def test_weekend_prep_focus_review_cohort_columns_stretch_and_elide(app, tmp_pat
         state_path=tmp_path / "state.json", now=datetime(2026, 8, 15, 10, 0)
     )
     page = weekend_prep_panel.FocusReviewPage(service)
+    # `horizon` and `_meets_floor` are what the readers project for every row
+    # (P2 item 1): the two cohort tables show ONE horizon at a time, so a row
+    # without one is filtered out and the table is empty. Production rows have
+    # always carried `horizon_sessions`; these fixtures simply predate the
+    # selector that reads it.
     page._render_cohort(
         [
             {"cohort": "veto_v3_sma_incoming", "side": "LONG", "n": 8,
-             "win_rate": "0.50", "avg_return": "0.10", "profit_factor": "1.1"},
+             "win_rate": "0.50", "avg_return": "0.10", "profit_factor": "1.1",
+             "horizon": weekend_prep_panel.DEFAULT_COHORT_HORIZON,
+             "_meets_floor": True, "_sort_value": 0.1},
         ]
     )
     page._render_like_cohort(
         [
             {"cohort": "human_focus_tracking", "side": "LONG", "n": 8,
-             "win_rate": "0.50", "avg_return": "0.10", "profit_factor": "1.1"},
+             "win_rate": "0.50", "avg_return": "0.10", "profit_factor": "1.1",
+             "horizon": weekend_prep_panel.DEFAULT_COHORT_HORIZON,
+             "_meets_floor": True, "_sort_value": 0.1},
         ]
     )
     page._render_performance(

@@ -2033,6 +2033,7 @@ class AlertCenterPanel(QFrame):
         # untouched. A click on the bar charts it through `chart_alert`.
         is_m5 = self._is_m5_review_alert(alert)
         if is_m5:
+            self._attach_cached_take_prob(alert)
             self.m5AlertPosted.emit(alert)
         if (
             self._current_review_alert is not None
@@ -2112,6 +2113,35 @@ class AlertCenterPanel(QFrame):
         the queue; an M5 chart in front is skipped (trader rule 2026-08-27,
         second pass - see `_select_review_alert`)."""
         self._select_review_alert(alert)
+
+    def _attach_cached_take_prob(self, alert: BounceAlert) -> None:
+        """Hand the M5 bar the take probability, IF one is already cached.
+
+        Deliberately `_review_guidance.get`, never `_guidance_for`. The cached
+        lookup is a dict read; `_guidance_for` on a miss calls
+        `ReviewGuide.guidance_for`, whose `_refresh()` stats two files and can
+        re-read a 34 KB JSON - per alert, on the Qt thread, in the alert path.
+        That is precisely the drip the snappiness packets spent three rounds
+        removing, and a take-rate suffix is not worth reintroducing it.
+
+        **This differs from the packet's premise, which assumed guidance is
+        computed before the M5 emit.** It is not: `m5AlertPosted` fires here
+        and `_enqueue_review_alert` returns immediately afterwards for an M5
+        alert, before `_queue_score` is ever reached. The cache is filled by
+        `_render_current_review`, so the suffix appears for a symbol the desk
+        has already charted this session and is silent otherwise - which is the
+        honest rendering of "not measured". A missing suffix says nothing; a
+        0% would be a claim.
+
+        Nothing is computed, nothing is fetched, and the alert is not otherwise
+        touched: one float is attached for the bar to read.
+        """
+        try:
+            guidance = self._review_guidance.get(alert.symbol)
+            if guidance is not None and guidance.take_prob is not None:
+                alert.review_take_prob = float(guidance.take_prob)
+        except Exception:  # noqa: BLE001 - a row suffix never costs an alert
+            logging.debug("Take-rate suffix skipped for %s.", alert.symbol, exc_info=True)
 
     def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
         """Cached per-symbol guidance; a failed lookup is neutral, never fatal."""

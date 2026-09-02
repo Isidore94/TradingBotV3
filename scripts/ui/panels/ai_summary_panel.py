@@ -46,6 +46,8 @@ class AiSummaryPanel(QFrame):
 
     statusChanged = Signal(str)
     _runFinished = Signal(object)
+    #: The gate strip's read lands here, off the worker thread.
+    _gatesLoaded = Signal(object)
 
     def __init__(
         self,
@@ -67,6 +69,7 @@ class AiSummaryPanel(QFrame):
         self.output_dir = Path(output_dir)
         self._post = post
         self._run_thread: threading.Thread | None = None
+        self._gates_thread: threading.Thread | None = None
         self._last_export: Path | None = None
         self._last_evidence: dict[str, Any] | None = None
 
@@ -131,9 +134,74 @@ class AiSummaryPanel(QFrame):
         self.status_label.setObjectName("MutedLabel")
         self.status_label.setWordWrap(True)
 
+        # P2 item 4: the five AI phase gates, on the page named after them.
+        # Every one already existed as a function or a published statement and
+        # none had a surface, so "why is the weekly synthesis only scaffolding?"
+        # had no answer on screen. Read-only; hover for each gate's own words.
+        self.gate_strip = QLabel("Reading the phase gates...")
+        self.gate_strip.setObjectName("MutedLabel")
+        self.gate_strip.setWordWrap(True)
+        self.refresh_gates_button = QPushButton("Refresh gates")
+        self.refresh_gates_button.setToolTip(
+            "Re-read the digest, enrichment, synthesis, policy-draft and "
+            "evidence-window counters from the files that publish them. Local "
+            "reads only; nothing is sent anywhere."
+        )
+        self.refresh_gates_button.clicked.connect(self.refresh_gates)
+
+        self._gatesLoaded.connect(self._on_gates_loaded)
         self._build_layout()
         self._wire()
         self._refresh_key_status()
+        self.refresh_gates()
+
+    def refresh_gates(self) -> None:
+        """Read the five phase gates on a daemon thread. Single-flight.
+
+        Every one is a file read - the digest store's directory listing, two
+        cohort CSVs, and two published JSON documents - so none of it belongs
+        on the Qt thread. The thread hands back one finished dict.
+        """
+        if self._gates_thread is not None and self._gates_thread.is_alive():
+            return
+        self.refresh_gates_button.setEnabled(False)
+        self._gates_thread = threading.Thread(
+            target=self._gates_worker, name="ai-gate-counters", daemon=True
+        )
+        self._gates_thread.start()
+
+    def _gates_worker(self) -> None:
+        try:
+            from ai_jobs.gate_counters import counters_payload
+
+            payload = counters_payload()
+        except Exception as exc:  # noqa: BLE001 - a counter is never worth a panel
+            payload = {
+                "text": f"Phase gates unavailable: {exc}",
+                "tooltip": "",
+                "counters": [],
+            }
+        try:
+            self._gatesLoaded.emit(payload)
+        except RuntimeError:
+            # The panel was deleted while this read was in flight; there is
+            # nothing left to update. See the same guard in the tracker panel.
+            pass
+
+    def _on_gates_loaded(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        self.refresh_gates_button.setEnabled(True)
+        self.gate_strip.setText(str(data.get("text") or ""))
+        self.gate_strip.setToolTip(str(data.get("tooltip") or ""))
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's own spelling
+        """Re-read the gates when the page is opened.
+
+        They move overnight, and a strip showing last week's counts is worse
+        than none: the whole point is to answer "where is this up to?".
+        """
+        super().showEvent(event)
+        self.refresh_gates()
 
     def _build_layout(self) -> None:
         header = SectionHeader(
@@ -190,8 +258,15 @@ class AiSummaryPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
+        gate_row = QHBoxLayout()
+        gate_row.setContentsMargins(0, 0, 0, 0)
+        gate_row.setSpacing(8)
+        gate_row.addWidget(self.gate_strip, 1)
+        gate_row.addWidget(self.refresh_gates_button, 0)
+
         layout.addWidget(header)
         layout.addWidget(safety)
+        layout.addLayout(gate_row)
         layout.addLayout(provider_row)
         layout.addLayout(key_row)
         layout.addWidget(scopes)
@@ -395,4 +470,10 @@ class AiSummaryPanel(QFrame):
     def shutdown(self) -> None:
         # Requests are daemonized and have a bounded timeout; closing the app
         # never blocks or lets a late response mutate another panel.
-        pass
+        #
+        # The gate read is joined, unlike the request: it is short, purely
+        # local, and updating a label on a widget that is going away is the
+        # one thing a stray worker here could actually do.
+        thread = self._gates_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
