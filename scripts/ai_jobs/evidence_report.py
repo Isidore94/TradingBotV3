@@ -330,7 +330,12 @@ def _read_pass_cohort_rows() -> list[dict[str, str]]:
 
 
 def _read_rejection_cohort_rows() -> list[dict[str, str]]:
-    """The NOT-TODAY and DISLIKE rollup. Separate cohorts, never pooled."""
+    """The NOT-TODAY and DISLIKE rollup.
+
+    Separate cohorts whose numbers are never combined into a verdict. The
+    family's BASE row pools both and is not either one - it is a total over two
+    verdicts recorded on two different populations.
+    """
     import csv
 
     from project_paths import REJECTION_COHORT_PERFORMANCE_FILE

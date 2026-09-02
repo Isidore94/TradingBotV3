@@ -791,7 +791,9 @@ carries `intraday_unmeasured_reason`, distinguishing
 as the second. Whether entry should instead be the last completed close AT the pass -
 the price the trader was looking at - is a definition change and the trader's to make.
 
-**2. The rejection cohort.** `not_today` and `dislike` are separate and never pooled -
+**2. The rejection cohort.** `not_today` and `dislike` are separate cohorts whose
+numbers are never combined into a verdict (their pooled BASE row exists and is
+labelled) -
 `pick_feedback` has kept them distinct since R2 because a same-day throwback and a
 judgement on the name are different claims. Live: **253 gradeable rows, 219 + 34, zero
 sideless.** `unfavorite` is not graded (a membership change, and sideless on the live

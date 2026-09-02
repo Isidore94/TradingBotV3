@@ -428,8 +428,10 @@ def run_rejection_cohort_grading(
 
     The fourth and fifth verdicts, and the last two that had no forward record
     at all: 223 not-todays and 34 dislikes on the live log. They are separate
-    cohorts and never pooled - a same-day throwback and a judgement on the name
-    are different claims. See `rejection_cohort`.
+    cohorts whose numbers are never combined into a verdict - a same-day
+    throwback and a judgement on the name are different claims. The family's
+    BASE row does pool both (every cohort family gets one) and must not be read
+    as either verdict; the Weekend Prep table labels it. See `rejection_cohort`.
     """
     from project_paths import (
         MASTER_AVWAP_DAILY_BARS_DIR,

@@ -864,7 +864,8 @@ def _source_specs() -> dict[str, list[tuple[str, str, Path]]]:
                 "judgement.rejection_performance",
                 (
                     "NOT-TODAY and DISLIKE cohort performance. Separate cohorts, "
-                    "never pooled: a same-day throwback and a judgement on the "
+                    "never combined into a verdict: a same-day throwback and a "
+                    "judgement on the "
                     "name are different claims."
                 ),
                 REJECTION_COHORT_PERFORMANCE_FILE,

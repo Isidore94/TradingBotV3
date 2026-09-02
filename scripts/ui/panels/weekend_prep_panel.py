@@ -806,8 +806,10 @@ class FocusReviewPage(_StepPage):
         """NOT-TODAY and DISLIKE, kept apart on purpose.
 
         A same-day throwback and a judgement on the name are different claims,
-        and `pick_feedback` has kept them distinct since packet R2. Pooling
-        them here would undo that in the one place a reader looks.
+        and `pick_feedback` has kept them distinct since packet R2. Combining
+        their numbers into one verdict here would undo that in the one place a
+        reader looks - so the family's pooled BASE row, which every cohort
+        family gets, is LABELLED rather than presented as a third verdict.
         """
         # R1: the base row is POOLED and the table shows it, so it is LABELLED
         # rather than hidden. Every cohort family gets a base row from

@@ -957,7 +957,9 @@ cohorts complete the set: every verdict the trader can record now has a forward 
    never be summed. Identity on write is (vocab_version, reason_code). Beside the daily
    horizons it carries a same-session grade when a bar sidecar exists.
 2. **`rejection_cohort`** over `pick_feedback.jsonl`. `not_today` and `dislike` are
-   separate cohorts, never pooled; `unfavorite` is not graded; the free-text reason is
+   separate cohorts whose numbers are never combined into a verdict (the family's
+   pooled BASE row exists and is labelled, never read as either); `unfavorite` is not
+   graded; the free-text reason is
    carried and never coded.
 3. Two nightly slots appended, two Weekend Prep tables, both files added to the evidence
    report and the `trader_judgement` scope (with the like file, which was also missing).
