@@ -166,9 +166,14 @@ def test_an_episode_counts_under_every_type_it_carries_and_once_under_its_combo(
     assert summaries[("bounce_type", "long", "ema_15")]["n"] == 40
     assert summaries[("bounce_type", "long", "vwap")]["n"] == 40
     assert summaries[("bounce_combo", "long", "ema_15+vwap")]["n"] == 40
-    # And the combination is ONE cell, not two.
-    combos = [key for key in summaries if key[0] == "bounce_combo"]
-    assert combos == [("bounce_combo", "long", "ema_15+vwap")]
+    # And the combination is ONE VALUE, not two: `ema_15+vwap`, never a cell per
+    # component. R4 B4 added a second DIRECTION SLOT per cell - the pooled
+    # `ALL_DIRECTIONS` one a sideless "My Decisions" row joins - so the assertion
+    # is on the segment values rather than on the raw key count, which would now
+    # be counting slots.
+    combos = {key[2] for key in summaries if key[0] == "bounce_combo"}
+    assert combos == {"ema_15+vwap"}
+    assert summaries[("bounce_combo", hrs.ALL_DIRECTIONS, "ema_15+vwap")]["n"] == 40
 
 
 def test_the_panel_join_fills_a_row_written_in_the_aggregators_spelling():

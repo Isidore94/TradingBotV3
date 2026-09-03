@@ -517,6 +517,20 @@ MEASURABLE_DIMENSIONS = (
 #: separate from "cannot be measured" because the two are different promises.
 UNDERIVED_DIMENSIONS = ("rrs_alignment",)
 
+#: The direction slot for a cell that pools both sides - R4 B4.
+#:
+#: `review_preference_state.json` records what the trader took and passed per
+#: SEGMENT and does not carry a side within a dimension, so a "My Decisions" row
+#: has no direction to join on. The pooled cell exists so that row can still show
+#: the day-trade headline. It is accumulated from the EPISODES like every other
+#: cell and summarised by the same `Segment.summary` - never by averaging the
+#: long cell and the short cell, because a mean of trimmed means is not a
+#: trimmed mean.
+#:
+#: `"all"` cannot collide with a real direction: the outcome log writes `long`
+#: and `short`.
+ALL_DIRECTIONS = "all"
+
 
 def dimension_summaries(
     episodes: Iterable[Episode],
@@ -554,18 +568,21 @@ def dimension_summaries(
         for dimension in MEASURABLE_DIMENSIONS:
             for raw in values.get(dimension, (UNKNOWN,)):
                 value = str(raw or UNKNOWN)
-                key = (dimension, direction, value)
-                cell = cells.get(key)
-                if cell is None:
-                    # The Segment key is only used for its `summary()` labels,
-                    # which the caller does not read here - the join key above is
-                    # what identifies the row.
-                    cell = cells[key] = Segment(key=(value, value, value, False))
-                cell.episodes += 1
-                if episode.held:
-                    cell.held += 1
-                    if episode.mfe_r is not None:
-                        cell.mfe_of_held.append(episode.mfe_r)
+                # Both the sided cell and the pooled one, accumulated from the
+                # SAME episode rather than from each other (R4 B4).
+                for slot in (direction, ALL_DIRECTIONS):
+                    key = (dimension, slot, value)
+                    cell = cells.get(key)
+                    if cell is None:
+                        # The Segment key is only used for its `summary()`
+                        # labels, which the caller does not read here - the join
+                        # key above is what identifies the row.
+                        cell = cells[key] = Segment(key=(value, value, value, False))
+                    cell.episodes += 1
+                    if episode.held:
+                        cell.held += 1
+                        if episode.mfe_r is not None:
+                            cell.mfe_of_held.append(episode.mfe_r)
     return {key: cell.summary(min_n=min_n) for key, cell in cells.items()}
 
 

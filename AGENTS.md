@@ -225,7 +225,17 @@ before changing the behaviour a rule governs.**
   scanner's own `master_avwap_tracker_scoring_snapshot.json` (19 MB), never from
   the 1.1 GB setup tracker, and its index **expires on the day roll** - a memo
   that never rolls puts `d1_setup_present` back to False on day 2 of uptime and
-  stops being "lately" while still saying it is.
+  stops being "lately" while still saying it is. **Every number on that table
+  names its own basis** (R4 B4): the champion tier is a COLUMN (PROVEN / MUTED /
+  active from the bounce learning state, blank for a segment it never saw - live
+  4 / 2 / 185 / 104 of 295 rows), and the aggregator's verdict is headed
+  **"Verdict (edge score)"** because it is computed from average R and sits three
+  columns from a headline computed from something else. **The My Decisions tabs
+  carry the headline too**, through the same `apply_held_and_ran`; those rows name
+  no side, so `held_run_score.ALL_DIRECTIONS` gives them a pooled cell
+  accumulated FROM THE EPISODES - never an average of the long cell and the short
+  one, which would be a mean of trimmed means and a second formula in that file
+  again.
 - **The AWAY digest ranks swing picks by the tracker's record, not by the bucket**
   (V1 item 3, built R4 A11; decision 0016 answer 8: *"the best pick is often in
   the near bucket, not the favourite bucket, so the cream is not being sent."*)
