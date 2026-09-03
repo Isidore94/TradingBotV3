@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QMenu,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -48,11 +49,16 @@ class FocusPicksPanel(QFrame):
         price_alert_service: PriceAlertService | None = None,
         *,
         price_alert_read_only: bool = False,
+        annotations_path: Any = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("Panel")
         self.service = focus_service
+        # Where this board's two verdicts are written (R4 A5). None means the
+        # one live stream, which is what the desk always passes; the same seam
+        # `CaptureRail` has carried since the rail was built.
+        self._annotations_path = annotations_path
         self.price_alert_service = price_alert_service or PriceAlertService(self)
         self._bounce_state: dict[str, dict[str, str]] = {}
         #: Answers "is this pick beyond its previous-day extreme?". Installed by
@@ -183,10 +189,12 @@ class FocusPicksPanel(QFrame):
 
     def _build_category_section(self, title: str, category: str, hint: str, accent: str | None = None) -> QWidget:
         long_editor = FocusSideEditor(
-            f"{title} - Longs", "long", category, self.service, self._live_state_for, tone="long"
+            f"{title} - Longs", "long", category, self.service, self._live_state_for,
+            tone="long", annotations_path=self._annotations_path,
         )
         short_editor = FocusSideEditor(
-            f"{title} - Shorts", "short", category, self.service, self._live_state_for, tone="short"
+            f"{title} - Shorts", "short", category, self.service, self._live_state_for,
+            tone="short", annotations_path=self._annotations_path,
         )
         setattr(self, f"{category}_long_editor", long_editor)
         setattr(self, f"{category}_short_editor", short_editor)
@@ -388,6 +396,7 @@ class FocusSideEditor(QFrame):
         live_state_for,
         *,
         tone: str,
+        annotations_path: Any = None,
     ) -> None:
         super().__init__()
         self.setObjectName("Panel")
@@ -396,6 +405,7 @@ class FocusSideEditor(QFrame):
         self.service = focus_service
         self.live_state_for = live_state_for
         self.tone = tone
+        self.annotations_path = annotations_path
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("SectionTitle")
@@ -543,6 +553,8 @@ class FocusSideEditor(QFrame):
                     symbol, tone=self.tone, state=self.live_state_for(symbol, self.side)
                 )
                 chip.removed.connect(self._remove)
+                chip.likeRequested.connect(self._like)
+                chip.notTodayRequested.connect(self._not_today)
             self.chip_flow.insertWidget(position, chip)
         self.chip_flow.invalidate()
 
@@ -593,6 +605,75 @@ class FocusSideEditor(QFrame):
         if self.service.remove(symbol, self.side, self.category):
             self._set_status(f"Removed {symbol}.")
 
+    # --- the two verdicts this board can record (R4 A5) -------------------
+    #
+    # `SURFACE_FOCUS_PANEL` was a constant with no writer: P10 declared the
+    # screen and never wired it, so a judgement passed on the Focus board left
+    # no annotation row at all and the "which screen is the trader a better
+    # judge from?" rollup had a column that could never be populated.
+    #
+    # Both are ADDITIVE. The like places nothing and arms nothing (plan.md
+    # P3.1); the "Not today" writes the row FIRST and then asks the store for
+    # the same scoped removal the Alert Center's verb asks for, which refuses a
+    # name the trader typed. Every failure is swallowed - an evidence store
+    # never costs the event it records.
+
+    def _annotation_side(self) -> str:
+        return "SHORT" if str(self.side).lower().startswith("short") else "LONG"
+
+    def _annotation_timeframe(self) -> str:
+        return "D1" if str(self.category).lower() == "swing" else "M5"
+
+    def _annotation_path_kwargs(self) -> dict:
+        return {} if self.annotations_path is None else {"path": self.annotations_path}
+
+    def _like(self, symbol: str) -> None:
+        try:
+            from ui.annotations import verdicts
+
+            written = verdicts.record_like(
+                symbol=symbol,
+                side=self._annotation_side(),
+                surface=verdicts.SURFACE_FOCUS_PANEL,
+                timeframe=self._annotation_timeframe(),
+                **self._annotation_path_kwargs(),
+            )
+        except Exception:
+            self._set_status(f"{symbol}: like NOT saved.")
+            return
+        if written is None:
+            self._set_status(f"{symbol}: like NOT saved.")
+            return
+        self._set_status(f"Liked {symbol}. Nothing was placed or armed.")
+
+    def _not_today(self, symbol: str) -> None:
+        try:
+            from ui.annotations import verdicts
+
+            verdicts.record_dislike(
+                symbol=symbol,
+                side=self._annotation_side(),
+                surface=verdicts.SURFACE_FOCUS_PANEL,
+                timeframe=self._annotation_timeframe(),
+                **self._annotation_path_kwargs(),
+            )
+        except Exception:
+            pass
+        dropped = False
+        try:
+            dropped = bool(
+                self.service.remove_if_auto_adopted(symbol, self.side, self.category)
+            )
+        except Exception:
+            dropped = False
+        if dropped:
+            self._set_status(f"Not today: {symbol} dropped from this list.")
+        else:
+            self._set_status(
+                f"Not today: {symbol} recorded. It stays on the list - "
+                "you added it, so only you take it off."
+            )
+
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
         self.statusChanged.emit(f"{self.category.upper()} focus {self.side}s: {message}")
@@ -618,6 +699,13 @@ class FocusStatusChip(QFrame):
     """
 
     removed = Signal(str)
+    #: R4 A5 - the two verdicts this board could not record. A CONTEXT MENU and
+    #: not two more buttons: the D1 board carries 105 chips, each one already a
+    #: widget tree with a stylesheet, and the 2026-08-21 stall log charged 88
+    #: seconds to this panel for exactly that kind of per-chip work. A menu is
+    #: built when it is opened and never when the board is.
+    likeRequested = Signal(str)
+    notTodayRequested = Signal(str)
 
     def __init__(self, symbol: str, *, tone: str, state: dict[str, dict[str, str]], parent=None) -> None:
         super().__init__(parent)
@@ -625,6 +713,8 @@ class FocusStatusChip(QFrame):
         self.tone = tone
         self.setObjectName("FocusStatusChip")
         self._look: tuple | None = None
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._open_verdict_menu)
 
         self.title = QLabel(symbol)
         self.title.setStyleSheet(f"color: {theme.color(tone)}; font-weight: 700;")
@@ -675,6 +765,25 @@ class FocusStatusChip(QFrame):
             self.status_labels.append(status)
 
         self.update_state(state)
+
+    def _open_verdict_menu(self, point) -> None:
+        """Right-click a chip: like it, or throw it back for today."""
+        menu = QMenu(self)
+        like = menu.addAction("Like this pick")
+        like.setToolTip(
+            "Records one like against this screen. A like carries no "
+            "privileges - nothing is placed, armed or alerted."
+        )
+        not_today = menu.addAction("Not today")
+        not_today.setToolTip(
+            "Records the verdict and drops the pick if the desk adopted it "
+            "automatically. A name you typed yourself is never removed."
+        )
+        chosen = menu.exec(self.mapToGlobal(point))
+        if chosen is like:
+            self.likeRequested.emit(self.symbol)
+        elif chosen is not_today:
+            self.notTodayRequested.emit(self.symbol)
 
     def update_state(self, state: dict[str, dict[str, str]]) -> None:
         """Re-point the chip at fresh live state without rebuilding it."""

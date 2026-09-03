@@ -21,7 +21,7 @@ from ui.models.bounce import (
     is_auto_pick_alert,
 )
 from ui import theme
-from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_VETO
+from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_VETO, SURFACE_CHART_REVIEW
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.empty_state import EmptyState
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
@@ -249,6 +249,13 @@ class AlertChartReview(QWidget):
             # host rebinds `action_shortcuts()` at a scope the trader reaches.
             bind_action_shortcuts=self._dock_capture_rail,
         )
+        # R4 A5: THIS pane is the screen, not the rail. `set_scan_context` has
+        # carried a `surface` override since P10 B1 and nothing ever called it,
+        # so every verdict the trader passed on a review chart filed as `rail` -
+        # and a rollup asking "is the trader a better judge from the setups
+        # table or from the chart?" could not tell the two apart. The rail's own
+        # default stays `rail`, which is honest for a host that IS the rail.
+        self.capture_rail.set_scan_context(surface=SURFACE_CHART_REVIEW)
         self.capture_rail.captured.connect(self._on_captured)
         self.capture_rail.vetoDayTradeRequested.connect(self._on_veto_day_trade)
         # A day-trade pass attaches the M5 bars this pane already drew, so the

@@ -26,6 +26,15 @@ for it when there is one: context, never a filter.
 
 Rows are plain QListWidget items with a foreground role for the side - no
 per-widget stylesheet, no rebuild (fluidity rules, 2026-08-21).
+
+Since R4 (2026-09-02) a row also carries ONE capture verb, on the right-click
+menu: a quick like. `SURFACE_M5_ALERT_BAR` had been declared by P10 and never
+written from anywhere, so the trader's opinion of a name on this bar had no
+column to land in. It is a CAPTURE and not a control: the like writes one
+annotation row and does nothing else - no Focus placement, no arm, no alert, no
+change to what this bar shows or to what reaches the review queue. The paragraph
+above still holds for the alert stream itself; what is new is that the trader can
+now say something about a row, and be recorded saying it.
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -118,10 +128,17 @@ class M5AlertBar(QWidget):
     """Newest alert on top. Click charts it; Copy/Clear act on the list only."""
 
     alertActivated = Signal(object)  # the BounceAlert behind the clicked row
+    #: R4 A5 - one annotation row was written for this alert. Capture only; no
+    #: listener may treat it as a placement, and nothing here reads it back.
+    likeRecorded = Signal(object)
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, annotations_path: Any = None) -> None:
         super().__init__(parent)
         self.setObjectName("M5AlertBar")
+        # Where a quick like is written (R4 A5). None means the one live
+        # stream, which is what the desk passes; the seam exists so a test can
+        # exercise the real handler without touching the trader's file.
+        self._annotations_path = annotations_path
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -153,6 +170,8 @@ class M5AlertBar(QWidget):
         self.list.setUniformItemSizes(True)
         self.list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.list.itemClicked.connect(self._on_item_clicked)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._open_row_menu)
         layout.addWidget(self.list, 1)
         self._refresh_title()
 
@@ -278,6 +297,58 @@ class M5AlertBar(QWidget):
             self._refresh_title()
         if alert is not None:
             self.alertActivated.emit(alert)
+
+    # ----------------------------------------------------------- capture
+    def _open_row_menu(self, point) -> None:
+        """Right-click a row: one quick like, and nothing else."""
+        item = self.list.itemAt(point)
+        if item is None:
+            return
+        menu = QMenu(self)
+        like = menu.addAction("Quick like")
+        like.setToolTip(
+            "Records that something about this alert was good. It places "
+            "nothing, arms nothing and changes nothing on this bar."
+        )
+        if menu.exec(self.list.viewport().mapToGlobal(point)) is like:
+            self.quick_like(item)
+
+    def quick_like(self, item: QListWidgetItem | None = None) -> dict | None:
+        """One QUICK like for a row of this bar. Returns the written row.
+
+        QUICK because this bar has no claim picklist and never asks for a why -
+        P9's Alt+L path, from a different screen. A like carries zero privileges
+        (plan.md P3.1): it records, and it does not act. The row stays on the bar
+        so the trader can still click through to the chart.
+
+        Every failure is swallowed and reported nowhere but the return value: an
+        evidence store never costs the event it records, and there is nothing
+        here for it to cost anyway.
+        """
+        if item is None:
+            item = self.list.currentItem()
+        alert = item.data(_ALERT_ROLE) if item is not None else None
+        if alert is None:
+            return None
+        symbol = str(getattr(alert, "symbol", "") or "").strip().upper()
+        if not symbol:
+            return None
+        side = str(getattr(alert, "side", "") or "").strip().upper()
+        try:
+            from ui.annotations import verdicts
+
+            written = verdicts.record_like(
+                symbol=symbol,
+                side="SHORT" if side.startswith("SHORT") else "LONG",
+                surface=verdicts.SURFACE_M5_ALERT_BAR,
+                timeframe=str(getattr(alert, "timeframe", "") or "M5"),
+                **({} if self._annotations_path is None else {"path": self._annotations_path}),
+            )
+        except Exception:
+            return None
+        if written is not None:
+            self.likeRecorded.emit(alert)
+        return written
 
     def _refresh_title(self) -> None:
         n = self.list.count()

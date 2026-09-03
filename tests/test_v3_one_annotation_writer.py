@@ -3,16 +3,20 @@
 Decision 0016 goal 2: *"teach the bot what the trader likes with ONE CLICK, from
 any screen."* P9 and P10 built that; this asserts the seams stayed closed.
 
-**What is measured rather than assumed.** P10 defined five `surface` values. Three
-are wired today - `master_avwap_setups`, `chart_review` and `rail` - because those
-are the screens that actually carry a like or a dislike gesture. `focus_panel` and
-`m5_alert_bar` are in the vocabulary and nothing writes them yet; the Focus
-panel's "Not today" IS the chart-review one, and the M5 alert bar's click-away is
-a review event and deliberately not an annotation (a click away is a pass and
-`review_learning` keys on `clicked_away_from_m5_alert`).
+**What is measured rather than assumed.** P10 defined five `surface` values and
+wired three. R4 A5 wired the last two, so all five now have a writer:
 
-That difference is reported here rather than papered over by inventing a gesture
-so a count comes out at five.
+* `master_avwap_setups` - the setups table's star and cross;
+* `chart_review` - the review pane's "Not today", and the capture rail hosted on
+  a chart-review screen, which now calls the `surface` override that
+  `set_scan_context` has carried since P10 B1 and that no host ever used;
+* `rail` - the rail standing on its own;
+* `focus_panel` - the Focus chip's right-click Like / Not today (R4 A5);
+* `m5_alert_bar` - the bar row's right-click quick like (R4 A5).
+
+The M5 bar's click-AWAY is still a review event and deliberately not an
+annotation: a click away is a pass and `review_learning` keys on
+`clicked_away_from_m5_alert`. What R4 added is a separate, explicit verb.
 """
 
 from __future__ import annotations
@@ -29,7 +33,13 @@ if str(ROOT / "scripts") not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 #: The surfaces that actually write today. Not the vocabulary - the callers.
-WIRED_SURFACES = ("master_avwap_setups", "chart_review", "rail")
+WIRED_SURFACES = (
+    "master_avwap_setups",
+    "chart_review",
+    "rail",
+    "focus_panel",
+    "m5_alert_bar",
+)
 
 
 def _rows(path: Path) -> list[dict]:
@@ -79,28 +89,37 @@ def test_the_rails_veto_carries_a_surface_like_its_like_does(tmp_path):
     assert 'common.setdefault("scan_context"' in record
 
 
-def test_the_three_wired_surfaces_are_the_ones_with_a_gesture():
-    """Measured, not assumed - and the two unwired ones are named, not hidden."""
+def test_every_declared_surface_has_a_gesture_that_writes_it():
+    """Measured, not assumed. R4 A5 closed the last two.
+
+    A surface in the vocabulary with no writer is a column that can never be
+    populated, and a rollup over it reads as "the trader never judges from that
+    screen" rather than as "nobody wired it".
+    """
     from ui.annotations import verdicts
 
-    assert set(WIRED_SURFACES) <= set(verdicts.SURFACES)
+    assert set(WIRED_SURFACES) == set(verdicts.SURFACES)
 
     wired = set()
     for path, surface in (
         ("scripts/ui/panels/master_avwap_panel.py", "SURFACE_MASTER_AVWAP"),
         ("scripts/ui/panels/alert_center_panel.py", "SURFACE_CHART_REVIEW"),
         ("scripts/ui/widgets/capture_rail.py", "SURFACE_RAIL"),
+        ("scripts/ui/panels/focus_picks_panel.py", "SURFACE_FOCUS_PANEL"),
+        ("scripts/ui/widgets/m5_alert_bar.py", "SURFACE_M5_ALERT_BAR"),
     ):
         text = (ROOT / path).read_text(encoding="utf-8")
         if surface in text or "record_not_today" in text or "self._surface" in text:
             wired.add(surface)
-    assert len(wired) == 3, wired
+    assert len(wired) == 5, wired
 
-    # And the two that are not wired are not wired by accident: the Focus panel's
-    # "Not today" IS the chart-review one, and the M5 alert bar's click-away is a
-    # review event that `review_learning` keys on by name.
-    assert verdicts.SURFACE_FOCUS_PANEL in verdicts.SURFACES
-    assert verdicts.SURFACE_M5_ALERT_BAR in verdicts.SURFACES
+    # And the chart-review OVERRIDE is called by the hosts that are that screen.
+    for host in (
+        "scripts/ui/widgets/alert_chart_review.py",
+        "scripts/ui/panels/chart_review_panel.py",
+    ):
+        text = (ROOT / host).read_text(encoding="utf-8")
+        assert "set_scan_context(surface=SURFACE_CHART_REVIEW)" in text, host
 
 
 # ---------------------------------------------------------------------------

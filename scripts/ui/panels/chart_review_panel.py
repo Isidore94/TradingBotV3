@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 
 from project_paths import MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
 from ui import theme
+from ui.annotations.store import SURFACE_CHART_REVIEW
 from ui.services.symbol_lookup import RecentLookups, normalize_symbol
 from ui.timer_utils import start_staggered
 from ui.widgets.capture_rail import CaptureRail
@@ -233,6 +234,11 @@ class ChartReviewPanel(QFrame):
         self._setups_bridge.ready.connect(self._on_setups_summary)
 
         self.capture_rail = CaptureRail(annotations_path=annotations_path)
+        # R4 A5: the workspace is the screen the trader clicked on. See the same
+        # line in `alert_chart_review.py` - the override existed and no host
+        # used it, so a chart-review verdict was indistinguishable from one
+        # typed on the rail itself.
+        self.capture_rail.set_scan_context(surface=SURFACE_CHART_REVIEW)
         self._build()
         self._bind_shortcuts()
         self._render_recents()

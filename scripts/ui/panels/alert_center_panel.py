@@ -5207,40 +5207,43 @@ class AlertCenterPanel(QFrame):
             return
         if written is None:
             return
-        # DEFERRED, exactly as the Master AVWAP prompt is and for the same three
-        # reasons: a modal opened inside the handler never returns in a headless
-        # test, the queue advance must finish first, and A2 asks that the box not
-        # block the 60 s poll.
+        # LAST, and asynchronous - exactly as the Master AVWAP prompt is, and
+        # for the same three reasons: a BLOCKING modal opened inside the handler
+        # never returns in a headless test, the queue advance must finish first,
+        # and A2 asks that the box not block the 60 s poll. (R4 A6: the word
+        # was "DEFERRED", which claimed a later turn of the event loop this call
+        # never takes.)
         self._prompt_for_not_today_note(written)
 
     def _prompt_for_not_today_note(self, written: dict) -> None:
-        """The note box. Optional, MODELESS, and it never blocks the queue.
+        """The note box. Optional, WINDOW-MODAL, and it never blocks the queue.
 
+        R4 A6 corrected "MODELESS" here: `QDialog.open()` shows the dialog
+        window-modal. The property that matters is that it does not BLOCK.
         `QInputDialog.getMultiLineText` runs a nested event loop and does not
         return until the trader answers. That would sit between the "Not today"
         click and the review queue advancing - and in a headless test it never
         returns at all, so every existing test that clicks this button would HANG
-        rather than fail. `open()` shows the same dialog and returns immediately.
+        rather than fail.
+
+        Enter saves and Shift+Enter makes a newline (R4 A6), through the one
+        helper both note boxes on the desk now use.
         """
         try:
-            from PySide6.QtWidgets import QInputDialog
+            from ui.widgets.note_prompt import open_note_prompt
 
-            dialog = QInputDialog(self)
-            dialog.setInputMode(QInputDialog.TextInput)
-            dialog.setOption(QInputDialog.UsePlainTextEditForTextInput, True)
-            dialog.setWindowTitle(f"Not today: {written.get('symbol', '')}")
-            dialog.setLabelText(
-                "Add a note if you want one - it is optional, and the click is "
-                "already saved either way."
+            # Held until it closes: a dialog with no reference is garbage the
+            # moment this method returns.
+            self._not_today_note_dialog = open_note_prompt(
+                self,
+                title=f"Not today: {written.get('symbol', '')}",
+                label=(
+                    "Add a note if you want one - it is optional, and the click "
+                    "is already saved either way. Enter saves; Shift+Enter "
+                    "starts a new line."
+                ),
+                on_text=lambda text, row=written: self._save_not_today_note(row, text),
             )
-            dialog.setAttribute(Qt.WA_DeleteOnClose, True)
-            dialog.textValueSelected.connect(
-                lambda text, row=written: self._save_not_today_note(row, text)
-            )
-            # Held until it closes: a modeless dialog with no reference is
-            # garbage the moment this method returns.
-            self._not_today_note_dialog = dialog
-            dialog.open()
         except Exception:
             return
 

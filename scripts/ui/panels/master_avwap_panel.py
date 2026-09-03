@@ -1265,14 +1265,16 @@ class MasterAvwapPanel(QWidget):
             return
         if written is None or reason_code:
             return
-        # DEFERRED to the next turn of the event loop, never opened inside the
-        # click. Three reasons, and the first is the one that bit: a modal opened
-        # synchronously inside a handler never returns in a headless test, so
-        # every existing test that clicks a star or a "Not today" would hang
-        # forever rather than fail. Second, the click's own work - the Focus
-        # placement, the review event, the status line - finishes first, so a
-        # dialog can never sit between two halves of one action. Third, A2 asks
-        # that the box not block the 60 s poll.
+        # LAST, and asynchronous - which is not the same as deferred (R4 A6
+        # corrected this comment, which claimed the call was on a later turn of
+        # the event loop; it is not, it is the last statement of this handler).
+        # What matters is that `open()` does not block: a modal opened with
+        # `exec()` inside a handler never returns in a headless test, so every
+        # existing test that clicks a star or a "Not today" would hang forever
+        # rather than fail. The click's own work - the Focus placement, the
+        # review event, the status line - is already finished above, so the
+        # dialog can never sit between two halves of one action, and A2's rule
+        # that the box must not block the 60 s poll holds.
         self._prompt_for_verdict_note(written)
 
     def _prompt_for_verdict_note(self, written: dict) -> None:
@@ -1281,33 +1283,38 @@ class MasterAvwapPanel(QWidget):
         Trader: *"I SHOULD get a little pop-up that lets me write a note if I am
         not using the quick buttons. same if I like a stock."*
 
-        **MODELESS.** `QInputDialog.getMultiLineText` runs a nested event loop
-        and does not return until the trader answers, which is wrong twice over:
-        it stops the click's own work finishing, and in a headless test it never
-        returns at all - so every existing test that clicks a star would HANG
-        rather than fail. `open()` shows the same dialog and returns immediately,
-        delivering the answer through a signal.
+        **WINDOW-MODAL and ASYNCHRONOUS** - R4 A6 corrected this docstring, which
+        said MODELESS. `QDialog.open()` shows the dialog window-modal; what it
+        does not do is block, which is the property this needs.
+        `QInputDialog.getMultiLineText` runs a nested event loop and does not
+        return until the trader answers, which is wrong twice over: it stops the
+        click's own work finishing, and in a headless test it never returns at
+        all - so every existing test that clicks a star would HANG rather than
+        fail. `open()` shows the same dialog and returns immediately, delivering
+        the answer through a signal.
+
+        **Enter saves and Shift+Enter makes a newline** (R4 A6). The plain-text
+        mode that makes the box multi-line also hands Return to the editor, so
+        Enter used to insert a newline and the only way to save was the mouse.
 
         Empty or cancelled writes nothing, and the click already counted.
         """
+        from ui.widgets.note_prompt import open_note_prompt
+
         symbol = str(written.get("symbol") or "")
         verb = "Liked" if written.get("event_type") == "like_claim" else "Disliked"
-        dialog = QInputDialog(self)
-        dialog.setInputMode(QInputDialog.TextInput)
-        dialog.setOption(QInputDialog.UsePlainTextEditForTextInput, True)
-        dialog.setWindowTitle(f"{verb} {symbol}")
-        dialog.setLabelText(
-            f"{verb} {symbol}. Add a note if you want one - it is optional, and "
-            "the click is already saved either way."
+        # Kept alive until it closes: a dialog with no reference is garbage the
+        # moment this method returns.
+        self._verdict_note_dialog = open_note_prompt(
+            self,
+            title=f"{verb} {symbol}",
+            label=(
+                f"{verb} {symbol}. Add a note if you want one - it is optional, "
+                "and the click is already saved either way. Enter saves; "
+                "Shift+Enter starts a new line."
+            ),
+            on_text=lambda text, row=written: self._save_verdict_note(row, text),
         )
-        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
-        dialog.textValueSelected.connect(
-            lambda text, row=written: self._save_verdict_note(row, text)
-        )
-        # Kept alive until it closes: a modeless dialog with no reference is
-        # garbage the moment this method returns.
-        self._verdict_note_dialog = dialog
-        dialog.open()
 
     def _save_verdict_note(self, written: dict, note: str) -> None:
         """The note row. Swallowed on failure, like every capture on this panel."""
