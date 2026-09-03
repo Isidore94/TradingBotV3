@@ -596,3 +596,49 @@ processed by the bot eventually."*
 Everything in this file's hard boundary holds unchanged. Nothing written here
 mutes, suppresses, scores, gates, ranks or alerts, and `review_policy.json` still
 has no suppression field.
+
+
+## S1 (2026-09-03) — a verb writes at once, and the chart waits for the words
+
+Trader, 2026-09-03: *"when I hit like or not today or anything, it should keep
+the chart up UNTIL I finish typing"*, and *"when I hit something in the capture
+tab such as veto, or like and claim etc that is sufficient reason enough - these
+are quick buttons to get a note in essentially and do NOT require a pop up
+note."*
+
+**No capture verb opens a dialog.** Three routes did, and each wrote nothing
+until answered: the claimed like's required why (R9.2(a), 2026-08-22), the
+quick-like BUTTON's `QInputDialog` (P9, 2026-09-02), and the Master AVWAP ✕'s
+reason picklist plus detail box. All three now write on the click. **R9.2(a)'s
+required why is superseded for the claimed path as well as the quick one**: the
+claim is the whole requirement, an empty why is recorded as nothing, and
+`_prompt_for_why` is gone.
+
+**The ✕'s rejection is UNCODED with `reason` present and empty.** Cohort identity
+on write is `(vocab_version, reason_code)` and rows are never rewritten, so a
+code the trader did not choose would enter a cohort it was never part of. An
+uncoded veto is a shape this stream already carries and `veto_uncoded` already
+grades. The rejection lane (`focus__swing_dislike`) is untouched, and the
+trader's free-text reason is still carried verbatim and never coded by machine.
+
+**A VETO and a LIKE retire the chart ON ENTER after the click.** The verdict row,
+`like_advance`, "reviewed today" and the cohort merge all still happen on the
+click — deferring the WRITE would make the trader's typing a precondition of
+their judgement being recorded, which is the failure this packet is about. Only
+`removeTodayRequested` / `likeAdvanceRequested` wait, for Enter or Escape in the
+rail's inline note field. Enter with a typed line writes ONE `note` row and then
+retires; Enter on an empty field or Escape retires and writes nothing; a note
+write that fails still retires. A NOTE and a day-trade PASS are unchanged: they
+write and never retire.
+
+**The follow-up note is joined by `supersedes`, the id the verdict row already
+carries.** Schema stays 1, the key is additive, and its ABSENCE on an older note
+means "not a follow-up". No second opportunity id is invented — plan.md P5.3/P5.4
+own that. `pick_feedback._ANNOTATION_DECISIONS` is unchanged, so nothing that
+counts verdicts starts counting a follow-up note as one.
+
+**A click away is still a SKIP.** The waiting chart retires with nothing extra
+written, and `clicked_away_from_m5_alert` is not renamed.
+
+Still analysis-only: nothing here mutes, suppresses, scores, gates, ranks or
+alerts, and `review_policy.json` still has no suppression field.

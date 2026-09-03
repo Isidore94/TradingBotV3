@@ -140,6 +140,21 @@ which is evidence and must not be loaded as context.
   test proves every rail shortcut is panel-scoped, bound once, and not owned
   inside a hidden tab — a QShortcut in a hidden tab never fires, and two bindings
   for one sequence fire NEITHER.
+- **The Strength column is ONE surface, every section open** (S1.3,
+  2026-09-03). Four `CollapsibleSection`s in reading order - Focus Strength, the
+  RS/RW Board, the M5 Strength Board and the RS Window moved off the setups
+  column's tabs - inside one column-wide `QScrollArea` that scrolls vertically
+  and never horizontally. Every body goes through
+  `alert_center_panel._strength_section_body`, so no board's minimum reaches the
+  splitter and the alert column's floor is unchanged at **932 px, measured**. The
+  `tabs_row` boundary's handle went from Qt's default **4 px to 8**, a failed
+  `desk_layout.persist_sizes` save is logged instead of swallowed, and a restored
+  split has always counted as user-set from the first paint (now asserted).
+- **A Master AVWAP ticker click charts in the review pane** (S1.4, 2026-09-03).
+  `MasterAvwapPanel.symbolActivated(symbol, side)` -> `chart_symbol`, the lookup
+  box's door, never `_enqueue_review_alert`; the Alert Center tab is raised in
+  tabs mode; the snapshot dialog stays on the row menu and on every non-ticker
+  cell's double-click; star / X are excluded and one double-click charts once.
 - **The Strength Board IS the trader's TC2000 scan** (V1, 2026-09-02, decision
   0016 answer 9; corrected by R4 A7/A8). Relative volume is
   `AVG(V / mean(V at the same bar offset over the prior 15 sessions), 12)` -
@@ -690,9 +705,27 @@ which is evidence and must not be loaded as context.
 - **`note_vocabulary_audit`** (P10 A4): a deterministic nightly slot listing the
   day's notes beside the vocabulary that exists. It proposes no code and adds
   none - a vocabulary code is permanent and never reused.
+- **A CAPTURE VERB IS A QUICK BUTTON: it writes at once and opens nothing**
+  (S1.1, 2026-09-03). No route on the rail or the setups table constructs a
+  `QInputDialog` any more. `commit_like` accepts an EMPTY why - the claim is the
+  whole requirement, superseding R9.2(a) for the claimed path as P9 did for the
+  quick one - `prompt_quick_like` is an alias for `commit_quick_like` so both
+  quick-like buttons match Alt+L, and the Master AVWAP **X** writes the rejection
+  at once, UNCODED, with `reason` present and empty (a code the trader did not
+  choose would land in a cohort it was never part of, and rows are never
+  rewritten). The **star** keeps its R4 A6 note box; the X does not, because
+  S1.4 gives it a chart to type on.
+- **A RETIRING VERB HOLDS THE CHART UNTIL THE TRADER PRESSES ENTER** (S1.2,
+  2026-09-03). The verdict row, `like_advance`, "reviewed today" and the cohort
+  merge all still happen ON THE CLICK; only `removeTodayRequested` /
+  `likeAdvanceRequested` wait. Enter with a typed line writes ONE additive `note`
+  row carrying `supersedes` - the id the verdict row already has, never a second
+  opportunity id - then retires; Enter on an empty field or Escape retires and
+  writes nothing; a failed note write still retires. A click away is still a
+  SKIP. A note and a day-trade pass still never retire.
 - **A LIKE has two modes** (P9, 2026-09-02). **Alt+L** writes a QUICK like -
   `like_mode: "quick"`, no claimed setup, no why - and **Alt+K** the claimed one,
-  which still requires both. A quick like retires the chart, records
+  which still names its setup (S1.1 removed its why requirement). A quick like retires the chart, records
   `like_advance` and marks the symbol reviewed exactly as a claimed one does, and
   **places nothing**: a like carries zero privileges (plan.md P3.1). It grades
   under `like_unclaimed`, saves the M5 sidecar on an M5 chart through the writer
@@ -1299,6 +1332,44 @@ failures**, with the `ai_jobs_runner` lock FREE and re-checked immediately befor
 run · `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix:
 **all 11** new narration tests fail against the un-fixed tree, and the two synthesis
 tests fail against theirs. No packaging trigger.
+### 2026-09-03 - Packet S1: quick verbs, a chart that waits, one Strength tab
+
+Four trader asks of that morning, quoted verbatim in
+[`docs/DESK_INTERNALS.md`](docs/DESK_INTERNALS.md) with the rules each one
+supersedes. Built against 21 tests the `tester` agent committed red first.
+
+**S1.1 - no capture verb opens a dialog.** Three routes stopped and asked and
+wrote nothing until answered: the claimed like's required why, the quick-like
+BUTTON's `QInputDialog`, and the setups table's X with its picklist and detail
+box. All three now write on the click. The X's rejection is uncoded with `reason`
+present and empty - a guessed code would enter a cohort it was never part of, and
+`(vocab_version, reason_code)` identity is fixed at write time. `_prompt_for_why`
+had no other caller and is gone.
+
+**S1.2 - the chart stays up until the trader finishes typing.** The row, the
+review event and the cohort merge stay on the click; the retire waits for Enter
+or Escape in the rail's note field. A typed line becomes one `note` row pointing
+at the verdict through the `supersedes` key it already carried. `_advance_after_like`
+gained the guard `_skip_review_alert` already had, because a deferred advance can
+now land after the trader has charted something else.
+
+**S1.3 - one Strength surface.** Four open sections in one scroll area, the RS
+Window moved out of the setups column, the boundary handle widened from 4 px to
+8, and a failed split save logged rather than swallowed. The panel's minimum
+width is unchanged at 932 px.
+
+**S1.4 - a setups ticker charts in the Visual Chart Review** instead of a popup,
+through `chart_symbol`.
+
+**S1.5 (test-only) - no test writes the trader's own decision stream.**
+`ui.annotations.verdicts` defaults to the live `trader_annotations.jsonl` and two
+hooks in `tests/test_review_events.py` reached it, writing rows 278 (NVDA) and
+279 (LNG) on 2026-09-02. An autouse fixture rebinds all four writers to a tmp
+path; the file reads 292 lines before and after. Two desk-building test files now
+disable `BouncePanel.start`, which had been connecting to the live TWS on 7496.
+
+**Live gate #53** is owed: one DESK session covering all four asks.
+
 ### 2026-09-02 - Phase 0.13 packet P9: quick like
 
 **Branch `claude/p9-quick-like`, off `main` at `13cbc50`.** Live gate #39 owed.

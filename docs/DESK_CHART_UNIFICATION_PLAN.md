@@ -311,3 +311,33 @@ ranking or invent a queue the trader never asked for. §2.1's CaptureRail alread
 delivered what §2 was for — capture on every chart-opening surface. Reopening
 this needs a trader statement that they want a queue over the boards, which is a
 workflow decision, not a wiring one.
+
+
+## S1.4 (2026-09-03) — a Master AVWAP ticker click charts in the review pane
+
+Trader, 2026-09-03: *"when I hit a ticker on the master avwap setups tab, I dont
+want the chart to be a pop up, I want it to come up on the visual chart review
+instead."*
+
+`MasterAvwapPanel` emits `symbolActivated(symbol, side)` — the same signal name
+and shape the group tape strip and the M5 Strength Board already use — on a
+single click and on a double-click of the SYMBOL cell. The desk routes it to
+`AlertCenterPanel.chart_symbol`, **the lookup box's door**, with
+`origin="the Master AVWAP setups table"`. Never `_enqueue_review_alert`, the
+scanner's door, which drops in AWAY, drops parked symbols, diverts M5 to the
+alert bar and can hide a row behind movers-only; a deliberate look at a name is
+none of those things.
+
+* Qt sends `clicked` then `doubleClicked` for one gesture, so a second activation
+  of the same ticker inside 400 ms is dropped — charting is an off-thread
+  snapshot rebuild and doing it twice buys nothing.
+* In **tabs** mode the Alert Center tab is raised: a chart the trader cannot see
+  is the same as no chart at all. In workspace mode both columns are already on
+  screen and nothing is raised.
+* **Nothing is deleted.** `show_symbol_snapshot` leaves the click path only; the
+  dialog stays on the row menu as "D1+M5 Snapshot Chart" and on every non-ticker
+  cell's double-click. The ★ and ✕ cells keep their own verbs and never chart.
+
+This completes what §2 of this plan was for on the setups table: capture and the
+chart on the surface the trader is already looking at, rather than over the top
+of it.

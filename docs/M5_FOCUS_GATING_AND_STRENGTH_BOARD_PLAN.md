@@ -709,3 +709,46 @@ pins strength and RVOL for five symbols over sixteen sessions, and its expected
 values are computed by a SECOND naive implementation written from the trader's
 two formula lines rather than from the module under test. All five agree to four
 decimals.
+
+
+## S1.3 (2026-09-03) — the Strength column is ONE surface and it all starts open
+
+Trader, 2026-09-03: *"lets revamp the strength tab to just include all of that
+great information into one tab. also make that tab resizable horizontally so I
+can compress the capture/journal tab a bit and see more of the strength tab."*
+
+`strength_column` is now a single scrolled surface of FOUR `CollapsibleSection`s,
+every one starting OPEN, in reading order:
+
+1. **Focus Strength** — the `FocusStrengthBoard`, which had been the one strength
+   widget in no section at all, so it could neither be closed nor scroll with the
+   rest;
+2. **RS/RW Board** — V1's rule survives inside the new surface: RS/RW above M5
+   Strength, because the trader was opening one by accident while looking for the
+   other;
+3. **M5 Strength Board (TC2000)** — **this now starts OPEN.** It started closed
+   to protect the alert column's 360 px floor; the column-wide scroll area
+   carries that protection instead;
+4. **RS Window** — moved out of the setups column's `MasterAvwapWorkspace` tabs,
+   where it lived because nothing else was there. The widget moves, so its
+   `rrsSnapshotChanged` wiring is untouched and it still answers its own
+   question: who led over the SELECTED WINDOW at scan time.
+
+**How the floor is kept.** All four bodies go through
+`alert_center_panel._strength_section_body`, a `QScrollArea` whose own minimum is
+what reaches the splitter. Measured after the change the panel's minimum width is
+**unchanged at 932 px**. Each body keeps its own horizontal scrollbar because the
+column scrolls vertically and never horizontally — the RS Window's own minimum
+width is **1,612 px**, so without one it would simply be clipped with no way to
+reach the rest. That is the 452 px lesson applied four times instead of twice.
+
+**The boundary.** `tabs_row` (`ALERT_TABS_SPLIT_KEY`) was already draggable and
+persisted, and a drag does hold. What was wrong: its handle was Qt's **default
+4 px** (`theme.qss` colours `QSplitter::handle` and never sizes it), now **8**;
+and `desk_layout.persist_sizes` swallowed `OSError`, so a settings file the desk
+could not write looked exactly like a saved split — a failed save is now logged.
+`_PresetTracker` already counted a RESTORED split as user-set from the first
+paint, which is what stops the next resize scaling the 60/40 preset over
+yesterday's drag; nothing asserted it, and a test does now.
+
+Live gate **#53** covers all of it, including that the width survives a restart.

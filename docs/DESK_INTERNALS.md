@@ -715,3 +715,154 @@ meanings will pick the flattering one.
 **A segment the learning state has never seen is BLANK, not "active".** "Not
 tracked" and "tracked and unremarkable" are different facts - live, 104 of 295
 rows are the first and 185 the second.
+
+## S1 - the trader's four asks of 2026-09-03
+
+Quoted in full, because they supersede four rules that were each written from an
+earlier instruction and each cite a trader quote of their own:
+
+> 1. when I hit like or not today or anything, it should keep the chart up UNTIL
+>    I finish typing.
+> 2. when I hit something in the capture tab such as veto, or like and claim etc
+>    that is sufficient reason enough - these are quick buttons to get a note in
+>    essentially and do NOT require a pop up note.
+> 3. lets revamp the strength tab to just include all of that great information
+>    into one tab. also make that tab resizable horizontally so I can compress
+>    the capture/journal tab a bit and see more of the strength tab.
+> 4. when I hit a ticker on the master avwap setups tab, I dont want the chart to
+>    be a pop up, I want it to come up on the visual chart review instead.
+
+### Ask 2 - a quick button that stops to ask is not a quick button
+
+Three routes stopped and asked, and each of them wrote NOTHING until it was
+answered:
+
+* `CaptureRail.commit_like` REFUSED a claimed like whose why was empty. That rule
+  is R9.2(a), 2026-08-22, and it existed for a measured reason: the `dislike`
+  rows held 31 of the most information-dense strings the trader ever wrote,
+  captured under a field nothing insisted on, and discarded. Refusing the click
+  was one way to insist. It was also a way to lose the JUDGEMENT as well as the
+  sentence, which is strictly worse - a like with no why still says the trader
+  liked the chart, and that fact is what every cohort is built from.
+* `prompt_quick_like` - the route BOTH quick-like buttons use - opened a
+  `QInputDialog.getMultiLineText` and wrote after OK. That is the 2026-09-02
+  design, "the key is instant and the BUTTON prompts", and the trader has now
+  said the button should be instant too.
+* `MasterAvwapPanel._dislike_row` - the setups table's X - opened TWO modal
+  dialogs, a versioned reason picklist and a detail box, and wrote after both.
+
+**What replaces the insisting is ask 1.** The why is not gone; it has moved to
+after the click, where refusing it costs nothing. So the trader's prose is still
+collected and the judgement behind it can no longer be lost by an interruption.
+
+**The X's rejection is written UNCODED, with `reason` present and empty.** A code
+the trader did not choose would be worse than no code at all: cohort identity on
+write is `(vocab_version, reason_code)`, rows are never rewritten, and a guessed
+code would put the row in a cohort it was never part of. An uncoded veto is a
+shape the stream already carries and already grades (`veto_uncoded`), and the
+rejection lane (`focus__swing_dislike`) is untouched.
+
+**The X opens no note box either, and the star still does.** R4 A6's
+`open_note_prompt` is not a `QInputDialog` and does not block, so it would have
+passed every test - but a pop-up appearing on a click where none appeared before
+is the thing ask 2 names. The X has somewhere else to say it now (ask 4 charts
+that ticker in the review pane, where ask 1's field is waiting). The star does
+not, so it keeps its box.
+
+### Ask 1 - the row on the click, the retire on Enter
+
+The important thing this does NOT change: **the verdict row still reaches disk on
+the click.** So does `like_advance`, so does "reviewed today", and so does the
+cohort merge. An evidence store never costs the event it records, and deferring
+the WRITE would have made the trader's typing a precondition of their judgement
+being recorded - the exact failure ask 2 is about.
+
+What is deferred is the queue move: `removeTodayRequested` /
+`likeAdvanceRequested` out of `AlertChartReview._on_captured`. Enter with a typed
+line writes ONE `note` row and then retires; Enter on an empty field, or Escape,
+retires and writes nothing; a note write that fails still retires.
+
+**The follow-up note names the verdict through `supersedes`** - the id that row
+ALREADY carries (P10 A2's lineage key). No second opportunity id is invented;
+plan.md P5.3/P5.4 own that and a second one must never exist. The row is an
+ordinary `note`, so `pick_feedback._ANNOTATION_DECISIONS` is unchanged and
+nothing that counts verdicts starts counting a follow-up. Its ABSENCE on an older
+note means "not a follow-up", which is what makes the key additive at schema 1.
+
+**A click away is still a skip.** The chart being left retires with nothing extra
+written, `clicked_away_from_m5_alert` is not renamed, and the place-holder
+behaviour is untouched. This forced one guard: `_advance_after_like` advanced the
+queue unconditionally, and a deferred advance can now arrive AFTER the trader has
+charted something else - which would yank away the chart they just asked for. It
+now carries the same "is this still the current alert?" guard `_skip_review_alert`
+has always had, and that `_ignore_alert_symbol` applies on the veto side.
+
+**A second retiring verb on one chart re-arms the wait rather than retiring**,
+and the LAST verb decides the route. Two verdicts on one chart was already
+allowed; the trader's final word is the one that says what happens to it.
+
+### Ask 3 - one Strength surface, and a boundary that can be dragged
+
+The column held four things and only two of them could be closed: the
+`FocusStrengthBoard` sat above both `CollapsibleSection`s in no section at all.
+It is now the FIRST section, so "all of that great information in one tab" means
+it too, and the RS Window - which lived on the setups column's tabs because
+nothing else was there - is the fourth.
+
+**Every section starts open, and the column-wide scroll area is what pays for
+it.** The M5 Strength section started CLOSED to protect the alert column's 360 px
+floor. That protection moved up: all four bodies go through
+`_strength_section_body`, a `QScrollArea` whose own minimum is what reaches the
+splitter. Measured after the change, the panel's minimum is **unchanged at 932
+px**. Each body keeps its own horizontal scrollbar because the column scrolls
+vertically and never horizontally - and the RS Window's own minimum width is
+**1,612 px**, so without one it would simply have been clipped with no way to
+reach the rest of it. That is the 452 px lesson applied four times instead of
+twice.
+
+**Why the trader could not drag the boundary.** `tabs_row` is already a
+draggable, persisted splitter and a drag DOES hold - measured. Two things were
+wrong around it:
+
+* the handle was Qt's **default 4 px**. `theme.qss` colours `QSplitter::handle`
+  and never sizes it. Two pixels either side of a line is not a target for a drag
+  the trader wants to make routine; it is now **8**.
+* `persist_sizes` swallowed `OSError`, so a settings file the desk could not
+  write looked exactly like a split that had been saved. A layout that will not
+  survive a restart now says so in the log.
+
+`_PresetTracker` already treated a RESTORED split as user-set from the first
+paint - `_user_dragged = load_sizes(...) is not None` - which is what stops the
+next Resize scaling the 60/40 preset over the top of yesterday's drag. Nothing
+asserted it, so nothing would have caught its removal; there is a test now.
+
+### Ask 4 - the ticker charts where the trader is looking
+
+`MasterAvwapPanel` emits `symbolActivated(symbol, side)` - the same signal name
+and shape the group tape strip and the M5 Strength Board already use - and the
+desk routes it to `AlertCenterPanel.chart_symbol`, **the lookup box's door**. Not
+`_enqueue_review_alert`, the scanner's door, which drops in AWAY, drops parked
+symbols, diverts M5 to the alert bar and can hide a row behind movers-only. A
+deliberate look at a name is none of those things.
+
+Qt sends `clicked` and then `doubleClicked` for one double-click, so a second
+activation of the same ticker inside 400 ms is dropped: charting is an off-thread
+snapshot rebuild and doing it twice for one gesture buys nothing. In tabs mode
+the Alert Center tab is raised, because a chart the trader cannot see is the same
+as no chart at all. `show_symbol_snapshot` leaves the click path and stays one
+right-click away as "D1+M5 Snapshot Chart"; every other cell of the row still
+double-clicks to it.
+
+### S1.5 - and no test writes the trader's own decision stream
+
+Found by the tester rather than by the packet: `ui.annotations.verdicts` defaults
+every writer's `path` to the LIVE `trader_annotations.jsonl`, and two panel hooks
+driven by `tests/test_review_events.py` reached one - so a `veto` for NVDA (row
+278) and one for LNG (row 279) were written into the trader's own file on
+2026-09-02 at 21:07:55. The file is append-only by contract, so the code that
+wrote them cannot take them back out: they are the trader's to remove. The
+fixture that closes it is autouse and names all four writers, because the next
+hook added there would otherwise leak the same way. Separately,
+`BouncePanel.__init__` ends in `QTimer.singleShot(0, self.start)`, so two test
+files that built a `TradingDeskPanel` connected to the live TWS on 7496 at the
+first `processEvents`; both now disable it.

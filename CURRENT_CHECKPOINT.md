@@ -18,12 +18,12 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - Round **R4 is fully on `main`** as of 2026-09-03 ~08:00: Part A (`claude/r4-fixes`, 18 items + a 4-blocker fix round, reviewer GO) merged at `d0a0d49`; Part B (`claude/v3-keep-it-honest`, B1-B8, reviewer GO with no blockers) merged at `60b9d5b`; `claude/agent-team-2` (docs + the `tester` agent) merged at `3b5633c`. Every merge was made in a SCRATCH worktree per `docs/AGENT_TEAM.md` rule 6. **B3 is deliberately PARTIAL** - five swing surfaces wired, the Setup Tracker's Setup Types tab owed because `master_avwap_setup_type_stats.csv` carries no win column. Next packet is **V4** (see Active roadmap items) |
-| Also in flight | **NOTHING unmerged.** `claude/r4-fixes`, `claude/v3-keep-it-honest`, `claude/agent-team` and `claude/agent-team-2` are all CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch. R4's review advisories (Part A: 9 + 5, Part B: 9 - the Tier column's dead sort click, the pass/rejection tables ranking across horizons, two unjoined QThreads, the one-z guard's import-idiom gap, the compact-profile guard pinning one column, one tautological test, B6's flat half reaching no screen, the human-focus rollup's bare win rate) are batched for V4, not lost |
+| Working branch | **`claude/s1-quick-verbs`** - packet **S1** (the trader's four asks of 2026-09-03: quick verbs with no pop-up, a chart that waits until they have finished typing, one Strength tab, and a setups ticker click that charts in the review pane) is BUILT and pushed, NOT merged - the lead merges. It sits on `main` at `080495b`. Previously: Round **R4 is fully on `main`** as of 2026-09-03 ~08:00: Part A (`claude/r4-fixes`, 18 items + a 4-blocker fix round, reviewer GO) merged at `d0a0d49`; Part B (`claude/v3-keep-it-honest`, B1-B8, reviewer GO with no blockers) merged at `60b9d5b`; `claude/agent-team-2` (docs + the `tester` agent) merged at `3b5633c`. Every merge was made in a SCRATCH worktree per `docs/AGENT_TEAM.md` rule 6. **B3 is deliberately PARTIAL** - five swing surfaces wired, the Setup Tracker's Setup Types tab owed because `master_avwap_setup_type_stats.csv` carries no win column. Next packet is **V4** (see Active roadmap items) |
+| Also in flight | **`claude/s1-quick-verbs`** - tester's 21 red tests at `3b70d3d`, builder's work on top. **ONE test is deliberately still RED**: `test_s1_quick_verbs_strength_tab.py::test_the_strength_column_holds_three_sections_and_every_one_is_open` asserts `len(sections) == 3` and the shipped surface has FOUR, because the lead ruled that `FocusStrengthBoard` - the one strength widget that was in no section at all - becomes the first one. Not weakened; the lead decides. The shipped shape is asserted beside it in `test_s1_quick_verbs_builder.py`. Otherwise: **NOTHING unmerged.** `claude/r4-fixes`, `claude/v3-keep-it-honest`, `claude/agent-team` and `claude/agent-team-2` are all CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch. R4's review advisories (Part A: 9 + 5, Part B: 9 - the Tier column's dead sort click, the pass/rejection tables ranking across horizons, two unjoined QThreads, the one-z guard's import-idiom gap, the compact-profile guard pinning one column, one tautological test, B6's flat half reaching no screen, the human-focus rollup's bare win rate) are batched for V4, not lost |
 | Active roadmap items | **V4**, which owns: V1's item 4 (Working-lately + the priority switch, whose identical-visible-rows test is owed WITH the switch), V2's item 3 (the AWAY Recap rebuild), B3's last surface (the Setup Types tab - the fix is upstream: the tracker export must write a win column), the B3 feature means and family split in P10's `after_like` block, and the R4 review advisories listed under Also in flight. Live gates #29-#52 are owed across Phases 0.13 and 0.14 |
-| Last verified baseline | **`main` at the R4 merge tip, 2026-09-03 08:00-08:10, run in a SCRATCH worktree - THE NIGHTLY AI LOCK PROBED FREE IMMEDIATELY BEFORE AND AFTER THE RUN.** `pytest tests/ -q` with **NOTHING DESELECTED**: **6476 passed, 1 skipped, 72 subtests passed, process exit 0, ZERO failures, 6 min 56 s**. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger (R4 added only test modules and `ui/widgets/note_prompt.py`, inside a collected package). Previous: **6476** on `claude/v3-keep-it-honest` (Part B builder and reviewer, both lock-free), **6310** on `main` before R4 |
+| Last verified baseline | **`claude/s1-quick-verbs`, 2026-09-03, THE NIGHTLY AI LOCK PROBED FREE.** `pytest tests/ -q` with nothing deselected: **6519 passed, 1 failed (the `== 3` assertion above), 1 skipped, 72 subtests**, process exit 1 for that one test alone. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - **no packaging trigger** (S1 adds one test module and no dependency, asset, package or dynamic import). Previously: **`main` at the R4 merge tip, 2026-09-03 08:00-08:10, run in a SCRATCH worktree - THE NIGHTLY AI LOCK PROBED FREE IMMEDIATELY BEFORE AND AFTER THE RUN.** `pytest tests/ -q` with **NOTHING DESELECTED**: **6476 passed, 1 skipped, 72 subtests passed, process exit 0, ZERO failures, 6 min 56 s**. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger (R4 added only test modules and `ui/widgets/note_prompt.py`, inside a collected package). Previous: **6476** on `claude/v3-keep-it-honest` (Part B builder and reviewer, both lock-free), **6310** on `main` before R4 |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
-| Desk restart | **OWED - a restart onto `main`.** The desk is running the OLD `main` tip `93732ef` (started 2026-09-02 21:04, pid 11612 under trampoline 7192), which predates every R4 commit, so **none of R4 is on the desk**: not the session-relative RVOL, not the tracker join, not the digest ranking, not the five win-rate surfaces, not the Market Journal page, not the pass surface stamp. The desk checkout is on `main` and is fast-forwarded to the merged tip; `trading_desk.cmd` launches source, so the next restart picks it up. The restart is the trader's call and the lead never performs it |
+| Desk restart | **OWED - a restart onto `main`, and S1 needs one too.** Nothing in S1 reaches the desk until it is merged and the desk restarts. Previously: **a restart onto `main`.** The desk is running the OLD `main` tip `93732ef` (started 2026-09-02 21:04, pid 11612 under trampoline 7192), which predates every R4 commit, so **none of R4 is on the desk**: not the session-relative RVOL, not the tracker join, not the digest ranking, not the five win-rate surfaces, not the Market Journal page, not the pass surface stamp. The desk checkout is on `main` and is fast-forwarded to the merged tip; `trading_desk.cmd` launches source, so the next restart picks it up. The restart is the trader's call and the lead never performs it |
 
 ### Open gates, newest first
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 53 | **The quick verbs and the one Strength tab (S1)** - one DESK session where: a veto click LEAVES THE CHART UP and a typed line + Enter lands as a `note` row whose `supersedes` is that veto's `event_id`, then advances; Enter on an empty field advances and writes nothing; a claimed like with no why commits; the quick-like button opens nothing; the Master AVWAP X records a rejection with no pop-up at all; a Master AVWAP ticker click charts in the Visual Chart Review with no pop-up; and the Strength tab shows FOUR open sections (Focus Strength, RS/RW, M5 Strength, RS Window), can be dragged wider at the Capture/Journal tabs' expense, and **the width survives a restart** | 2026-09-03 S1 entry |
 | 52 | **The surfaces say what they measure (R4 Part B)** - one DESK session and one Weekend Prep open where: the Master AVWAP setups table shows a **Family Win %** cell reading `NN% (>=NN%, n=NNN)` and sorting by the bound, not the rate; the Setup Playbook shows a **Record:** line under a setup and it matches the AWAY digest's ordering for that family; the Daytrade Tracker shows a **Tier** column (PROVEN / MUTED / active / blank) beside **Verdict (edge score)**, and My Decisions carries Held 30m; the Weekend Prep verdict card's research line names a real cell count instead of "no cell has cleared the evidence floor"; the week summary header says **sessions**; and one day-trade PASS recorded from the chart lands in `trader_annotations.jsonl` **with a `surface`** | 2026-09-03 R4 Part B entry |
 | 51 | **The corrected numbers, on the desk (R4 Part A)** - one DESK session and one Weekend Prep open where: the Strength Board's RVOL column is populated on a day the window contains a half day (the number must not jump when one does); the Day Trade Tracker's Held 30m / Held x Ran are filled on the FOUR tabs the outcome log can answer - Bounce Types, Combos, Time of Day, Environment - and BLANK on the four Swing tabs and on RRS (which is reachable and simply not derived yet); an M5 alert row shows "held NN% / ran N.NR" or nothing; the AWAY digest's swing list is ordered with a near-bucket pick above a favorite at least once; the Weekend Prep verdict card's take rate is NOT 100%; and one Market Journal note typed after the close files against TODAY with "written after the session" on it | 2026-09-02 R4 Part A entry |
 | 50 | **The headline statistics agree (V3)** - one DESK session and one Weekend Prep open where every named surface shows the headline first (win rate on swings, Held x Ran on day trades), the sorts agree with it, and the Day Trade Tracker opens on Held x Ran descending | 2026-09-02 V3 entry |
@@ -86,6 +87,78 @@ the dated entry named beside it.
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
+
+### 2026-09-03 - Packet S1: quick verbs, a chart that waits, one Strength tab
+
+Branch `claude/s1-quick-verbs` off `main` at `080495b`. The `tester` agent
+committed 21 red tests and 7 green guards first (`3b70d3d`); the builder made
+them pass without weakening one. The trader's four asks are quoted verbatim in
+[`docs/DESK_INTERNALS.md`](docs/DESK_INTERNALS.md), with the rule each one
+supersedes named beside it.
+
+**S1.1 - no capture verb opens a dialog.** `commit_like` accepts an empty why
+(the claim is the whole requirement; `_prompt_for_why` had no other caller and is
+gone); `prompt_quick_like` is an alias for `commit_quick_like`, so both
+quick-like buttons match Alt+L; `MasterAvwapPanel._dislike_row` writes the
+rejection at once, uncoded, `reason` present and empty, and opens neither the
+picklist, the detail box nor R4 A6's note box. The star keeps its box.
+
+**S1.2 - the chart waits until the trader has finished typing.** The verdict row,
+`like_advance`, "reviewed today" and the cohort merge all stay on the CLICK. Only
+`removeTodayRequested` / `likeAdvanceRequested` are deferred, to Enter or Escape
+in the rail's note field. A typed line writes one `note` row carrying
+`supersedes` - the id the verdict row already had. A failed note write still
+retires. A click away is still a skip and still retires the chart it left.
+`_advance_after_like` gained the current-alert guard `_skip_review_alert` already
+had, because a deferred advance can now arrive after the trader has charted
+something else.
+
+**S1.3 - one Strength surface.** Four sections, all open (Focus Strength, RS/RW
+Board, M5 Strength Board, RS Window - the last moved off the setups column's
+tabs), in ONE column-wide scroll area that scrolls vertically and never
+horizontally. Every body goes through `_strength_section_body`, so no board's
+minimum reaches the splitter: the panel's minimum is **unchanged at 932 px,
+measured**. The `tabs_row` handle went from Qt's default **4 px to 8**;
+`persist_sizes` logs a failed save; `_PresetTracker`'s "a restored split is
+user-set from the first paint" is now asserted, which is the trader's actual
+symptom ("the width does not survive a restart").
+
+**S1.4 - a setups ticker charts in the review pane.**
+`MasterAvwapPanel.symbolActivated(symbol, side)` -> `chart_symbol`, never
+`_enqueue_review_alert`; the Alert Center tab is raised in tabs mode; the
+snapshot dialog stays on the row menu and on every non-ticker cell.
+
+**S1.5 (test-only, added by the lead) - no test writes the trader's own decision
+stream.** `ui.annotations.verdicts` defaults to the live
+`trader_annotations.jsonl`; two hooks driven by `tests/test_review_events.py`
+reached it and had written rows **278 (NVDA)** and **279 (LNG)**, both
+2026-09-02T21:07:55. An autouse fixture rebinds all four writers to a tmp path -
+the live file reads 292 lines before and after the run. **The two rows already
+written are the trader's to remove**; an append-only store cannot be edited by
+the code that wrote them. Two desk-building test files now disable
+`BouncePanel.start`, which had been connecting to the live TWS on 7496.
+
+**Deliberately still RED:**
+`test_s1_quick_verbs_strength_tab.py::test_the_strength_column_holds_three_sections_and_every_one_is_open`
+asserts `len(sections) == 3`. The tester wrote it before the lead ruled that
+`FocusStrengthBoard` becomes the FIRST section, so the shipped surface has four.
+Left red rather than weakened; `test_s1_quick_verbs_builder.py` states the
+shipped shape beside it so the disagreement is on the record.
+
+**Superseded rules, all four with their own trader quote behind them:** R9.2(a)'s
+required why (2026-08-22) for the claimed path as well as the quick one; P9's
+"the key is instant and the BUTTON prompts" (2026-09-02); CLAUDE.md's "a VETO and
+a LIKE each retire the chart" (now: on Enter after the click); V1's "M5 Strength
+starts closed" (2026-09-02). Thirteen pre-S1 tests that encoded the old contract
+were updated, each keeping its subject and naming the instruction that replaced
+its old one.
+
+**Verification, lock probed FREE immediately before:** `pytest tests/ -q` nothing
+deselected - 6519 passed, 1 failed (the `== 3` above), 1 skipped, 72 subtests,
+process exit 1 for that one test alone. `ruff` clean. `smoke_check.py` 7/7.
+`launch_gui.py --selftest` 74/74. **No packaging trigger.**
+
+**Live gate #53 owed.** Not merged - the lead merges.
 
 ### 2026-09-03 - Round R4 Part B: the surfaces the packets promised
 

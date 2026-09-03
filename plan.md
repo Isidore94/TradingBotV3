@@ -811,6 +811,35 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+## Phase 0.15 — Packet S1: quick verbs (trader instruction 2026-09-03)
+
+**Authorized by the trader on 2026-09-03**, in four sentences quoted verbatim in
+`.claude/packets/S1.md` and in `docs/DESK_INTERNALS.md`. **BUILT** on
+`claude/s1-quick-verbs`, not merged — the lead merges. Live gate **#53** owed.
+
+| Item | State |
+|---|---|
+| S1.1 no capture verb opens a dialog | **BUILT**. `commit_like` accepts an empty why (R9.2(a) superseded for the claimed path, as P9 superseded it for the quick one); `prompt_quick_like` is an alias for `commit_quick_like`; the Master AVWAP ✕ writes an UNCODED rejection with `reason` present and empty, and opens neither the picklist, the detail box nor R4 A6's note box. The ★ keeps its box — it has no other surface to type on |
+| S1.2 the chart waits until the trader finishes typing | **BUILT**. The verdict row, `like_advance`, "reviewed today" and the cohort merge stay ON THE CLICK; only `removeTodayRequested` / `likeAdvanceRequested` wait for Enter or Escape. A typed line writes ONE additive `note` row carrying `supersedes` — the id the verdict row already had. **No second opportunity id was invented**; P5.3/P5.4 still own that |
+| S1.3 one Strength surface, draggable against the tabs | **BUILT**. Four open `CollapsibleSection`s in one column-wide scroll area; the RS Window moved off the setups column's tabs; the boundary handle 4 px → 8; a failed split save logged rather than swallowed. Alert-column floor unchanged at 932 px, measured |
+| S1.4 a setups ticker charts in the review pane | **BUILT**. `MasterAvwapPanel.symbolActivated` → `chart_symbol`, the Alert Center tab raised in tabs mode, the snapshot dialog kept on the row menu |
+| S1.5 no test writes the live decision stream | **BUILT (test-only)**. An autouse fixture in `tests/test_review_events.py` rebinds every `ui.annotations.verdicts` writer to a tmp path; two desk-building test files stop connecting to the live TWS on 7496 |
+
+**One test is deliberately RED**:
+`test_s1_quick_verbs_strength_tab.py::test_the_strength_column_holds_three_sections_and_every_one_is_open`
+asserts three sections and the shipped surface has four, because the lead ruled
+after the tests were written that `FocusStrengthBoard` becomes the first section.
+It is left as the tester wrote it; the shipped shape is asserted separately.
+
+Nothing in this packet reaches a detector, score, gate, alert generator,
+watchlist, Focus list, review queue or `review_policy.json`. `trader_annotations`
+stays schema 1 and the new key is additive; an ABSENT `supersedes` on a note
+means "not a follow-up". `bounce_bot_lib/*`, `legacy.py` and
+`m5_signal_engines.py` are untouched.
+
+Gate #53: one DESK session covering all four asks, including that the dragged
+Strength width **survives a restart**.
+
 ## Phase 0.14 — Names first (decision 0016)
 
 **Status at 2026-09-02, after round R4 Part A.** V1, V2 and V3 are all merged to
