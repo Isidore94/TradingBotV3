@@ -115,6 +115,15 @@ why both the tracker panel and the Alert Center do it on a worker and memoise it
 once per process. It cuts to **519 segments, 43 of them over the evidence
 floor**.
 
+Two more, read the same way. The live `review_preference_state.json` carries
+`shown`, `takes` and `overall_take_rate` and **no `skips` and no `rejects`** - so
+the verdict card now says *"Take rate: 32% of 2618 shown (846 taken)"* where the
+old arithmetic (`takes + 0 + 0`) would have said **"100% of 846 shown"**. And
+`swing_family_records()` finds **13 setup families** graded inside the lately
+window, with Wilson lower bounds running 0.553 down to 0.461 - enough separation
+for the digest's new ordering to mean something rather than to be a tiebreak on
+expected R.
+
 **Two numbers said the opposite of the truth.** The Weekend Prep verdict card
 computed `shown = takes + skips + rejects` and `build_review_learning_state`
 publishes neither of the last two, so it printed **"100% of 94 shown"** where the
