@@ -34,11 +34,24 @@ class SetupTableModel(QAbstractTableModel):
         # compact profile moves this into reading position with
         # header.moveSection rather than by reordering COLUMNS.
         ("expected_r", "Exp R"),
+        # V3 item 1, wired by R4 B3: the setup FAMILY's recent win rate, with its
+        # Wilson lower bound and n, on the trader's main swing screen. Appended
+        # for the same reason Exp R was - indices 0/1/2 are click targets pinned
+        # by tests and by the panel's column handlers.
+        #
+        # The header says FAMILY deliberately. This is a statistic about the
+        # setup family the row belongs to, not about this symbol on this day; a
+        # column headed "Win %" on a per-symbol row would read as a claim about
+        # the name in front of the trader, which it is not.
+        ("family_win_rate", "Family Win %"),
     )
 
     def __init__(self, rows: list[SetupRow] | None = None, parent=None) -> None:
         super().__init__(parent)
         self._rows = list(rows or [])
+        #: `{normalized family: swing_headline row}`. Injected by the panel from
+        #: a worker - this model never reads a file.
+        self._family_records: dict[str, dict] = {}
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -61,7 +74,14 @@ class SetupTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if key in {"favorite", "dislike"}:
                 return int(Qt.AlignmentFlag.AlignCenter)
-            if key in {"score", "supports", "expected_r", "d1_vs_sector", "d1_vs_industry"}:
+            if key in {
+                "score",
+                "supports",
+                "expected_r",
+                "d1_vs_sector",
+                "d1_vs_industry",
+                "family_win_rate",
+            }:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole:
@@ -92,6 +112,19 @@ class SetupTableModel(QAbstractTableModel):
         self.beginResetModel()
         self._rows = list(rows)
         self.endResetModel()
+
+    def set_family_records(self, records) -> None:
+        """The per-family swing record, built OFF this thread by the panel."""
+        self.beginResetModel()
+        self._family_records = {
+            _normalize_family(key): dict(value or {})
+            for key, value in dict(records or {}).items()
+        }
+        self.endResetModel()
+
+    def _family_record(self, row: SetupRow) -> dict:
+        family = _normalize_family((row.raw or {}).get("setup_family"))
+        return self._family_records.get(family) or {}
 
     def row_at(self, source_row: int) -> SetupRow | None:
         if 0 <= source_row < len(self._rows):
@@ -128,6 +161,11 @@ class SetupTableModel(QAbstractTableModel):
             return row.last_trade_date
         if key == "expected_r":
             return row.expected_r_text
+        if key == "family_win_rate":
+            from swing_headline import format_win_rate
+
+            record = self._family_record(row)
+            return format_win_rate(record) if record else "-"
         return ""
 
     def _sort_value(self, row: SetupRow, key: str) -> Any:
@@ -140,7 +178,20 @@ class SetupTableModel(QAbstractTableModel):
         if key in {"d1_vs_sector", "d1_vs_industry"}:
             value = getattr(row, key)
             return value if value is not None else -999999.0
+        if key == "family_win_rate":
+            # THE LOWER BOUND, never the raw rate. Sorting by the rate puts a
+            # 100%-on-three family above a 62%-on-ninety every time, which is the
+            # ordering `swing_headline` exists to stop. A family the tracker has
+            # never graded sorts below every family that has one: "not measured"
+            # is not "measured badly".
+            bound = self._family_record(row).get("win_rate_lb")
+            return float(bound) if bound is not None else -1.0
         return self._display_value(row, key)
+
+
+def _normalize_family(value) -> str:
+    """One spelling for a family key, the same one `autopilot_core` uses."""
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "")
 
 
 _UNSET = object()

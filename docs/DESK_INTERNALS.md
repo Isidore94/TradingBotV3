@@ -612,3 +612,106 @@ indistinguishable from measured-and-empty.
 **A like still carries zero privileges** (plan.md P3.1). Nothing in this chain
 reaches a detector, score, alert, watchlist, Focus list, review queue or
 `review_policy.json`.
+
+## R4 Part B - the four rules the code gained (2026-09-03)
+
+Every one of these was a claim the docs already made and the code did not keep.
+They are recorded here because the next agent will otherwise re-derive the wrong
+answer from the shape of the code they find.
+
+### A superseded fact pack sorts BEFORE the original, not after
+
+`ai_jobs/setup_research._superseding` writes `<date>.json` first and appends an
+ordinal on every re-run: `<date>.1.json`, `<date>.2.json`. Both Weekend Prep
+readers then took `sorted(root.rglob("*.json"))[-1]`.
+
+That is an ASCII sort. `.` is 0x2E and `1` is 0x31, so `"2026-09-01.1.json"` is
+LESS than `"2026-09-01.json"` and the last name in the list is the FIRST pack
+written for the day - the one every re-run superseded. Measured on the live store
+on 2026-09-03, three packs existed for 2026-09-01: the original with
+`gate.eligible_policy_cells = 47` in the older shape, and `.1` / `.2` with 33 in
+the newer one. The reader took the original; it carries no `eligible_policies`
+list at all, so `weekend_verdict.research_line` fell to its "no cell has cleared
+the evidence floor yet" branch while the current pack had 33 that had.
+
+**The rule: undo the supersession in the module that owns the naming.**
+`setup_research.latest_pack_path` and `pack_sort_key` sit next to `_superseding`
+so a reader can never re-derive the scheme wrongly. The ordinal is parsed as an
+INTEGER - a string sort puts a tenth re-run before a ninth - and the session stem
+sorts first, so a re-run of yesterday never outranks today's first pack.
+
+**And a reader falls back rather than reporting nothing.** `eligible_policies`
+arrived on 2026-09-01; every earlier pack carries the same cells under `policies`
+with eligibility at `cell["stats"]["eligible"]`. On the live pack those two lists
+are the SAME 33 of 73 cells, so the fallback is exact. Printing "no cell has
+cleared the floor" for a pack that measured nine of them states a different fact,
+and the wrong one.
+
+### One decision graded at four horizons is one decision
+
+`master_avwap_tier_outcomes.csv` carries one row per `(scan_row_id, horizon)` -
+the tracker grades every scan row at 1, 3, 5 and 10 sessions. Reading it whole
+counts one decision up to four times. `setup_docs._read_family_outcomes` did:
+`avwap_band_bounce` reported n=1797 where the horizon-5 record is 329.
+
+The rate barely moves. **The Wilson lower bound does**, and in the flattering
+direction - an inflated n makes it too TIGHT - and unevenly across families,
+because families are scanned at different frequencies. So it changes the ORDER,
+which is the whole reason the bound is computed.
+
+**The rule: one declared horizon, and the same one everywhere.** The value lives
+in `evidence_stats.SWING_HORIZON_SESSIONS` (5) and
+`autopilot_core.SWING_DIGEST_HORIZON_SESSIONS` re-exports it. R4 A11 declared it
+for the AWAY digest; B2 moved the value rather than copying it, because the setup
+docs answer the same question off the same file, and two horizons across the
+desk's swing surfaces is the same failure as two Wilson z values. The proof it
+worked: the top three families by lower bound read 0.585 / 0.543 / 0.522 on both
+surfaces.
+
+`stale_horizon == True` rows are dropped on both - "5 sessions later" indexes a
+symbol's own scan rows, not exchange sessions. Only an explicit `True`; `None`
+means the drift could not be measured, and uncertainty is not grounds for
+deletion.
+
+### A source-text test passes for a verb that never runs the code
+
+The V3 item-4 guard read the TEXT of `capture_rail._record` and asserted the two
+`setdefault` lines that stamp `surface` and `scan_context` were present. They
+were. `commit_pass` needed the sidecar writer, so it built its own field dict and
+called `record_pass_annotation` directly - it never reached that method. Every
+day-trade pass on disk therefore carries no `surface` and no scan context, while
+the veto, the like, the quick like and the note beside it carry both, and a rollup
+by screen reads as "the trader never passes from the chart".
+
+**The rule: assert on the row, not on the source.** `_record` gained one keyword,
+`writer` - the only thing the pass path actually needed to differ on - and the
+guard is five tests, one per real click handler, each performing the handler on a
+rail bound to a temp file and reading the written row back. The rail under test is
+told it is serving `chart_review` rather than left on the `rail` default, because
+a verb that stamps nothing and a verb that stamps the default are
+indistinguishable when the default is what you assert.
+
+### A pooled cell is accumulated, never averaged
+
+`review_preference_state.json` records what the trader took and passed per
+SEGMENT and carries no side within a dimension, so a "My Decisions" row has no
+direction to join `held_run_score.dimension_summaries` on - and that table was
+graded in mean R alone, on the day-trade side, where decision 0016 answer 4 makes
+MFE-after-a-held-level the headline.
+
+**The rule: `held_run_score.ALL_DIRECTIONS` is a cell like any other.** It is
+accumulated from the EPISODES, in the same loop, and summarised by the same
+`Segment.summary`. It is never the long cell averaged with the short cell: a mean
+of trimmed means is not a trimmed mean, and computing one in the panel would be
+the second formula that R4 A10 deleted, returning under a different name.
+
+The same section is why the tracker's other two columns were labelled. The
+champion tier (PROVEN / MUTED / active) says whether the desk should ALERT on a
+segment at all; `Verdict` is the aggregator's `edge_score`, computed from average
+R; Held x Ran is what the alert offered once the level held. Three questions. Two
+of them sat unlabelled next to each other, and a reader with one number and two
+meanings will pick the flattering one.
+
+**A segment the learning state has never seen is BLANK, not "active".** "Not
+tracked" and "tracked and unremarkable" are different facts - live, 104 of 295
+rows are the first and 185 the second.

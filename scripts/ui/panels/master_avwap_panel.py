@@ -4,7 +4,14 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher, QItemSelection, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QFileSystemWatcher,
+    QItemSelection,
+    QThread,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -142,6 +149,13 @@ COMPACT_COLUMN_WIDTHS = {
     "industry": 130,
     "d1_vs_sector": 84,
     "d1_vs_industry": 88,
+    # R4 B3. The cell is `62% (>=52%, n=90)` at natural width, which is wider
+    # than this table can afford; 104px shows the rate and the bound and elides
+    # the n, which is the right thing to lose first - the n is also readable in
+    # the tooltip and the bound already encodes it. Without an entry here the
+    # column took DataTable's 80px floor and NO squeeze rule, and the compact
+    # profile overflowed its viewport by 99px at 1400px wide.
+    "family_win_rate": 104,
 }
 
 
@@ -157,6 +171,26 @@ def _row_context(row: SetupRow) -> str:
     if row.expected_r is not None:
         parts.append(f"expected_r={row.expected_r:.2f}")
     return "; ".join(parts)
+
+
+class _FamilyRecordWorker(QThread):
+    """One pass over the tracker outcomes for the Family Win % column - R4 B3.
+
+    It never raises into Qt. A blank record column is a column that has not been
+    measured yet; a swing screen that fails to load because a CSV moved would be
+    a far worse trade.
+    """
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            from setup_docs import family_headline_rows
+
+            records = family_headline_rows()
+        except Exception:  # noqa: BLE001 - one column, never the table
+            records = {}
+        self.done.emit(records)
 
 
 class MasterAvwapPanel(QWidget):
@@ -529,7 +563,16 @@ class MasterAvwapPanel(QWidget):
         if overflow <= 0:
             return
         # Elastic columns, widest-first, with the narrowest width each may take.
-        for key, floor in (("setup_tags", 72), ("industry", 84), ("key_level", 88)):
+        # `family_win_rate` is LAST and floors at 76 - enough for `62% (>=52%)`
+        # to elide gracefully. It squeezes late and drops last because it is the
+        # headline (decision 0016 answer 3): the columns above it are context for
+        # a number this one states outright.
+        for key, floor in (
+            ("setup_tags", 72),
+            ("industry", 84),
+            ("key_level", 88),
+            ("family_win_rate", 76),
+        ):
             if overflow <= 0:
                 break
             column = keys.index(key)
@@ -542,7 +585,7 @@ class MasterAvwapPanel(QWidget):
                 overflow -= take
         # Still over: drop columns in reverse value order rather than let a
         # scrollbar hide them silently.
-        for key in ("d1_vs_sector", "industry", "setup_tags"):
+        for key in ("d1_vs_sector", "industry", "setup_tags", "family_win_rate"):
             if overflow <= 0:
                 break
             column = keys.index(key)
@@ -808,7 +851,31 @@ class MasterAvwapPanel(QWidget):
         )
         self._refresh_scheduler_status(note=note)
 
+    def _start_family_record_read(self) -> None:
+        """The per-family swing record, off the Qt thread - V3 item 1 / R4 B3.
+
+        `setup_docs.family_headline_rows` opens
+        `master_avwap_tier_outcomes.csv`, which is why this is a worker and not a
+        call inside `set_rows`: the report refresh already runs on the click, and
+        a store read there is a stall charged to the trader's own button.
+
+        Started once per report refresh. The column simply reads "-" until the
+        answer lands, which is the honest state for a record nobody has measured
+        yet.
+        """
+        worker = getattr(self, "_family_record_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _FamilyRecordWorker(self)
+        worker.done.connect(self._on_family_records_ready)
+        self._family_record_worker = worker
+        worker.start()
+
+    def _on_family_records_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        self.model.set_family_records(payload if isinstance(payload, dict) else {})
+
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
+        self._start_family_record_read()
         meta = load_latest_setup_rows_with_meta()
         rows = meta["rows"]
         _apply_swing_quality_shadow_badges(rows)

@@ -219,7 +219,7 @@ def _state(**overrides) -> dict:
     state = {
         "schema": "review_learning_v1",
         "generated_at": "2026-07-28T09:00:00",
-        "window_days": 90,
+        "window_sessions": 20,
         "event_rows": 40,
         "episodes": 20,
         "shown": 18,

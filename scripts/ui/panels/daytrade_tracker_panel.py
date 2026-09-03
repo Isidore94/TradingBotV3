@@ -45,6 +45,12 @@ PERFORMANCE_COLUMNS = (
     ("segment", "Segment"),
     ("held_rate", "Held 30m"),
     ("held_run_score", "Held x Ran"),
+    # R4 B4: the champion tier the header comment above has promised since V3 and
+    # the table never carried. PROVEN / MUTED / active from the bounce learning
+    # state, joined on the SAME (dimension, direction, segment) key the headline
+    # uses; blank for a segment the state has never seen, because "not tracked"
+    # and "tracked and unremarkable" are different facts.
+    ("champion_tier", "Tier"),
     ("sample_count", "N"),
     ("avg_close_r", "Avg R"),
     ("median_close_r", "Med R"),
@@ -54,7 +60,11 @@ PERFORMANCE_COLUMNS = (
     ("target_1r_rate", "1R Hit"),
     ("target_2r_rate", "2R Hit"),
     ("stop_rate", "Stop"),
-    ("recommendation", "Verdict"),
+    # R4 B4: NAMED. This is the aggregator's `edge_score` verdict, computed from
+    # average R over its own window - a different question from Held x Ran, which
+    # sits three columns to the left. Two verdicts under one table with neither
+    # naming its basis is how a reader ends up believing they agree.
+    ("recommendation", "Verdict (edge score)"),
     ("example_symbols", "Examples"),
 )
 
@@ -109,6 +119,14 @@ DECISION_COLUMNS = (
     ("shown", "Shown"),
     ("take", "Takes"),
     ("take_rate", "Take rate"),
+    # R4 B4: the DAY-TRADE HEADLINE, on the trader's own decisions. These tabs
+    # graded what was taken and what was passed in mean R alone, and decision
+    # 0016 answer 4 makes MFE-after-a-held-level the headline on this side. From
+    # the one helper (`apply_held_and_ran`) and the one module, joined on the
+    # pooled-direction cell because this state records no side within a
+    # dimension.
+    ("held_rate", "Held 30m"),
+    ("held_run_score", "Held x Ran"),
     ("taken_r", "Taken R"),
     ("taken_n", "(n)"),
     ("passed_r", "Passed R"),
@@ -251,6 +269,10 @@ class DaytradeTrackerPanel(QFrame):
         #: `{(dimension, direction, segment): summary}`. Empty until the first
         #: read lands, and empty means BLANK - never a substitute number.
         self._held_run_summaries: dict = {}
+        #: The bounce learning state, cached from `reload_from_disk` so the
+        #: held/ran worker's callback can re-join the tier without a file read on
+        #: the Qt thread (R4 B4).
+        self._learning_state: dict = {}
         self._performance_rows: list[dict[str, Any]] = []
 
         self.refresh_button = QPushButton("Re-aggregate Outcomes")
@@ -441,7 +463,15 @@ class DaytradeTrackerPanel(QFrame):
         state = data.get("state")
         probation = data.get("probation") or frozenset()
         for key, (table, model) in self._decision_tables.items():
-            model.set_rows(decision_rows(state, key, probation))
+            # R4 B4: through the SAME join the performance table uses, so the
+            # trader's own decisions carry the day-trade headline rather than
+            # mean R alone. These rows name no side, so they land on the pooled
+            # cell.
+            model.set_rows(
+                apply_held_and_ran(
+                    decision_rows(state, key, probation), self._held_run_summaries
+                )
+            )
             table.fit_columns()
         message = str(data.get("message") or "")
         if message:
@@ -457,7 +487,7 @@ class DaytradeTrackerPanel(QFrame):
             return
         self.decisions_status.setText(
             f"{state.get('shown', 0)} chart(s) shown, {state.get('takes', 0)} taken "
-            f"over the last {state.get('window_days', '?')} days; scoreboard "
+            f"over the last {state.get('window_sessions', '?')} sessions; scoreboard "
             f"generated {state.get('generated_at', 'unknown')}."
         )
 
@@ -508,15 +538,23 @@ class DaytradeTrackerPanel(QFrame):
         # and the worker below fills the two columns in when it lands. Blank
         # first is honest: it is what an unmeasured cell looks like.
         self._performance_rows = _load_performance_rows()
-        perf_rows = apply_held_and_ran(self._performance_rows, self._held_run_summaries)
         self._start_held_run_read()
+        # R4 B4: the champion tier, from the ONE learning-state read this method
+        # already does. Cached on the panel so the held/ran worker's callback can
+        # re-join it without opening the file again - a signal handler runs on
+        # the Qt thread, and nothing expensive belongs there.
+        state = load_bounce_learning_state() or {}
+        self._learning_state = state
+        perf_rows = apply_champion_tier(
+            apply_held_and_ran(self._performance_rows, self._held_run_summaries),
+            state,
+        )
         by_dimension: dict[str, list[dict]] = {}
         for row in perf_rows:
             by_dimension.setdefault(str(row.get("dimension") or ""), []).append(row)
         for key, (_table, model) in self._dimension_tables.items():
             model.set_rows(_by_headline(by_dimension.get(key, [])))
 
-        state = load_bounce_learning_state() or {}
         learning_rows = []
         muted_count = 0
         proven_count = 0
@@ -610,7 +648,10 @@ class DaytradeTrackerPanel(QFrame):
 
     def _on_held_run_loaded(self, summaries) -> None:
         self._held_run_summaries = summaries if isinstance(summaries, dict) else {}
-        rows = apply_held_and_ran(self._performance_rows, self._held_run_summaries)
+        rows = apply_champion_tier(
+            apply_held_and_ran(self._performance_rows, self._held_run_summaries),
+            getattr(self, "_learning_state", {}) or {},
+        )
         by_dimension: dict[str, list[dict]] = {}
         for row in rows:
             by_dimension.setdefault(str(row.get("dimension") or ""), []).append(row)
@@ -694,14 +735,63 @@ def apply_held_and_ran(rows, summaries) -> list[dict]:
     out: list[dict] = []
     for raw in rows or ():
         row = dict(raw)
-        key = (
-            str(row.get("dimension") or "").strip(),
-            str(row.get("direction") or "").strip().lower(),
-            str(row.get("segment") or "").strip(),
-        )
-        cell = lookup.get(key)
+        dimension = str(row.get("dimension") or "").strip()
+        segment = str(row.get("segment") or "").strip()
+        # R4 B4: a row that names no side joins the POOLED cell, which
+        # `held_run_score` accumulates from the episodes exactly as it does the
+        # sided ones. The "My Decisions" tabs are such rows -
+        # `review_preference_state.json` records take and pass per segment and
+        # carries no side within a dimension - and averaging the long cell with
+        # the short cell here would be a mean of trimmed means, which is not a
+        # trimmed mean and would be a second formula in this file again.
+        direction = str(row.get("direction") or "").strip().lower()
+        if not direction:
+            import held_run_score
+
+            direction = held_run_score.ALL_DIRECTIONS
+        cell = lookup.get((dimension, direction, segment))
         row["held_rate"] = (cell or {}).get("hold_rate")
         row["held_run_score"] = (cell or {}).get("held_run_score")
+        out.append(row)
+    return out
+
+
+def apply_champion_tier(rows, state) -> list[dict]:
+    """Join the champion's own tier onto the aggregator's rows - R4 B4.
+
+    The panel's header comment has said "the champion tier stays as a column"
+    since V3 and there was no such column. The tier answers a different question
+    from the headline: it says whether the desk should ALERT on the segment at
+    all, while Held x Ran says what the alert offered once the level held. Beside
+    each other they are two facts; without the tier the reader has one number
+    carrying both meanings.
+
+    `state` is `load_bounce_learning_state()`, whose segments are keyed
+    `dimension -> "<direction>|<segment>"` - the same identity the headline joins
+    on, spelled the state's way.
+
+    A segment the state has never seen gets a BLANK, never "active": "not
+    tracked" and "tracked and unremarkable" are different facts, and this file
+    has already paid once for a column that filled an absent measurement in.
+
+    Nothing here changes a tier. It is read-only over a file the champion writes.
+    """
+    segments = (state or {}).get("segments") or {}
+    out: list[dict] = []
+    for raw in rows or ():
+        row = dict(raw)
+        dimension = str(row.get("dimension") or "").strip()
+        direction = str(row.get("direction") or "").strip().lower()
+        segment = str(row.get("segment") or "").strip()
+        entry = (segments.get(dimension) or {}).get(f"{direction}|{segment}")
+        if not isinstance(entry, dict):
+            row["champion_tier"] = ""
+        elif entry.get("muted"):
+            row["champion_tier"] = "MUTED"
+        elif entry.get("proven"):
+            row["champion_tier"] = "PROVEN"
+        else:
+            row["champion_tier"] = "active"
         out.append(row)
     return out
 

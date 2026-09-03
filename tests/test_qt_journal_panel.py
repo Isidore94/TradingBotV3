@@ -10,6 +10,7 @@ signals between each other.
 from __future__ import annotations
 
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,28 @@ def store(tmp_path, monkeypatch):
     return journal
 
 
+# ---------------------------------------------------------------------------
+# The fixture's calendar
+# ---------------------------------------------------------------------------
+#
+# **Every trade date here is RELATIVE to today and never an absolute date.**
+# ``journal_feed``'s default range is the last 30 days, so a pinned date walks
+# out of the window on its own and the suite goes red at a midnight nobody
+# touched. That is not a hypothetical: these dates were ``2026-08-03`` /
+# ``-08-04`` / ``-08-05`` and six tests failed on 2026-09-03 because the AAPL
+# round trip had aged 31 days out of the default range.
+#
+# The anchor is the Monday of the week two weeks before the current one, so
+# ``DAY_MON`` lands 14-20 days back: always inside the 30-day window, always in
+# the past whatever day the suite is run on, and always carrying the same
+# weekday the original dates did (Mon / Tue / Wed), which the calendar tab and
+# the trade-shape tagger both read.
+_ANCHOR_MONDAY = date.today() - timedelta(days=date.today().weekday() + 14)
+DAY_MON = _ANCHOR_MONDAY.isoformat()
+DAY_TUE = (_ANCHOR_MONDAY + timedelta(days=1)).isoformat()
+DAY_WED = (_ANCHOR_MONDAY + timedelta(days=2)).isoformat()
+
+
 def _execution(uid, side, quantity, price, day, **overrides):
     row = {
         "execution_uid": uid, "broker": "QUESTRADE", "account_number": "51830546",
@@ -61,9 +84,9 @@ def _execution(uid, side, quantity, price, day, **overrides):
 def populated(store):
     store.upsert_executions(
         [
-            _execution("QT:1", "BUY", 100, 150.0, "2026-08-03"),
-            _execution("QT:2", "SELL", 100, 160.0, "2026-08-03"),
-            _execution("QT:3", "BUY", 50, 90.0, "2026-08-05",
+            _execution("QT:1", "BUY", 100, 150.0, DAY_MON),
+            _execution("QT:2", "SELL", 100, 160.0, DAY_MON),
+            _execution("QT:3", "BUY", 50, 90.0, DAY_WED,
                        symbol="AMD", account_number="29347316", account_label="Margin"),
         ]
     )
@@ -86,6 +109,27 @@ def panel(qapp, populated):
 # ---------------------------------------------------------------------------
 # The shell
 # ---------------------------------------------------------------------------
+
+
+def test_the_fixtures_trades_can_never_age_out_of_the_default_range():
+    """The regression the six 2026-09-03 failures were.
+
+    Nothing in this module may pin a trade to an absolute date: the header opens
+    on ``30d`` and a pinned date crosses that boundary one midnight and takes six
+    tests with it, with no commit anywhere near the code. Assert against the
+    feed's OWN bound rather than a re-spelled 30, so a change to the preset moves
+    this test with it.
+    """
+    from datetime import date as _date
+
+    start, end = journal_feed.date_range_bounds("30d")
+    for label, day in (("DAY_MON", DAY_MON), ("DAY_TUE", DAY_TUE), ("DAY_WED", DAY_WED)):
+        parsed = _date.fromisoformat(day)
+        assert start <= parsed <= end, f"{label} ({day}) is outside the default 30d range"
+        assert parsed.weekday() < 5, f"{label} ({day}) landed on a weekend"
+    assert _date.fromisoformat(DAY_WED) > _date.fromisoformat(DAY_MON), (
+        "the AMD open must still be dated after the AAPL round trip"
+    )
 
 
 def test_the_journal_is_five_tabs_over_one_header(panel):
@@ -316,7 +360,7 @@ def test_saving_a_plan_stores_it_and_the_r_appears(panel, populated):
     )
     panel.trades_tab.table.selectRow(aapl_row)
     trade_id = panel.trades_tab._current.trade_id
-    journal_fx.seed_rate(populated, day="2026-08-03", currency="USD", rate_to_cad=1.4)
+    journal_fx.seed_rate(populated, day=DAY_MON, currency="USD", rate_to_cad=1.4)
     populated.book_currency_values()
 
     panel.trades_tab.planned_risk.setValue(500.0)
@@ -402,8 +446,8 @@ def test_analytics_says_why_a_total_is_missing_instead_of_showing_a_wrong_one(pa
     """B8, rendered. Mixed currencies with anything unconverted refuses to total."""
     populated.upsert_executions(
         [
-            _execution("QT:c1", "BUY", 100, 80.0, "2026-08-04", symbol="SHOP.TO", currency="CAD"),
-            _execution("QT:c2", "SELL", 100, 85.0, "2026-08-04", symbol="SHOP.TO", currency="CAD"),
+            _execution("QT:c1", "BUY", 100, 80.0, DAY_TUE, symbol="SHOP.TO", currency="CAD"),
+            _execution("QT:c2", "SELL", 100, 85.0, DAY_TUE, symbol="SHOP.TO", currency="CAD"),
         ]
     )
     populated.rebuild_trades(refresh_tags=False)
@@ -417,8 +461,8 @@ def test_analytics_says_why_a_total_is_missing_instead_of_showing_a_wrong_one(pa
 def test_the_equity_curve_reports_what_it_had_to_leave_out(panel, populated):
     populated.upsert_executions(
         [
-            _execution("QT:c1", "BUY", 100, 80.0, "2026-08-04", symbol="SHOP.TO", currency="CAD"),
-            _execution("QT:c2", "SELL", 100, 85.0, "2026-08-04", symbol="SHOP.TO", currency="CAD"),
+            _execution("QT:c1", "BUY", 100, 80.0, DAY_TUE, symbol="SHOP.TO", currency="CAD"),
+            _execution("QT:c2", "SELL", 100, 85.0, DAY_TUE, symbol="SHOP.TO", currency="CAD"),
         ]
     )
     populated.rebuild_trades(refresh_tags=False)
@@ -553,7 +597,7 @@ def test_fees_never_adds_trade_costs_to_cash_fees(panel, populated):
     populated.upsert_cash_transactions(
         [
             {"txn_uid": "c1", "broker": "QUESTRADE", "account_number": "51830546",
-             "txn_date": "2026-08-05", "activity_type": "FEE", "amount": -3.0, "currency": "USD"},
+             "txn_date": DAY_WED, "activity_type": "FEE", "amount": -3.0, "currency": "USD"},
         ]
     )
     panel.header.range_input.setCurrentText("All")

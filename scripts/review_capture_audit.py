@@ -567,7 +567,7 @@ def scoreboard_check(
     details = {
         "generated_at": generated_at,
         "age_days": round(age, 2) if age is not None else None,
-        "window_days": state.get("window_days"),
+        "window_sessions": state.get("window_sessions"),
         "event_rows": int(state.get("event_rows", 0) or 0),
         "episodes": int(state.get("episodes", 0) or 0),
         "shown": int(state.get("shown", 0) or 0),

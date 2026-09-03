@@ -4,7 +4,7 @@ import csv
 import json
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -247,7 +247,7 @@ def test_structured_setup_dislikes_are_counted_by_reason_code():
     assert reasons["too_extended_from_base"]["reject"] == 1
     assert reasons["incoming_trendline"]["n"] == 1
     assert reasons["overhead_horizontal"]["n"] == 1
-    report = render_report({**aggregate, "generated_at": "now", "window_days": 90})
+    report = render_report({**aggregate, "generated_at": "now", "window_sessions": 20})
     assert "DISLIKE REASON" in report
     assert "too_extended_from_base" in report
 
@@ -327,7 +327,7 @@ def test_build_state_end_to_end_with_window_filter(tmp_path, monkeypatch):
     state = build_review_learning_state(
         events_path=events,
         outcomes_path=outcomes,
-        window_days=90,
+        window_sessions=20,
         now=datetime(2026, 7, 28, 18, 0),
     )
     assert state["schema"] == review_learning.REVIEW_LEARNING_SCHEMA
@@ -400,6 +400,13 @@ def test_refresh_reads_partitioned_shards_when_legacy_file_does_not_exist(
         [
             _row(
                 "shown",
+                # RELATIVE, because this test uses the real clock: it asserts
+                # that the SHARDS are read, and a pinned date would eventually
+                # age out of the analysis window and fail for a reason that has
+                # nothing to do with shards. R4 B6 shortened that window from 90
+                # calendar days to 20 sessions, which is when 2026-07-27 stopped
+                # being inside it.
+                trade_date=(date.today() - timedelta(days=1)).isoformat(),
                 schema="review_events_v2",
                 installation_id=identity,
                 review_record_id="row-1",
@@ -598,7 +605,7 @@ def test_the_report_renders_the_r_gap_section():
         {
             **aggregate,
             "generated_at": "now",
-            "window_days": 90,
+            "window_sessions": 20,
             "blind_spots": blind_spots,
             "leaks": leaks,
             "r_gaps": r_gaps,

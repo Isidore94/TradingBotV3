@@ -340,9 +340,13 @@ class WeekReviewPage(_StepPage):
 
     def _build_summary_text(self) -> str:
         """Every store this page reads, and no widget. Runs on the worker."""
+        from evidence_stats import WEEK_SESSIONS
         from review_learning import build_review_learning_state
 
-        state = build_review_learning_state(window_days=7)
+        # R4 B6: SESSIONS, through the exchange calendar. This asked for the last
+        # 7 CALENDAR days under a heading that says "Week of <Mon> to <Fri>", so
+        # a holiday week measured four sessions and still called itself a week.
+        state = build_review_learning_state(window_sessions=WEEK_SESSIONS)
         lines = [f"Week of {self.service.week_bounds[0]} to {self.service.week_bounds[1]}", ""]
         for key in ("takes", "skips", "rejects", "watch_conversion"):
             value = state.get(key) if isinstance(state, dict) else None
@@ -1778,9 +1782,13 @@ class WeekendPrepPanel(QFrame):
             except Exception:  # noqa: BLE001
                 return default
 
+        from evidence_stats import WEEK_SESSIONS
         from review_learning import build_review_learning_state
 
-        state = _safe(lambda: build_review_learning_state(window_days=7), {})
+        # R4 B6: the same week, in the same unit as the summary above it.
+        state = _safe(
+            lambda: build_review_learning_state(window_sessions=WEEK_SESSIONS), {}
+        )
         likes = _safe(_read_like_cohort, [])
         vetoes = _safe(_read_veto_cohort, [])
         trades = _safe(lambda: _read_week_trades(self.service.week_bounds), [])
@@ -2099,10 +2107,12 @@ def _read_veto_cohort() -> list[dict[str, str]]:
             "side": str(raw.get("side") or "").strip(),
             "horizon": str(raw.get("horizon_sessions") or "").strip(),
             "n": str(raw.get("sample_count") or "").strip(),
-            "win_rate": _pct(raw.get("win_rate")),
             "avg_return": _signed_pct(raw.get("avg_side_return")),
             "profit_factor": _ratio(raw.get("profit_factor")),
         }
+        # R4 B3: the rate, its bound and n in one cell, and the bound as the sort
+        # key. Written AFTER the base row so it owns `win_rate` outright.
+        row.update(_cohort_headline_fields(raw))
         row.update(_cohort_robust_fields(raw))
         rows.append(row)
     return rows
@@ -2111,26 +2121,28 @@ def _read_veto_cohort() -> list[dict[str, str]]:
 def _read_after_like_block() -> dict:
     """The newest nightly fact pack, for its `after_like` block only.
 
-    Reads the LATEST pack by name and returns `{}` for anything it cannot get -
-    a missing pack, an unreadable one, the warehouse disabled. A blank table
-    with a note is the right answer to "the research has not run yet"; an
-    exception here would take the whole Weekend Prep read down with it, and the
-    other seven tables on this page have nothing to do with this one.
+    **The newest pack, by the writer's own supersession rule** - R4 B1. This read
+    `sorted(root.rglob("*.json"))[-1]`, which is an ASCII sort and picks
+    `2026-09-01.json` over `2026-09-01.2.json`, i.e. the first pack of the day
+    rather than the last. `setup_research.latest_pack_path` undoes exactly what
+    `_superseding` did, in the module that owns the naming.
+
+    Returns `{}` for anything it cannot get - a missing pack, an unreadable one,
+    the warehouse disabled. A blank table with a note is the right answer to "the
+    research has not run yet"; an exception here would take the whole Weekend
+    Prep read down with it, and the other seven tables on this page have nothing
+    to do with this one.
     """
     try:
         import json
 
         from ai_jobs import store as ai_store
+        from ai_jobs.setup_research import latest_pack_path
 
-        root = ai_store.retros_dir() / "setup_research"
-        packs = sorted(
-            path
-            for path in root.rglob("*.json")
-            if "narration" not in path.name
-        )
-        if not packs:
+        newest = latest_pack_path(ai_store.retros_dir() / "setup_research")
+        if newest is None:
             return {}
-        return json.loads(packs[-1].read_text(encoding="utf-8"))
+        return json.loads(newest.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - one table, never the page
         return {}
 
@@ -2173,10 +2185,10 @@ def _read_like_cohort() -> list[dict[str, str]]:
             "side": str(raw.get("side") or "").strip(),
             "horizon": str(raw.get("horizon_sessions") or "").strip(),
             "n": str(raw.get("sample_count") or "").strip(),
-            "win_rate": _cohort_pct(raw.get("win_rate")),
             "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
             "profit_factor": _cohort_ratio(raw.get("profit_factor")),
         }
+        row.update(_cohort_headline_fields(raw))
         row.update(_cohort_robust_fields(raw))
         rows.append(row)
     return rows
@@ -2295,6 +2307,51 @@ def _cohort_robust_fields(raw) -> dict[str, str]:
     }
 
 
+def _cohort_headline_fields(raw) -> dict:
+    """The win-rate cell and its hidden sort key - V3 item 1, wired by R4 B3.
+
+    Every cohort rollup on this page stores a rate and a sample count rather
+    than the graded rows behind them, so `swing_headline.headline_from_rate`
+    rebuilds the integer pair Wilson needs. The cell reads
+    `62% (>=52%, n=90)` - the one spelling `swing_headline.format_win_rate`
+    gives every surface - and `win_rate_lb` rides along as the sort key.
+
+    THE LOWER BOUND IS WHY THIS EXISTS. These tables are read on a Saturday,
+    when there is time to act on what they say, and a raw 100%-on-three cell
+    above a 62%-on-ninety is exactly the reading that costs money.
+
+    A cohort with no sample gets a BLANK cell and a `None` bound, never a zero:
+    "nothing graded" and "graded and lost everything" are different facts.
+    """
+    from swing_headline import format_win_rate, headline_from_rate
+
+    record = headline_from_rate(
+        str(raw.get("cohort") or ""),
+        win_rate=raw.get("win_rate"),
+        n=raw.get("sample_count"),
+    )
+    if not record.n:
+        return {"win_rate": "", "win_rate_lb": None}
+    return {
+        "win_rate": format_win_rate(record.as_row()),
+        "win_rate_lb": record.win_rate_lb,
+    }
+
+
+def _rank_cohort_rows(rows) -> list[dict]:
+    """Best-measured first, BY THE WILSON LOWER BOUND, unmeasured last."""
+    def _key(row):
+        bound = row.get("win_rate_lb")
+        return (
+            bound is None,
+            -(float(bound) if bound is not None else 0.0),
+            str(row.get("cohort") or ""),
+            str(row.get("side") or ""),
+        )
+
+    return sorted(rows, key=_key)
+
+
 def _cohort_view(rows, horizon: str) -> list[dict]:
     """One horizon's rows, floor-clearing ones first, by trimmed mean.
 
@@ -2303,9 +2360,14 @@ def _cohort_view(rows, horizon: str) -> list[dict]:
     and the view greys it. Sorting them together is what lets an n=3 row with a
     profit factor of 165 sit at the top of a table read on a Saturday.
 
-    Within each group the key is the TRIMMED mean, not the bare one - the same
-    reason R10.C published it. A row with no trimmed mean sorts last inside its
-    own group rather than being promoted by a default of zero.
+    Within each group the key is the WIN RATE'S WILSON LOWER BOUND (R4 B3,
+    decision 0016 answer 3: win rate leads every trader-facing swing surface, and
+    the sort follows the headline or the headline is decoration). It was the
+    trimmed mean, which ranked these tables by a statistic the trader's own loss
+    profile makes misleading - their losses run about 1.5x their best wins. The
+    trimmed mean is still shown, and is now the TIEBREAK: a row with no graded
+    sample has no bound and sorts last inside its own group rather than being
+    promoted by a default of zero.
     """
     wanted = str(horizon or "").strip()
     kept = [row for row in rows if str(row.get("horizon") or "").strip() == wanted]
@@ -2313,6 +2375,8 @@ def _cohort_view(rows, horizon: str) -> list[dict]:
         kept,
         key=lambda row: (
             0 if row.get("_meets_floor") else 1,
+            row.get("win_rate_lb") is None,
+            -(row.get("win_rate_lb") or 0.0),
             0 if row.get("_sort_value") is not None else 1,
             -(row.get("_sort_value") or 0.0),
             str(row.get("cohort") or ""),
@@ -2516,20 +2580,24 @@ def _read_p5_cohort(path) -> list[dict[str, str]]:
             raw_rows = list(csv.DictReader(handle))
     except OSError:
         return []
-    return [
-        {
-            "cohort": str(raw.get("cohort") or "").strip(),
-            "side": str(raw.get("side") or "").strip(),
-            "horizon": str(raw.get("horizon_sessions") or "").strip(),
-            "n": str(raw.get("sample_count") or "").strip(),
-            "win_rate": _cohort_pct(raw.get("win_rate")),
-            "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
-            "profit_factor": _cohort_ratio(raw.get("profit_factor")),
-            "meets_n_floor": str(raw.get("meets_n_floor") or "").strip(),
-            "evidence": str(raw.get("evidence_label") or "").strip(),
-        }
-        for raw in raw_rows
-    ]
+    return _rank_cohort_rows(
+        [
+            {
+                "cohort": str(raw.get("cohort") or "").strip(),
+                "side": str(raw.get("side") or "").strip(),
+                "horizon": str(raw.get("horizon_sessions") or "").strip(),
+                "n": str(raw.get("sample_count") or "").strip(),
+                "avg_return": _cohort_signed_pct(raw.get("avg_side_return")),
+                "profit_factor": _cohort_ratio(raw.get("profit_factor")),
+                "meets_n_floor": str(raw.get("meets_n_floor") or "").strip(),
+                "evidence": str(raw.get("evidence_label") or "").strip(),
+                # R4 B3: the headline, and the bound these rows are ordered by.
+                # The pass and rejection tables had no order at all before this.
+                **_cohort_headline_fields(raw),
+            }
+            for raw in raw_rows
+        ]
+    )
 
 
 def _read_pass_cohort() -> list[dict[str, str]]:
@@ -2863,6 +2931,12 @@ def _read_research_pack() -> dict:
     trader must see may live only there. This lifts ONE line onto a surface they
     open; the panel stays where it is.
 
+    **The newest pack, by the writer's own supersession rule** - R4 B1. See
+    :func:`_read_after_like_block`: an ASCII sort put `2026-09-01.json` last, so
+    on 2026-09-03 the card read the first pack of that day (47 eligible cells and
+    the older shape, which carries no `eligible_policies` list) and printed "no
+    cell has cleared the evidence floor yet" while the `.2` pack had 33 that had.
+
     Returns {} for anything it cannot get. A missing pack is "the research has
     not run yet", which the card says in words - it is never a reason to fail the
     other six lines.
@@ -2871,13 +2945,11 @@ def _read_research_pack() -> dict:
         import json
 
         from ai_jobs import store as ai_store
+        from ai_jobs.setup_research import latest_pack_path
 
-        root = ai_store.retros_dir() / "setup_research"
-        packs = sorted(
-            path for path in root.rglob("*.json") if "narration" not in path.name
-        )
-        if not packs:
+        newest = latest_pack_path(ai_store.retros_dir() / "setup_research")
+        if newest is None:
             return {}
-        return json.loads(packs[-1].read_text(encoding="utf-8"))
+        return json.loads(newest.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - one line, never the card
         return {}

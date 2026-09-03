@@ -239,7 +239,8 @@ def test_the_veto_cohort_is_read_and_shown_beside_the_picks(tmp_path, monkeypatc
     longs = rows[1]
     assert longs["cohort"] == "human_focus_veto"
     assert longs["n"] == "43"
-    assert longs["win_rate"] == "55.8%"
+    # R4 B3: rate, Wilson lower bound and n in one cell.
+    assert longs["win_rate"] == "56% (>=41%, n=43)"
     assert longs["avg_return"] == "+0.74%"
     assert longs["profit_factor"] == "3.34"
 
@@ -405,7 +406,8 @@ def test_the_like_cohort_is_read_by_its_named_constant(tmp_path, monkeypatch):
     rows = _read_like_cohort()
 
     assert [row["n"] for row in rows] == ["21", "4"]
-    assert rows[0]["win_rate"] == "81.0%"
+    # R4 B3: rate, bound and n in one cell.
+    assert rows[0]["win_rate"] == "81% (>=60%, n=21)"
     assert rows[0]["avg_return"] == "+1.90%"
     assert rows[0]["profit_factor"] == "6.55"
 

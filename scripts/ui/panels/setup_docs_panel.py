@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+import logging
+
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QListWidget,
@@ -10,9 +12,40 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from setup_docs import STOP_CLOSE_FAILURES, TIME_STOP_SESSIONS, all_setup_docs_by_group
+from setup_docs import (
+    STOP_CLOSE_FAILURES,
+    TIME_STOP_SESSIONS,
+    all_setup_docs_by_group,
+    family_record_sentences,
+)
 from ui import theme
 from ui.widgets.section_header import SectionHeader
+
+
+class _RecordWorker(QThread):
+    """One pass over the tracker outcomes, off the GUI thread - R4 B2.
+
+    The record sentences are the ONLY thing on this page that touches a store,
+    and `_on_family_selected` runs on the click. `family_record_sentences` reads
+    `master_avwap_tier_outcomes.csv` - a file that measured ~0.1 s a pass on the
+    live store - so calling it from the handler would put a store read on the Qt
+    thread for every click. It never raises into Qt: a page of setup mechanics is
+    still worth reading with the records missing.
+    """
+
+    done = Signal(object)
+
+    def __init__(self, keys, parent=None) -> None:
+        super().__init__(parent)
+        self._keys = list(keys)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            sentences = family_record_sentences(self._keys)
+        except Exception as exc:  # noqa: BLE001
+            logging.debug("Setup docs could not read the tracker record: %s", exc)
+            sentences = {}
+        self.done.emit(sentences)
 
 
 class SetupDocsPanel(QFrame):
@@ -58,23 +91,67 @@ class SetupDocsPanel(QFrame):
             )
         )
         layout.addWidget(splitter, 1)
+
+        # V3 item 1, wired by R4 B2: every family's recent swing record, win rate
+        # first. Built on a worker and cached; the click renders from the cache
+        # and never opens a file. Empty until the worker answers, and an empty
+        # record simply renders no line - a doc that waits for a CSV is a doc the
+        # trader cannot open.
+        self._records: dict[str, str] = {}
+        self._record_worker = _RecordWorker(list(self._docs_by_key), self)
+        self._record_worker.done.connect(self._on_records_ready)
+        self._record_worker.start()
+
         self.family_list.setCurrentRow(0)
 
+    def shutdown(self) -> None:
+        worker = getattr(self, "_record_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.wait(2000)
+
+    def _on_records_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        self._records = dict(payload) if isinstance(payload, dict) else {}
+        self._render_current()
+
     def _on_family_selected(self, current: QListWidgetItem | None, _previous=None) -> None:
+        self._render_current(current)
+
+    def _render_current(self, current: QListWidgetItem | None = None) -> None:
+        """Render from the CACHED records. No store read on this path."""
+        if current is None:
+            current = self.family_list.currentItem()
         if current is None:
             return
         key = current.data(Qt.ItemDataRole.UserRole)
         if key == "__overview__":
-            self.doc_view.setHtml(render_all_docs_html())
+            self.doc_view.setHtml(render_all_docs_html(records=self._records))
         elif key in self._docs_by_key:
-            self.doc_view.setHtml(render_doc_html(key, self._docs_by_key[key]))
+            self.doc_view.setHtml(
+                render_doc_html(
+                    key,
+                    self._docs_by_key[key],
+                    record_sentence=self._records.get(key, ""),
+                )
+            )
 
 
 def _esc(value) -> str:
     return str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def render_doc_html(key: str, doc: dict, *, heading_level: int = 2) -> str:
+def render_doc_html(
+    key: str,
+    doc: dict,
+    *,
+    heading_level: int = 2,
+    record_sentence: str = "",
+) -> str:
+    """One setup's mechanics, with its recent record on top of them.
+
+    `record_sentence` is passed IN rather than read here: this function is called
+    24 times to build the overview page, and a read per call was 24 full passes
+    over the tracker CSV - on the Qt thread. See `_RecordWorker`.
+    """
     body = theme.color("text_primary")
     muted = theme.color("text_secondary")
     favorite = theme.color("favorite")
@@ -95,6 +172,14 @@ def render_doc_html(key: str, doc: dict, *, heading_level: int = 2) -> str:
     parts.append(f"<div><b style='color:{long_c}'>Entry:</b> {_esc(doc['entry'])}</div>")
     parts.append(f"<div><b style='color:{short_c}'>Stop:</b> {_esc(doc['stop'])}</div>")
     parts.append(f"<div><b style='color:{favorite}'>Targets:</b> {_esc(doc['targets'])}</div>")
+    if record_sentence:
+        # WIN RATE FIRST (decision 0016 answer 3). Above the hand-written
+        # "Measured:" note deliberately: this one is re-read from the tracker at
+        # render time, and the note below it is prose that can age.
+        parts.append(
+            f"<div style='color:{favorite}; margin-top:6px'><b>Record:</b> "
+            f"{_esc(record_sentence)}</div>"
+        )
     if doc.get("evidence"):
         parts.append(
             f"<div style='color:{muted}; margin-top:4px'><b>Measured:</b> {_esc(doc['evidence'])}</div>"
@@ -163,7 +248,7 @@ def render_best_now_html() -> str:
     return "".join(parts)
 
 
-def render_all_docs_html() -> str:
+def render_all_docs_html(*, records: dict | None = None) -> str:
     body = theme.color("text_primary")
     muted = theme.color("text_secondary")
     favorite = theme.color("favorite")
@@ -179,7 +264,12 @@ def render_all_docs_html() -> str:
     for group_name, entries in all_setup_docs_by_group():
         parts.append(f"<h3 style='margin:14px 0 2px 0; color:{muted}'>{_esc(group_name)}</h3><hr/>")
         for key, doc in entries:
-            inner = render_doc_html(key, doc, heading_level=4)
+            inner = render_doc_html(
+                key,
+                doc,
+                heading_level=4,
+                record_sentence=(records or {}).get(key, ""),
+            )
             inner = inner.replace(f"<body style='color:{body}; font-size:9pt'>", "").replace("</body>", "")
             parts.append(inner)
     parts.append("</body>")

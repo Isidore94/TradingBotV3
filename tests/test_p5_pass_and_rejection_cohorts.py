@@ -586,7 +586,12 @@ def test_the_weekend_prep_reader_reformats_and_never_derives(tmp_path):
     )
     rows = panel_module._read_p5_cohort(path)
     assert rows[0]["cohort"] == "human_focus_pass_all"
-    assert rows[0]["win_rate"] == "52.4%"
+    # R4 B3: the cell now carries the Wilson lower bound and n beside the rate,
+    # through `swing_headline.format_win_rate` - the one spelling every surface
+    # uses. Still REFORMATTED and never derived: the rate and the count are the
+    # CSV's own, and the bound is arithmetic on those two.
+    assert rows[0]["win_rate"] == "52% (>=38%, n=42)"
+    assert rows[0]["win_rate_lb"] is not None
     assert rows[0]["avg_return"] == "-1.23%"
     assert rows[0]["meets_n_floor"] == "1"
     assert rows[0]["evidence"] == "discovery"

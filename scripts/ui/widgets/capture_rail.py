@@ -82,7 +82,7 @@ from ui.annotations.store import (
     LIKE_MODE_CLAIMED,
     LIKE_MODE_QUICK,
     record_annotation,
-    record_pass_annotation,
+    record_annotation_with_bars,
 )
 from ui.annotations.vocabulary import (
     VocabularyError,
@@ -724,13 +724,27 @@ class CaptureRail(QFrame):
             fields["path"] = self._annotations_path
         return fields
 
-    def _record(self, event_type: str, **fields: Any) -> dict | None:
+    def _record(
+        self,
+        event_type: str,
+        *,
+        writer: Any = None,
+        **fields: Any,
+    ) -> dict | None:
         """Every non-like annotation this rail writes: veto, pass, note, stop.
 
         V3 item 4 closed a seam here. P10 gave the LIKE path a `surface` and this
         one kept writing without it, so a veto and a like from the same rail
         landed with different shapes and any rollup by screen silently omitted
         every veto. One writer means one row shape.
+
+        R4 B5 closed the second half of it. `commit_pass` needed the SIDECAR
+        writer, so it called `record_pass_annotation` directly and skipped this
+        method entirely - and with it the two `setdefault` lines below. Every
+        day-trade pass therefore landed with no `surface` and no scan context
+        while the veto and the note beside it carried both. `writer` is that one
+        difference and nothing else: which store function appends the row. The
+        stamping happens here, once, for every verb.
         """
         if not self._symbol:
             self._set_status("No symbol in focus.", ok=False)
@@ -739,7 +753,7 @@ class CaptureRail(QFrame):
         common.setdefault("surface", self._surface)
         common.setdefault("scan_context", dict(self._scan_context or {}))
         try:
-            row = record_annotation(event_type, **common)
+            row = (writer or record_annotation)(event_type, **common)
         except AnnotationError as exc:
             self._set_status(str(exc), ok=False)
             return None
@@ -1029,30 +1043,24 @@ class CaptureRail(QFrame):
         if not codes:
             self._set_status("Tick at least one reason for passing.", ok=False)
             return None
-        if not self._symbol:
-            self._set_status("No symbol in focus.", ok=False)
-            return None
-        fields = {
-            **self._common_fields(),
-            "reason_codes": codes,
-            "vocabulary": self._pass_vocabulary,
-            "side": self._side,
-            "note": self.note_input.text(),
-        }
-        # The bars are read HERE, at the moment of the decision, so what is
-        # attached is the chart the trader was actually looking at.
-        fields["m5_bars"] = self.cached_m5_bars()
-        try:
-            row = record_pass_annotation(**fields)
-        except AnnotationError as exc:
-            self._set_status(str(exc), ok=False)
-            return None
+        # R4 B5: THROUGH `_record`, like every other verb. This built its own
+        # field dict and called `record_pass_annotation` directly, which meant it
+        # never reached the two lines that stamp `surface` and the scan context -
+        # so a pass was the one verb whose row could not say which screen it came
+        # from. The sidecar writer is passed IN rather than forked around.
+        row = self._record(
+            EVENT_PASS,
+            writer=record_annotation_with_bars,
+            reason_codes=codes,
+            vocabulary=self._pass_vocabulary,
+            side=self._side,
+            note=self.note_input.text(),
+            # The bars are read HERE, at the moment of the decision, so what is
+            # attached is the chart the trader was actually looking at.
+            m5_bars=self.cached_m5_bars(),
+        )
         if row is None:
-            self._set_status(
-                "NOT SAVED - the annotation log could not be written.", ok=False
-            )
             return None
-        self.captured.emit(EVENT_PASS, row)
         self.note_input.clear()
         self.clear_pass_selection()
         attached = row.get("m5_bar_count")

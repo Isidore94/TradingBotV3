@@ -252,6 +252,19 @@ def research_line(pack: Mapping[str, Any] | None) -> VerdictLine:
     """
     block = (pack or {}).get("gate") or {}
     cells = list((pack or {}).get("eligible_policies") or ())
+    if not cells:
+        # R4 B1: the OLDER pack shape. `eligible_policies` was added on
+        # 2026-09-01; every pack before it carries the same cells under
+        # `policies` with eligibility at `cell["stats"]["eligible"]`, and the two
+        # lists are the same thing - on the live 2026-09-01 pack,
+        # `eligible_policies` is exactly the 33 of 73 `policies` whose stats say
+        # eligible. Falling through to "no cell has cleared the floor" for a pack
+        # that measured nine of them states a different fact, and the wrong one.
+        cells = [
+            cell
+            for cell in ((pack or {}).get("policies") or ())
+            if isinstance(cell, Mapping) and (cell.get("stats") or {}).get("eligible")
+        ]
     count = _as_int(block.get("eligible_policy_cells") or len(cells))
     if not count or not cells:
         return VerdictLine(

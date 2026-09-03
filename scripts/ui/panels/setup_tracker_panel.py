@@ -105,6 +105,13 @@ RECENT_TYPE_COLUMNS = (
     ("side", "Side"),
     ("priority_bucket", "Bucket"),
     ("setup_family", "Setup Family"),
+    # WIN RATE LEADS (V3 item 1, decision 0016 answer 3), wired by R4 B3. It is
+    # the first STATISTIC on the row - the five columns before it are the row's
+    # identity, not a measurement - and it carries its Wilson lower bound and n
+    # in one cell, `62% (>=52%, n=90)`, through `swing_headline.format_win_rate`.
+    # Closed R stays right beside it and is never replaced: the two answer
+    # different questions and dropping either is how a number starts lying.
+    ("win_rate_headline", "Win %"),
     ("closed_setups", "Closed 30d"),
     ("tracked_setups", "Tracked 30d"),
     ("avg_closed_r", "Closed R"),
@@ -599,7 +606,11 @@ class SetupTrackerPanel(QFrame):
         tier_performance_export_rows = _load_csv_rows_cached(MASTER_AVWAP_TIER_PERFORMANCE_FILE)
         self.current_pick_rows = _rank_current_picks(_load_csv_rows_cached(MASTER_AVWAP_TIER_LIST_FILE))
         self.setup_type_rows = _rank_setup_types(all_setup_type_rows, min_closed=min_closed)
-        self.recent_type_rows = _rank_recent_types(_load_csv_rows_cached(RECENT_SETUP_TYPE_STATS_FILE))
+        self.recent_type_rows = _rank_recent_types(
+            _recent_type_headline_rows(
+                _load_csv_rows_cached(RECENT_SETUP_TYPE_STATS_FILE)
+            )
+        )
         self.short_term_rows = _rank_short_term(_load_csv_rows_cached(SHORT_HORIZON_FILE))
         self.playbook_rows = _rank_playbooks(all_playbook_rows, min_closed=min_closed)
         self.scan_factor_rows = _rank_scan_factors(_load_csv_rows_cached(MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE))
@@ -871,20 +882,59 @@ def _rank_setup_types(rows: list[dict[str, Any]], *, min_closed: int) -> list[di
     )
 
 
+def _recent_type_headline_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach the win-rate headline to each recent-type row - R4 B3.
+
+    The row already carries `win_rate_closed` and `closed_setups`, so the record
+    is measured at the ROW'S OWN GRAIN and nothing is joined in from a parent
+    cohort. `swing_headline.headline_from_rate` rebuilds the integer pair Wilson
+    needs from the stored rate and count.
+
+    `win_rate_lb` rides along as a hidden sort key. It is the number the table is
+    ordered by; the cell shows the rate, the bound and n together so the reader
+    can see why.
+    """
+    from swing_headline import format_win_rate, headline_from_rate
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        record = headline_from_rate(
+            str(row.get("setup_family") or ""),
+            win_rate=row.get("win_rate_closed"),
+            n=row.get("closed_setups"),
+        )
+        enriched = dict(row)
+        enriched["win_rate_headline"] = (
+            format_win_rate(record.as_row()) if record.n else ""
+        )
+        enriched["win_rate_lb"] = record.win_rate_lb
+        out.append(enriched)
+    return out
+
+
 def _rank_recent_types(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # NEW/RISING families with some closed evidence pin to the top (freshly
     # promoted ideas and not-yet-favorite outperformers must never drown under
-    # high-sample veterans); below them, most closed evidence first, best
-    # realized R next; open-only families fall to the bottom but stay visible.
-    return sorted(
-        rows,
-        key=lambda row: (
+    # high-sample veterans).
+    #
+    # R4 B3 changed what orders them BELOW that pin: the Wilson LOWER BOUND on
+    # the win rate, not the raw closed count. Sorting by count put the biggest
+    # sample on top whatever it measured, and sorting by the raw rate would put a
+    # 100%-on-three family above a 62%-on-ninety every time. A family with no
+    # graded closes has no bound and sorts under every family that has one -
+    # "not measured" is not "measured badly" - with the old keys as tiebreaks.
+    def _key(row):
+        bound = row.get("win_rate_lb")
+        return (
             not (str(row.get("status") or "").strip() and _int(row.get("closed_setups")) >= 2),
+            bound is None,
+            -(float(bound) if bound is not None else 0.0),
             -_int(row.get("closed_setups")),
             -_float(row.get("avg_closed_r"), -1e9),
             -_int(row.get("tracked_setups")),
-        ),
-    )
+        )
+
+    return sorted(rows, key=_key)
 
 
 def _rank_short_term(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

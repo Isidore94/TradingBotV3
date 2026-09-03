@@ -99,12 +99,16 @@ def test_master_setup_columns_carry_group_strength_and_expected_r():
 
     keys = [key for key, _label in SetupTableModel.COLUMNS]
     assert keys[:3] == ["favorite", "dislike", "symbol"]
-    assert keys[-6:] == [
+    # R4 B3 appended `family_win_rate` behind Expected R under the SAME rule, so
+    # the window widens by one rather than the assertion loosening: the point is
+    # that new columns go on the END, and an exact tail is what proves it.
+    assert keys[-7:] == [
         "sector",
         "d1_vs_sector",
         "industry",
         "d1_vs_industry",
         "last_trade_date",
         "expected_r",
+        "family_win_rate",
     ]
     assert not {"theta", "days_to_earnings"} & set(keys)

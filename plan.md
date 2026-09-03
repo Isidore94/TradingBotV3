@@ -821,7 +821,7 @@ nobody has to reconstruct it from four entries:
 | Packet | Item | State |
 |---|---|---|
 | V1 | 1 Strength Board = TC2000 | **BUILT** (gates #44, #45). R4 A7/A8 made the RVOL session-relative, dropped the forming daily bar and widened the daily window to `2y` |
-| V1 | 2 `held_run_score` | **BUILT AND WIRED** (R4 A9/A10): the D1 dimension is fed, the tracker's second formula is deleted, and the M5 alert row carries the suffix. Six of the tracker's nine tabs read BLANK because the outcome log does not record what they are cut on |
+| V1 | 2 `held_run_score` | **BUILT AND WIRED** (R4 A9/A10): the D1 dimension is fed, the tracker's second formula is deleted, and the M5 alert row carries the suffix. FOUR of the tracker's nine tabs fill (Bounce Types, Combos, Time of Day, Environment) and five read BLANK - the four `master_avwap_*` Swing tabs because the outcome log cannot be asked those dimensions, `rrs_alignment` because it is reachable and not derived yet (`UNDERIVED_DIMENSIONS` splits the two) |
 | V1 | 3 phone digest ranks across buckets | **BUILT** (R4 A11, horizon corrected in fix round 1) - Wilson lower bound on the family's realized win rate at ONE declared horizon (`SWING_DIGEST_HORIZON_SESSIONS` = 5, stale-horizon rows dropped the way the scan-factor leaderboard drops them), expected R as tiebreak, near cap after the ranking |
 | V1 | 4 Working-lately + priority switch | **NOT BUILT** - this is V4 |
 | V2 | 1 nightly auto-tagging | **BUILT** (gate #46) |
@@ -829,18 +829,20 @@ nobody has to reconstruct it from four entries:
 | V2 | 3 AWAY Recap | **NOT BUILT** - this is V4 |
 | V2 | 4 Market Journal one box | **BUILT** (gate #47). The Desk tab landed with V2; the LEFT-NAV PAGE landed with R4 A16, and R4 A17 moved the session roll to the open |
 | V2 | 5 hide the dead tabs | **BUILT** (gate #48) |
-| V3 | 1 win rate leads | **PARTIAL** - `swing_headline` exists and `setup_docs.family_record_sentence` renders it; the Master AVWAP table, the Setup Tracker Setup Types tab and the Weekend Prep cohort tables are still owed (R4 Part B, item B3) |
-| V3 | 2 day-trade headline | **BUILT** - and its surfaces are real since R4 A10 |
-| V3 | 3 one `LATELY_SESSIONS` | **BUILT** - `review_learning.DEFAULT_WINDOW_DAYS` and Weekend Prep's `window_days=7` calls still bypass it (R4 Part B, item B6) |
-| V3 | 4 one annotation writer | **BUILT** - all five surfaces have a writer since R4 A5 |
-| V3 | 5 research on a trader surface | **BUILT** |
+| V3 | 1 win rate leads | **PARTIAL** (R4 B3 wired five surfaces). WIRED: the AWAY digest ranking (A11), `setup_docs.family_record_sentence` and its two renderers (B2), the Master AVWAP setups table's **Family Win %** column, the Setup Tracker's **Last 30 Days** tab, and all four Weekend Prep cohort tables (veto, like, pass, rejection), each sorting by the Wilson lower bound. ONE Wilson: `swing_headline.WILSON_Z`. STILL OWED: **the Setup Tracker's Setup Types tab** - and the reason is measured, not scheduling. `master_avwap_setup_type_stats.csv` carries no win column (only `target_hit_rate` / `stop_rate`, different questions), and `master_avwap_tier_outcomes.csv` cannot be joined at that table's grain: its 184 rows collapse to 71 (side, bucket, family, zone) groups, so one joined rate would repeat across up to six rows and read as each row's own. Giving it an honest win rate needs the tracker export to carry one |
+| V3 | 2 day-trade headline | **BUILT** - surfaces real since R4 A10, and since R4 B4 every number on the Daytrade Tracker names its own basis: the champion tier is a COLUMN (PROVEN / MUTED / active from the learning state, blank for a segment it never saw - live 4 / 2 / 185 / 104 of 295 rows), the aggregator's verdict is headed **Verdict (edge score)**, and the My Decisions tabs carry Held 30m / Held x Ran through the same helper on `held_run_score.ALL_DIRECTIONS`, a pooled cell accumulated from the EPISODES and never an average of the two sided cells |
+| V3 | 3 one `LATELY_SESSIONS` | **BUILT AND COMPLETE** (R4 B6). `review_learning.DEFAULT_WINDOW_SESSIONS` IS `LATELY_SESSIONS` and its cutoff walks the exchange calendar; Weekend Prep's week is `evidence_stats.WEEK_SESSIONS` (5). The state key, the report header, the CLI flag, the System Health audit and the Daytrade Tracker status line all say **sessions**, and a literal scan test fails if a `window_days` comes back |
+| V3 | 4 one annotation writer | **BUILT** - all five surfaces have a writer since R4 A5, and since R4 B5 every VERB stamps the screen: `commit_pass` bypassed `_record` entirely, so a day-trade pass was the one row that could not say where it came from. The guard is now behavioural (one test per real click handler, reading the written row) rather than a scan of `_record`'s source text, which a verb that never calls it satisfied |
+| V3 | 5 research on a trader surface | **BUILT**, and CORRECTED by R4 B1 - the reader picked the OLDEST pack of a superseded day (`sorted(...)[-1]` is an ASCII sort), so the verdict card read a 47-cell pack in the older shape and printed "no cell has cleared the evidence floor" while the current pack had 33 that had |
 | V3 | 6 docs | **BUILT** |
 
 **The two largest owed items are V1's Working-lately + priority switch and V2's
 AWAY Recap, and both are V4.** Every rule they need is already written down - the
 switch reorders and never withholds (CLAUDE.md), "lately" is `LATELY_SESSIONS`,
 the headline statistics are `swing_headline` and `held_run_score` - so what is
-missing is the surface, not the decision.
+missing is the surface, not the decision. **The priority switch is not built, and
+CLAUDE.md no longer claims a test for it** (R4 B3): the
+identical-visible-rows test is owed WITH the switch.
 
 
 Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breaker

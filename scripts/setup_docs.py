@@ -35,6 +35,11 @@ Ground rules shared by every setup (the tracker's exit discipline):
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
+from evidence_stats import SWING_HORIZON_SESSIONS
+
 STOP_CLOSE_FAILURES = 2
 POST_EARNINGS_STOP_CLOSE_FAILURES = 1
 TIME_STOP_SESSIONS = 18
@@ -590,34 +595,131 @@ def family_record_sentence(setup_family: str, *, tracker_rows=None) -> str:
     return headline_from_tracker_rows(key, rows or ()).sentence()
 
 
-def _read_family_outcomes(family_key: str) -> list[dict]:
-    """Graded swing outcomes for one family, inside the "lately" window.
+#: The ONE horizon a setup doc's record is measured over - R4 B2. Read from
+#: `evidence_stats`, which is also where the AWAY digest's
+#: `SWING_DIGEST_HORIZON_SESSIONS` now takes it from: two horizons across the
+#: desk's swing surfaces would put two different win rates for one family on two
+#: screens, which is exactly the failure B3 names for the Wilson z.
+RECORD_HORIZON_SESSIONS = SWING_HORIZON_SESSIONS
 
-    Returns [] for anything it cannot read. A setup doc is reference material the
+#: One entry, replaced whole when the file or the window moves. A setup doc read
+#: is a burst - the overview page renders 24 families at once - and the previous
+#: shape re-read the whole CSV once per family, ~0.1 s each on the live store.
+_FAMILY_OUTCOMES_CACHE: dict[str, Any] = {}
+
+
+def clear_family_outcome_cache() -> None:
+    """Forget the memo. For tests, and for a caller that has just rescanned."""
+    _FAMILY_OUTCOMES_CACHE.clear()
+
+
+def _family_outcomes_path():
+    from project_paths import MASTER_AVWAP_TIER_OUTCOMES_FILE
+
+    return MASTER_AVWAP_TIER_OUTCOMES_FILE
+
+
+def _family_outcomes_window():
+    from evidence_stats import lately_window
+
+    return lately_window()
+
+
+def _all_family_outcomes() -> dict[str, list[dict]]:
+    """`{family key: rows}` for every family, from ONE pass over the tracker.
+
+    **ONE DECLARED HORIZON** (:data:`RECORD_HORIZON_SESSIONS`). The tracker
+    grades every scan row at 1, 3, 5 and 10 sessions, so the file carries one row
+    per `(scan_row_id, horizon)`: reading it whole counts ONE decision up to four
+    times. Measured live before this change, `avwap_band_bounce` reported n=1797
+    where the horizon-5 record is a quarter of that. The rate barely moves; the
+    Wilson LOWER BOUND does, and in the wrong direction - an inflated n makes it
+    too tight, unevenly across families, which changes the order.
+
+    **A row the tracker flagged `stale_horizon` is dropped**, the same rule
+    `autopilot_core.swing_family_records` and the scan-factor leaderboard apply
+    to this file: "5 sessions later" indexes a symbol's own scan rows, not
+    exchange sessions, so an irregularly scanned name lands far from its declared
+    horizon. Only an explicit `True` drops - `None` means the drift could not be
+    measured, and uncertainty is not grounds for deletion.
+
+    Returns {} for anything it cannot read. A setup doc is reference material the
     trader opens mid-session; it must never fail to render because a CSV moved.
     """
     try:
         import csv
 
-        from evidence_stats import lately_window
-        from project_paths import MASTER_AVWAP_TIER_OUTCOMES_FILE
+        path = _family_outcomes_path()
+        first, last = _family_outcomes_window()
+        try:
+            stamp = Path(path).stat().st_mtime_ns
+        except OSError:
+            stamp = 0
+        key = (str(path), stamp, first, last, RECORD_HORIZON_SESSIONS)
+        if _FAMILY_OUTCOMES_CACHE.get("key") == key:
+            return _FAMILY_OUTCOMES_CACHE["rows"]
 
-        first, last = lately_window()
-        rows: list[dict] = []
-        with open(MASTER_AVWAP_TIER_OUTCOMES_FILE, newline="", encoding="utf-8") as handle:
+        wanted_horizon = str(int(RECORD_HORIZON_SESSIONS))
+        grouped: dict[str, list[dict]] = {}
+        with open(path, newline="", encoding="utf-8-sig") as handle:
             for row in csv.DictReader(handle):
+                if str(row.get("horizon_sessions") or "").strip() != wanted_horizon:
+                    continue
+                if str(row.get("stale_horizon") or "").strip().lower() == "true":
+                    continue
+                stamp_text = str(row.get("scan_date") or "")[:10]
+                if stamp_text and not (first <= stamp_text <= last):
+                    continue
                 family = str(
                     row.get("setup_family") or row.get("family") or ""
                 ).strip().lower().replace(" ", "_").replace("-", "")
-                if family != family_key:
+                if not family:
                     continue
-                stamp = str(row.get("scan_date") or "")[:10]
-                if stamp and not (first <= stamp <= last):
-                    continue
-                rows.append(dict(row))
-        return rows
+                grouped.setdefault(family, []).append(dict(row))
+        _FAMILY_OUTCOMES_CACHE.clear()
+        _FAMILY_OUTCOMES_CACHE.update({"key": key, "rows": grouped})
+        return grouped
     except Exception:  # noqa: BLE001 - reference material never raises at a reader
-        return []
+        return {}
+
+
+def _read_family_outcomes(family_key: str) -> list[dict]:
+    """Graded swing outcomes for one family, one horizon, one shared read."""
+    return _all_family_outcomes().get(family_key, [])
+
+
+def family_headline_rows() -> dict[str, dict]:
+    """`{family key: swing_headline row}` for every family the tracker graded.
+
+    The table form of :func:`family_record_sentence`, for surfaces that show a
+    column rather than a sentence - R4 B3 wires the Master AVWAP setups table off
+    this. One pass over the tracker, one horizon, one Wilson.
+
+    Returns {} for anything it cannot read: a swing screen with a blank record
+    column is still a swing screen.
+    """
+    from swing_headline import headline_from_tracker_rows
+
+    return {
+        family: headline_from_tracker_rows(family, rows).as_row()
+        for family, rows in _all_family_outcomes().items()
+        if rows
+    }
+
+
+def family_record_sentences(setup_families) -> dict[str, str]:
+    """`{family key: sentence}` for many families, from one pass over the file.
+
+    What the setup-docs page actually needs: it renders 24 families at once, and
+    calling :func:`family_record_sentence` in a loop re-read the whole CSV every
+    time. The memo makes both shapes one read; this one says so at the call site.
+    """
+    grouped = _all_family_outcomes()
+    sentences: dict[str, str] = {}
+    for candidate in setup_families or ():
+        key, _doc = resolve_setup_doc(candidate)
+        sentences[key] = family_record_sentence(key, tracker_rows=grouped.get(key, []))
+    return sentences
 
 
 def all_setup_docs_by_group() -> list[tuple[str, list[tuple[str, dict]]]]:

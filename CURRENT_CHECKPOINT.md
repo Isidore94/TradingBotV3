@@ -18,12 +18,12 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/r4-fixes`** - Round R4 **Part A** (items A1-A18), off `main`, UNMERGED. Eighteen fixes across P10, V1 and V2, each with a test proven to fail on the un-fixed file; no new feature. Part B (`claude/v3-keep-it-honest`) and Part C (integrate) are not this branch's. Before it: Phase 0.14 packet **V3** was fast-forwarded onto `main` at ~21:40 on 2026-09-02 (trader: "ok merge to main now"); `claude/v3-keep-it-honest` is now CONTAINED in `main` and carries nothing extra. The agent team (`.claude/agents/`, `docs/AGENT_TEAM.md`) rode in with it. **The two largest owed items are V1's Working-lately + priority switch and V2's AWAY Recap** - plan.md's Phase 0.14 status table lists every packet item and its state |
-| Also in flight | **`claude/r4-fixes` is unmerged** (R4 Part A). Otherwise: `claude/v3-keep-it-honest` and `claude/agent-team` are both CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch. The one locked worktree under `.claude/worktrees/` was removed and pruned on 2026-09-02 (clean, nothing lost) |
-| Active roadmap items | **Round R4 Part A** (this branch, BUILT). Then R4 Part B and Part C, then **V4**: V1's item 4 (Working-lately + the priority switch) and V2's item 3 (the AWAY Recap), which are the two largest owed pieces. R4 A11 built V1 item 3 (the digest ranking) and R4 A9/A10 wired V1 item 2's surfaces, so plan.md's Phase 0.14 table is smaller than it was this morning. Live gates #29-#51 are owed across Phase 0.13 and 0.14 |
-| Last verified baseline | **R4 Part A + FIX ROUND 1, `claude/r4-fixes` at `0a5e653`, 2026-09-03 ~00:50 - THE NIGHTLY AI LOCK WAS STILL HELD.** `pytest tests/ -q` with the three lock-sensitive files AND `test_qt_journal_panel.py` stood down: **6265 passed, 1 skipped, 161 deselected, 72 subtests, process exit 0, ZERO failures, 6 min 03 s**. `test_qt_journal_panel.py` is stood down for a reason that is NOT this branch's and is named in the fix-round entry below - a `today - 30 days` fixture that expired at midnight; `git diff main..HEAD` over the four files involved is empty. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger. **A clean full run with the lock FREE and that fixture repaired is owed before merge.** Previous run, before the fix round: **R4 Part A, 2026-09-02 23:19 - lock held** (`run_ai_jobs.py` pid 3144, running since ~22:00; it took six hours on 2026-09-01). So the run is reported the way the contract says to report it. `pytest tests/ -q` with the three lock-sensitive files stood down: **6284 passed, 115 deselected, 72 subtests, process exit 0, ZERO failures, 6 min 52 s**. A second run standing down only `test_ai_jobs_runner.py`: **6358 passed, 4 failed** - and all four are in `test_ai_evidence_coverage.py` and `test_ai_jobs_store_window.py`, the other two lock files. Run alone, those three files fail **32** tests, which is exactly the number `docs/AGENT_TEAM.md` names for the held lock. **Every failure in the tree is the lock and none is this branch.** `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger. **A clean full run with the lock FREE is still owed and is the lead's to take before merging.** Previous: `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0, ZERO failures, 5 min 42 s** (2026-09-02 21:43, desk `.venv`, on `main` at the V3 fast-forward `7c075d8`, run in a SCRATCH worktree per `docs/AGENT_TEAM.md` rule 6) - the `ai_jobs_runner` lock probed FREE immediately before AND after that run. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger |
+| Working branch | **`claude/v3-keep-it-honest`** - Round R4 **Part B** (items B1-B8), with `origin/main` (Part A + its fix round) merged in first as a clean fast-forward. Eight commits, each with a test PROVEN to fail on the un-fixed file. UNMERGED; the lead merges. Part C (integrate and prove) is not this branch's. **B3 is deliberately PARTIAL** - five surfaces wired, the Setup Tracker's Setup Types tab owed for a MEASURED reason (its stats file carries no win column and the outcomes file cannot be joined at its grain), and CLAUDE.md, plan.md and the CHANGELOG all say so. **The two largest owed items are still V1's Working-lately + priority switch and V2's AWAY Recap, both V4** - plan.md's Phase 0.14 status table lists every packet item and its state |
+| Also in flight | **`claude/v3-keep-it-honest` is unmerged** (R4 Part B, 8 commits ahead of `origin/main`). `claude/r4-fixes` (Part A) was MERGED to `origin/main` at `d0a0d49`. `claude/agent-team` is CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch |
+| Active roadmap items | **Round R4 Part B** (this branch, BUILT). Then Part C: merge and prove. Then **V4**, which now owns three things - V1's item 4 (Working-lately + the priority switch, whose identical-visible-rows test is owed WITH the switch and is no longer claimed by CLAUDE.md), V2's item 3 (the AWAY Recap), and B3's last surface (the Setup Types tab, which needs the tracker export to write a win column before it can be wired honestly). Live gates #29-#52 are owed across Phase 0.13 and 0.14 |
+| Last verified baseline | **R4 Part B, `claude/v3-keep-it-honest` at `fc80e0b`, 2026-09-03 - THE NIGHTLY AI LOCK PROBED **FREE** IMMEDIATELY BEFORE THE RUN.** `pytest tests/ -q` with **NOTHING DESELECTED**: **6476 passed, 1 skipped, 72 subtests passed, process exit 0, ZERO failures, 6 min 00 s**. This is the clean full run with the lock free that the previous two baselines owed, and it also clears the `test_qt_journal_panel.py` stand-down - B7 made that fixture relative, so the six date-expired failures are gone rather than excluded. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - **no packaging trigger** (the only files added since `main` are six test modules; no dependency, no non-`.py` asset, no new top-level package, no dynamic import). Previous: R4 Part A + FIX ROUND 1 at `0a5e653`, 2026-09-03 ~00:50 with the lock HELD - 6265 passed with the three lock-sensitive files and `test_qt_journal_panel.py` stood down |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
-| Desk restart | **DONE 2026-09-02 21:04, trader-authorized ("go ahead and start the desk"). THE DESK HAD BEEN DOWN SINCE ~13:02** - `heartbeat.json` last stamped 13:02:29 under the old pid 25884 and no `launch_gui` process existed after it; the cause is not established, and I killed four stuck pytest processes at about that minute, which I cannot rule out. Relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **11612** (the desk) under trampoline **7192**. **It runs `claude/v3-keep-it-honest`, not `main`** - another agent holds `main` in a locked worktree, and V3 CONTAINS main (`git merge-base --is-ancestor` succeeds, 3 ahead / 0 behind) and is the commit the 6310-pass baseline was measured on. Verified UP THREE WAYS rather than assumed: the process outlived the launch with 18 s of CPU, `heartbeat.json` re-stamped at 21:05:22 naming pid 11612 (it had read 25884 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0 |
+| Desk restart | **The desk is running `claude/v3-keep-it-honest` at the OLD tip `93732ef`** (started 2026-09-02 21:04, pids 11612 under trampoline 7192, verified three ways at the time). That commit predates Part A, Part A's fix round and all of Part B, so **none of R4 is on the desk**. A restart is owed once the lead merges - and it is a restart onto `main`, not onto this branch. Nothing in R4 requires a frozen rebuild; the desk runs from SOURCE |
 
 ### Open gates, newest first
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 52 | **The surfaces say what they measure (R4 Part B)** - one DESK session and one Weekend Prep open where: the Master AVWAP setups table shows a **Family Win %** cell reading `NN% (>=NN%, n=NNN)` and sorting by the bound, not the rate; the Setup Playbook shows a **Record:** line under a setup and it matches the AWAY digest's ordering for that family; the Daytrade Tracker shows a **Tier** column (PROVEN / MUTED / active / blank) beside **Verdict (edge score)**, and My Decisions carries Held 30m; the Weekend Prep verdict card's research line names a real cell count instead of "no cell has cleared the evidence floor"; the week summary header says **sessions**; and one day-trade PASS recorded from the chart lands in `trader_annotations.jsonl` **with a `surface`** | 2026-09-03 R4 Part B entry |
 | 51 | **The corrected numbers, on the desk (R4 Part A)** - one DESK session and one Weekend Prep open where: the Strength Board's RVOL column is populated on a day the window contains a half day (the number must not jump when one does); the Day Trade Tracker's Held 30m / Held x Ran are filled on the FOUR tabs the outcome log can answer - Bounce Types, Combos, Time of Day, Environment - and BLANK on the four Swing tabs and on RRS (which is reachable and simply not derived yet); an M5 alert row shows "held NN% / ran N.NR" or nothing; the AWAY digest's swing list is ordered with a near-bucket pick above a favorite at least once; the Weekend Prep verdict card's take rate is NOT 100%; and one Market Journal note typed after the close files against TODAY with "written after the session" on it | 2026-09-02 R4 Part A entry |
 | 50 | **The headline statistics agree (V3)** - one DESK session and one Weekend Prep open where every named surface shows the headline first (win rate on swings, Held x Ran on day trades), the sorts agree with it, and the Day Trade Tracker opens on Held x Ran descending | 2026-09-02 V3 entry |
 | 49 | **Weekend Prep, read in one click (V2 item 2)** - one open where Refresh builds every step and the verdict card shows five to eight lines with an n on each; then "Tag this week" lists the week's unconfirmed trades and Confirm all shown writes the trader's answer | 2026-09-02 V2 entry |
@@ -85,6 +86,82 @@ the dated entry named beside it.
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
+
+### 2026-09-03 - Round R4 Part B: the surfaces the packets promised
+
+**Branch `claude/v3-keep-it-honest`, with `origin/main` (carrying Part A and its
+fix round) merged in first - a clean fast-forward, because V3 was already
+contained in `main` and the branch held nothing extra.** Eight items, eight
+commits, each with a test PROVEN to fail on the un-fixed file by restoring that
+file and re-running. B7 and B8 are the lead's additions.
+
+**What the packet got right, and what the code corrected.** B1's mechanism was
+exactly as described and its live symptom slightly different: no pack on the
+store yet carries an `after_like` block at all, so the after-like TABLE was
+honest either way. What the bad sort actually broke is the **research headline on
+the verdict card** - it read the 47-cell original in the older shape, which has no
+`eligible_policies` key, and printed "no cell has cleared the evidence floor yet"
+while the `.2` pack had 33 that had. B3's "zero production callers" was stale by
+two: R4 A11 and B2 had already given it the AWAY digest and the setup docs.
+
+**B3 is PARTIAL and the docs say which surfaces are owed.** Five are wired - the
+AWAY digest ranking, both setup-doc renderers, the Master AVWAP setups table's
+Family Win % column, the Setup Tracker's Last 30 Days tab, and all four Weekend
+Prep cohort tables, every one sorting by the Wilson lower bound. The Setup Types
+tab is owed **for a measured reason rather than for time**:
+`master_avwap_setup_type_stats.csv` carries no win column at all, and
+`master_avwap_tier_outcomes.csv` cannot be joined at that table's grain - its 184
+rows collapse to 71 (side, bucket, family, zone) groups, so one joined rate would
+repeat across up to six rows and read as each row's own. That tab needs the
+tracker export to write a win column; it is not a wiring job.
+
+**The CLAUDE.md sentence citing a "rows identical with the switch on and off"
+test is deleted.** The priority switch is not built - it is V4 - and the test is
+owed WITH it. A doc that cites a test nothing runs is worse than a doc that says
+the work is owed.
+
+**One horizon and one Wilson, now enforceable.**
+`evidence_stats.SWING_HORIZON_SESSIONS` (5) is the value and
+`autopilot_core.SWING_DIGEST_HORIZON_SESSIONS` re-exports it, so the setup docs
+and the AWAY digest rank on one number - the top three families by bound read
+0.585 / 0.543 / 0.522 on both, off the same file. `swing_headline.WILSON_Z` (1.96)
+is every trader-facing win rate; `expected_r`'s 1.28 stays where it is as a
+parameter of the proven-quality score inside a fenced scoring file, and a test
+asserts no trader-facing surface reaches for it.
+
+**"Lately" now includes the review board.**
+`review_learning.DEFAULT_WINDOW_SESSIONS` IS `LATELY_SESSIONS` - it was a
+90-calendar-day literal on the very window CLAUDE.md names as reading that
+constant. The number changes with the unit and that is intended: 90 calendar days
+was about 62 sessions of behaviour and this is 20. Weekend Prep's week is
+`WEEK_SESSIONS` (5); it had been printing "Week of \<Mon\> to \<Fri\>" over the
+last 7 CALENDAR days, so a holiday week measured four sessions and still called
+itself a week.
+
+**Two expiring fixtures were repaired rather than widened.**
+`test_qt_journal_panel.py` went red at midnight on dates pinned to 2026-08-03
+against a `30d` default range, and `test_review_learning.py`'s shard test would
+have gone the same way under the shorter window. Both are relative now, and the
+journal one carries a guard that asserts against `journal_feed.date_range_bounds`
+rather than a re-spelled 30.
+
+**No packaging trigger.** No new dependency, no non-`.py` asset, no new top-level
+`scripts/` package, no dynamic import. Every new module is inside an
+already-collected package - the only files this branch adds are six test modules.
+
+**Three full runs, and what each one found.** The FIRST caught a real defect this
+branch's own tests had missed: B3's `family_win_rate` column was appended to
+`COLUMNS` and to nothing else, so the Master AVWAP compact profile needed **638px
+in a 539px viewport at 1400px wide** - the horizontal scrollbar that profile
+exists to prevent, on the trader's main swing screen. It now has all three entries
+the profile needs (a pinned width, an elastic floor, a place in the drop order),
+and a guard asserts a future appended column cannot repeat it silently. The SECOND
+run was clean except for
+`test_ui_stall_watchdog.py::test_watchdog_records_a_blocking_call_with_its_stack`,
+which is a 30 ms threshold against a 5 ms heartbeat: it passed in run one, passes
+alone, and `git diff origin/main...HEAD` touches nothing near it - a load flake,
+recorded rather than hidden. The THIRD run is the baseline above: **6476 passed,
+exit 0, nothing deselected.**
 
 ### 2026-09-03 - Round R4 Part A, FIX ROUND 1: the reviewer's four blockers
 

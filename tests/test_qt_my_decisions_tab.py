@@ -32,7 +32,7 @@ def _state(**dimensions) -> dict:
     return {
         "schema": "review_learning_v1",
         "generated_at": "2026-09-01T11:10:48",
-        "window_days": 90,
+        "window_sessions": 20,
         "shown": 2606,
         "takes": 645,
         "overall_take_rate": 0.247,
