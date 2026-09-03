@@ -149,6 +149,13 @@ COMPACT_COLUMN_WIDTHS = {
     "industry": 130,
     "d1_vs_sector": 84,
     "d1_vs_industry": 88,
+    # R4 B3. The cell is `62% (>=52%, n=90)` at natural width, which is wider
+    # than this table can afford; 104px shows the rate and the bound and elides
+    # the n, which is the right thing to lose first - the n is also readable in
+    # the tooltip and the bound already encodes it. Without an entry here the
+    # column took DataTable's 80px floor and NO squeeze rule, and the compact
+    # profile overflowed its viewport by 99px at 1400px wide.
+    "family_win_rate": 104,
 }
 
 
@@ -556,7 +563,16 @@ class MasterAvwapPanel(QWidget):
         if overflow <= 0:
             return
         # Elastic columns, widest-first, with the narrowest width each may take.
-        for key, floor in (("setup_tags", 72), ("industry", 84), ("key_level", 88)):
+        # `family_win_rate` is LAST and floors at 76 - enough for `62% (>=52%)`
+        # to elide gracefully. It squeezes late and drops last because it is the
+        # headline (decision 0016 answer 3): the columns above it are context for
+        # a number this one states outright.
+        for key, floor in (
+            ("setup_tags", 72),
+            ("industry", 84),
+            ("key_level", 88),
+            ("family_win_rate", 76),
+        ):
             if overflow <= 0:
                 break
             column = keys.index(key)
@@ -569,7 +585,7 @@ class MasterAvwapPanel(QWidget):
                 overflow -= take
         # Still over: drop columns in reverse value order rather than let a
         # scrollbar hide them silently.
-        for key in ("d1_vs_sector", "industry", "setup_tags"):
+        for key in ("d1_vs_sector", "industry", "setup_tags", "family_win_rate"):
             if overflow <= 0:
                 break
             column = keys.index(key)

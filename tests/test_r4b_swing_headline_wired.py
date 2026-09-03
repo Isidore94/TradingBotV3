@@ -214,3 +214,26 @@ def test_a_cohort_with_no_sample_shows_a_dash_and_sorts_last():
         ]
     )
     assert [row["cohort"] for row in ranked] == ["thick", "thin", "unmeasured"]
+
+
+def test_the_new_column_is_budgeted_in_the_compact_profile():
+    """A column with no compact width overflows the desk's setups pane.
+
+    Found by the full suite rather than by this file: `family_win_rate` landed
+    with no entry in `COMPACT_COLUMN_WIDTHS`, no floor in the elastic list and no
+    place in the drop order, so it took `DataTable`'s 80px minimum and could not
+    be squeezed - the compact profile needed 638px in a 539px viewport at 1400px
+    wide, which is exactly the horizontal scrollbar that profile exists to
+    prevent. Any future appended column needs all three entries.
+    """
+    pytest.importorskip("PySide6", reason="the setups table is a Qt widget")
+    from ui.panels.master_avwap_panel import COMPACT_COLUMN_WIDTHS
+
+    source = (
+        ROOT / "scripts" / "ui" / "panels" / "master_avwap_panel.py"
+    ).read_text(encoding="utf-8")
+    squeeze = source.split("def _fit_compact_columns", 1)[1]
+
+    assert COMPACT_COLUMN_WIDTHS.get("family_win_rate")
+    assert '("family_win_rate", 76)' in squeeze, "no floor: it cannot be squeezed"
+    assert '"setup_tags", "family_win_rate"' in squeeze, "not in the drop order"
