@@ -2622,9 +2622,17 @@ frozen dataclass, so one shared instance is safe; the holiday dicts are shared a
 **no caller may mutate them** (every caller in `scripts/` and `tests/` only reads,
 checked 2026-09-03).
 
-**A side effect worth knowing:** `owned_scan_process_count` now counts the build
-child too, so the Health tile labelled for scan children can read 1 with no scan
-running.
+**The build child is OWNED without being a SCAN child, and that distinction is
+load-bearing.** `ScanService._start` refuses a new scan while
+`owned_scan_process_count()` is non-zero ("previous scan child still running"),
+so counting the build there would have turned a freeze fix into skipped scans —
+a 27–57 minute build, four times a session, straddling the next slot every time.
+The child is registered for the shutdown reap and for
+`owned_scan_process_snapshot` (which is about reaping and answers plan sec 6.1's
+"owned child-process count returns to zero"), and it is tracked in a second list
+so `owned_scan_process_count` keeps its exact previous meaning.
+`owned_build_process_count()` answers for builds. The second list holds process
+OBJECTS rather than pids, because the OS recycles pids.
 
 **Reopen if** the build ever needs to hand a live object back to the desk (it does
 not — it publishes through the lake), or if a platform without

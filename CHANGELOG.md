@@ -875,7 +875,11 @@ which is evidence and must not be loaded as context.
   specified a CLI build job; in-process was the deviation. The parent-side
   `warehouse_enabled()` gate, the one-build-at-a-time rule and
   `wait_for_warehouse_build` are unchanged, and a reaped child is safe because
-  `single_flight` reclaims a dead holder's lock.
+  `single_flight` reclaims a dead holder's lock. The child is OWNED (reaped at
+  shutdown, present in `owned_scan_process_snapshot`) but is **not a scan
+  child**: `owned_scan_process_count` gates whether a new scan may start, and a
+  half-hour build must never be the reason a scheduled scan is refused -
+  `owned_build_process_count()` answers for builds.
 - **The XNYS exchange calendar is memoized** (F1). `holidays`, `half_days` and the
   session builder behind `trading_session` are `lru_cache`d - **84%** of that build
   thread's samples were recomputing them once per M5 bar per occurrence. 20,000
@@ -974,9 +978,10 @@ call shape and every in-module caller passes `calendar=` as a keyword.
 macOS still launches), `launch_gui` answers `--warehouse-build <run_id>` beside
 `--run-scan`, and `_run_warehouse_build` is deleted. A CPU-bound Python thread
 holds the GIL by construction - no priority or timer trick returns the GUI thread,
-which is why nothing smaller was attempted. `owned_scan_process_count` now counts
-the build child too. The three tests in `test_qt_warehouse_tee.py` that pinned the
-in-process mechanism ask the same four questions of the child.
+which is why nothing smaller was attempted. The child is owned and reaped but
+deliberately NOT counted as a scan child, because that count decides whether the
+next scan may start. The three tests in `test_qt_warehouse_tee.py` that pinned
+the in-process mechanism ask the same four questions of the child.
 
 **3 - the stall watchdog's cap rolls hourly.** `MAX_RECORDS_PER_HOUR = 2000` with
 a counter beside the session total; a runaway loop is still bounded at 48k a day,

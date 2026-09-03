@@ -17,6 +17,9 @@ What this file pins:
   carrying the run id, and that a second start while it lives is refused
   rather than stacked;
 * that an unconfigured warehouse spawns nothing at all;
+* that the child is OWNED (shutdown reaps it) without being a SCAN child - a
+  build that ran for half an hour would otherwise make ``ScanService`` refuse
+  the next scheduled scan;
 * that ``launch_gui --warehouse-build <run_id>`` answers before the desk's
   own startup work, the way ``--run-scan`` does;
 * that no thread in ``scan_service`` runs a build any more.
@@ -156,11 +159,41 @@ def test_a_second_build_while_one_lives_is_refused_not_stacked(spawned):
 
 
 def test_a_build_is_owned_so_shutdown_can_reap_it(spawned):
-    before = scan_service_mod.owned_scan_process_count()
+    """Owned, visible to the Health accounting - and NOT a scan child.
+
+    `ScanService.start` refuses a new scan while `owned_scan_process_count()`
+    is non-zero ("previous scan child still running"). The build runs for tens
+    of minutes, four times a session, so counting it there would have turned
+    the freeze fix into skipped scans. It is registered for the reap and
+    counted separately.
+    """
+    scan_service_mod.terminate_owned_scan_processes(grace_seconds=0.0)
     service = ScanService()
     try:
         assert service.start_warehouse_build("r1") is True
-        assert scan_service_mod.owned_scan_process_count() == before + 1
+        assert scan_service_mod.owned_build_process_count() == 1
+        assert scan_service_mod.owned_scan_process_count() == 0, (
+            "a research build must never be the reason a scheduled scan is refused"
+        )
+        # It is still in the reap registry, which is what shutdown walks.
+        snapshot = scan_service_mod.owned_scan_process_snapshot()
+        assert any(child["running"] for child in snapshot["children"])
+    finally:
+        service.wait_for_warehouse_build(5.0)
+        scan_service_mod.terminate_owned_scan_processes(grace_seconds=0.0)
+
+
+def test_a_live_build_does_not_refuse_the_next_scan(spawned, monkeypatch):
+    """The end-to-end version of the rule above, through the real refusal."""
+    service = ScanService()
+    try:
+        assert service.start_warehouse_build("r1") is True
+        # `start` is refused for many reasons; the one under test is the
+        # owned-child gate, so assert on the reason it records.
+        started = service._start(lambda: {}, "probe scan")
+        assert service._last_rejection_reason != "previous scan child still running"
+        if started:
+            service.shutdown()
     finally:
         service.wait_for_warehouse_build(5.0)
         scan_service_mod.terminate_owned_scan_processes(grace_seconds=0.0)

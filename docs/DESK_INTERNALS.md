@@ -769,9 +769,15 @@ holder rather than obeying it**. One daemon thread, `qt-warehouse-build-wait`,
 blocks on the child's pipe; blocking on I/O holds no GIL, which is the entire
 distinction this rule rests on. Detail and the reopen triggers: BD-95.
 
-**A side effect that is not a defect:** `owned_scan_process_count` now counts the
-build child, so a Health tile labelled for scan children can read 1 with no scan
-running.
+**A build child is owned, and is not a scan child.** `ScanService._start` refuses
+a new scan while `owned_scan_process_count()` is non-zero - "previous scan child
+still running" - so registering the build there and stopping would have converted
+this freeze into a different failure: a 27-57 minute build, four times a session,
+refusing the next scheduled scan. The build is registered for the shutdown reap
+and appears in `owned_scan_process_snapshot`, which is the reaping account; it is
+excluded from `owned_scan_process_count`, which is the may-a-scan-start question,
+and `owned_build_process_count()` answers for it. Two tests hold this: one on the
+counts, one driving the real refusal path.
 
 **The exchange calendar is memoized.** `holidays(year)`, `half_days(year)` and the
 session builder behind `trading_session` are `functools.lru_cache(maxsize=None)`.

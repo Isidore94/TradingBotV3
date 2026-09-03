@@ -373,11 +373,12 @@ class ScanService(QObject):
             )
             return False
         self._warehouse_proc = child
-        # Registered like a scan child so shutdown reaps it: a closed desk must
-        # not leave a multi-GB build running invisibly (plan.md P0 #5). It is
-        # therefore counted by `owned_scan_process_count`, which now means
-        # "children this desk owns" rather than "scan children".
-        _register_owned_process(child)
+        # Owned, so shutdown reaps it: a closed desk must not leave a multi-GB
+        # build running invisibly (plan.md P0 #5). Flagged as a BUILD, so it is
+        # not counted as a scan child - `ScanService.start` refuses a new scan
+        # while one of those is alive, and a research build must never be the
+        # reason a scheduled scan does not run.
+        _register_owned_process(child, is_build=True)
         threading.Thread(
             target=self._await_warehouse_build,
             args=(child,),
@@ -454,19 +455,51 @@ from scan_worker import SCAN_OK_MARKER as _SCAN_OK_MARKER  # noqa: E402
 # the application unnoticed.
 _owned_processes_lock = threading.Lock()
 _owned_processes: list[subprocess.Popen] = []
+#: The subset of the above that are research-warehouse BUILD children. They are
+#: owned - shutdown reaps them and the Health accounting sees them - but they
+#: are not SCAN children, and the distinction is load-bearing: `ScanService.start`
+#: refuses a new scan while a scan child is alive, and a research build that can
+#: run for tens of minutes must never be the reason a scheduled scan does not
+#: run. Held as a second list rather than a pid set because the OS recycles pids
+#: and identity here must not depend on it.
+_owned_build_processes: list[subprocess.Popen] = []
 
 
-def _register_owned_process(proc: subprocess.Popen) -> None:
+def _register_owned_process(proc: subprocess.Popen, *, is_build: bool = False) -> None:
     with _owned_processes_lock:
         _owned_processes[:] = [p for p in _owned_processes if p.poll() is None]
         _owned_processes.append(proc)
+        if is_build:
+            _owned_build_processes[:] = [
+                p for p in _owned_build_processes if p.poll() is None
+            ]
+            _owned_build_processes.append(proc)
 
 
 def owned_scan_process_count() -> int:
-    """Live scan children owned by this GUI (health/status surface)."""
+    """Live SCAN children owned by this GUI (health/status surface).
+
+    Build children are deliberately excluded - see `_owned_build_processes`.
+    `owned_build_process_count` answers for those, and
+    `owned_scan_process_snapshot` still accounts for every owned child, because
+    that one is about reaping rather than about whether a scan may start.
+    """
     with _owned_processes_lock:
         _owned_processes[:] = [p for p in _owned_processes if p.poll() is None]
-        return len(_owned_processes)
+        _owned_build_processes[:] = [
+            p for p in _owned_build_processes if p.poll() is None
+        ]
+        builds = {id(p) for p in _owned_build_processes}
+        return len([p for p in _owned_processes if id(p) not in builds])
+
+
+def owned_build_process_count() -> int:
+    """Live research-warehouse build children owned by this GUI."""
+    with _owned_processes_lock:
+        _owned_build_processes[:] = [
+            p for p in _owned_build_processes if p.poll() is None
+        ]
+        return len(_owned_build_processes)
 
 
 def owned_scan_process_snapshot() -> dict[str, Any]:
@@ -533,6 +566,7 @@ def terminate_owned_scan_processes(grace_seconds: float = 3.0) -> dict[str, int]
     with _owned_processes_lock:
         procs = [p for p in _owned_processes if p.poll() is None]
         _owned_processes.clear()
+        _owned_build_processes.clear()
     summary = {"finished": 0, "terminated": 0}
     for proc in procs:
         try:
