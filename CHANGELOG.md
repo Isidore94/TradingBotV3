@@ -35,6 +35,20 @@ which is evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Weekend Prep has ONE Refresh and a verdict card** (V2 item 2, decision 0016
+  answer 10). The click starts each page's own reader and returns - measured under
+  50 ms - and the five per-page buttons left the layout. The card is a PURE builder
+  (`scripts/weekend_verdict.py`): take rate, blind spots and leaks BY NAME, the
+  best liked claim and weakest veto reason at h3, the week's net and win rate
+  (**confirmed tags only**), the tag-review count. Every measured line carries its
+  n; a cohort under n=5 is named thin and never ranked; a missing input says so
+  rather than printing a zero. The RS/RW prose is retired - it duplicated a live
+  board with a Saturday snapshot - and the log scans are kept UNCALLED with
+  docstrings that say so.
+- **"Tag this week" is a weekend step** (V2 item 2e). The week's provisional and
+  needs_review trades, confirm-all-shown and confirm-selected through
+  `JournalStore.confirm_tags`, ten visible rows, read on a worker. A confirmed row
+  is never listed again, and a failed write is reported LOUDLY.
 - **The tagger runs every night** (V2, decision 0016 answer 10). `journal_auto_tag`
   is a deterministic slot inserted SECOND, right after `journal_import` — the
   second and last sanctioned exception to this list's append-only rule. It applies
@@ -781,10 +795,14 @@ capture as one box and one Enter, dated to the session it is about; and the
 default-off switch that hides the four surfaces the trader never opens without
 removing any of them.
 
-**Not built: items 2 and 3.** Weekend Prep still has its per-table refreshes,
-its text blocks and no verdict card; the AWAY Recap is still the forward-looking
-digest with no outcomes and no charts. Both are UI rebuilds of a size that
-deserves its own run, and plan.md's Phase 0.14 entry records what each owes.
+**Also built (second run): item 2's (a), (b), (c) and (e)** - one Refresh for the
+whole tab, the verdict card, the retired RS/RW prose, and the "Tag this week"
+step that completes the tagging loop item 1 started.
+
+**Not built: item 3, and part of 2's (c).** The AWAY Recap is still the
+forward-looking digest with no outcomes and no charts; Weekend Prep still shows
+its takes and watch conversion as text rather than a table. plan.md's Phase 0.14
+entry records exactly what each owes.
 
 **One defect of my own, found and fixed here.** Item 1's badge started its reader
 in `__init__`; that thread opened the journal while another test was still
@@ -792,7 +810,7 @@ monkeypatching the journal's module globals, and it made an unrelated journal
 test fail from a hundred tests away - green alone, red in the suite. It starts
 from `showEvent` now and is joined in `closeEvent`.
 
-**Verification.** `pytest tests/ -q` **6200 passed, 72 subtests, process exit 0,
+**Verification.** `pytest tests/ -q` **6222 passed, 72 subtests, process exit 0,
 zero failures**, lock probed FREE immediately before the run · `ruff` clean ·
 smoke **7/7** · source `--selftest` **74/74**.
 

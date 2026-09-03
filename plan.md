@@ -842,16 +842,34 @@ the Universe page. **Hidden is not removed**: `setTabVisible`, no index shifts,
 every timer still visibility-gated, and a test proving every rail shortcut is
 panel-scoped, bound once, and not owned inside a hidden tab.
 
-**Items 2 and 3 — NOT BUILT.**
+**Item 2 - Weekend Prep. (a), (b), (c) and (e) BUILT; the rest of (c) owed.**
 
-2. **Weekend Prep is not rebuilt.** It still has per-table Refresh buttons, the
-   week-in-review text block, the watch-conversion dict dump and the RS/RW
-   extremes; there is no verdict card and no "Tag this week" step. The packet's
-   (a)–(e) all remain.
-3. **The AWAY Recap is unchanged.** It is still the forward-looking digest
-   assembly — best-swing block, classified D1 alerts, staged picks, Focus lists —
-   with no outcomes, no charts, no "what moved", no "alerts that were right" and
-   no "Review these" walk-through.
+* **(a) ONE Refresh** drives every step. The click starts each page's own reader
+  and returns - measured under 50 ms - and names the steps as they start. The five
+  per-page buttons left the layout and stay as objects, because `reload()` uses
+  each one as its own single-flight guard.
+* **(b) The verdict card**, five to eight lines from a PURE builder
+  (`scripts/weekend_verdict.py`): take rate, blind spots and leaks BY NAME, the
+  best liked claim and weakest veto reason at h3, the week's net and win rate
+  (**confirmed tags only**), and the tag-review count. Every measured line carries
+  its n; a cohort under n=5 is named as thin and never ranked; a missing input
+  says so instead of printing a zero.
+* **(c) The RS/RW prose is retired** - it duplicated a live board with a Saturday
+  snapshot. The log SCANS are kept, uncalled, and say so in capitals in their own
+  docstrings so nobody "fixes" a blank page by wiring the wall of text back.
+* **(e) "Tag this week"**, a sixth step: the week's provisional and needs_review
+  trades, confirm-all-shown and confirm-selected through the store's own API, ten
+  visible rows, read on a worker, and a failed write reported LOUDLY.
+
+**Still owed by item 2:** the takes/watch-conversion table (the summary is still
+text), the ten-visible-rows pass over the OTHER tables, and the collapsed
+"how to read this" notes.
+
+**Item 3 - the AWAY Recap. NOT BUILT.** It is still the forward-looking digest
+assembly - best-swing block, classified D1 alerts, staged picks, Focus lists -
+with no outcomes, no charts, no "what moved", no "alerts that were right", no
+"your names" and no "Review these" walk-through. All four of the packet's blocks
+and the chart-on-click door remain.
 
 **Live gate (#46):** one nightly run that tags new trades, and the Journal nav
 button showing the count the next morning.
