@@ -50,7 +50,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -94,6 +94,9 @@ from ui.widgets.flow_layout import FlowLayout
 _REASON_ROLE = Qt.ItemDataRole.UserRole
 _CLAIM_ROLE = Qt.ItemDataRole.UserRole
 
+#: The note field's resting hint, restored whenever no verb is waiting on it.
+NOTE_PLACEHOLDER = "freeform note"
+
 #: One keystroke per claim, in list order. Digits first so the nine main-swing
 #: claims keep the exact keys the trader already presses; letters continue the
 #: run because there is no tenth digit and a two-key sequence would cost the
@@ -126,6 +129,20 @@ class CaptureRail(QFrame):
     #: had to be torn back out). The host that owns the Focus store performs
     #: the placement, so that store keeps exactly one writer.
     vetoDayTradeRequested = Signal(dict)
+    #: (event_type, verdict_row) once the trader has finished typing about a
+    #: retiring verb - S1.2, trader 2026-09-03: *"when I hit like or not today
+    #: or anything, it should keep the chart up UNTIL I finish typing."*
+    #:
+    #: The verb's own row is already on disk (``captured`` fired at the click).
+    #: This says the trader is DONE with the chart, so the host may now retire
+    #: it. A host that never calls :meth:`begin_follow_up` never sees this and
+    #: keeps today's behaviour exactly - which is what the rail hosted in the
+    #: snapshot popup and in the tests does.
+    followUpSettled = Signal(str, dict)
+
+    #: What the note field says while a verb is waiting for the trader.
+    FOLLOW_UP_PLACEHOLDER = "Enter to advance - type first to add a note"
+    FOLLOW_UP_HINT = "  ·  type a note then Enter, or Enter to move on."
 
     def __init__(
         self,
@@ -165,6 +182,10 @@ class CaptureRail(QFrame):
         # the object the Focus placement needs would already be gone. This is
         # how that host is told to hold the chart for one commit.
         self._veto_keeps_chart = False
+        # S1.2. (event_type, row) of the retiring verb whose chart is being
+        # held up while the trader types. None means "no verb is waiting", and
+        # then Enter in the note field is an ordinary note exactly as before.
+        self._pending_follow_up: tuple[str, dict] | None = None
         # Supplied by the host that owns a chart, and called only at commit
         # time. It reads memory the desk already materialised and must never
         # fetch: no bars cached is an ordinary outcome, and the pass row is
@@ -382,7 +403,8 @@ class CaptureRail(QFrame):
         inner.addWidget(self.setup_list)
 
         self.like_note_input = QLineEdit()
-        self.like_note_input.setPlaceholderText("why (required)")
+        # S1.1: OPTIONAL. The claim is the requirement; the why is the offer.
+        self.like_note_input.setPlaceholderText("why (optional)")
         self.like_note_input.returnPressed.connect(self.commit_like)
         inner.addWidget(self.like_note_input)
         self.like_button = QPushButton("Like + claim setup")
@@ -395,8 +417,9 @@ class CaptureRail(QFrame):
         self.quick_like_button = QPushButton("♥ Quick like  (Alt+L)")
         self.quick_like_button.setToolTip(
             "Records that something about this chart was good, without naming "
-            "the setup. Opens a box for an optional note. Alt+L does the same "
-            "thing with no box. Nothing is added to Focus or any watchlist."
+            "the setup. Writes at once - Alt+L does exactly the same. The "
+            "chart then waits: type a note and press Enter, or just press "
+            "Enter. Nothing is added to Focus or any watchlist."
         )
         self.quick_like_button.clicked.connect(self.prompt_quick_like)
         inner.addWidget(self.quick_like_button)
@@ -415,8 +438,16 @@ class CaptureRail(QFrame):
         """
         frame, inner = self._section("Note  (Alt+N)")
         self.note_input = QLineEdit()
-        self.note_input.setPlaceholderText("freeform note")
-        self.note_input.returnPressed.connect(self.commit_note)
+        self.note_input.setPlaceholderText(NOTE_PLACEHOLDER)
+        # S1.2: Enter means "save this note" normally, and "I have finished
+        # typing about the verb I just clicked - move on" while a retiring verb
+        # is waiting. One field, because the trader's hands are already on it
+        # and a second box would be the pop-up they asked us to remove.
+        self.note_input.returnPressed.connect(self._on_note_return)
+        # Escape is not a QLineEdit gesture, so it needs a filter rather than a
+        # signal. It only ever means "advance without the note"; with nothing
+        # waiting the event is passed straight on.
+        self.note_input.installEventFilter(self)
         inner.addWidget(self.note_input)
         self.note_button = QPushButton("Save note")
         self.note_button.clicked.connect(self.commit_note)
@@ -782,6 +813,7 @@ class CaptureRail(QFrame):
         self.veto_note_input.clear()
         detail = self._merge_veto_cohort_safely()
         self._set_status(f"VETO {row['symbol']} - {code}{detail}")
+        self._append_follow_up_hint()
         return row
 
     def veto_keeps_chart(self) -> bool:
@@ -850,14 +882,12 @@ class CaptureRail(QFrame):
         can double click the veto." The veto's gesture does not bypass its note
         rule; it ATTEMPTS the commit and `commit_veto` diverts to the note
         field when that reason's ``note_required`` is unmet. So the like's
-        gesture now calls `commit_like`, which already carries the identical
-        guard for the why.
+        gesture now calls `commit_like`.
 
-        The 2026-08-22 rule is therefore untouched - "if I like a chart I
-        should always be prompted with why", and a like with no why still
-        writes nothing and still holds the chart. What changes is only the case
-        where the why is ALREADY typed: the gesture used to send the trader
-        back to a field they had just filled in.
+        S1.1 removed the why guard entirely (trader, 2026-09-03), so the gesture
+        and the button now always write. The chart still waits afterwards, so a
+        why the trader wants to give is typed into the note field rather than
+        demanded before the judgement is recorded.
         """
         for row in range(self.setup_list.count()):
             if self.setup_list.item(row).data(_CLAIM_ROLE) == setup_id:
@@ -872,10 +902,6 @@ class CaptureRail(QFrame):
         if item is not None:
             self.setup_list.setCurrentItem(item)
         self.commit_like()
-
-    def _prompt_for_why(self) -> None:
-        self.like_note_input.setFocus()
-        self._set_status("This like needs a why - type it, then Enter.")
 
     def commit_quick_like(self, note: str = "") -> dict | None:
         """One key: "something about this was good", and nothing else.
@@ -924,44 +950,27 @@ class CaptureRail(QFrame):
         self._set_status(
             f"Liked (quick) {row['symbol']} - claim it later with Alt+K{detail}"
         )
+        self._append_follow_up_hint()
         return row
 
     def prompt_quick_like(self) -> dict | None:
-        """Ask for an optional note, then quick-like. The BUTTON's route.
+        """The quick-like BUTTON. Writes at once; asks nothing.
 
-        Trader, 2026-09-02: *"maybe it can have a pop up with a note I can put in
-        similar to what we have in master avwapsetups"* - which is
-        `QInputDialog.getMultiLineText`, the same control the setup tracker's
-        dislike detail uses, so the gesture is one the trader already knows.
+        S1.1 retired the `QInputDialog` this used to open. Trader, 2026-09-03:
+        *"when I hit something in the capture tab such as veto, or like and
+        claim etc that is sufficient reason enough - these are quick buttons to
+        get a note in essentially and do NOT require a pop up note."*
 
-        The note is OPTIONAL: OK with an empty box is a plain quick like, and
-        CANCEL records NOTHING. A dialog that wrote a row on cancel would make
-        the button unusable for "let me look at this first".
+        That SUPERSEDES the 2026-09-02 "the BUTTON prompts" rule: the button and
+        Alt+L are now the same verb, and the optional sentence is typed into the
+        rail's own note field while the chart waits (S1.2) instead of into a
+        modal that stopped the desk to ask.
 
-        **Alt+L does not come through here.** A keystroke that stops to ask a
-        question is not a one-key verb, and the whole point of the shortcut is
-        that it costs nothing. The button is for the times the trader has a
-        sentence in mind; the key is for the times they do not.
+        The name stays because both quick-like buttons - this rail's and the
+        chart's verb row - are wired to it, and a route with one implementation
+        cannot drift from itself.
         """
-        if not self._symbol:
-            self._set_status("No symbol in focus.", ok=False)
-            return None
-        from PySide6.QtWidgets import QInputDialog
-
-        note, accepted = QInputDialog.getMultiLineText(
-            self,
-            f"Like {self._symbol}",
-            (
-                "Something about this was good.\n\n"
-                "Add a note if you want one - it is optional, and you can claim "
-                "the setup later with Alt+K. Leave it empty to just record the "
-                "like."
-            ),
-            "",
-        )
-        if not accepted:
-            return None
-        return self.commit_quick_like(note=str(note or "").strip())
+        return self.commit_quick_like()
 
     def _record_like(self, **fields: Any) -> dict | None:
         """Write a like row, with the M5 sidecar when the chart is an M5 one.
@@ -1002,14 +1011,18 @@ class CaptureRail(QFrame):
         if not setup_id:
             self._set_status("Pick a setup to claim (1-9).", ok=False)
             return None
+        # S1.1: THE CLAIM IS THE WHOLE REQUIREMENT. An empty why is accepted and
+        # recorded as nothing rather than refused - trader, 2026-09-03: *"when I
+        # hit something in the capture tab such as veto, or like and claim etc
+        # that is sufficient reason enough."* This supersedes R9.2(a) for the
+        # claimed path too; the quick path was already exempt (P9).
+        #
+        # Nothing is lost by it: the chart now stays up after the click (S1.2)
+        # with the cursor in the note field, so the why the trader DOES want to
+        # write still reaches the stream - as its own row, joined by
+        # `supersedes` - and the one they do not is no longer the difference
+        # between a recorded judgement and none at all.
         why = self.like_note_input.text().strip()
-        if not why:
-            # Required, not merely offered. The `dislike` rows are the warning:
-            # 31 of the most information-dense strings the trader ever wrote,
-            # captured under a field nothing insisted on, and discarded.
-            # A like without a why is not a like - the chart stays.
-            self._prompt_for_why()
-            return None
         row = self._record_like(
             claimed_setup_id=str(setup_id),
             note=why,
@@ -1024,6 +1037,7 @@ class CaptureRail(QFrame):
         self.like_note_input.clear()
         detail = self._merge_like_cohort_safely()
         self._set_status(f"LIKE {row['symbol']} - {setup_id}{detail}")
+        self._append_follow_up_hint()
         return row
 
 
@@ -1080,6 +1094,111 @@ class CaptureRail(QFrame):
         self.note_input.clear()
         self._set_status(f"NOTE {row['symbol']}")
         return row
+
+    # ------------------------------------------------------------------
+    # S1.2 - the chart waits until the trader has finished typing
+    # ------------------------------------------------------------------
+    def begin_follow_up(self, event_type: str, row: dict) -> None:
+        """Hold this chart open and put the cursor in the note field.
+
+        Trader, 2026-09-03: *"when I hit like or not today or anything, it
+        should keep the chart up UNTIL I finish typing."*
+
+        Called by the HOST that owns the retire, on the same click that already
+        wrote the verdict row - so the evidence is on disk before anything can
+        go wrong with the sentence that explains it, exactly as it was before.
+        What is deferred is only the queue move.
+
+        A host that does not call this (the snapshot popup's rail, a bare rail
+        in a test) never enters the waiting state, so Enter in the note field
+        stays an ordinary note there.
+        """
+        if not isinstance(row, dict):
+            return
+        self._pending_follow_up = (str(event_type or ""), dict(row))
+        self.note_input.clear()
+        self.note_input.setPlaceholderText(self.FOLLOW_UP_PLACEHOLDER)
+        self.note_input.setFocus()
+
+    def follow_up_pending(self) -> bool:
+        """True while a retiring verb is waiting for Enter or Escape."""
+        return self._pending_follow_up is not None
+
+    def cancel_follow_up(self) -> None:
+        """Drop the waiting state, writing nothing and telling nobody.
+
+        The host uses this when the trader clicks away to another chart: that
+        click is a SKIP and it stays one, so the host emits its own retire for
+        the chart being left and this must not emit a second one.
+        """
+        self._pending_follow_up = None
+        self.note_input.clear()
+        self.note_input.setPlaceholderText(NOTE_PLACEHOLDER)
+
+    def _on_note_return(self) -> None:
+        if self._pending_follow_up is not None:
+            self._settle_follow_up(write=True)
+            return
+        self.commit_note()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 (Qt override)
+        if (
+            watched is self.note_input
+            and self._pending_follow_up is not None
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Escape
+        ):
+            # Escape discards the half-typed line. The verdict itself already
+            # counted - it is on disk and is never rewritten.
+            self._settle_follow_up(write=False)
+            return True
+        return super().eventFilter(watched, event)
+
+    def _settle_follow_up(self, *, write: bool) -> None:
+        """Write the optional note, then release the chart. Always releases.
+
+        An evidence store never costs the event it records, and here the event
+        is the trader moving on: a note that cannot be written degrades to a
+        status line and the chart still advances.
+        """
+        pending = self._pending_follow_up
+        self._pending_follow_up = None
+        text = self.note_input.text().strip() if write else ""
+        self.note_input.clear()
+        self.note_input.setPlaceholderText(NOTE_PLACEHOLDER)
+        if pending is None:
+            return
+        event_type, row = pending
+        if text:
+            try:
+                self._record_follow_up_note(row, text)
+            except Exception:
+                self._set_status(
+                    "Advanced, but the follow-up note was NOT saved.", ok=False
+                )
+        self.followUpSettled.emit(event_type, row)
+
+    def _record_follow_up_note(self, row: dict, text: str) -> dict | None:
+        """One NOTE row naming the verdict it follows.
+
+        `supersedes` is the id the verdict row ALREADY carries (P10 A2's
+        lineage key). No second opportunity id is invented - plan.md P5.3/P5.4
+        own that - and the row is an ordinary `note`, so nothing that counts
+        verdicts starts counting it (`pick_feedback._ANNOTATION_DECISIONS` is
+        unchanged). Its ABSENCE on an older note means "not a follow-up".
+        """
+        event_id = str((row or {}).get("event_id") or "").strip()
+        if not event_id:
+            return None
+        return self._record(
+            EVENT_NOTE, note=text, side=self._side, supersedes=event_id
+        )
+
+    def _append_follow_up_hint(self) -> None:
+        """Say how to move on, on the status line the verb just wrote."""
+        if self._pending_follow_up is None:
+            return
+        self.status_label.setText(self.status_label.text() + self.FOLLOW_UP_HINT)
 
     # ------------------------------------------------------------------
     def _set_status(self, message: str, *, ok: bool = True) -> None:

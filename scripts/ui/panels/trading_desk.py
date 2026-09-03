@@ -73,14 +73,21 @@ class TradingDeskPanel(QWidget):
         )
         self.bounce_panel = BouncePanel(self.focus_service)
         self.rs_window_panel = RsWindowPanel(self.bounce_panel.service)
+        # S1.3: the RS Window is no longer a page in the setups column. It
+        # lived there because nothing else was there; it belongs with the other
+        # two strength surfaces, and the trader asked for exactly that - *"lets
+        # revamp the strength tab to just include all of that great information
+        # into one tab"* (2026-09-03). The WIDGET moves, so its
+        # `rrsSnapshotChanged` wiring (below) is untouched and it still answers
+        # its own question: who led over the selected window at scan time.
         self.master_workspace = MasterAvwapWorkspace(
             self.master_panel,
             self.theta_panel,
             self.watchlists_panel,
             self.industry_panel,
-            rs_window_panel=self.rs_window_panel,
         )
         self.alert_center = AlertCenterPanel(self.focus_service)
+        self.alert_center.attach_rs_window(self.rs_window_panel)
         self.alert_center.attach_service(self.bounce_panel.service)
         # A5: the Alert Center arms phone price alerts off painted D1 levels.
         # It borrows the desk's ONE PriceAlertService rather than building a
@@ -108,6 +115,14 @@ class TradingDeskPanel(QWidget):
 
         self.master_panel.statusChanged.connect(self.statusChanged)
         self.master_panel.rowsChanged.connect(self.rowsChanged)
+        # S1.4, trader 2026-09-03: *"when I hit a ticker on the master avwap
+        # setups tab, I dont want the chart to be a pop up, I want it to come up
+        # on the visual chart review instead."* The same door the group tape
+        # strip and the M5 Strength Board use - `chart_symbol`, the lookup box's
+        # - and never `_enqueue_review_alert`, which drops in AWAY, drops parked
+        # symbols, diverts M5 to the alert bar and can hide a row behind
+        # movers-only. This is a deliberate look, so none of that applies.
+        self.master_panel.symbolActivated.connect(self._chart_setups_symbol)
         self.theta_panel.statusChanged.connect(self.statusChanged)
         self.watchlists_panel.statusChanged.connect(self.statusChanged)
         self.industry_panel.statusChanged.connect(self.statusChanged)
@@ -233,6 +248,25 @@ class TradingDeskPanel(QWidget):
 
         self._build_layout()
         self.set_mode(workspace_mode)
+
+    def _chart_setups_symbol(self, symbol: str, side: str = "") -> None:
+        """A Master AVWAP ticker click, charted in the Visual Chart Review.
+
+        In WORKSPACE mode the review pane is already on screen beside the table,
+        so nothing has to be raised. In TABS mode the Alert Center is a tab, and
+        a chart the trader cannot see is the same as no chart at all - so that
+        tab comes forward. S1.4.
+        """
+        self.alert_center.chart_symbol(
+            symbol, side=side, origin="the Master AVWAP setups table"
+        )
+        self._raise_alert_center_tab()
+
+    def _raise_alert_center_tab(self) -> None:
+        """Bring the Alert Center forward in tabs mode; a no-op otherwise."""
+        widget = self._mode_widget
+        if isinstance(widget, QTabWidget):
+            widget.setCurrentWidget(self.alert_center)
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
@@ -530,7 +564,6 @@ class MasterAvwapWorkspace(QFrame):
         theta_panel: ThetaPanel,
         watchlists_panel: WatchlistsPanel,
         industry_panel: IndustryPanel | None = None,
-        rs_window_panel: RsWindowPanel | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -539,15 +572,14 @@ class MasterAvwapWorkspace(QFrame):
         self.theta_panel = theta_panel
         self.watchlists_panel = watchlists_panel
         self.industry_panel = industry_panel
-        self.rs_window_panel = rs_window_panel
         self.tabs = QTabWidget()
         self.tabs.addTab(self.master_panel, "Setups")
         self.tabs.addTab(self.theta_panel, "Theta Plays")
         self.tabs.addTab(self.watchlists_panel, "Watchlists")
         if self.industry_panel is not None:
             self.tabs.addTab(self.industry_panel, "Industry Board")
-        if self.rs_window_panel is not None:
-            self.tabs.addTab(self.rs_window_panel, "RS Window")
+        # The RS Window page left this stack on 2026-09-03 (S1.3): it is now a
+        # section of the one Strength surface in the alert column.
         self.master_panel.scan_service.finished.connect(lambda *_args: self.theta_panel.refresh())
 
         layout = QVBoxLayout(self)

@@ -100,6 +100,11 @@ class AlertChartReview(QWidget):
     ) -> None:
         super().__init__(parent)
         self.alert: BounceAlert | None = None
+        # S1.2: (event_type, alert) of the verb whose chart is being held open
+        # while the trader types. The ALERT is captured here, at the click, so
+        # the retire that eventually fires names the chart the verb was about
+        # even if something else has since been charted.
+        self._pending_advance: tuple[str, BounceAlert] | None = None
         self._cross_labels = ("Add to D1 Focus", "✓ In D1 Focus")
         # Where each control dock goes is the HOST's decision, not this
         # widget's, and the two are decided SEPARATELY because they cost very
@@ -257,6 +262,10 @@ class AlertChartReview(QWidget):
         # default stays `rail`, which is honest for a host that IS the rail.
         self.capture_rail.set_scan_context(surface=SURFACE_CHART_REVIEW)
         self.capture_rail.captured.connect(self._on_captured)
+        # S1.2: the retire happens when the trader has finished typing, not on
+        # the click. The rail says when that is; this pane still decides WHICH
+        # retire, and the host beyond it still owns every store.
+        self.capture_rail.followUpSettled.connect(self._on_follow_up_settled)
         self.capture_rail.vetoDayTradeRequested.connect(self._on_veto_day_trade)
         # A day-trade pass attaches the M5 bars this pane already drew, so the
         # chart can be read back as it stood. Memory-only and read at click
@@ -422,6 +431,17 @@ class AlertChartReview(QWidget):
         conditional on it - `_record` has already returned by the time we get
         here, so a retired chart always has a row behind it.
 
+        **S1.2 defers only the move.** Trader, 2026-09-03: *"when I hit like or
+        not today or anything, it should keep the chart up UNTIL I finish
+        typing."* The row is on disk at the click exactly as before, and so is
+        the badge below; what waits for Enter or Escape is the same two signals
+        with the same alert. `like_advance` and "reviewed today" are therefore
+        still recorded off the verb, not off the advance.
+
+        A second retiring verb on the same chart writes its own row and simply
+        re-arms the wait, and the LAST verb decides which route retires it -
+        that is the trader's final word on the chart in front of them.
+
         The day-trade veto does NOT come through here: it needs the Focus
         placement to happen before the chart is retired, so it has its own
         route (`_on_veto_day_trade`) and this deliberately ignores it.
@@ -430,9 +450,52 @@ class AlertChartReview(QWidget):
         if self.alert is None:
             return
         if event_type == EVENT_VETO and not self.capture_rail.veto_keeps_chart():
-            self.removeTodayRequested.emit(self.alert)
+            self._await_follow_up(event_type, _row)
         elif event_type == EVENT_LIKE_CLAIM:
-            self.likeAdvanceRequested.emit(self.alert)
+            self._await_follow_up(event_type, _row)
+
+    def _await_follow_up(self, event_type: str, row: dict) -> None:
+        """Hold this chart until the trader presses Enter or Escape."""
+        if self.alert is None:
+            return
+        self._pending_advance = (str(event_type or ""), self.alert)
+        self.capture_rail.begin_follow_up(event_type, row)
+
+    def _on_follow_up_settled(self, _event_type: str, _row: dict) -> None:
+        """The trader has finished typing: retire the chart they were on."""
+        self._release_pending_advance()
+
+    def _release_pending_advance(self) -> None:
+        """Emit the deferred retire, once, for the alert it was armed on.
+
+        Cleared BEFORE the signal goes out: the host's reaction advances the
+        review queue, which charts something else, which re-enters this pane -
+        and a pending entry still standing at that moment would retire twice.
+        """
+        pending = self._pending_advance
+        self._pending_advance = None
+        if pending is None:
+            return
+        event_type, alert = pending
+        if alert is None:
+            return
+        if event_type == EVENT_VETO:
+            self.removeTodayRequested.emit(alert)
+        else:
+            self.likeAdvanceRequested.emit(alert)
+
+    def _abandon_follow_up(self) -> None:
+        """The trader charted something else while a chart was waiting.
+
+        That click is a SKIP and it stays one (CLAUDE.md; `review_learning`
+        keys on `clicked_away_from_m5_alert`). Nothing extra is written - the
+        half-typed line goes with the chart - and the retire the verb earned
+        still fires, for the chart the verb was about.
+        """
+        if self._pending_advance is None:
+            return
+        self.capture_rail.cancel_follow_up()
+        self._release_pending_advance()
 
     def _on_veto_day_trade(self, _row: dict) -> None:
         """Vetoed the D1, keeping the name for an M5 trade.
@@ -537,6 +600,9 @@ class AlertChartReview(QWidget):
         in_focus: bool = False,
         auto_adopted: bool = False,
     ) -> None:
+        # FIRST, before anything points at the new symbol: a chart that was
+        # waiting for a typed line is being left, so it retires now (S1.2).
+        self._abandon_follow_up()
         self.alert = alert
         # Re-point capture, clearing the previous chart's level reference: a
         # stale ref_level_id would attribute this alert's veto to a line the
@@ -709,6 +775,7 @@ class AlertChartReview(QWidget):
         style.polish(self.alert_text)
 
     def clear(self) -> None:
+        self._abandon_follow_up()
         self.alert = None
         self.title.setText("Visual Alert Review")
         self.alert_text.setText("Waiting for the next ticker alert.")

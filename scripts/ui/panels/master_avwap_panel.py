@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
+from time import monotonic
 
 from PySide6.QtCore import (
     QFileSystemWatcher,
@@ -19,7 +20,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -44,7 +44,6 @@ from review_events import record_review_event, setup_context_fields
 from pick_feedback import reviewed_symbols_today
 from market_session import get_default_hourly_scan_schedule, get_default_stop_time_label, get_market_session_window
 from ui.annotations import verdicts
-from ui.annotations.vocabulary import VocabularyError, load_veto_vocabulary
 from ui.models.setup import DEFAULT_SETUP_BUCKET_FILTER_LABELS, SetupRow
 from ui.models.setup_table_model import ROW_ROLE, SetupFilterProxyModel, SetupTableModel
 from ui.services.data_feed import copy_symbols, load_latest_setup_rows_with_meta
@@ -70,6 +69,11 @@ BUCKET_SELECTION_KEYS = {
     "all": set(),
 }
 DEFAULT_BUCKET_SELECTION = "fav_hc_near"
+
+# S1.4: Qt sends `clicked` then `doubleClicked` for one double-click, so a
+# second activation of the same ticker inside this window is that pair and not
+# a second decision. Qt's own double-click interval is 400 ms by default.
+_DOUBLE_CLICK_WINDOW_S = 0.4
 _SHADOW_SECTION_TITLE = "Stretched - shadow would demote (NO LIVE CHANGE)"
 _SHADOW_ROW_RE = re.compile(r"^\s{2}(?P<symbol>[A-Z][A-Z0-9._\-]*)\s+(?:LONG|SHORT)\s+")
 
@@ -197,6 +201,14 @@ class MasterAvwapPanel(QWidget):
     setupSelected = Signal(object)
     rowsChanged = Signal(int, int, int)
     statusChanged = Signal(str)
+    #: (symbol, side) - the trader clicked a ticker and wants to look at it.
+    #: S1.4, trader 2026-09-03: *"when I hit a ticker on the master avwap setups
+    #: tab, I dont want the chart to be a pop up, I want it to come up on the
+    #: visual chart review instead."* Same signal name and shape the group tape
+    #: and the M5 Strength Board already use, so the desk wires it the same way:
+    #: to `AlertCenterPanel.chart_symbol` - the lookup box's door - and NEVER to
+    #: `_enqueue_review_alert`, which is the scanner's.
+    symbolActivated = Signal(str, str)
 
     def __init__(self, focus_service=None, parent=None, *, review_events_path=None) -> None:
         super().__init__(parent)
@@ -240,6 +252,9 @@ class MasterAvwapPanel(QWidget):
         self.table.setShowGrid(False)
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
         self._bounce_service = None
+        # S1.4: the last ticker charted from this table, so Qt's
+        # click-then-double-click pair is one chart rather than two.
+        self._last_activated: tuple[str, float] = ("", 0.0)
         self._chart_watch_host = None
         self.table.clicked.connect(self._on_table_clicked)
         self.table.doubleClicked.connect(self._open_symbol_snapshot_from_double_click)
@@ -1050,13 +1065,44 @@ class MasterAvwapPanel(QWidget):
         )
 
     def _open_symbol_snapshot_from_double_click(self, proxy_index) -> None:
-        """Keep the existing row double-click without reopening symbol clicks."""
+        """Double-click: the ticker charts, every other cell pops the snapshot."""
         if not proxy_index.isValid():
             return
         source_index = self.proxy.mapToSource(proxy_index)
         if self.model.COLUMNS[source_index.column()][0] == "symbol":
-            return  # the first single click already opened it
+            # Both gestures mean the same thing now, so both take the same
+            # door. The dedupe inside `_activate_symbol` is what stops Qt's
+            # click-then-double-click pair charting the name twice.
+            self._activate_symbol(proxy_index)
+            return
         self._open_symbol_snapshot(proxy_index)
+
+    def _activate_symbol(self, proxy_index) -> None:
+        """Ask the desk to chart this row's ticker in the Visual Chart Review.
+
+        S1.4. A REQUEST, not a chart: this panel has never owned the review
+        pane and still does not. `show_symbol_snapshot` leaves the click path
+        entirely and stays one right-click away ("D1+M5 Snapshot Chart"), so
+        nothing is deleted.
+
+        Qt delivers `clicked` before `doubleClicked`, so a double-click on the
+        ticker arrives here twice. The second is dropped: charting is an
+        off-thread snapshot rebuild, and doing it twice for one gesture buys
+        nothing.
+        """
+        if not proxy_index.isValid():
+            return
+        source_index = self.proxy.mapToSource(proxy_index)
+        row = self.model.row_at(source_index.row())
+        if row is None or not row.symbol:
+            return
+        side = row.side if row.side in {"LONG", "SHORT"} else ""
+        now = monotonic()
+        last_symbol, last_at = self._last_activated
+        if last_symbol == row.symbol and (now - last_at) < _DOUBLE_CLICK_WINDOW_S:
+            return
+        self._last_activated = (row.symbol, now)
+        self.symbolActivated.emit(row.symbol, side)
 
     # ------------------------------------------------------------------
     # Snapshot review flow: the chart popup's ✕ / Add-to-D1-Focus buttons
@@ -1149,13 +1195,13 @@ class MasterAvwapPanel(QWidget):
         )
 
     def _on_table_clicked(self, proxy_index) -> None:
-        """Symbol opens its snapshot; ★/✕ retain their existing actions."""
+        """Symbol charts in the review pane; ★/✕ retain their existing actions."""
         if not proxy_index.isValid():
             return
         source_index = self.proxy.mapToSource(proxy_index)
         key = self.model.COLUMNS[source_index.column()][0]
         if key == "symbol":
-            self._open_symbol_snapshot(proxy_index)
+            self._activate_symbol(proxy_index)
             return
         if key not in {"favorite", "dislike"}:
             # An explicit click on a data cell is the "tell me more" gesture;
@@ -1196,47 +1242,28 @@ class MasterAvwapPanel(QWidget):
             pass
 
     def _dislike_row(self, row: SetupRow) -> bool:
-        """Prompt for a versioned reason code plus optional detail."""
-        try:
-            vocabulary = load_veto_vocabulary()
-        except VocabularyError as exc:
-            QMessageBox.warning(self, "Dislike unavailable", str(exc))
-            return False
-        labels = [f"{reason.hotkey}. {reason.label} [{reason.code}]" for reason in vocabulary.reasons]
-        selected, accepted = QInputDialog.getItem(
-            self,
-            f"Dislike {row.symbol}",
-            "Choose the primary reason. The permanent code is counted by the review scoreboard.",
-            labels,
-            0,
-            False,
-        )
-        if not accepted:
-            return False
-        selected_index = labels.index(selected) if selected in labels else -1
-        if selected_index < 0:
-            return False
-        reason_choice = vocabulary.reasons[selected_index]
-        detail, accepted = QInputDialog.getMultiLineText(
-            self,
-            f"Dislike {row.symbol} — optional detail",
-            (
-                f"{reason_choice.label}: add detail for later AI review."
-                if not reason_choice.note_required
-                else f"{reason_choice.label}: detail is required for this reason."
-            ),
-        )
-        if not accepted:
-            return False
-        if not reason_choice.accepts(detail):
-            QMessageBox.warning(self, "Detail required", "The Other reason requires a note.")
-            return False
-        self._record_dislike(
-            row,
-            detail,
-            reason_code=reason_choice.code,
-            vocab_version=vocabulary.vocab_version,
-        )
+        """The ✕ is a quick button: one click, one rejection, nothing asked.
+
+        S1.1, trader 2026-09-03: *"when I hit something in the capture tab such
+        as veto, or like and claim etc that is sufficient reason enough - these
+        are quick buttons to get a note in essentially and do NOT require a pop
+        up note."* This click used to open TWO modal `QInputDialog`s - a
+        versioned reason picklist and a detail box - and wrote nothing until
+        both were answered, so an interrupted rejection left no record at all.
+
+        The rejection is now written at once with its `reason` PRESENT AND
+        EMPTY. It is uncoded, which is a shape the stream already carries and
+        grades (`veto_uncoded`); a code the trader did not choose would be worse
+        than none, because cohort identity is `(vocab_version, reason_code)` and
+        rows are never rewritten. The trader's own words are still theirs to
+        add - S1.4 charts this ticker in the review pane on the same click, and
+        S1.2's inline field takes them there - and they are never coded by
+        machine.
+
+        The rejection lane (`focus__swing_dislike`) and every downstream reader
+        are unchanged.
+        """
+        self._record_dislike(row, "")
         return True
 
     def _record_dislike(
@@ -1259,11 +1286,21 @@ class MasterAvwapPanel(QWidget):
         self._record_review_event(
             "dislike", row, detail
         )
-        # P10 A1. A CODE WAS ALREADY CHOSEN on this path, so no note box opens
-        # here - the picklist and its detail field are the quick buttons, and
-        # the detail the trader typed is carried in as the note.
+        # P10 A1, amended by S1.1. The ✕ IS the quick button now, so no box
+        # opens here either - trader, 2026-09-03: *"these are quick buttons to
+        # get a note in essentially and do NOT require a pop up note."* Before
+        # S1.1 the picklist supplied a code and suppressed the box on the same
+        # grounds; the click is quicker now and the rule is the same one.
+        #
+        # The words are not lost with the box: the same click charts the ticker
+        # in the Visual Chart Review (S1.4), where the chart waits for them
+        # (S1.2). The ★ keeps its box - it has no other surface to type on.
         self._record_verdict_annotation(
-            row, kind="dislike", reason_code=reason_code, note=reason
+            row,
+            kind="dislike",
+            reason_code=reason_code,
+            note=reason,
+            prompt_note=False,
         )
         feedback_reason = str(reason or "").strip()
         if reason_code:
@@ -1291,6 +1328,7 @@ class MasterAvwapPanel(QWidget):
         kind: str,
         reason_code: str = "",
         note: str = "",
+        prompt_note: bool = True,
     ) -> None:
         """One annotation row for a star or an X, then the note box - P10 A1/A2.
 
@@ -1330,7 +1368,7 @@ class MasterAvwapPanel(QWidget):
                 )
         except Exception:
             return
-        if written is None or reason_code:
+        if written is None or reason_code or not prompt_note:
             return
         # LAST, and asynchronous - which is not the same as deferred (R4 A6
         # corrected this comment, which claimed the call was on a later turn of

@@ -13,6 +13,8 @@ would rewrite the settings file on every mouse-move frame of a drag.
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 
 from project_paths import get_local_setting, save_local_setting
@@ -122,6 +124,11 @@ class _PresetTracker(QObject):
         super().__init__(owner)
         self._splitter = splitter
         self._weights_for = weights_for
+        # A SPLIT THE TRADER SAVED COUNTS AS USER-SET FROM THE FIRST PAINT.
+        # `apply_saved_sizes` has already restored it by the time this runs, and
+        # without this line the very next Resize would scale the preset over the
+        # top of it - so a width dragged yesterday would not survive today's
+        # launch. The preset is for a splitter with nothing saved.
         self._user_dragged = load_sizes(key, splitter.count()) is not None
         splitter.splitterMoved.connect(self._on_moved)
         splitter.installEventFilter(self)
@@ -130,7 +137,11 @@ class _PresetTracker(QObject):
         self._user_dragged = True
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 (Qt override)
-        if watched is self._splitter and event.type() == QEvent.Type.Resize:
+        # `getattr`, because Qt keeps delivering resize events to this filter
+        # while the panel is being torn down and the Python attributes have
+        # already gone - which printed an AttributeError per event on every
+        # test that closes a desk.
+        if watched is getattr(self, "_splitter", None) and event.type() == QEvent.Type.Resize:
             self.reapply()
         return False
 
@@ -177,7 +188,18 @@ def persist_sizes(owner, splitter, key: str) -> None:
         try:
             save_local_setting(key, [int(size) for size in splitter.sizes()])
         except OSError:
-            pass
+            # SAY SO (S1.3). This swallowed silently, so a settings file the
+            # desk could not write looked identical to a split that had been
+            # saved - and the trader's evidence for "my width did not survive
+            # the restart" was a layout that quietly reverted with nothing
+            # anywhere naming the cause. A failed save still must not cost the
+            # drag itself, so it is logged rather than raised.
+            logging.warning(
+                "Could not save the %s split; this layout will not survive a "
+                "restart.",
+                key,
+                exc_info=True,
+            )
 
     timer.timeout.connect(_save)
     timers[key] = timer

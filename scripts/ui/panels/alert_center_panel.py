@@ -149,6 +149,13 @@ MAX_D1_FEED_ITEMS = 100
 ALERT_SPLIT_KEY = "qt_alert_center_split_sizes_v2"
 # The lower row of the alert column: tab stack | Focus strength board.
 ALERT_TABS_SPLIT_KEY = "qt_alert_tabs_row_split_sizes_v1"
+#: Grab width for the capture/journal <-> Strength boundary, in theme pixels.
+#: Qt's default is 4 (MEASURED 2026-09-03) and the trader drags this one often.
+TABS_ROW_HANDLE_PX = 8
+#: How much of the Strength column each open section asks for before the column
+#: starts to scroll. Four sections x this is deliberately taller than the row,
+#: which is what makes the column-wide scroll the surface the trader reads.
+STRENGTH_SECTION_MIN_HEIGHT_PX = 200
 
 #: How long a FAILED flip re-verification waits before trying again (R2.2).
 #: The poll itself runs every 30 s; retrying on every one of those would hammer
@@ -434,6 +441,36 @@ class _ClickableItem(QFrame):
 #: mini-PC and the checkpoint records multi-day uptimes, so "once per process"
 #: was never the same thing as "once per session".
 _HELD_RUN_INDEX_MEMO: dict | None = None
+
+
+def _strength_section_body(widget: QWidget) -> QScrollArea:
+    """Bound one board so the Strength column can promise what it promises.
+
+    S1.3. Two properties the four sections all need, in one place rather than
+    three copies that drift:
+
+    * **the board's minimum width stops here.** A widget's minimum reaches the
+      splitter, and these boards are wide - the RS Window's own minimum is
+      1,612 px, the RS/RW board's 452 - so hosted bare they would raise the
+      alert column's 360 px floor and the charts would pay for the move. That
+      is the 452 px lesson, and it applies four times now instead of twice.
+    * **nothing is unreachable.** The column scrolls vertically and never
+      horizontally, so a board wider than the column would simply be clipped
+      with no way to reach the rest of it. Here it gets its own horizontal
+      scrollbar when - and only when - the trader has dragged the column
+      narrower than the board needs.
+
+    The minimum HEIGHT is what makes an open section show a board rather than a
+    sliver: without it a section in a scrolled column collapses to its size
+    hint and four of them stack into nothing.
+    """
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setWidget(widget)
+    area.setMinimumWidth(theme.px(170))
+    area.setMinimumHeight(theme.px(STRENGTH_SECTION_MIN_HEIGHT_PX))
+    return area
 
 
 class AlertCenterPanel(QFrame):
@@ -947,7 +984,13 @@ class AlertCenterPanel(QFrame):
         # it here through `attach_strength_board` - the board changed address,
         # not owner, and nothing here refreshes, schedules or caches.
         self.strength_board: "StrengthBoardPanel | None" = None
-        self.strength_board_section = CollapsibleSection("M5 Strength Board (TC2000)")
+        # Open from construction (S1.3), not only once a board is attached: a
+        # panel built without `MainWindow`'s StrengthBoardService still shows
+        # the section, and the trader sees one surface whose sections are all
+        # open rather than three open and one mysteriously shut.
+        self.strength_board_section = CollapsibleSection(
+            "M5 Strength Board (TC2000)", expanded=True
+        )
 
         # V1: ONE WINDOW, TWO SECTIONS, RS/RW FIRST (decision 0016 answer 7).
         # The RS/RW board was a tab in the stack to the left; it now sits here,
@@ -960,34 +1003,74 @@ class AlertCenterPanel(QFrame):
         # 360 px floor and everything left of it is chart, so only one of the
         # two may claim height at startup.
         self.rrs_board_section = CollapsibleSection("RS/RW Board")
-        # IN A SCROLL AREA, for the reason `attach_strength_board` spells out at
-        # length: a widget's minimum reaches the splitter, and hosted bare this
-        # board's own minimum took the strength column's floor from 190 px to
-        # 452 - past the alert column's whole 360 px budget, so the charts would
-        # have paid for the move. Inside a scroll area the minimum stops here.
-        rrs_scroll = QScrollArea()
-        rrs_scroll.setWidgetResizable(True)
-        rrs_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        rrs_scroll.setWidget(board_tab)
-        rrs_scroll.setMinimumWidth(theme.px(170))
-        self.rrs_board_section.set_content(rrs_scroll)
+        self.rrs_board_section.set_content(_strength_section_body(board_tab))
         self.rrs_board_section.set_expanded(True)
+
+        # S1.3 - ONE STRENGTH SURFACE, ALL OF IT OPEN. Trader, 2026-09-03:
+        # *"lets revamp the strength tab to just include all of that great
+        # information into one tab. also make that tab resizable horizontally
+        # so I can compress the capture/journal tab a bit and see more of the
+        # strength tab."*
+        #
+        # Four sections, every one starting open: the Focus strength board -
+        # which was the one strength widget NOT in a section, so it could
+        # neither be closed nor be scrolled with the rest - then the RS/RW
+        # board, the M5 Strength Board, and the RS Window moved out of the
+        # setups column's tabs. The M5 board started closed to protect the
+        # 360 px floor; the column-wide scroll area below now carries that
+        # protection, so it opens with the others.
+        self.focus_strength_section = CollapsibleSection("Focus Strength")
+        self.focus_strength_section.set_content(
+            _strength_section_body(self.focus_strength)
+        )
+        self.focus_strength_section.set_expanded(True)
+        #: Filled by `attach_rs_window`; empty on a panel built without a desk.
+        self.rs_window_section = CollapsibleSection("RS Window")
+        self.rs_window_panel = None
+
+        strength_inner = QWidget()
+        strength_inner.setObjectName("StrengthSurface")
+        inner_layout = QVBoxLayout(strength_inner)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setSpacing(theme.px(4))
+        for section in (
+            self.focus_strength_section,
+            self.rrs_board_section,
+            self.strength_board_section,
+            self.rs_window_section,
+        ):
+            inner_layout.addWidget(section, 0)
+        # Collects the slack when everything is closed, so four headers sit at
+        # the top of the column instead of being smeared down it.
+        inner_layout.addStretch(1)
+
+        # ONE scroll area over the WHOLE column: with every section open the
+        # surface is taller than the row it sits in, and this is what the
+        # trader scrolls. It scrolls vertically and never horizontally - a
+        # strength surface that slid sideways would hide a column - which it
+        # can promise because every section body is itself bounded (see
+        # `_strength_section_body`), so nothing inside ever demands more width
+        # than the column has.
+        #
+        # It is also what keeps the alert column's 360 px floor: a widget's
+        # minimum reaches the splitter, and hosted bare the RS/RW board alone
+        # took this column's floor from 190 px to 452 - past the whole budget,
+        # so the charts would have paid for the move. Measured after S1.3 the
+        # panel's minimum is unchanged at 932 px.
+        self.strength_scroll = QScrollArea()
+        self.strength_scroll.setWidgetResizable(True)
+        self.strength_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.strength_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.strength_scroll.setWidget(strength_inner)
+        self.strength_scroll.setMinimumWidth(theme.px(170))
 
         self.strength_column = QWidget()
         strength_layout = QVBoxLayout(self.strength_column)
         strength_layout.setContentsMargins(0, 0, 0, 0)
         strength_layout.setSpacing(theme.px(4))
-        strength_layout.addWidget(self.focus_strength, 1)
-        strength_layout.addWidget(self.rrs_board_section, 0)
-        strength_layout.addWidget(self.strength_board_section, 0)
-        self.rrs_board_section.toggled.connect(
-            lambda expanded: strength_layout.setStretch(1, 3 if expanded else 0)
-        )
-        # A closed section asks for nothing; an open one earns the larger half
-        # of the column, and closing hands every pixel straight back.
-        self.strength_board_section.toggled.connect(
-            lambda expanded: strength_layout.setStretch(2, 2 if expanded else 0)
-        )
+        strength_layout.addWidget(self.strength_scroll, 1)
 
         self.tabs_row = QSplitter(Qt.Orientation.Horizontal)
         self.tabs_row.addWidget(self.tabs)
@@ -995,6 +1078,13 @@ class AlertCenterPanel(QFrame):
         self.tabs_row.setStretchFactor(0, 3)
         self.tabs_row.setStretchFactor(1, 2)
         self.tabs_row.setChildrenCollapsible(False)
+        # S1.3: A HANDLE THE TRADER CAN ACTUALLY GRAB. `theme.qss` colours
+        # `QSplitter::handle` but never sizes it, so this boundary was Qt's
+        # default 4 px - measured 2026-09-03 - i.e. a two-pixel-either-side
+        # target for a drag the trader asked to make routine. Eight is still
+        # thin enough to read as a divider rather than a gutter. Scoped to THIS
+        # splitter: the desk's other splits are not the one they named.
+        self.tabs_row.setHandleWidth(theme.px(TABS_ROW_HANDLE_PX))
         # The tab stack hints wide enough to squeeze the board out entirely;
         # an explicit minimum takes precedence over minimumSizeHint and hands
         # the split back to the preset (same fix the desk columns needed).
@@ -2809,6 +2899,14 @@ class AlertCenterPanel(QFrame):
         self.statusChanged.emit(
             f"♥ {alert.symbol}: liked and claimed; it keeps alerting as normal."
         )
+        # S1.2 made the advance arrive AFTER the trader finished typing, which
+        # means it can now arrive after they have charted something else - and
+        # advancing then would yank away the chart they just asked for. Same
+        # guard `_skip_review_alert` has carried all along, and the same guard
+        # `_ignore_alert_symbol` applies on the veto side of this fork.
+        current = self._current_review_alert
+        if current is not None and current.symbol != alert.symbol:
+            return
         self._advance_review_queue()
 
     def _add_review_alert_to_focus(self, alert: BounceAlert) -> None:
@@ -5718,16 +5816,27 @@ class AlertCenterPanel(QFrame):
         # 170 of it. The board asks for 270 (two side tables, each with a
         # heading row and an "Add all" button), and a widget's minimum reaches
         # the splitter, so hosting it bare would have raised the floor the
-        # charts are sized against - the one thing this move must not do.
-        # Inside a scroll area the board's minimum stops here: at a normal
-        # column width nothing scrolls, and a trader who drags the column
-        # narrower gets a scrollbar instead of narrower charts.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setWidget(board)
-        scroll.setMinimumWidth(theme.px(170))
-        self.strength_board_section.set_content(scroll)
+        # charts are sized against - the one thing this move must not do. That
+        # protection moved UP to the column-wide scroll area in S1.3, so the
+        # board is hosted bare here and there is one scrollbar for the whole
+        # Strength surface instead of one per board.
+        self.strength_board_section.set_content(_strength_section_body(board))
+        self.strength_board_section.set_expanded(True)
+
+    def attach_rs_window(self, panel) -> None:
+        """Host the RS Window as the last section of the Strength surface.
+
+        S1.3. The desk owns the widget (it is constructed against BounceBot's
+        service and keeps its `rrsSnapshotChanged` wiring); this panel only
+        gives it a parent. It answers a different question from the RS/RW board
+        beside it - who led over the SELECTED WINDOW at scan time - which is why
+        both are here rather than one replacing the other.
+        """
+        if panel is None:
+            return
+        self.rs_window_panel = panel
+        self.rs_window_section.set_content(_strength_section_body(panel))
+        self.rs_window_section.set_expanded(True)
 
     def _show_board_symbol_snapshot(self, symbol: str, side: str = "") -> None:
         """RS/RW-board ticker click: use the same cache-only quick look."""
