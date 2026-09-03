@@ -11,6 +11,7 @@ the contract they share with the lead session and with the trader.
 |---|---|---|---|---|
 | **lead** (the session the trader talks to; Fable by default) | session model | the main checkout | ask the trader, write packets, spawn the others, merge, run the full suite, reconcile the ledgers | build a packet itself when a builder could, restart the desk without the trader's word |
 | **builder** (`.claude/agents/builder.md`) | Opus, effort high | its own worktree, branch `claude/<slug>` off `main` | edit, test, commit, push its branch, reconcile docs on its branch | touch the main checkout, merge, delete branches, edit a detector/scoring file without the trader's recorded yes |
+| **tester** (`.claude/agents/tester.md`) | Opus, effort high | its own worktree, on the packet's branch | write the packet's tests, prove each FAILS on the current code, commit them red | write the fix; weaken or skip a test |
 | **reviewer** (`.claude/agents/reviewer.md`) | Opus, effort high | its own worktree, checked out to the branch under review | run tests, revert-and-rerun to prove fail-before-fix, reproduce claims on COPIES of live data, render Qt offscreen | write, edit, commit, push, touch live stores |
 | **recon** (`.claude/agents/recon.md`) | Sonnet, effort medium | the main checkout, read-only | map code with file:line, count live rows, find gaps | write anything, propose designs unasked |
 
@@ -28,23 +29,34 @@ is the same job with this repo's rules baked in.
    the invariants that bind, the docs to reconcile, the live gate. Packets P0-P10 and
    V1-V3 (2026-09-02) are the models; the house-rules block is now inside
    `builder.md`, so a packet no longer repeats it.
-3. **Build.** The lead spawns `builder` with the packet and the branch slug, in the
+3. **Tests first, for anything that matters.** For a packet with more than one item, or
+   any item touching evidence, scoring, alerts, the journal or a trader-facing screen,
+   the lead spawns `tester` FIRST. It writes one test per item that drives the real
+   path, proves each fails on the current code, and commits them red. The builder then
+   makes them pass and may only ADD tests. Round 3 of 2026-09-02 found four tests that
+   could not fail, all written by the agent that wrote the fix; this is the cure.
+4. **Build.** The lead spawns `builder` with the packet and the branch slug, in the
    background. One builder per packet. Two packets that touch the same files run one
    after the other, not in parallel - the 2026-09-02 integration of seven parallel
    branches cost an evening of conflict resolution.
-4. **Review by reproduction.** The lead spawns `reviewer` with the branch, the packet
+   **The lead checks the handoff against the diff before believing it.** `git diff
+   --stat <base>..<branch>` and the item list must agree: an item marked "done" with no
+   file behind it, or a file changed that no item names, is a question for the builder
+   before any reviewer is spawned. Two handoffs on 2026-09-02 said "built" for items
+   that had no code.
+5. **Review by reproduction.** The lead spawns `reviewer` with the branch, the packet
    and the builder's handoff. GO / NO-GO with blockers separated from advisories.
    Review rounds 1 and 2 of 2026-09-02 each found real defects the green suite had
    passed (a NaN read as a tier named "NAN"; a link tag evicting real setup tags), so
    this step is never skipped for a packet that touches evidence or the desk.
-5. **Fix round.** Blockers go back to a builder as a small fix packet on the same
+6. **Fix round.** Blockers go back to a builder as a small fix packet on the same
    branch (`SendMessage` to the same builder keeps its context; a fresh builder gets the
    reviewer's blockers verbatim). Advisories are batched into a later packet.
-6. **Integrate.** The lead merges to `main` in a SCRATCH WORKTREE, never in the desk's
+7. **Integrate.** The lead merges to `main` in a SCRATCH WORKTREE, never in the desk's
    checkout while the desk is up, then runs the full suite with the nightly AI lock
    FREE (probe it; 32 tests stand down while it is held), ruff, smoke and the source
    selftest, and refreshes the checkpoint block. Merge order is the packet order.
-7. **The desk.** A merged commit reaches the desk only at its next restart, and the
+8. **The desk.** A merged commit reaches the desk only at its next restart, and the
    restart is the trader's call. The lead says in one line that it is owed and why.
 
 ## Rules that exist because something broke
@@ -71,11 +83,33 @@ is the same job with this repo's rules baked in.
   the question goes in the handoff. `CLAUDE.md` lists the files.
 - **Chat to the trader is short.** Detail lives in commits, docs and handoffs.
 
+## Delegation policy for the lead
+
+The lead's job is routing, not typing. The cheapest correct agent does each job.
+
+- **Do it yourself:** reading; a lookup under a minute; `git status/log/diff`; committing
+  and pushing work that already exists on a branch; merging in a scratch worktree;
+  doc-only edits under ~40 lines; answering the trader.
+- **Spawn `recon` (Sonnet):** any question that needs more than three files read, or a
+  count from a live store. Never Opus for a lookup.
+- **Spawn `tester` then `builder`:** any packet with more than one item, or any item
+  that touches evidence, scoring, alerts, the journal or a trader-facing screen.
+- **Spawn `builder` alone:** a one-item packet the lead can verify by running one test.
+  Small packet (one file, under ~80 lines): pass `model: sonnet` at call time. Otherwise
+  Opus.
+- **Spawn `reviewer`:** every builder branch that touches evidence, scoring, alerts, the
+  journal or a trader-facing screen. Skip for docs-only branches and for one-line fixes
+  the lead verified by running the test.
+- **Packets live in `.claude/packets/<name>.md`.** The lead hands an agent the file
+  path, never the pasted text, so the lead's own context stays small.
+- **Between jobs the trader runs `/clear`.** The checkpoint block is the memory, not the
+  chat.
+
 ## How the trader uses it
 
 - "Recon: <question>" - the lead spawns `recon` and reports the answer.
-- "Build packet <name>" - the lead writes or reuses the packet, spawns `builder`, and
-  reports the handoff when it lands.
+- "Build packet <name>" - the lead writes or reuses the packet, spawns `tester` then
+  `builder` per the policy, checks the handoff against the diff, and reports.
 - "Review <branch>" - the lead spawns `reviewer` and reports GO / NO-GO.
 - "Integrate" - the lead merges in order, runs the gates, and says whether a restart
   is owed.
