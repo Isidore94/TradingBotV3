@@ -452,14 +452,33 @@ def _failure_reason(job: str, status: str, outcome: Mapping[str, Any]) -> str:
 def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobSlot]:
     """The Phase 1 slate, plus R7's journal pull at the front.
 
-    ``journal_import`` is deliberately **first**, and it is the one sanctioned
-    exception to "later phases append; they never reorder these"
+    ``journal_import`` is deliberately **first**, and ``journal_auto_tag``
+    deliberately **second**. Those two are the only sanctioned exceptions to
+    "later phases append; they never reorder these"
     (``docs/LOCAL_AI_AUTOMATION_PLAN.md`` §6.4c, promoted into R7 §6). The
     summary and the ticker briefs read the journal; running them before the
     night's trades are in it means they read yesterday's. It also costs seconds
     rather than the briefs' hours, so putting it first spends nothing.
+
+    ``journal_auto_tag`` (V2, decision 0016 answer 10) is the second exception
+    and for the same reason read from the other end: the import is what puts the
+    night's trades in the journal, so tagging ahead of it would tag yesterday's,
+    and every cohort slot below reads the journal, so tagging after them would
+    hand them a journal one night stale. It is deterministic and costs seconds.
+
+    **Every other slot still appends.** Two positions are argued for and written
+    down here; a third would mean this list has an ordering nobody can state.
     """
-    from ai_jobs import briefs, cohorts, digest, enrichment, evidence_report, policy_draft, setup_research
+    from ai_jobs import (
+        briefs,
+        cohorts,
+        digest,
+        enrichment,
+        evidence_report,
+        journal_auto_tag,
+        policy_draft,
+        setup_research,
+    )
     from journal_runner import run_nightly_journal_import
     from preference_trade_outcomes import run_preference_trade_outcomes
 
@@ -469,6 +488,26 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=lambda **kwargs: run_nightly_journal_import(trigger="nightly"),
             reserve_minutes=5.0,
             description="Broker journal pull, gap self-heal, FX booking and reconciliation",
+            max_attempts=3,
+        ),
+        # V2 item 1, APPENDED RIGHT AFTER `journal_import` and before everything
+        # else - which is a POSITION, not a reorder of the slots above it.
+        # `journal_import` is what puts the night's trades in the journal, so
+        # tagging ahead of it would tag yesterday's; and every cohort slot below
+        # reads the journal, so tagging after them would hand them a journal one
+        # night stale. Same reasoning that put `journal_import` first.
+        #
+        # Deterministic and cheap: no model, seconds of work, and its own ledger
+        # row so a tagging failure reads as a tagging failure rather than as a
+        # journal one.
+        JobSlot(
+            name="journal_auto_tag",
+            run=journal_auto_tag.run_journal_auto_tag,
+            reserve_minutes=5.0,
+            description=(
+                "Provisional setup tags on the night's closed trades "
+                "(deterministic, no model; never overwrites a confirmed tag)"
+            ),
             max_attempts=3,
         ),
         JobSlot(

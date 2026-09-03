@@ -35,6 +35,36 @@ which is evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Weekend Prep has ONE Refresh and a verdict card** (V2 item 2, decision 0016
+  answer 10). The click starts each page's own reader and returns - measured under
+  50 ms - and the five per-page buttons left the layout. The card is a PURE builder
+  (`scripts/weekend_verdict.py`): take rate, blind spots and leaks BY NAME, the
+  best liked claim and weakest veto reason at h3, the week's net and win rate
+  (**confirmed tags only**), the tag-review count. Every measured line carries its
+  n; a cohort under n=5 is named thin and never ranked; a missing input says so
+  rather than printing a zero. The RS/RW prose is retired - it duplicated a live
+  board with a Saturday snapshot - and the log scans are kept UNCALLED with
+  docstrings that say so.
+- **"Tag this week" is a weekend step** (V2 item 2e). The week's provisional and
+  needs_review trades, confirm-all-shown and confirm-selected through
+  `JournalStore.confirm_tags`, ten visible rows, read on a worker. A confirmed row
+  is never listed again, and a failed write is reported LOUDLY.
+- **The tagger runs every night** (V2, decision 0016 answer 10). `journal_auto_tag`
+  is a deterministic slot inserted SECOND, right after `journal_import` — the
+  second and last sanctioned exception to this list's append-only rule. It applies
+  P6a's plan at 0.70, never touches a confirmed row, and **fails LOUDLY**: the
+  journal is the one store on this desk that may not fail quietly. The Journal nav
+  button reads "Journal (N to review)", counted off-thread from `showEvent`.
+- **The Market Journal capture is one box and one Enter** (V2, answer 11). The
+  picker and the button leave the surface; **nothing leaves the schema**. The entry
+  is dated to the SESSION IT IS ABOUT — today while today trades, the last session
+  that traded otherwise — and `written_after_the_session` is still COMPUTED.
+- **The unused surfaces are HIDDEN, never removed** (V2, answer 7). One setting,
+  default OFF, hides the Alerts / D1 Focus / Armed tabs and the Universe page.
+  `setTabVisible`, so no index shifts; every timer stays visibility-gated; and a
+  test proves every rail shortcut is panel-scoped, bound once, and not owned
+  inside a hidden tab — a QShortcut in a hidden tab never fires, and two bindings
+  for one sequence fire NEITHER.
 - **The Strength Board IS the trader's TC2000 scan** (V1, 2026-09-02, decision
   0016 answer 9). Relative volume `AVG(V / mean(V78 ... V1170), 12)` - POSITIONAL
   as TC2000 is, blank and never zero under sixteen sessions - plus the $5, D1 200
@@ -754,6 +784,35 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-02 - Phase 0.14 packet V2: the loop closes (items 1, 4 and 5)
+
+**Branch `claude/v2-loop-closes`, off `main`.** Live gates #46-#48 owed. V1 was
+merged to `main` first, as the packet required.
+
+**Built:** the nightly auto-tagger and its review badge; the Market Journal
+capture as one box and one Enter, dated to the session it is about; and the
+default-off switch that hides the four surfaces the trader never opens without
+removing any of them.
+
+**Also built (second run): item 2's (a), (b), (c) and (e)** - one Refresh for the
+whole tab, the verdict card, the retired RS/RW prose, and the "Tag this week"
+step that completes the tagging loop item 1 started.
+
+**Not built: item 3, and part of 2's (c).** The AWAY Recap is still the
+forward-looking digest with no outcomes and no charts; Weekend Prep still shows
+its takes and watch conversion as text rather than a table. plan.md's Phase 0.14
+entry records exactly what each owes.
+
+**One defect of my own, found and fixed here.** Item 1's badge started its reader
+in `__init__`; that thread opened the journal while another test was still
+monkeypatching the journal's module globals, and it made an unrelated journal
+test fail from a hundred tests away - green alone, red in the suite. It starts
+from `showEvent` now and is joined in `closeEvent`.
+
+**Verification.** `pytest tests/ -q` **6222 passed, 72 subtests, process exit 0,
+zero failures**, lock probed FREE immediately before the run · `ruff` clean ·
+smoke **7/7** · source `--selftest` **74/74**.
 
 ### 2026-09-02 - Phase 0.14 packet V1: names first (items 1 and 2)
 

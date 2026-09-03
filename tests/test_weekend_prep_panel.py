@@ -71,11 +71,22 @@ def panel(service):
 # ---------------------------------------------------------------------------
 
 
-def test_the_routine_is_five_steps_in_the_trader_s_order(panel):
-    assert panel.rail.count() == len(STEP_IDS) == 5
+def test_the_routine_runs_in_the_trader_s_order(panel):
+    """SIX steps since V2 appended "Tag this week".
+
+    The count is not the point and pinning it made this test fail for the
+    sanctioned way to add a step. What the routine has to hold is its ENDS: the
+    week is read first and planned last.
+    """
+    assert panel.rail.count() == len(STEP_IDS)
     labels = [panel.rail.item(i).text() for i in range(panel.rail.count())]
     assert "Week in review" in labels[0]
     assert "Week ahead" in labels[-1]
+    # V2 item 2e: the correcting half of the nightly tagger, after the week has
+    # been read and before the week ahead is planned.
+    assert "Tag this week" in " ".join(labels)
+    assert STEP_IDS.index("tag_week") > STEP_IDS.index("week_review")
+    assert STEP_IDS.index("tag_week") < STEP_IDS.index("week_ahead")
 
 
 def test_the_rail_shows_each_step_s_status(panel, service):
@@ -87,8 +98,11 @@ def test_the_rail_shows_each_step_s_status(panel, service):
 
 
 def test_selecting_a_step_shows_its_page(panel):
-    panel.rail.setCurrentRow(3)
+    # BY NAME rather than by row number: V2 appended a step and the number moved.
+    panel.rail.setCurrentRow(STEP_IDS.index("discovery"))
     assert panel.pages.currentWidget() is panel.discovery
+    panel.rail.setCurrentRow(STEP_IDS.index("tag_week"))
+    assert panel.pages.currentWidget() is panel.tag_week
 
 
 def test_the_header_names_the_weekend_and_the_reviewed_week(panel):

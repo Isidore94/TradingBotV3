@@ -815,6 +815,71 @@ Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breake
 for this phase: **when two packets compete, the one that improves WHICH NAMES ARE
 SHOWN beats the one that improves WHEN TO ENTER.**
 
+### Phase 0.14 packet V2 — The loop closes (2026-09-02) — items 1, 4 and 5 BUILT; 2 and 3 NOT BUILT
+
+Authorized by the trader pasting the packet. Requires V1, which was merged first.
+
+**Item 1 — nightly auto-tagging. BUILT.** `journal_auto_tag` runs P6a's plan every
+night at the recorded 0.70 threshold, right after `journal_import` and before
+every other slot. That position is an INSERT and the second and last sanctioned
+exception to "later phases append; they never reorder" — the import puts the
+night's trades in, and every cohort slot below reads them. It never touches a
+confirmed row (the refusal lives in the STORE) and a failed write is reported
+LOUDLY, because the journal is the one store on this desk that may not fail
+quietly. The Journal nav button carries the review count, computed off-thread and
+started from `showEvent`.
+
+**Item 4 — the Market Journal capture is one box and one Enter. BUILT.** The
+timeframe picker and the Save button leave the SURFACE; nothing leaves the
+SCHEMA. Plain Enter saves through an event filter (a `QShortcut` on Return would
+fire for the whole panel); Ctrl+Enter still works. The entry is dated to the
+SESSION IT IS ABOUT — today while today trades, the last session that traded on a
+weekend or holiday — and `written_after_the_session` is still COMPUTED.
+
+**Item 5 — hide the dead surfaces, keep the code. BUILT.** One setting,
+`qt_show_unused_tabs`, default OFF, hiding the Alerts / D1 Focus / Armed tabs and
+the Universe page. **Hidden is not removed**: `setTabVisible`, no index shifts,
+every timer still visibility-gated, and a test proving every rail shortcut is
+panel-scoped, bound once, and not owned inside a hidden tab.
+
+**Item 2 - Weekend Prep. (a), (b), (c) and (e) BUILT; the rest of (c) owed.**
+
+* **(a) ONE Refresh** drives every step. The click starts each page's own reader
+  and returns - measured under 50 ms - and names the steps as they start. The five
+  per-page buttons left the layout and stay as objects, because `reload()` uses
+  each one as its own single-flight guard.
+* **(b) The verdict card**, five to eight lines from a PURE builder
+  (`scripts/weekend_verdict.py`): take rate, blind spots and leaks BY NAME, the
+  best liked claim and weakest veto reason at h3, the week's net and win rate
+  (**confirmed tags only**), and the tag-review count. Every measured line carries
+  its n; a cohort under n=5 is named as thin and never ranked; a missing input
+  says so instead of printing a zero.
+* **(c) The RS/RW prose is retired** - it duplicated a live board with a Saturday
+  snapshot. The log SCANS are kept, uncalled, and say so in capitals in their own
+  docstrings so nobody "fixes" a blank page by wiring the wall of text back.
+* **(e) "Tag this week"**, a sixth step: the week's provisional and needs_review
+  trades, confirm-all-shown and confirm-selected through the store's own API, ten
+  visible rows, read on a worker, and a failed write reported LOUDLY.
+
+**Still owed by item 2:** the takes/watch-conversion table (the summary is still
+text), the ten-visible-rows pass over the OTHER tables, and the collapsed
+"how to read this" notes.
+
+**Item 3 - the AWAY Recap. NOT BUILT.** It is still the forward-looking digest
+assembly - best-swing block, classified D1 alerts, staged picks, Focus lists -
+with no outcomes, no charts, no "what moved", no "alerts that were right", no
+"your names" and no "Review these" walk-through. All four of the packet's blocks
+and the chart-on-click door remain.
+
+**Live gate (#46):** one nightly run that tags new trades, and the Journal nav
+button showing the count the next morning.
+
+**Live gate (#47):** one Market Journal entry written from the desk tab in one
+Enter, filed against the right session.
+
+**Live gate (#48):** a desk session with the four surfaces hidden and every rail
+hotkey still firing.
+
 ### Phase 0.14 packet V1 — Names first (2026-09-02) — items 1 and 2 BUILT; 2's surfaces, 3 and 4 NOT BUILT
 
 Authorized by the trader pasting the packet.

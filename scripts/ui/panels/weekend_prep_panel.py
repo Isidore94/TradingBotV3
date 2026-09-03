@@ -278,7 +278,11 @@ class WeekReviewPage(_StepPage):
         self.refresh_note = QLabel("")
         self.refresh_note.setWordWrap(True)
         self._worker: _ReadWorker | None = None
-        self._layout.addWidget(self.refresh_button)
+        # V2 item 2a: the per-page Refresh button is GONE FROM THE LAYOUT.
+        # One Refresh at the top of the tab drives every page now. The
+        # button object stays because `reload()` still enables and disables
+        # it as its own single-flight guard - what changed is that the
+        # trader no longer has to find five of them.
         self._layout.addWidget(self.refresh_note)
         self._layout.addWidget(self.summary, 1)
         self._finish_layout()
@@ -337,80 +341,17 @@ class WeekReviewPage(_StepPage):
         # The recorded, accepted v1 limitation - stated where it is read, not
         # buried in a spec nobody opens on a Saturday.
         lines += ["", "Episodes fold on (trade_date, symbol): two setups in one name on one day read as one."]
-        lines += self._rrs_lines()
-        lines += self._rrs_group_lines()
+        # V2 item 2c: THE RS/RW EXTREMES LEFT THIS TAB. They are two long text
+        # blocks about which names and groups led the tape, and the desk has a
+        # board for exactly that question - the RS/RW section, which V1 moved
+        # into the alert column beside the Strength board. Printing them here as
+        # prose was the second-largest part of the wall of text the trader named,
+        # and it duplicated a live surface with a Saturday snapshot.
+        #
+        # The two prose builders that printed them are GONE from this page; the
+        # log SCANS are kept, uncalled, and say so in their own docstrings.
         return "\n".join(lines)
 
-
-    def _rrs_lines(self) -> list[str]:
-        """The week's RS/RW extremes beside the decisions (R8 retained scope).
-
-        Folded per symbol, and capped, because the step is a review rather than
-        a log dump - and what the cap drops is SAID, since a silent top-N reads
-        as "that was all of it".
-        """
-        rows = _read_rrs_week(self.service.week_bounds)
-        if not rows:
-            return ["", "RS/RW extremes: nothing recorded this week (or the log is unreadable)."]
-        lines = ["", "RS/RW extremes this week (folded per symbol):"]
-        shown = 0
-        for bucket in sorted({row["bucket"] for row in rows}):
-            in_bucket = [row for row in rows if row["bucket"] == bucket]
-            lines.append(f"  {bucket}: {len(in_bucket)} name(s)")
-            for row in in_bucket[:RRS_ROWS_PER_BUCKET]:
-                lines.append(
-                    f"    {row['symbol']}: {row['days']} day(s), "
-                    f"{row['sightings']} sighting(s), best RRS {row['best_rrs']:+.2f}, "
-                    f"last {row['last_seen']}"
-                )
-                shown += 1
-            if len(in_bucket) > RRS_ROWS_PER_BUCKET:
-                lines.append(
-                    f"    ... {len(in_bucket) - RRS_ROWS_PER_BUCKET} more in this bucket "
-                    "not shown"
-                )
-        lines.append(f"  ({shown} of {len(rows)} folded rows shown.)")
-        return lines
-
-    def _rrs_group_lines(self) -> list[str]:
-        """The week's SECTOR and INDUSTRY extremes, beside the symbol ones.
-
-        R8 sec 6's last retained stream, built 2026-08-24. The symbol block
-        above says which names led the tape; this says which parts of the
-        market they came from, which is the difference between "a strong name"
-        and "a strong name in a strong group".
-
-        The group log stamps no bucket, so both extremes are printed and the
-        SIGN is what the reader reads - nothing here invents a direction the
-        file never recorded.
-        """
-        rows = _read_rrs_group_week(self.service.week_bounds)
-        if not rows:
-            return [
-                "",
-                "Sector/industry RS extremes: nothing recorded this week (or the "
-                "log is unreadable).",
-            ]
-        lines = ["", "Sector/industry RS extremes this week (folded per group):"]
-        shown = 0
-        for group_type in sorted({row["group_type"] for row in rows}):
-            in_type = [row for row in rows if row["group_type"] == group_type]
-            lines.append(f"  {group_type}: {len(in_type)} group(s)")
-            for row in in_type[:RRS_GROUP_ROWS_PER_TYPE]:
-                etf = f" ({row['etf']})" if row["etf"] and row["etf"] != row["group_key"] else ""
-                lines.append(
-                    f"    {row['group_key']}{etf}: {row['days']} day(s), "
-                    f"{row['sightings']} sighting(s), RRS {row['min_rrs']:+.2f} to "
-                    f"{row['max_rrs']:+.2f}, last {row['last_seen']}"
-                )
-                shown += 1
-            if len(in_type) > RRS_GROUP_ROWS_PER_TYPE:
-                lines.append(
-                    f"    ... {len(in_type) - RRS_GROUP_ROWS_PER_TYPE} more "
-                    f"{group_type} group(s) not shown"
-                )
-        lines.append(f"  ({shown} of {len(rows)} folded group rows shown.)")
-        return lines
 
 
 class FocusReviewPage(_StepPage):
@@ -532,7 +473,9 @@ class FocusReviewPage(_StepPage):
         self.feedback_note = QLabel("")
         self.feedback_note.setWordWrap(True)
 
-        self._layout.addWidget(self.refresh_button)
+        # V2 item 2a: OUT OF THE LAYOUT, not deleted. One Refresh at the top of
+        # the tab drives every page; the button object stays because `reload()`
+        # still uses it as its own single-flight guard.
         self._layout.addWidget(self.table, 1)
         self._layout.addWidget(self.note)
         horizon_row = QHBoxLayout()
@@ -981,7 +924,9 @@ class WalkawayPage(_StepPage):
         tag_buttons.addWidget(self.correct_button)
         tag_buttons.addStretch(1)
 
-        self._layout.addWidget(self.refresh_button)
+        # V2 item 2a: OUT OF THE LAYOUT, not deleted. One Refresh at the top of
+        # the tab drives every page; the button object stays because `reload()`
+        # still uses it as its own single-flight guard.
         self._layout.addWidget(self.output, 2)
         self._layout.addWidget(self.open_note)
         self._layout.addWidget(QLabel("Auto-tag review"))
@@ -1128,6 +1073,177 @@ class WalkawayPage(_StepPage):
         self._reload_review_data()
 
 
+TAG_WEEK_COLUMNS = ("Date", "Symbol", "Status", "Tag", "Net")
+
+
+class TagWeekPage(_StepPage):
+    """V2 item 2e: the week's trades and what the tagger made of them.
+
+    Decision 0016 answer 10: *"the bot should auto-tag every night and the trader
+    corrects."* Item 1 built the nightly half. This is the correcting half, on
+    the screen the trader already opens on a Saturday.
+
+    **The trader owns `trade_annotations`** (R7 invariant I7). Confirming writes
+    the trader's own answer through `JournalStore.confirm_tags`; nothing on this
+    page invents a tag, and a row that already carries a confirmed one is shown
+    and never offered for confirmation.
+
+    Reads on the page's worker, like every other step.
+    """
+
+    def __init__(self, service, parent=None) -> None:
+        super().__init__("tag_week", service, parent)
+        monday, friday = service.week_bounds
+        self.subtitle.setText(
+            f"Trades from {monday} to {friday} that the nightly tagger has not "
+            "had confirmed. Confirming writes YOUR answer; the guess stays "
+            "provisional until you do."
+        )
+        self.refresh_button = QPushButton("Refresh tags")
+        self.refresh_button.clicked.connect(self.reload)
+        self.note = QLabel("")
+        self.note.setWordWrap(True)
+
+        self.table = QTableWidget(0, len(TAG_WEEK_COLUMNS))
+        self.table.setHorizontalHeaderLabels(list(TAG_WEEK_COLUMNS))
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        # TEN VISIBLE ROWS before scrolling, which is the number the trader
+        # asked for - three at a time was the complaint. A plain pixel
+        # minimum rather than `theme.px`: this module does not import the
+        # theme, and one number here is cheaper than a new dependency.
+        self.table.setMinimumHeight(260)
+
+        self.confirm_all_button = QPushButton("Confirm all shown")
+        self.confirm_all_button.setToolTip(
+            "Accept the tagger's suggestion for every row in this table. Rows you "
+            "have already confirmed are not listed and are never touched."
+        )
+        self.confirm_all_button.clicked.connect(self._confirm_all_shown)
+        self.confirm_one_button = QPushButton("Confirm selected")
+        self.confirm_one_button.clicked.connect(self._confirm_selected)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.confirm_one_button)
+        buttons.addWidget(self.confirm_all_button)
+        buttons.addStretch(1)
+
+        self._worker: _ReadWorker | None = None
+        self._rows: list[dict] = []
+        self._layout.addWidget(self.note)
+        self._layout.addWidget(self.table, 1)
+        self._layout.addLayout(buttons)
+        self._finish_layout()
+
+    def reload(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self.refresh_button.setEnabled(False)
+        self.note.setText("Reading the week's trades...")
+        worker = _ReadWorker(lambda: _read_week_tag_rows(self.service.week_bounds), self)
+        worker.finished_with.connect(self._on_rows_ready)
+        worker.failed.connect(self._on_rows_failed)
+        self._worker = worker
+        worker.start()
+
+    def _on_rows_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        self.refresh_button.setEnabled(True)
+        self._rows = list(payload) if isinstance(payload, list) else []
+        self._render()
+
+    def _on_rows_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        self.refresh_button.setEnabled(True)
+        self.note.setText(f"The journal could not be read: {message}")
+
+    def _render(self) -> None:
+        self.table.setRowCount(len(self._rows))
+        for index, row in enumerate(self._rows):
+            values = (
+                str(row.get("trade_date") or "")[:10],
+                str(row.get("symbol") or ""),
+                str(row.get("tag_status") or ""),
+                str(row.get("setup_tags") or ""),
+                _tag_net_text(row.get("net_pnl")),
+            )
+            for column, text in enumerate(values):
+                self.table.setItem(index, column, QTableWidgetItem(text))
+        if not self._rows:
+            self.note.setText("Nothing to confirm - every trade this week is your own answer.")
+        else:
+            self.note.setText(
+                f"{len(self._rows)} trade(s) waiting. Confirming writes your answer; "
+                "the tagger never overwrites one."
+            )
+
+    def _confirm(self, trade_ids) -> None:
+        """Confirm through the STORE's own API. A journal write fails loudly."""
+        wanted = [str(item) for item in trade_ids if str(item or "").strip()]
+        if not wanted:
+            self.note.setText("Nothing selected.")
+            return
+        try:
+            from journal_store import JournalStore
+
+            store = JournalStore()
+            confirmed = sum(1 for trade_id in wanted if store.confirm_tags(trade_id))
+        except Exception as exc:  # noqa: BLE001
+            # LOUD. A journal write is the one store on this desk that may not
+            # fail quietly, and a confirmation the trader believes landed is
+            # worse than one that visibly did not.
+            self.note.setText(f"NOT SAVED - the journal could not be written: {exc}")
+            self.statusChanged.emit(f"tag confirmation failed: {exc}")
+            return
+        self.note.setText(f"{confirmed} tag(s) confirmed.")
+        self.reload()
+
+    def _confirm_all_shown(self) -> None:
+        self._confirm([row.get("trade_id") for row in self._rows])
+
+    def _confirm_selected(self) -> None:
+        rows = {index.row() for index in self.table.selectedIndexes()}
+        self._confirm([
+            self._rows[index].get("trade_id")
+            for index in sorted(rows)
+            if 0 <= index < len(self._rows)
+        ])
+
+
+def _tag_net_text(value) -> str:
+    try:
+        return f"{float(value):+,.2f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _read_week_tag_rows(bounds) -> list[dict]:
+    """The week's closed trades that are NOT the trader's own answer yet.
+
+    Provisional and needs_review only. A confirmed row is the trader's answer and
+    has nothing to offer this page; listing it would invite a second confirmation
+    of something already settled.
+    """
+    from journal_store import (
+        TAG_STATUS_NEEDS_REVIEW,
+        TAG_STATUS_PROVISIONAL,
+        JournalStore,
+    )
+
+    monday, friday = bounds
+    start, end = str(monday), str(friday)
+    wanted = {TAG_STATUS_PROVISIONAL, TAG_STATUS_NEEDS_REVIEW}
+    rows = []
+    store = JournalStore()
+    for trade in store.list_trades():
+        date = str(trade.get("trade_date") or "")[:10]
+        if not date or date < start or date > end:
+            continue
+        if str(trade.get("tag_status") or "") not in wanted:
+            continue
+        rows.append(dict(trade))
+    rows.sort(key=lambda row: (str(row.get("trade_date") or ""), str(row.get("symbol") or "")))
+    return rows
+
+
 class DiscoveryPage(_StepPage):
     """Step 4: strongest and weakest on H1, D1 and Monthly, then Adopt."""
 
@@ -1264,7 +1380,9 @@ class WeekAheadPage(_StepPage):
         self.refresh_button.clicked.connect(self.reload)
         self.report = QTextBrowser()
         self.report.setMarkdown("Not built yet for this weekend.")
-        self._layout.addWidget(self.refresh_button)
+        # V2 item 2a: OUT OF THE LAYOUT, not deleted. One Refresh at the top of
+        # the tab drives every page; the button object stays because `reload()`
+        # still uses it as its own single-flight guard.
         self._layout.addWidget(self.report, 1)
         self._finish_layout()
         service.weekAheadReady.connect(self._render)
@@ -1296,12 +1414,14 @@ class WeekendPrepPanel(QFrame):
         self.week_review = WeekReviewPage(self.service)
         self.focus_review = FocusReviewPage(self.service)
         self.walkaway = WalkawayPage(self.service)
+        self.tag_week = TagWeekPage(self.service)
         self.discovery = DiscoveryPage(self.service, focus_service=focus_service)
         self.week_ahead = WeekAheadPage(self.service)
         self._pages = {
             "week_review": self.week_review,
             "focus_review": self.focus_review,
             "walkaway": self.walkaway,
+            "tag_week": self.tag_week,
             "discovery": self.discovery,
             "week_ahead": self.week_ahead,
         }
@@ -1313,19 +1433,126 @@ class WeekendPrepPanel(QFrame):
         self.header = QLabel("")
         self.header.setObjectName("WeekendHeader")
 
+        # V2 item 2a/2b: ONE Refresh and a verdict card, above the whole tab.
+        #
+        # The trader's complaint, in their own words: the first screen is a wall
+        # of text whose three callout lines are the only part that matters, the
+        # tables show three rows at a time, and every table has its own refresh.
+        # This is the top of the answer - the card says what the week was, and
+        # one button rebuilds everything under it.
+        self.verdict_card = QLabel("Press Refresh to build the week.")
+        self.verdict_card.setObjectName("WeekendVerdict")
+        self.verdict_card.setWordWrap(True)
+        self.verdict_card.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        self.refresh_all_button = QPushButton("Refresh everything")
+        self.refresh_all_button.setToolTip(
+            "Rebuild every step of the weekend routine. Each page reads on its "
+            "own worker, so this returns immediately and the pages fill in."
+        )
+        self.refresh_all_button.clicked.connect(self.refresh_everything)
+        self.building_note = QLabel("")
+        self.building_note.setObjectName("MutedLabel")
+        self.building_note.setWordWrap(True)
+        self._verdict_worker = None
+
+        top = QHBoxLayout()
+        top.addWidget(self.header, 1)
+        top.addWidget(self.refresh_all_button, 0)
+
         body = QHBoxLayout()
         body.addWidget(self.rail)
         body.addWidget(self.pages, 1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.addWidget(self.header)
+        layout.addLayout(top)
+        layout.addWidget(self.verdict_card)
+        layout.addWidget(self.building_note)
         layout.addLayout(body, 1)
 
         self.service.stateChanged.connect(self._refresh_rail)
         self.service.statusChanged.connect(self.statusChanged)
         self._refresh_rail()
         self.rail.setCurrentRow(0)
+
+    def refresh_everything(self) -> None:
+        """One click, every step. **The click itself does no reading.**
+
+        It starts each page's own reader and returns; the pages fill in as their
+        workers finish. That is what keeps the click under a frame - the reads
+        behind this button were once 8.45 s of frozen GUI on one page alone.
+
+        The note names the steps as they start, so "building" is a list of what
+        is happening rather than a spinner.
+        """
+        started = []
+        for step in STEP_IDS:
+            page = self._pages.get(step)
+            reload = getattr(page, "reload", None)
+            if not callable(reload):
+                continue
+            try:
+                reload()
+                started.append(STEP_LABELS[step])
+            except Exception:  # noqa: BLE001
+                # One page that will not start must not stop the other four.
+                continue
+        self._start_verdict()
+        self.building_note.setText(
+            "Building: " + ", ".join(started) if started else "Nothing to build."
+        )
+
+    def _start_verdict(self) -> None:
+        """Build the card on a worker. It reads four stores and a journal."""
+        worker = getattr(self, "_verdict_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _ReadWorker(self._read_verdict, self)
+        worker.finished_with.connect(self._on_verdict_ready)
+        worker.failed.connect(self._on_verdict_failed)
+        self._verdict_worker = worker
+        worker.start()
+
+    def _read_verdict(self) -> list:
+        """Every store the card reads, and no widget. Runs on the worker.
+
+        Each source is guarded on its own: a card that failed because one of
+        five files was unreadable would tell the trader nothing about the four
+        that were fine, and this is the screen they open to find out how the week
+        went.
+        """
+        import weekend_verdict
+
+        def _safe(work, default):
+            try:
+                return work()
+            except Exception:  # noqa: BLE001
+                return default
+
+        from review_learning import build_review_learning_state
+
+        state = _safe(lambda: build_review_learning_state(window_days=7), {})
+        likes = _safe(_read_like_cohort, [])
+        vetoes = _safe(_read_veto_cohort, [])
+        trades = _safe(lambda: _read_week_trades(self.service.week_bounds), [])
+        waiting = _safe(_read_awaiting_review, 0)
+
+        return weekend_verdict.build_verdict(
+            learning_state=state,
+            like_rows=likes,
+            veto_rows=vetoes,
+            week_trades=trades,
+            awaiting_review=waiting,
+        ).rendered()
+
+    def _on_verdict_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        lines = list(payload) if isinstance(payload, (list, tuple)) else []
+        self.verdict_card.setText("\n".join(str(line) for line in lines))
+        self.building_note.setText("")
+
+    def _on_verdict_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        self.building_note.setText(f"The week's verdict could not be built: {message}")
 
     def _refresh_rail(self) -> None:
         current = self.rail.currentRow()
@@ -1374,6 +1601,21 @@ def _default_focus_service():
 
 
 def _read_rrs_week(bounds) -> list[dict[str, Any]]:
+    """NO CALLER SINCE V2, AND KEPT ON PURPOSE - read this before wiring it back.
+
+    V2 item 2c retired the RS/RW extremes from the week-review page: they were
+    two long text blocks about which names and groups led the tape, and the
+    desk has a live board for exactly that question - the RS/RW section V1
+    moved into the alert column. Printing them here duplicated a live surface
+    with a Saturday snapshot, and they were the second-largest part of the wall
+    of text the trader named.
+
+    The SCAN is kept because it works, it is tested, and a later surface may
+    want the week folded rather than live. **A blank page is not a reason to
+    call this again** - that is the AI-P1 lesson pointing the other way, and
+    the test `test_the_rs_extremes_are_deliberately_unwired` says so.
+
+    """
     """The week's RS/RW extremes, folded to one row per symbol and bucket.
 
     R8's retained future scope, built 2026-08-18. The extremes log is one row
@@ -2303,3 +2545,33 @@ def _read_rrs_group_week(bounds) -> list[dict[str, Any]]:
     ]
     rows.sort(key=lambda row: (row["group_type"], -row["max_rrs"], row["group_key"]))
     return rows
+
+
+def _read_week_trades(bounds) -> list[dict]:
+    """The week's closed trades, for the verdict card's P&L line.
+
+    CONFIRMED TAGS ONLY is applied in `weekend_verdict`, not here: this reads
+    the week and that decides what counts, so the rule lives in one place and
+    the reader can see every trade it was chosen from.
+    """
+    from journal_store import JournalStore
+
+    monday, friday = bounds
+    start, end = str(monday), str(friday)
+    store = JournalStore()
+    rows = []
+    for trade in store.list_trades():
+        date = str(trade.get("trade_date") or "")[:10]
+        if not date or date < start or date > end:
+            continue
+        if str(trade.get("status") or "").upper() != "CLOSED":
+            continue
+        rows.append(dict(trade))
+    return rows
+
+
+def _read_awaiting_review() -> int:
+    """How many trades the nightly tagger left for review (V2 item 1)."""
+    from ai_jobs.journal_auto_tag import trades_awaiting_review
+
+    return trades_awaiting_review()

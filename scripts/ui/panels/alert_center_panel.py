@@ -4415,13 +4415,22 @@ class AlertCenterPanel(QFrame):
         return [watch for watch in self._d1_level_watches if watch.symbol == symbol]
 
     def _build_journal_tab(self):
-        """The in-session market-journal note (R10.H).
+        """ONE BOX, ONE ENTER (V2 item 4, decision 0016 answer 11).
 
-        Deliberately small: a timeframe, a box, a button and a status line.
-        The sit-down review lives on the left-nav Market Journal page; this is
-        for the thought you have at 10:40 and would otherwise lose.
+        The trader's own description of what this should be: *"one box, one
+        Enter, one or two thesis entries a day."* It had a timeframe picker, a
+        box, a Save button and a status line - four decisions for a thought you
+        have at 10:40 and would otherwise lose.
+
+        Everything except the box is gone from the SURFACE. **Nothing is gone
+        from the SCHEMA**: `timeframe` is still written, at the M5 default, and
+        every other field is written empty rather than dropped, because a field
+        that exists at v1 keeps its name and meaning forever - rows already on
+        disk carry it, and the nightly `market_journal` scope reads it.
+
+        The sit-down review still lives on the left-nav Market Journal page.
         """
-        from PySide6.QtWidgets import QComboBox, QPlainTextEdit
+        from PySide6.QtWidgets import QPlainTextEdit
 
         import market_journal
         from ui.services.market_journal_service import shared_journal_service
@@ -4436,38 +4445,55 @@ class AlertCenterPanel(QFrame):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        self._journal_timeframe = QComboBox()
-        self._journal_timeframe.addItems(list(market_journal.TIMEFRAMES))
-        self._journal_timeframe.setCurrentText(market_journal.TIMEFRAME_M5)
+        # The timeframe the entry is written with. NOT a picker any more - the
+        # schema field stays and the surface loses the decision. M5 because that
+        # is what the trader is looking at when the thought arrives, and it was
+        # the default of the picker this replaces.
+        self._journal_timeframe_value = market_journal.TIMEFRAME_M5
+
         self._journal_text = QPlainTextEdit()
         self._journal_text.setPlaceholderText(
-            "What the tape is doing, and what you make of it. Ctrl+Enter saves."
+            "What you make of the tape. Enter saves; Shift+Enter for a new line."
         )
+        self._journal_text.installEventFilter(self)
         self._journal_status = QLabel("")
         self._journal_status.setWordWrap(True)
-        save = QPushButton("Save entry (Ctrl+Enter)")
-        save.clicked.connect(self._commit_journal_entry)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Timeframe"))
-        row.addWidget(self._journal_timeframe)
-        row.addStretch(1)
-        row.addWidget(save)
-
-        layout.addWidget(QLabel("Market journal - this session"))
         layout.addWidget(self._journal_text, 1)
-        layout.addLayout(row)
         layout.addWidget(self._journal_status)
 
         self.market_journal_service.statusChanged.connect(self._journal_status.setText)
+        # Ctrl+Enter stays bound as well as plain Enter. The trader has been
+        # typing it since R10.H, and removing a shortcut that already works is a
+        # cost with no benefit.
         shortcut = QShortcut(QKeySequence("Ctrl+Return"), container)
         shortcut.activated.connect(self._commit_journal_entry)
         self._journal_shortcut = shortcut
         return container
 
-    def _commit_journal_entry(self) -> None:
-        from datetime import date
+    def eventFilter(self, watched, event):  # noqa: N802 - Qt's own spelling
+        """Plain Enter saves the market-journal note; Shift+Enter is a newline.
 
+        An event filter rather than a `QShortcut`: a shortcut on Return would
+        fire for every widget in this panel's scope, and this key must mean
+        "save" only while the cursor is in this one box.
+        """
+        try:
+            from PySide6.QtCore import QEvent, Qt as _Qt
+
+            if (
+                watched is getattr(self, "_journal_text", None)
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (_Qt.Key.Key_Return, _Qt.Key.Key_Enter)
+                and not (event.modifiers() & _Qt.KeyboardModifier.ShiftModifier)
+            ):
+                self._commit_journal_entry()
+                return True
+        except Exception:  # noqa: BLE001 - a key handler never breaks the panel
+            pass
+        return super().eventFilter(watched, event)
+
+    def _commit_journal_entry(self) -> None:
         import market_journal
 
         # The chart in front of the trader, when there is one. A stale symbol
@@ -4477,8 +4503,14 @@ class AlertCenterPanel(QFrame):
 
         result = self.market_journal_service.write_entry(
             text=self._journal_text.toPlainText(),
-            session_date=date.today().isoformat(),
-            timeframe=self._journal_timeframe.currentText(),
+            # THE SESSION IT IS ABOUT, not the date it was typed. Today's until
+            # the close, the last session after it - a thought written at 18:00
+            # is about the day that just ended, and dating it tomorrow would file
+            # it against a session that has not happened. `written_after_the_
+            # session` is still COMPUTED by the store from `created_at`, so the
+            # distinction is recorded rather than erased.
+            session_date=market_journal.session_date_for(),
+            timeframe=self._journal_timeframe_value,
             symbols=[symbol] if symbol else [],
             origin=market_journal.ORIGIN_DESK_TAB,
         )
@@ -5385,6 +5417,39 @@ class AlertCenterPanel(QFrame):
         appear.
         """
         self.chart_symbol(symbol, side=side, origin="the M5 Strength Board")
+
+    #: The tabs the trader never opens (decision 0016 answer 7). HIDDEN, never
+    #: removed: the Alerts feed is the review-alert door, the D1 Focus tab holds
+    #: the flag list several polls write into, and the Armed tab is the
+    #: inventory across every symbol. All three are load-bearing behind the
+    #: scenes; what they are not is worth a tab the trader has to skip past.
+    UNUSED_TAB_TITLES = ("Alerts", "D1 Focus", "Armed")
+
+    def apply_unused_tab_visibility(self, show: bool) -> None:
+        """Show or hide the three tabs the trader does not open.
+
+        **HIDING IS NOT REMOVING**, and the difference is the whole design. The
+        widgets are built, parented and connected exactly as before; every timer
+        behind them stays visibility-gated as the snappiness work left it; every
+        signal still arrives. A hidden tab costs one row of tab strip and
+        nothing else.
+
+        It is a `setTabVisible` on the existing index rather than a `removeTab`,
+        so no index shifts and nothing that remembers one - `_d1_tab_index`,
+        `_armed_tab_index`, `_capture_tab_index` - has to be recomputed.
+
+        **Every shortcut those tabs hosted must still fire**, which is why the
+        capture rail rebinds `action_shortcuts` at PANEL scope: a `QShortcut`
+        owned by a widget inside a hidden tab never fires, and two bindings for
+        one sequence fire NEITHER.
+        """
+        wanted = bool(show)
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) in self.UNUSED_TAB_TITLES:
+                self.tabs.setTabVisible(index, wanted)
+        if not wanted and self.tabs.tabText(self.tabs.currentIndex()) in self.UNUSED_TAB_TITLES:
+            # Never leave the trader looking at a tab that just vanished.
+            self.tabs.setCurrentIndex(self._capture_tab_index)
 
     def attach_strength_board(self, service, focus_service=None) -> None:
         """Host the M5 Strength Board under the Strength window.

@@ -288,6 +288,9 @@ class MainWindow(QMainWindow):
             nav_layout.addWidget(button)
         nav_layout.addStretch(1)
         self.nav_buttons[0].setChecked(True)
+        self.apply_unused_surface_visibility()
+        #: V2 item 1's badge is started from `showEvent`, not here. See it.
+        self._tag_badge_started = False
 
         top_bar = QFrame()
         top_bar.setObjectName("TopBar")
@@ -470,6 +473,103 @@ class MainWindow(QMainWindow):
         for part in spec.attribute.split("."):
             target = getattr(target, part)
         return target
+
+    #: The left-nav page the trader never opens (decision 0016 answer 7). The
+    #: universe BUILDER is load-bearing - the scanner reads what it writes - so
+    #: the page is hidden and the builder is untouched.
+    UNUSED_PAGE_TITLES = ("Universe",)
+
+    #: One machine-local setting, default OFF. Not a per-surface list: the
+    #: trader asked for these four to go away together, and four switches would
+    #: be four things to find.
+    SHOW_UNUSED_SETTING = "qt_show_unused_tabs"
+
+    def show_unused_surfaces(self) -> bool:
+        """Whether the unused tabs and pages are shown. Default OFF.
+
+        Fails to SHOWING on an unreadable settings file: a surface the trader
+        cannot reach is worse than one they have to skip past, and this is the
+        direction that cannot lose them anything.
+        """
+        try:
+            from project_paths import get_local_setting
+
+            return bool(get_local_setting(self.SHOW_UNUSED_SETTING, False))
+        except Exception:  # noqa: BLE001
+            return True
+
+    def apply_unused_surface_visibility(self) -> None:
+        """Hide the left-nav pages and the Alert Center tabs the trader skips.
+
+        **HIDDEN IS NOT REMOVED.** Every page is still built, still in
+        `self.pages`, still at the same index - `_select_page` and every stored
+        index keep working - and every timer behind a hidden page stays
+        visibility-gated exactly as snappiness packet 3 left it. What changes is
+        one nav button's visibility.
+        """
+        show = self.show_unused_surfaces()
+        for index, spec in enumerate(PAGE_SPECS):
+            if spec.title in self.UNUSED_PAGE_TITLES and index < len(self.nav_buttons):
+                self.nav_buttons[index].setVisible(show)
+        try:
+            self.trading_panel.alert_center.apply_unused_tab_visibility(show)
+        except Exception:  # noqa: BLE001 - a hidden tab is never worth a broken desk
+            pass
+
+    def _start_tag_review_badge(self) -> None:
+        """Count the trades awaiting tag review, off-thread, once at startup.
+
+        Decision 0016 answer 10 makes the nightly tagger the thing that saves the
+        trader time, and a review queue nobody can see saves none: the badge is
+        how the Trades tab's Provisional filter gets asked for.
+
+        Everything here fails to a PLAIN LABEL. A badge is a convenience, and a
+        number nobody can compute is not worth a broken nav bar.
+        """
+        try:
+            from ui.read_worker import ReadWorker
+        except Exception:  # noqa: BLE001
+            return
+
+        def _count():
+            from ai_jobs.journal_auto_tag import trades_awaiting_review
+
+            return trades_awaiting_review()
+
+        try:
+            worker = ReadWorker(_count, self)
+            worker.finished_with.connect(self._apply_tag_review_badge)
+            self._tag_badge_worker = worker
+            worker.start()
+        except Exception:  # noqa: BLE001
+            return
+
+    def _join_tag_review_badge(self) -> None:
+        """Wait for the badge reader, but never forever. Called from shutdown."""
+        worker = getattr(self, "_tag_badge_worker", None)
+        if worker is None:
+            return
+        try:
+            from ui.read_worker import join_worker
+
+            join_worker(worker)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _apply_tag_review_badge(self, payload: object) -> None:
+        """"Journal (12 to review)". Zero leaves the label exactly as it was."""
+        try:
+            count = int(payload)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        for index, spec in enumerate(PAGE_SPECS):
+            if spec.title != "Journal":
+                continue
+            if index < len(self.nav_buttons):
+                self.nav_buttons[index].setText(
+                    f"Journal ({count} to review)" if count > 0 else "Journal"
+                )
+            return
 
     def _select_page(self, index: int) -> None:
         # Diagnostics only (P1 item 3): a stall sampled inside Qt's own event
@@ -712,7 +812,28 @@ class MainWindow(QMainWindow):
             self.universe_status.setStyleSheet("" if done else "color: #E06C75;")
             self._universe_poll.stop()
 
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's own spelling
+        """Start the tag-review badge the first time the window is actually shown.
+
+        NOT in `__init__`, and the reason is measured rather than tidy: the count
+        opens the journal on a background thread, and a thread that starts during
+        construction runs while a test is still monkeypatching the journal's
+        module globals. It made `test_migration_failure_stays_visible_instead_of_
+        claiming_no_accounts` fail from a hundred tests away - green alone, red in
+        the suite - which is the worst kind of failure to own.
+
+        A window that is never shown is a window nobody is reading a badge on, so
+        this costs production nothing: the desk always shows.
+        """
+        super().showEvent(event)
+        if not getattr(self, "_tag_badge_started", False):
+            self._tag_badge_started = True
+            self._start_tag_review_badge()
+
     def closeEvent(self, event) -> None:
+        # V2: the badge reader, before the panels. It is one bounded read and it
+        # must not outlive the window that started it.
+        self._join_tag_review_badge()
         for panel in (
             self.trading_panel,
             self.journal_panel,

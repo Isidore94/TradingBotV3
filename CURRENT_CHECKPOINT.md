@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/v1-names-first`**, off `main` - Phase 0.14 packet **V1** (names first). Decision **0016** is merged to `main` and is the tie-breaker for this phase. **`claude/p10-after-the-like` is still unmerged** |
+| Working branch | **`claude/v2-loop-closes`**, off `main` - Phase 0.14 packet **V2**: items 1, **2 (a/b/c/e)**, 4 and 5 built; **item 3 (the AWAY Recap) is not**. V1 is merged to `main`; decision 0016 is the tie-breaker for this phase. **`claude/p10-after-the-like` is still unmerged** |
 | Also in flight | **`claude/p10-after-the-like`** - Phase 0.13 packet P10, built and verified, NOT merged. It has no dependency on V1 and V1 has none on it |
 | Active roadmap items | **Phase 0.13 packets P0-P9: ALL MERGED, live gates #29-#40 owed**; **integration gate #38** (one DESK session on the merged tree after a restart); Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **6174 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/v1-names-first`) - the `ai_jobs_runner` lock probed FREE immediately before the run. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger. Previous: **6147 passed** on `main` |
+| Last verified baseline | `pytest tests/ -q` **6222 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/v2-loop-closes`) - the `ai_jobs_runner` lock probed FREE immediately before the run. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger. Previous: **6200 passed** |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 04:09, trader-authorized ("Go ahead and restart the desk").** The checkout was moved to `main` at `125ffa0` FIRST and verified (selftest 74/74, smoke 7/7, ruff clean) - restarting onto the branch it happened to be sitting on would have put the wrong code on the desk. Old pid 17132 (up since 2026-09-01 11:09) stopped; relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **25884** (the desk) under trampoline **9140**. Verified UP THREE WAYS rather than assumed: the process outlived the launch by minutes, `heartbeat.json` re-stamps every ~4 min naming pid 25884 (it had read pid 17132 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0. **The desk now knows `tag_status`, so P6a's 24 provisional tags render as provisional rather than as the trader's own** - which is what the restart was for. The nightly AI run was a SEPARATE process and was not disturbed; it finished normally at ~04:08 |
 
@@ -32,6 +32,10 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 49 | **Weekend Prep, read in one click (V2 item 2)** - one open where Refresh builds every step and the verdict card shows five to eight lines with an n on each; then "Tag this week" lists the week's unconfirmed trades and Confirm all shown writes the trader's answer | 2026-09-02 V2 entry |
+| 48 | **The hidden surfaces (V2)** - a desk session with Alerts, D1 Focus, Armed and Universe hidden, and EVERY capture-rail hotkey still firing | 2026-09-02 V2 entry |
+| 47 | **One box, one Enter (V2)** - one Market Journal entry written from the desk tab with a single Enter, filed against the right session | 2026-09-02 V2 entry |
+| 46 | **The tagger runs itself (V2)** - one nightly run that tags new trades, and the Journal nav button showing the review count the next morning | 2026-09-02 V2 entry |
 | 45 | **One window, two sections (V1)** - the RS/RW section opens ABOVE the M5 Strength section in the alert column, and neither widens the column | 2026-09-02 V1 entry |
 | 44 | **TC2000 parity (V1)** - one DESK session where the Strength section matches the trader's own TC2000 list on the same minute for the top ten names, with the parity toggle ON. Turning it OFF shows the near-misses greyed, each naming the filter it failed | 2026-09-02 V1 entry |
 | 40 | **The narration fits (R3)** - one overnight `setup_research` run that publishes **exactly ONE pack** for the date and a `.narration.json` beside it. Three siblings, or an `ok` whose reason contains `narration absent`, means the view is still too large - and the refusal message names the size, the budget and the eligible-cell count, so it says which. Also check the pack carries `built_by_commit` and a non-empty `recipe_ids` | 2026-09-02 R3 entry |
@@ -76,6 +80,121 @@ the dated entry named beside it.
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
+
+### 2026-09-02 - V2 second run: Weekend Prep gets one Refresh, a card and a tag step
+
+**Same branch.** Live gate 49 owed. Item 2's (a), (b), (c) and (e); item 3 is
+still not built.
+
+**ONE REFRESH.** The click starts each page's own reader and returns - measured
+under 50 ms in a test, which matters because the reads behind it were once 8.45 s
+of frozen GUI on one page alone. One page that will not start does not stop the
+other four. The five per-page buttons left the LAYOUT and stay as objects,
+because `reload()` uses each as its own single-flight guard.
+
+**THE VERDICT CARD** is a PURE builder, so it is testable without a journal, a
+lake or an event loop. Every measured line carries its n; a cohort under n=5 is
+named thin and never ranked, because a top row resting on two observations is
+worse than no row; a missing input SAYS SO, because "no graded likes yet" and
+"your likes averaged 0.00R" are different facts and only the second is a claim.
+The P&L line counts CONFIRMED tags only - "my setups" means the trader's answer,
+not the tagger's guess. It reads five stores on the worker, each guarded
+separately: a card that failed because one of five files was unreadable would
+tell the trader nothing about the four that were fine.
+
+**THE RS/RW PROSE IS RETIRED** - two long blocks duplicating a LIVE board with a
+Saturday snapshot. The log SCANS are kept, uncalled, and their docstrings say so
+in capitals: a reader that exists but is never called renders the same blank page
+as a broken one, and the next agent must not "fix" it by wiring the wall of text
+back. Two tests that asserted the retired block's behaviour are replaced by ONE
+named test recording that they retired with it.
+
+**"TAG THIS WEEK"** is a sixth step, appended between reading the week and
+planning the next. It lists only what is not the trader's answer yet; confirming
+goes through `JournalStore.confirm_tags`; a failed write is reported LOUDLY,
+because a confirmation the trader believes landed is worse than one that visibly
+did not. Ten visible rows - three at a time was the complaint.
+
+Two panel tests updated: one pinned the step COUNT at five, which made it fail for
+the sanctioned way to add a step, and now pins the routine's ENDS instead; the
+other selected a page by row number and now selects by name.
+
+**Still owed:** item 3 entirely, and item 2's takes/watch-conversion table, the
+ten-row pass over the other tables, and the collapsed how-to-read notes.
+
+**Verification.** `pytest tests/ -q` **6222 passed, 72 subtests, exit 0** · `ruff`
+clean · smoke **7/7** · `--selftest` **74/74**.
+
+### 2026-09-02 - Phase 0.14 packet V2: the loop closes (items 1, 4 and 5 of five)
+
+**Branch `claude/v2-loop-closes`, off `main`.** Live gates 46-48 owed. V1 was
+merged to `main` first, as the packet required. No frozen rebuild: no new
+dependency, no new asset, and the one new module sits inside `ai_jobs`.
+
+**ITEM 1 - THE TAGGER RUNS ITSELF.** P6a built the whole machine and left it as a
+command the trader had to remember. `journal_auto_tag` runs it nightly at the
+recorded 0.70 threshold, **inserted SECOND** - right after `journal_import` and
+before everything else. That position is an insert rather than an append and is
+the second and last sanctioned exception to this list's own rule: the import is
+what puts the night's trades in the journal, so tagging ahead of it would tag
+yesterday's, and every cohort slot below reads the journal, so tagging after them
+would hand them one a night stale. Both exceptions are now argued for in
+`default_slots`' docstring, because a third would mean the list has an ordering
+nobody can state.
+
+**A journal write fails LOUDLY.** Every other evidence store swallows a failed
+append; the journal is the exception, because a tag that silently did not land is
+a trade the trader will believe is tagged. The test proves it by making the write
+raise - `JournalStore` creates its own parent directory, so a missing path would
+have tested nothing.
+
+**The badge** reads "Journal (12 to review)", counted from the STORE rather than
+from the last run's summary: a run that wrote nothing new does not mean there is
+nothing to review, and the trader may have confirmed some since.
+
+**ITEM 4 - ONE BOX, ONE ENTER.** The desk capture had a timeframe picker, a box, a
+Save button and a status line - four decisions for a thought you have at 10:40 and
+would otherwise lose. Everything but the box leaves the SURFACE; **nothing leaves
+the SCHEMA**, because a field that exists at v1 keeps its name and meaning forever
+and the nightly scope reads it. Plain Enter saves through an EVENT FILTER, not a
+`QShortcut`: a shortcut on Return would fire for every widget in the panel's
+scope, and this key must mean "save" only in this one box.
+
+**The entry is dated to the session it is ABOUT.** Today while today trades; the
+last session that traded on a weekend or a holiday. A thought written at 18:00 is
+about the day that just ended, and dating it tomorrow would file it against a
+session that has not happened. Measured: Wed 10:00 and Wed 18:00 both give
+2026-09-02; Saturday, Sunday and Labor Day all give 2026-09-04.
+`written_after_the_session` is untouched and still COMPUTED, because which day the
+note is about and whether the trader had already seen how it finished are
+different questions.
+
+**ITEM 5 - HIDDEN IS NOT REMOVED.** One setting, default OFF, hides the Alerts,
+D1 Focus and Armed tabs and the Universe page. All four are load-bearing behind
+the scenes - the review-alert door, the flag list two polls write into, the armed
+inventory the expiry sweep walks, and the builder that writes the file the scanner
+reads - so `setTabVisible` rather than `removeTab`, no index shifts, every timer
+still visibility-gated. **The shortcut rule is the part that would actually cost
+the trader something**: a `QShortcut` owned inside a hidden tab never fires, and
+two bindings for one sequence fire NEITHER, so a test asserts every rail shortcut
+is panel-scoped, bound once, and not owned inside a hidden tab.
+
+**A DEFECT OF MY OWN, FOUND AND FIXED HERE.** Item 1's badge started its reader in
+`__init__`. That thread opened the journal while another test was still
+monkeypatching the journal's module globals, and it made
+`test_migration_failure_stays_visible_instead_of_claiming_no_accounts` fail from a
+hundred tests away - green alone, red in the suite, which is the worst kind of
+failure to own. It starts from `showEvent` now and is joined in `closeEvent`; a
+window nobody has shown is a window nobody is reading a badge on.
+
+**ITEMS 2 AND 3 ARE NOT BUILT.** Weekend Prep still has its per-table refreshes,
+its week-in-review text block and no verdict card; the AWAY Recap is still the
+forward-looking digest with no outcomes and no charts. Both are UI rebuilds of a
+size that deserves its own run, and plan.md records what each owes.
+
+**Verification.** `pytest tests/ -q` **6200 passed, 72 subtests, exit 0, zero
+failures**, lock probed FREE immediately before the run · `ruff` clean · smoke
+**7/7** · `--selftest` **74/74**.
 
 ### 2026-09-02 - Phase 0.14 packet V1: names first (items 1 and 2 of four)
 

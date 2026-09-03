@@ -115,6 +115,44 @@ def build_entry(
     }
 
 
+def session_date_for(now: datetime | None = None) -> str:
+    """The session a note typed NOW is about - V2 item 4, decision 0016 answer 11.
+
+    Today's session until the close; the last completed session after it. A
+    thought written at 18:00 is about the day that just ended, and dating it
+    tomorrow would file it against a session that has not happened yet. On a
+    weekend or a holiday it is the last session that traded.
+
+    This does NOT touch `written_after_the_session`, which `build_entry` still
+    COMPUTES from `created_at`. The two answer different questions - which day
+    the note is about, and whether the trader had already seen how that day
+    finished - and the second is the one a reader needs to discount the first.
+
+    Falls back to the local date if the calendar cannot be read. A note filed
+    against today is a small error; a note that could not be written is a lost
+    thought, and this function must never be the reason one is.
+    """
+    moment = _now(now)
+    local = moment.astimezone()
+    try:
+        from market_calendar import is_session, previous_session
+        from market_session import get_market_session_window
+
+        window = get_market_session_window(reference=local)
+        market_date = window.market_date
+        if is_session(market_date):
+            # Today TRADES. Whether the close has passed or not, the note is
+            # about today - before the close it is the running session, after it
+            # the one that just finished. Both are `market_date`.
+            return market_date.isoformat()
+        # A weekend or a holiday has no session of its own, so the note is about
+        # the last one that actually traded.
+        return previous_session(market_date).isoformat()
+    except Exception:  # noqa: BLE001 - never the reason a thought is lost
+        pass
+    return local.date().isoformat()
+
+
 def _normalize_timeframe(value: Any) -> str:
     text = str(value or "").strip().upper()
     return text if text in TIMEFRAMES else TIMEFRAME_M5

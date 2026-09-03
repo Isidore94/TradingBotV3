@@ -493,3 +493,47 @@ landed in Phase 0.13 without their entry. These are those entries.
   worse than a blank grade. The slot sits BEFORE `pass_cohort_grading` because it
   feeds it - the same night completes and grades, rather than the morning after.
 
+
+## Hidden is not removed (V2 item 5, 2026-09-02)
+
+Decision 0016 answer 7 lists the surfaces the trader never opens: the Alert
+Center's **Alerts**, **D1 Focus** and **Armed** tabs, and the **Universe** page.
+V2 hides them behind one machine-local setting, `qt_show_unused_tabs`, default
+OFF.
+
+**They are hidden, not removed, and the next agent must not read "unused" as
+"deletable".** Every one of the four is load-bearing behind the scenes:
+
+* the **Alerts** feed is the review-alert door - `_enqueue_review_alert` routes
+  through it, the M5 list is built from it, and the repetition fold writes the
+  backing list before any repetition decision;
+* the **D1 Focus** tab holds the flag list that `_poll_focus_d1_interest` and
+  `_poll_d1_event_watches` both write into;
+* the **Armed** tab is the armed-watch inventory across every symbol, and the
+  expiry sweep runs at the head of the poll that owns each store;
+* the **Universe** page's BUILDER writes `universe_all.txt`, which the scanner
+  and now the Strength Board both read.
+
+**How it hides.** `setTabVisible` on the existing index, never `removeTab`, so no
+index shifts and nothing that remembers one - `_d1_tab_index`, `_armed_tab_index`,
+`_capture_tab_index` - has to be recomputed. The left-nav page keeps its position
+in `PAGE_SPECS` and its widget in `self.pages`; only the nav button's visibility
+changes, so `_select_page` and every stored index keep working.
+
+**Timers are unaffected.** Every timer behind a hidden page stays
+visibility-gated exactly as snappiness packet 3 left it. Hiding costs one row of
+tab strip and nothing else.
+
+**The shortcut rule is what would actually cost the trader something.** A
+`QShortcut` owned by a widget inside a hidden tab **never fires**, and two
+bindings for one sequence fire **NEITHER**. `CaptureRail.action_shortcuts()` is
+rebound at PANEL scope precisely so the rail's verbs survive whatever tab is on
+top; a test asserts every rail shortcut is panel-scoped, that no sequence is
+bound twice, and that none of them is owned inside a hidden tab.
+
+**Hiding the tab the trader is looking at moves them to Capture** rather than
+leaving them staring at a tab that vanished.
+
+**An unreadable settings file SHOWS.** A surface the trader cannot reach is worse
+than one they have to skip past, and that is the direction that cannot lose them
+anything.
