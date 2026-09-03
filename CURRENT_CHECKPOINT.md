@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - Phase 0.14 packet **V3** was fast-forwarded onto it at ~21:40 on 2026-09-02 (trader: "ok merge to main now"); `claude/v3-keep-it-honest` is now CONTAINED in `main` and carries nothing extra. The agent team (`.claude/agents/`, `docs/AGENT_TEAM.md`) rode in with it. **The two largest owed items are V1's Working-lately + priority switch and V2's AWAY Recap** - plan.md's Phase 0.14 status table lists every packet item and its state |
-| Also in flight | **NOTHING unmerged.** `claude/v3-keep-it-honest` and `claude/agent-team` are both CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch. The one locked worktree under `.claude/worktrees/` was removed and pruned on 2026-09-02 (clean, nothing lost) |
-| Active roadmap items | **Phase 0.14 V3** (this branch); then V1's item 4 (Working-lately + the priority switch) and V2's item 3 (the AWAY Recap), which are the two largest owed pieces. Live gates #29-#50 are owed across Phase 0.13 and 0.14 |
-| Last verified baseline | `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0, ZERO failures, 5 min 42 s** (2026-09-02 21:43, desk `.venv`, on `main` at the V3 fast-forward `7c075d8`, run in a SCRATCH worktree per `docs/AGENT_TEAM.md` rule 6) - the `ai_jobs_runner` lock probed FREE immediately before AND after the run. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger. Previous: **6310 passed** on `claude/v3-keep-it-honest`, **6281** on the old `main` |
+| Working branch | **`claude/r4-fixes`** - Round R4 **Part A** (items A1-A18), off `main`, UNMERGED. Eighteen fixes across P10, V1 and V2, each with a test proven to fail on the un-fixed file; no new feature. Part B (`claude/v3-keep-it-honest`) and Part C (integrate) are not this branch's. Before it: Phase 0.14 packet **V3** was fast-forwarded onto `main` at ~21:40 on 2026-09-02 (trader: "ok merge to main now"); `claude/v3-keep-it-honest` is now CONTAINED in `main` and carries nothing extra. The agent team (`.claude/agents/`, `docs/AGENT_TEAM.md`) rode in with it. **The two largest owed items are V1's Working-lately + priority switch and V2's AWAY Recap** - plan.md's Phase 0.14 status table lists every packet item and its state |
+| Also in flight | **`claude/r4-fixes` is unmerged** (R4 Part A). Otherwise: `claude/v3-keep-it-honest` and `claude/agent-team` are both CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch. The one locked worktree under `.claude/worktrees/` was removed and pruned on 2026-09-02 (clean, nothing lost) |
+| Active roadmap items | **Round R4 Part A** (this branch, BUILT). Then R4 Part B and Part C, then **V4**: V1's item 4 (Working-lately + the priority switch) and V2's item 3 (the AWAY Recap), which are the two largest owed pieces. R4 A11 built V1 item 3 (the digest ranking) and R4 A9/A10 wired V1 item 2's surfaces, so plan.md's Phase 0.14 table is smaller than it was this morning. Live gates #29-#51 are owed across Phase 0.13 and 0.14 |
+| Last verified baseline | **R4 Part A: see the 2026-09-02 R4 entry below for the run and the lock state.** Previous: `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0, ZERO failures, 5 min 42 s** (2026-09-02 21:43, desk `.venv`, on `main` at the V3 fast-forward `7c075d8`, run in a SCRATCH worktree per `docs/AGENT_TEAM.md` rule 6) - the `ai_jobs_runner` lock probed FREE immediately before AND after that run. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 21:04, trader-authorized ("go ahead and start the desk"). THE DESK HAD BEEN DOWN SINCE ~13:02** - `heartbeat.json` last stamped 13:02:29 under the old pid 25884 and no `launch_gui` process existed after it; the cause is not established, and I killed four stuck pytest processes at about that minute, which I cannot rule out. Relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **11612** (the desk) under trampoline **7192**. **It runs `claude/v3-keep-it-honest`, not `main`** - another agent holds `main` in a locked worktree, and V3 CONTAINS main (`git merge-base --is-ancestor` succeeds, 3 ahead / 0 behind) and is the commit the 6310-pass baseline was measured on. Verified UP THREE WAYS rather than assumed: the process outlived the launch with 18 s of CPU, `heartbeat.json` re-stamped at 21:05:22 naming pid 11612 (it had read 25884 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0 |
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 51 | **The corrected numbers, on the desk (R4 Part A)** - one DESK session and one Weekend Prep open where: the Strength Board's RVOL column is populated on a day the window contains a half day (the number must not jump when one does); the Day Trade Tracker's Held 30m / Held x Ran are filled on the three measurable tabs and BLANK on the other six; an M5 alert row shows "held NN% / ran N.NR" or nothing; the AWAY digest's swing list is ordered with a near-bucket pick above a favorite at least once; the Weekend Prep verdict card's take rate is NOT 100%; and one Market Journal note typed after the close files against TODAY with "written after the session" on it | 2026-09-02 R4 Part A entry |
 | 50 | **The headline statistics agree (V3)** - one DESK session and one Weekend Prep open where every named surface shows the headline first (win rate on swings, Held x Ran on day trades), the sorts agree with it, and the Day Trade Tracker opens on Held x Ran descending | 2026-09-02 V3 entry |
 | 49 | **Weekend Prep, read in one click (V2 item 2)** - one open where Refresh builds every step and the verdict card shows five to eight lines with an n on each; then "Tag this week" lists the week's unconfirmed trades and Confirm all shown writes the trader's answer | 2026-09-02 V2 entry |
 | 48 | **The hidden surfaces (V2)** - a desk session with Alerts, D1 Focus, Armed and Universe hidden, and EVERY capture-rail hotkey still firing | 2026-09-02 V2 entry |
@@ -84,6 +85,78 @@ the dated entry named beside it.
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
+
+### 2026-09-02 - Round R4 Part A: fix what review round 3 found (A1-A18)
+
+**Branch `claude/r4-fixes`, off `main` at `93732ef`. UNMERGED.** Eighteen items,
+no new feature: every one is a claim a doc made that the code did not keep, and
+every one ships with a test PROVEN to fail on the un-fixed file (copy the file
+out, `git checkout --`, run, see it fail, copy back, run again).
+
+**Three whole features were declared and never wired.** `d1_setup_present` had NO
+caller anywhere in the tree, so all 346 live `held_run_score` segments read False
+and decision 0016 answer 4's "an M5 alert on a name that also carries a D1 setup
+outranks the same alert on a name that does not" was a column of constants.
+`like_links.link_rows_for_bronze` had no caller either, while the ERD, the
+CHANGELOG and gate 42 all said `bronze_like_occurrence_link` is written nightly -
+and BD-92 makes that dataset the ONLY route from an after-like outcome row back to
+its setup family. `SURFACE_FOCUS_PANEL` and `SURFACE_M5_ALERT_BAR` were constants
+with no writer, so two of five columns in "which screen is the trader a better
+judge from?" could never be populated. **A rollup over an unwired dimension reads
+as an answer about the trader, not about the wiring**, which is why these are
+worse than a missing feature.
+
+**Two numbers said the opposite of the truth.** The Weekend Prep verdict card
+computed `shown = takes + skips + rejects` and `build_review_learning_state`
+publishes neither of the last two, so it printed **"100% of 94 shown"** where the
+truth was **30% of 318** - the first number the trader reads. And the Strength
+Board's relative volume walked a flat positional stride; on a synthetic series
+whose volume is a pure function of the time of day, where the honest answer is
+exactly **1.0000**, one 39-bar early close made it read **1.2949**.
+
+**One formula shipped twice under one heading.** The Daytrade Tracker's
+`_add_held_and_ran` was `1 - stop_rate` times `avg_mfe_r`, both from the
+aggregator over ITS window and over ALL rows rather than the held ones, with no
+thirty-minute question in it - filed under `held_run_score`'s own column key. It
+is deleted; the panel joins the module and computes nothing. **Six of the nine
+tabs now read BLANK**, because `intraday_bounce_outcomes.csv` does not record the
+alert context those dimensions are cut on. That is the honest consequence, stated
+here so it is not read later as a regression.
+
+**One cache made a result depend on execution order.** `simulate_after_like_rows`
+hands one `series_cache` to all twenty cells of a like and `_entry_from_derived`
+keyed it without the window, so an offset>=1 cell was served offset 0's longer
+derived series - and since the M30 EMA floor is 21 bars while an RTH session is
+13, whether a cell was MEASURABLE depended on which sibling ran first.
+
+**Also:** the trial ledger is registered ABOVE `_run_outcomes` (it was written one
+step AFTER the outcomes it declares); `after_like_block` read an `eligible` key
+`evidence_stats.summarize` never sets, so every cell reported ineligible however
+large; both note boxes save on Enter through one helper; the daily SMA feed drops
+today's forming bar and reads `2y`; a missing volume passes through as None
+rather than a measured zero; the AWAY digest ranks across the buckets by the
+tracker's realized win rate with the near cap applied AFTER the ranking; the
+Weekend Prep click no longer does a 775 ms journal read on the Qt thread;
+Discovery gained the `reload` it never had and lost six buttons; Confirm-all can
+no longer confirm a blank the nightly tagger would re-flag forever, and the page
+gained the per-row edit; the Market Journal left-nav page is one box and a dated
+newest-first list; and `session_date_for` rolls at the OPEN rather than at
+midnight in New York, with `written_after_the_session` measured against the CLOSE.
+
+**Deviations from the packet, reported rather than forced.** The packet said the
+rail's `commit_veto` sets no `surface` or `scan_context`; it does - V3 item 4
+closed that seam before the packet was written, and `capture_rail.py:727` shows
+it. The packet said the note dialogs are synchronous; they are asynchronous
+(`QDialog.open()`), and what was wrong in both comments was "MODELESS" - `open()`
+is WINDOW-modal - and "DEFERRED", which claimed a later turn of the event loop the
+call never takes. Both comments are corrected in place rather than deleted.
+
+**Verification.** See the "Active state at a glance" block. The `ai_jobs_runner`
+lock was HELD for most of this build (the nightly job), and the ~30
+`test_ai_jobs_runner.py` tests stand down under it - the full suite was run with
+the lock FREE, because a red suite under a held lock is not a baseline.
+
+**Owed:** live gate #51. Parts B and C of R4 are not on this branch.
 
 ### 2026-09-02 - Phase 0.14 packet V3: keep it honest (all six items)
 

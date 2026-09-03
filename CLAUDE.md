@@ -169,7 +169,7 @@ before changing the behaviour a rule governs.**
 - Chart paint lines: `scripts/chart_levels.py` builds the `levels` payload on the **worker**, never the paint path.
 - Price alerts: Focus and Research share one `PriceAlertService`. The `read_only` mode survives the Desk Link removal and now has no production caller.
 - **The group RS/RW tape owns its own clock** (`scripts/group_rrs.py` pure formula + `ui/services/group_tape_service.py`): ONE batched `yfinance` download per 5-minute tick, no retry inside the tick, **zero IB traffic and no `legacy.py` change**. Session filter is completed M5 bars **plus a same-date filter**; a window without `length + 2` bars is `None` and draws NOTHING (0.0 would claim "in line with SPY"). The RS Window tab still reads `rrsSnapshotChanged` — it answers a different question.
-- **M5 Strength Board:** batched yfinance over `universe_all.txt`, **zero IB traffic**. Every board add re-runs the adoption gate at click time. **A row click charts into the Visual Alert Review pane** via `chart_symbol` (the lookup box's door), never `_enqueue_review_alert` (the scanner's door, which drops in AWAY, drops parked symbols, diverts M5 to the alert bar and can hide a row behind movers-only). **It is a section under the Desk's Strength window, not a page** (trader, 2026-08-31) - one `StrengthBoardService` owned by `MainWindow`, hosted through `AlertCenterPanel.attach_strength_board`, **starting closed** because the alert column's 360 px floor is width the charts would otherwise lose. Its RS/RW half retired with the page; the Alert Center's RS/RW Board tab is the surviving view.
+- **M5 Strength Board:** batched yfinance over `universe_all.txt` **PLUS the four trader watchlists** (V1, decision 0016 answer 9 - a name the trader follows may not clear the universe's liquidity spec, and the board it never appears on is the one they read), **zero IB traffic**. Its relative volume is **SESSION-RELATIVE** (R4 A7): bar k of today against bar k of each of the prior 15 sessions, and a session that never reached bar k **contributes nothing rather than a zero**. The D1 SMA floors read a **`2y`** daily download with **today's forming bar dropped** (R4 A8). `relative_volume` is deliberately NOT one of the seven fenced formula functions; those seven stay byte-identical to the R8 baseline. Every board add re-runs the adoption gate at click time. **A row click charts into the Visual Alert Review pane** via `chart_symbol` (the lookup box's door), never `_enqueue_review_alert` (the scanner's door, which drops in AWAY, drops parked symbols, diverts M5 to the alert bar and can hide a row behind movers-only). **It is a section under the Desk's Strength window, not a page** (trader, 2026-08-31) - one `StrengthBoardService` owned by `MainWindow`, hosted through `AlertCenterPanel.attach_strength_board`, **starting closed** because the alert column's 360 px floor is width the charts would otherwise lose. **The RS/RW board is a SECTION in that same column and no longer a tab** (V1, decision 0016 answer 7): it sits ABOVE the M5 Strength section, **starts OPEN** while Strength starts closed, and is hosted in a scroll area because bare it took the column's floor from 190 px to 452. The RS Window tab still reads `rrsSnapshotChanged` - it answers a different question.
 - **One completed-bar rule** (`scripts/completed_bars.py`): `bar_start + bar_minutes <= now`, **inclusive**, timezone-converted with `astimezone` and **never** `replace(tzinfo=None)`. BounceBot's ad-hoc copies migrate opportunistically, never as a silent change to a shipped detector.
 - Pure indicator modules (`scripts/indicators/`): completed bars in, immutable tuples out, `None` for anything unmeasurable. **No importer yet — the first one fires the packaging trigger.**
 - Auto/Away phone output: `autopilot_today.txt` is the single verified home-folder digest, safety/freshness header first.
@@ -189,7 +189,25 @@ before changing the behaviour a rule governs.**
   and **sorting is by the lower bound** - the raw rate puts a 100%-on-three cell
   above a 62%-on-ninety every time. Mean R stays beside it, never replaced. On
   the day-trade side the headline is `held_run_score`: P(the level held in the
-  first 30 min) x trimmed-mean MFE_R of the ones that held.
+  first 30 min) x trimmed-mean MFE_R of the ones that held. **ONE formula reaches
+  every surface** (R4 A10): the Day Trade Tracker joins
+  `held_run_score.dimension_summaries` and computes nothing, and the M5 alert row
+  reads `alert_cell` + `alert_suffix`. A dimension the outcome log cannot be
+  asked - six of the tracker's nine tabs - is **BLANK**, because a second formula
+  under the headline key is worse than a blank when the column is read as an
+  ordering. `d1_setup_present` is fed from the scanner's own
+  `master_avwap_tracker_scoring_snapshot.json` (19 MB), never from the 1.1 GB
+  setup tracker.
+- **The AWAY digest ranks swing picks by the tracker's record, not by the bucket**
+  (V1 item 3, built R4 A11; decision 0016 answer 8: *"the best pick is often in
+  the near bucket, not the favourite bucket, so the cream is not being sent."*)
+  The order is the **Wilson lower bound** on the setup family's realized win rate
+  - `master_avwap_tier_outcomes.csv`'s own `win` column inside `lately_window()`
+  - with expected R as the tiebreak; an ungraded family sorts BELOW every graded
+  one rather than at zero. The bucket is PRINTED and never ranked on, and the near
+  cap is applied **after** the ranking, so what is hidden is the weakest near rows
+  and never the best one. The read is the caller's, so `render_away_report` stays
+  a pure renderer. AWAY is still the only routine pusher.
 - **The Research tab is not a trader surface.** It is the builder's
   (decision 0016 answer 7: the trader never opens it). Nothing the trader must
   see may live only there - a number that matters gets a line on the Trading

@@ -394,3 +394,54 @@ each other. The cap prints what it dropped, like the symbol stream.
 its CSVs under the home root. AI-P1 fixed the live reader and left the copy that
 encoded the defect; a future edit reaching for the nearest-looking helper would
 have restored it.
+
+
+## Round R4 Part A (2026-09-02) — what V2 claimed here and what it left
+
+R8 built this tab; Phase 0.14 packet V2 rebuilt its front (decision 0016
+answer 10: *"one Refresh for the whole tab, a short verdict card on top, tables
+not prose, ten visible rows"*). R4 A13, A14, A15 and A18 finished four of those
+four, and the gap in each case was the same shape — the rule was written down
+and applied to one place.
+
+**One Refresh means the CLICK reads nothing.** V2's own test measured the click
+with every page's `reload` monkeypatched to an `append`, so what it timed was the
+`for` loop. Underneath it, `WalkawayPage._reload_review_data` called
+`journal_feed.week_trades` synchronously — a journal query over a week of trades,
+**775 ms**, on the thread that draws. It runs on the page's own `_ReadWorker`
+now, with its own handle so a read and a tag toggle cannot cancel each other, and
+the 50 ms assertion is measured against the REAL click with the reads stubbed at
+the WORKER boundary.
+
+**`DiscoveryPage` had no `reload` at all.** `_StepPage.reload` is a no-op, so
+"Refresh everything" called it, counted Discovery as started, named it in the
+"Building:" line and built nothing — while its **six** per-table Refresh buttons
+(two per timeframe, three timeframes) stayed in the layout, which is the exact
+complaint answer 10 was answering. V2's button test could not see them because it
+looked for a `refresh_button` attribute this page does not have. `reload` now
+refreshes all six boards through the service's own single-flight, and the buttons
+are out of the layout and kept as objects.
+
+**Ten rows is one constant now.** `TABLE_TEN_ROWS_PX` (260 px), applied through
+`_ten_row_table` to every `QTableWidget` on the tab. V2 set a bare `260` on
+`tag_week` and left the other eleven tables at whatever the layout gave them.
+
+**"Confirm all shown" could confirm a blank.** `JournalStore.confirm_tags` only
+flips the LANE, so a `needs_review` row carrying no tag was written `confirmed`
+over nothing — and the nightly `journal_auto_tag` then found a closed trade with
+no confirmed tag and marked it `needs_review` again, every night, forever. 132 of
+the live rows are that shape and no button on this page could give one of them a
+tag. Untagged rows are skipped and COUNTED, the note names them, and **"Edit
+tag..."** writes the trader's own wording through `journal_feed.correct_auto_tag`
+and then confirms it. The SQLite writes moved onto a worker: "Confirm all shown"
+is one UPDATE per row.
+
+**The verdict card's take rate was wrong, not merely thin.** `take_rate_line`
+computed `shown = takes + skips + rejects`, and `build_review_learning_state`
+publishes **neither** `skips` nor `rejects` — `aggregate_dimensions` returns
+`episodes`, `shown`, `takes`, `overall_take_rate` and `dimensions`, and that is
+the whole top level. The denominator was `takes + 0 + 0`, so the card read
+"100% of 94 shown" on a week whose real answer was 30% of 318. It reads `shown`
+and `overall_take_rate` off the state now, and its tests are fixtured on REAL
+states built through `build_review_learning_state` — a hand-written dict is what
+let this ship, because it can carry any key the code happens to ask for.

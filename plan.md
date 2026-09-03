@@ -813,33 +813,34 @@ inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
 ## Phase 0.14 — Names first (decision 0016)
 
-**Status at 2026-09-02.** V1, V2 and V3 are all merged to `main` (V3 fast-forwarded
-from `claude/v3-keep-it-honest` the evening of 2026-09-02). What is NOT built, in one place so nobody has to
-reconstruct it from three entries:
+**Status at 2026-09-02, after round R4 Part A.** V1, V2 and V3 are all merged to
+`main` (V3 fast-forwarded from `claude/v3-keep-it-honest` the evening of
+2026-09-02); R4 Part A is on `claude/r4-fixes`. What is NOT built, in one place so
+nobody has to reconstruct it from four entries:
 
 | Packet | Item | State |
 |---|---|---|
-| V1 | 1 Strength Board = TC2000 | **BUILT** (gates #44, #45) |
-| V1 | 2 `held_run_score` | score BUILT; its three surfaces landed in V3 item 2 |
-| V1 | 3 phone digest ranks across buckets | **NOT BUILT** |
-| V1 | 4 Working-lately + priority switch | **NOT BUILT** |
+| V1 | 1 Strength Board = TC2000 | **BUILT** (gates #44, #45). R4 A7/A8 made the RVOL session-relative, dropped the forming daily bar and widened the daily window to `2y` |
+| V1 | 2 `held_run_score` | **BUILT AND WIRED** (R4 A9/A10): the D1 dimension is fed, the tracker's second formula is deleted, and the M5 alert row carries the suffix. Six of the tracker's nine tabs read BLANK because the outcome log does not record what they are cut on |
+| V1 | 3 phone digest ranks across buckets | **BUILT** (R4 A11) - Wilson lower bound on the family's realized win rate, expected R as tiebreak, near cap after the ranking |
+| V1 | 4 Working-lately + priority switch | **NOT BUILT** - this is V4 |
 | V2 | 1 nightly auto-tagging | **BUILT** (gate #46) |
-| V2 | 2 Weekend Prep | (a)(b)(c)(e) **BUILT** (gate #49); the takes table, the ten-row pass and the collapsed notes are owed |
-| V2 | 3 AWAY Recap | **NOT BUILT** |
-| V2 | 4 Market Journal one box | **BUILT** (gate #47) |
+| V2 | 2 Weekend Prep | (a)(b)(c)(e) **BUILT** (gate #49). R4 A13/A14/A15/A18 fixed the take rate, moved the 775 ms read off the Qt thread, gave Discovery a real `reload` and its six buttons the exit, stopped Confirm-all confirming a blank, added the per-row edit and put every table on a ten-row floor. The takes table and the collapsed notes are still owed |
+| V2 | 3 AWAY Recap | **NOT BUILT** - this is V4 |
+| V2 | 4 Market Journal one box | **BUILT** (gate #47). The Desk tab landed with V2; the LEFT-NAV PAGE landed with R4 A16, and R4 A17 moved the session roll to the open |
 | V2 | 5 hide the dead tabs | **BUILT** (gate #48) |
-| V3 | 1 win rate leads | **BUILT** - `swing_headline`; the Master AVWAP table and Setup Tracker still need the column wired |
-| V3 | 2 day-trade headline | **BUILT** |
-| V3 | 3 one `LATELY_SESSIONS` | **BUILT** |
-| V3 | 4 one annotation writer | **BUILT** - and it found the rail's veto seam |
+| V3 | 1 win rate leads | **PARTIAL** - `swing_headline` exists and `setup_docs.family_record_sentence` renders it; the Master AVWAP table, the Setup Tracker Setup Types tab and the Weekend Prep cohort tables are still owed (R4 Part B, item B3) |
+| V3 | 2 day-trade headline | **BUILT** - and its surfaces are real since R4 A10 |
+| V3 | 3 one `LATELY_SESSIONS` | **BUILT** - `review_learning.DEFAULT_WINDOW_DAYS` and Weekend Prep's `window_days=7` calls still bypass it (R4 Part B, item B6) |
+| V3 | 4 one annotation writer | **BUILT** - all five surfaces have a writer since R4 A5 |
 | V3 | 5 research on a trader surface | **BUILT** |
 | V3 | 6 docs | **BUILT** |
 
 **The two largest owed items are V1's Working-lately + priority switch and V2's
-AWAY Recap.** Every rule they need is already written down - the switch reorders
-and never withholds (CLAUDE.md), "lately" is `LATELY_SESSIONS`, the headline
-statistics are `swing_headline` and `held_run_score` - so what is missing is the
-surface, not the decision.
+AWAY Recap, and both are V4.** Every rule they need is already written down - the
+switch reorders and never withholds (CLAUDE.md), "lately" is `LATELY_SESSIONS`,
+the headline statistics are `swing_headline` and `held_run_score` - so what is
+missing is the surface, not the decision.
 
 
 Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breaker

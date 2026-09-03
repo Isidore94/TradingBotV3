@@ -43,25 +43,48 @@ which is evidence and must not be loaded as context.
   rather than re-deriving one, and the average carries its unit, because a column
   headed "Avg R" showing a percent is a number that lies.
   `setup_docs.family_record_sentence` renders one line per family AT READ TIME.
-- **MFE after a held level leads every DAY-TRADE surface** (V3 item 2). The Day
-  Trade Tracker leads with Held and Held x Ran and opens sorted by the second; the
-  tier statistics stay beside them. The column is labelled "Held" and not "Held in
-  30m" because the aggregator's `stop_rate` is over ITS window - the precise
-  30-minute version stays in `held_run_score.build_segments`.
+- **MFE after a held level leads every DAY-TRADE surface** (V3 item 2, WIRED by
+  R4 A9/A10). The Day Trade Tracker leads with **Held 30m** and Held x Ran and
+  opens sorted by the second; the tier statistics stay beside them. **One
+  formula**: the panel joins `held_run_score.dimension_summaries` and computes
+  nothing, which is why the column may finally say "30m" - V3 shipped a SECOND
+  formula under the same key (`1 - stop_rate` x `avg_mfe_r`, the aggregator's own
+  window, every row rather than the held ones). Six of the nine tabs are cut on
+  alert context `intraday_bounce_outcomes.csv` does not record and read BLANK.
+  The M5 alert row carries "held NN% / ran N.NR" through `alert_cell` +
+  `alert_suffix`, silent below the floor, attached as a dict read from an index
+  built once per session on a worker. `d1_setup_present` had no caller at all and
+  is now fed from `master_avwap_tracker_scoring_snapshot.json`.
 - **"Lately" is ONE number, counted in trading sessions** (V3 item 3).
   `evidence_stats.LATELY_SESSIONS` (20) and `lately_window()`, which walks the
   exchange calendar: twenty calendar days is fourteen sessions in a normal month
   and twelve across a holiday week.
-- **One annotation writer, and every row carries its screen** (V3 item 4). Exactly
-  one module outside the store calls the raw writer, and the capture rail's VETO
-  path now stamps `surface` as its LIKE path already did - they had different row
-  shapes, so any rollup by screen silently omitted every veto.
+- **One annotation writer, and every row carries its screen** (V3 item 4,
+  completed by R4 A5). Exactly one module outside the store calls the raw writer,
+  and the capture rail's VETO path stamps `surface` as its LIKE path already did.
+  **All five declared surfaces now have a writer**: the Master AVWAP star/cross,
+  the review pane's "Not today", the bare rail, the Focus chip's right-click
+  Like / Not today, and the M5 alert row's right-click quick like. The two
+  chart-review HOSTS call `set_scan_context(surface=SURFACE_CHART_REVIEW)`; the
+  override existed from P10 B1 and no host ever called it, so every verdict
+  passed on a review chart filed as `rail`. The Focus panel's "Not today" writes
+  the row FIRST and then asks for the scoped removal that refuses a name the
+  trader typed. The note box saves on **Enter** and newlines on Shift+Enter
+  through one helper, `ui/widgets/note_prompt.py` (R4 A6).
 - **The Research tab is the builder's surface** (V3 item 5). The nightly fact
   pack's headline gets one line on Weekend Prep's verdict card; the full panel
   stays in Research, which now says so on the page.
 - **Weekend Prep has ONE Refresh and a verdict card** (V2 item 2, decision 0016
-  answer 10). The click starts each page's own reader and returns - measured under
-  50 ms - and the five per-page buttons left the layout. The card is a PURE builder
+  answer 10; finished by R4 A13/A14/A18). The click starts each page's own reader
+  and returns - measured under 50 ms with the reads stubbed at the WORKER
+  boundary - and the five per-page buttons left the layout, as did **Discovery's
+  six per-table ones**, which now have a real `reload` (it had none, so one
+  Refresh counted the step and built nothing). `week_trades` moved off the Qt
+  thread: it was 775 ms of the click. Every table carries the ten-row floor
+  through one constant, `TABLE_TEN_ROWS_PX`. The card's take rate READS `shown`
+  and `overall_take_rate` off the state - it used to add `takes + skips +
+  rejects`, and the state has never published the last two, so it printed
+  "100% of 94" where the truth was 30% of 318. The card is a PURE builder
   (`scripts/weekend_verdict.py`): take rate, blind spots and leaks BY NAME, the
   best liked claim and weakest veto reason at h3, the week's net and win rate
   (**confirmed tags only**), the tag-review count. Every measured line carries its
@@ -69,20 +92,28 @@ which is evidence and must not be loaded as context.
   rather than printing a zero. The RS/RW prose is retired - it duplicated a live
   board with a Saturday snapshot - and the log scans are kept UNCALLED with
   docstrings that say so.
-- **"Tag this week" is a weekend step** (V2 item 2e). The week's provisional and
-  needs_review trades, confirm-all-shown and confirm-selected through
-  `JournalStore.confirm_tags`, ten visible rows, read on a worker. A confirmed row
-  is never listed again, and a failed write is reported LOUDLY.
+- **"Tag this week" is a weekend step** (V2 item 2e, corrected by R4 A15). The
+  week's provisional and needs_review trades, confirm-all-shown and
+  confirm-selected through `JournalStore.confirm_tags`, ten visible rows, read AND
+  written on a worker. A confirmed row is never listed again, and a failed write
+  is reported LOUDLY. **A row with no tag is SKIPPED and counted**: `confirm_tags`
+  only flips the lane, so confirming a blank leaves the nightly tagger re-flagging
+  it `needs_review` every night forever. "Edit tag..." is the path those rows have
+  - the trader's own wording through `correct_auto_tag`, then confirmed.
 - **The tagger runs every night** (V2, decision 0016 answer 10). `journal_auto_tag`
   is a deterministic slot inserted SECOND, right after `journal_import` — the
   second and last sanctioned exception to this list's append-only rule. It applies
   P6a's plan at 0.70, never touches a confirmed row, and **fails LOUDLY**: the
   journal is the one store on this desk that may not fail quietly. The Journal nav
   button reads "Journal (N to review)", counted off-thread from `showEvent`.
-- **The Market Journal capture is one box and one Enter** (V2, answer 11). The
-  picker and the button leave the surface; **nothing leaves the schema**. The entry
-  is dated to the SESSION IT IS ABOUT — today while today trades, the last session
-  that traded otherwise — and `written_after_the_session` is still COMPUTED.
+- **The Market Journal capture is one box and one Enter** (V2, answer 11; the
+  LEFT-NAV PAGE too since R4 A16, which V2 never touched). The picker and the
+  button leave the surface; **nothing leaves the schema**. The page is a DATED
+  newest-first list across every session. The entry is dated to the SESSION IT IS
+  ABOUT — today while today trades, the last session that traded otherwise — and
+  **the roll is the session's OPEN, not midnight in New York** (R4 A17): a Pacific
+  note at 21:00 was filing against tomorrow. `written_after_the_session` is still
+  COMPUTED, and measured against the session's **CLOSE** rather than its date.
 - **The unused surfaces are HIDDEN, never removed** (V2, answer 7). One setting,
   default OFF, hides the Alerts / D1 Focus / Armed tabs and the Universe page.
   `setTabVisible`, so no index shifts; every timer stays visibility-gated; and a
@@ -90,15 +121,25 @@ which is evidence and must not be loaded as context.
   inside a hidden tab — a QShortcut in a hidden tab never fires, and two bindings
   for one sequence fire NEITHER.
 - **The Strength Board IS the trader's TC2000 scan** (V1, 2026-09-02, decision
-  0016 answer 9). Relative volume `AVG(V / mean(V78 ... V1170), 12)` - POSITIONAL
-  as TC2000 is, blank and never zero under sixteen sessions - plus the $5, D1 200
-  SMA, D1 100 SMA and M5 15 EMA floors, each a NAMED boolean carrying the sentence
-  that failed. The fetch period is `1mo` because the RVOL needs 1,182 bars. The
-  universe is `universe_all.txt` PLUS the four watchlists. **A row that misses a
+  0016 answer 9; corrected by R4 A7/A8). Relative volume is
+  `AVG(V / mean(V at the same bar offset over the prior 15 sessions), 12)` -
+  **SESSION-RELATIVE**, which is what answer 9 asks for and calls "the time-of-day
+  relative volume". V1 shipped a flat positional stride on a TC2000-parity
+  argument; one 39-bar early close shifts every offset past it, and on a series
+  whose volume is a pure function of the time of day - where the answer must be
+  exactly 1.0000 - it read 1.2949. A prior session that never reached bar k
+  CONTRIBUTES NOTHING rather than a zero. Blank and never zero under fifteen
+  prior sessions. Plus the $5, D1 200 SMA, D1 100 SMA and M5 15 EMA floors, each
+  a NAMED boolean carrying the sentence that failed; the D1 pair reads a **`2y`**
+  download with **today's forming bar dropped**. The fetch period is `1mo`
+  because the RVOL needs sixteen sessions of bars. The universe is
+  `universe_all.txt` PLUS the four watchlists. **A row that misses a
   filter is GREYED with its reason, never dropped**, behind a default-on "TC2000
   parity" toggle. The D1 SMAs come from a second batched daily download; still zero
-  IB traffic. Golden `tc2000_parity_v1` pins strength and RVOL for five symbols
-  against a SECOND hand implementation.
+  IB traffic. Golden `tc2000_parity_v1` pins strength and RVOL for **seven** symbols
+  against a SECOND hand implementation - AAA-EEE are clean sessions on which both
+  readings agree, which is exactly why they could not catch the defect, and R4
+  added `FFF` (one early close) and `GGG` (one missing bar).
 - **`strength_scan.py`'s fence is narrowed, not lifted.** The R8 spec froze the
   module whole; the trader authorized this change naming the file, so the test now
   pins the seven FORMULA functions byte-identical to the R8 baseline instead.
@@ -106,13 +147,25 @@ which is evidence and must not be loaded as context.
   board left the Alert Center's tab stack for the strength column, above the M5
   Strength section, in a scroll area - hosted bare its minimum took the column's
   floor from 190 px to 452, past the alert column's whole 360 px budget.
+- **The AWAY digest ranks swing picks by the tracker's record, not by the
+  bucket** (V1 item 3, built R4 A11; decision 0016 answer 8: *"the best pick is
+  often in the near bucket, not the favourite bucket, so the cream is not being
+  sent."*) The order is the **Wilson lower bound** on the setup family's realized
+  win rate, read from `master_avwap_tier_outcomes.csv`'s own `win` column inside
+  `lately_window()`, with expected R as the tiebreak; an ungraded family sorts
+  BELOW every graded one rather than at zero. The bucket is PRINTED and never
+  ranked on, and the near cap is applied AFTER the ranking, so what is hidden is
+  the weakest near rows and never the best one. `render_away_report` stays a pure
+  renderer - the read is the caller's. AWAY is still the only routine pusher.
 - **`held_run_score` measures whether the level held and then how far it ran**
   (V1 item 2, decision 0016 answer 4): P(no stop inside 30 minutes) x trimmed-mean
   MFE_R of the held ones, per (bounce_type, time_bucket, environment,
   d1_setup_present), rolling 20 sessions. **A SECOND score** - the champion tier,
   the mutes and the PROVEN stamp are untouched and a test pins that the champion
   never imports it. The row suffix is BLANK below the floor, never a number in
-  brackets. **Its three surfaces are not built yet.**
+  brackets. **Its surfaces landed with R4 A9/A10** - the Daytrade Tracker column
+  and sort, and the M5 alert row's suffix. The priority/ordering switch is V4;
+  the seam is `daytrade_tracker_panel._by_headline`.
 
 
 - PySide6 Trading Desk launched by `launch_gui.py`, with the legacy Tk UI retained
@@ -850,6 +903,67 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-02 - Round R4 Part A: fix what review round 3 found
+
+**Branch `claude/r4-fixes`, off `main`.** Eighteen items (A1-A18) across P10, V1
+and V2, each with a test PROVEN to fail on the un-fixed file. Nothing here is a
+new feature: every item is a claim the docs made that the code did not keep.
+
+**P10 (A1-A6).** `after_like_block` read `summary["eligible"]` off
+`evidence_stats.summarize`, which never sets that key, so every cell of the
+after-like grid reported ineligible however large - a 60-episode, 60-symbol,
+28-session cell showed nothing. One helper, `_meets_eligibility_floors`, now owns
+the rule for both blocks. `trial_ledger.backfill` ran BELOW `_run_outcomes` in
+`cli.run_build`, so the row declaring the grid was appended one step AFTER the
+outcomes it governs; moved above, asserted on recorded call order.
+`simulate_after_like_rows` shares one `series_cache` across twenty cells that look
+at different windows, and `_entry_from_derived` keyed it without the window - so
+an offset>=1 cell was served offset 0's longer derived series and whether a cell
+was MEASURABLE depended on which sibling ran first (13 M30 bars alone, 39 after a
+sibling, against a 21-bar EMA floor). `like_links.link_rows_for_bronze` had no
+production caller while the ERD, this file and gate 42 all said
+`bronze_like_occurrence_link` is written nightly; `_run_after_like_pass` publishes
+it now, month-keyed, skipping by record hash what the partition already holds.
+`SURFACE_FOCUS_PANEL` and `SURFACE_M5_ALERT_BAR` were constants with no writer and
+now have one each; the two chart-review hosts call the `surface` override that had
+existed since P10 B1 with no caller. And both note boxes save on **Enter**
+(Shift+Enter newlines) through `ui/widgets/note_prompt.py` - the plain-text mode
+that makes them multi-line also handed Return to the editor, so the only way to
+save was the mouse.
+
+**V1 (A7-A12).** The Strength Board's relative volume is SESSION-RELATIVE, which
+is what decision 0016 answer 9 asks for; the positional stride V1 shipped reads
+1.2949 on a series whose honest answer is exactly 1.0000. The D1 SMA floors drop
+today's forming bar and read `2y` rather than `1y`. `autopilot_core._frame_rows`
+passes a missing volume through as None instead of a measured 0.0.
+`d1_setup_present` had NO caller anywhere - 346 live segments read False - and is
+fed from the scanner's own 19 MB snapshot, never the 1.1 GB tracker. The Daytrade
+Tracker's second held/ran formula is deleted and the module's own answer joined in
+its place; the M5 alert row gained the suffix `segment_index` was built for. The
+AWAY digest ranks ACROSS the buckets by the tracker's realized win rate (Wilson
+lower bound, expected R as tiebreak) with the near cap applied AFTER the ranking.
+
+**V2 (A13-A18).** The verdict card's take rate read `takes + skips + rejects` and
+the state publishes neither of the last two: "100% of 94 shown" where the truth
+was 30% of 318. `week_trades` moved off the Qt thread (775 ms of the one Refresh
+click) and `DiscoveryPage` gained the `reload` it never had, losing its six
+per-table buttons. "Confirm all shown" no longer confirms a blank - which the
+nightly tagger re-flagged every night forever - and the page gained the per-row
+"Edit tag...". The Market Journal left-nav page is one box, one Enter and a dated
+newest-first list. `session_date_for` rolls at the OPEN rather than at midnight
+in New York, and `written_after_the_session` is measured against the CLOSE. Every
+Weekend Prep table carries a ten-row floor through one constant.
+
+**Deviations from the packet, reported rather than forced.** `capture_rail`'s
+`commit_veto` already stamped `surface` and `scan_context` - V3 item 4 closed that
+seam before this packet was written. The `alert_center_panel` note dialog was
+already asynchronous; what was wrong in both comments was "MODELESS"
+(`QDialog.open()` is window-modal) and "DEFERRED" (the call is the handler's last
+statement). Six of the Daytrade Tracker's nine tabs now read BLANK for Held and
+Held x Ran, because `intraday_bounce_outcomes.csv` does not record the alert
+context those dimensions are cut on - the honest consequence of deleting the
+second formula, not a regression.
 
 ### 2026-09-02 - Phase 0.14 packet V3: keep it honest
 
