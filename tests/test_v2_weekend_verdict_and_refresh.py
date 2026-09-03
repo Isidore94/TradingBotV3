@@ -52,7 +52,11 @@ def test_every_measured_line_carries_its_n():
     import weekend_verdict
 
     verdict = weekend_verdict.build_verdict(
-        learning_state={"takes": 4, "skips": 11, "rejects": 2},
+        # R4 A13: the REAL key shape. `build_review_learning_state` publishes
+        # `shown` / `takes` / `overall_take_rate` and has never published
+        # `skips` or `rejects` - the hand-written dict this used to carry is
+        # what let the card's denominator be wrong.
+        learning_state={"shown": 17, "takes": 4, "overall_take_rate": 0.235},
         like_rows=[{"source": "like_avwap_breakout", "avg_r_h3": 0.42, "n_h3": 9}],
         veto_rows=[{"source": "veto_v2_compressed", "avg_r_h3": 0.31, "n_h3": 7}],
         week_trades=[
@@ -88,8 +92,9 @@ def test_the_callouts_are_named_not_counted():
 
     verdict = weekend_verdict.build_verdict(
         learning_state={
+            "shown": 2,
             "takes": 1,
-            "skips": 1,
+            "overall_take_rate": 0.5,
             "blind_spots": [{"segment": "ema_15 morning"}, {"segment": "vwap_reclaim"}],
             "leaks": [{"segment": "gap_fill power_hour"}],
         }

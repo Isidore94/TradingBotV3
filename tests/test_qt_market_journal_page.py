@@ -197,7 +197,15 @@ def test_a_pane_that_was_never_captured_is_hidden_not_drawn_empty(panel):
 
 
 def test_a_late_capture_never_lands_under_another_entrys_words(panel):
+    """R4 A16: the list is newest-FIRST now, so the selected row is row 0.
+
+    The point is unchanged - a capture that arrives for an entry the trader is
+    no longer looking at must not repaint the note - so the test selects the
+    OTHER entry explicitly rather than relying on which row the render happened
+    to leave current.
+    """
     _render(panel, [_entry("mj-1", "x"), _entry("mj-2", "y")], digests={"mj-1": {"digest": ""}})
+    panel.entries.setCurrentRow(1)
     before = panel.charts_note.text()
 
     panel._render_capture("mj-1", {"symbol": "DT", "series": {}})

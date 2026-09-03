@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGridLayout,
-    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -75,7 +74,10 @@ class _EntriesWorker(QThread):
     def run(self) -> None:  # pragma: no cover - exercised through its signal seam
         payload: dict[str, Any] = {"session_date": self._session}
         try:
-            payload["entries"] = self._service.entries_for(self._session)
+            # R4 A16: EVERY session, not one. The picker is gone, so the list is
+            # the journal - dated, newest first - and the day context below it
+            # follows whichever entry is selected.
+            payload["entries"] = self._service.entries_for()
             payload["sessions"] = self._service.sessions_with_entries()
             payload["timeline"] = self._service.regime_timeline()
             payload["context"] = self._service.day_context(self._session)
@@ -136,16 +138,23 @@ class MarketJournalPanel(QFrame):
         self.subtitle.setObjectName("SectionSubtitle")
         self.subtitle.setWordWrap(True)
 
+        # R4 A16: the picker, the Refresh, the timeframe box, the Save button
+        # and the after-the-fact caption are OUT OF THE LAYOUT, not deleted -
+        # the V2 idiom, and for the same reason: `reload()` and `_save()` still
+        # read them, and nothing leaves the SCHEMA. Decision 0016 answer 11 is
+        # "one box, one Enter", and V2 built that on the Desk tab and left this
+        # page exactly as it was.
         self.session_picker = QComboBox()
         self.session_picker.setEditable(True)
-        self.session_picker.currentTextChanged.connect(lambda _text: self.reload())
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.clicked.connect(self.reload)
 
         self.entry_text = QPlainTextEdit()
         self.entry_text.setPlaceholderText(
-            "What happened today, and what you make of it. Ctrl+Enter saves."
+            "What happened today, and what you make of it. Enter saves; "
+            "Shift+Enter starts a new line."
         )
+        self.entry_text.installEventFilter(self)
         self.timeframe_picker = QComboBox()
         self.save_button = QPushButton("Save entry")
         self.save_button.clicked.connect(self._save)
@@ -176,26 +185,14 @@ class MarketJournalPanel(QFrame):
         self.timeframe_picker.addItems(list(market_journal.TIMEFRAMES))
         self.timeframe_picker.setCurrentText(market_journal.TIMEFRAME_D1)
 
-        header = QHBoxLayout()
-        header.addWidget(QLabel("Session"))
-        header.addWidget(self.session_picker, 1)
-        header.addWidget(self.refresh_button)
-
         compose = QVBoxLayout()
         compose.addWidget(QLabel("New entry"))
         compose.addWidget(self.entry_text, 1)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Timeframe"))
-        row.addWidget(self.timeframe_picker)
-        row.addStretch(1)
-        row.addWidget(self.save_button)
-        compose.addLayout(row)
-        compose.addWidget(self.after_the_fact)
         compose_widget = QWidget()
         compose_widget.setLayout(compose)
 
         review = QVBoxLayout()
-        review.addWidget(QLabel("Entries"))
+        review.addWidget(QLabel("Entries, newest first"))
         review.addWidget(self.entries, 2)
         review.addWidget(QLabel("Environment timeline"))
         review.addWidget(self.agreement)
@@ -251,7 +248,6 @@ class MarketJournalPanel(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.heading)
         layout.addWidget(self.subtitle)
-        layout.addLayout(header)
         layout.addWidget(splitter, 1)
         layout.addWidget(self.status)
 
@@ -271,8 +267,42 @@ class MarketJournalPanel(QFrame):
 
     # -- session ----------------------------------------------------------
     def session_date(self) -> str:
-        text = self.session_picker.currentText().strip()
-        return text or date.today().isoformat()
+        """The session a note typed NOW is about. COMPUTED (R4 A16).
+
+        The picker is gone, so this is `market_journal.session_date_for` - the
+        same function the Desk tab's box uses, which is what makes a note filed
+        from either surface land on the same day. A calendar that cannot answer
+        falls back to today, because a note that could not be filed is a lost
+        thought.
+        """
+        import market_journal
+
+        try:
+            return market_journal.session_date_for()
+        except Exception:  # noqa: BLE001
+            return date.today().isoformat()
+
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt override)
+        """Enter saves, Shift+Enter makes a newline - answer 11's "one Enter".
+
+        An event filter rather than a `QShortcut`, exactly as the Desk tab's box
+        does it: a shortcut on Return would fire for every widget in this page's
+        scope, and this key means "save" only while the cursor is in this box.
+        """
+        try:
+            from PySide6.QtCore import QEvent
+
+            if (
+                watched is self.entry_text
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            ):
+                self._save()
+                return True
+        except Exception:  # noqa: BLE001 - a key handler never breaks the page
+            pass
+        return super().eventFilter(watched, event)
 
     def _sync_after_the_fact(self) -> None:
         """Say plainly when the entry being typed is about a past session.
@@ -350,7 +380,18 @@ class MarketJournalPanel(QFrame):
         import market_journal
 
         previous = self._selected_entry_id()
-        self._entries = list(entries)
+        # R4 A16: NEWEST FIRST, and every session in one list. The page used to
+        # show one session at a time behind a picker, so reading back "what did
+        # I think last week" meant knowing the date first.
+        self._entries = sorted(
+            entries,
+            key=lambda row: (
+                str(row.get("session_date") or ""),
+                str(row.get("created_at") or ""),
+            ),
+            reverse=True,
+        )
+        entries = self._entries
         blocked = self.entries.blockSignals(True)
         try:
             self.entries.clear()
@@ -365,12 +406,15 @@ class MarketJournalPanel(QFrame):
                 hand = " [desk]" if market_journal.is_machine_entry(entry) else ""
                 symbols = ", ".join(entry.get("symbols") or ())
                 camera = " 📈" if str(entry.get("entry_id") or "") in self._digests else ""
-                stamp = str(entry.get("created_at") or "")[:19]
+                # DATED by the session it is ABOUT, which is the question the
+                # picker used to answer. `created_at` moves to the tooltip.
+                session = str(entry.get("session_date") or "")[:10]
                 label = (
-                    f"{entry.get('timeframe', '')} {stamp}{hand}{marker}{camera} "
+                    f"{session}  {entry.get('timeframe', '')}{hand}{marker}{camera} "
                     f"{('[' + symbols + '] ') if symbols else ''}{entry.get('text', '')}"
                 )
                 item = QListWidgetItem(label)
+                item.setToolTip(f"written {str(entry.get('created_at') or '')[:19]}")
                 item.setData(Qt.UserRole, str(entry.get("entry_id") or ""))
                 self.entries.addItem(item)
         finally:
@@ -381,7 +425,8 @@ class MarketJournalPanel(QFrame):
             self._clear_charts("No entries for this session, so there is nothing to chart.")
             return
         row = self._row_for_entry(previous)
-        self.entries.setCurrentRow(row if row is not None else len(entries) - 1)
+        # Newest first, so the newest entry is row ZERO.
+        self.entries.setCurrentRow(row if row is not None else 0)
         # setCurrentRow is a no-op when the row is already current (a reload
         # that changed nothing), and the charts must still be right.
         self._on_entry_selected(self.entries.currentRow())

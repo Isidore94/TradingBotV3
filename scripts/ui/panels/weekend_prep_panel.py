@@ -81,6 +81,23 @@ class _WalkawayWorker(QThread):
 #: so nothing that already refers to `_ReadWorker` has to move.
 _ReadWorker = ReadWorker
 
+#: TEN VISIBLE ROWS before a table starts scrolling. Decision 0016 answer 10, in
+#: the trader's words: the tables "show three rows at a time". V2 answered that
+#: on ONE table - `tag_week` - and left the other eleven at Qt's default, which
+#: is whatever the layout gives them. R4 A18 makes it one constant and applies
+#: it to every table on the tab.
+#:
+#: A plain pixel number rather than `theme.px`: this module does not import the
+#: theme, and one number here is cheaper than a new dependency. 260 px is the
+#: figure V2 measured for ten rows plus a header.
+TABLE_TEN_ROWS_PX = 260
+
+
+def _ten_row_table(table):
+    """Give one table the ten-row floor and hand it back."""
+    table.setMinimumHeight(TABLE_TEN_ROWS_PX)
+    return table
+
 
 class _StepPage(QFrame):
     """Shared furniture: a title, a body, and the two buttons every step has."""
@@ -370,7 +387,7 @@ class FocusReviewPage(_StepPage):
         # One row per PICK, carrying its outcome - not picks and outcomes as
         # separate rows, which listed the same name twice and could not answer
         # "how did this pick do" (R8 retained scope, built 2026-08-18).
-        self.table = QTableWidget(0, 9)
+        self.table = _ten_row_table(QTableWidget(0, 9))
         self.table.setHorizontalHeaderLabels(
             ["Date", "Symbol", "Side", "Source", "H1", "H3", "H5", "H10", "Matured"]
         )
@@ -396,7 +413,7 @@ class FocusReviewPage(_StepPage):
         )
         self.cohort_horizon_input.currentIndexChanged.connect(self._on_cohort_horizon_changed)
 
-        self.cohort_table = QTableWidget(0, len(COHORT_TABLE_COLUMNS))
+        self.cohort_table = _ten_row_table(QTableWidget(0, len(COHORT_TABLE_COLUMNS)))
         self.cohort_table.setHorizontalHeaderLabels(
             ["Veto reason", *COHORT_TABLE_HEADERS[1:]]
         )
@@ -407,7 +424,7 @@ class FocusReviewPage(_StepPage):
         # Packet 8b: R10.F's LIKE cohort, beside the veto one. The two are the
         # halves of one judgement - what you threw away and what you endorsed -
         # and reading either alone gives half an answer.
-        self.like_table = QTableWidget(0, len(COHORT_TABLE_COLUMNS))
+        self.like_table = _ten_row_table(QTableWidget(0, len(COHORT_TABLE_COLUMNS)))
         self.like_table.setHorizontalHeaderLabels(
             ["Claimed setup", *COHORT_TABLE_HEADERS[1:]]
         )
@@ -423,7 +440,7 @@ class FocusReviewPage(_StepPage):
         # page is read on a Sunday when there is time to act on what it says.
         # BLANK when nothing is eligible, which is the normal state for the first
         # twenty sessions and says so.
-        self.after_like_table = QTableWidget(0, len(AFTER_LIKE_COLUMNS))
+        self.after_like_table = _ten_row_table(QTableWidget(0, len(AFTER_LIKE_COLUMNS)))
         self.after_like_table.setHorizontalHeaderLabels(AFTER_LIKE_HEADERS)
         self.after_like_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.after_like_note = QLabel("")
@@ -436,7 +453,7 @@ class FocusReviewPage(_StepPage):
         # P5: the other two verdicts. With these four tables the page shows
         # every judgement the trader can record - thrown away, endorsed, passed
         # on, and thrown back - rather than only the two that had graders first.
-        self.pass_table = QTableWidget(0, len(P5_COHORT_COLUMNS))
+        self.pass_table = _ten_row_table(QTableWidget(0, len(P5_COHORT_COLUMNS)))
         self.pass_table.setHorizontalHeaderLabels(
             ["Pass reason", *P5_COHORT_HEADERS[1:]]
         )
@@ -444,7 +461,7 @@ class FocusReviewPage(_StepPage):
         self.pass_note = QLabel("")
         self.pass_note.setWordWrap(True)
 
-        self.rejection_table = QTableWidget(0, len(P5_COHORT_COLUMNS))
+        self.rejection_table = _ten_row_table(QTableWidget(0, len(P5_COHORT_COLUMNS)))
         self.rejection_table.setHorizontalHeaderLabels(
             ["Verdict", *P5_COHORT_HEADERS[1:]]
         )
@@ -455,7 +472,7 @@ class FocusReviewPage(_StepPage):
         # P6: what was said, whether it was taken, and what it then did. The
         # cohorts above answer "was I right"; this answers the question before
         # it - "did I act on what I said at all?".
-        self.preference_table = QTableWidget(0, len(PREFERENCE_COLUMNS))
+        self.preference_table = _ten_row_table(QTableWidget(0, len(PREFERENCE_COLUMNS)))
         self.preference_table.setHorizontalHeaderLabels(list(PREFERENCE_HEADERS))
         self.preference_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.preference_note = QLabel("")
@@ -465,7 +482,7 @@ class FocusReviewPage(_StepPage):
         # the two judgement mirrors - what was thrown away, what was endorsed.
         # These are the picks THEMSELVES: how they behaved, and what the trader
         # said about them at the time.
-        self.performance_table = QTableWidget(0, 11)
+        self.performance_table = _ten_row_table(QTableWidget(0, 11))
         self.performance_table.setHorizontalHeaderLabels(
             [
                 "Cohort", "Side", "Horizon", "n", "Win rate", "Avg return",
@@ -476,7 +493,7 @@ class FocusReviewPage(_StepPage):
         self.performance_note = QLabel("")
         self.performance_note.setWordWrap(True)
 
-        self.feedback_table = QTableWidget(0, 7)
+        self.feedback_table = _ten_row_table(QTableWidget(0, 7))
         self.feedback_table.setHorizontalHeaderLabels(
             ["Date", "Symbol", "Side", "Verdict", "Category", "Origin", "Reason"]
         )
@@ -919,6 +936,10 @@ class WalkawayPage(_StepPage):
         #: The tag list's own worker handle (R2). Separate from the page's
         #: `_worker` so a backlog toggle and a reload cannot cancel each other.
         self._tag_worker = None
+        #: The week's-trades read (R4 A14), again on its own handle for the same
+        #: reason: three reads on one page that could cancel each other is three
+        #: ways to show the trader a half-built page.
+        self._open_worker = None
         super().__init__("walkaway", service, parent)
         self.subtitle.setText(
             "Trades CLOSED inside the reviewed week. A position opened this week and still "
@@ -930,7 +951,7 @@ class WalkawayPage(_StepPage):
         self.open_note = QLabel("")
         self.open_note.setWordWrap(True)
 
-        self.tag_table = QTableWidget(0, 4)
+        self.tag_table = _ten_row_table(QTableWidget(0, 4))
         self.tag_table.setHorizontalHeaderLabels(["Date", "Symbol", "My tags", "Suggested"])
         self.tag_table.setEditTriggers(QTableWidget.NoEditTriggers)
         # AI-P2, trader-approved amendment 2026-08-24. R8 locked the journal
@@ -987,24 +1008,45 @@ class WalkawayPage(_StepPage):
         self.statusChanged.emit(f"walk-away failed: {message}")
 
     def _reload_review_data(self) -> None:
-        monday, friday = self.service.week_bounds
+        """Start both of this page's reads. NEITHER runs on the Qt thread.
 
-        try:
-            split = journal_feed.week_trades(monday, friday)
-            still_open = split["still_open"]
-            self.open_note.setText(
-                f"{len(split['closed'])} closed this week."
-                + (
-                    f" {len(still_open)} opened this week and still open: "
-                    + ", ".join(t.symbol for t in still_open)
-                    + " - flagged, not counted."
-                    if still_open
-                    else ""
-                )
+        R4 A14: `journal_feed.week_trades` was called here SYNCHRONOUSLY, and it
+        is a journal query over a week of trades - measured at 775 ms of the one
+        Refresh click, on the thread that draws. The 50 ms rule the V2 packet set
+        for that click was true of every other page and false of this one.
+
+        Single-flight like `_reload_tags`: a second click while a read is in
+        flight is ignored rather than queued, because the answer the second one
+        wants is the one already being fetched.
+        """
+        monday, friday = self.service.week_bounds
+        if self._open_worker is None or not self._open_worker.isRunning():
+            worker = _ReadWorker(
+                lambda: journal_feed.week_trades(monday, friday), self
             )
-        except Exception as exc:  # noqa: BLE001
-            self.open_note.setText(f"Journal unavailable: {exc}")
+            worker.finished_with.connect(self._on_week_trades_ready)
+            worker.failed.connect(self._on_week_trades_failed)
+            self._open_worker = worker
+            worker.start()
         self._reload_tags()
+
+    def _on_week_trades_ready(self, split: object) -> None:  # pragma: no cover - signal seam
+        split = split if isinstance(split, dict) else {}
+        still_open = list(split.get("still_open") or ())
+        closed = list(split.get("closed") or ())
+        self.open_note.setText(
+            f"{len(closed)} closed this week."
+            + (
+                f" {len(still_open)} opened this week and still open: "
+                + ", ".join(trade.symbol for trade in still_open)
+                + " - flagged, not counted."
+                if still_open
+                else ""
+            )
+        )
+
+    def _on_week_trades_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        self.open_note.setText(f"Journal unavailable: {message}")
 
     def _reload_tags(self) -> None:
         """Fill the auto-tag list from whichever scope is selected. OFF THE QT THREAD.
@@ -1134,31 +1176,47 @@ class TagWeekPage(_StepPage):
         self.note = QLabel("")
         self.note.setWordWrap(True)
 
-        self.table = QTableWidget(0, len(TAG_WEEK_COLUMNS))
+        self.table = _ten_row_table(QTableWidget(0, len(TAG_WEEK_COLUMNS)))
         self.table.setHorizontalHeaderLabels(list(TAG_WEEK_COLUMNS))
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        # TEN VISIBLE ROWS before scrolling, which is the number the trader
-        # asked for - three at a time was the complaint. A plain pixel
-        # minimum rather than `theme.px`: this module does not import the
-        # theme, and one number here is cheaper than a new dependency.
-        self.table.setMinimumHeight(260)
+        # R4 A18: the ten-row floor is `TABLE_TEN_ROWS_PX` now, and every table
+        # on this tab gets it through `_ten_row_table`. This one had the only
+        # copy of the number.
 
         self.confirm_all_button = QPushButton("Confirm all shown")
         self.confirm_all_button.setToolTip(
-            "Accept the tagger's suggestion for every row in this table. Rows you "
-            "have already confirmed are not listed and are never touched."
+            "Accept the tagger's suggestion for every row in this table that HAS "
+            "one. A row with no tag is skipped and named - confirming a blank "
+            "settles nothing, and the nightly tagger would mark it needs_review "
+            "again tomorrow. Rows you have already confirmed are not listed and "
+            "are never touched."
         )
         self.confirm_all_button.clicked.connect(self._confirm_all_shown)
         self.confirm_one_button = QPushButton("Confirm selected")
         self.confirm_one_button.clicked.connect(self._confirm_selected)
+        # R4 A15: the per-row EDIT the packet asked for and V2 did not build.
+        # 132 of the week's rows are `needs_review` with NO tag, and no button on
+        # this page could give them one - the trader could only confirm what the
+        # machine guessed, and for those rows it guessed nothing.
+        self.edit_button = QPushButton("Edit tag...")
+        self.edit_button.setToolTip(
+            "Type your own tag for the selected trade. It is written as YOUR "
+            "answer (confirmed) and the tagger learns the correction."
+        )
+        self.edit_button.clicked.connect(self._edit_selected)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.confirm_one_button)
         buttons.addWidget(self.confirm_all_button)
+        buttons.addWidget(self.edit_button)
         buttons.addStretch(1)
 
         self._worker: _ReadWorker | None = None
+        #: The confirm/edit write's own worker. SQLite on the Qt thread is what
+        #: R4 A15 moved off it; `reload` keeps its own handle so a write and a
+        #: read cannot cancel each other.
+        self._write_worker = None
         self._rows: list[dict] = []
         self._layout.addWidget(self.note)
         self._layout.addWidget(self.table, 1)
@@ -1205,37 +1263,127 @@ class TagWeekPage(_StepPage):
                 "the tagger never overwrites one."
             )
 
-    def _confirm(self, trade_ids) -> None:
-        """Confirm through the STORE's own API. A journal write fails loudly."""
-        wanted = [str(item) for item in trade_ids if str(item or "").strip()]
-        if not wanted:
-            self.note.setText("Nothing selected.")
-            return
-        try:
-            from journal_store import JournalStore
+    def _confirm(self, rows) -> None:
+        """Confirm through the STORE's own API. A journal write fails loudly.
 
-            store = JournalStore()
-            confirmed = sum(1 for trade_id in wanted if store.confirm_tags(trade_id))
-        except Exception as exc:  # noqa: BLE001
-            # LOUD. A journal write is the one store on this desk that may not
-            # fail quietly, and a confirmation the trader believes landed is
-            # worse than one that visibly did not.
-            self.note.setText(f"NOT SAVED - the journal could not be written: {exc}")
-            self.statusChanged.emit(f"tag confirmation failed: {exc}")
+        R4 A15, two changes. **An empty tag is REFUSED**: `confirm_tags` only
+        flips the lane, so confirming a row with no tag writes `confirmed` over
+        a blank, the nightly `journal_auto_tag` finds a closed trade with no
+        confirmed tag and marks it `needs_review` again - forever, every night,
+        for as long as the trade exists. And the SQLite writes are on a WORKER:
+        "Confirm all shown" is one UPDATE per row and it was running on the
+        thread that draws.
+        """
+        wanted = []
+        skipped = 0
+        for row in rows or ():
+            trade_id = str((row or {}).get("trade_id") or "").strip()
+            if not trade_id:
+                continue
+            if not str((row or {}).get("setup_tags") or "").strip():
+                skipped += 1
+                continue
+            wanted.append(trade_id)
+        if not wanted:
+            self.note.setText(
+                f"Nothing to confirm - {skipped} row(s) carry no tag yet. "
+                "Use \u201cEdit tag...\u201d to give one your own answer."
+                if skipped
+                else "Nothing selected."
+            )
             return
-        self.note.setText(f"{confirmed} tag(s) confirmed.")
+        if self._write_worker is not None and self._write_worker.isRunning():
+            return
+        self.note.setText(f"Confirming {len(wanted)} tag(s)...")
+        worker = _ReadWorker(lambda ids=tuple(wanted): _confirm_tag_ids(ids), self)
+        worker.finished_with.connect(
+            lambda count, skipped=skipped: self._on_write_done(count, skipped)
+        )
+        worker.failed.connect(self._on_write_failed)
+        self._write_worker = worker
+        worker.start()
+
+    def _on_write_done(self, confirmed: object, skipped: int = 0) -> None:  # pragma: no cover - seam
+        note = f"{int(confirmed or 0)} tag(s) confirmed."
+        if skipped:
+            note += (
+                f" {skipped} row(s) skipped for having no tag - "
+                "\u201cEdit tag...\u201d gives one your own answer."
+            )
+        self.note.setText(note)
         self.reload()
 
+    def _on_write_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        # LOUD. A journal write is the one store on this desk that may not fail
+        # quietly, and a confirmation the trader believes landed is worse than
+        # one that visibly did not.
+        self.note.setText(f"NOT SAVED - the journal could not be written: {message}")
+        self.statusChanged.emit(f"tag confirmation failed: {message}")
+
     def _confirm_all_shown(self) -> None:
-        self._confirm([row.get("trade_id") for row in self._rows])
+        self._confirm(self._rows)
+
+    def _selected_rows(self) -> list[dict]:
+        indexes = {index.row() for index in self.table.selectedIndexes()}
+        return [
+            self._rows[index]
+            for index in sorted(indexes)
+            if 0 <= index < len(self._rows)
+        ]
 
     def _confirm_selected(self) -> None:
-        rows = {index.row() for index in self.table.selectedIndexes()}
-        self._confirm([
-            self._rows[index].get("trade_id")
-            for index in sorted(rows)
-            if 0 <= index < len(self._rows)
-        ])
+        self._confirm(self._selected_rows())
+
+    def _edit_selected(self) -> None:
+        """The trader's own tag for one trade - R4 A15.
+
+        Written through `journal_feed.correct_auto_tag`, which is the desk's
+        existing correction path: it saves the trader's wording and teaches the
+        tagger. Then the lane is confirmed, because a tag the trader typed IS
+        their answer. Blank cancels and writes nothing.
+        """
+        selected = self._selected_rows()
+        if len(selected) != 1:
+            self.note.setText("Select exactly one trade to edit its tag.")
+            return
+        row = selected[0]
+        from PySide6.QtWidgets import QInputDialog
+
+        text, accepted = QInputDialog.getText(
+            self,
+            f"Tag for {row.get('symbol', '')}",
+            "Your setup tag (semicolon-separated for more than one):",
+            text=str(row.get("setup_tags") or ""),
+        )
+        if not accepted or not str(text or "").strip():
+            return
+        if self._write_worker is not None and self._write_worker.isRunning():
+            return
+        trade_id = str(row.get("trade_id") or "")
+        tag = str(text).strip()
+        self.note.setText(f"Saving your tag for {row.get('symbol', '')}...")
+        worker = _ReadWorker(lambda: _write_trader_tag(trade_id, tag), self)
+        worker.finished_with.connect(lambda count: self._on_write_done(count, 0))
+        worker.failed.connect(self._on_write_failed)
+        self._write_worker = worker
+        worker.start()
+
+
+def _confirm_tag_ids(trade_ids) -> int:
+    """Flip the lane on each id. Runs on a worker; touches no widget."""
+    from journal_store import JournalStore
+
+    store = JournalStore()
+    return sum(1 for trade_id in trade_ids if store.confirm_tags(trade_id))
+
+
+def _write_trader_tag(trade_id: str, tag: str) -> int:
+    """The trader's own tag, then confirm it. Worker-side; no widget."""
+    journal_feed.correct_auto_tag(trade_id, tag)
+    from journal_store import JournalStore
+
+    JournalStore().confirm_tags(trade_id)
+    return 1
 
 
 def _tag_net_text(value) -> str:
@@ -1286,6 +1434,8 @@ class DiscoveryPage(_StepPage):
         self._focus_service = focus_service
         self.tabs = QTabWidget()
         self._boards: dict[str, dict[str, Any]] = {}
+        #: The six per-table buttons, kept as objects and out of the layout.
+        self._refresh_buttons: list[QPushButton] = []
         for timeframe in weekend_strength.TIMEFRAMES:
             self.tabs.addTab(self._build_board_tab(timeframe), timeframe.label)
         self._layout.addWidget(self.tabs, 1)
@@ -1298,6 +1448,12 @@ class DiscoveryPage(_StepPage):
         page = QWidget()
         layout = QVBoxLayout(page)
 
+        # R4 A14: the SIX per-table Refresh buttons - two per timeframe, three
+        # timeframes - are OUT OF THE LAYOUT, not deleted, exactly as the five
+        # per-page ones were in V2. They are what the trader complained about
+        # ("each table has its own refresh"), and the V2 test missed them because
+        # it looked for a `refresh_button` attribute this page does not have.
+        # `reload` drives all six now.
         long_button = QPushButton("Refresh strongest")
         long_button.clicked.connect(lambda: self._refresh(timeframe.key, "long"))
         short_button = QPushButton("Refresh weakest")
@@ -1306,12 +1462,10 @@ class DiscoveryPage(_StepPage):
         adopt_button.clicked.connect(lambda: self._adopt(timeframe.key))
 
         buttons = QHBoxLayout()
-        buttons.addWidget(long_button)
-        buttons.addWidget(short_button)
         buttons.addStretch(1)
         buttons.addWidget(adopt_button)
 
-        table = QTableWidget(0, 5)
+        table = _ten_row_table(QTableWidget(0, 5))
         table.setHorizontalHeaderLabels(["Symbol", "Side", "Score", "Last", "Bars"])
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         accounting = QLabel("Not refreshed yet.")
@@ -1325,8 +1479,26 @@ class DiscoveryPage(_StepPage):
         layout.addWidget(banner)
         layout.addWidget(table, 1)
         layout.addWidget(accounting)
+        self._refresh_buttons.extend((long_button, short_button))
         self._boards[timeframe.key] = {"table": table, "accounting": accounting, "banner": banner}
         return page
+
+    def reload(self) -> None:
+        """R4 A14: this page had no reload, so one Refresh never built it.
+
+        `_StepPage.reload` is a no-op, so `refresh_everything` called it, counted
+        Discovery as started and built nothing - and the trader, told the step
+        was building, was reading a board from whenever it was last refreshed by
+        hand.
+
+        Every board, both sides. Each `refresh_board` is already asynchronous and
+        already single-flight, so this click returns immediately and a board that
+        is mid-refresh is left alone. Batched yfinance, no IB traffic - the page
+        says so and that is unchanged.
+        """
+        for timeframe in weekend_strength.TIMEFRAMES:
+            for side in ("long", "short"):
+                self.service.refresh_board(timeframe.key, side=side)
 
     def _refresh(self, timeframe: str, side: str) -> None:
         started = self.service.refresh_board(timeframe, side=side)

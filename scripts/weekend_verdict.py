@@ -86,24 +86,34 @@ def _as_int(value: Any) -> int:
 def take_rate_line(state: Mapping[str, Any] | None) -> VerdictLine:
     """How much of what the desk showed, the trader acted on.
 
-    `takes` and `skips` are the review scoreboard's own counts, so this is the
-    same denominator every other take-rate number on the desk uses. Zero shown
-    is not a zero take rate: it is a week with nothing to act on.
+    READ FROM THE STATE, never recomputed (R4 A13). This added `takes + skips +
+    rejects` and `build_review_learning_state` publishes NO `skips` and NO
+    `rejects` key - `aggregate_dimensions` returns `episodes`, `shown`, `takes`,
+    `overall_take_rate` and `dimensions`, and nothing else at the top level. So
+    the denominator was `takes + 0 + 0`, the card printed "100% of 94 shown" on
+    a week whose real answer was 30% of 318, and the one number the trader reads
+    first said the opposite of the truth.
+
+    `shown` is the scoreboard's own count - a chart the trader was shown, which
+    is the denominator every other take-rate number on the desk uses - and
+    `overall_take_rate` is its own rate rather than a second division here. Zero
+    shown is not a zero take rate: it is a week with nothing to act on.
     """
     state = state or {}
     takes = _as_int(state.get("takes"))
-    skips = _as_int(state.get("skips"))
-    rejects = _as_int(state.get("rejects"))
-    shown = takes + skips + rejects
+    shown = _as_int(state.get("shown"))
     if shown <= 0:
         return VerdictLine(
             key="take_rate",
             text="Take rate: nothing was shown for review this week.",
             measured=False,
         )
+    rate = _as_float(state.get("overall_take_rate"))
+    if rate is None:
+        rate = takes / shown
     return VerdictLine(
         key="take_rate",
-        text=f"Take rate: {takes / shown * 100:.0f}% of {shown} shown ({takes} taken)",
+        text=f"Take rate: {rate * 100:.0f}% of {shown} shown ({takes} taken)",
         n=shown,
     )
 

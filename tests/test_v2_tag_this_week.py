@@ -146,6 +146,11 @@ def test_confirm_all_shown_writes_the_traders_answer(qapp, tmp_path, monkeypatch
     assert page._rows, "the fixture must offer something to confirm"
 
     page._confirm_all_shown()
+    # R4 A15 moved the SQLite writes onto a worker: one UPDATE per row was
+    # running on the thread that draws. The write still happens on this click;
+    # the test now waits for it instead of assuming it already finished.
+    if page._write_worker is not None:
+        page._write_worker.wait(2000)
 
     trade = next(row for row in store.list_trades() if row["trade_id"] == "t1")
     assert str(trade.get("tag_status")) == TAG_STATUS_CONFIRMED
@@ -158,7 +163,10 @@ def test_a_failed_write_is_reported_and_never_a_quiet_success(qapp, monkeypatch)
     from ui.services.weekend_prep_service import WeekendPrepService
 
     page = weekend_prep_panel.TagWeekPage(WeekendPrepService())
-    page._rows = [{"trade_id": "t1"}]
+    # R4 A15: the row needs a TAG. A row with none is skipped before any write,
+    # because confirming a blank leaves the nightly tagger re-flagging it every
+    # night - see `test_r4_tag_week_confirm.py`.
+    page._rows = [{"trade_id": "t1", "setup_tags": "avwap_breakout"}]
 
     def _explode(*_args, **_kwargs):
         raise OSError("database is locked")
@@ -166,6 +174,11 @@ def test_a_failed_write_is_reported_and_never_a_quiet_success(qapp, monkeypatch)
     monkeypatch.setattr("journal_store.JournalStore", _explode)
 
     page._confirm_all_shown()
+    if page._write_worker is not None:
+        page._write_worker.wait(2000)
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.processEvents()
 
     assert "NOT SAVED" in page.note.text()
     assert "database is locked" in page.note.text()

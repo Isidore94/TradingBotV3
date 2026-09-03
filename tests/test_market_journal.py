@@ -43,12 +43,41 @@ def test_an_entry_about_a_past_session_is_flagged_and_never_backdated():
     assert entry["written_after_the_session"] is True
 
 
-def test_a_same_day_entry_is_not_flagged():
-    now = datetime.now(timezone.utc)
+def test_an_entry_written_DURING_the_session_is_not_flagged():
+    """R4 A17 sharpened this: the boundary is the CLOSE, not the calendar date.
+
+    The old version used "now", so on a machine whose clock happened to be past
+    16:00 ET it was asserting the opposite of what it meant - and it could never
+    have caught a 21:00 Pacific note claiming to have been written during a
+    session that had already shut.
+    """
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
     entry = mj.build_entry(
-        text="Opening drive held.", session_date=now.astimezone().date().isoformat(), now=now
+        text="Opening drive held.",
+        session_date="2026-09-02",
+        now=datetime(2026, 9, 2, 11, 15, tzinfo=et),
     )
     assert entry["written_after_the_session"] is False
+
+
+def test_an_entry_written_after_the_close_is_flagged_on_the_same_day():
+    """A note typed at 21:00 Pacific is five hours after the market shut.
+
+    Under the old calendar-date rule it read as written DURING the session,
+    which is the one thing this field exists to deny.
+    """
+    from zoneinfo import ZoneInfo
+
+    pacific = ZoneInfo("America/Los_Angeles")
+    for hour in (21, 22):
+        now = datetime(2026, 9, 2, hour, 0, tzinfo=pacific)
+        session = mj.session_date_for(now)
+        entry = mj.build_entry(text="late thought", session_date=session, now=now)
+
+        assert session == "2026-09-02", hour
+        assert entry["written_after_the_session"] is True, hour
 
 
 def test_the_after_the_fact_flag_is_computed_never_claimed():
