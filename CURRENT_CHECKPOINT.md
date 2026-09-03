@@ -18,7 +18,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/v3-keep-it-honest`**, off `main` - Phase 0.14 packet **V3**, all six items built. `main` holds P10, V1 and V2. **The two largest owed items are V1's Working-lately + priority switch and V2's AWAY Recap** - plan.md's Phase 0.14 status table lists every packet item and its state |
+| Working branch | **`claude/v3-keep-it-honest`**, off `main` - Phase 0.14 packet **V3**, all six items built. `main` holds P10, V1 and V2. **The two largest owed items are V1's Working-lately + priority switch and V2's AWAY Recap** - plan.md's Phase 0.14 status table lists every packet item and its state. **Also carries the agent team** (`.claude/agents/` builder/reviewer/recon + `docs/AGENT_TEAM.md`), merged from `claude/agent-team` on 2026-09-02 - docs only, baseline unchanged |
 | Also in flight | **NOTHING unmerged.** `claude/gui-phase-0-9` is CONTAINED in `main` - what is open there is GATE 7 (SOAK 1), not the branch |
 | Active roadmap items | **Phase 0.14 V3** (this branch); then V1's item 4 (Working-lately + the priority switch) and V2's item 3 (the AWAY Recap), which are the two largest owed pieces. Live gates #29-#50 are owed across Phase 0.13 and 0.14 |
 | Last verified baseline | `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/v3-keep-it-honest`) - the `ai_jobs_runner` lock probed FREE immediately before the run. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger. Previous: **6281 passed** on `main` |
