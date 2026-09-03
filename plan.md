@@ -815,6 +815,53 @@ Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breake
 for this phase: **when two packets compete, the one that improves WHICH NAMES ARE
 SHOWN beats the one that improves WHEN TO ENTER.**
 
+### Phase 0.14 packet V2 — The loop closes (2026-09-02) — items 1, 4 and 5 BUILT; 2 and 3 NOT BUILT
+
+Authorized by the trader pasting the packet. Requires V1, which was merged first.
+
+**Item 1 — nightly auto-tagging. BUILT.** `journal_auto_tag` runs P6a's plan every
+night at the recorded 0.70 threshold, right after `journal_import` and before
+every other slot. That position is an INSERT and the second and last sanctioned
+exception to "later phases append; they never reorder" — the import puts the
+night's trades in, and every cohort slot below reads them. It never touches a
+confirmed row (the refusal lives in the STORE) and a failed write is reported
+LOUDLY, because the journal is the one store on this desk that may not fail
+quietly. The Journal nav button carries the review count, computed off-thread and
+started from `showEvent`.
+
+**Item 4 — the Market Journal capture is one box and one Enter. BUILT.** The
+timeframe picker and the Save button leave the SURFACE; nothing leaves the
+SCHEMA. Plain Enter saves through an event filter (a `QShortcut` on Return would
+fire for the whole panel); Ctrl+Enter still works. The entry is dated to the
+SESSION IT IS ABOUT — today while today trades, the last session that traded on a
+weekend or holiday — and `written_after_the_session` is still COMPUTED.
+
+**Item 5 — hide the dead surfaces, keep the code. BUILT.** One setting,
+`qt_show_unused_tabs`, default OFF, hiding the Alerts / D1 Focus / Armed tabs and
+the Universe page. **Hidden is not removed**: `setTabVisible`, no index shifts,
+every timer still visibility-gated, and a test proving every rail shortcut is
+panel-scoped, bound once, and not owned inside a hidden tab.
+
+**Items 2 and 3 — NOT BUILT.**
+
+2. **Weekend Prep is not rebuilt.** It still has per-table Refresh buttons, the
+   week-in-review text block, the watch-conversion dict dump and the RS/RW
+   extremes; there is no verdict card and no "Tag this week" step. The packet's
+   (a)–(e) all remain.
+3. **The AWAY Recap is unchanged.** It is still the forward-looking digest
+   assembly — best-swing block, classified D1 alerts, staged picks, Focus lists —
+   with no outcomes, no charts, no "what moved", no "alerts that were right" and
+   no "Review these" walk-through.
+
+**Live gate (#46):** one nightly run that tags new trades, and the Journal nav
+button showing the count the next morning.
+
+**Live gate (#47):** one Market Journal entry written from the desk tab in one
+Enter, filed against the right session.
+
+**Live gate (#48):** a desk session with the four surfaces hidden and every rail
+hotkey still firing.
+
 ### Phase 0.14 packet V1 — Names first (2026-09-02) — items 1 and 2 BUILT; 2's surfaces, 3 and 4 NOT BUILT
 
 Authorized by the trader pasting the packet.
