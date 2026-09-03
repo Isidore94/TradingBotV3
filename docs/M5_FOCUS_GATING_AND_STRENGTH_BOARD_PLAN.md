@@ -638,3 +638,51 @@ One desk session where the trader opens the section, reads the board in the
 column, and adds a name from it — plus a judgement on whether the vertical
 stack is right or the sides want their old side-by-side shape back with the
 column dragged wider.
+
+## Amendment, 2026-09-02 (Phase 0.14 packet V1) — TC2000 parity
+
+Decision 0016 answer 9 makes **the trader's own TC2000 scan the specification for
+this board**, so §B's formula is no longer the whole of it. What this plan
+described - the strength formula, the 25% cut, the session-VWAP check and the
+15 EMA - was correct and is unchanged. Three things it did not have:
+
+1. **Relative volume.** `AVG(V / mean(V78, V156, ... V1170), 12)` - each of the
+   last twelve completed bars against the same bar offset over the prior fifteen
+   sessions. **Positional, exactly as TC2000 is**: `V78` means "78 bars ago", not
+   "this time yesterday". Across a half day those differ by 39 bars and every
+   later offset is shifted; that is TC2000's divergence too, and parity is the
+   requirement, so it is documented rather than corrected into a different
+   number. Keep the top 50%, and the pick must also be in the top 50% of today's
+   session volume - a name can clear the first on twelve quiet bars that are
+   merely less quiet than usual.
+2. **The floors:** last price over $5, above the D1 200 SMA, above the D1 100
+   SMA, above the M5 15 EMA (mirrored for shorts). **The two timeframes are an
+   ASSUMPTION** - the trader wrote "the 200 and 100 SMA" without naming one, and
+   decision 0016 records both as open. One line in `strength_scan.D1_SMA_PERIODS`
+   and one in the EMA span correct them.
+3. **The universe** is `universe_all.txt` PLUS the four watchlists. A name the
+   trader is watching for their own reasons may not clear the universe's
+   liquidity specification, and the board it never appears on is the one they
+   are reading.
+
+**Two consequences that are costs, not details.** The M5 fetch period grew from
+`5d` to `1mo`, because the RVOL needs 1,182 bars and `5d` holds about 390 - under
+the old period every RVOL would have been blank. And the D1 floors need daily
+bars, so there is a second batched daily download over the symbols that reached
+the board. Still **zero IB traffic**.
+
+**A row that misses a filter is GREYED and names what it missed, never dropped**
+(decision 0010: a display filter is not a suppression), behind a default-on
+"TC2000 parity" toggle that hides them for a line-by-line comparison.
+
+**The fence on `strength_scan.py` is narrowed, not lifted.** §2 and §8 froze the
+module whole and said stop and ask; the trader asked, in packet V1, naming the
+file. The test now pins the seven FORMULA functions byte-identical to the R8
+baseline - stronger than "no edits at all", which could be satisfied by not
+touching the file while the numbers moved underneath it.
+
+**Parity is a golden, not an impression.** `tests/fixtures/tc2000_parity_v1.json`
+pins strength and RVOL for five symbols over sixteen sessions, and its expected
+values are computed by a SECOND naive implementation written from the trader's
+two formula lines rather than from the module under test. All five agree to four
+decimals.

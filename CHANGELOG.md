@@ -35,6 +35,30 @@ which is evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
 
+- **Win rate leads every trader-facing SWING surface** (V3, decision 0016 answer
+  3). `scripts/swing_headline.py` is the one implementation: win rate first, `n`
+  and a **Wilson lower bound** beside it, mean R beside that and never instead of
+  it. **Sorting is by the LOWER BOUND** - the raw rate puts a 100%-on-three cell
+  above a 62%-on-ninety every time. It reads the TRACKER'S OWN `win` verdict
+  rather than re-deriving one, and the average carries its unit, because a column
+  headed "Avg R" showing a percent is a number that lies.
+  `setup_docs.family_record_sentence` renders one line per family AT READ TIME.
+- **MFE after a held level leads every DAY-TRADE surface** (V3 item 2). The Day
+  Trade Tracker leads with Held and Held x Ran and opens sorted by the second; the
+  tier statistics stay beside them. The column is labelled "Held" and not "Held in
+  30m" because the aggregator's `stop_rate` is over ITS window - the precise
+  30-minute version stays in `held_run_score.build_segments`.
+- **"Lately" is ONE number, counted in trading sessions** (V3 item 3).
+  `evidence_stats.LATELY_SESSIONS` (20) and `lately_window()`, which walks the
+  exchange calendar: twenty calendar days is fourteen sessions in a normal month
+  and twelve across a holiday week.
+- **One annotation writer, and every row carries its screen** (V3 item 4). Exactly
+  one module outside the store calls the raw writer, and the capture rail's VETO
+  path now stamps `surface` as its LIKE path already did - they had different row
+  shapes, so any rollup by screen silently omitted every veto.
+- **The Research tab is the builder's surface** (V3 item 5). The nightly fact
+  pack's headline gets one line on Weekend Prep's verdict card; the full panel
+  stays in Research, which now says so on the page.
 - **Weekend Prep has ONE Refresh and a verdict card** (V2 item 2, decision 0016
   answer 10). The click starts each page's own reader and returns - measured under
   50 ms - and the five per-page buttons left the layout. The card is a PURE builder
@@ -826,6 +850,33 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-02 - Phase 0.14 packet V3: keep it honest
+
+**Branch `claude/v3-keep-it-honest`, off `main`.** Live gate #50 owed. P10, V1 and
+V2 were merged first.
+
+Six items, all six built, and the shape of all of them is the same: a number the
+trader reads has to mean one thing on every screen, and it has to say what it
+rests on.
+
+**Win rate leads swings, MFE-after-a-held-level leads day trades**, one
+implementation each, with `n`, a Wilson lower bound and a floor flag; mean R and
+the tier statistics stay beside them and are never replaced. **"Lately" is one
+constant** counted in trading sessions. **The rail's veto seam is closed** - it
+wrote without a `surface` while its like path wrote with one. **The Research tab
+says it is the builder's surface**, and the one number the trader needs from it
+now has a line on Weekend Prep.
+
+**Measured against the packet:** it asks for exactly five annotation entry points.
+Three are wired, because those are the screens that carry a like or dislike
+gesture; the Focus panel's "Not today" IS the chart-review one and the M5 bar's
+click-away is deliberately a review event. The test records that rather than
+inventing a gesture so a count comes out at five.
+
+**Verification.** `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0,
+zero failures**, lock probed FREE immediately before the run - `ruff` clean -
+smoke **7/7** - source `--selftest` **74/74**.
 
 ### 2026-09-02 - Phase 0.14 packet V2: the loop closes (items 1, 4 and 5)
 

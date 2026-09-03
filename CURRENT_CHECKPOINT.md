@@ -18,8 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - Phase 0.13 packet **P10** and Phase 0.14 packets **V1** and **V2** are all merged (2026-09-02). Decision 0016 is the tie-breaker for this phase. **V2's item 3 (the AWAY Recap) is still not built** |
+| Working branch | **`claude/v3-keep-it-honest`**, off `main` - Phase 0.14 packet **V3**, all six items built. `main` holds P10, V1 and V2. **The two largest owed items are V1's Working-lately + priority switch and V2's AWAY Recap** - plan.md's Phase 0.14 status table lists every packet item and its state |
 | Also in flight | **NOTHING unmerged.** `claude/gui-phase-0-9` is CONTAINED in `main` - what is open there is GATE 7 (SOAK 1), not the branch |
+| Active roadmap items | **Phase 0.14 V3** (this branch); then V1's item 4 (Working-lately + the priority switch) and V2's item 3 (the AWAY Recap), which are the two largest owed pieces. Live gates #29-#50 are owed across Phase 0.13 and 0.14 |
+| Last verified baseline | `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/v3-keep-it-honest`) - the `ai_jobs_runner` lock probed FREE immediately before the run. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger. Previous: **6281 passed** on `main` |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 04:09, trader-authorized ("Go ahead and restart the desk").** The checkout was moved to `main` at `125ffa0` FIRST and verified (selftest 74/74, smoke 7/7, ruff clean) - restarting onto the branch it happened to be sitting on would have put the wrong code on the desk. Old pid 17132 (up since 2026-09-01 11:09) stopped; relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **25884** (the desk) under trampoline **9140**. Verified UP THREE WAYS rather than assumed: the process outlived the launch by minutes, `heartbeat.json` re-stamps every ~4 min naming pid 25884 (it had read pid 17132 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0. **The desk now knows `tag_status`, so P6a's 24 provisional tags render as provisional rather than as the trader's own** - which is what the restart was for. The nightly AI run was a SEPARATE process and was not disturbed; it finished normally at ~04:08 |
 
@@ -30,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 50 | **The headline statistics agree (V3)** - one DESK session and one Weekend Prep open where every named surface shows the headline first (win rate on swings, Held x Ran on day trades), the sorts agree with it, and the Day Trade Tracker opens on Held x Ran descending | 2026-09-02 V3 entry |
 | 49 | **Weekend Prep, read in one click (V2 item 2)** - one open where Refresh builds every step and the verdict card shows five to eight lines with an n on each; then "Tag this week" lists the week's unconfirmed trades and Confirm all shown writes the trader's answer | 2026-09-02 V2 entry |
 | 48 | **The hidden surfaces (V2)** - a desk session with Alerts, D1 Focus, Armed and Universe hidden, and EVERY capture-rail hotkey still firing | 2026-09-02 V2 entry |
 | 47 | **One box, one Enter (V2)** - one Market Journal entry written from the desk tab with a single Enter, filed against the right session | 2026-09-02 V2 entry |
@@ -81,6 +84,56 @@ the dated entry named beside it.
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
+
+### 2026-09-02 - Phase 0.14 packet V3: keep it honest (all six items)
+
+**Branch `claude/v3-keep-it-honest`, off `main`.** Live gate 50 owed. P10, V1 and
+V2 were merged to `main` first - V3 item 4 verifies P10 Part A and item 6 records
+P10 in Section 12, neither checkable with the branch outside `main`.
+
+**THE SHAPE OF ALL SIX ITEMS IS THE SAME.** A number the trader reads has to mean
+one thing on every screen, and it has to say what it rests on.
+
+**Win rate leads swings** (`swing_headline`), with `n`, a **Wilson lower bound**
+and a floor flag, and **sorting is by the lower bound** - a 100% on three trades
+and a 62% on ninety are the same number to a reader skimming a column, and their
+bounds are 44% and 52%. Wilson rather than the normal approximation, which returns
+exactly p at 0 and 1 - the one place a thin cell actually sits. It reads the
+TRACKER'S OWN win verdict rather than re-deriving one: two definitions of a win in
+one program is how two screens end up disagreeing. **The average carries its
+unit**, because the tracker grades in percent and the grids grade in R.
+
+**MFE after a held level leads day trades.** The Day Trade Tracker opens sorted by
+Held x Ran and keeps every tier statistic beside it. The column is labelled "Held"
+and NOT "Held in 30m", because the aggregator's `stop_rate` is over its own window
+and the precise 30-minute question lives in `held_run_score.build_segments`. A row
+missing an input is blank and sorts LAST, never at the bottom of the scale.
+
+**"Lately" is one constant**, counted in TRADING sessions. Measured: from
+2026-09-02 the window opens 2026-08-06, which is exactly twenty NYSE sessions.
+Twenty calendar days would be fourteen.
+
+**Item 4 found a real seam.** P10 gave the like path a `surface`; the capture
+rail's veto, pass and note path kept writing without one, so a rollup by screen
+silently omitted every veto - which reads as "the trader does not veto from the
+rail". Both stamp it now, and a test asserts exactly ONE module outside the store
+calls the raw writer.
+
+**MEASURED AGAINST THE PACKET.** It asks for exactly five entry points; THREE are
+wired, because those are the screens that carry a gesture. The Focus panel's "Not
+today" IS the chart-review one, and the M5 bar's click-away is a review event
+`review_learning` keys on by name. The test records that rather than inventing a
+gesture so a count comes out at five.
+
+**The Research tab now says it is the builder's surface** and names the four the
+trader uses; the fact pack's headline has one line on Weekend Prep's card.
+
+**Docs:** Section 12 gains Phase 0.13 and 0.14 plus a status table naming every
+packet item and its state; the R2 strength plan gains the TC2000 parity
+amendment; CLAUDE.md and AGENTS.md gain four rules, identical in both.
+
+**Verification.** `pytest tests/ -q` **6310 passed, 72 subtests, exit 0, zero
+failures** - `ruff` clean - smoke **7/7** - `--selftest` **74/74**.
 
 ### 2026-09-02 - V2 second run: Weekend Prep gets one Refresh, a card and a tag step
 

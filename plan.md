@@ -241,6 +241,8 @@ where the phase says so; it never authorizes an early promotion.
 | **0 — NOW** | Validate and merge | Prove the testing-week build on the real desk and merge it safely |
 | **0.5** | Trader refinement packets | Build the trader's 2026-08-14/15 desk requests in ranked order (R1–R8) |
 | **0.8** | GUI fluidity Wave P1 | Repair the measured Standard-mode stalls and three verified GUI defects |
+| **0.13** | Grade what the trader already said (P0-P10) | Every verdict gets a forward record; a like starts a five-session watch. **MERGED; live gates #29-#43 owed** |
+| **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1 and V2 merged, V3 on its branch; V2's item 3 (the AWAY Recap) is NOT BUILT** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -810,6 +812,35 @@ promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
 ## Phase 0.14 — Names first (decision 0016)
+
+**Status at 2026-09-02.** V1 and V2 are merged to `main`; V3 is on
+`claude/v3-keep-it-honest`. What is NOT built, in one place so nobody has to
+reconstruct it from three entries:
+
+| Packet | Item | State |
+|---|---|---|
+| V1 | 1 Strength Board = TC2000 | **BUILT** (gates #44, #45) |
+| V1 | 2 `held_run_score` | score BUILT; its three surfaces landed in V3 item 2 |
+| V1 | 3 phone digest ranks across buckets | **NOT BUILT** |
+| V1 | 4 Working-lately + priority switch | **NOT BUILT** |
+| V2 | 1 nightly auto-tagging | **BUILT** (gate #46) |
+| V2 | 2 Weekend Prep | (a)(b)(c)(e) **BUILT** (gate #49); the takes table, the ten-row pass and the collapsed notes are owed |
+| V2 | 3 AWAY Recap | **NOT BUILT** |
+| V2 | 4 Market Journal one box | **BUILT** (gate #47) |
+| V2 | 5 hide the dead tabs | **BUILT** (gate #48) |
+| V3 | 1 win rate leads | **BUILT** - `swing_headline`; the Master AVWAP table and Setup Tracker still need the column wired |
+| V3 | 2 day-trade headline | **BUILT** |
+| V3 | 3 one `LATELY_SESSIONS` | **BUILT** |
+| V3 | 4 one annotation writer | **BUILT** - and it found the rail's veto seam |
+| V3 | 5 research on a trader surface | **BUILT** |
+| V3 | 6 docs | **BUILT** |
+
+**The two largest owed items are V1's Working-lately + priority switch and V2's
+AWAY Recap.** Every rule they need is already written down - the switch reorders
+and never withholds (CLAUDE.md), "lately" is `LATELY_SESSIONS`, the headline
+statistics are `swing_headline` and `held_run_score` - so what is missing is the
+surface, not the decision.
+
 
 Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breaker
 for this phase: **when two packets compete, the one that improves WHICH NAMES ARE
