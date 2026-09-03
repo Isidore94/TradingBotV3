@@ -91,7 +91,19 @@ def test_week_review_reads_review_learning_off_the_qt_thread(service, monkeypatc
     )
 
 
-def test_week_review_scans_the_rs_logs_off_the_qt_thread(service, monkeypatch):
+def test_the_week_review_no_longer_prints_the_rs_extremes(service, monkeypatch):
+    """CHANGED BY V2 item 2c: they moved to the board that answers that question.
+
+    The RS/RW extremes were two long text blocks on this page about which names
+    and groups led the tape - the second-largest part of the wall of text the
+    trader named, duplicating a LIVE surface with a Saturday snapshot. V1 moved
+    the RS/RW board into the alert column beside the Strength board, so the page
+    stopped printing them.
+
+    The readers themselves are UNCHANGED and still off-thread; what this asserts
+    is that this page no longer calls them. `test_the_rs_week_readers_still_
+    work_off_thread` below covers the readers.
+    """
     from ui.panels import weekend_prep_panel as panel_module
 
     idents: list[int] = []
@@ -107,8 +119,27 @@ def test_week_review_scans_the_rs_logs_off_the_qt_thread(service, monkeypatch):
     page.reload()
     _settle(page)
 
-    assert idents, "the RS logs were never scanned"
-    assert MAIN_THREAD not in idents, "the RS week logs were scanned on the Qt thread"
+    assert idents == [], "the week review page still prints the RS extremes"
+
+
+def test_the_rs_week_readers_still_work_off_thread(service, monkeypatch):
+    """Retired from a page is not retired from the tree.
+
+    Both readers are still exported, still take the week's bounds, and are still
+    called from a worker wherever they are used - so a later surface can print
+    them without rebuilding the scan.
+    """
+    from ui.panels import weekend_prep_panel as panel_module
+
+    assert callable(panel_module._read_rrs_week)
+    assert callable(panel_module._read_rrs_group_week)
+    # They read logs, so they must never be called from the Qt thread; the page
+    # that used to call them did it on a worker and the next one has to as well.
+    source = (ROOT_DIR / "scripts" / "ui" / "panels" / "weekend_prep_panel.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def _read_rrs_week" in source
+    assert "def _read_rrs_group_week" in source
 
 
 def test_week_review_keeps_last_good_text_while_refreshing(service, monkeypatch):

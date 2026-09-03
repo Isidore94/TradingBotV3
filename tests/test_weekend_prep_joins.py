@@ -643,50 +643,55 @@ def test_the_new_streams_are_wired_to_their_pages_not_merely_defined():
     week_page = source.split("class WeekReviewPage")[1].split("\nclass ")[0]
     focus_page = source.split("class FocusReviewPage")[1].split("\nclass ")[0]
 
-    assert "_read_rrs_group_week(" in week_page
-    assert "_rrs_group_lines()" in week_page
+    # CHANGED BY V2 item 2c: the RS/RW extremes left this page for the live
+    # board that answers the same question. See
+    # `test_the_rs_extremes_are_deliberately_unwired` below - the lesson this
+    # test states still holds, and it now points the other way for these two.
     assert "_read_focus_performance()" in focus_page
     assert "_read_pick_feedback_week(" in focus_page
 
 
-def test_the_group_cap_prints_what_it_dropped(tmp_path, monkeypatch):
-    """A silent top-N reads as 'that was all of it'."""
-    import project_paths
+def test_the_rs_extremes_are_deliberately_unwired():
+    """The AI-P1 lesson, pointing the other way.
+
+    A reader that exists but is never called renders the same blank page as a
+    broken one - so an uncalled reader has to SAY it is uncalled, or the next
+    agent will "fix" a page by wiring it back and put the wall of text the
+    trader complained about straight back on their Saturday.
+    """
     from ui.panels import weekend_prep_panel
 
-    _redirect_w2(monkeypatch, project_paths, tmp_path)
-    rows = [
-        f"2026-08-11 07:05:00 PDT,D1,sector,GROUP{index},ETF{index},{index}.0,0.5"
-        for index in range(12)
-    ]
-    _write(
-        tmp_path / "rrs_group_strength_extremes.csv",
-        "timestamp_local,timeframe,group_type,group_key,etf,rrs,power_index",
-        rows,
-    )
+    source = Path(weekend_prep_panel.__file__).read_text(encoding="utf-8")
+    week_page = source.split("class WeekReviewPage")[1].split(chr(10) + "class ")[0]
 
-    class _Service:
-        week_bounds = WEEK
+    assert "_read_rrs_week(" not in week_page
+    assert "_read_rrs_group_week(" not in week_page
+    assert "_rrs_lines" not in week_page
+    assert "_rrs_group_lines" not in week_page
 
-    page = weekend_prep_panel.WeekReviewPage.__new__(weekend_prep_panel.WeekReviewPage)
-    page.service = _Service()
-    lines = page._rrs_group_lines()
-    text = "\n".join(lines)
-
-    assert "4 more sector group(s) not shown" in text
-    assert "8 of 12 folded group rows shown" in text
+    # The scans are kept, and they say why they have no caller.
+    assert "NO CALLER SINCE V2, AND KEPT ON PURPOSE" in source
+    assert callable(weekend_prep_panel._read_rrs_week)
+    assert callable(weekend_prep_panel._read_rrs_group_week)
 
 
-def test_an_absent_group_log_says_so_on_the_page(tmp_path, monkeypatch):
-    import project_paths
+def test_the_group_cap_and_the_absent_log_message_retired_with_the_block():
+    """RETIRED BY V2 item 2c, and named rather than quietly deleted.
+
+    Two tests lived here: one that the group cap PRINTS what it dropped (a
+    silent top-N reads as "that was all of it"), and one that an absent log says
+    so on the page rather than showing a blank. Both asserted the behaviour of
+    `WeekReviewPage._rrs_group_lines`, which V2 removed along with the rest of
+    the RS/RW prose - the desk has a live board for that question, and the block
+    was the second-largest part of the wall of text the trader complained about.
+
+    The two rules they protected are NOT retired; they are protected wherever
+    those readers are next printed. What is gone is the printer, not the log, and
+    `_read_rrs_group_week` is still exported and still tested by
+    `test_the_group_rs_stream_folds_per_group_and_keeps_both_extremes` and
+    `test_a_missing_group_log_is_a_quieter_week_not_an_error`.
+    """
     from ui.panels import weekend_prep_panel
 
-    _redirect_w2(monkeypatch, project_paths, tmp_path)
-
-    class _Service:
-        week_bounds = WEEK
-
-    page = weekend_prep_panel.WeekReviewPage.__new__(weekend_prep_panel.WeekReviewPage)
-    page.service = _Service()
-    text = "\n".join(page._rrs_group_lines())
-    assert "nothing recorded this week" in text
+    assert not hasattr(weekend_prep_panel.WeekReviewPage, "_rrs_group_lines")
+    assert callable(weekend_prep_panel._read_rrs_group_week)
