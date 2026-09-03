@@ -276,8 +276,18 @@ def test_the_grading_slot_is_registered_last_and_is_cheap():
     # no longer last - but it is still after the three that were there first,
     # which is the property this test exists to hold. Later phases append; they
     # never reorder.
-    assert names[:3] == ["journal_import", "ai_summary", "ticker_briefs"]
-    assert names.index("veto_cohort_grading") == 3
+    # V2 inserted `journal_auto_tag` SECOND - an insert, not an append, and the
+    # second and last sanctioned exception, argued for in `default_slots`'
+    # docstring. The three that were there first still lead.
+    assert names[:4] == [
+        "journal_import",
+        "journal_auto_tag",
+        "ai_summary",
+        "ticker_briefs",
+    ]
+    # PAIRWISE rather than an index: five packets have now edited this number,
+    # and what the test means is "after the three that were there first".
+    assert names.index("veto_cohort_grading") > names.index("ticker_briefs")
     slot = slots[names.index("veto_cohort_grading")]
     assert slot.reserve_minutes == 5.0
     assert slot.max_attempts == 3
@@ -538,6 +548,10 @@ def test_the_scope_can_be_selected_on_demand():
     slots = default_slots(summary_scopes=("trader_judgement",))
     assert [slot.name for slot in slots] == [
         "journal_import",
+        # V2 inserted this SECOND - an insert, not an append, and the second and
+        # last sanctioned exception to "later phases append; they never reorder".
+        # `default_slots`' docstring argues for both positions.
+        "journal_auto_tag",
         "ai_summary",
         "ticker_briefs",
         "veto_cohort_grading",
@@ -564,7 +578,8 @@ def test_the_scope_can_be_selected_on_demand():
         "setup_research",
     ]
     # And the override is per-call: building again without it is untouched.
-    assert default_slots()[1].run.__name__ == "run_daily_summary"
+    # Index 2 now: `journal_auto_tag` sits at 1 (V2).
+    assert default_slots()[2].run.__name__ == "run_daily_summary"
 
 
 def test_an_unknown_scope_is_rejected_at_the_cli():

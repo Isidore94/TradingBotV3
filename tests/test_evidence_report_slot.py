@@ -123,7 +123,13 @@ def test_the_slot_is_appended_last_and_never_reorders_the_others():
 
     names = [slot.name for slot in default_slots()]
 
-    assert names[:3] == ["journal_import", "ai_summary", "ticker_briefs"]
+    # V2 inserted `journal_auto_tag` second; the three below still lead.
+    assert names[:4] == [
+        "journal_import",
+        "journal_auto_tag",
+        "ai_summary",
+        "ticker_briefs",
+    ]
     # Phase 2's `daily_digest` was appended after this slot on 2026-08-24, so
     # this is no longer last - which is the rule working, not breaking: later
     # phases append, and the ones already here never move.

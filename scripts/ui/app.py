@@ -288,6 +288,11 @@ class MainWindow(QMainWindow):
             nav_layout.addWidget(button)
         nav_layout.addStretch(1)
         self.nav_buttons[0].setChecked(True)
+        # V2 item 1: how many trades the nightly tagger left for the trader to
+        # look at. OFF THE QT THREAD - it opens a SQLite journal and walks every
+        # trade, which is not work a page build may do - and the button keeps its
+        # plain label until the answer arrives.
+        self._start_tag_review_badge()
 
         top_bar = QFrame()
         top_bar.setObjectName("TopBar")
@@ -470,6 +475,49 @@ class MainWindow(QMainWindow):
         for part in spec.attribute.split("."):
             target = getattr(target, part)
         return target
+
+    def _start_tag_review_badge(self) -> None:
+        """Count the trades awaiting tag review, off-thread, once at startup.
+
+        Decision 0016 answer 10 makes the nightly tagger the thing that saves the
+        trader time, and a review queue nobody can see saves none: the badge is
+        how the Trades tab's Provisional filter gets asked for.
+
+        Everything here fails to a PLAIN LABEL. A badge is a convenience, and a
+        number nobody can compute is not worth a broken nav bar.
+        """
+        try:
+            from ui.read_worker import ReadWorker
+        except Exception:  # noqa: BLE001
+            return
+
+        def _count():
+            from ai_jobs.journal_auto_tag import trades_awaiting_review
+
+            return trades_awaiting_review()
+
+        try:
+            worker = ReadWorker(_count, self)
+            worker.finished_with.connect(self._apply_tag_review_badge)
+            self._tag_badge_worker = worker
+            worker.start()
+        except Exception:  # noqa: BLE001
+            return
+
+    def _apply_tag_review_badge(self, payload: object) -> None:
+        """"Journal (12 to review)". Zero leaves the label exactly as it was."""
+        try:
+            count = int(payload)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        for index, spec in enumerate(PAGE_SPECS):
+            if spec.title != "Journal":
+                continue
+            if index < len(self.nav_buttons):
+                self.nav_buttons[index].setText(
+                    f"Journal ({count} to review)" if count > 0 else "Journal"
+                )
+            return
 
     def _select_page(self, index: int) -> None:
         # Diagnostics only (P1 item 3): a stall sampled inside Qt's own event

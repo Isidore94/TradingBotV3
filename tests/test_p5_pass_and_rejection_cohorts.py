@@ -480,8 +480,12 @@ def test_both_slots_are_appended_and_nothing_was_reordered():
     from ai_jobs.runner import default_slots
 
     names = [slot.name for slot in default_slots()]
-    assert names[:5] == [
+    assert names[:6] == [
         "journal_import",
+        # V2 inserted this SECOND - an insert, not an append, and the second and
+        # last sanctioned exception to "later phases append; they never reorder".
+        # `default_slots`' docstring argues for both positions.
+        "journal_auto_tag",
         "ai_summary",
         "ticker_briefs",
         "veto_cohort_grading",
