@@ -2111,26 +2111,28 @@ def _read_veto_cohort() -> list[dict[str, str]]:
 def _read_after_like_block() -> dict:
     """The newest nightly fact pack, for its `after_like` block only.
 
-    Reads the LATEST pack by name and returns `{}` for anything it cannot get -
-    a missing pack, an unreadable one, the warehouse disabled. A blank table
-    with a note is the right answer to "the research has not run yet"; an
-    exception here would take the whole Weekend Prep read down with it, and the
-    other seven tables on this page have nothing to do with this one.
+    **The newest pack, by the writer's own supersession rule** - R4 B1. This read
+    `sorted(root.rglob("*.json"))[-1]`, which is an ASCII sort and picks
+    `2026-09-01.json` over `2026-09-01.2.json`, i.e. the first pack of the day
+    rather than the last. `setup_research.latest_pack_path` undoes exactly what
+    `_superseding` did, in the module that owns the naming.
+
+    Returns `{}` for anything it cannot get - a missing pack, an unreadable one,
+    the warehouse disabled. A blank table with a note is the right answer to "the
+    research has not run yet"; an exception here would take the whole Weekend
+    Prep read down with it, and the other seven tables on this page have nothing
+    to do with this one.
     """
     try:
         import json
 
         from ai_jobs import store as ai_store
+        from ai_jobs.setup_research import latest_pack_path
 
-        root = ai_store.retros_dir() / "setup_research"
-        packs = sorted(
-            path
-            for path in root.rglob("*.json")
-            if "narration" not in path.name
-        )
-        if not packs:
+        newest = latest_pack_path(ai_store.retros_dir() / "setup_research")
+        if newest is None:
             return {}
-        return json.loads(packs[-1].read_text(encoding="utf-8"))
+        return json.loads(newest.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - one table, never the page
         return {}
 
@@ -2863,6 +2865,12 @@ def _read_research_pack() -> dict:
     trader must see may live only there. This lifts ONE line onto a surface they
     open; the panel stays where it is.
 
+    **The newest pack, by the writer's own supersession rule** - R4 B1. See
+    :func:`_read_after_like_block`: an ASCII sort put `2026-09-01.json` last, so
+    on 2026-09-03 the card read the first pack of that day (47 eligible cells and
+    the older shape, which carries no `eligible_policies` list) and printed "no
+    cell has cleared the evidence floor yet" while the `.2` pack had 33 that had.
+
     Returns {} for anything it cannot get. A missing pack is "the research has
     not run yet", which the card says in words - it is never a reason to fail the
     other six lines.
@@ -2871,13 +2879,11 @@ def _read_research_pack() -> dict:
         import json
 
         from ai_jobs import store as ai_store
+        from ai_jobs.setup_research import latest_pack_path
 
-        root = ai_store.retros_dir() / "setup_research"
-        packs = sorted(
-            path for path in root.rglob("*.json") if "narration" not in path.name
-        )
-        if not packs:
+        newest = latest_pack_path(ai_store.retros_dir() / "setup_research")
+        if newest is None:
             return {}
-        return json.loads(packs[-1].read_text(encoding="utf-8"))
+        return json.loads(newest.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 - one line, never the card
         return {}

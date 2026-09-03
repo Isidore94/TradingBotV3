@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -1070,6 +1071,55 @@ def _superseding(path: Path) -> Path:
         if not candidate.exists():
             return candidate
         index += 1
+
+
+#: The supersession suffix :func:`_superseding` appends: `<date>.json` first,
+#: then `<date>.1.json`, `<date>.2.json`. Captured once here because the READER
+#: has to undo exactly what the writer did, and the two drifting apart is the
+#: whole of R4 B1.
+_ORDINAL_SUFFIX = re.compile(r"^(?P<stem>.+)\.(?P<ordinal>\d+)$")
+
+
+def pack_sort_key(path: Path) -> tuple[str, int]:
+    """`(session stem, supersession ordinal)` - the order the packs were written.
+
+    **Never sort these names as strings.** In ASCII `.` is 0x2E and `1` is 0x31,
+    so `"2026-09-01.1.json" < "2026-09-01.json"` and `sorted(...)[-1]` hands back
+    the FIRST pack written for the day - the one every re-run superseded. Both
+    Weekend Prep readers did that, and on 2026-09-03 the live store held three
+    packs for 2026-09-01: the reader took the original (no `eligible_policies`
+    key at all) while the `.2` pack had 33 eligible cells.
+
+    The ordinal is parsed as an INTEGER, so a tenth re-run sorts after a ninth;
+    a string sort would put `.10` before `.9`. The session stem sorts first, so a
+    re-run of yesterday never outranks today's first pack.
+    """
+    stem = path.stem
+    match = _ORDINAL_SUFFIX.match(stem)
+    if match is None:
+        return (stem, 0)
+    return (match.group("stem"), int(match.group("ordinal")))
+
+
+def latest_pack_path(root: Path) -> Path | None:
+    """The newest fact pack under `root`, or None when there is not one.
+
+    Narrations live beside the packs and are not packs; a `.md` render is not
+    either. Returns None rather than raising for a root that does not exist -
+    "the research has not run yet" is an answer, and every caller of this is a
+    read that must never take its page down.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return None
+    packs = [
+        path
+        for path in root.rglob("*.json")
+        if "narration" not in path.name
+    ]
+    if not packs:
+        return None
+    return max(packs, key=pack_sort_key)
 
 
 def _default_root() -> Path:
