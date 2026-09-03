@@ -176,18 +176,36 @@ before changing the behaviour a rule governs.**
 
 **Headline statistics and the priority switch (V3, decision 0016)**
 
-- **The priority switch reorders and never withholds.** "Prioritise what is
-  working" is display-only (decision 0016 answer 5): it sorts the review queue,
-  the M5 list and the setups table, and it may never hide, mute, park or withhold
-  a row. A test asserts the set of visible rows is identical with it on and off.
-  The tier gate, movers-only and repetition control are untouched by it.
+- **The priority switch reorders and never withholds** - and it is **NOT BUILT
+  YET** (V4 owns it; R4 B3 removed the sentence that cited a test for it). When
+  it is built: "prioritise what is working" is display-only (decision 0016
+  answer 5), it sorts the review queue, the M5 list and the setups table, and it
+  may never hide, mute, park or withhold a row. The tier gate, movers-only and
+  repetition control stay untouched by it. **The identical-visible-rows test is
+  owed with the switch**, not before it - a doc that cites a test nothing runs is
+  worse than a doc that says the work is owed.
 - **Win rate leads every trader-facing SWING surface; MFE-after-a-held-level
   leads every DAY-TRADE surface** (decision 0016 answers 3 and 4). The trader
   gives swings room and their losses run ~1.5x their best wins, so mean R ranks
   their swings by the statistic their loss profile makes misleading. Win rate
   goes FIRST, with `n` and a **Wilson lower bound** beside it (`swing_headline`),
   and **sorting is by the lower bound** - the raw rate puts a 100%-on-three cell
-  above a 62%-on-ninety every time. Mean R stays beside it, never replaced. On
+  above a 62%-on-ninety every time. Mean R stays beside it, never replaced.
+  **PARTIAL** (R4 B3). Wired: the AWAY digest's swing ranking (A11), the setup
+  docs' record line (`setup_docs.family_record_sentence`, rendered at read time
+  from the tracker), the Master AVWAP setups table's **Family Win %** column, the
+  Setup Tracker's **Last 30 Days** tab, and all four Weekend Prep cohort tables
+  (veto, like, pass, rejection), which now sort by the bound. **Still owed: the
+  Setup Tracker's Setup Types tab**, and the reason is measured rather than
+  scheduling - `master_avwap_setup_type_stats.csv` carries no win column at all
+  (only `target_hit_rate` and `stop_rate`, which are different questions), and
+  the outcomes file cannot be joined at that table's grain: its 184 rows collapse
+  to 71 (side, bucket, family, zone) groups, so a joined rate would repeat across
+  up to six rows and read as each row's own. **ONE WILSON**: `swing_headline`'s z
+  (1.96, 95% two-sided) is every trader-facing win rate.
+  `master_avwap_lib/expected_r.py`'s z of 1.28 is a PARAMETER of the Expected-R
+  proven-quality score inside a fenced scoring file, not a column anyone reads;
+  no trader-facing surface may reach for it. On
   the day-trade side the headline is `held_run_score`: P(the level held in the
   first 30 min) x trimmed-mean MFE_R of the ones that held. **ONE formula reaches
   every surface** (R4 A10): the Day Trade Tracker joins
@@ -213,7 +231,9 @@ before changing the behaviour a rule governs.**
   the near bucket, not the favourite bucket, so the cream is not being sent."*)
   The order is the **Wilson lower bound** on the setup family's realized win rate
   - `master_avwap_tier_outcomes.csv`'s own `win` column inside `lately_window()`
-  - at ONE DECLARED HORIZON (`autopilot_core.SWING_DIGEST_HORIZON_SESSIONS`, 5),
+  - at ONE DECLARED HORIZON (`evidence_stats.SWING_HORIZON_SESSIONS`, 5, which
+  `autopilot_core.SWING_DIGEST_HORIZON_SESSIONS` re-exports and `setup_docs`
+  reads too - R4 B2),
   with expected R as the tiebreak; an ungraded family sorts BELOW every graded
   one rather than at zero. **The horizon is declared because that file is one row
   per (pick, horizon)**: pooling all four inflated n ~2.5x with correlated looks
@@ -233,7 +253,13 @@ before changing the behaviour a rule governs.**
   `evidence_stats.LATELY_SESSIONS` (20) is the home; `lately_window()` walks the
   exchange calendar. Twenty calendar days is fourteen sessions in a normal month
   and twelve across a holiday week, so a calendar window silently shortens the
-  sample exactly when the market was closed.
+  sample exactly when the market was closed. **The review board is inside this
+  rule** (R4 B6): `review_learning.DEFAULT_WINDOW_SESSIONS` IS `LATELY_SESSIONS`,
+  it was a 90-CALENDAR-DAY literal, and the blind-spot and leak callouts are cut
+  on it. Weekend Prep's week is `evidence_stats.WEEK_SESSIONS` (5) for the same
+  reason - it printed "Week of <Mon> to <Fri>" over the last 7 calendar days, so
+  a holiday week measured four sessions and still called itself a week. The state
+  key, the report header, the CLI flag and every renderer say **sessions**.
 
 ## Hard invariants (plan.md sec 5 — never violate)
 - Decision-support only: never add order execution.

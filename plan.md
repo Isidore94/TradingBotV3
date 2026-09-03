@@ -829,9 +829,9 @@ nobody has to reconstruct it from four entries:
 | V2 | 3 AWAY Recap | **NOT BUILT** - this is V4 |
 | V2 | 4 Market Journal one box | **BUILT** (gate #47). The Desk tab landed with V2; the LEFT-NAV PAGE landed with R4 A16, and R4 A17 moved the session roll to the open |
 | V2 | 5 hide the dead tabs | **BUILT** (gate #48) |
-| V3 | 1 win rate leads | **PARTIAL** - `swing_headline` exists and `setup_docs.family_record_sentence` renders it; the Master AVWAP table, the Setup Tracker Setup Types tab and the Weekend Prep cohort tables are still owed (R4 Part B, item B3) |
+| V3 | 1 win rate leads | **PARTIAL** (R4 B3 wired five surfaces). WIRED: the AWAY digest ranking (A11), `setup_docs.family_record_sentence` and its two renderers (B2), the Master AVWAP setups table's **Family Win %** column, the Setup Tracker's **Last 30 Days** tab, and all four Weekend Prep cohort tables (veto, like, pass, rejection), each sorting by the Wilson lower bound. ONE Wilson: `swing_headline.WILSON_Z`. STILL OWED: **the Setup Tracker's Setup Types tab** - and the reason is measured, not scheduling. `master_avwap_setup_type_stats.csv` carries no win column (only `target_hit_rate` / `stop_rate`, different questions), and `master_avwap_tier_outcomes.csv` cannot be joined at that table's grain: its 184 rows collapse to 71 (side, bucket, family, zone) groups, so one joined rate would repeat across up to six rows and read as each row's own. Giving it an honest win rate needs the tracker export to carry one |
 | V3 | 2 day-trade headline | **BUILT** - and its surfaces are real since R4 A10 |
-| V3 | 3 one `LATELY_SESSIONS` | **BUILT** - `review_learning.DEFAULT_WINDOW_DAYS` and Weekend Prep's `window_days=7` calls still bypass it (R4 Part B, item B6) |
+| V3 | 3 one `LATELY_SESSIONS` | **BUILT AND COMPLETE** (R4 B6). `review_learning.DEFAULT_WINDOW_SESSIONS` IS `LATELY_SESSIONS` and its cutoff walks the exchange calendar; Weekend Prep's week is `evidence_stats.WEEK_SESSIONS` (5). The state key, the report header, the CLI flag, the System Health audit and the Daytrade Tracker status line all say **sessions**, and a literal scan test fails if a `window_days` comes back |
 | V3 | 4 one annotation writer | **BUILT** - all five surfaces have a writer since R4 A5 |
 | V3 | 5 research on a trader surface | **BUILT** |
 | V3 | 6 docs | **BUILT** |
@@ -840,7 +840,9 @@ nobody has to reconstruct it from four entries:
 AWAY Recap, and both are V4.** Every rule they need is already written down - the
 switch reorders and never withholds (CLAUDE.md), "lately" is `LATELY_SESSIONS`,
 the headline statistics are `swing_headline` and `held_run_score` - so what is
-missing is the surface, not the decision.
+missing is the surface, not the decision. **The priority switch is not built, and
+CLAUDE.md no longer claims a test for it** (R4 B3): the
+identical-visible-rows test is owed WITH the switch.
 
 
 Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breaker

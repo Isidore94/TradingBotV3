@@ -41,6 +41,21 @@ from typing import Any, Iterable, Mapping
 from evidence_stats import LATELY_SESSIONS, MIN_REPORTABLE_N
 
 #: The confidence level for the lower bound. 95% two-sided, so z = 1.96.
+#:
+#: **THIS IS THE ONE z FOR EVERY TRADER-FACING WIN RATE** (R4 B3). The desk has
+#: a second Wilson - `master_avwap_lib/expected_r.wilson_lower_bound`, default
+#: z = 1.28, ~90% one-sided - and the two must never appear on one screen: a
+#: reader comparing "at least 52%" on one table with "at least 55%" on another
+#: is comparing two different questions and has no way to know it.
+#:
+#: The other one is deliberately left where it is. It is not a column anybody
+#: reads; it is a PARAMETER of the Expected-R model's proven-quality score
+#: (`DEFAULT_PQS_CONFIG["wilson_z"]`), which is calibrated end to end and lives
+#: in a fenced scoring file. Changing it would move every Expected R on the desk
+#: and needs a golden fixture and a sec-7 promotion, which is a different packet
+#: from putting a win rate on a table. What B3 requires - and what
+#: `test_r4b_swing_headline_wired.py` asserts - is that no trader-facing surface
+#: reaches for it.
 WILSON_Z = 1.959963984540054
 
 #: The column order every trader-facing swing surface uses. WIN RATE FIRST, and
@@ -167,6 +182,55 @@ def headline_from_counts(
         avg_r=_float(avg_r),
         sessions=int(sessions),
     )
+
+
+def headline_from_rate(
+    name: str,
+    *,
+    win_rate: Any,
+    n: Any,
+    avg_r: Any = None,
+    avg_unit: str = "R",
+    sessions: int = LATELY_SESSIONS,
+) -> Headline:
+    """A headline from a STORED rate and count, for a surface that has no rows.
+
+    Several stores keep the rate and the sample size rather than the graded rows
+    behind them - the veto and like cohort CSVs, the tracker's recent-types
+    export. Rebuilding wins from `round(rate * n)` recovers the integer pair
+    Wilson needs and is exact whenever the stored rate was computed as `wins / n`,
+    which is how every one of those files writes it.
+
+    An n of 0 gives a headline with no rate at all rather than a zero: "nothing
+    graded" and "graded and lost everything" are different facts.
+    """
+    try:
+        total = max(0, int(float(n)))
+    except (TypeError, ValueError):
+        total = 0
+    try:
+        rate = float(win_rate)
+    except (TypeError, ValueError):
+        rate = float("nan")
+    if total <= 0 or rate != rate:
+        return Headline(name=str(name or ""), wins=0, losses=0, sessions=sessions)
+    wins = max(0, min(total, int(round(min(max(rate, 0.0), 1.0) * total))))
+    return Headline(
+        name=str(name or ""),
+        wins=wins,
+        losses=total - wins,
+        avg_r=_optional_float(avg_r),
+        avg_unit=avg_unit,
+        sessions=sessions,
+    )
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if number != number else number
 
 
 def headline_from_outcomes(

@@ -4,7 +4,14 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QFileSystemWatcher, QItemSelection, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QFileSystemWatcher,
+    QItemSelection,
+    QThread,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -157,6 +164,26 @@ def _row_context(row: SetupRow) -> str:
     if row.expected_r is not None:
         parts.append(f"expected_r={row.expected_r:.2f}")
     return "; ".join(parts)
+
+
+class _FamilyRecordWorker(QThread):
+    """One pass over the tracker outcomes for the Family Win % column - R4 B3.
+
+    It never raises into Qt. A blank record column is a column that has not been
+    measured yet; a swing screen that fails to load because a CSV moved would be
+    a far worse trade.
+    """
+
+    done = Signal(object)
+
+    def run(self) -> None:  # pragma: no cover - exercised through its seam
+        try:
+            from setup_docs import family_headline_rows
+
+            records = family_headline_rows()
+        except Exception:  # noqa: BLE001 - one column, never the table
+            records = {}
+        self.done.emit(records)
 
 
 class MasterAvwapPanel(QWidget):
@@ -808,7 +835,31 @@ class MasterAvwapPanel(QWidget):
         )
         self._refresh_scheduler_status(note=note)
 
+    def _start_family_record_read(self) -> None:
+        """The per-family swing record, off the Qt thread - V3 item 1 / R4 B3.
+
+        `setup_docs.family_headline_rows` opens
+        `master_avwap_tier_outcomes.csv`, which is why this is a worker and not a
+        call inside `set_rows`: the report refresh already runs on the click, and
+        a store read there is a stall charged to the trader's own button.
+
+        Started once per report refresh. The column simply reads "-" until the
+        answer lands, which is the honest state for a record nobody has measured
+        yet.
+        """
+        worker = getattr(self, "_family_record_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        worker = _FamilyRecordWorker(self)
+        worker.done.connect(self._on_family_records_ready)
+        self._family_record_worker = worker
+        worker.start()
+
+    def _on_family_records_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        self.model.set_family_records(payload if isinstance(payload, dict) else {})
+
     def refresh_from_reports(self, emit_empty: bool = True) -> None:
+        self._start_family_record_read()
         meta = load_latest_setup_rows_with_meta()
         rows = meta["rows"]
         _apply_swing_quality_shadow_badges(rows)

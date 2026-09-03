@@ -42,7 +42,19 @@ which is evidence and must not be loaded as context.
   above a 62%-on-ninety every time. It reads the TRACKER'S OWN `win` verdict
   rather than re-deriving one, and the average carries its unit, because a column
   headed "Avg R" showing a percent is a number that lies.
-  `setup_docs.family_record_sentence` renders one line per family AT READ TIME.
+  `setup_docs.family_record_sentence` renders one line per family AT READ TIME,
+  at ONE declared horizon (`evidence_stats.SWING_HORIZON_SESSIONS`, 5 - the same
+  one the AWAY digest ranks on), from ONE pass over the tracker.
+  **PARTIAL, and what is wired is named** (R4 B3): the AWAY digest ranking, both
+  setup-doc renderers, the Master AVWAP setups table's **Family Win %** column,
+  the Setup Tracker's **Last 30 Days** tab, and all four Weekend Prep cohort
+  tables - each SORTING by the Wilson lower bound. **STILL OWED: the Setup
+  Tracker's Setup Types tab**, because `master_avwap_setup_type_stats.csv` has no
+  win column and the outcomes file cannot be joined at that table's grain (184
+  rows over 71 (side, bucket, family, zone) groups). **ONE Wilson z**:
+  `swing_headline.WILSON_Z` (1.96). `expected_r`'s 1.28 is a parameter of the
+  proven-quality score in a fenced scoring file and no trader-facing surface may
+  reach for it.
 - **MFE after a held level leads every DAY-TRADE surface** (V3 item 2, WIRED by
   R4 A9/A10). The Day Trade Tracker leads with **Held 30m** and Held x Ran and
   opens sorted by the second; the tier statistics stay beside them. **One

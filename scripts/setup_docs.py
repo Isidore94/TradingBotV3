@@ -688,6 +688,25 @@ def _read_family_outcomes(family_key: str) -> list[dict]:
     return _all_family_outcomes().get(family_key, [])
 
 
+def family_headline_rows() -> dict[str, dict]:
+    """`{family key: swing_headline row}` for every family the tracker graded.
+
+    The table form of :func:`family_record_sentence`, for surfaces that show a
+    column rather than a sentence - R4 B3 wires the Master AVWAP setups table off
+    this. One pass over the tracker, one horizon, one Wilson.
+
+    Returns {} for anything it cannot read: a swing screen with a blank record
+    column is still a swing screen.
+    """
+    from swing_headline import headline_from_tracker_rows
+
+    return {
+        family: headline_from_tracker_rows(family, rows).as_row()
+        for family, rows in _all_family_outcomes().items()
+        if rows
+    }
+
+
 def family_record_sentences(setup_families) -> dict[str, str]:
     """`{family key: sentence}` for many families, from one pass over the file.
 
