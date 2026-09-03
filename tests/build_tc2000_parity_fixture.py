@@ -11,7 +11,14 @@ the code does, including its mistakes. These values are produced by a second,
 deliberately naive implementation written straight from the trader's two lines:
 
     relative strength = AVG(((C/O) - 1) * 100, 12) * ((C + C50) / 2) / ATR50
-    relative volume   = AVG(V / mean(V78, V156, ... V1170), 12)
+    relative volume   = AVG(V / mean(V at the same bar offset over the prior
+                              15 sessions), 12)
+
+R4 A7 corrected the second line here as well as in the module. It read
+`AVG(V / mean(V78, V156, ... V1170), 12)` - a flat positional stride - and that
+is only the same thing as the trader's line on a series with no short sessions.
+Two symbols now carry the cases where it is not: `FFF` has one early close and
+`GGG` has one missing bar.
 
 Run with `--write` to regenerate, and READ THE DIFF: a change here is a change to
 the trader's scan, not a refresh.
@@ -38,8 +45,8 @@ BODY_BARS = 12
 ATR_PERIOD = 50
 RVOL_PRIOR_SESSIONS = 15
 
-#: Five deliberately different shapes. The generator is a plain arithmetic walk
-#: so every bar is reproducible from these five numbers alone.
+#: Seven deliberately different shapes. The generator is a plain arithmetic walk
+#: so every bar is reproducible from these numbers alone.
 SYMBOLS = {
     #        base   drift    range  vol_base  vol_today
     "AAA": (100.0, 0.010, 0.30, 1000.0, 3000.0),
@@ -47,7 +54,32 @@ SYMBOLS = {
     "CCC": (250.0, -0.006, 0.90, 800.0, 400.0),
     "DDD": (12.5, 0.020, 0.08, 5000.0, 15000.0),
     "EEE": (7.5, 0.000, 0.05, 300.0, 300.0),
+    # R4 A7. Both of these have a volume series that depends ONLY on the bar's
+    # offset inside its session and is identical on every session INCLUDING
+    # today, so the honest relative volume is exactly 1.00 and any deviation is
+    # the alignment, never the data.
+    "FFF": (60.0, 0.002, 0.15, 1000.0, 0.0),
+    "GGG": (60.0, 0.002, 0.15, 1000.0, 0.0),
 }
+
+#: Bars in an EARLY-CLOSE session: 3.25 hours. `{symbol: {session: bars}}`.
+#: One of these anywhere in the window shifts every positional offset past it by
+#: 39 bars, which is how a 10:00 bar ends up compared with a 13:00 one.
+EARLY_CLOSE_BARS = 39
+SHORT_SESSIONS = {"FFF": {7: EARLY_CLOSE_BARS}}
+
+#: One bar dropped from the middle of a prior session. The session still exists
+#: and still reaches most of the day; it is one offset that has no bar, and that
+#: offset must contribute NOTHING rather than a zero. `{symbol: {session: index}}`
+MISSING_BARS = {"GGG": {4: 30}}
+
+#: Volume that is a pure function of the time of day. Used by FFF and GGG so the
+#: expected relative volume is exactly 1.00 under session-relative alignment.
+TIME_OF_DAY_VOLUME = {"FFF", "GGG"}
+
+
+def _session_length(symbol: str, session: int) -> int:
+    return SHORT_SESSIONS.get(symbol, {}).get(session, SESSION_BARS)
 
 
 def build_bars(symbol: str) -> list[dict]:
@@ -56,10 +88,13 @@ def build_bars(symbol: str) -> list[dict]:
     bars: list[dict] = []
     price = base
     start = datetime(2026, 6, 1, 6, 30)
+    dropped = MISSING_BARS.get(symbol, {})
     for session in range(SESSIONS):
         day = start + timedelta(days=session)
         today = session == SESSIONS - 1
-        for index in range(SESSION_BARS):
+        for index in range(_session_length(symbol, session)):
+            if dropped.get(session) == index:
+                continue
             stamp = day + timedelta(minutes=5 * index)
             open_price = price
             # A repeating body pattern, so the 12-bar average is a real average
@@ -68,7 +103,15 @@ def build_bars(symbol: str) -> list[dict]:
             close_price = open_price * (1.0 + step)
             high = max(open_price, close_price) + span / 2.0
             low = min(open_price, close_price) - span / 2.0
-            volume = vol_today if today else vol_base * (1.0 + (index % 7) * 0.05)
+            if symbol in TIME_OF_DAY_VOLUME:
+                # A volume curve that RISES across the session, so a misaligned
+                # offset compares a late bar with a middling one and the error
+                # is visible. The repeating (index % 7) pattern the other five
+                # use is nearly flat under a 39-bar shift, which would have made
+                # this fixture agree with the defect to within 1%.
+                volume = vol_base * (1.0 + index * 0.05)
+            else:
+                volume = vol_today if today else vol_base * (1.0 + (index % 7) * 0.05)
             bars.append(
                 {
                     "dt": stamp.isoformat(),
@@ -115,15 +158,35 @@ def hand_strength(bars: list[dict]) -> float:
 
 
 def hand_rvol(bars: list[dict]) -> float:
-    volumes = [bar["volume"] for bar in bars]
+    """The trader's line, session-relative, written out the slow obvious way.
+
+    Group the bars by their own date, take the last twelve, and for each one
+    average the volume at the SAME OFFSET INSIDE A SESSION over the fifteen
+    sessions before it. A session that never reached that offset simply is not
+    in the average - it is a day that closed early, not a day with no volume.
+    """
+    sessions: list[list[dict]] = []
+    seen = None
+    for bar in bars:
+        day = bar["dt"][:10]
+        if day != seen:
+            sessions.append([])
+            seen = day
+        sessions[-1].append(bar)
+
+    positions = [
+        (session_index, offset)
+        for session_index, session in enumerate(sessions)
+        for offset in range(len(session))
+    ]
     ratios = []
-    for step in range(BODY_BARS):
-        index = len(volumes) - 1 - step
+    for session_index, offset in positions[-BODY_BARS:]:
         prior = [
-            volumes[index - SESSION_BARS * back]
+            sessions[session_index - back][offset]["volume"]
             for back in range(1, RVOL_PRIOR_SESSIONS + 1)
+            if offset < len(sessions[session_index - back])
         ]
-        ratios.append(volumes[index] / (sum(prior) / RVOL_PRIOR_SESSIONS))
+        ratios.append(sessions[session_index][offset]["volume"] / (sum(prior) / len(prior)))
     return sum(ratios) / len(ratios)
 
 
@@ -142,9 +205,13 @@ def build_payload() -> dict:
         "universe_version": "synthetic-5",
         "provider_assumptions": (
             "Synthetic M5 bars generated by tests/build_tc2000_parity_fixture.py. "
-            "78 bars per session, 16 sessions, no gaps and no half days - so the "
-            "positional offsets V78..V1170 are also the same time of day, which "
-            "is what makes the hand computation checkable."
+            "16 sessions each. AAA-EEE are 78 bars per session with no gaps and "
+            "no half days, so for them the positional offsets V78..V1170 ARE the "
+            "same time of day and the two readings agree - which is what keeps "
+            "their pinned values comparable across R4 A7. FFF carries one "
+            "early-close session of 39 bars and GGG one missing bar, and both "
+            "have a volume series that depends only on the time of day, so their "
+            "honest relative volume is exactly 1.00."
         ),
         "intentional_difference": (
             "None. This is a parity fixture: the expected values are computed by a "
@@ -162,6 +229,15 @@ def build_payload() -> dict:
             "body_bars": BODY_BARS,
             "atr_period": ATR_PERIOD,
             "rvol_prior_sessions": RVOL_PRIOR_SESSIONS,
+            "early_close_bars": EARLY_CLOSE_BARS,
+            "short_sessions": {
+                symbol: {str(k): v for k, v in mapping.items()}
+                for symbol, mapping in SHORT_SESSIONS.items()
+            },
+            "missing_bars": {
+                symbol: {str(k): v for k, v in mapping.items()}
+                for symbol, mapping in MISSING_BARS.items()
+            },
         },
         "bars": bars,
         "expected": expected,

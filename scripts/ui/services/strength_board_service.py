@@ -176,11 +176,15 @@ class StrengthBoardService(QObject):
             self.statusChanged.emit(self.status_text())
 
 
-#: A year of daily bars: the 200 SMA needs 200 closes and a year holds about
-#: 252. Daily rows are a fraction of the 5m payload, so this second batched
-#: download is cheap next to the one it rides beside - and it is the only way to
-#: measure a D1 floor without an IB request, which this service does not make.
-DAILY_FETCH_PERIOD = "1y"
+#: TWO years of daily bars (R4 A8). The 200 SMA needs 200 closes and a year
+#: holds about 252, which leaves ~52 sessions of slack - and the slack is what
+#: gets spent: a symbol listed inside the window, a provider gap, a holiday run,
+#: and the longest floor on the board goes blank for the names most likely to be
+#: interesting. Two years is ~504 sessions against a 200-close requirement, and
+#: daily rows are a fraction of the 5m payload, so this second batched download
+#: is still cheap next to the one it rides beside. It is the only way to measure
+#: a D1 floor without an IB request, which this service does not make.
+DAILY_FETCH_PERIOD = "2y"
 
 
 def board_universe() -> list[str]:
@@ -215,11 +219,51 @@ def board_universe() -> list[str]:
     return list(seen)
 
 
+def _completed_daily_rows(rows: list[dict], *, now: datetime) -> list[dict]:
+    """Daily rows up to the last CLOSED session. Today's forming bar is dropped.
+
+    R4 A8. plan.md sec 5 is not a style note: *completed bars only for state
+    transitions; a forming bar is a labeled preview.* A daily download taken at
+    11:00 hands back a row for today that holds the last nineteen minutes of
+    trading, and it was going straight into the 100 and 200 SMA - so the floor a
+    row was greyed against moved every refresh, and at 09:31 it moved a lot.
+
+    The calendar answers which session is CLOSED. If it refuses - and it does
+    refuse rather than guess - the fallback is narrower and still bounded: drop
+    a row dated today in market-local time. Dropping everything on a calendar
+    error would blank every SMA floor on the board, which is a much larger claim
+    than the one being avoided.
+    """
+    if not rows:
+        return rows
+    try:
+        from market_calendar import MARKET_TZ, last_completed_session
+
+        cutoff = last_completed_session(now)
+    except Exception:
+        try:
+            from market_calendar import MARKET_TZ
+
+            today = (now if now.tzinfo else now.astimezone()).astimezone(MARKET_TZ).date()
+        except Exception:
+            return rows
+        return [row for row in rows if _row_date(row) != today]
+    return [
+        row for row in rows if (_row_date(row) is None or _row_date(row) <= cutoff)
+    ]
+
+
+def _row_date(row: dict):
+    stamp = row.get("dt")
+    return stamp.date() if hasattr(stamp, "date") else None
+
+
 def _daily_closes(
     pool: list[str],
     downloader,
     *,
     chunk_size: int,
+    now: datetime,
 ) -> dict[str, list[float]]:
     """Batched daily closes for the D1 SMA floors. Zero IB traffic, as ever.
 
@@ -227,6 +271,9 @@ def _daily_closes(
     their SMA floors and are shown greyed with "cannot measure the D1 200 SMA",
     which is the honest outcome. Failing the whole board because one chunk timed
     out would be worse than a partly greyed one.
+
+    Today's FORMING daily bar never reaches the SMA - see
+    :func:`_completed_daily_rows`.
     """
     closes: dict[str, list[float]] = {}
     for start in range(0, len(pool), chunk_size):
@@ -245,7 +292,7 @@ def _daily_closes(
                 continue
             values = [
                 row.get("close")
-                for row in core._frame_rows(frame)
+                for row in _completed_daily_rows(core._frame_rows(frame), now=now)
                 if row.get("close") is not None
             ]
             if values:
@@ -300,7 +347,9 @@ def build_board(
     # The D1 floors, over the symbols that actually reached the board - not the
     # whole pool. A name with no measurable M5 strength is not on the board, so
     # fetching its year of daily bars would be a download nobody reads.
-    daily = _daily_closes(sorted(bars_by_symbol), downloader, chunk_size=chunk_size)
+    daily = _daily_closes(
+        sorted(bars_by_symbol), downloader, chunk_size=chunk_size, now=moment
+    )
 
     board = strength_scan.build_strength_board(
         bars_by_symbol,

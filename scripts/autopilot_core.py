@@ -993,12 +993,22 @@ def _frame_rows(frame) -> list[dict[str, Any]]:
             continue
         if open_val != open_val or close_val != close_val:  # NaN guard
             continue
+        # A MISSING VOLUME IS None, NEVER A ZERO (R4 A8). This coerced to 0.0,
+        # and a zero is a measurement: it reaches the Strength Board's relative
+        # volume as "this bar traded nothing", which is a claim about the tape
+        # rather than about the download. `strength_scan.relative_volume` refuses
+        # an unreadable volume and leaves the cell blank, which is the honest
+        # answer - but only if it is given a blank to refuse.
+        #
+        # A NEGATIVE volume is still dropped to None for the same reason: it is
+        # not a quantity, it is a defect.
+        volume_val: float | None
         try:
             volume_val = float(row["Volume"])
         except (KeyError, TypeError, ValueError):
-            volume_val = 0.0
-        if volume_val != volume_val or volume_val < 0:  # NaN guard
-            volume_val = 0.0
+            volume_val = None
+        if volume_val is not None and (volume_val != volume_val or volume_val < 0):
+            volume_val = None
         rows.append(
             {
                 "dt": stamp.to_pydatetime() if hasattr(stamp, "to_pydatetime") else stamp,
