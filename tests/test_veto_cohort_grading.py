@@ -565,6 +565,10 @@ def test_the_scope_can_be_selected_on_demand():
         # P5's two, completing the set of verdicts that have a forward record.
         "pass_cohort_grading",
         "rejection_cohort_grading",
+        # P10 A4's, with the other deterministic slots. It reads the annotation
+        # log and nothing the cohorts produce, so its place among them carries no
+        # dependency - it is here because it is the same KIND of job.
+        "note_vocabulary_audit",
         # P6's join, after the cohorts whose outcome files it reads and before
         # the report that reads all of them.
         "preference_trade_outcomes",

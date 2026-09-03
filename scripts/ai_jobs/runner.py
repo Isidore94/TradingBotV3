@@ -476,6 +476,7 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
         enrichment,
         evidence_report,
         journal_auto_tag,
+        note_vocabulary_audit,
         policy_draft,
         setup_research,
     )
@@ -597,6 +598,21 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             run=cohorts.run_rejection_cohort_grading,
             reserve_minutes=5.0,
             description="Forward-grade NOT-TODAY and DISLIKE (deterministic, no model)",
+            max_attempts=3,
+        ),
+        # P10 A4, APPENDED after the cohort slots. It reads the annotation log
+        # and nothing the cohorts produce, so its position among them carries no
+        # dependency - but it belongs with them because it is the same KIND of
+        # job: deterministic, cheap, no model, its own ledger row and its own
+        # failure isolation. Later phases append; they never reorder.
+        JobSlot(
+            name="note_vocabulary_audit",
+            run=note_vocabulary_audit.run_note_vocabulary_audit,
+            reserve_minutes=5.0,
+            description=(
+                "What the trader wrote that no code says - listed, never coded "
+                "(deterministic, no model)"
+            ),
             max_attempts=3,
         ),
         # P6, APPENDED after the cohort slots and BEFORE the evidence report,

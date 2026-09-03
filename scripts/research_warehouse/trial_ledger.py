@@ -264,6 +264,77 @@ BACKFILL_TRIALS: tuple[Mapping[str, Any], ...] = (
         "registered_by": "P8 registration (written before any outcome was inspected)",
     },
     {
+        "trial_id": "after_like_entry_grid_v1",
+        "schema": SCHEMA,
+        # The paste date. Declared BEFORE any after-like outcome exists - the
+        # simulator that produces them lands in the same commit as this row and
+        # runs for the first time on the night after it.
+        "registered_at": "2026-09-02T00:00:00+00:00",
+        "family": "AFTER_LIKE",
+        "question": (
+            "For a D1 name the trader LIKED, which day after the like and which "
+            "entry rule gives the best net R? Trader, 2026-09-02: *\"if I like a "
+            "stock one day it may not be for 3-5 days later that the best entry "
+            "is.\"*"
+        ),
+        "failure_mode": (
+            "THREE, and the first is the one that will actually happen. (1) A later "
+            "offset looks better because the episodes that went straight down have "
+            "no bars left to enter on - the same survivorship the P8 grid names, "
+            "with five chances to commit it instead of three, so the DAY-0 row "
+            "count is the denominator every other offset is read against. (2) The "
+            "unlinked bucket and the linked one are compared as if they were the "
+            "same population; they are not - an unlinked like is one the scanner "
+            "never found, which is a different kind of name. (3) Twenty cells over "
+            "one like episode are twenty views of one decision: the episode is the "
+            "unit, and a cell whose n counts ROWS is counting the same opinion "
+            "twenty times."
+        ),
+        "declared_cells": {
+            "day_offset": [0, 1, 2, 3, 5],
+            "entry": [
+                "first_m5_close",
+                "m5_retest_trigger",
+                "m15_acceptance",
+                "m30_ema15_21_pullback",
+            ],
+            "target_r": [2.0],
+            "stop": ["current_anchor:1"],
+        },
+        "declared_cell_count": 20,
+        "recipe_id_prefix": "afterlike_",
+        "declared_floors": {
+            "min_episodes_per_cell": 30,
+            "min_symbols": 5,
+            "min_entry_sessions": 5,
+            "counted_on": "like_episode",
+            "note": (
+                "The episode is ONE LIKE on one symbol-side, across all twenty "
+                "cells - not one row per cell. `dependency_cluster_id` is keyed on "
+                "(symbol, side, like_date) for the same reason: a name liked on "
+                "consecutive days is one opinion held twice, not two."
+            ),
+        },
+        "declared_window": {
+            "kind": "fixed_forward_sessions",
+            "sessions": 20,
+            "opens_at": "the first overnight run after 2026-09-02",
+            "note": (
+                "Fixed at REGISTRATION. No cell is read for a verdict before the "
+                "window closes, including by the agent that built it and including "
+                "if an early cell looks good."
+            ),
+        },
+        "authorization": (
+            "trader packet pasted 2026-09-02 (Phase 0.13 P10 Part C); the trader's "
+            "own question, quoted in `question` above"
+        ),
+        "analysis_unit": "like_episode",
+        "status": STATUS_COLLECTING,
+        "outcome": "",
+        "registered_by": "P10 registration (written before any outcome was inspected)",
+    },
+    {
         "trial_id": "v1_recipe_library",
         "schema": SCHEMA,
         # The date the work was AUTHORIZED, from plan.md, not the date this

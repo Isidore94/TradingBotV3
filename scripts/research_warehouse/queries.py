@@ -326,8 +326,143 @@ def query_sql(store: ResearchStore, dataset: str, sql: str, *, partition: str | 
         connection.close()
 
 
+#: The daily-feature columns `occurrence_features` starts with. Small on
+#: purpose: these are the ones P4 registered as the trader's own attributes plus
+#: the two the study needs to normalise anything (P10 B3). Widening it is a
+#: one-line change and should be made when a question needs a column, not in
+#: advance - every column here is one more thing a reader has to decide is
+#: missing rather than zero.
+OCCURRENCE_FEATURE_COLUMNS = (
+    "close",
+    "atr14",
+    "dist_sma50_atr",
+    "dist_sma200_atr",
+    "spy_regime_state",
+)
+
+
+def occurrence_features(
+    store,
+    occurrence_ids,
+    *,
+    feature_columns=OCCURRENCE_FEATURE_COLUMNS,
+) -> dict[str, dict]:
+    """What the symbol looked like on the occurrence's own session - P10 B3.
+
+    The round-1 audit's item 6: **no join existed from an occurrence to the
+    feature snapshots**, so nothing could ask what a setup looked like when it
+    triggered. This is that join, as a helper and its tests. No lattice, no
+    materialised view, no new dataset.
+
+    POINT IN TIME, and the refusal is the whole value. For each occurrence it
+    takes the LATEST snapshot whose `session_date` is on or before the trigger
+    date - never a later one. A snapshot from the day after the trigger knows how
+    the setup turned out, and a study that read one would be scoring the outcome
+    against a feature computed from it.
+
+    A revision is chosen the same way: among snapshots for the chosen session,
+    the one with the greatest `computed_at` that is still `<= trigger_at` wins. A
+    later REVISION of the right session is as much of a leak as a later session -
+    it was computed with knowledge the decision moment did not have.
+
+    Returns `{occurrence_id: {column: value}}`, and an occurrence with no usable
+    snapshot is simply ABSENT rather than present-with-nulls. The caller has to
+    know the difference between "measured and flat" and "never measured", and a
+    dict of Nones cannot say which.
+
+    Reads are narrowed Arrow-side and year-keyed (`feature_snapshot_daily`
+    partitions by year on `session_date`), one read per symbol-set rather than
+    one per occurrence.
+    """
+    from datetime import date, datetime
+
+    wanted = [str(item).strip() for item in (occurrence_ids or ()) if str(item or "").strip()]
+    if not wanted:
+        return {}
+
+    occurrences = store.read_rows(
+        "setup_occurrence",
+        occurrence_ids=wanted,
+        columns=["occurrence_id", "symbol", "trigger_at"],
+    )
+    if not occurrences:
+        return {}
+
+    def _as_date(value):
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        text = str(value or "").strip()
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+
+    def _as_moment(value):
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None)
+        text = str(value or "").strip().replace("Z", "")
+        for cut in (19, 10):
+            try:
+                return datetime.fromisoformat(text[:cut])
+            except ValueError:
+                continue
+        return None
+
+    symbols = sorted({str(row.get("symbol") or "").strip() for row in occurrences} - {""})
+    snapshots = store.read_rows(
+        "feature_snapshot_daily",
+        symbols=symbols,
+        columns=["symbol", "session_date", "computed_at", *feature_columns],
+    )
+    by_symbol: dict[str, list[dict]] = {}
+    for snapshot in snapshots:
+        by_symbol.setdefault(str(snapshot.get("symbol") or "").strip(), []).append(snapshot)
+
+    features: dict[str, dict] = {}
+    for row in occurrences:
+        occurrence = str(row.get("occurrence_id") or "").strip()
+        triggered = _as_date(row.get("trigger_at"))
+        trigger_moment = _as_moment(row.get("trigger_at"))
+        if not occurrence or triggered is None:
+            continue
+        candidates = [
+            snapshot
+            for snapshot in by_symbol.get(str(row.get("symbol") or "").strip(), ())
+            if (_as_date(snapshot.get("session_date")) or date.max) <= triggered
+        ]
+        if trigger_moment is not None:
+            # A revision computed after the trigger knows what happened next.
+            # An UNSTAMPED revision is kept: a missing `computed_at` is unknown
+            # provenance, not proof of a leak, and dropping it would lose every
+            # snapshot written before the column carried a value.
+            candidates = [
+                snapshot
+                for snapshot in candidates
+                if (_as_moment(snapshot.get("computed_at")) or trigger_moment)
+                <= trigger_moment
+            ]
+        if not candidates:
+            continue
+        chosen = max(
+            candidates,
+            key=lambda snapshot: (
+                _as_date(snapshot.get("session_date")) or date.min,
+                _as_moment(snapshot.get("computed_at")) or datetime.min,
+            ),
+        )
+        features[occurrence] = {
+            "session_date": str(chosen.get("session_date") or ""),
+            **{column: chosen.get(column) for column in feature_columns},
+        }
+    return features
+
+
 __all__ = [
     "AS_OBSERVED_MODES",
+    "OCCURRENCE_FEATURE_COLUMNS",
+    "occurrence_features",
     "CHECKPOINT_COLUMNS",
     "EVIDENCE_TIER",
     "QuerySnapshot",

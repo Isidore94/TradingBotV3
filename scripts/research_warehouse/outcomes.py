@@ -1523,6 +1523,205 @@ def simulate_setup_entry_timing(
     )
 
 
+# ---------------------------------------------------------------------------
+# P10 Part C - what happened after the like
+# ---------------------------------------------------------------------------
+
+#: The trader's own question, as a grid. Trader, 2026-09-02: "if I like a stock
+#: one day it may not be for 3-5 days later that the best entry is."
+#:
+#: Day 4 is deliberately absent. Five offsets is already a wide look at ONE
+#: episode, and 0/1/2/3/5 spans the range the trader named while keeping the
+#: registered grid at twenty cells - one target, one stop, four entries.
+AFTER_LIKE_OFFSETS = (0, 1, 2, 3, 5)
+
+#: The same four entry moments as P8, reusing P8's selectors verbatim. The names
+#: are the packet's; the mapping to P8's variant names is written out here so a
+#: reader can see the two grids asking one question at different moments.
+AFTER_LIKE_ENTRIES = (
+    "first_m5_close",
+    "m5_retest_trigger",
+    "m15_acceptance",
+    "m30_ema15_21_pullback",
+)
+AFTER_LIKE_ENTRY_VARIANTS = {
+    "first_m5_close": "",  # the control: no selector, the existing entry rule
+    "m5_retest_trigger": "m5_retest_trigger",
+    "m15_acceptance": "m15_acceptance_close",
+    "m30_ema15_21_pullback": "m30_ema15_21_pullback",
+}
+AFTER_LIKE_CONTROL_ENTRY = "first_m5_close"
+
+#: ONE target and ONE stop, and that is the point of the grid rather than a
+#: simplification: only the OFFSET and the ENTRY vary, so a winning cell cannot
+#: have won on its stop or its target.
+AFTER_LIKE_TARGET_R = 2.0
+AFTER_LIKE_STOP_SELECTOR = "current_anchor:1"
+
+AFTER_LIKE_TRIAL_ID = "after_like_entry_grid_v1"
+
+
+def _after_like_recipes() -> tuple[Recipe, ...]:
+    """The bounded registered grid: 5 offsets x 4 entries. Never a search."""
+    recipes: list[Recipe] = []
+    for offset in AFTER_LIKE_OFFSETS:
+        for entry in AFTER_LIKE_ENTRIES:
+            recipes.append(
+                Recipe(
+                    recipe_id=f"afterlike_d{offset}_{entry}_2r_v1",
+                    timeframe="AFTER_LIKE",
+                    analysis_unit=ANALYSIS_UNIT_OPPORTUNITY,
+                    entry=f"day_{offset}_after_like:{entry}",
+                    stop="tracker_current_anchor_nearest_1_close_failure",
+                    management="fixed_2r_target",
+                    time_stop_sessions=SWING_TIME_STOP_SESSIONS,
+                    target_r=AFTER_LIKE_TARGET_R,
+                    stop_selector=AFTER_LIKE_STOP_SELECTOR,
+                    entry_variant=entry,
+                    is_control=(offset == 0 and entry == AFTER_LIKE_CONTROL_ENTRY),
+                    is_diagnostic=True,
+                    note=(
+                        "P10 after-like grid; offset and entry vary, one stop and "
+                        "one target; twenty correlated views of ONE like"
+                    ),
+                )
+            )
+    return tuple(recipes)
+
+
+AFTER_LIKE_RECIPES = _after_like_recipes()
+
+
+def after_like_offset_for(recipe: Recipe) -> int | None:
+    """The day offset a recipe declares, read from its id and never guessed."""
+    text = str(recipe.recipe_id or "")
+    if not text.startswith("afterlike_d"):
+        return None
+    digits = text[len("afterlike_d") :].split("_", 1)[0]
+    return int(digits) if digits.isdigit() else None
+
+
+def after_like_entry_session(like_date, offset: int):
+    """The TRADING session `offset` sessions after the like, or None.
+
+    Trading days, never calendar days: "three days after the like" on a Thursday
+    means Tuesday, and counting calendar days would put it on the Sunday and then
+    silently find no bars there. Offset 0 is the like's own session, or - when
+    the like was made on a day the exchange was shut - the next session that
+    opens, because a like typed at the weekend is about the Monday.
+
+    The walk is BOUNDED at 30 calendar days, which covers five sessions plus any
+    holiday week. A runaway loop inside a nightly job is worse than a missing row.
+    """
+    day = None
+    if isinstance(like_date, datetime):
+        day = like_date.date()
+    elif isinstance(like_date, date):
+        day = like_date
+    else:
+        try:
+            day = date.fromisoformat(str(like_date)[:10])
+        except ValueError:
+            return None
+    seen = 0
+    cursor = day
+    for _ in range(30):
+        if xcal.is_trading_day(cursor):
+            if seen == offset:
+                return xcal.trading_session(cursor)
+            seen += 1
+        cursor = cursor + timedelta(days=1)
+    return None
+
+
+def simulate_after_like_entry(
+    like: dict,
+    occurrence: dict,
+    m5_bars,
+    recipe: Recipe,
+    *,
+    as_of: datetime,
+    computed_at: datetime | None = None,
+    run_id: str = "",
+    series_cache: dict | None = None,
+) -> dict | None:
+    """Phase 0.13 P10: what a liked name did, entered N sessions later. SHADOW.
+
+    The analysis unit is the LIKE EPISODE: one like on one symbol-side is ONE
+    episode across all twenty cells, and the cluster key is `(symbol, side,
+    like_date)` so a name liked on consecutive days counts as one opinion held
+    twice rather than as two independent observations.
+
+    Everything except the entry MOMENT is the P8 machinery unchanged - the same
+    exit loop, the same structural stop, the same checkpoints - because a grid
+    that reimplemented any of them would eventually disagree with the code it is
+    being compared against, and the disagreement would read as a finding about
+    entries.
+
+    THE OFFSET RESTRICTS WHERE THE SELECTOR MAY LOOK, and does not filter the
+    bars the simulator sees. `simulate_m5_close_opportunity` finds the entry
+    bar's index in its own ordered list; handing it a shortened list would move
+    every ATR and checkpoint calculation that follows.
+
+    A day with no bars is NO ROW, never an invented entry at the previous close.
+    The question is which day was best to enter, so a day the market gave no
+    entry is a fact about that day and the missing row is how the count says so.
+    """
+    offset = after_like_offset_for(recipe)
+    if offset is None:
+        return None
+    session = after_like_entry_session(like.get("session_date"), offset)
+    if session is None:
+        return None
+    opens_at = session.rth_open_at
+
+    variant = AFTER_LIKE_ENTRY_VARIANTS.get(recipe.entry_variant)
+    if variant is None:
+        return None
+    chosen = SETUP_ENTRY_TIMING_SELECTORS.get(variant) if variant else None
+
+    def _selector(occ, ordered, *, as_of):
+        from_offset = [row for row in ordered if row.get("interval_start") >= opens_at]
+        if not from_offset:
+            return None, None
+        if chosen is None:
+            # The control: the existing next-completed-close rule, applied from
+            # the offset session's open rather than from the D1 trigger.
+            for row in from_offset:
+                found = xcal.session_for(row["interval_start"])
+                if found and found.rth_open_at <= row["interval_start"] < found.rth_close_at:
+                    return row, found
+            return None, None
+        return chosen(occ, from_offset, as_of=as_of, series_cache=series_cache)
+
+    return simulate_m5_close_opportunity(
+        occurrence,
+        m5_bars,
+        recipe,
+        as_of=as_of,
+        computed_at=computed_at,
+        run_id=run_id,
+        entry_selector=_selector,
+    )
+
+
+def after_like_cluster_id(like: dict) -> str:
+    """`(symbol, side, like_date)` - the honest denominator for this grid.
+
+    A name liked on Monday and again on Tuesday is one opinion held twice. Two
+    clusters would let the same conviction vote twice in every cell, which is the
+    correlation `dependency_cluster_id` exists to keep out of the count.
+    """
+    return "|".join(
+        (
+            "afterlike",
+            str(like.get("symbol") or "").strip().upper(),
+            str(like.get("side") or "").strip().upper(),
+            str(like.get("session_date") or "").strip(),
+        )
+    )
+
+
 def _htf_series(
     m5_bars,
     timeframe: str,
@@ -2284,6 +2483,14 @@ __all__ = [
     "net_r",
     "outcome_key",
     "simulate_intraday_bounce",
+    "AFTER_LIKE_ENTRIES",
+    "AFTER_LIKE_OFFSETS",
+    "AFTER_LIKE_RECIPES",
+    "AFTER_LIKE_TRIAL_ID",
+    "after_like_cluster_id",
+    "after_like_entry_session",
+    "after_like_offset_for",
+    "simulate_after_like_entry",
     "SETUP_ENTRY_TIMING_RECIPES",
     "SETUP_ENTRY_TIMING_FAMILY",
     "SETUP_ENTRY_TIMING_SIDE",

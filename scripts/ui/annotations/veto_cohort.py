@@ -47,6 +47,25 @@ from ui.annotations.store import EVENT_VETO, load_annotations
 _SIDES = ("LONG", "SHORT")
 
 
+#: The cohort an UNCODED veto grades in (P10 A3). "Not today" in chart review has
+#: never had a picklist - it wrote the hardcoded free text `"not today"` - and the
+#: trader asked for a note box there rather than a vocabulary. Those rows were
+#: previously SKIPPED here entirely, so the most-used dismissal on the desk had no
+#: forward record at all.
+#:
+#: Its own name, never pooled with a coded cohort: a coded veto states which of
+#: nine specific things was wrong; an uncoded one states only that the trader
+#: moved on. Averaging them would make both numbers mean less than either.
+#:
+#: NO VERSION TAG, because the row cites no vocabulary. `_rebuild_pooled_
+#: performance` pools on `(vocab_version, reason_code)`, and a version stamped on
+#: a codeless row would file it in a pool it was never part of.
+#:
+#: It still lands under the `human_focus_veto` family: `_outcome_base_cohort`
+#: matches `startswith(prefix + "_")`, and `VETO_SOURCE_PREFIX` is `veto`.
+VETO_UNCODED_SOURCE = VETO_SOURCE_PREFIX + "_uncoded"
+
+
 def veto_cohort_source(reason_code: str, vocab_version: Any = None) -> str:
     """``veto_v<version>_<reason_code>`` - the cohort this veto grades in.
 
@@ -239,7 +258,7 @@ def veto_pick_rows(
         reason = str(annotation.get("reason_code") or "").strip().lower()
         side = str(annotation.get("side") or "").strip().upper()
         trade_date = str(annotation.get("session_date") or "").strip()
-        if not symbol or not reason or not trade_date:
+        if not symbol or not trade_date:
             continue
         if side not in _SIDES:
             skipped_no_side += 1
@@ -251,7 +270,11 @@ def veto_pick_rows(
             "trade_date": trade_date,
             "symbol": symbol,
             "side": side,
-            "source": veto_cohort_source(reason, annotation.get("vocab_version")),
+            "source": (
+                veto_cohort_source(reason, annotation.get("vocab_version"))
+                if reason
+                else VETO_UNCODED_SOURCE
+            ),
             "snapshotted_at": timestamp,
             "active_at_snapshot": "1",
         }

@@ -537,3 +537,76 @@ leaving them staring at a tab that vanished.
 **An unreadable settings file SHOWS.** A surface the trader cannot reach is worse
 than one they have to skip past, and that is the direction that cannot lose them
 anything.
+## P10 - one like, one dislike, from every screen (2026-09-02)
+
+**Trader, verbatim:**
+
+> the veto and like+claim tabs are just quicker ways to make a note for a stock.
+> when I hit the dislike button in master avwap setups or not-for-today in visual
+> chart review I SHOULD get a little pop-up that lets me write a note if I am not
+> using the quick buttons. same if I like a stock. sometimes I may not want to
+> write a note but the fact I clicked like should be processed by the bot
+> eventually.
+
+> anytime I like a D1 it should be treated with respect by the bot in regards to
+> finding out what's good about it, how we can replicate those searches, and then
+> how we can improve the entries. if I like a stock one day it may not be for 3-5
+> days later that the best entry is.
+
+And, decisively: **a star in Master AVWAP setups and a like in chart review are
+the SAME thing.** One bucket, graded together, and the screen it came from is a
+column.
+
+### What was true before, measured on the tree that day
+
+Three writers, one of them graded.
+
+* **Master AVWAP ★ / ✕** wrote a review event (`favorite` / `dislike`) with
+  `setup_context_fields`, plus - for the ✕ only - a `pick_feedback` row. The
+  review event reaches the scoreboard and **no graded cohort at all**. So the
+  most considered judgement the trader makes all day, a star on a D1 setup, left
+  no forward record while the same opinion two panels away did.
+* **"Not today"** wrote a `pick_feedback` verdict whose reason is the hardcoded
+  string `"not today"` - never a code, never a word of the trader's own. P5
+  grades it as `focus__m5_not_today`.
+* **The capture rail's like** wrote a `trader_annotations` `like_claim` row,
+  which `like_cohort` grades.
+
+### The rules this produced
+
+**One writer.** `ui/annotations/verdicts.py`. Every like and dislike from any
+screen writes ONE annotation row carrying `surface` - `master_avwap_setups`,
+`chart_review`, `focus_panel`, `m5_alert_bar`, `rail`. An unknown screen is
+REFUSED rather than written: rows are never rewritten, so a typo would be a
+permanent sixth screen no rollup knows about. These are NOT
+`review_events.setup_context_fields`' `surface` values (that one writes
+`"setups"`) - different file, different vocabulary, neither renamed.
+
+**Nothing existing changed meaning.** The review event, the `pick_feedback` row
+and the Focus removal all still happen exactly as they did; the annotation row is
+the ADDITION, and every call site swallows its failure. An evidence store never
+costs the event it records.
+
+**The row goes first and the dialog second.** If the note box came first, Escape
+would mean the click never happened - precisely the case the trader described.
+The box opens only where no quick button was used: a coded dislike has already
+said why in the vocabulary the scoreboard counts, and asking again would be
+asking twice for one answer. The note is a SECOND row joined by `supersedes`,
+never an edit.
+
+**An uncoded veto is legal and carries no `vocab_version`.** A version stamp on a
+row that cites no vocabulary would file it in a pool it was never part of -
+`_rebuild_pooled_performance` pools on exactly `(vocab_version, reason_code)`. It
+grades as `veto_uncoded`, never pooled with a coded cohort: a coded veto says
+which of nine things was wrong, an uncoded one says only that the trader moved
+on. These rows were previously SKIPPED outright by `veto_pick_rows`.
+
+**A capture click never fetches.** The scanner-row stamp (`scan_date`,
+`tracker_setup_id`, `canonical_setup_id`, `priority_bucket`, `score`,
+`expected_r`) is copied from a row the desk was already showing. A bare symbol
+lookup stamps nothing, because absent is a real answer and `""` would be
+indistinguishable from measured-and-empty.
+
+**A like still carries zero privileges** (plan.md P3.1). Nothing in this chain
+reaches a detector, score, alert, watchlist, Focus list, review queue or
+`review_policy.json`.

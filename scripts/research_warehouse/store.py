@@ -815,6 +815,7 @@ class ResearchStore:
         occurrence_ids=None,
         recipe_ids=None,
         interval_start_range: tuple[datetime | None, datetime | None] | None = None,
+        time_column: str = "interval_start",
     ) -> list[dict]:
         """Rows as dicts, with the narrowing done in Arrow BEFORE Python sees them.
 
@@ -843,6 +844,17 @@ class ResearchStore:
         bounded seam for outcome/context rows, so a 32-bucket research run
         never materialises every historical recipe result. ``interval_start_range`` is
         half-open ``[start, end)``, matching ``rth_open_at <= t < rth_close_at``.
+
+        ``time_column`` names the column that range applies to and defaults to
+        ``interval_start``, which every caller before P10 used and which is
+        therefore unchanged for all of them. It exists because the bar datasets
+        are not the only ones with a time to narrow on: ``setup_occurrence``
+        carries ``trigger_at`` and ``event_at`` and no ``interval_start`` at all,
+        so a caller that wanted a date window there had either to name its column
+        or to pull the year into Python and filter it - which is the thing this
+        method exists to stop. It is still a NAME, not an expression: the
+        predicate built from it is the same half-open comparison, so it cannot
+        silently mean something else.
         """
         paths = self.resolve_files(dataset, partition)
         if not paths:
@@ -868,7 +880,7 @@ class ResearchStore:
                 # an aware bound in any zone is normalized rather than stripped.
                 if isinstance(bound, datetime) and bound.tzinfo is not None:
                     bound = bound.astimezone(timezone.utc)
-                field = pads.field("interval_start")
+                field = pads.field(time_column)
                 clause = field >= pc.scalar(bound) if operator == "ge" else field < pc.scalar(bound)
                 predicate = clause if predicate is None else (predicate & clause)
         table = self.open_dataset(dataset, partition).to_table(

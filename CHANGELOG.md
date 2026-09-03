@@ -551,6 +551,48 @@ which is evidence and must not be loaded as context.
   sentence naming the coverage. **The group is never hidden**: hiding it would
   replace a visible thin answer with an invisible one, and seeing how little is
   tagged is the prompt to tag more.
+- **Every like and every dislike, from every screen, writes ONE annotation row**
+  (P10, 2026-09-02). Trader: a star in Master AVWAP setups and a like in chart
+  review are the SAME thing - one bucket, graded together, and the screen is a
+  COLUMN (`surface`: `master_avwap_setups` / `chart_review` / `focus_panel` /
+  `m5_alert_bar` / `rail`), never a second cohort. One writer,
+  `ui/annotations/verdicts.py`. The review event, the `pick_feedback` row and the
+  Focus removal are all unchanged and still happen; the annotation row is the
+  ADDITION and its failure is swallowed. **An UNCODED veto is legal** and carries
+  no `vocab_version` - a version on a row that cites no vocabulary would file it
+  in a pool it was never part of - and grades as `veto_uncoded`, never pooled
+  with a coded cohort. Those rows were previously SKIPPED, so "Not today", the
+  desk's most-used dismissal, had no forward record at all.
+- **The note is a SECOND row and the click goes first** (P10 A2). Joined by
+  `supersedes`, never an edit. If the box came first, Escape would mean the click
+  never happened - which is exactly the case the trader named. The dialog is
+  **MODELESS** (`open()`, not `getMultiLineText`): a nested event loop would sit
+  between the click and the queue advancing, and in a headless test it never
+  returns at all. It opens only where no quick button was used.
+- **A verdict on a scanner row records which search found it** (P10 B1):
+  `scan_date`, `tracker_setup_id`, `canonical_setup_id` (P7's registry),
+  `priority_bucket`, `score`, `expected_r`, all copied from a row the desk was
+  ALREADY showing. **A capture click never fetches**; a bare lookup stamps
+  nothing, because absent is a real answer and `""` is not.
+- **A like links to a warehouse occurrence, and absence is a row** (P10 B2,
+  BD-90). `bronze_like_occurrence_link`: basis `exact_family` / `any_family` /
+  `none`, window ONE session back and FIVE forward (the trader's own range),
+  `candidates_in_window` beside it. A like with no occurrence is written with
+  basis `none` - dropping them would report on the subset the scanner happened to
+  find. `queries.occurrence_features` finally builds the round-1 audit's item 6:
+  the latest snapshot on or before the trigger, and never a later REVISION of the
+  right session.
+- **The after-like grid is registered, bounded and shadow** (P10 C, BD-92/93):
+  `after_like_entry_grid_v1`, 20 cells (5 day offsets x 4 entries), ONE stop and
+  ONE target so a winning cell cannot have won on either, floors counted on the
+  LIKE EPISODE, a 20-session window fixed at registration. Rows are keyed by the
+  like episode rather than the occurrence - two likes on one occurrence would
+  otherwise collide on `outcome_path`'s grain. **The unlinked bucket is a COUNT**:
+  the declared stop needs the occurrence's anchor, and a substitute stop would end
+  the grid's one-stop model.
+- **`note_vocabulary_audit`** (P10 A4): a deterministic nightly slot listing the
+  day's notes beside the vocabulary that exists. It proposes no code and adds
+  none - a vocabulary code is permanent and never reused.
 - **A LIKE has two modes** (P9, 2026-09-02). **Alt+L** writes a QUICK like -
   `like_mode: "quick"`, no claimed setup, no why - and **Alt+K** the claimed one,
   which still requires both. A quick like retires the chart, records
@@ -837,6 +879,54 @@ records exactly what each still owes.
 **Verification.** `pytest tests/ -q` **6174 passed, 72 subtests, process exit 0,
 zero failures**, lock probed FREE immediately before the run · `ruff` clean ·
 smoke **7/7** · source `--selftest` **74/74**.
+### 2026-09-02 - Phase 0.13 packet P10: what happens after I like it
+
+**Branch `claude/p10-after-the-like`, off `main`.** Live gates #41-#43 owed.
+
+Trader: *"the veto and like+claim tabs are just quicker ways to make a note for a
+stock ... sometimes I may not want to write a note but the fact I clicked like
+should be processed by the bot eventually"*, and *"anytime I like a D1 it should
+be treated with respect ... if I like a stock one day it may not be for 3-5 days
+later that the best entry is."*
+
+**What was true before, measured.** Three writers, one of them graded. The Master
+AVWAP star and X wrote a review event and reached NO graded cohort - so the most
+considered judgement the trader makes all day left no forward record, while the
+same opinion two panels away did. "Not today" wrote a `pick_feedback` verdict
+whose reason is the hardcoded string `"not today"`. Only the rail's like wrote a
+`trader_annotations` row.
+
+**Part A** gives every screen one writer, a `surface` column, an optional note as
+a superseding row, and `veto_uncoded` for a dismissal with no code. Plus a
+deterministic `note_vocabulary_audit` slot that lists recurring uncoded words and
+coins nothing.
+
+**Part B** stamps the scanner row onto the click, links each like to a warehouse
+occurrence with a stated basis, and joins an occurrence to the feature snapshot of
+its own session - point in time, refusing a later revision as firmly as a later
+day.
+
+**Part C** registers `after_like_entry_grid_v1` BEFORE any outcome exists and
+simulates it on P8's machinery, with the offset restricting where the entry
+selector may look rather than what the simulator sees. Parity with P8's control is
+pinned field-for-field. The readout is a pack block, a Weekend Prep table of
+ELIGIBLE cells only, and the eligible cells in R3's narration view.
+
+**Three differences from the packet, each measured rather than assumed:** the
+bronze namespace rather than a "new frozen schema" (the slice datasets are
+frozen); `setup_context_fields` does NOT already collect B1's six fields; and the
+unlinked bucket is a COUNT rather than graded cells, because the declared stop
+needs the occurrence's anchor.
+
+**One defect found and fixed while building.** The first note dialogs were
+`QInputDialog.getMultiLineText`, which runs a nested event loop - every existing
+test that clicks a star or a "Not today" HUNG rather than failed. They are
+modeless now, which is also what A2 asks for.
+
+**Verification.** `pytest tests/ -q` **6206 passed, 72 subtests, process exit 0,
+zero failures**, with the `ai_jobs_runner` lock probed FREE immediately before the
+run · `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. No packaging
+trigger: every new module sits inside an already-collected package.
 
 ### 2026-09-02 - The merge, and the test run that started a real scan
 

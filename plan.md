@@ -1245,6 +1245,82 @@ chart and one M5 chart - both rows in `trader_annotations.jsonl` with
 nothing in Focus; the next morning `like_cohort_picks.csv` holds both, the M5 one
 has `m5_bars_completed_ref`, and its intraday columns are numbers.
 
+### Phase 0.13 packet P10 — What happens after I like it (2026-09-02) — BUILT, live gates owed
+
+Authorized by the trader pasting the packet. Their two decisions govern it: a star
+in Master AVWAP setups and a like in chart review are **the same thing** — one
+bucket, graded together, the screen is a column — and *"anytime I like a D1 it
+should be treated with respect ... if I like a stock one day it may not be for 3-5
+days later that the best entry is."*
+
+**Part A — one like, one dislike, note optional.**
+
+1. **One writer** (`ui/annotations/verdicts.py`). Every like and dislike from any
+   screen writes ONE annotation row carrying `surface`. The Master AVWAP ★ and ✕
+   reached no graded cohort at all before this. Nothing existing changed meaning:
+   the review event, the `pick_feedback` row and the Focus removal all still
+   happen, and the annotation row is the addition whose failure is swallowed.
+2. **The note is a SECOND row**, joined by `supersedes`, never an edit — and the
+   CLICK ROW GOES FIRST, so Escape leaves the click counted. The box opens only
+   where no quick button was used.
+3. **One bucket, `surface` as a column** on the like picks CSV. Uncoded vetoes
+   grade as `veto_uncoded`, never pooled with a coded cohort, and carrying no
+   `vocab_version` because they cite no vocabulary.
+4. **`note_vocabulary_audit`**, a deterministic nightly slot: the day's notes
+   beside the vocabulary that exists, so recurring uncoded words are visible. It
+   proposes no code and adds none.
+
+**Part B — a like knows which setup it was.**
+
+5. **B1** stamps the scanner row under the click. A capture click never fetches;
+   a bare lookup stamps nothing.
+6. **B2** `research_warehouse/like_links.py` — one row per like into
+   `bronze_like_occurrence_link`, basis `exact_family` / `any_family` / `none`,
+   window one session back and five forward. **Absence is a first-class fact.**
+7. **B3** `queries.occurrence_features` — the round-1 audit's item 6, finally
+   built. Point in time: never a later session, and never a later REVISION of the
+   right session.
+
+**Part C — what happened after the like.**
+
+8. **C1** `after_like_entry_grid_v1` in the trial ledger, written before any
+   outcome exists: 20 cells (5 offsets x 4 entries), one stop, one target, floors
+   on the LIKE EPISODE, a 20-session window fixed at registration.
+9. **C2** `simulate_after_like_entry` reuses P8's selectors and P8's exit machine;
+   the offset restricts where the selector may look and never what the simulator
+   sees. Parity with P8's control is pinned field-for-field.
+10. **C3** an `after_like` block in the nightly pack, a "your likes: best day and
+    entry so far" table on Weekend Prep (eligible cells only), and the eligible
+    cells in R3's narration view.
+
+**Three differences from the packet as written, each measured rather than
+assumed:**
+
+- The packet said B2 needed a "new frozen schema". The slice datasets ARE frozen
+  (sec 7.1) and the bronze namespace exists so an additive artifact needs none;
+  it is `bronze_like_occurrence_link` on the shared record (BD-90).
+- The packet said B1's fields are "the same fields `setup_context_fields` already
+  collects". They are not: that function has no `scan_date`, no
+  `tracker_setup_id`, no canonical id, and spells the bucket `bucket`.
+- **The `unlinked` bucket is a COUNT and not graded cells** (BD-93). The declared
+  stop is `current_anchor:1`, which comes from the occurrence's tracker geometry,
+  and a like the scanner never found has no anchor. A substitute stop would end
+  the grid's one-stop model; dropping them silently would hide how many likes the
+  scanner missed. They are counted by named reason.
+
+**Live gate (#41):** one DESK session where a star in Master AVWAP, a like on the
+chart-review rail and a "Not today" each leave exactly one annotation row with the
+right `surface`; the note box appears only where no quick button was used; and
+Escape leaves the click counted.
+
+**Live gate (#42):** one overnight run writing `bronze_like_occurrence_link` rows
+and after-like outcome rows inside the 20-minute reserve, with the
+`after_like_entry_grid_v1` ledger row present and status `collecting`.
+
+**Live gate (#43) is a REFUSAL, not a check:** no after-like cell may be read for
+a verdict before the declared 20-session window closes — including by the agent
+that built it, and including if an early cell looks good.
+
 ### Phase 0.13 review round R2 (2026-09-02) — TWO GUARDS, BUILT
 
 Authorized by the trader pasting the review.

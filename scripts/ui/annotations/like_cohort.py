@@ -71,6 +71,14 @@ PICK_COLUMNS = [
     # and the split matters because they are different statements: a claimed
     # like says which setup, a quick like says only that something was good.
     "like_mode",
+    # P10: WHICH SCREEN the like was made on - the Master AVWAP setups table, the
+    # chart-review pane, the Focus panel, the M5 alert bar, or the capture rail
+    # itself. Trader, 2026-09-02: a star in Master AVWAP and a like in chart
+    # review are the SAME thing, so this is a COLUMN and never a second cohort.
+    # It rides here so a later rollup can ask whether the trader judges better
+    # from one screen than another - a question the column answers and two
+    # cohorts would destroy.
+    "surface",
 ]
 
 
@@ -164,6 +172,7 @@ def like_pick_rows(
             "side": side,
             "source": like_cohort_source(annotation.get("claimed_setup_id")),
             "like_mode": like_mode_of(annotation),
+            "surface": str(annotation.get("surface") or ""),
             "snapshotted_at": stamp_local,
             "active_at_snapshot": "1",
             "claimed_at_utc": stamp_utc,

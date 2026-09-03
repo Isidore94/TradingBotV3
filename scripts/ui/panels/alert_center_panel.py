@@ -5158,6 +5158,16 @@ class AlertCenterPanel(QFrame):
             queue_len=len(self._review_queue),
             detail={"auto_pick_dropped": dropped} if dropped else None,
         )
+        # P10 A1/A2. "Not today" has always written a `pick_feedback` verdict
+        # with the hardcoded free-text reason "not today" - never a code, never
+        # a word of the trader's own. It now ALSO writes one uncoded veto
+        # annotation and then offers a note box, which is the surface the trader
+        # named: *"not-for-today in visual chart review I SHOULD get a little
+        # pop-up that lets me write a note if I am not using the quick buttons."*
+        #
+        # The `pick_feedback` row and the Focus removal above are untouched: P5
+        # grades them as `focus__m5_not_today` and several surfaces read them.
+        self._record_not_today_annotation(alert)
         self._ignore_alert_symbol(alert.symbol)
         if dropped:
             self.statusChanged.emit(
@@ -5169,6 +5179,79 @@ class AlertCenterPanel(QFrame):
             f"{alert.symbol}: removed from Alert Center processing for today. "
             "BounceBot scanning and watchlists are unchanged."
         )
+
+    def _record_not_today_annotation(self, alert: BounceAlert) -> None:
+        """One uncoded veto row for a "Not today", then the optional note.
+
+        The ROW GOES FIRST. Escape on the box leaves the click counted, which is
+        the trader's own rule - the fact they clicked is the evidence, and the
+        sentence is a bonus.
+
+        No scanner row is attached: this click happens on a chart, and the alert
+        does not carry the tracker row behind it. **A capture click never
+        fetches** (the pass rule), so the fields are absent rather than guessed.
+
+        Every failure is swallowed. The Focus removal and the review event have
+        already happened, and an evidence store never costs the event it records.
+        """
+        try:
+            from ui.annotations import verdicts
+
+            side = str(getattr(alert, "side", "") or "").strip().upper()
+            written = verdicts.record_not_today(
+                symbol=alert.symbol,
+                side="SHORT" if side.startswith("SHORT") else "LONG",
+                timeframe=str(getattr(alert, "timeframe", "") or "M5"),
+            )
+        except Exception:
+            return
+        if written is None:
+            return
+        # DEFERRED, exactly as the Master AVWAP prompt is and for the same three
+        # reasons: a modal opened inside the handler never returns in a headless
+        # test, the queue advance must finish first, and A2 asks that the box not
+        # block the 60 s poll.
+        self._prompt_for_not_today_note(written)
+
+    def _prompt_for_not_today_note(self, written: dict) -> None:
+        """The note box. Optional, MODELESS, and it never blocks the queue.
+
+        `QInputDialog.getMultiLineText` runs a nested event loop and does not
+        return until the trader answers. That would sit between the "Not today"
+        click and the review queue advancing - and in a headless test it never
+        returns at all, so every existing test that clicks this button would HANG
+        rather than fail. `open()` shows the same dialog and returns immediately.
+        """
+        try:
+            from PySide6.QtWidgets import QInputDialog
+
+            dialog = QInputDialog(self)
+            dialog.setInputMode(QInputDialog.TextInput)
+            dialog.setOption(QInputDialog.UsePlainTextEditForTextInput, True)
+            dialog.setWindowTitle(f"Not today: {written.get('symbol', '')}")
+            dialog.setLabelText(
+                "Add a note if you want one - it is optional, and the click is "
+                "already saved either way."
+            )
+            dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+            dialog.textValueSelected.connect(
+                lambda text, row=written: self._save_not_today_note(row, text)
+            )
+            # Held until it closes: a modeless dialog with no reference is
+            # garbage the moment this method returns.
+            self._not_today_note_dialog = dialog
+            dialog.open()
+        except Exception:
+            return
+
+    def _save_not_today_note(self, written: dict, note: str) -> None:
+        """The note row. Swallowed on failure: the veto row is already on disk."""
+        try:
+            from ui.annotations import verdicts
+
+            verdicts.record_note_on(written, note)
+        except Exception:
+            return
 
     def _drop_auto_adopted_pick(self, alert: BounceAlert) -> str:
         """Scoped removal of an auto-adopted M5 entry. Returns the side, or "".

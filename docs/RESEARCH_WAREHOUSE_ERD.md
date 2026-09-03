@@ -219,6 +219,22 @@ per-symbol D1 Parquet store projects into `bar_d1` — completed sessions only
 `provider = UNKNOWN`, because that store never persisted which provider produced
 a row.
 
+### `bronze_like_occurrence_link` (P10 B2, 2026-09-02)
+
+Not a wrapped legacy artifact but a DERIVED join, in the bronze namespace because
+the slice datasets are frozen and the shared record schema fits it without a
+schema change. One row per like, whether or not it matched.
+
+The payload carries `event_id`, `symbol`, `side`, `like_date`, `occurrence_id`,
+`canonical_setup_id`, `trigger_at`, `match_basis` (`exact_family` / `any_family` /
+`none`) and `candidates_in_window`. `legacy_id` is the like's `event_id`;
+`capture_mode` is `derived`; `record_hash` is over the payload, so a re-run on an
+unchanged lake writes nothing new.
+
+**Read it to recover what an after-like outcome row cannot say.** After-like rows
+in `outcome_path` are keyed by the LIKE EPISODE (BD-92), so the setup family
+behind one is only reachable through this dataset.
+
 ## Point-in-time columns
 
 `event_at` (market fact), `observed_at` (when this installation received it),

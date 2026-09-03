@@ -90,6 +90,52 @@ def like_mode_of(row) -> str:
         return LIKE_MODE_CLAIMED
     mode = str(row.get("like_mode") or "").strip().lower()
     return mode if mode in LIKE_MODES else LIKE_MODE_CLAIMED
+#: WHICH SCREEN the verdict came from (P10, trader 2026-09-02: *"the veto and
+#: like+claim tabs are just quicker ways to make a note for a stock"*, and *"a
+#: star in Master AVWAP setups and a like in chart review are the SAME thing"*).
+#:
+#: One bucket, graded together, **the screen it came from is a column**. That is
+#: the whole design: `surface` never splits a cohort at write time, because two
+#: verdicts about the same chart are the same verdict whichever button reached
+#: it. It rides along so a later rollup can ask whether the trader is a better
+#: judge on one screen than another - a question that needs the column and would
+#: be destroyed by two cohorts.
+#:
+#: These are NOT `review_events.setup_context_fields`' `surface` values (that one
+#: writes `"setups"`). Different file, different vocabulary, and neither is
+#: renamed: rows already written carry the spelling they were written with.
+SURFACE_MASTER_AVWAP = "master_avwap_setups"
+SURFACE_CHART_REVIEW = "chart_review"
+SURFACE_FOCUS_PANEL = "focus_panel"
+SURFACE_M5_ALERT_BAR = "m5_alert_bar"
+SURFACE_RAIL = "rail"
+SURFACES = (
+    SURFACE_MASTER_AVWAP,
+    SURFACE_CHART_REVIEW,
+    SURFACE_FOCUS_PANEL,
+    SURFACE_M5_ALERT_BAR,
+    SURFACE_RAIL,
+)
+
+#: The scanner row under the click, when there IS one (P10 B1). Trader: *"anytime
+#: I like a D1 it should be treated with respect by the bot in regards to finding
+#: out what's good about it, how we can replicate those searches"* - and you
+#: cannot replicate a search from a bare symbol and a timestamp.
+#:
+#: Every one of these is copied from a row the desk was ALREADY showing. **A
+#: capture click never fetches** (the pass rule, and it holds here for the same
+#: reason): a verdict must cost one write, and a lookup that fails would either
+#: block the click or write a field that lies. With no row under the click - a
+#: bare symbol lookup - they are simply absent, and absence is the honest answer.
+SCAN_CONTEXT_FIELDS = (
+    "scan_date",
+    "tracker_setup_id",
+    "canonical_setup_id",
+    "priority_bucket",
+    "score",
+    "expected_r",
+)
+
 ANNOTATION_SOURCE = "chart_review"
 
 EVENT_VETO = "veto"
@@ -257,6 +303,9 @@ def build_annotation(
     note: Any = "",
     timeframe: str = "",
     event_id: str = "",
+    surface: str = "",
+    supersedes: str = "",
+    scan_context: Any = None,
 ) -> dict[str, Any]:
     """Validate and assemble one schema-v1 row. Raises AnnotationError.
 
@@ -282,18 +331,30 @@ def build_annotation(
     }
 
     if kind == EVENT_VETO:
-        vocab = vocabulary if vocabulary is not None else load_veto_vocabulary()
         code = str(reason_code or "").strip().lower()
-        reason = vocab.reason(code)
-        if reason is None:
-            raise AnnotationError(
-                f"reason_code {reason_code!r} is not in veto vocabulary "
-                f"v{vocab.vocab_version} ({list(vocab.codes)})"
-            )
-        if not reason.accepts(note_text):
-            raise AnnotationError(f"reason {code!r} requires a note")
-        row["reason_code"] = reason.code
-        row["vocab_version"] = vocab.vocab_version
+        if not code:
+            # AN UNCODED VETO IS LEGAL AND IT IS NOT A CODED ONE (P10 A1).
+            # "Not today" in chart review has never asked for a code - it writes
+            # `reason="not today"`, a hardcoded string - and the trader asked for
+            # a note box there rather than a picklist. So the row carries no
+            # `reason_code` and NO `vocab_version`: a version stamp on a row that
+            # cites no vocabulary would put it in a pooled cohort it was never
+            # part of, and `_rebuild_pooled_performance` pools on exactly that
+            # pair. It grades under its own `veto_uncoded` name instead, which
+            # keeps the trader's coded record uncontaminated in both directions.
+            pass
+        else:
+            vocab = vocabulary if vocabulary is not None else load_veto_vocabulary()
+            reason = vocab.reason(code)
+            if reason is None:
+                raise AnnotationError(
+                    f"reason_code {reason_code!r} is not in veto vocabulary "
+                    f"v{vocab.vocab_version} ({list(vocab.codes)})"
+                )
+            if not reason.accepts(note_text):
+                raise AnnotationError(f"reason {code!r} requires a note")
+            row["reason_code"] = reason.code
+            row["vocab_version"] = vocab.vocab_version
 
     if kind == EVENT_PASS:
         vocab = vocabulary if vocabulary is not None else load_pass_vocabulary()
@@ -351,6 +412,26 @@ def build_annotation(
         row["note"] = note_text
     if timeframe:
         row["timeframe"] = str(timeframe).strip().upper()
+    if surface:
+        screen = str(surface).strip().lower()
+        if screen not in SURFACES:
+            # A typo here would silently create a sixth screen that no rollup
+            # knows about, and rows are never rewritten.
+            raise AnnotationError(f"unknown surface {surface!r}; expected one of {SURFACES}")
+        row["surface"] = screen
+    if supersedes:
+        # THE LINEAGE, NOT AN EDIT (P10 A2). The click row is already on disk and
+        # is never touched; this row says "the note that belongs with that
+        # click". Append-only is the whole contract of this file, so a note
+        # typed three seconds later is a second row, and the pair is joined by
+        # the id rather than merged.
+        row["supersedes"] = str(supersedes).strip()
+    if scan_context:
+        for key in SCAN_CONTEXT_FIELDS:
+            value = scan_context.get(key) if hasattr(scan_context, "get") else None
+            if value is None or str(value).strip() == "":
+                continue
+            row[key] = value
     # The attached chart, when the desk already held one. Written as a
     # reference rather than inline so the row stays one small buffered write -
     # see ui.annotations.pass_bars for why the bars live in a sidecar.

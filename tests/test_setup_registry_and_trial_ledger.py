@@ -395,6 +395,11 @@ def test_the_registry_has_exactly_the_readers_it_was_given():
         # to grow a second sweep, and a `datas` rule proves a file was bundled
         # while only a frozen run proves the process can read it.
         "scripts/selftest.py",
+        # P10 B1: a like on a scanner row stamps the canonical setup id, so a
+        # study can ask which SEARCH found the name the trader liked. It calls
+        # `find` rather than `resolve` and swallows the miss - an unmapped family
+        # costs the id and never the verdict.
+        "scripts/ui/annotations/verdicts.py",
     }, importers
 
 

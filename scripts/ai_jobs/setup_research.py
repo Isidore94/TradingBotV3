@@ -108,6 +108,7 @@ def _load() -> tuple[list[dict], dict[str, dict], dict[str, dict[str, str]], dic
             tuple(outcomes.M5_CLOSE_RECIPES)
             + tuple(outcomes.HTF_LRSI_RECIPES)
             + tuple(outcomes.SETUP_ENTRY_TIMING_RECIPES)
+            + tuple(outcomes.AFTER_LIKE_RECIPES)
         )
     ]
     latest = list(outcomes.latest_outcomes(store, recipe_ids=recipes).values())
@@ -265,6 +266,117 @@ def _summarize(rows: list[dict]) -> dict[str, Any]:
 def _trimmed_mean_score(row: Mapping[str, Any]) -> float:
     value = ((row.get("stats") or {}).get("clipped") or {}).get("trimmed_mean")
     return float(value) if value is not None else -999.0
+
+
+AFTER_LIKE_PREFIX = "afterlike_"
+
+
+def after_like_block(rows) -> dict:
+    """P10 C3: what the trader's likes did, by day offset and entry rule.
+
+    Cells are keyed by (offset, entry) and NOT by family, and that is a measured
+    limit rather than a choice. `outcome_path` has no column for the linked
+    occurrence, so the published row carries the like episode - which is what its
+    `occurrence_id` is for these rows - and not the setup family behind it. The
+    family is recoverable by joining the bronze `like_occurrence_link` dataset,
+    and the block SAYS SO rather than leaving a reader to wonder why the split
+    they were promised is absent.
+
+    The EPISODE is the unit. For an after-like row the `occurrence_id` IS the
+    like episode (`afterlike|SYMBOL|SIDE|date`), so distinct ids are distinct
+    likes, and a cell that counted rows would count one opinion once per cell.
+
+    Nothing here is eligible for a verdict until the registered window closes -
+    `eligible` reports the floors, and the trial ledger holds the window.
+    """
+    import evidence_stats
+
+    cells: dict[tuple[int, str], list[dict]] = {}
+    for row in rows:
+        recipe_id = str(row.get("recipe_id") or "")
+        if not recipe_id.startswith(AFTER_LIKE_PREFIX):
+            continue
+        rest = recipe_id[len(AFTER_LIKE_PREFIX) :]
+        if not rest.startswith("d"):
+            continue
+        head, _, tail = rest.partition("_")
+        offset_text = head[1:]
+        if not offset_text.isdigit():
+            continue
+        entry = tail.rsplit("_2r_v1", 1)[0]
+        cells.setdefault((int(offset_text), entry), []).append(row)
+
+    out = []
+    for (offset, entry), cell_rows in sorted(cells.items()):
+        episodes = {str(row.get("occurrence_id") or "") for row in cell_rows}
+        episodes.discard("")
+        values = [
+            float(row["net_r"])
+            for row in cell_rows
+            if row.get("net_r") is not None
+        ]
+        # The desk's ONE statistics contract, and the same call the other blocks
+        # make: the episode is the sample, so symbols and sessions are counted on
+        # the episode key rather than on the row.
+        summary = (
+            evidence_stats.summarize(
+                values,
+                symbols=[str(row.get("occurrence_id") or "") for row in cell_rows],
+                sessions=[
+                    str(row.get("entry_at") or "")[:10] for row in cell_rows
+                ],
+                stop_flags=[
+                    str(row.get("first_hit") or "") == "STOP" for row in cell_rows
+                ],
+            )
+            if values
+            else {}
+        )
+        out.append(
+            {
+                "day_offset": offset,
+                "entry": entry,
+                "n": len(cell_rows),
+                "n_episodes": len(episodes),
+                "trimmed_mean_r": (summary.get("clipped") or {}).get("trimmed_mean"),
+                # `summarize` does not compute a win rate - `_summarize` adds it
+                # afterwards, and this does the same rather than reaching into
+                # that function, so both blocks state one definition once each.
+                "win_rate": (
+                    round(sum(value > 0.0 for value in values) / len(values), 4)
+                    if values
+                    else None
+                ),
+                "stop_rate": summary.get("stop_rate"),
+                "eligible": bool(summary.get("eligible")),
+                "meets_n_floor": bool(summary.get("meets_n_floor")),
+                "evidence_label": summary.get("evidence_label", "discovery"),
+            }
+        )
+    return {
+        "schema": "after_like_v1",
+        "question": (
+            "For a D1 name the trader LIKED, which day after the like and which "
+            "entry rule gives the best net R?"
+        ),
+        "cells": out,
+        "episodes": len({str(row.get("occurrence_id") or "") for cell in cells.values() for row in cell}),
+        "family_split": (
+            "NOT AVAILABLE from these rows. `outcome_path` has no column for the "
+            "linked occurrence, so a family split needs a join against the bronze "
+            "`like_occurrence_link` dataset."
+        ),
+        "read_before_the_window_closes": (
+            "No cell here may be read for a verdict before the registered window "
+            "closes - see the `after_like_entry_grid_v1` trial ledger row. A cell "
+            "that looks good early is the reason the window was fixed at "
+            "registration."
+        ),
+        "not_a_control_signal": (
+            "Diagnostic rows only. Nothing here reaches a detector, score, alert, "
+            "watchlist, Focus list, review queue or review_policy.json."
+        ),
+    }
 
 
 def build_fact_pack(
@@ -468,6 +580,10 @@ def build_fact_pack(
         "policy_cells_dropped_from_pack": max(0, len(all_policies) - len(policies)),
         "eligible_policy_cells_dropped": 0,
         "ineligible_policy_cells_dropped": max(0, len(ineligible_cells) - len(kept_ineligible)),
+        # P10 C3, built from the RAW rows rather than the enriched ones: an
+        # after-like row's `occurrence_id` is a LIKE EPISODE, so the family
+        # enrichment above would file every one of them under UNKNOWN.
+        "after_like": after_like_block(outcomes_rows),
         "non_trade_families": non_trade_families,
         "non_trade_families_note": (
             "Excluded from every policy and context cell above, by role. Their "
@@ -752,6 +868,15 @@ def narration_view(pack: Mapping[str, Any]) -> dict[str, Any]:
         "non_trade_families": list(pack.get("non_trade_families") or ()),
         "non_trade_families_note": pack.get("non_trade_families_note"),
         "eligible_policies": trimmed,
+        # P10 C3: the after-like grid's ELIGIBLE cells only. The ineligible ones
+        # are in the pack on disk; a cell under the floor is a cell the narration
+        # must not describe, and handing the model twenty thin cells is how the
+        # prompt grew past the window in the first place (R3).
+        "after_like_eligible": [
+            cell
+            for cell in ((pack.get("after_like") or {}).get("cells") or ())
+            if cell.get("eligible")
+        ],
         "conventions": conventions,
         "not_a_control_signal": pack.get("not_a_control_signal"),
         "omitted": {

@@ -41,6 +41,7 @@ try:  # package import
         tracker_adapter,
         trial_ledger,
     )
+    from . import after_like, like_links
     from .aggregate import build_derived_bars, build_trading_sessions, build_weekly_bars
     from .ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots
     from .manifest import utc_now
@@ -63,6 +64,8 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     from store import ResearchStore  # type: ignore
     import outcome_coverage  # type: ignore
     import trial_ledger  # type: ignore
+    import after_like  # type: ignore
+    import like_links  # type: ignore
 
 LOCK_NAME = "research_build.lock"
 JOB_TYPE = "research_warehouse_build"
@@ -415,6 +418,9 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
         run_id=run_id,
         job_id="m5_close_recipe_outcomes",
     )
+    after_like_step = _run_after_like_pass(
+        store, m5_by_symbol, stamp=stamp, run_id=run_id
+    )
     slice_rows = [
         row for row in selected
         if str(row.get("canonical_setup_id") or "") in occurrences.SLICE_SETUPS
@@ -448,7 +454,90 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
         "m5_close": vars(primary),
         "legacy_slice": vars(legacy_slice) if legacy_slice is not None else None,
         "market_context": vars(context),
+        "after_like": after_like_step,
     }
+
+
+#: How far back the after-like pass looks for likes each night. Bounded, and
+#: bounded generously: a like's day-5 cell cannot be measured until five sessions
+#: have passed, so a window shorter than that would grade the early offsets of a
+#: like and then never come back for the late ones. Thirty calendar days covers
+#: five sessions plus a holiday week with room to spare, and the rows are
+#: idempotent by grain so re-simulating an older like costs time and changes
+#: nothing.
+AFTER_LIKE_LOOKBACK_DAYS = 30
+
+
+def _run_after_like_pass(store, m5_by_symbol, *, stamp, run_id: str) -> dict:
+    """P10 Part C: what the trader's likes did, entered N sessions later.
+
+    Reads the likes from the annotation log, links each to a warehouse
+    occurrence (P10 B2), and simulates the twenty registered cells over the M5
+    bars THIS BUILD HAS ALREADY MATERIALISED - so the pass costs simulation time
+    and not a second read of the lake.
+
+    Never allowed to cost the build. Every failure here is swallowed and
+    reported as a step status, exactly like the coverage and trial-ledger lines:
+    an evidence store never costs the build that feeds it.
+    """
+    from datetime import timedelta
+
+    try:
+        from project_paths import TRADER_ANNOTATIONS_FILE
+        from ui.annotations.store import EVENT_LIKE_CLAIM, load_annotations
+
+        cutoff = (stamp - timedelta(days=AFTER_LIKE_LOOKBACK_DAYS)).date().isoformat()
+        likes = [
+            row
+            for row in load_annotations(
+                TRADER_ANNOTATIONS_FILE, event_types=(EVENT_LIKE_CLAIM,)
+            )
+            if str(row.get("session_date") or "") >= cutoff
+        ]
+        if not likes:
+            return {"status": "ok", "likes": 0, "episodes": 0, "rows": 0}
+
+        links = {
+            link.event_id: link
+            for link in like_links.link_likes(store, likes)
+        }
+        wanted = sorted(
+            {link.occurrence_id for link in links.values() if link.occurrence_id}
+        )
+        occurrences_by_id = {
+            str(row.get("occurrence_id")): row
+            for row in (
+                store.read_rows("setup_occurrence", occurrence_ids=wanted)
+                if wanted
+                else []
+            )
+        }
+        result = after_like.run_after_like(
+            likes,
+            links,
+            occurrences_by_id,
+            m5_by_symbol,
+            as_of=stamp,
+            computed_at=stamp,
+            run_id=run_id,
+        )
+        published = 0
+        if result.rows:
+            outcome = store.publish(
+                "outcome_path", result.rows, job_id="after_like_outcomes"
+            )
+            published = len(result.rows)
+        return {
+            "status": "ok",
+            "likes": result.likes_seen,
+            "episodes": result.episodes_graded,
+            "rows": published,
+            "excluded": dict(result.excluded_by_reason),
+            "basis": like_links.basis_counts(list(links.values())),
+            "publish": vars(outcome) if result.rows else None,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "skipped", "reason": str(exc)}
 
 
 def _bands_by_occurrence(store: ResearchStore, known: dict) -> dict:
