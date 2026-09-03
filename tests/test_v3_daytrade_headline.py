@@ -42,69 +42,89 @@ def test_the_default_sort_is_the_headline_not_the_sample_count():
     assert DEFAULT_PERFORMANCE_SORT_KEY in [key for key, _ in PERFORMANCE_COLUMNS]
 
 
-def test_the_score_is_the_hold_rate_times_what_the_held_ones_offered():
-    from ui.panels.daytrade_tracker_panel import _add_held_and_ran
+def test_the_panel_computes_nothing_and_joins_the_modules_own_answer():
+    """R4 A10: V3 shipped a SECOND FORMULA under the headline column key.
 
-    rows = _add_held_and_ran([{"stop_rate": 0.25, "avg_mfe_r": 2.0}])
+    `1 - stop_rate` times `avg_mfe_r`, both from the aggregator over its own
+    window and over ALL rows rather than the held ones, with no thirty-minute
+    question in it anywhere. Two different numbers under one heading is worse
+    than one blank, because the trader reads the column as an ordering.
+    """
+    from ui.panels import daytrade_tracker_panel as panel
 
-    assert rows[0]["held_rate"] == 0.75
-    assert rows[0]["held_run_score"] == 1.5
+    assert not hasattr(panel, "_add_held_and_ran"), "the second formula is back"
 
-
-def test_a_row_missing_an_input_is_blank_and_never_zero():
-    """A zero ranks a segment we could not measure at the bottom of an ordering."""
-    from ui.panels.daytrade_tracker_panel import _add_held_and_ran
-
-    rows = _add_held_and_ran(
-        [{"stop_rate": None, "avg_mfe_r": 2.0}, {"stop_rate": 0.1, "avg_mfe_r": ""}]
+    summaries = {
+        ("bounce_type", "long", "ema_15"): {"hold_rate": 0.75, "held_run_score": 1.5},
+    }
+    rows = panel.apply_held_and_ran(
+        [
+            {"dimension": "bounce_type", "direction": "long", "segment": "ema_15",
+             "stop_rate": 0.9, "avg_mfe_r": 0.1},
+        ],
+        summaries,
     )
 
-    for row in rows:
-        assert row["held_rate"] is None
-        assert row["held_run_score"] is None
+    assert rows[0]["held_rate"] == 0.75
+    assert rows[0]["held_run_score"] == 1.5, (
+        "the aggregate's own stop_rate/avg_mfe_r must not reach this column"
+    )
+
+
+def test_a_dimension_the_outcome_log_cannot_answer_is_blank_and_never_zero():
+    """Six of the nine tabs are cut on context the outcome log does not record.
+
+    A zero would rank a segment we could not measure at the bottom of a list the
+    trader reads as an ordering; a substitute formula would rank it wrongly and
+    invisibly. Blank is the answer.
+    """
+    from ui.panels.daytrade_tracker_panel import apply_held_and_ran
+
+    rows = apply_held_and_ran(
+        [{"dimension": "master_avwap_setup_family", "direction": "long", "segment": "AVWAPE"}],
+        {("bounce_type", "long", "ema_15"): {"hold_rate": 0.5, "held_run_score": 1.0}},
+    )
+
+    assert rows[0]["held_rate"] is None
+    assert rows[0]["held_run_score"] is None
 
 
 def test_an_unmeasured_row_sorts_last_rather_than_at_the_bottom_of_the_scale():
-    from ui.panels.daytrade_tracker_panel import _add_held_and_ran, _float
+    from ui.panels.daytrade_tracker_panel import _by_headline, apply_held_and_ran
 
-    rows = _add_held_and_ran(
+    summaries = {
+        ("bounce_type", "long", "weak"): {"hold_rate": 0.1, "held_run_score": 0.02},
+        ("bounce_type", "long", "strong"): {"hold_rate": 0.8, "held_run_score": 2.4},
+    }
+    rows = apply_held_and_ran(
         [
-            {"segment": "blank", "stop_rate": None, "avg_mfe_r": None},
-            {"segment": "weak", "stop_rate": 0.9, "avg_mfe_r": 0.2},
-            {"segment": "strong", "stop_rate": 0.2, "avg_mfe_r": 3.0},
-        ]
+            {"dimension": "bounce_type", "direction": "long", "segment": "blank"},
+            {"dimension": "bounce_type", "direction": "long", "segment": "weak"},
+            {"dimension": "bounce_type", "direction": "long", "segment": "strong"},
+        ],
+        summaries,
     )
-    ordered = sorted(
-        rows,
-        key=lambda r: (r.get("held_run_score") is None, -_float(r.get("held_run_score"), -999.0)),
-    )
-    assert [row["segment"] for row in ordered] == ["strong", "weak", "blank"]
+
+    assert [row["segment"] for row in _by_headline(rows)] == ["strong", "weak", "blank"]
 
 
-def test_the_hold_rate_is_clamped_to_a_rate():
-    """A stop rate over 1 is bad data, not a negative hold rate."""
-    from ui.panels.daytrade_tracker_panel import _add_held_and_ran
-
-    rows = _add_held_and_ran([{"stop_rate": 1.4, "avg_mfe_r": 2.0}])
-    assert rows[0]["held_rate"] == 0.0
-    assert rows[0]["held_run_score"] == 0.0
-
-
-def test_the_column_is_labelled_held_and_not_held_in_thirty_minutes():
-    """The tracker's stop rate is over ITS window, not the 30-minute question.
-
-    `held_run_score.build_segments` computes the precise version from the raw
-    outcome log; this column is the same SHAPE from the aggregate the panel
-    already has, and the label must not claim otherwise.
-    """
-    from ui.panels.daytrade_tracker_panel import PERFORMANCE_COLUMNS
-
-    labels = dict(PERFORMANCE_COLUMNS)
-    assert labels["held_rate"] == "Held"
-    assert "30" not in labels["held_rate"]
-
+def test_the_expensive_read_never_runs_on_the_qt_thread():
+    """~300,000 outcome rows and a 19 MB snapshot; the panel opens on the GUI."""
     source = (ROOT / "scripts" / "ui" / "panels" / "daytrade_tracker_panel.py").read_text(
         encoding="utf-8"
     )
-    assert "30-minute question" in source
-    assert "approximation of the same shape" in source
+    body = source.split("def reload_from_disk(", 1)[1].split("\n    def ", 1)[0]
+    assert "load_held_run_summaries()" not in body, "the read moved onto the paint path"
+    assert "_start_held_run_read()" in body
+
+    worker = source.split("def _held_run_worker(", 1)[1].split("\n    def ", 1)[0]
+    assert "load_held_run_summaries()" in worker
+
+
+def test_the_column_says_what_it_measures_now_that_it_measures_it():
+    """V3 called it "Held" because it was NOT the thirty-minute question."""
+    from ui.panels.daytrade_tracker_panel import PERFORMANCE_COLUMNS
+
+    labels = dict(PERFORMANCE_COLUMNS)
+    assert labels["held_rate"] == "Held 30m"
+    assert labels["held_run_score"] == "Held x Ran"

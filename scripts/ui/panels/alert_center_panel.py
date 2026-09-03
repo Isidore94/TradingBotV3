@@ -457,6 +457,9 @@ class AlertCenterPanel(QFrame):
     #: already fires - this exists so a surface that only shows the FADED
     #: count does not have to listen to every Focus mutation.
     focusFadedChanged = Signal()
+    #: R4 A10: `held_run_score`'s segment index, built once per session on a
+    #: worker. `object` because the payload is a plain dict Qt must not marshal.
+    _heldRunIndexLoaded = Signal(object)
 
     def __init__(
         self,
@@ -692,6 +695,14 @@ class AlertCenterPanel(QFrame):
             else (ReviewGuide() if persist_ignored else ReviewGuide(None, None))
         )
         self._review_guidance: dict[str, AlertGuidance] = {}
+        # R4 A10 - decision 0016 answer 4's day-trade headline on the M5 row.
+        # Built ONCE per session on a worker (the outcome log is ~90 MB) and
+        # then read as a dict, exactly like the take-rate cache above it: a row
+        # suffix must never put a file read in the alert path.
+        self._held_run_index: dict = {}
+        self._held_run_d1_symbols: dict = {}
+        self._held_run_thread = None
+        self._heldRunIndexLoaded.connect(self._on_held_run_index_loaded)
         if self.focus_service is not None:
             # Liking a pick (here or on the setups table) re-renders both feeds
             # so every alert for that name immediately shows the gold flag.
@@ -2072,6 +2083,7 @@ class AlertCenterPanel(QFrame):
         is_m5 = self._is_m5_review_alert(alert)
         if is_m5:
             self._attach_cached_take_prob(alert)
+            self._attach_held_run_suffix(alert)
             self.m5AlertPosted.emit(alert)
         if (
             self._current_review_alert is not None
@@ -2180,6 +2192,89 @@ class AlertCenterPanel(QFrame):
                 alert.review_take_prob = float(guidance.take_prob)
         except Exception:  # noqa: BLE001 - a row suffix never costs an alert
             logging.debug("Take-rate suffix skipped for %s.", alert.symbol, exc_info=True)
+
+    def _attach_held_run_suffix(self, alert: BounceAlert) -> None:
+        """Hand the M5 bar "held NN% / ran N.NR", IF the cell is already known.
+
+        R4 A10, decision 0016 answer 4. `held_run_score.segment_index` said it
+        existed "for a per-alert lookup" and nothing ever built the key, so the
+        bar's rows carried no such suffix at all.
+
+        A DICT READ, and never anything more. The index is built once per
+        session on a worker started by the first M5 alert; until it lands there
+        is no suffix, which is the honest rendering of "not measured". The same
+        rule the take-rate suffix follows, and for the same reason: a file read
+        in the alert path is the drip three snappiness packets removed.
+
+        Blank below the evidence floor - `alert_suffix` enforces that, not this.
+        A row reading "held 100% / ran 3.2R (n=2)" is read as a strong segment
+        at a glance, and a glance is what the row is for.
+        """
+        try:
+            self._ensure_held_run_index()
+            if not self._held_run_index:
+                return
+            import held_run_score
+
+            feedback = alert.payload.get("feedback") if isinstance(alert.payload, dict) else None
+            feedback = feedback if isinstance(feedback, dict) else {}
+            bounce_type = str(
+                (feedback.get("bounce_types") or "").split(";")[0]
+            ).strip() or str(alert.trigger or "").strip()
+            environment = str(feedback.get("market_environment") or "").strip()
+            trade_date = str(feedback.get("trade_date") or "").strip() or date.today().isoformat()
+            entry_time = f"{trade_date}T{str(alert.time_text or '')[:8]}"
+            cell = held_run_score.alert_cell(
+                self._held_run_index,
+                bounce_type=bounce_type,
+                entry_time=entry_time,
+                market_environment=environment,
+                d1_setup_present=alert.symbol
+                in (self._held_run_d1_symbols.get(trade_date) or set()),
+            )
+            alert.held_run_suffix = held_run_score.alert_suffix(cell)
+        except Exception:  # noqa: BLE001 - a row suffix never costs an alert
+            logging.debug("Held/ran suffix skipped for %s.", alert.symbol, exc_info=True)
+
+    def _ensure_held_run_index(self) -> None:
+        """Start the one background build, once. Never blocks the alert path."""
+        if self._held_run_index or self._held_run_thread is not None:
+            return
+        import threading
+
+        self._held_run_thread = threading.Thread(
+            target=self._held_run_index_worker,
+            name="alert-center-held-run",
+            daemon=True,
+        )
+        self._held_run_thread.start()
+
+    def _held_run_index_worker(self) -> None:
+        payload = {"index": {}, "d1": {}}
+        try:
+            import held_run_score
+
+            from project_paths import MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
+
+            episodes = held_run_score.load_episodes()
+            payload["index"] = held_run_score.segment_index(
+                held_run_score.build_segments(episodes)
+            )
+            payload["d1"] = held_run_score.d1_setups_by_session(
+                held_run_score.d1_setup_rows(MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE)
+            )
+        except Exception:  # noqa: BLE001 - an absent suffix is a real answer
+            logging.debug("Held/ran index unavailable.", exc_info=True)
+        try:
+            self._heldRunIndexLoaded.emit(payload)
+        except RuntimeError:
+            pass
+
+    def _on_held_run_index_loaded(self, payload) -> None:
+        if not isinstance(payload, dict):
+            return
+        self._held_run_index = payload.get("index") or {}
+        self._held_run_d1_symbols = payload.get("d1") or {}
 
     def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
         """Cached per-symbol guidance; a failed lookup is neutral, never fatal."""

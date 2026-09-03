@@ -106,8 +106,11 @@ def row_text(alert: Any, *, repeats: int = 1) -> str:
     """One line: time, side, ticker, what fired, and what the trader usually does.
 
     The take-rate suffix is P(take | shown) for this alert's segments, measured
-    from the trader's own review decisions. It is CONTEXT on a row, never a
-    filter: every alert is on the bar whatever it says.
+    from the trader's own review decisions. The held/ran suffix is decision 0016
+    answer 4's day-trade headline for this alert's `held_run_score` cell - did
+    the level hold, and then how far did it run. Both are CONTEXT on a row, never
+    a filter: every alert is on the bar whatever they say, and both are BLANK
+    rather than zero when the desk has not measured them.
 
     ``repeats`` is the ×N fold badge - see `M5AlertBar.post`. It counts what
     the bar has SHOWN, and the count is display only.
@@ -121,6 +124,9 @@ def row_text(alert: Any, *, repeats: int = 1) -> str:
     probability = take_probability(alert)
     if probability is not None:
         line += f"  take {probability * 100:.0f}%"
+    suffix = str(getattr(alert, "held_run_suffix", "") or "").strip()
+    if suffix:
+        line += f"  {suffix}"
     return line
 
 

@@ -327,6 +327,33 @@ def segment_index(summaries: Iterable[Mapping[str, Any]]) -> dict[tuple, Mapping
     }
 
 
+def alert_cell(
+    index: Mapping[tuple, Mapping[str, Any]] | None,
+    *,
+    bounce_type: Any,
+    entry_time: Any,
+    market_environment: Any = UNKNOWN,
+    d1_setup_present: Any = False,
+) -> Mapping[str, Any] | None:
+    """One alert's cell out of `segment_index`, or None.
+
+    `segment_index` said it existed "for a per-alert lookup" and no caller ever
+    built the key, so the alert row had nothing to read (R4 A10). The key is
+    built HERE rather than at each call site: four positional strings that must
+    agree with `Episode.segment()` is exactly the sort of thing that drifts.
+    """
+    if not index:
+        return None
+    return index.get(
+        (
+            str(bounce_type or UNKNOWN).strip() or UNKNOWN,
+            time_bucket(entry_time),
+            str(market_environment or UNKNOWN).strip() or UNKNOWN,
+            bool(d1_setup_present),
+        )
+    )
+
+
 def alert_suffix(cell: Mapping[str, Any] | None) -> str:
     """"held 71% / ran 1.9R" for the M5 alert row, or "" below the floor.
 
@@ -394,3 +421,134 @@ def d1_setups_by_session(rows: Iterable[Mapping[str, Any]]) -> dict[str, set]:
         if session and symbol:
             by_session[session].add(symbol)
     return dict(by_session)
+
+#: The tracker dimensions this module can measure, and the only ones. They are
+#: the three the OUTCOME LOG itself carries; every other tab on the Daytrade
+#: Tracker (combos, RRS, the four Swing ones) is derived from alert context that
+#: `intraday_bounce_outcomes.csv` does not record, so this module answers BLANK
+#: for them rather than a number computed some other way. A second formula under
+#: the same column heading is the failure R4 A10 removed.
+MEASURABLE_DIMENSIONS = ("bounce_type", "time_bucket", "market_environment")
+
+
+def dimension_summaries(
+    episodes: Iterable[Episode],
+    *,
+    sessions: int = ROLLING_SESSIONS,
+    min_n: int | None = None,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """`{(dimension, direction, value): summary}` - the tracker's own join key.
+
+    The Daytrade Tracker groups by ONE dimension at a time and by side; this
+    module's native cell is the four-way cross. So the marginal is built here,
+    with the SAME arithmetic - `Segment.summary` - rather than by adding up the
+    cross-cells, because a mean of trimmed means is not a trimmed mean.
+
+    A dimension outside :data:`MEASURABLE_DIMENSIONS` simply has no key, and the
+    caller shows a blank. Blank is the honest answer for a question the outcome
+    log cannot be asked.
+    """
+    episodes = list(episodes)
+    wanted = recent_sessions(episodes, sessions=sessions)
+    cells: dict[tuple[str, str, str], Segment] = {}
+    for episode in episodes:
+        if wanted and episode.trade_date not in wanted:
+            continue
+        direction = str(episode.direction or "").strip().lower()
+        values = {
+            "bounce_type": episode.bounce_type or UNKNOWN,
+            "time_bucket": time_bucket(episode.entry_time),
+            "market_environment": episode.market_environment or UNKNOWN,
+        }
+        for dimension in MEASURABLE_DIMENSIONS:
+            value = str(values.get(dimension) or UNKNOWN)
+            key = (dimension, direction, value)
+            cell = cells.get(key)
+            if cell is None:
+                # The Segment key is only used for its `summary()` labels, which
+                # the caller does not read here - the join key above is what
+                # identifies the row.
+                cell = cells[key] = Segment(key=(value, value, value, False))
+            cell.episodes += 1
+            if episode.held:
+                cell.held += 1
+                if episode.mfe_r is not None:
+                    cell.mfe_of_held.append(episode.mfe_r)
+    return {key: cell.summary(min_n=min_n) for key, cell in cells.items()}
+
+
+def d1_setup_rows(path: Path) -> list[dict[str, str]]:
+    """The scanner's own snapshot, reduced to what the D1 dimension needs.
+
+    R4 A9. `d1_setup_present` had no caller anywhere: every one of the live
+    segments read False, so decision 0016 answer 4 - *"an M5 alert on a name that
+    also carries a D1 setup outranks the same alert on a name that does not"* -
+    was a dimension in the schema and a constant in the data.
+
+    Read from `master_avwap_tracker_scoring_snapshot.json`, which is the
+    scanner's own output and carries `scan_date`, `symbol` and `priority_bucket`
+    per setup. NOT from `master_avwap_setup_tracker.json`, which holds the same
+    three fields and is 1.1 GB - `json.loads` on that file is one of the three
+    measured causes of the 10 GB desk (2026-08-27) and it must never be read to
+    answer a question a 19 MB sibling already answers.
+
+    **Never fetched.** A study that reached for a quote is a study that cannot be
+    re-run. A missing or unreadable snapshot yields no rows, and every episode
+    then reads `d1_setup_present=False` - which is what happened before this
+    existed, so an absent file degrades to the old behaviour rather than to an
+    error.
+    """
+    target = Path(path)
+    if not target.exists():
+        return []
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    setups = payload.get("setups") if isinstance(payload, Mapping) else None
+    if isinstance(setups, Mapping):
+        entries = list(setups.values())
+    elif isinstance(setups, list):
+        entries = setups
+    else:
+        return []
+    rows: list[dict[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        rows.append(
+            {
+                "scan_date": str(entry.get("scan_date") or ""),
+                "symbol": str(entry.get("symbol") or ""),
+                "priority_bucket": str(entry.get("priority_bucket") or ""),
+            }
+        )
+    return rows
+
+
+def load_episodes(
+    *,
+    outcomes_path: Path | None = None,
+    setups_path: Path | None = None,
+    sessions: int = ROLLING_SESSIONS,
+) -> list[Episode]:
+    """The whole build path, in one call, so no caller re-assembles it.
+
+    R4 A9/A10: the D1 dimension was never fed and the tracker computed its own
+    version of the score. One entry point means one answer.
+
+    Both paths default to the live stores through `project_paths`, addressed by
+    their NAMED CONSTANTS - resolving a home-folder store by name under the wrong
+    root shipped a blank page for six days.
+    """
+    from project_paths import (
+        INTRADAY_BOUNCE_OUTCOMES_FILE,
+        MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE,
+    )
+
+    outcomes = Path(outcomes_path or INTRADAY_BOUNCE_OUTCOMES_FILE)
+    setups = Path(setups_path or MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE)
+    rows = read_outcome_rows(outcomes, sessions=sessions)
+    return build_episodes(
+        rows, d1_setups_by_session=d1_setups_by_session(d1_setup_rows(setups))
+    )
