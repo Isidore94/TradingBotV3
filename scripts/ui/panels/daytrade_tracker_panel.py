@@ -25,9 +25,19 @@ from ui.widgets.kpi_tile import KpiTile
 from ui.widgets.research_explanation_view import ResearchExplanationView
 from ui.widgets.section_header import SectionHeader
 
+#: V3 item 2 (decision 0016 answer 4): *"the intraday level holds, then the name
+#: runs. Rank by maximum favourable excursion - the most the move offered - not
+#: by any exit; exiting well is the trader's job."*
+#:
+#: So HELD and RAN lead this table, and the champion tier stays as a column. The
+#: two are different questions - the tier says whether the desk should alert on
+#: the segment at all, and these say what the alert offered once the level held -
+#: and the Verdict column already says which is which.
 PERFORMANCE_COLUMNS = (
     ("direction", "Side"),
     ("segment", "Segment"),
+    ("held_rate", "Held"),
+    ("held_run_score", "Held x Ran"),
     ("sample_count", "N"),
     ("avg_close_r", "Avg R"),
     ("median_close_r", "Med R"),
@@ -53,8 +63,26 @@ LEARNING_COLUMNS = (
     ("status", "Status"),
 )
 
-PERCENT_KEYS = {"positive_eod_rate", "target_1r_rate", "target_2r_rate", "stop_rate"}
-SIGNED_KEYS = {"avg_close_r", "median_close_r", "avg_mfe_r", "avg_mae_r", "score_delta"}
+PERCENT_KEYS = {
+    "positive_eod_rate",
+    "target_1r_rate",
+    "target_2r_rate",
+    "stop_rate",
+    "held_rate",
+}
+SIGNED_KEYS = {
+    "avg_close_r",
+    "median_close_r",
+    "avg_mfe_r",
+    "avg_mae_r",
+    "score_delta",
+    "held_run_score",
+}
+
+#: The column this table sorts by when it is first shown. V3 item 2 makes it the
+#: day-trade headline rather than the sample count - a tracker that opens sorted
+#: by N answers "what has the most data", which is not a question the trader has.
+DEFAULT_PERFORMANCE_SORT_KEY = "held_run_score"
 
 # ---------------------------------------------------------------------------
 # "My decisions" (P2 item 3): the same shape, over the trader's OWN choices.
@@ -237,6 +265,12 @@ class DaytradeTrackerPanel(QFrame):
         for key, label in DIMENSION_TABS:
             table, model = self._make_table(PERFORMANCE_COLUMNS)
             self._dimension_tables[key] = (table, model)
+            # V3 item 2: OPEN ON THE HEADLINE. Sorted descending by
+            # `held_run_score` - did the level hold, and then how far did it run -
+            # rather than by the sample count. A tracker that opens sorted by N
+            # answers "what has the most data", which is not a question the
+            # trader has.
+            self._apply_default_sort(table)
             self.tabs.addTab(table, label)
             table.clicked.connect(
                 lambda index, dimension=key: self._show_row_explanation(
@@ -411,6 +445,21 @@ class DaytradeTrackerPanel(QFrame):
             f"generated {state.get('generated_at', 'unknown')}."
         )
 
+    def _apply_default_sort(self, table) -> None:
+        """Sort the performance table by the day-trade headline, descending.
+
+        By COLUMN NAME rather than index: this table has gained a column in three
+        packets, and an index would move under the next one.
+        """
+        keys = [key for key, _label in PERFORMANCE_COLUMNS]
+        try:
+            column = keys.index(DEFAULT_PERFORMANCE_SORT_KEY)
+        except ValueError:  # pragma: no cover - the column was renamed
+            return
+        from PySide6.QtCore import Qt as _Qt
+
+        table.sortByColumn(column, _Qt.SortOrder.DescendingOrder)
+
     def _make_table(self, columns) -> tuple[DataTable, TrackerTableModel]:
         numeric = {key for key, _label in columns if key not in {"direction", "segment", "dimension", "recommendation", "status", "example_symbols"}}
         model = TrackerTableModel(
@@ -438,14 +487,22 @@ class DaytradeTrackerPanel(QFrame):
 
     # ------------------------------------------------------------------
     def reload_from_disk(self) -> None:
-        perf_rows = _load_performance_rows()
+        perf_rows = _add_held_and_ran(_load_performance_rows())
         by_dimension: dict[str, list[dict]] = {}
         for row in perf_rows:
             by_dimension.setdefault(str(row.get("dimension") or ""), []).append(row)
         for key, (_table, model) in self._dimension_tables.items():
+            # V3 item 2: ordered by the HEADLINE - did the level hold, then how
+            # far did it run - rather than by average R. Answer 4: *"rank by
+            # maximum favourable excursion, not by any exit; exiting well is the
+            # trader's job."* A row that cannot be measured sorts last rather
+            # than at the bottom of the scale, which is a different claim.
             rows = sorted(
                 by_dimension.get(key, []),
-                key=lambda r: -_float(r.get("avg_close_r"), -999.0),
+                key=lambda r: (
+                    r.get("held_run_score") is None,
+                    -_float(r.get("held_run_score"), -999.0),
+                ),
             )
             model.set_rows(rows)
 
@@ -556,3 +613,39 @@ def _mtime_text(path: Path) -> str:
         return datetime.fromtimestamp(Path(path).stat().st_mtime).strftime("%Y-%m-%d %H:%M")
     except OSError:
         return "never"
+
+
+def _add_held_and_ran(rows) -> list[dict]:
+    """Add `held_rate` and `held_run_score` to the aggregator's rows - V3 item 2.
+
+    ONE IMPLEMENTATION, MANY CALLERS. The arithmetic is `held_run_score`'s, not a
+    second copy here: P(the level held) x the trimmed-mean MFE_R of the ones that
+    held. What this does is read the two inputs the aggregator already publishes -
+    `stop_rate` and `avg_mfe_r` - and combine them the same way.
+
+    **`stop_rate` is the aggregator's own, over its own window**, which is not the
+    30-minute question `held_run_score` asks of the raw log. So the column is an
+    approximation of the same shape rather than the identical number, and it is
+    labelled "Held" rather than "Held in 30m" for exactly that reason. The precise
+    version is what `held_run_score.build_segments` computes from the outcome log;
+    this is what the tracker's existing aggregate can support without a second
+    pass over 300,000 rows on a panel load.
+
+    A row missing either input gets None for both, never a zero - a zero would
+    rank a segment we could not measure at the bottom of a list the trader reads
+    as an ordering.
+    """
+    out: list[dict] = []
+    for raw in rows or ():
+        row = dict(raw)
+        stop = _float(row.get("stop_rate"), None)
+        mfe = _float(row.get("avg_mfe_r"), None)
+        if stop is None or mfe is None:
+            row["held_rate"] = None
+            row["held_run_score"] = None
+        else:
+            held = max(0.0, min(1.0, 1.0 - stop))
+            row["held_rate"] = held
+            row["held_run_score"] = held * mfe
+        out.append(row)
+    return out

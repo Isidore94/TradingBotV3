@@ -725,11 +725,21 @@ class CaptureRail(QFrame):
         return fields
 
     def _record(self, event_type: str, **fields: Any) -> dict | None:
+        """Every non-like annotation this rail writes: veto, pass, note, stop.
+
+        V3 item 4 closed a seam here. P10 gave the LIKE path a `surface` and this
+        one kept writing without it, so a veto and a like from the same rail
+        landed with different shapes and any rollup by screen silently omitted
+        every veto. One writer means one row shape.
+        """
         if not self._symbol:
             self._set_status("No symbol in focus.", ok=False)
             return None
+        common = {**self._common_fields(), **fields}
+        common.setdefault("surface", self._surface)
+        common.setdefault("scan_context", dict(self._scan_context or {}))
         try:
-            row = record_annotation(event_type, **{**self._common_fields(), **fields})
+            row = record_annotation(event_type, **common)
         except AnnotationError as exc:
             self._set_status(str(exc), ok=False)
             return None
