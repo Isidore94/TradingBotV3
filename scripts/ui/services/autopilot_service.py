@@ -1826,6 +1826,12 @@ class AutopilotService(QObject):
                 "longs": longs,
                 "shorts": shorts,
                 "swing_picks": picks,
+                # R4 A11: the tracker's own record per setup family, so the
+                # digest can rank ACROSS the buckets by win rate. READ HERE
+                # rather than in `render_away_report`, which is a pure renderer;
+                # an unreadable file yields {} and the ranking falls back to
+                # expected R, which is a weaker order and never a wrong one.
+                "swing_family_records": core.swing_family_records(),
                 "bucket_roster": core.build_bucket_roster(roster_rows),
                 "swing_data_current": current_session_data,
                 "swing_data_line": (
