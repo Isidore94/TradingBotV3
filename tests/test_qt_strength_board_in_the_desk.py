@@ -251,37 +251,48 @@ def test_the_board_fetch_goes_through_the_batched_yfinance_helper():
 # ---------------------------------------------------------------------------
 def test_the_board_sits_under_the_strength_window_not_beside_the_charts(qt_desk):
     from ui.widgets.collapsible_section import CollapsibleSection
-    from ui.widgets.focus_strength_board import FocusStrengthBoard
 
     center = qt_desk.trading_panel.alert_center
-    column = center.strength_column
-    order = [column.layout().itemAt(i).widget() for i in range(column.layout().count())]
-    assert isinstance(order[0], FocusStrengthBoard)
-    # V1 (decision 0016 answer 7): ONE WINDOW, TWO SECTIONS, RS/RW FIRST. The
-    # RS/RW board moved out of the tab stack and into this column above the M5
-    # Strength section - the trader was opening one of them by accident while
-    # looking for the other.
-    assert isinstance(order[1], CollapsibleSection)
-    assert order[1] is center.rrs_board_section
-    assert isinstance(order[2], CollapsibleSection)
-    assert order[2] is center.strength_board_section
-    # Both bodies are scroll areas so neither board's own minimum width reaches
-    # the desk splitter and widens the alert column at the charts' expense.
-    # Hosting the RS/RW board bare took this column's floor to 452 px, past the
-    # alert column's whole 360 px budget.
-    assert order[2].content().widget() is center.strength_board
-    assert order[1].content().widget() is center.rrs_board_tab
+    # S1.3: the column is now ONE scrolled surface of four sections, in the
+    # order the trader reads them. V1's rule survives inside it - RS/RW above
+    # M5 Strength, because the trader was opening one by accident while looking
+    # for the other - and the Focus board leads, having been the one strength
+    # widget that was in no section at all.
+    inner = center.strength_scroll.widget()
+    order = [
+        inner.layout().itemAt(i).widget()
+        for i in range(inner.layout().count())
+        if inner.layout().itemAt(i).widget() is not None
+    ]
+    assert all(isinstance(section, CollapsibleSection) for section in order)
+    assert order == [
+        center.focus_strength_section,
+        center.rrs_board_section,
+        center.strength_board_section,
+        center.rs_window_section,
+    ]
+    # Every body is a scroll area so no board's own minimum width reaches the
+    # desk splitter and widens the alert column at the charts' expense. Hosting
+    # the RS/RW board bare took this column's floor to 452 px, past the alert
+    # column's whole 360 px budget; the RS Window's own minimum is 1,612.
+    assert center.strength_board_section.content().widget() is center.strength_board
+    assert center.rrs_board_section.content().widget() is center.rrs_board_tab
 
 
-def test_the_section_starts_collapsed_so_it_steals_no_space(qt_desk):
-    """Default-off costs the charts nothing; the trader opens it when wanted."""
+def test_every_section_starts_open_and_the_column_still_costs_nothing(qt_desk):
+    """S1.3, trader 2026-09-03: *"revamp the strength tab to just include all
+    of that great information into one tab."*
+
+    The M5 Strength section started CLOSED to protect the alert column's 360 px
+    floor. The column-wide scroll area carries that protection now, so it opens
+    with the rest and the floor is measured here rather than assumed.
+    """
     center = qt_desk.trading_panel.alert_center
     section = center.strength_board_section
-    assert section.is_expanded() is False
-    assert section.content().isVisible() is False
-    # And closed, it costs the alert column nothing: the header takes the width
-    # it is given rather than demanding its title, and the board's own 270 px
-    # minimum is held behind the scroll area.
+    assert section.is_expanded() is True
+    assert center.focus_strength_section.is_expanded() is True
+    assert center.rrs_board_section.is_expanded() is True
+    assert center.rs_window_section.is_expanded() is True
     tabs_floor = center.tabs.minimumWidth()
     assert tabs_floor + center.strength_column.minimumSizeHint().width() <= 360
 

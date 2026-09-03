@@ -307,7 +307,9 @@ def test_the_alert_center_still_owns_the_rs_rw_board():
     # strength column, above the M5 Strength section - re-hosted, never retired.
     # The assertion follows the widget rather than the address it used to have.
     assert 'CollapsibleSection("RS/RW Board")' in source
-    assert "self.rrs_board_section.set_content(rrs_scroll)" in source
+    # S1.3 replaced the two per-board scroll areas with one bounding helper for
+    # all four sections of the Strength surface. Re-hosted again, never retired.
+    assert "self.rrs_board_section.set_content(_strength_section_body(board_tab))" in source
     assert "service.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)" in source
 
 

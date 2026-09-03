@@ -218,6 +218,15 @@ def test_widget_renders_focus_names_and_survives_a_broken_store():
     assert board.current_board().focus == []
 
 
+def _has_ancestor(widget, ancestor) -> bool:
+    parent = widget.parentWidget()
+    while parent is not None:
+        if parent is ancestor:
+            return True
+        parent = parent.parentWidget()
+    return False
+
+
 def test_alert_center_puts_the_board_beside_the_tab_stack(tmp_path):
     if _qt_app() is None:
         return
@@ -230,10 +239,15 @@ def test_alert_center_puts_the_board_beside_the_tab_stack(tmp_path):
     # M5 Strength Board in a closed section under it. The board itself is still
     # beside the tab stack rather than inside a tab.
     assert panel.tabs_row.widget(1) is panel.strength_column
-    assert panel.focus_strength.parent() is panel.strength_column
+    # S1.3 made that column ONE scrolled Strength surface, so the board is now
+    # a descendant rather than a direct child - it is the first section of it,
+    # which is what "all of that great information in one tab" meant for the
+    # one strength widget that had never been in a section at all.
+    assert panel.focus_strength_section.content().widget() is panel.focus_strength
+    assert _has_ancestor(panel.focus_strength, panel.strength_column)
     # The board is beside the tabs, not inside one, so it stays visible when
     # the trader switches to D1 Focus or Armed.
-    assert panel.focus_strength.parent() is not panel.tabs
+    assert not _has_ancestor(panel.focus_strength, panel.tabs)
     assert panel.splitter.widget(1) is panel.tabs_row
     # Adding the board must not push the alert column past the 360px floor
     # the desk splitter gives it. The strength column is measured now, not just

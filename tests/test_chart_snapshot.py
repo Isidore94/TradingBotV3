@@ -825,7 +825,15 @@ def test_snapshot_dialog_reuses_owner_child_without_stealing_editor_focus(monkey
     owner.close()
 
 
-def test_master_setups_symbol_click_opens_snapshot(monkeypatch):
+def test_master_setups_symbol_click_charts_instead_of_popping_up(monkeypatch):
+    """S1.4 took the SYMBOL cell off the popup path and left the rest on it.
+
+    Trader, 2026-09-03: *"when I hit a ticker on the master avwap setups tab, I
+    dont want the chart to be a pop up, I want it to come up on the visual chart
+    review instead."* The ticker now emits `symbolActivated` and the desk charts
+    it; every other cell of the row still opens the snapshot on a double-click,
+    and so does the row menu, so the dialog is not lost.
+    """
     if _qt_app() is None:
         return
     from ui.models.setup import SetupRow
@@ -835,6 +843,8 @@ def test_master_setups_symbol_click_opens_snapshot(monkeypatch):
     panel = MasterAvwapPanel(None)
     panel.set_rows([SetupRow(symbol="NVDA", side="LONG", score=90.0)])
     calls = []
+    charted = []
+    panel.symbolActivated.connect(lambda symbol, side: charted.append((symbol, side)))
     monkeypatch.setattr(
         snapshot_dialog,
         "show_symbol_snapshot",
@@ -842,17 +852,20 @@ def test_master_setups_symbol_click_opens_snapshot(monkeypatch):
     )
     symbol_index = panel.proxy.index(0, 2)
     panel.table.clicked.emit(symbol_index)
-    assert calls == [("NVDA", "LONG")]
-    # A double-click emits after the first single click; it must not reopen.
+    assert charted == [("NVDA", "LONG")]
+    assert calls == [], "the ticker click must not pop a window"
+    # A double-click emits after the first single click; it must not chart twice.
     panel._open_symbol_snapshot_from_double_click(symbol_index)
-    assert calls == [("NVDA", "LONG")]
+    assert charted == [("NVDA", "LONG")]
+    assert calls == []
     # Existing double-click behavior remains on the rest of the setup row.
     panel._open_symbol_snapshot_from_double_click(panel.proxy.index(0, 4))
-    assert calls == [("NVDA", "LONG"), ("NVDA", "LONG")]
+    assert calls == [("NVDA", "LONG")]
     # The ★/✕ cells are their own click targets: no popup from there.
     panel._open_symbol_snapshot(panel.proxy.index(0, 0))
     panel._open_symbol_snapshot(panel.proxy.index(0, 1))
-    assert calls == [("NVDA", "LONG"), ("NVDA", "LONG")]
+    assert calls == [("NVDA", "LONG")]
+    assert charted == [("NVDA", "LONG")]
 
 
 def test_master_setups_popup_carries_chart_watch_host(monkeypatch):
@@ -926,45 +939,27 @@ def test_snapshot_popup_dislike_advances_to_next_chart(monkeypatch, tmp_path):
     assert dialog.dislike_button.isVisibleTo(dialog)
     assert not dialog.d1_focus_button.isVisibleTo(dialog)
 
-    class _Prompt:
-        @staticmethod
-        def getItem(*_args, **_kwargs):
-            return ("5. Too extended from base [too_extended_from_base]", True)
-
-        @staticmethod
-        def getMultiLineText(*_args, **_kwargs):
-            return ("too extended from the level", True)
-
-    monkeypatch.setattr(panel_module, "QInputDialog", _Prompt)
+    # S1.1: THE POPUP'S ✕ ASKS NOTHING EITHER. It shares `_dislike_row` with
+    # the table's, and the trader took the picklist and the detail box off that
+    # path on 2026-09-03 - *"these are quick buttons to get a note in
+    # essentially and do NOT require a pop up note."* So the reason is recorded
+    # PRESENT AND EMPTY and uncoded, and the click still advances the popup.
     dialog._review_dislike()
-    # The dislike logged with the row's swing context and the popup advanced.
     rows = load_review_events(events_path)
     assert [row["action"] for row in rows] == ["dislike"]
     assert rows[0]["symbol"] == "NVDA"
     assert rows[0]["bucket"] == "favorite_setup"
-    assert rows[0]["detail"]["reason"] == "too extended from the level"
-    assert rows[0]["detail"]["reason_codes"] == ["too_extended_from_base"]
-    # The active vocabulary, not a literal: v2 shipped 2026-08-20 and this
-    # assertion is about the stamp travelling with the row, not its value.
-    from ui.annotations.vocabulary import load_veto_vocabulary
-
-    assert rows[0]["detail"]["vocab_version"] == load_veto_vocabulary().vocab_version
+    assert rows[0]["detail"]["reason"] == ""
+    assert "reason_codes" not in rows[0]["detail"], (
+        "a code the trader did not choose is worse than no code: cohort "
+        "identity is (vocab_version, reason_code) and rows are never rewritten"
+    )
+    assert "vocab_version" not in rows[0]["detail"]
     assert dialog._symbol == "TSLA"
 
-    # A cancelled reason prompt = no dislike, no advance.
-    class _Cancel:
-        @staticmethod
-        def getItem(*_args, **_kwargs):
-            return ("", False)
-
-        @staticmethod
-        def getMultiLineText(*_args, **_kwargs):
-            return ("", False)
-
-    monkeypatch.setattr(panel_module, "QInputDialog", _Cancel)
+    # And a second one advances again rather than stalling on a cancelled box.
     dialog._review_dislike()
-    assert dialog._symbol == "TSLA"
-    assert len(load_review_events(events_path)) == 1
+    assert len(load_review_events(events_path)) == 2
 
 
 def test_snapshot_popup_d1_focus_add_advances_to_next_chart(monkeypatch, tmp_path):
