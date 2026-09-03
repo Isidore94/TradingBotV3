@@ -340,9 +340,13 @@ class WeekReviewPage(_StepPage):
 
     def _build_summary_text(self) -> str:
         """Every store this page reads, and no widget. Runs on the worker."""
+        from evidence_stats import WEEK_SESSIONS
         from review_learning import build_review_learning_state
 
-        state = build_review_learning_state(window_days=7)
+        # R4 B6: SESSIONS, through the exchange calendar. This asked for the last
+        # 7 CALENDAR days under a heading that says "Week of <Mon> to <Fri>", so
+        # a holiday week measured four sessions and still called itself a week.
+        state = build_review_learning_state(window_sessions=WEEK_SESSIONS)
         lines = [f"Week of {self.service.week_bounds[0]} to {self.service.week_bounds[1]}", ""]
         for key in ("takes", "skips", "rejects", "watch_conversion"):
             value = state.get(key) if isinstance(state, dict) else None
@@ -1778,9 +1782,13 @@ class WeekendPrepPanel(QFrame):
             except Exception:  # noqa: BLE001
                 return default
 
+        from evidence_stats import WEEK_SESSIONS
         from review_learning import build_review_learning_state
 
-        state = _safe(lambda: build_review_learning_state(window_days=7), {})
+        # R4 B6: the same week, in the same unit as the summary above it.
+        state = _safe(
+            lambda: build_review_learning_state(window_sessions=WEEK_SESSIONS), {}
+        )
         likes = _safe(_read_like_cohort, [])
         vetoes = _safe(_read_veto_cohort, [])
         trades = _safe(lambda: _read_week_trades(self.service.week_bounds), [])

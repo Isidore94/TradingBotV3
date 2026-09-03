@@ -56,6 +56,13 @@ class Headline:
     name: str
     wins: int
     losses: int
+    #: Graded rows that came back EXACTLY FLAT - R4 B6. A scratch is not a loss.
+    #: `headline_from_outcomes` counted `close_r == 0.0` as a loss (`value > 0`
+    #: else loss), which understates every rate it touches, and the more
+    #: disciplined the exit the more of them there are. It is a MEASURED outcome,
+    #: so it stays in `avg_r`; it simply has no answer to the win/loss question
+    #: and is kept out of `n`, which is that question's denominator.
+    flats: int = 0
     avg_r: float | None = None
     sessions: int = LATELY_SESSIONS
     #: What `avg_r` IS. The tracker grades in percent move and the recipe grids
@@ -86,6 +93,7 @@ class Headline:
             "win_rate": self.win_rate,
             "win_rate_lb": self.win_rate_lb,
             "n": self.n,
+            "flats": self.flats,
             "avg_r": self.avg_r,
             "avg_unit": self.avg_unit,
             "meets_floor": self.meets_floor,
@@ -174,7 +182,7 @@ def headline_from_outcomes(
     loss, and folding it into the denominator would drift every rate downward by
     however much the data is missing.
     """
-    wins = losses = 0
+    wins = losses = flats = 0
     values: list[float] = []
     for row in outcomes or ():
         try:
@@ -186,10 +194,23 @@ def headline_from_outcomes(
         values.append(value)
         if value > 0:
             wins += 1
-        else:
+        elif value < 0:
             losses += 1
+        else:
+            # R4 B6. A FLAT IS NEITHER. This branch used to be the loss branch,
+            # so every scratched trade was scored as a loser - and unmeasured and
+            # flat are different facts, which is why an unreadable row is
+            # `continue`d above and a 0.0 is counted here.
+            flats += 1
     average = sum(values) / len(values) if values else None
-    return Headline(name=str(name or ""), wins=wins, losses=losses, avg_r=average, sessions=sessions)
+    return Headline(
+        name=str(name or ""),
+        wins=wins,
+        losses=losses,
+        flats=flats,
+        avg_r=average,
+        sessions=sessions,
+    )
 
 
 def headline_from_tracker_rows(

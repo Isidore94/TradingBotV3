@@ -61,7 +61,7 @@ def _state(tmp_path, *, takes: int, skips: int):
         events_path=events,
         outcomes_path=tmp_path / "missing_outcomes.csv",
         annotations_path=tmp_path / "missing_annotations.jsonl",
-        window_days=90,
+        window_sessions=20,
         now=datetime(2026, 8, 29, 18, 0),
     )
 

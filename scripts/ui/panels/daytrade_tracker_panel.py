@@ -457,7 +457,7 @@ class DaytradeTrackerPanel(QFrame):
             return
         self.decisions_status.setText(
             f"{state.get('shown', 0)} chart(s) shown, {state.get('takes', 0)} taken "
-            f"over the last {state.get('window_days', '?')} days; scoreboard "
+            f"over the last {state.get('window_sessions', '?')} sessions; scoreboard "
             f"generated {state.get('generated_at', 'unknown')}."
         )
 

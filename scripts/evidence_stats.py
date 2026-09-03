@@ -75,6 +75,15 @@ MIN_REPORTABLE_N = 30
 #: window silently shortens the sample exactly when the market was closed.
 LATELY_SESSIONS = 20
 
+#: ONE TRADING WEEK, for the surfaces whose question IS the week rather than
+#: "lately" - Weekend Prep's summary prints "Week of <Mon> to <Fri>" above it.
+#: Same reasoning as :data:`LATELY_SESSIONS` and the same calendar walk: seven
+#: calendar days is five sessions in a normal week and four across a holiday, so
+#: a calendar week quietly drops a session exactly when there was a holiday. Kept
+#: here rather than in the panel so there is one place that answers "how long is
+#: a window on this desk, and in what unit".
+WEEK_SESSIONS = 5
+
 
 def lately_start(end=None, *, sessions: int = LATELY_SESSIONS):
     """The first session of the "lately" window ending at `end` (inclusive).

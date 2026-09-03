@@ -184,7 +184,11 @@ reconstruct it:
 > unchanged and still owed — and it is now the thing that would have caught
 > this, which is the argument for owing it.
 
-- **Week in review**: `review_learning.build_review_learning_state(window_days=7)`
+- **Week in review**:
+  `review_learning.build_review_learning_state(window_sessions=WEEK_SESSIONS)`
+  — five TRADING SESSIONS through the exchange calendar, not seven calendar days
+  (R4 B6). Seven calendar days is four sessions across a holiday week, and this
+  block prints "Week of \<Mon\> to \<Fri\>" above it
   (takes/skips/rejects, blind spots, leaks, watch conversion; the
   (trade_date, symbol) episode folding is a recorded, accepted v1 limitation) +
   `rrs_strength_extremes.csv` / `rrs_group_strength_extremes.csv` rows stamped

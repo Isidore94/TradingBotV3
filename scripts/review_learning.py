@@ -30,7 +30,7 @@ this phase only ranks and annotates, it never suppresses anything.
 
 Run:
     .venv/Scripts/python.exe scripts/review_learning.py            # rebuild + print
-    .venv/Scripts/python.exe scripts/review_learning.py --days 30
+    .venv/Scripts/python.exe scripts/review_learning.py --sessions 30
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from statistics import median
 from typing import Any, Callable, Iterable
@@ -59,12 +59,25 @@ from project_paths import (  # noqa: E402
     REVIEW_PREFERENCE_STATE_FILE,
     TRADER_ANNOTATIONS_FILE,
 )
+from evidence_stats import LATELY_SESSIONS, lately_start  # noqa: E402
 from review_events import load_review_events, review_event_store_mtime  # noqa: E402
 
 REVIEW_LEARNING_SCHEMA = "review_learning_v1"
 
-# Analysis window: behavior from months ago should age out of the board.
-DEFAULT_WINDOW_DAYS = 90
+# Analysis window: behaviour from months ago should age out of the board.
+#
+# **SESSIONS, and the desk's one "lately"** (R4 B6, decision 0016 answer 6).
+# This was `DEFAULT_WINDOW_DAYS = 90` - a calendar-day literal, and a second
+# definition of a window CLAUDE.md already names as reading `LATELY_SESSIONS`:
+# *"the blind-spot and leak callouts"* are cut on exactly this state. Twenty
+# calendar days is fourteen sessions in a normal month and twelve across a
+# holiday week, so a calendar window shortens the sample precisely when the
+# market was closed - and the board says nothing about having done so.
+#
+# The number changes with the unit, deliberately: 90 calendar days was about 62
+# sessions of behaviour, and this is 20. That is what "lately" means everywhere
+# else on the desk, and one window with one meaning is the point of the change.
+DEFAULT_WINDOW_SESSIONS = LATELY_SESSIONS
 # Empirical-Bayes shrinkage toward the overall take rate; matches the bounce
 # learning engine's COMPOSITE_SHRINK_SAMPLES.
 SHRINK_SAMPLES = 10
@@ -765,12 +778,17 @@ def build_review_learning_state(
     events_path: Path = ALERT_REVIEW_EVENTS_FILE,
     outcomes_path: Path = INTRADAY_BOUNCE_OUTCOMES_FILE,
     annotations_path: Path = TRADER_ANNOTATIONS_FILE,
-    window_days: int = DEFAULT_WINDOW_DAYS,
+    window_sessions: int = DEFAULT_WINDOW_SESSIONS,
     load_frame=None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     moment = now or datetime.now()
-    cutoff = (moment - timedelta(days=window_days)).date().isoformat()
+    # R4 B6: the cutoff walks the EXCHANGE CALENDAR (`evidence_stats.lately_start`)
+    # rather than subtracting calendar days. `lately_start` falls back to a
+    # deliberately LONGER calendar estimate if the calendar refuses the date, so
+    # an unreadable window can include an extra session but never silently drop
+    # one.
+    cutoff = lately_start(moment.date(), sessions=window_sessions).isoformat()
     rows = [
         row
         for row in load_review_events(events_path)
@@ -787,7 +805,7 @@ def build_review_learning_state(
     return {
         "schema": REVIEW_LEARNING_SCHEMA,
         "generated_at": moment.isoformat(timespec="seconds"),
-        "window_days": window_days,
+        "window_sessions": window_sessions,
         "event_rows": len(rows),
         "outcome_matches": outcome_matches,
         "forward_matches": forward_matches,
@@ -846,7 +864,7 @@ def _fmt_pct(value) -> str:
 def render_report(state: dict[str, Any]) -> str:
     lines = [
         f"REVIEW PREFERENCE SCOREBOARD  (generated {state.get('generated_at', '')})",
-        f"Window: last {state.get('window_days')} days · {state.get('shown', 0)} charts shown, "
+        f"Window: last {state.get('window_sessions')} sessions · {state.get('shown', 0)} charts shown, "
         f"{state.get('takes', 0)} taken (overall take rate {_fmt_rate(state.get('overall_take_rate'))}) · "
         f"{state.get('outcome_matches', 0)} intraday outcomes joined, "
         f"{state.get('forward_matches', 0)} D1 names forward-graded, "
@@ -990,7 +1008,7 @@ def refresh_review_learning_if_stale(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the review preference scoreboard.")
-    parser.add_argument("--days", type=int, default=DEFAULT_WINDOW_DAYS)
+    parser.add_argument("--sessions", type=int, default=DEFAULT_WINDOW_SESSIONS)
     parser.add_argument("--events", type=Path, default=ALERT_REVIEW_EVENTS_FILE)
     parser.add_argument("--outcomes", type=Path, default=INTRADAY_BOUNCE_OUTCOMES_FILE)
     parser.add_argument("--state", type=Path, default=REVIEW_PREFERENCE_STATE_FILE)
@@ -998,7 +1016,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     state = build_review_learning_state(
-        events_path=args.events, outcomes_path=args.outcomes, window_days=args.days
+        events_path=args.events, outcomes_path=args.outcomes, window_sessions=args.sessions
     )
     save_review_learning_state(state, args.state)
     report = render_report(state)
