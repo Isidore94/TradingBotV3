@@ -924,6 +924,108 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-03 - Round R4 Part B: the surfaces the packets promised
+
+**Branch `claude/v3-keep-it-honest`, `main` (with Part A) merged into it first.**
+Eight items (B1-B8), each with a test PROVEN to fail on the un-fixed file. Two are
+the lead's additions (B7, B8).
+
+**B1 - the newest fact pack is the LAST one written.** Both Weekend Prep readers
+used `sorted(root.rglob("*.json"))[-1]`, an ASCII sort in which `.` (0x2E) is
+below `1` (0x31), so `2026-09-01.1.json` sorts BEFORE `2026-09-01.json` and the
+last name is the pack every re-run superseded. Live that day: the reader took the
+47-cell original, whose older shape carries no `eligible_policies` list, and the
+verdict card printed "no cell has cleared the evidence floor yet" while the `.2`
+pack had 33 that had. `setup_research.latest_pack_path` / `pack_sort_key` undo
+exactly what `_superseding` did, in the module that owns the naming, with the
+ordinal parsed as an INTEGER (a tenth re-run sorts after a ninth) and the session
+stem first (a re-run of yesterday never outranks today).
+`weekend_verdict.research_line` additionally falls back to `policies` filtered on
+`stats.eligible` when `eligible_policies` is absent - on the live pack those two
+lists are the same 33 of 73 cells, so the fallback is exact rather than an
+estimate.
+
+**B2 - a setup doc's record is ONE horizon, ONE read, and it reaches the screen.**
+`_read_family_outcomes` pooled every horizon; the tracker grades each scan row at
+1, 3, 5 and 10 sessions, so one decision was counted up to four times
+(`avwap_band_bounce`: n=1797 pooled, n=329 at the horizon). The rate barely moves;
+the Wilson LOWER BOUND does, in the flattering direction, unevenly across
+families, which changes the order. The horizon value moved to
+`evidence_stats.SWING_HORIZON_SESSIONS` (5) and
+`autopilot_core.SWING_DIGEST_HORIZON_SESSIONS` re-exports it, so the docs and the
+AWAY digest rank on one number - the top three families by bound read
+0.585 / 0.543 / 0.522 on both. `stale_horizon == True` rows are dropped, the rule
+the digest and the scan-factor leaderboard already apply. The CSV is read ONCE
+into `{family: rows}`, memoised on (path, mtime, window, horizon): 24 full passes
+became one, measured 0.16 s. And nothing had called `family_record_sentence` at
+all - `SetupDocsPanel` now builds every sentence on a `_RecordWorker` QThread and
+renders each click from the cache, so the selection handler opens no file.
+
+**B3 - `swing_headline` has production callers, and there is ONE Wilson.** PARTIAL
+and the docs say so. Wired: the Master AVWAP setups table's appended
+**Family Win %** column (records built on `_FamilyRecordWorker`; the header says
+FAMILY because it is a statistic about the family, not about that symbol today),
+the Setup Tracker's **Last 30 Days** tab, and all four Weekend Prep cohort tables
+(veto, like, pass, rejection) - every one of them now SORTING by the Wilson lower
+bound. The veto/like view had been ordered by the trimmed mean; the pass and
+rejection tables had no order at all. `swing_headline.headline_from_rate` is what
+made three of those possible: those stores keep a rate and a count, and
+`round(rate * n)` recovers the integer pair exactly, because each file writes the
+rate as `wins / n`. STILL OWED: the Setup Tracker's **Setup Types** tab, for a
+measured reason - `master_avwap_setup_type_stats.csv` has no win column at all
+(`target_hit_rate` and `stop_rate` are different questions) and the outcomes file
+cannot be joined at that table's grain, its 184 rows collapsing to 71
+(side, bucket, family, zone) groups so one rate would repeat across up to six rows
+and read as each row's own. **ONE z**: `swing_headline.WILSON_Z` (1.96).
+`expected_r`'s 1.28 is a parameter of the proven-quality score in a fenced scoring
+file and no trader-facing surface may reach for it - a test asserts it.
+
+**B4 - the Daytrade Tracker says which number is which.** The champion tier is a
+COLUMN at last (the header comment had promised it since V3): PROVEN / MUTED /
+active joined from the bounce learning state on the same key the headline uses,
+BLANK for a segment it never saw - live 4 / 2 / 185 / 104 of 295 rows. The
+aggregator's verdict is headed **"Verdict (edge score)"**, because it is computed
+from average R and sat unlabelled three columns from a headline computed from
+something else. The **My Decisions** tabs carry Held 30m and Held x Ran through
+the same `apply_held_and_ran`; those rows name no side, so `held_run_score`
+gained `ALL_DIRECTIONS` - a pooled cell accumulated FROM THE EPISODES in the same
+loop, never an average of the long and short cells, which would be a mean of
+trimmed means and a second formula in that file again.
+
+**B5 - a day-trade pass writes the screen it came from.** `commit_pass` needed the
+sidecar writer, so it called `record_pass_annotation` directly and skipped
+`_record` - and with it the two lines that stamp `surface` and the scan context.
+Every pass landed with neither while the veto, the like and the note beside it
+carried both. `_record` gained one keyword, `writer`, which is the only thing that
+path actually needed to differ on. The V3 item-4 test that guarded this asserted
+on the SOURCE TEXT of `_record`, which is true of a method a verb never calls;
+it is replaced by five behavioural tests, one per real click handler, each reading
+the written row off disk.
+
+**B6 - one "lately", counted in sessions, and a flat is neither.**
+`review_learning.DEFAULT_WINDOW_DAYS = 90` was a calendar-day literal on the very
+window CLAUDE.md names as reading `LATELY_SESSIONS` (the blind-spot and leak
+callouts are cut on it); it is now `DEFAULT_WINDOW_SESSIONS = LATELY_SESSIONS`
+with the cutoff walking the exchange calendar. Weekend Prep's `window_days=7`
+became `evidence_stats.WEEK_SESSIONS` (5) - it printed "Week of \<Mon\> to \<Fri\>"
+over the last 7 calendar days, so a holiday week measured four sessions and still
+called itself a week. The state key, report header, CLI flag, System Health audit
+and Daytrade Tracker status line all say **sessions**, and a literal-scan test
+fails if a `window_days` comes back. Separately,
+`swing_headline.headline_from_outcomes` counted `close_r == 0.0` as a LOSS; a
+scratch now counts in a third bucket, out of `n` (it has no answer to the win/loss
+question) and in `avg_r` (it is a measured outcome).
+
+**B7 (test-only) - the journal panel fixture cannot expire again.** Six tests went
+red at midnight with no commit near them: the header opens on the `30d` preset and
+the fixture's AAPL round trip was pinned to 2026-08-03, one day outside it. The
+dates anchor on the Monday two weeks back, and a guard test asserts them against
+`journal_feed.date_range_bounds("30d")` rather than a re-spelled 30.
+
+**B8 (docs) - four tabs fill, five blank.** plan.md's Phase 0.14 table and the
+CHANGELOG's Part A entry still carried the retired "six of nine" claim that fix
+round 1 superseded.
+
 ### 2026-09-02 - Round R4 Part A: fix what review round 3 found
 
 **Branch `claude/r4-fixes`, off `main`.** Eighteen items (A1-A18) across P10, V1

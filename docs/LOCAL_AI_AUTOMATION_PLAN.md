@@ -945,6 +945,22 @@ explicit offset (plan.md sec 5). A digest is never edited — a correction is a
 superseding sibling naming what it supersedes, so the history of what was
 believed on the day survives.
 
+**And a READER has to undo the supersession, which is not free** (R4 B1,
+2026-09-03). `setup_research._superseding` writes `<date>.json` first and appends
+an ordinal on every re-run — `<date>.1.json`, `<date>.2.json`. In ASCII `.` is
+0x2E and `1` is 0x31, so `"2026-09-01.1.json"` sorts BELOW `"2026-09-01.json"`
+and `sorted(root.rglob("*.json"))[-1]` returns the FIRST pack of the day: the one
+every re-run superseded. Both Weekend Prep readers did exactly that, and on
+2026-09-03 the verdict card printed "no cell has cleared the evidence floor yet"
+off a 47-cell pack in the older shape while the current `.2` pack carried 33 that
+had.
+
+**The rule: select through `setup_research.latest_pack_path`**, which lives beside
+`_superseding` so one module owns both halves of the naming. The ordinal is parsed
+as an INTEGER — a string sort puts a tenth re-run before a ninth — and the session
+stem sorts first, so a re-run of yesterday never outranks today's first pack.
+Never re-derive the scheme at a call site.
+
 #### D7 — No local large model
 
 Narration is medium tier or nothing (sec 2). Any design that needs a 27B-class
