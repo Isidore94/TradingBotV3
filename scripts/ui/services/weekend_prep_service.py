@@ -37,11 +37,28 @@ import market_calendar
 import weekend_strength
 from project_paths import WEEKEND_PREP_STATE_FILE
 
-STEP_IDS: tuple[str, ...] = ("week_review", "focus_review", "walkaway", "discovery", "week_ahead")
+#: V2 item 2e appended `tag_week`. APPENDED, and the position is argued: the
+#: nightly tagger (V2 item 1) leaves provisional tags and needs_review markers
+#: all week, and the trader's own answer is what every per-setup statistic on the
+#: desk counts. Reviewing them belongs in the weekend routine, after the week has
+#: been read and before the week ahead is planned.
+#:
+#: A weekend already in the state file has no `tag_week` key; `step_status`
+#: returns "pending" for a step it has never seen, so an old weekend simply gains
+#: an unstarted step rather than failing to load.
+STEP_IDS: tuple[str, ...] = (
+    "week_review",
+    "focus_review",
+    "walkaway",
+    "tag_week",
+    "discovery",
+    "week_ahead",
+)
 STEP_LABELS = {
     "week_review": "Week in review",
     "focus_review": "Focus pick review",
     "walkaway": "Walk-away",
+    "tag_week": "Tag this week",
     "discovery": "Discovery",
     "week_ahead": "Week ahead",
 }

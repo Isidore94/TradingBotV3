@@ -1073,6 +1073,177 @@ class WalkawayPage(_StepPage):
         self._reload_review_data()
 
 
+TAG_WEEK_COLUMNS = ("Date", "Symbol", "Status", "Tag", "Net")
+
+
+class TagWeekPage(_StepPage):
+    """V2 item 2e: the week's trades and what the tagger made of them.
+
+    Decision 0016 answer 10: *"the bot should auto-tag every night and the trader
+    corrects."* Item 1 built the nightly half. This is the correcting half, on
+    the screen the trader already opens on a Saturday.
+
+    **The trader owns `trade_annotations`** (R7 invariant I7). Confirming writes
+    the trader's own answer through `JournalStore.confirm_tags`; nothing on this
+    page invents a tag, and a row that already carries a confirmed one is shown
+    and never offered for confirmation.
+
+    Reads on the page's worker, like every other step.
+    """
+
+    def __init__(self, service, parent=None) -> None:
+        super().__init__("tag_week", service, parent)
+        monday, friday = service.week_bounds
+        self.subtitle.setText(
+            f"Trades from {monday} to {friday} that the nightly tagger has not "
+            "had confirmed. Confirming writes YOUR answer; the guess stays "
+            "provisional until you do."
+        )
+        self.refresh_button = QPushButton("Refresh tags")
+        self.refresh_button.clicked.connect(self.reload)
+        self.note = QLabel("")
+        self.note.setWordWrap(True)
+
+        self.table = QTableWidget(0, len(TAG_WEEK_COLUMNS))
+        self.table.setHorizontalHeaderLabels(list(TAG_WEEK_COLUMNS))
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        # TEN VISIBLE ROWS before scrolling, which is the number the trader
+        # asked for - three at a time was the complaint. A plain pixel
+        # minimum rather than `theme.px`: this module does not import the
+        # theme, and one number here is cheaper than a new dependency.
+        self.table.setMinimumHeight(260)
+
+        self.confirm_all_button = QPushButton("Confirm all shown")
+        self.confirm_all_button.setToolTip(
+            "Accept the tagger's suggestion for every row in this table. Rows you "
+            "have already confirmed are not listed and are never touched."
+        )
+        self.confirm_all_button.clicked.connect(self._confirm_all_shown)
+        self.confirm_one_button = QPushButton("Confirm selected")
+        self.confirm_one_button.clicked.connect(self._confirm_selected)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.confirm_one_button)
+        buttons.addWidget(self.confirm_all_button)
+        buttons.addStretch(1)
+
+        self._worker: _ReadWorker | None = None
+        self._rows: list[dict] = []
+        self._layout.addWidget(self.note)
+        self._layout.addWidget(self.table, 1)
+        self._layout.addLayout(buttons)
+        self._finish_layout()
+
+    def reload(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self.refresh_button.setEnabled(False)
+        self.note.setText("Reading the week's trades...")
+        worker = _ReadWorker(lambda: _read_week_tag_rows(self.service.week_bounds), self)
+        worker.finished_with.connect(self._on_rows_ready)
+        worker.failed.connect(self._on_rows_failed)
+        self._worker = worker
+        worker.start()
+
+    def _on_rows_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
+        self.refresh_button.setEnabled(True)
+        self._rows = list(payload) if isinstance(payload, list) else []
+        self._render()
+
+    def _on_rows_failed(self, message: str) -> None:  # pragma: no cover - signal seam
+        self.refresh_button.setEnabled(True)
+        self.note.setText(f"The journal could not be read: {message}")
+
+    def _render(self) -> None:
+        self.table.setRowCount(len(self._rows))
+        for index, row in enumerate(self._rows):
+            values = (
+                str(row.get("trade_date") or "")[:10],
+                str(row.get("symbol") or ""),
+                str(row.get("tag_status") or ""),
+                str(row.get("setup_tags") or ""),
+                _tag_net_text(row.get("net_pnl")),
+            )
+            for column, text in enumerate(values):
+                self.table.setItem(index, column, QTableWidgetItem(text))
+        if not self._rows:
+            self.note.setText("Nothing to confirm - every trade this week is your own answer.")
+        else:
+            self.note.setText(
+                f"{len(self._rows)} trade(s) waiting. Confirming writes your answer; "
+                "the tagger never overwrites one."
+            )
+
+    def _confirm(self, trade_ids) -> None:
+        """Confirm through the STORE's own API. A journal write fails loudly."""
+        wanted = [str(item) for item in trade_ids if str(item or "").strip()]
+        if not wanted:
+            self.note.setText("Nothing selected.")
+            return
+        try:
+            from journal_store import JournalStore
+
+            store = JournalStore()
+            confirmed = sum(1 for trade_id in wanted if store.confirm_tags(trade_id))
+        except Exception as exc:  # noqa: BLE001
+            # LOUD. A journal write is the one store on this desk that may not
+            # fail quietly, and a confirmation the trader believes landed is
+            # worse than one that visibly did not.
+            self.note.setText(f"NOT SAVED - the journal could not be written: {exc}")
+            self.statusChanged.emit(f"tag confirmation failed: {exc}")
+            return
+        self.note.setText(f"{confirmed} tag(s) confirmed.")
+        self.reload()
+
+    def _confirm_all_shown(self) -> None:
+        self._confirm([row.get("trade_id") for row in self._rows])
+
+    def _confirm_selected(self) -> None:
+        rows = {index.row() for index in self.table.selectedIndexes()}
+        self._confirm([
+            self._rows[index].get("trade_id")
+            for index in sorted(rows)
+            if 0 <= index < len(self._rows)
+        ])
+
+
+def _tag_net_text(value) -> str:
+    try:
+        return f"{float(value):+,.2f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _read_week_tag_rows(bounds) -> list[dict]:
+    """The week's closed trades that are NOT the trader's own answer yet.
+
+    Provisional and needs_review only. A confirmed row is the trader's answer and
+    has nothing to offer this page; listing it would invite a second confirmation
+    of something already settled.
+    """
+    from journal_store import (
+        TAG_STATUS_NEEDS_REVIEW,
+        TAG_STATUS_PROVISIONAL,
+        JournalStore,
+    )
+
+    monday, friday = bounds
+    start, end = str(monday), str(friday)
+    wanted = {TAG_STATUS_PROVISIONAL, TAG_STATUS_NEEDS_REVIEW}
+    rows = []
+    store = JournalStore()
+    for trade in store.list_trades():
+        date = str(trade.get("trade_date") or "")[:10]
+        if not date or date < start or date > end:
+            continue
+        if str(trade.get("tag_status") or "") not in wanted:
+            continue
+        rows.append(dict(trade))
+    rows.sort(key=lambda row: (str(row.get("trade_date") or ""), str(row.get("symbol") or "")))
+    return rows
+
+
 class DiscoveryPage(_StepPage):
     """Step 4: strongest and weakest on H1, D1 and Monthly, then Adopt."""
 
@@ -1243,12 +1414,14 @@ class WeekendPrepPanel(QFrame):
         self.week_review = WeekReviewPage(self.service)
         self.focus_review = FocusReviewPage(self.service)
         self.walkaway = WalkawayPage(self.service)
+        self.tag_week = TagWeekPage(self.service)
         self.discovery = DiscoveryPage(self.service, focus_service=focus_service)
         self.week_ahead = WeekAheadPage(self.service)
         self._pages = {
             "week_review": self.week_review,
             "focus_review": self.focus_review,
             "walkaway": self.walkaway,
+            "tag_week": self.tag_week,
             "discovery": self.discovery,
             "week_ahead": self.week_ahead,
         }
