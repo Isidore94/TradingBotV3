@@ -5418,6 +5418,39 @@ class AlertCenterPanel(QFrame):
         """
         self.chart_symbol(symbol, side=side, origin="the M5 Strength Board")
 
+    #: The tabs the trader never opens (decision 0016 answer 7). HIDDEN, never
+    #: removed: the Alerts feed is the review-alert door, the D1 Focus tab holds
+    #: the flag list several polls write into, and the Armed tab is the
+    #: inventory across every symbol. All three are load-bearing behind the
+    #: scenes; what they are not is worth a tab the trader has to skip past.
+    UNUSED_TAB_TITLES = ("Alerts", "D1 Focus", "Armed")
+
+    def apply_unused_tab_visibility(self, show: bool) -> None:
+        """Show or hide the three tabs the trader does not open.
+
+        **HIDING IS NOT REMOVING**, and the difference is the whole design. The
+        widgets are built, parented and connected exactly as before; every timer
+        behind them stays visibility-gated as the snappiness work left it; every
+        signal still arrives. A hidden tab costs one row of tab strip and
+        nothing else.
+
+        It is a `setTabVisible` on the existing index rather than a `removeTab`,
+        so no index shifts and nothing that remembers one - `_d1_tab_index`,
+        `_armed_tab_index`, `_capture_tab_index` - has to be recomputed.
+
+        **Every shortcut those tabs hosted must still fire**, which is why the
+        capture rail rebinds `action_shortcuts` at PANEL scope: a `QShortcut`
+        owned by a widget inside a hidden tab never fires, and two bindings for
+        one sequence fire NEITHER.
+        """
+        wanted = bool(show)
+        for index in range(self.tabs.count()):
+            if self.tabs.tabText(index) in self.UNUSED_TAB_TITLES:
+                self.tabs.setTabVisible(index, wanted)
+        if not wanted and self.tabs.tabText(self.tabs.currentIndex()) in self.UNUSED_TAB_TITLES:
+            # Never leave the trader looking at a tab that just vanished.
+            self.tabs.setCurrentIndex(self._capture_tab_index)
+
     def attach_strength_board(self, service, focus_service=None) -> None:
         """Host the M5 Strength Board under the Strength window.
 

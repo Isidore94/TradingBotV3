@@ -89,13 +89,20 @@ def test_the_scope_can_be_selected_on_demand(scope):
     from ai_jobs.runner import default_slots
 
     slots = default_slots(summary_scopes=(scope,))
-    assert [slot.name for slot in slots][:3] == [
+    # V2 inserted `journal_auto_tag` SECOND - an insert, not an append, and the
+    # second and last sanctioned exception to "later phases append; they never
+    # reorder". `default_slots`' docstring argues for both positions.
+    assert [slot.name for slot in slots][:4] == [
         "journal_import",
+        "journal_auto_tag",
         "ai_summary",
         "ticker_briefs",
     ]
     # And the override is per-call: building again without it is untouched.
-    assert default_slots()[1].run.__name__ == "run_daily_summary"
+    # BY NAME rather than by index: `journal_auto_tag` sits at 1 since V2, and
+    # what this line means is "the summary slot went back to its default".
+    summary = next(slot for slot in default_slots() if slot.name == "ai_summary")
+    assert summary.run.__name__ == "run_daily_summary"
 
 
 def test_an_unknown_scope_is_still_rejected_at_the_cli():

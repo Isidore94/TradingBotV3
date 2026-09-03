@@ -193,14 +193,29 @@ def test_the_count_never_raises_and_never_costs_the_page(tmp_path):
     assert trades_awaiting_review(tmp_path / "nothing" / "here.db") == 0
 
 
-def test_the_badge_is_computed_off_the_qt_thread():
-    """It opens SQLite and walks every trade - not work a page build may do."""
+def test_the_badge_is_computed_off_the_qt_thread_and_only_once_shown():
+    """Two rules, and the second was learned the hard way.
+
+    It opens SQLite and walks every trade, so it runs on a worker - not work a
+    page build may do. And it starts from `showEvent`, not `__init__`: a thread
+    that starts during construction runs while a test is still monkeypatching
+    the journal's module globals, and it made an unrelated journal test fail
+    from a hundred tests away - green alone, red in the suite.
+    """
     source = (ROOT / "scripts" / "ui" / "app.py").read_text(encoding="utf-8")
-    assert "_start_tag_review_badge" in source
+
     assert "ReadWorker(_count, self)" in source
-    # And the count itself is never called inline on the build path.
+    assert "def showEvent" in source
+    show = source.split("def showEvent", 1)[1].split("def closeEvent", 1)[0]
+    assert "_start_tag_review_badge()" in show
+
+    # Never on the construction path, and never inline anywhere.
     build = source.split("def _start_tag_review_badge", 1)[0]
+    assert "self._start_tag_review_badge()" not in build
     assert "trades_awaiting_review()" not in build
+
+    # And the reader is joined when the window closes.
+    assert "_join_tag_review_badge()" in source
 
 
 def test_zero_leaves_the_label_alone(qtbot=None):
