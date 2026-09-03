@@ -100,7 +100,7 @@ class ScanService(QObject):
         # post-scan/EOD CLI build job, no daemon). Owned here because this is
         # where a scan finishes; it runs on its own thread and can never affect
         # the scan that triggered it.
-        self._warehouse_thread: threading.Thread | None = None
+        self._warehouse_proc: subprocess.Popen | None = None
         try:
             from job_ledger import get_default_ledger
 
@@ -310,54 +310,121 @@ class ScanService(QObject):
         self.start_warehouse_build(str(payload.get("run_id") or ""))
 
     def start_warehouse_build(self, run_id: str = "") -> bool:
-        """Seal the spool and run the EOD build after a scan. Shadow-only.
+        """Seal the spool and run the EOD build after a scan, IN A CHILD.
 
-        This is the "post-scan" half of LD-01's *post-scan/EOD CLI build job*:
-        the same `run_build` the CLI exposes, invoked in-process on its own
-        thread rather than by a daemon. Without it the GUI tee spools M5 bars
+        This is the "post-scan" half of LD-01's *post-scan/EOD CLI build job*,
+        and LD-01 said CLI for a reason. Without it the GUI tee spools M5 bars
         every minute and nothing ever seals them - and because M5 segments are
         PROTECTED and never shed (LD-12/BD-18), the backlog would simply grow
         until Health went red.
 
-        Never blocks, never raises, and never touches the scan: one build at a
-        time (a second is skipped, and `run_build`'s own single-flight lock
-        refuses a concurrent one from any other process anyway).
-        """
-        thread = self._warehouse_thread
-        if thread is not None and thread.is_alive():
-            return False  # the next scan picks up whatever this one misses
-        self._warehouse_thread = threading.Thread(
-            target=self._run_warehouse_build,
-            args=(str(run_id or ""),),
-            name="qt-warehouse-build",
-            daemon=True,
-        )
-        self._warehouse_thread.start()
-        return True
+        It used to run on a ``qt-warehouse-build`` THREAD inside the desk, and
+        on 2026-09-03 that made the desk unusable for a morning: py-spy on pid
+        11612 measured that thread holding the GIL in **82.7%** of samples
+        while ``MainThread`` got **2.3%**, with WM_NULL pings to the desk
+        window hanging 100-606 ms every few seconds. A CPU-bound Python thread
+        holds the GIL; no priority, timer or chunking trick gives it back. The
+        build is 27-57 minutes of pure Python per scan (measured in
+        ``manifest_log.jsonl``, 09-01 to 09-03), four scans a day, all inside
+        RTH. So it leaves the process entirely, at BELOW_NORMAL priority,
+        where the OS scheduler rather than the GIL decides who runs.
 
-    def _run_warehouse_build(self, run_id: str) -> None:
+        Never blocks, never raises, and never touches the scan: one build at a
+        time (a second is skipped, and the build's own single-flight lock
+        refuses a concurrent one from any other process anyway, reclaiming a
+        dead holder's lock so a reaped child cannot wedge the next build).
+        """
         import logging
 
+        proc = self._warehouse_proc
+        if proc is not None and proc.poll() is None:
+            return False  # the next scan picks up whatever this one misses
         try:
             if str(SCRIPTS_DIR) not in sys.path:
                 sys.path.insert(0, str(SCRIPTS_DIR))
             from research_warehouse import config as warehouse_config
-            from research_warehouse.cli import run_build
 
+            # Asked in the PARENT: with no research store there is nothing to
+            # build, and spawning an interpreter four times a day to discover
+            # that is a cost with no answer behind it.
             if not warehouse_config.warehouse_enabled():
-                return  # no research store: the warehouse is a total no-op
-            report = run_build(run_id=run_id)
-            if report.status not in {"OK", "DISABLED"}:
-                logging.info("Research warehouse build %s: %s", report.status, report.message)
+                return False
+        except Exception:
+            logging.exception("Research warehouse build not started; the scan is unaffected.")
+            return False
+        try:
+            child = subprocess.Popen(
+                warehouse_build_command(str(run_id or "")),
+                cwd=str(ROOT_DIR),
+                env=_scan_child_env(run_id=str(run_id or "")),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                # Windows-only flags, read BY NAME so macOS still launches.
+                creationflags=(
+                    getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+                    | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                ),
+            )
         except Exception:
             # Research evidence must never be able to break a scan.
-            logging.exception("Research warehouse post-scan build failed; the scan is unaffected.")
+            logging.exception(
+                "Research warehouse post-scan build failed to start; the scan is unaffected."
+            )
+            return False
+        self._warehouse_proc = child
+        # Registered like a scan child so shutdown reaps it: a closed desk must
+        # not leave a multi-GB build running invisibly (plan.md P0 #5). It is
+        # therefore counted by `owned_scan_process_count`, which now means
+        # "children this desk owns" rather than "scan children".
+        _register_owned_process(child)
+        threading.Thread(
+            target=self._await_warehouse_build,
+            args=(child,),
+            name="qt-warehouse-build-wait",
+            daemon=True,
+        ).start()
+        return True
+
+    def _await_warehouse_build(self, proc: subprocess.Popen) -> None:
+        """Reap the build child and say how it went.
+
+        This thread blocks on the child's pipe, so it holds no GIL while it
+        waits - which is the entire point of the change above. It also drains
+        stderr, so a chatty failure cannot fill the pipe and wedge the build.
+        """
+        import logging
+
+        try:
+            _, stderr_text = proc.communicate()
+        except Exception:  # pragma: no cover - a reaped child races here
+            return
+        code = proc.returncode
+        if code:
+            tail = "\n".join(str(stderr_text or "").strip().splitlines()[-20:])
+            logging.warning(
+                "Research warehouse build child exited %s%s",
+                code,
+                f"\n{tail}" if tail else "",
+            )
+        else:
+            logging.info("Research warehouse build child exited %s", code)
 
     def wait_for_warehouse_build(self, timeout: float = 30.0) -> None:
-        """Test/shutdown helper: join the in-flight build thread, if any."""
-        thread = self._warehouse_thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout)
+        """Test/shutdown helper: wait on the in-flight build CHILD, if any.
+
+        A build mid-seal is given its moment to finish its manifest line; past
+        the timeout it is left to the shutdown reap, which is safe because the
+        build's single-flight lock reclaims a dead holder rather than obeying
+        it.
+        """
+        proc = self._warehouse_proc
+        if proc is None:
+            return
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
 
     @Slot(str)
     def _handle_failed(self, message: str) -> None:
@@ -512,6 +579,53 @@ def scan_worker_command(payload: str) -> list[str]:
     ]
 
 
+#: CLI flag the frozen application answers for the post-scan research build,
+#: exactly as it answers ``--run-scan``. See ``launch_gui.main``.
+WAREHOUSE_BUILD_FLAG = "--warehouse-build"
+
+
+def warehouse_build_command(run_id: str) -> list[str]:
+    """Argv that runs one post-scan warehouse build in a child, per build.
+
+    Same shape rule as :func:`scan_worker_command`, and for the same reason: a
+    frozen build's ``sys.executable`` is ``TradingBotV3.exe``, which parses
+    ``-m`` as its own CLI and exits before building anything, so the frozen
+    form goes through the flag the app answers itself. The source form invokes
+    the module the warehouse already exposes - ``research_warehouse.cli`` has
+    parsed ``build --run-id`` since Phase 8 - rather than a second entry point
+    that could drift from it.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, WAREHOUSE_BUILD_FLAG, str(run_id or "")]
+    return [
+        sys.executable,
+        "-m",
+        "research_warehouse.cli",
+        "build",
+        "--run-id",
+        str(run_id or ""),
+    ]
+
+
+def _scan_child_env(*, run_id: str = "", trigger: str = "") -> dict[str, str]:
+    """The environment every child this module spawns inherits.
+
+    One definition, because the scan child and the warehouse build child must
+    resolve the same first-party packages and stamp the same run id: a second
+    copy of these four lines is a place for the two to silently diverge.
+    """
+    env = os.environ.copy()
+    pythonpath = str(SCRIPTS_DIR)
+    if env.get("PYTHONPATH"):
+        pythonpath = pythonpath + os.pathsep + env["PYTHONPATH"]
+    env["PYTHONPATH"] = pythonpath
+    if run_id:
+        env["TRADINGBOT_RUN_ID"] = str(run_id)
+    if trigger:
+        env["TRADINGBOT_RUN_TRIGGER"] = str(trigger)
+    return env
+
+
 def _run_master_scan_subprocess(
     *,
     update_setup_tracker: bool | None = None,
@@ -528,15 +642,7 @@ def _run_master_scan_subprocess(
         },
         sort_keys=True,
     )
-    env = os.environ.copy()
-    pythonpath = str(SCRIPTS_DIR)
-    if env.get("PYTHONPATH"):
-        pythonpath = pythonpath + os.pathsep + env["PYTHONPATH"]
-    env["PYTHONPATH"] = pythonpath
-    if run_id:
-        env["TRADINGBOT_RUN_ID"] = str(run_id)
-    if trigger:
-        env["TRADINGBOT_RUN_TRIGGER"] = str(trigger)
+    env = _scan_child_env(run_id=run_id, trigger=trigger)
     stdout_text = _wait_for_scan_marker(
         scan_worker_command(payload),
         cwd=str(ROOT_DIR),

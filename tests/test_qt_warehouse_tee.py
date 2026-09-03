@@ -429,97 +429,123 @@ def test_a_disabled_warehouse_stops_the_service_timer(monkeypatch):
 
 
 # --- the post-scan build hook ---------------------------------------------
+# These three used to assert the build ran on a THREAD inside the desk, with
+# `run_build` monkeypatched in-process. Packet F1 (2026-09-03) moved it to a
+# child process, because that thread held the GIL in 82.7% of py-spy samples
+# for 27-57 minutes per scan and froze the desk for a morning. What each test
+# asks is unchanged - the build is invoked, it is not inline, only one runs,
+# and a disabled warehouse does nothing - only the mechanism it asks about is.
+# The child's argv, priority class and environment are pinned separately, in
+# tests/test_warehouse_build_child.py.
+class _FakeBuildChild:
+    """Alive until the test releases it, like the real build child."""
+
+    def __init__(self, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        self.pid = 4242
+        self.returncode = None
+        self._exit = threading.Event()
+
+    def poll(self):
+        return 0 if self._exit.is_set() else None
+
+    def wait(self, timeout=None):
+        self.returncode = 0
+        self._exit.set()
+        return 0
+
+    def communicate(self, *a, **k):
+        self._exit.wait(30.0)
+        return ("", "")
+
+    def terminate(self):
+        self.wait()
+
+
+def _capture_build_children(monkeypatch):
+    from ui.services import scan_service as scan_service_mod
+
+    children = []
+
+    def fake_popen(*args, **kwargs):
+        child = _FakeBuildChild(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(scan_service_mod.subprocess, "Popen", fake_popen)
+    return children
+
+
 def test_a_finished_scan_starts_the_warehouse_build(enabled, monkeypatch):
     """LD-01's 'post-scan build job' had no invoker at all.
 
     Without it the tee spools M5 bars every minute and nothing seals them - and
     M5 segments are PROTECTED, so the backlog grows until Health goes red.
     """
-    from ui.services.scan_service import ScanService
+    from ui.services.scan_service import ScanService, warehouse_build_command
 
-    calls = []
-    import research_warehouse.cli as warehouse_cli
-
-    monkeypatch.setattr(
-        warehouse_cli,
-        "run_build",
-        lambda *args, **kwargs: calls.append(kwargs.get("run_id")) or _BuildOk(),
-    )
-
+    children = _capture_build_children(monkeypatch)
     service = ScanService()
     try:
         assert service.start_warehouse_build("run-42") is True
-        service.wait_for_warehouse_build(10.0)
-        assert calls == ["run-42"]
+        assert len(children) == 1
+        assert children[0].args[0] == warehouse_build_command("run-42")
+        assert children[0].kwargs["env"]["TRADINGBOT_RUN_ID"] == "run-42"
     finally:
         service.wait_for_warehouse_build(10.0)
 
 
-class _BuildOk:
-    status = "OK"
-    message = ""
-
-
-def test_the_build_runs_off_the_gui_thread_and_never_breaks_the_scan(enabled, monkeypatch):
-    """It must not run inline, and an exploding build must not escape."""
+def test_the_build_runs_out_of_process_and_never_breaks_the_scan(enabled, monkeypatch):
+    """It must not run inline, and a child that cannot start must not escape."""
+    from ui.services import scan_service as scan_service_mod
     from ui.services.scan_service import ScanService
     import research_warehouse.cli as warehouse_cli
 
-    ran_on = []
+    ran_inline = []
+    monkeypatch.setattr(
+        warehouse_cli, "run_build", lambda *a, **k: ran_inline.append(1)
+    )
 
-    def explode(*args, **kwargs):
-        ran_on.append(threading.current_thread())
-        raise RuntimeError("DAS unplugged mid-build")
+    def refuse(*args, **kwargs):
+        raise OSError("no such executable")
 
-    monkeypatch.setattr(warehouse_cli, "run_build", explode)
+    monkeypatch.setattr(scan_service_mod.subprocess, "Popen", refuse)
 
     service = ScanService()
     try:
-        service.start_warehouse_build("run-1")  # returns immediately
-        service.wait_for_warehouse_build(10.0)
-        assert ran_on and ran_on[0] is not threading.current_thread()
+        # A build that cannot even be spawned is a False, never an exception:
+        # research evidence must never be able to break a scan.
+        assert service.start_warehouse_build("run-1") is False
+        assert ran_inline == [], "the build ran inside the desk process"
     finally:
-        service.wait_for_warehouse_build(10.0)  # no exception escapes
+        service.wait_for_warehouse_build(10.0)
 
 
 def test_only_one_warehouse_build_runs_at_a_time(enabled, monkeypatch):
     """A second scan finishing mid-build is skipped, not stacked."""
     from ui.services.scan_service import ScanService
-    import research_warehouse.cli as warehouse_cli
 
-    release = threading.Event()
-    started = threading.Event()
-
-    def blocking(*args, **kwargs):
-        started.set()
-        release.wait(5.0)
-        return _BuildOk()
-
-    monkeypatch.setattr(warehouse_cli, "run_build", blocking)
-
+    children = _capture_build_children(monkeypatch)
     service = ScanService()
     try:
         assert service.start_warehouse_build("first") is True
-        assert started.wait(5.0)
         assert service.start_warehouse_build("second") is False, "not stacked"
+        assert len(children) == 1
     finally:
-        release.set()
         service.wait_for_warehouse_build(10.0)
 
 
 def test_a_disabled_warehouse_builds_nothing_after_a_scan(monkeypatch):
     import research_warehouse.config as config
-    import research_warehouse.cli as warehouse_cli
     from ui.services.scan_service import ScanService
 
     monkeypatch.setattr(config, "warehouse_enabled", lambda: False)
-    calls = []
-    monkeypatch.setattr(warehouse_cli, "run_build", lambda *a, **k: calls.append(1))
+    children = _capture_build_children(monkeypatch)
 
     service = ScanService()
     try:
-        service.start_warehouse_build("run-1")
-        service.wait_for_warehouse_build(10.0)
-        assert calls == []
+        assert service.start_warehouse_build("run-1") is False
+        assert children == []
     finally:
         service.wait_for_warehouse_build(10.0)

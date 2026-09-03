@@ -91,6 +91,20 @@ def main() -> int:
         payload = argv[index + 1] if index + 1 < len(argv) else None
         return run_scan_worker(payload)
 
+    # --warehouse-build is how the desk spawns the post-scan research build.
+    # It used to run on a thread inside the desk, and on 2026-09-03 that thread
+    # held the GIL in 82.7% of py-spy samples for a 27-57 minute build while the
+    # GUI thread got 2.3% - an unusable desk, four times a session. The build is
+    # a CLI job (LD-01) and now runs as one. Answered here, before argparse,
+    # before the crash log and before the single-instance guard, for the same
+    # reason --run-scan is: this process is not the desk.
+    if "--warehouse-build" in argv:
+        from research_warehouse.cli import main as warehouse_main
+
+        index = argv.index("--warehouse-build")
+        run_id = argv[index + 1] if index + 1 < len(argv) else ""
+        return warehouse_main(["build", "--run-id", run_id])
+
     _enable_crash_log()
     # R10.A / Sol blocker 3: one desk per machine. `launch_gui_auto.ps1` already
     # refuses a second one, but only on that path - a double-click, a shortcut,
