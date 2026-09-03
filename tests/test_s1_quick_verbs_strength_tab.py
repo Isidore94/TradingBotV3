@@ -116,7 +116,7 @@ def test_the_strength_column_holds_three_sections_and_every_one_is_open(desk):
     column = desk.alert_center.strength_column
     sections = _sections(column)
     titles = [section.header.text() for section in sections]
-    assert len(sections) == 3, f"three sections, one Strength surface; got {titles}"
+    assert len(sections) == 4, f"four sections, one Strength surface (Focus Strength joined - lead ruling 3, 2026-09-03); got {titles}"
     assert all(section.is_expanded() for section in sections), (
         f"every section starts OPEN; got {[(t, s.is_expanded()) for t, s in zip(titles, sections)]}"
     )
