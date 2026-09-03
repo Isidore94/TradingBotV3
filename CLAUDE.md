@@ -174,6 +174,34 @@ before changing the behaviour a rule governs.**
 - Pure indicator modules (`scripts/indicators/`): completed bars in, immutable tuples out, `None` for anything unmeasurable. **No importer yet — the first one fires the packaging trigger.**
 - Auto/Away phone output: `autopilot_today.txt` is the single verified home-folder digest, safety/freshness header first.
 
+**Headline statistics and the priority switch (V3, decision 0016)**
+
+- **The priority switch reorders and never withholds.** "Prioritise what is
+  working" is display-only (decision 0016 answer 5): it sorts the review queue,
+  the M5 list and the setups table, and it may never hide, mute, park or withhold
+  a row. A test asserts the set of visible rows is identical with it on and off.
+  The tier gate, movers-only and repetition control are untouched by it.
+- **Win rate leads every trader-facing SWING surface; MFE-after-a-held-level
+  leads every DAY-TRADE surface** (decision 0016 answers 3 and 4). The trader
+  gives swings room and their losses run ~1.5x their best wins, so mean R ranks
+  their swings by the statistic their loss profile makes misleading. Win rate
+  goes FIRST, with `n` and a **Wilson lower bound** beside it (`swing_headline`),
+  and **sorting is by the lower bound** - the raw rate puts a 100%-on-three cell
+  above a 62%-on-ninety every time. Mean R stays beside it, never replaced. On
+  the day-trade side the headline is `held_run_score`: P(the level held in the
+  first 30 min) x trimmed-mean MFE_R of the ones that held.
+- **The Research tab is not a trader surface.** It is the builder's
+  (decision 0016 answer 7: the trader never opens it). Nothing the trader must
+  see may live only there - a number that matters gets a line on the Trading
+  Desk, the Journal, Weekend Prep or the AWAY Recap, and the full readout stays
+  in Research. The same rule retires "it is on the Research tab" as an answer to
+  "where does the trader see this?"
+- **"Lately" is ONE number and it is counted in trading sessions.**
+  `evidence_stats.LATELY_SESSIONS` (20) is the home; `lately_window()` walks the
+  exchange calendar. Twenty calendar days is fourteen sessions in a normal month
+  and twelve across a holiday week, so a calendar window silently shortens the
+  sample exactly when the market was closed.
+
 ## Hard invariants (plan.md sec 5 — never violate)
 - Decision-support only: never add order execution.
 - Legacy SPY pause detection and D1 wick alerts are the champions; shadow engines must never influence live decisions until plan.md sec 7 promotion gates pass.

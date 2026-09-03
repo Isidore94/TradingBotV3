@@ -561,6 +561,65 @@ def resolve_setup_family_from_candidates(candidates) -> str:
     return "general"
 
 
+def family_record_sentence(setup_family: str, *, tracker_rows=None) -> str:
+    """One sentence stating this family's recent swing record - V3 item 1.
+
+    Decision 0016 answer 3 makes WIN RATE the swing headline, so a setup doc that
+    describes a family without saying how it has been doing is describing half of
+    it.
+
+    **RENDERED AT READ TIME, never hardcoded.** The number comes from the
+    tracker's own outcome rows, so the doc cannot quietly age into a claim the
+    data stopped supporting - which is exactly what a number typed into a
+    docstring does.
+
+    It carries n and the Wilson lower bound, and it says so when there is not
+    enough behind it: "no graded swings in the last 20 sessions" and "0% win
+    rate" are different facts, and only the second is a claim about the setup.
+
+    `tracker_rows` is injected so this is testable without a tracker file. With
+    nothing passed it reads the live outcomes and, if it cannot, says that too -
+    a doc that raises is a doc the trader cannot open.
+    """
+    from swing_headline import headline_from_tracker_rows
+
+    key, _doc = resolve_setup_doc(setup_family)
+    rows = tracker_rows
+    if rows is None:
+        rows = _read_family_outcomes(key)
+    return headline_from_tracker_rows(key, rows or ()).sentence()
+
+
+def _read_family_outcomes(family_key: str) -> list[dict]:
+    """Graded swing outcomes for one family, inside the "lately" window.
+
+    Returns [] for anything it cannot read. A setup doc is reference material the
+    trader opens mid-session; it must never fail to render because a CSV moved.
+    """
+    try:
+        import csv
+
+        from evidence_stats import lately_window
+        from project_paths import MASTER_AVWAP_TIER_OUTCOMES_FILE
+
+        first, last = lately_window()
+        rows: list[dict] = []
+        with open(MASTER_AVWAP_TIER_OUTCOMES_FILE, newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                family = str(
+                    row.get("setup_family") or row.get("family") or ""
+                ).strip().lower().replace(" ", "_").replace("-", "")
+                if family != family_key:
+                    continue
+                stamp = str(row.get("scan_date") or "")[:10]
+                if stamp and not (first <= stamp <= last):
+                    continue
+                rows.append(dict(row))
+        return rows
+    except Exception:  # noqa: BLE001 - reference material never raises at a reader
+        return []
+
+
 def all_setup_docs_by_group() -> list[tuple[str, list[tuple[str, dict]]]]:
     """Docs grouped for display, preserving a sensible reading order."""
     group_order = ["Main swing", "Earnings cycle", "Study (measured only)", "Playbook research"]

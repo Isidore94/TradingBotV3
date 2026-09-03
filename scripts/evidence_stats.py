@@ -60,6 +60,65 @@ SUMMARY_SCHEMA = "evidence_summary_v1"
 #: Necessary, never sufficient.
 MIN_REPORTABLE_N = 30
 
+#: "LATELY" IS ONE NUMBER, AND IT LIVES HERE (V3 item 3, decision 0016 answer 6:
+#: *"'this market regime' needs no definition. 'Lately' is a rolling window
+#: (about 20 sessions). No regime label."*).
+#:
+#: Every surface that says "lately" reads this: the Working-lately section, the
+#: blind-spot and leak callouts, the per-family win rates, the priority switch and
+#: `held_run_score`'s rolling segments. Before V3 those paths carried their own
+#: literals - 20 in one module, 90 days in another - so two screens could
+#: disagree about what the trader's own word meant.
+#:
+#: TRADING SESSIONS, never calendar days. Twenty calendar days is fourteen
+#: sessions in a normal month and twelve across a holiday week, so a calendar
+#: window silently shortens the sample exactly when the market was closed.
+LATELY_SESSIONS = 20
+
+
+def lately_start(end=None, *, sessions: int = LATELY_SESSIONS):
+    """The first session of the "lately" window ending at `end` (inclusive).
+
+    Walks the exchange calendar backwards, so the window is `sessions` SESSIONS
+    long whatever holidays fall in it. `end` defaults to today's date.
+
+    Falls back to a calendar-day estimate if the calendar refuses the date - the
+    validated range has ends, and a window that cannot be computed must not stop
+    a readout from rendering. The fallback is deliberately the CONSERVATIVE
+    direction: `sessions * 7 / 5` calendar days is longer than the true window,
+    so it can include an extra session but never silently drop one.
+    """
+    from datetime import date as _date, timedelta as _timedelta
+
+    last = end or _date.today()
+    if isinstance(last, str):
+        try:
+            last = _date.fromisoformat(last[:10])
+        except ValueError:
+            last = _date.today()
+    try:
+        from market_calendar import is_session, previous_session
+
+        cursor = last if is_session(last) else previous_session(last)
+        for _ in range(max(0, int(sessions) - 1)):
+            cursor = previous_session(cursor)
+        return cursor
+    except Exception:  # noqa: BLE001 - a window is never worth a blank readout
+        return last - _timedelta(days=int(round(int(sessions) * 7 / 5)))
+
+
+def lately_window(end=None, *, sessions: int = LATELY_SESSIONS):
+    """`(first, last)` ISO dates for the window. Inclusive at both ends."""
+    from datetime import date as _date
+
+    last = end or _date.today()
+    if isinstance(last, str):
+        try:
+            last = _date.fromisoformat(last[:10])
+        except ValueError:
+            last = _date.today()
+    return lately_start(last, sessions=sessions).isoformat(), last.isoformat()
+
 #: The 10% trimmed mean this repo already uses.
 TRIM_FRACTION = 0.10
 

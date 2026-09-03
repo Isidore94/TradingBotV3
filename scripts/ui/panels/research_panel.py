@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QFrame, QTabWidget, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QLabel, QTabWidget, QVBoxLayout
 
 from ui.panels.daytrade_tracker_panel import DaytradeTrackerPanel
 from ui.panels.master_market_prep_panel import MasterMarketPrepPanel
@@ -49,6 +49,22 @@ class ResearchPanel(QFrame):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         layout.addWidget(SectionHeader("Research", "Market prep, setup performance, and ticker lookup."))
+
+        # V3 item 5. Decision 0016: *"the Research tab is the builder's surface,
+        # not the trader's. Nothing the trader must see may live only there."*
+        # The pointer is here rather than in a doc because this is the screen
+        # somebody stands on when they wonder whether a number belongs here.
+        pointer = QLabel(
+            "This tab is the BUILDER'S surface. Nothing the trader has to see "
+            "may live only here - the trader-facing surfaces are the Trading "
+            "Desk (Capture), the Journal, Weekend Prep and the AWAY Recap. A "
+            "number that matters gets a line on one of those; the full readout "
+            "stays here."
+        )
+        pointer.setObjectName("MutedLabel")
+        pointer.setWordWrap(True)
+        layout.addWidget(pointer)
+
         layout.addWidget(tabs, 1)
 
     def shutdown(self) -> None:

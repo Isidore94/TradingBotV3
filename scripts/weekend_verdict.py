@@ -224,6 +224,57 @@ def awaiting_review_line(count: int) -> VerdictLine:
     )
 
 
+def research_line(pack: Mapping[str, Any] | None) -> VerdictLine:
+    """The nightly fact pack's headline, on a surface the trader opens - V3 item 5.
+
+    Decision 0016: *"The Research tab is the builder's surface, not the trader's.
+    Nothing the trader must see may live only there."* The pack's eligible-cell
+    count and its best cell were reachable only from Research, which the trader
+    never opens - so the answer to "did the overnight research find anything?"
+    was a screen away from every screen they use.
+
+    ONE LINE, and the full panel stays in Research. This is a pointer with a
+    number on it, not a second readout.
+
+    Eligible cells only, and it says DISCOVERY: a cell that has cleared the
+    evidence floor has still not closed its registered window, and the ledger -
+    not this card - is what says when it may be read for a verdict.
+    """
+    block = (pack or {}).get("gate") or {}
+    cells = list((pack or {}).get("eligible_policies") or ())
+    count = _as_int(block.get("eligible_policy_cells") or len(cells))
+    if not count or not cells:
+        return VerdictLine(
+            key="research",
+            text="Research: no cell has cleared the evidence floor yet.",
+            measured=False,
+        )
+    best = max(
+        cells,
+        key=lambda cell: (
+            _as_float(((cell.get("stats") or {}).get("clipped") or {}).get("trimmed_mean"))
+            or _as_float(cell.get("trimmed_mean_r"))
+            or float("-inf")
+        ),
+    )
+    stats = best.get("stats") or {}
+    mean = _as_float((stats.get("clipped") or {}).get("trimmed_mean"))
+    if mean is None:
+        mean = _as_float(best.get("trimmed_mean_r"))
+    n = _as_int(stats.get("n") or best.get("n") or 0)
+    name = " ".join(
+        str(best.get(key) or "").strip()
+        for key in ("family", "side", "recipe_id")
+        if str(best.get(key) or "").strip()
+    )
+    mean_text = f"{mean:+.2f}R" if mean is not None else "unmeasured"
+    return VerdictLine(
+        key="research",
+        text=f"Research: {count} eligible cell(s), best {name} {mean_text} - discovery",
+        n=n or count,
+    )
+
+
 def build_verdict(
     *,
     learning_state: Mapping[str, Any] | None = None,
@@ -231,6 +282,7 @@ def build_verdict(
     veto_rows: Iterable[Mapping[str, Any]] = (),
     week_trades: Iterable[Mapping[str, Any]] = (),
     awaiting_review: int = 0,
+    research_pack: Mapping[str, Any] | None = None,
     horizon: str = CARD_HORIZON,
 ) -> Verdict:
     """The whole card. Pure: every input is passed in, nothing is read here.
@@ -260,4 +312,5 @@ def build_verdict(
     )
     verdict.lines.append(journal_week_line(week_trades))
     verdict.lines.append(awaiting_review_line(awaiting_review))
+    verdict.lines.append(research_line(research_pack))
     return verdict

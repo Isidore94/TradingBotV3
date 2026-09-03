@@ -46,7 +46,12 @@ HELD_WINDOW_MINUTES = 30
 
 #: The rolling window the score is measured over. Decision 0016 answer 6:
 #: "lately" is about 20 sessions and carries NO regime label.
-ROLLING_SESSIONS = 20
+#:
+#: V3 item 3: ONE CONSTANT, and it lives in `evidence_stats` with the rest of the
+#: desk's statistics contract. This name is kept as an alias so nothing that
+#: imports it breaks, but the NUMBER is no longer written here - two modules that
+#: each own a "lately" eventually disagree about the trader's own word.
+from evidence_stats import LATELY_SESSIONS as ROLLING_SESSIONS  # noqa: E402
 
 #: Time buckets, market-local. The open and the last hour behave differently
 #: enough from the middle of the day that pooling them hides both.

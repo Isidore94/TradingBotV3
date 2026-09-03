@@ -1613,6 +1613,9 @@ class WeekendPrepPanel(QFrame):
         vetoes = _safe(_read_veto_cohort, [])
         trades = _safe(lambda: _read_week_trades(self.service.week_bounds), [])
         waiting = _safe(_read_awaiting_review, 0)
+        # V3 item 5: the nightly fact pack's headline, on a surface the trader
+        # opens. The full panel stays in Research; this is one line.
+        pack = _safe(_read_research_pack, {})
 
         return weekend_verdict.build_verdict(
             learning_state=state,
@@ -1620,6 +1623,7 @@ class WeekendPrepPanel(QFrame):
             veto_rows=vetoes,
             week_trades=trades,
             awaiting_review=waiting,
+            research_pack=pack,
         ).rendered()
 
     def _on_verdict_ready(self, payload: object) -> None:  # pragma: no cover - signal seam
@@ -2678,3 +2682,30 @@ def _read_awaiting_review() -> int:
     from ai_jobs.journal_auto_tag import trades_awaiting_review
 
     return trades_awaiting_review()
+
+
+def _read_research_pack() -> dict:
+    """The newest nightly fact pack, for its eligible-cell headline (V3 item 5).
+
+    Decision 0016: the Research tab is the builder's surface and nothing the
+    trader must see may live only there. This lifts ONE line onto a surface they
+    open; the panel stays where it is.
+
+    Returns {} for anything it cannot get. A missing pack is "the research has
+    not run yet", which the card says in words - it is never a reason to fail the
+    other six lines.
+    """
+    try:
+        import json
+
+        from ai_jobs import store as ai_store
+
+        root = ai_store.retros_dir() / "setup_research"
+        packs = sorted(
+            path for path in root.rglob("*.json") if "narration" not in path.name
+        )
+        if not packs:
+            return {}
+        return json.loads(packs[-1].read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - one line, never the card
+        return {}
