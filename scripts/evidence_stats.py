@@ -85,6 +85,30 @@ LATELY_SESSIONS = 20
 WEEK_SESSIONS = 5
 
 
+#: THE ONE HORIZON A SWING RECORD IS MEASURED OVER, in trading sessions.
+#:
+#: The tracker grades every scan row at 1, 3, 5 and 10 sessions, so
+#: `master_avwap_tier_outcomes.csv` carries one row per `(scan_row_id, horizon)`
+#: and reading it whole counts each pick up to four times. Measured on the live
+#: file over 2026-08-06..2026-09-02: 11,097 rows over 4,433 distinct
+#: `scan_row_id`, so pooling inflates n by ~2.5x with rows that are four looks at
+#: ONE decision rather than four decisions. A Wilson bound on an inflated n is
+#: too TIGHT, and unevenly so - it changes the ORDER, which is the whole output.
+#:
+#: **FIVE.** Horizon 1 is an overnight move and not the thing the trader holds
+#: for; its top family in the live window rests on n=8. Horizon 10 can only grade
+#: picks from the first half of a 20-session window, so the ranking would be
+#: about a fortnight ago. Horizon 5 is the shortest that is a swing hold rather
+#: than a gap, and it still grades 13 families with real separation.
+#:
+#: R4 A11 declared this for the AWAY digest as
+#: `autopilot_core.SWING_DIGEST_HORIZON_SESSIONS`; R4 B2 moved the VALUE here,
+#: because the setup docs answer the same question off the same file and two
+#: horizons across the desk's swing surfaces is the failure B3 names.
+#: `autopilot_core` keeps its name as a re-export.
+SWING_HORIZON_SESSIONS = 5
+
+
 def lately_start(end=None, *, sessions: int = LATELY_SESSIONS):
     """The first session of the "lately" window ending at `end` (inclusive).
 

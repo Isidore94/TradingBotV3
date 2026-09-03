@@ -39,6 +39,7 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping
 
 import focus_adoption_gate
 import prev_day_gate
+from evidence_stats import SWING_HORIZON_SESSIONS
 from market_session import get_market_session_window, normalize_market_local_datetime
 from project_paths import (
     AUTO_LONGS_FILE,
@@ -3365,7 +3366,12 @@ AWAY_REPORT_MAX_NEAR_ROWS = 3
 #: than a gap, and it still grades 13 families with real separation - 2,450
 #: rows before the stale-horizon filter and 2,249 after it, top bounds 0.585 /
 #: 0.543 / 0.522.
-SWING_DIGEST_HORIZON_SESSIONS = 5
+#:
+#: R4 B2: the VALUE now lives in `evidence_stats.SWING_HORIZON_SESSIONS`, the
+#: same module that owns `LATELY_SESSIONS`, because `setup_docs` grades the same
+#: file for the same question and had been pooling all four horizons. This name
+#: is a RE-EXPORT and stays so nothing that reads the digest's constant moves.
+SWING_DIGEST_HORIZON_SESSIONS = SWING_HORIZON_SESSIONS
 
 
 def swing_family_records(
