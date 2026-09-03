@@ -809,6 +809,71 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+## Phase 0.14 — Names first (decision 0016)
+
+Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breaker
+for this phase: **when two packets compete, the one that improves WHICH NAMES ARE
+SHOWN beats the one that improves WHEN TO ENTER.**
+
+### Phase 0.14 packet V1 — Names first (2026-09-02) — items 1 and 2 BUILT; 2's surfaces, 3 and 4 NOT BUILT
+
+Authorized by the trader pasting the packet.
+
+**Item 1 — the Strength Board becomes the trader's TC2000 scan. BUILT.**
+
+1. **Relative volume**, `AVG(V / mean(V78 ... V1170), 12)`, POSITIONAL exactly as
+   TC2000 is. Blank, never zero, under sixteen sessions of history.
+2. **The fetch period grew from `5d` to `1mo`** and had to: the RVOL needs 1,182
+   bars and `5d` holds about 390, so every RVOL would have been blank.
+3. **The floors** — price over $5, above the D1 200 and 100 SMA, above the M5
+   15 EMA — each a NAMED boolean with the sentence that failed. The timeframes
+   are a stated ASSUMPTION (decision 0016 records both as open); one line
+   corrects either.
+4. **The universe** is `universe_all.txt` plus the four watchlists. The D1 SMAs
+   come from a second batched daily download; still **zero IB traffic**.
+5. **A row that misses a filter is GREYED, not dropped**, with what it missed in
+   its tooltip, behind a default-on "TC2000 parity" toggle that hides them.
+6. **One window, two sections, RS/RW first** — the RS/RW board moved out of the
+   tab stack into the strength column, in a scroll area, because hosted bare its
+   minimum took the column's floor from 190 px to 452.
+7. **Golden `tc2000_parity_v1`**: five symbols, sixteen sessions, expected values
+   computed by a SECOND naive implementation written from the trader's formula
+   lines rather than from the module under test. All five agree to four decimals.
+
+**The fence on `strength_scan.py` is NARROWED, not lifted.** It was frozen whole
+by the R8 spec ("stop and ask the trader first"); the trader asked, naming the
+file. The test now asserts the seven FORMULA functions are byte-identical to the
+R8 baseline — stronger than "no edits", which could be satisfied by not touching
+the file while the numbers moved underneath it.
+
+**Item 2 — `held_run_score`. THE SCORE IS BUILT; ITS THREE SURFACES ARE NOT.**
+
+`scripts/held_run_score.py` computes P(level held in the first 30 min) x
+trimmed-mean MFE_R of the held ones, per (bounce_type, time_bucket,
+market_environment, d1_setup_present), over a rolling 20 sessions with
+`evidence_stats` floors. Shadow only: the champion tier, the mutes and the PROVEN
+stamp are untouched, and a test asserts the champion never imports it.
+
+**NOT BUILT and owed by this item:** the Daytrade Tracker column and sort, the M5
+alert-bar row suffix (`alert_suffix` exists and is tested; nothing calls it yet),
+and the Alert Center ordering switch.
+
+**Items 3 and 4 — NOT BUILT.**
+
+3. The phone digest still ranks the best-swing block inside the favourite bucket
+   only. Decision 0016 answer 8 says the best pick is often in `near_favorite_zone`,
+   so the cream is still not being sent.
+4. There is no "Working lately" section on the Trading Desk and no priority
+   switch. `review_learning`'s callouts, the tracker's per-family outcomes and the
+   four verdict cohorts all still require leaving the desk to read.
+
+**Live gate (#44):** one DESK session where the Strength section matches the
+trader's TC2000 list on the same minute for the top ten names, with the parity
+toggle on.
+
+**Live gate (#45):** the RS/RW section opens above the Strength section in the
+alert column and neither widens the column.
+
 ### Phase 0.13 packet P3 — The fact pack tells the truth (2026-09-01) — BUILT, live gate owed
 
 Authorized by the trader pasting the packet. Built on `claude/p3-fact-pack-truth`.

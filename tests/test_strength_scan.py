@@ -348,9 +348,14 @@ def test_the_board_cuts_before_it_filters():
     board = build_strength_board(bars_by_symbol, fraction=0.25)
     assert board["offered"] == 8
     assert board["measured"] == 8
-    # 25% of 8 = 2 rows a side entered the filters.
-    assert len(board["long"]) + board["long_filtered_out"] == 2
-    assert len(board["short"]) + board["short_filtered_out"] == 2
+    # 25% of 8 = 2 rows a side entered the filters. CHANGED BY V1: a row that
+    # fails a filter is no longer dropped, it is kept and greyed, so the two
+    # rows are both in the list and `filtered_out` counts how many of them are
+    # not picks. A display filter is not a suppression (decision 0010).
+    assert len(board["long"]) == 2
+    assert len(board["short"]) == 2
+    assert board["long_picks"] + board["long_filtered_out"] == 2
+    assert board["short_picks"] + board["short_filtered_out"] == 2
 
 
 def test_a_long_row_must_clear_vwap_the_ema_and_yesterdays_high():
@@ -364,9 +369,18 @@ def test_a_long_row_must_clear_vwap_the_ema_and_yesterdays_high():
     board = build_strength_board({"GOOD": good}, fraction=1.0)
     assert [row["symbol"] for row in board["long"]] == ["GOOD"]
 
+    # CHANGED BY V1: the row STAYS and carries why it is not a pick, so the
+    # trader can see what nearly qualified. It is greyed, never hidden.
     board = build_strength_board({"INSIDE": inside}, fraction=1.0)
-    assert board["long"] == []
+    assert [row["symbol"] for row in board["long"]] == ["INSIDE"]
+    assert board["long"][0]["passes_floors"] is False
+    assert board["long_picks"] == 0
     assert board["long_filtered_out"] == 1
+    # It names WHAT failed. `_passes_filters` stops at the first miss, so the
+    # sentence it contributes is whichever of VWAP / 15EMA / yesterday's high
+    # came first - the point is that the row says why, not which one it says.
+    assert board["long"][0]["failed_floors"]
+    assert board["long"][0]["filter_reason"]
 
 
 def test_the_board_reports_what_it_could_not_measure():
@@ -392,8 +406,27 @@ def test_an_empty_universe_produces_an_honest_empty_board():
     assert board["offered"] == 0 and board["measured"] == 0
 
 
-def test_the_fetch_period_is_five_days_not_one():
-    """The formula needs 50 completed bars; a 1d window holds six at 07:00."""
-    from strength_scan import STRENGTH_FETCH_PERIOD
+def test_the_fetch_period_covers_the_rvol_history():
+    """It was 5d for ATR50; V1 needs sixteen SESSIONS, not fifty bars.
 
-    assert STRENGTH_FETCH_PERIOD == "5d"
+    The strength formula needs 50 completed bars, which 5d supplies and a 1d
+    window does not (six bars at 07:00). The trader's relative volume compares
+    each of the last 12 bars with the same offset over the PRIOR 15 SESSIONS, so
+    the series needs 12 + 78x15 = 1,182 bars - sixteen sessions - and under 5d
+    every RVOL on the board would have been blank.
+    """
+    from strength_scan import (
+        RVOL_BARS,
+        RVOL_PRIOR_SESSIONS,
+        SESSION_M5_BARS,
+        STRENGTH_ATR_PERIOD,
+        STRENGTH_FETCH_PERIOD,
+    )
+
+    assert STRENGTH_FETCH_PERIOD == "1mo"
+    needed = RVOL_BARS + SESSION_M5_BARS * RVOL_PRIOR_SESSIONS
+    assert needed == 1182
+    # A month of regular sessions is about 21, and sixteen is the requirement.
+    assert needed / SESSION_M5_BARS <= 21
+    # And it still covers what it covered before.
+    assert needed > STRENGTH_ATR_PERIOD + 1

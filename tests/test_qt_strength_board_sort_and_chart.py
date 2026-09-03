@@ -152,7 +152,12 @@ class TestTheHeaderClicks:
     def test_the_button_column_sorts_nothing(self, monkeypatch):
         panel = _panel(monkeypatch)
         before = panel.longs.sort_state()
-        panel.longs._on_header_clicked(5)
+        # The button sits AFTER the last data column, whatever that index is -
+        # V1 added three columns, and pinning the number here would mean editing
+        # this test every time the board gains one.
+        from ui.panels.strength_board_panel import _COLUMNS
+
+        panel.longs._on_header_clicked(len(_COLUMNS))
         assert panel.longs.sort_state() == before
 
     def test_sorting_never_touches_the_service(self, monkeypatch):
@@ -178,7 +183,9 @@ class TestTheAddButtonFollowsItsRow:
         row_of_ccc = [
             index for index in range(table.rowCount()) if table.item(index, 0).text() == "CCC"
         ][0]
-        table.cellWidget(row_of_ccc, 5).click()
+        from ui.panels.strength_board_panel import _COLUMNS
+
+        table.cellWidget(row_of_ccc, len(_COLUMNS)).click()
 
         assert requested == [("CCC", "long")]
 
@@ -296,7 +303,11 @@ def test_the_alert_center_still_owns_the_rs_rw_board():
         encoding="utf-8"
     )
     assert "self.rrs_snapshot = RrsSnapshotWidget()" in source
-    assert 'self.tabs.addTab(board_tab, "RS/RW Board")' in source
+    # V1 (decision 0016 answer 7) MOVED it out of the tab stack and into the
+    # strength column, above the M5 Strength section - re-hosted, never retired.
+    # The assertion follows the widget rather than the address it used to have.
+    assert 'CollapsibleSection("RS/RW Board")' in source
+    assert "self.rrs_board_section.set_content(rrs_scroll)" in source
     assert "service.rrsSnapshotChanged.connect(self.rrs_snapshot.update_snapshot)" in source
 
 

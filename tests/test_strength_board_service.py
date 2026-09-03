@@ -32,27 +32,69 @@ class _Frame:
             }
 
 
-def _bars(close, *, prev_high, prev_low, opening):
+#: V1's relative volume compares each of the last 12 bars with the same offset
+#: over the PRIOR 15 SESSIONS, so a fixture needs sixteen sessions or every row
+#: is greyed with "relative volume not measurable" and the test is about the
+#: fixture rather than the board.
+_SESSIONS = 16
+_BARS_PER_SESSION = 78
+
+
+def _bars(close, *, prev_high, prev_low, opening, today_volume=1000.0):
+    """Sixteen sessions of flat history, then today's move.
+
+    Today's volume is a parameter because the board's second volume cut asks
+    whether the SESSION is busy, and a fixture where every symbol traded exactly
+    the same amount cannot exercise it.
+    """
     bars = []
-    day_one = datetime(2026, 7, 1, 6, 30)
     mid = (prev_high + prev_low) / 2
-    for index in range(60):
-        bars.append({"dt": day_one + timedelta(minutes=5 * index), "open": mid,
-                     "high": prev_high, "low": prev_low, "close": mid, "volume": 1000.0})
-    day_two = datetime(2026, 7, 2, 6, 30)
+    for session in range(_SESSIONS - 1):
+        start = datetime(2026, 6, 1, 6, 30) + timedelta(days=session)
+        for index in range(_BARS_PER_SESSION):
+            bars.append({"dt": start + timedelta(minutes=5 * index), "open": mid,
+                         "high": prev_high, "low": prev_low, "close": mid,
+                         "volume": 1000.0})
+    today = datetime(2026, 7, 2, 6, 30)
     for index in range(20):
-        bars.append({"dt": day_two + timedelta(minutes=5 * index), "open": opening,
+        bars.append({"dt": today + timedelta(minutes=5 * index), "open": opening,
                      "high": max(opening, close) + 0.1, "low": min(opening, close) - 0.1,
-                     "close": close, "volume": 1000.0})
+                     "close": close, "volume": today_volume})
     return bars
 
 
-def _downloader(mapping):
-    class _Data:
-        def __getitem__(self, symbol):
-            return _Frame(mapping.get(symbol) or [])
+def _daily(level):
+    """210 daily closes at `level` - enough for the 200 SMA the V1 floors need."""
+    start = datetime(2025, 9, 1)
+    return [
+        {"dt": start + timedelta(days=index), "open": level, "high": level,
+         "low": level, "close": level, "volume": 1_000_000.0}
+        for index in range(210)
+    ]
 
-    return lambda chunk, **_kwargs: _Data()
+
+def _downloader(mapping, daily=None):
+    """Answers the 5m and the 1d call separately.
+
+    V1 added a second batched download for the D1 SMA floors, so a stub that
+    returned M5 bars to both would leave every row unable to measure its 200 SMA
+    - which fails the floor, correctly, and would make this test about the stub.
+    """
+    daily = daily or {}
+
+    class _Data:
+        def __init__(self, source):
+            self._source = source
+
+        def __getitem__(self, symbol):
+            return _Frame(self._source.get(symbol) or [])
+
+    def _call(chunk, **kwargs):
+        if str(kwargs.get("interval") or "") == "1d":
+            return _Data(daily)
+        return _Data(mapping)
+
+    return _call
 
 
 def test_the_pipeline_turns_bars_into_a_board():
@@ -62,12 +104,32 @@ def test_the_pipeline_turns_bars_into_a_board():
         "STRONG": _bars(105.0, prev_high=100.0, prev_low=98.0, opening=101.0),
         "WEAK": _bars(95.0, prev_high=102.0, prev_low=100.0, opening=99.0),
     }
-    board = build_board(symbols=list(mapping), downloader=_downloader(mapping),
-                        fraction=1.0, now=NOW)
+    # STRONG sits above its daily SMAs and WEAK below its own, so each clears
+    # the floors on the side it belongs to.
+    # The volume cuts are OFF here (fraction 1.0). They keep the busier HALF of
+    # the measured population, and with two symbols that is one of them - so on
+    # a two-name fixture they decide the test rather than the pipeline does.
+    # `test_the_volume_cuts_keep_the_busier_half` exercises them on a population.
+    board = build_board(
+        symbols=list(mapping),
+        downloader=_downloader(mapping, {"STRONG": _daily(50.0), "WEAK": _daily(150.0)}),
+        fraction=1.0,
+        rvol_fraction=1.0,
+        session_volume_fraction=1.0,
+        now=NOW,
+    )
     assert board["offered"] == 2
     assert board["measured"] == 2
-    assert [row["symbol"] for row in board["long"]] == ["STRONG"]
-    assert [row["symbol"] for row in board["short"]] == ["WEAK"]
+    # CHANGED BY V1: the board keeps the rows that miss a filter, greyed and
+    # carrying why, so `long` holds both and `long_picks` counts the picks.
+    picks = [row["symbol"] for row in board["long"] if row["passes_floors"]]
+    assert picks == ["STRONG"]
+    assert board["long_picks"] == 1
+    # Both rows appear on both sides now - the strength cut is 1.0 here - and
+    # what separates them is `passes_floors`, not membership.
+    assert sorted(row["symbol"] for row in board["short"]) == ["STRONG", "WEAK"]
+    short_picks = [row["symbol"] for row in board["short"] if row["passes_floors"]]
+    assert short_picks == ["WEAK"]
 
 
 def test_the_forming_bar_is_excluded():
@@ -155,3 +217,39 @@ def test_a_failed_refresh_keeps_the_last_good_board(monkeypatch):
     assert service.board()["long"] == [{"symbol": "NVDA"}], "last good survives"
     # ... and the failure is visible, so a stale board cannot look current.
     assert "FAILED" in service.status_text()
+
+
+def test_the_volume_cuts_keep_the_busier_half():
+    """The trader's second filter, on a population rather than two names.
+
+    Both halves of it: the per-bar relative volume, and today's session volume.
+    A name can clear the first on twelve quiet bars that are merely less quiet
+    than usual, which is why the trader asks for both.
+    """
+    from ui.services.strength_board_service import build_board
+
+    # Four names, identical in every way except how much they traded today.
+    mapping = {
+        f"N{index}": _bars(
+            105.0, prev_high=100.0, prev_low=98.0, opening=101.0,
+            today_volume=1000.0 * (index + 1),
+        )
+        for index in range(4)
+    }
+    daily = {symbol: _daily(50.0) for symbol in mapping}
+
+    board = build_board(
+        symbols=list(mapping), downloader=_downloader(mapping, daily),
+        fraction=1.0, now=NOW,
+    )
+
+    by_symbol = {row["symbol"]: row for row in board["long"]}
+    assert len(by_symbol) == 4, "nothing is hidden by a volume cut"
+    # The two busiest are in; the two quietest are greyed and say why.
+    # Ordered by STRENGTH, which is identical here, so the order is the input's.
+    # What the cut decides is membership, not rank.
+    assert [row["symbol"] for row in board["long"] if row["passes_floors"]] == ["N2", "N3"]
+    for symbol in ("N0", "N1"):
+        reasons = by_symbol[symbol]["failed_floors"]
+        assert any("busier half" in reason for reason in reasons), reasons
+

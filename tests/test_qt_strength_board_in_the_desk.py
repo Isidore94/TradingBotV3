@@ -257,11 +257,20 @@ def test_the_board_sits_under_the_strength_window_not_beside_the_charts(qt_desk)
     column = center.strength_column
     order = [column.layout().itemAt(i).widget() for i in range(column.layout().count())]
     assert isinstance(order[0], FocusStrengthBoard)
+    # V1 (decision 0016 answer 7): ONE WINDOW, TWO SECTIONS, RS/RW FIRST. The
+    # RS/RW board moved out of the tab stack and into this column above the M5
+    # Strength section - the trader was opening one of them by accident while
+    # looking for the other.
     assert isinstance(order[1], CollapsibleSection)
-    # The section's body is a scroll area so the board's own minimum width
-    # stops there instead of reaching the desk splitter and widening the alert
-    # column at the charts' expense.
-    assert order[1].content().widget() is center.strength_board
+    assert order[1] is center.rrs_board_section
+    assert isinstance(order[2], CollapsibleSection)
+    assert order[2] is center.strength_board_section
+    # Both bodies are scroll areas so neither board's own minimum width reaches
+    # the desk splitter and widens the alert column at the charts' expense.
+    # Hosting the RS/RW board bare took this column's floor to 452 px, past the
+    # alert column's whole 360 px budget.
+    assert order[2].content().widget() is center.strength_board
+    assert order[1].content().widget() is center.rrs_board_tab
 
 
 def test_the_section_starts_collapsed_so_it_steals_no_space(qt_desk):

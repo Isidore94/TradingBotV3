@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - both remaining branches merged 2026-09-02: **`claude/p9-quick-like`** (Phase 0.13 packet P9, the quick like) and **`claude/r3-narration-budget`** (review round R3, the research narration). `main` now holds every Phase 0.13 packet P0-P9 plus R1, R2 and R3 |
-| Also in flight | **NOTHING unmerged.** `claude/gui-phase-0-9` is CONTAINED in `main` (`git merge-base --is-ancestor` succeeds, 0 ahead) - what is open there is GATE 7 (SOAK 1), not the branch, and a gate owed by landed work is not an open branch |
+| Working branch | **`claude/v1-names-first`**, off `main` - Phase 0.14 packet **V1** (names first). Decision **0016** is merged to `main` and is the tie-breaker for this phase. **`claude/p10-after-the-like` is still unmerged** |
+| Also in flight | **`claude/p10-after-the-like`** - Phase 0.13 packet P10, built and verified, NOT merged. It has no dependency on V1 and V1 has none on it |
 | Active roadmap items | **Phase 0.13 packets P0-P9: ALL MERGED, live gates #29-#40 owed**; **integration gate #38** (one DESK session on the merged tree after a restart); Desk snappiness packets 1-3 (#24-#26); Phase 0.11 theta (#23); Strength Board (#22); day-trade pass (#21); swing picks (#20); desk lockup (#19); R7 journal auto-tagging + statement import; Phase 3.2 + 6.1 (warehouse); Phase 0.9 (GUI); Phase 0.10 (AVWAP band challenger) |
-| Last verified baseline | `pytest tests/ -q` **6147 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `main` after both merges) - the `ai_jobs_runner` lock probed FREE immediately before the run. **The exit code is the point here**: the first run on the merged tree printed 6,145 passed and then died with a Windows fast-fail, and the cause was not either branch - see the merge entry below. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger. Previous: **6104 passed** on the R2 tree |
+| Last verified baseline | `pytest tests/ -q` **6174 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/v1-names-first`) - the `ai_jobs_runner` lock probed FREE immediately before the run. `ruff` **clean** · smoke **7/7** · source `--selftest` **74/74** · no packaging trigger. Previous: **6147 passed** on `main` |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 04:09, trader-authorized ("Go ahead and restart the desk").** The checkout was moved to `main` at `125ffa0` FIRST and verified (selftest 74/74, smoke 7/7, ruff clean) - restarting onto the branch it happened to be sitting on would have put the wrong code on the desk. Old pid 17132 (up since 2026-09-01 11:09) stopped; relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **25884** (the desk) under trampoline **9140**. Verified UP THREE WAYS rather than assumed: the process outlived the launch by minutes, `heartbeat.json` re-stamps every ~4 min naming pid 25884 (it had read pid 17132 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0. **The desk now knows `tag_status`, so P6a's 24 provisional tags render as provisional rather than as the trader's own** - which is what the restart was for. The nightly AI run was a SEPARATE process and was not disturbed; it finished normally at ~04:08 |
 
@@ -32,6 +32,8 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 45 | **One window, two sections (V1)** - the RS/RW section opens ABOVE the M5 Strength section in the alert column, and neither widens the column | 2026-09-02 V1 entry |
+| 44 | **TC2000 parity (V1)** - one DESK session where the Strength section matches the trader's own TC2000 list on the same minute for the top ten names, with the parity toggle ON. Turning it OFF shows the near-misses greyed, each naming the filter it failed | 2026-09-02 V1 entry |
 | 40 | **The narration fits (R3)** - one overnight `setup_research` run that publishes **exactly ONE pack** for the date and a `.narration.json` beside it. Three siblings, or an `ok` whose reason contains `narration absent`, means the view is still too large - and the refusal message names the size, the budget and the eligible-cell count, so it says which. Also check the pack carries `built_by_commit` and a non-empty `recipe_ids` | 2026-09-02 R3 entry |
 | 39 | **Quick like (Phase 0.13 P9)** - one DESK session: the trader quick-likes one SWING chart and one M5 chart. Both rows reach `trader_annotations.jsonl` with `like_mode` quick, the M5 one carries `m5_bars_ref`, BOTH charts retire, and nothing appears in Focus. The next morning `like_cohort_picks.csv` holds both, the M5 one has `m5_bars_completed_ref`, and **its intraday columns are numbers rather than blank** - which is also what closes gate 34's open definition question | 2026-09-02 P9 entry |
 | 38 | **The merged tree, on the desk (R1, extended by R2)** — one DESK session after the restart with the stall watchdog ON and quiet on every new surface: the Weekend Prep pass/rejection/preference tables, the journal's Provisional filter, the Decisions pane, the M5 take-rate row and the Strength Board section. **R2 adds two specific things to watch**: the Setup Tracker's current-picks count after the FIRST scan of the day (it should be the real tier count, not one row per symbol - that is the NAN guard), and the Weekend Prep backlog-toggle line in `ui_stalls.jsonl`, which should now be absent | 2026-09-02 R2 entry |
@@ -74,6 +76,59 @@ the dated entry named beside it.
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
+
+### 2026-09-02 - Phase 0.14 packet V1: names first (items 1 and 2 of four)
+
+**Branch `claude/v1-names-first`, off `main`.** Live gates 44-45 owed. Decision
+0016 was merged to `main` first, as the packet required; it is docs-only and it is
+the tie-breaker for this whole phase.
+
+**ITEM 1 IS COMPLETE: the board is the trader's own scan now.** Their relative
+volume (`AVG(V / mean(V78 ... V1170), 12)`, positional exactly as TC2000 is, blank
+and never zero under sixteen sessions of history), their four floors, their
+universe (`universe_all.txt` PLUS the four watchlists), and their filters applied
+as a DISPLAY filter - a row that misses is greyed and names what it missed, behind
+a default-on parity toggle that hides them for a line-by-line comparison.
+
+**Two costs, both measured rather than assumed.** The M5 fetch period had to grow
+from `5d` to `1mo`, because the RVOL needs 1,182 bars and `5d` holds about 390 -
+under the old period every RVOL on the board would have been blank. And the D1
+floors need daily bars, so there is now a second batched daily download over the
+symbols that actually reached the board. Still zero IB traffic.
+
+**The fence on `strength_scan.py` is NARROWED, not lifted.** It was frozen whole
+by the R8 spec - "stop and ask the trader first" - and the trader asked, in this
+packet, naming the file. What the fence protects is the FORMULA, so the test now
+asserts the seven formula functions are byte-identical to the R8 baseline. That is
+stronger than "no edits at all", which could be satisfied by not touching the file
+while the numbers moved underneath it.
+
+**The golden's expected values come from a SECOND hand implementation** written
+from the trader's two formula lines, not from the module under test - a golden
+generated by the code it checks pins that code's mistakes. All five symbols agree
+to four decimals.
+
+**The RS/RW board moved into the strength column above the Strength section**, in
+a scroll area. Hosted bare its minimum took the column's floor from 190 px to 452,
+past the alert column's entire 360 px budget - the charts would have paid for the
+move, and the test that measures that floor is what caught it.
+
+**ITEM 2's SCORE IS COMPLETE AND ITS THREE SURFACES ARE NOT.**
+`scripts/held_run_score.py` is built, tested and shadow: P(no stop inside 30
+minutes) x trimmed-mean MFE_R of the ones that held, per segment, rolling 20
+sessions. The champion tier, the mutes and the PROVEN stamp are untouched, and a
+test pins that the champion never imports the challenger. **Not wired:** the
+Daytrade Tracker column, the M5 alert-bar suffix (`alert_suffix` exists and is
+tested; nothing calls it), the Alert Center ordering switch.
+
+**ITEMS 3 AND 4 ARE NOT BUILT.** The phone digest still picks the best swing from
+the favourite bucket alone, so the near-bucket cream is still not being sent; and
+there is no "Working lately" section on the Trading Desk and no priority switch.
+plan.md's Phase 0.14 entry records exactly what each still owes.
+
+**Verification.** `pytest tests/ -q` **6174 passed, 72 subtests, exit 0, zero
+failures**, lock probed FREE immediately before the run · `ruff` clean · smoke
+**7/7** · `--selftest` **74/74**.
 
 ### 2026-09-02 - Phase 0.13 packet P8: the first setup-parameter grid
 

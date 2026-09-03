@@ -68,13 +68,52 @@ def test_the_capture_is_reproducible_within_one_process():
     assert capture() == capture()
 
 
-def test_r8_has_not_edited_the_m5_scanner():
-    """The hard rule, checked rather than remembered.
+#: The functions the R8 spec fences. These ARE the trader's formula; everything
+#: else in the module is orchestration around them.
+FENCED_FUNCTIONS = (
+    "sma",
+    "displaced_close",
+    "true_ranges",
+    "atr",
+    "strength_score",
+    "percentile_cut",
+    "ema",
+)
 
-    ``strength_scan.py`` is fenced by the spec's §2 and §8: R8 reimplements the
-    ~20-line board orchestration in its own module and imports the formula. If
-    this file ever needs editing, the spec says stop and ask - so this test
-    exists to make "it seemed necessary" visible instead of quiet.
+
+def _function_text(source: str, name: str) -> str:
+    """The body of one top-level `def`, from `def` to the next top-level line."""
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(f"def {name}("):
+            end = index + 1
+            while end < len(lines) and (
+                not lines[end].strip() or lines[end].startswith((" ", ")", "\t"))
+            ):
+                end += 1
+            return "\n".join(lines[index:end]).rstrip()
+    raise AssertionError(f"{name} is gone from strength_scan.py")
+
+
+def test_the_m5_formula_itself_has_not_been_edited():
+    """The hard rule, checked rather than remembered - and narrowed, not lifted.
+
+    ``strength_scan.py`` was fenced whole by the R8 spec's §2 and §8: R8
+    reimplements the ~20-line board orchestration in its own module and imports
+    the formula, and if this file ever needed editing the spec said stop and ask.
+
+    **The trader asked, on 2026-09-02, in packet V1** - decision 0016 answer 9
+    makes their TC2000 scan the specification for this board, and the packet
+    names this file: *"Build the RVOL as a pure function in strength_scan.py."*
+    So the module is no longer frozen whole.
+
+    What the fence protects is the FORMULA, and that is now checked directly:
+    every function in :data:`FENCED_FUNCTIONS` must be byte-identical to the R8
+    baseline. That is a stronger guard than "no edits at all", which could be
+    satisfied by not touching the file while the numbers changed underneath it,
+    and it is the guard the spec was actually reaching for. The golden in
+    `m5_strength_functions_v1.json` pins the same functions numerically, so a
+    rewrite that preserved the text and changed a constant is caught there.
     """
     import subprocess
 
@@ -82,11 +121,15 @@ def test_r8_has_not_edited_the_m5_scanner():
         ["git", "merge-base", "HEAD", "4420bbf"],
         capture_output=True, text=True, cwd=ROOT_DIR,
     ).stdout.strip() or "4420bbf"
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", base, "--", "scripts/strength_scan.py"],
+    original = subprocess.run(
+        ["git", "show", f"{base}:scripts/strength_scan.py"],
         capture_output=True, text=True, cwd=ROOT_DIR,
-    ).stdout.strip()
-    assert changed == "", (
-        "scripts/strength_scan.py is fenced by the R8 spec and must not be edited; "
-        "stop and ask the trader first"
-    )
+    ).stdout
+    assert original, "the R8 baseline of strength_scan.py could not be read"
+    current = (ROOT_DIR / "scripts" / "strength_scan.py").read_text(encoding="utf-8")
+
+    for name in FENCED_FUNCTIONS:
+        assert _function_text(current, name) == _function_text(original, name), (
+            f"{name}() is the trader's formula and is fenced by the R8 spec; "
+            "V1 authorized ADDITIONS to this module, not edits to these"
+        )

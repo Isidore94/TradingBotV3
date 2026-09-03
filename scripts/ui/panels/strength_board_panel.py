@@ -36,6 +36,7 @@ import logging
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -49,11 +50,20 @@ from PySide6.QtWidgets import (
 
 import focus_adoption_gate
 
-_COLUMNS = ("Symbol", "Strength", "Day %", "vs VWAP", "Last")
+#: V1 adds the trader's own numbers: relative volume, and the two daily levels
+#: the floors test. They are COLUMNS rather than a pass/fail badge because the
+#: trader reads this board against their TC2000 screen and needs the figures to
+#: compare, not a verdict on them.
+_COLUMNS = (
+    "Symbol", "Strength", "RVOL", "Day %", "vs VWAP", "Last", "200 SMA", "100 SMA",
+)
 #: Which row field each column shows, so a header click sorts on the NUMBER
 #: rather than on the formatted text. "+1.20%" and "-11.00%" sort correctly as
 #: floats and backwards as strings, and "—" is not a small number at all.
-_COLUMN_KEYS = ("symbol", "strength", "day_pct", "vwap_distance_pct", "last")
+_COLUMN_KEYS = (
+    "symbol", "strength", "rvol", "day_pct", "vwap_distance_pct", "last",
+    "sma200_d1", "sma100_d1",
+)
 
 
 def _sort_value(row: dict, key: str):
@@ -99,6 +109,8 @@ class _SideTable(QWidget):
     symbolActivated = Signal(str, str)   # symbol, side (chart it)
 
     def __init__(self, side: str, parent=None) -> None:
+        # V1: TC2000 parity is the DEFAULT view. See `set_parity_only`.
+        self._parity_only = True
         super().__init__(parent)
         self._side = side
         self._rows: list[dict] = []
@@ -212,9 +224,33 @@ class _SideTable(QWidget):
         self._rows = [dict(row) for row in rows]
         self._render()
 
+    def set_parity_only(self, on: bool) -> None:
+        """TC2000 parity: show only the rows that clear every one of the filters.
+
+        A DISPLAY FILTER and nothing else. The rows it hides are still in
+        `self._rows`, still counted in the title, and one click brings them back;
+        nothing is muted, withheld, or written anywhere (decision 0010).
+
+        Default ON, because the trader compares this board with their TC2000
+        screen and a list with extra names on it cannot be compared line by line.
+        Turning it OFF is how they see what nearly qualified and why.
+        """
+        self._parity_only = bool(on)
+        self._render()
+
     def _render(self) -> None:
         rows = sort_rows(self._rows, self._sort_column, self._sort_descending)
-        self._title.setText(f"{self._side.title()}s ({len(rows)})")
+        hidden = 0
+        if self._parity_only:
+            picks = [row for row in rows if not (row.get("failed_floors") or ())]
+            hidden = len(rows) - len(picks)
+            rows = picks
+        # The title counts what is SHOWN and says what is not, so a short board
+        # is explainable rather than merely short.
+        title = f"{self._side.title()}s ({len(rows)})"
+        if hidden:
+            title += f"  ·  {hidden} below the filters"
+        self._title.setText(title)
         keep = self._selected_symbol
         self.table.blockSignals(True)
         self.table.setRowCount(len(rows))
@@ -222,14 +258,29 @@ class _SideTable(QWidget):
             values = (
                 str(row.get("symbol") or ""),
                 _fmt(row.get("strength"), 1),
+                _fmt(row.get("rvol"), 2),
                 _fmt(row.get("day_pct"), 2, signed=True, suffix="%"),
                 _fmt(row.get("vwap_distance_pct"), 2, signed=True, suffix="%"),
                 _fmt(row.get("last"), 2),
+                _fmt(row.get("sma200_d1"), 2),
+                _fmt(row.get("sma100_d1"), 2),
             )
+            # A row that misses a floor is GREYED and NAMES what it missed - it
+            # is never removed from the list (decision 0010: a display filter is
+            # not a suppression). The trader asked to see what nearly qualified.
+            missed = list(row.get("failed_floors") or ())
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 if column:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if missed:
+                    # The desk's existing greying idiom (`away_recap_panel`):
+                    # a brush from the THEME's own `text_muted`, not a per-item
+                    # stylesheet. QSS selectors do not reach a table item, and a
+                    # stylesheet set per cell is CSS parsed per widget on the Qt
+                    # thread - which is the thing that must not happen here.
+                    item.setForeground(_muted_brush())
+                    item.setToolTip("Not a pick: " + "; ".join(missed))
                 self.table.setItem(index, column, item)
             button = QPushButton("Add to Focus")
             symbol = str(row.get("symbol") or "")
@@ -255,6 +306,26 @@ class _SideTable(QWidget):
         # The name left the board on this refresh; the chart stays where it is
         # and the next explicit selection re-points it.
         self._selected_symbol = ""
+
+
+def _muted_brush():
+    """The theme's muted text colour, resolved once per process.
+
+    Cached because `_render` asks for it per cell and a colour lookup per cell
+    over a few hundred rows is work the Qt thread does not need to repeat for an
+    answer that cannot change while the app runs.
+    """
+    global _MUTED_BRUSH
+    if _MUTED_BRUSH is None:
+        from PySide6.QtGui import QColor
+
+        from ui import theme
+
+        _MUTED_BRUSH = QColor(theme.color("text_muted"))
+    return _MUTED_BRUSH
+
+
+_MUTED_BRUSH = None
 
 
 def _fmt(value, places: int, *, signed: bool = False, suffix: str = "") -> str:
@@ -299,6 +370,21 @@ class StrengthBoardPanel(QWidget):
         self.status.setWordWrap(True)
         controls.addWidget(self.status, 1)
         controls.addStretch(1)
+        # V1: the parity switch. DEFAULT ON - the trader reads this board beside
+        # their TC2000 screen, and a list carrying extra names cannot be compared
+        # line by line. Off shows every row in the top fraction, greyed, with the
+        # filter it missed in its tooltip.
+        self.parity_toggle = QCheckBox("TC2000 parity")
+        self.parity_toggle.setChecked(True)
+        self.parity_toggle.setToolTip(
+            "On: only names that clear every one of your filters, exactly as "
+            "TC2000 lists them. Off: the whole top slice, with the rows that "
+            "missed a filter greyed and naming what they missed. This only "
+            "changes what is DISPLAYED - nothing is muted or removed."
+        )
+        self.parity_toggle.toggled.connect(self._on_parity_toggled)
+        controls.addWidget(self.parity_toggle)
+
         self.refresh_button = QPushButton("Refresh")
         self.refresh_button.setToolTip(
             "Refresh now. Manual refreshes are never gated on quiet hours."
@@ -358,6 +444,11 @@ class StrengthBoardPanel(QWidget):
     def set_board(self, board: dict) -> None:
         self.longs.set_rows(list(board.get("long") or []))
         self.shorts.set_rows(list(board.get("short") or []))
+
+    def _on_parity_toggled(self, on: bool) -> None:
+        """Both tables, one switch. It re-renders; it never re-fetches."""
+        for table in (self.longs, self.shorts):
+            table.set_parity_only(bool(on))
 
     def _on_status(self, text: str) -> None:
         self.status.setText(text)
