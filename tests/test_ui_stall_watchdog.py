@@ -224,14 +224,71 @@ def test_threshold_defaults_and_overrides(monkeypatch):
     assert stall_watchdog.threshold_ms() == stall_watchdog.DEFAULT_THRESHOLD_MS
 
 
+def _hour_cap_scenario(log: Path):
+    """Spend the hourly budget, then move the clock and try again.
+
+    Returns ``[what the spent hour wrote, what the next hour wrote]``. The
+    watchdog is never started: this is about the write budget, not the sampler,
+    and a running sampler would add records nobody asked for.
+    """
+    from datetime import datetime, timedelta
+
+    from ui import stall_watchdog as mod
+
+    _qt_app()
+    watchdog = mod.StallWatchdog(threshold_ms=30, log_path=log, heartbeat_ms=5)
+    cap = getattr(mod, "MAX_RECORDS_PER_HOUR", None) or mod.MAX_RECORDS_PER_SESSION
+    # The SESSION total stays at zero on purpose: the desk that went blind on
+    # 2026-09-03 had written 1,614 records overnight, not 2,000, and the cap it
+    # hit was the one this line stands in for.
+    watchdog._hour_records = cap
+    watchdog._write(0.5, ["frame.py:1"], 1)
+    spent_hour = mod.load_stalls(log)
+
+    # One hour later, with the same watchdog and the same session.
+    later = datetime.now() + timedelta(hours=1)
+    mod._now = lambda: later
+    watchdog._write(0.5, ["frame.py:1"], 1)
+    return [spent_hour, mod.load_stalls(log), watchdog.records_written]
+
+
+def test_the_record_cap_rolls_every_hour(tmp_path):
+    """A desk left on overnight must not spend the morning's stall budget.
+
+    On 2026-09-03 the desk had been up since 21:04 the night before and wrote
+    1,614 records between midnight and 06:03:35 - the 04h and 05h hours burned
+    ~500 each on sub-second native ``app.exec`` stalls on an IDLE desk. At
+    06:03 ``MAX_RECORDS_PER_SESSION`` was reached and the log stopped, so the
+    trading morning the trader reported as unusable has no stall evidence at
+    all. A per-DAY cap would have gone blind at the same minute; the budget has
+    to roll while the session runs, and an hour is the smallest window that
+    still bounds a runaway loop (48k records a day, ~50 MB).
+
+    Isolated in its own interpreter for the same reason as the two scenarios
+    above - see :func:`_run_scenario`.
+    """
+    spent_hour, next_hour, session_total = _run_scenario(tmp_path, "--hour-cap-scenario")
+
+    assert spent_hour == [], "a write landed after the hour's budget was spent"
+    assert len(next_hour) == 1, "the new hour did not restore the budget"
+    # The session total is the property the summary reads, and it counts every
+    # record ever written - it is not the budget and never was.
+    assert session_total == 1
+
+
 if __name__ == "__main__":
     # `--scenario <log>`: run the block-and-measure scenario in this pristine
     # interpreter and print the records as JSON on the last stdout line.
-    _MODES = {"--scenario": _scenario, "--idle-scenario": _idle_scenario}
+    _MODES = {
+        "--scenario": _scenario,
+        "--idle-scenario": _idle_scenario,
+        "--hour-cap-scenario": _hour_cap_scenario,
+    }
     if len(sys.argv) == 3 and sys.argv[1] in _MODES:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         print(json.dumps(_MODES[sys.argv[1]](Path(sys.argv[2]))))
     else:  # pragma: no cover - developer convenience only
         raise SystemExit(
-            "usage: test_ui_stall_watchdog.py [--scenario|--idle-scenario] <log path>"
+            "usage: test_ui_stall_watchdog.py "
+            "[--scenario|--idle-scenario|--hour-cap-scenario] <log path>"
         )

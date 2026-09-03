@@ -50,14 +50,32 @@ DEFAULT_THRESHOLD_MS = 50.0
 #: Heartbeat cadence. Also the sampler's poll interval and therefore the
 #: measurement's resolution: a stall is seen within one tick of starting.
 HEARTBEAT_MS = 10
-#: A runaway stall loop must not fill the disk during a session.
-MAX_RECORDS_PER_SESSION = 2000
+#: A runaway stall loop must not fill the disk during a session - but the
+#: budget rolls every HOUR rather than being spent once. On 2026-09-03 the
+#: desk had been up since 21:04 the night before and wrote 1,614 records
+#: between midnight and 06:03:35, the 04h and 05h hours burning ~500 each on
+#: sub-second native `app.exec` stalls on an idle desk. The cap was reached at
+#: 06:03 and the whole trading morning - the morning the trader reported the
+#: desk as unusable - has NO stall evidence at all. A per-day cap would have
+#: gone blind at the same minute. Hourly still bounds a runaway loop at 48k
+#: records a day (~50 MB), and it can never spend tomorrow's budget.
+MAX_RECORDS_PER_HOUR = 2000
 #: Stacks captured per stall. A five-minute freeze must not spend itself
 #: formatting tracebacks; 240 samples is four minutes of heartbeats.
 MAX_SAMPLES_PER_STALL = 240
 LOG_NAME = "ui_stalls.jsonl"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _now() -> datetime:
+    """The clock, in one place, so the hourly budget can be tested."""
+    return datetime.now()
+
+
+def _hour_key() -> str:
+    """Local-time hour the current budget belongs to."""
+    return _now().strftime("%Y-%m-%d %H")
 
 
 def _flag(raw: str) -> bool:
@@ -149,6 +167,10 @@ class StallWatchdog(QObject):
         # land on the same float, and a wrapped compare would miss the resume.
         self._beat_seq = 0
         self._records = 0
+        # The cap is hourly, so the session total (which `records_written`
+        # reports) and the budget are two different counters.
+        self._hour_records = 0
+        self._hour_key = _hour_key()
         self._stop = threading.Event()
         self._sampler: threading.Thread | None = None
         self._timer = QTimer(self)
@@ -247,7 +269,11 @@ class StallWatchdog(QObject):
         culprits: "Counter[str] | None" = None,
         stacks: dict[str, list[str]] | None = None,
     ) -> None:
-        if self._records >= MAX_RECORDS_PER_SESSION:
+        hour = _hour_key()
+        if hour != self._hour_key:
+            self._hour_key = hour
+            self._hour_records = 0
+        if self._hour_records >= MAX_RECORDS_PER_HOUR:
             return
         path = self._log_path if self._log_path is not None else log_path()
         gap_ms = gap_s * 1000.0
@@ -294,6 +320,7 @@ class StallWatchdog(QObject):
         except OSError:
             return  # diagnostics must never break the session
         self._records += 1
+        self._hour_records += 1
 
 
 def install(parent: QObject | None = None) -> StallWatchdog | None:
