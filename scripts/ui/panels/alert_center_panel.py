@@ -417,6 +417,12 @@ class _ClickableItem(QFrame):
         super().mousePressEvent(event)
 
 
+#: R4 A10: `held_run_score`'s segment index and the D1 setups by session, built
+#: ONCE per process. `None` means "not built yet"; a dict - even an empty one -
+#: means "built, and this is the answer". A failed read is an answer too.
+_HELD_RUN_INDEX_MEMO: dict | None = None
+
+
 class AlertCenterPanel(QFrame):
     """The sit-back-and-wait surface, split into two stacked feeds.
 
@@ -2237,8 +2243,19 @@ class AlertCenterPanel(QFrame):
             logging.debug("Held/ran suffix skipped for %s.", alert.symbol, exc_info=True)
 
     def _ensure_held_run_index(self) -> None:
-        """Start the one background build, once. Never blocks the alert path."""
+        """Start the one background build, once per PROCESS. Never blocks.
+
+        The memo is module-level rather than per panel because the read is ~90 MB
+        of outcome log plus a 19 MB snapshot and the answer is the same for every
+        panel in the process - a second Alert Center (a test, a second window)
+        must not pay for it again. A panel that finds the memo already filled
+        takes it immediately and starts nothing.
+        """
+        global _HELD_RUN_INDEX_MEMO
         if self._held_run_index or self._held_run_thread is not None:
+            return
+        if _HELD_RUN_INDEX_MEMO is not None:
+            self._on_held_run_index_loaded(_HELD_RUN_INDEX_MEMO)
             return
         import threading
 
@@ -2250,6 +2267,7 @@ class AlertCenterPanel(QFrame):
         self._held_run_thread.start()
 
     def _held_run_index_worker(self) -> None:
+        global _HELD_RUN_INDEX_MEMO
         payload = {"index": {}, "d1": {}}
         try:
             import held_run_score
@@ -2265,6 +2283,9 @@ class AlertCenterPanel(QFrame):
             )
         except Exception:  # noqa: BLE001 - an absent suffix is a real answer
             logging.debug("Held/ran index unavailable.", exc_info=True)
+        # Memoised even when it came back empty: a failed read is an answer, and
+        # retrying a 90 MB parse on every alert is exactly the drip this avoids.
+        _HELD_RUN_INDEX_MEMO = payload
         try:
             self._heldRunIndexLoaded.emit(payload)
         except RuntimeError:

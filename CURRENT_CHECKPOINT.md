@@ -106,6 +106,15 @@ judge from?" could never be populated. **A rollup over an unwired dimension read
 as an answer about the trader, not about the wiring**, which is why these are
 worse than a missing feature.
 
+**Measured on the live stores after the fix** (read-only, from this worktree):
+`held_run_score.load_episodes()` returns **7,603 episodes**, of which **2,459 now
+carry `d1_setup_present=True`** where every one of them read False before - that
+is 32% of the day-trade evidence gaining the dimension answer 4 asked for. The
+build is **8.7 s** (a ~90 MB outcome log plus a 19 MB snapshot), which is exactly
+why both the tracker panel and the Alert Center do it on a worker and memoise it
+once per process. It cuts to **519 segments, 43 of them over the evidence
+floor**.
+
 **Two numbers said the opposite of the truth.** The Weekend Prep verdict card
 computed `shown = takes + skips + rejects` and `build_review_learning_state`
 publishes neither of the last two, so it printed **"100% of 94 shown"** where the
