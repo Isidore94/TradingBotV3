@@ -18,12 +18,12 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`main`** - Round **R4 is fully on `main`** as of 2026-09-03 ~08:00: Part A (`claude/r4-fixes`, 18 items + a 4-blocker fix round, reviewer GO) merged at `d0a0d49`; Part B (`claude/v3-keep-it-honest`, B1-B8, reviewer GO with no blockers) merged at `60b9d5b`; `claude/agent-team-2` (docs + the `tester` agent) merged at `3b5633c`. Every merge was made in a SCRATCH worktree per `docs/AGENT_TEAM.md` rule 6. **B3 is deliberately PARTIAL** - five swing surfaces wired, the Setup Tracker's Setup Types tab owed because `master_avwap_setup_type_stats.csv` carries no win column. Next packet is **V4** (see Active roadmap items) |
-| Also in flight | **NOTHING unmerged.** `claude/r4-fixes`, `claude/v3-keep-it-honest`, `claude/agent-team` and `claude/agent-team-2` are all CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch. R4's review advisories (Part A: 9 + 5, Part B: 9 - the Tier column's dead sort click, the pass/rejection tables ranking across horizons, two unjoined QThreads, the one-z guard's import-idiom gap, the compact-profile guard pinning one column, one tautological test, B6's flat half reaching no screen, the human-focus rollup's bare win rate) are batched for V4, not lost |
+| Working branch | **`claude/f1-desk-freeze`** - packet **F1**, built 2026-09-03, the desk-freeze fix: the post-scan warehouse build moved to a CHILD PROCESS, the exchange calendar memoized, the stall watchdog's cap made hourly. Not merged; the lead merges. Before it, Round **R4 is fully on `main`** as of 2026-09-03 ~08:00: Part A (`claude/r4-fixes`, 18 items + a 4-blocker fix round, reviewer GO) merged at `d0a0d49`; Part B (`claude/v3-keep-it-honest`, B1-B8, reviewer GO with no blockers) merged at `60b9d5b`; `claude/agent-team-2` (docs + the `tester` agent) merged at `3b5633c`. Every merge was made in a SCRATCH worktree per `docs/AGENT_TEAM.md` rule 6. **B3 is deliberately PARTIAL** - five swing surfaces wired, the Setup Tracker's Setup Types tab owed because `master_avwap_setup_type_stats.csv` carries no win column. Next packet is **V4** (see Active roadmap items) |
+| Also in flight | **`claude/f1-desk-freeze` (F1) is unmerged and is the priority - the desk is unusable until it lands and the trader restarts.** Otherwise nothing: `claude/r4-fixes`, `claude/v3-keep-it-honest`, `claude/agent-team` and `claude/agent-team-2` are all CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch. R4's review advisories (Part A: 9 + 5, Part B: 9 - the Tier column's dead sort click, the pass/rejection tables ranking across horizons, two unjoined QThreads, the one-z guard's import-idiom gap, the compact-profile guard pinning one column, one tautological test, B6's flat half reaching no screen, the human-focus rollup's bare win rate) are batched for V4, not lost |
 | Active roadmap items | **V4**, which owns: V1's item 4 (Working-lately + the priority switch, whose identical-visible-rows test is owed WITH the switch), V2's item 3 (the AWAY Recap rebuild), B3's last surface (the Setup Types tab - the fix is upstream: the tracker export must write a win column), the B3 feature means and family split in P10's `after_like` block, and the R4 review advisories listed under Also in flight. Live gates #29-#52 are owed across Phases 0.13 and 0.14 |
 | Last verified baseline | **`main` at the R4 merge tip, 2026-09-03 08:00-08:10, run in a SCRATCH worktree - THE NIGHTLY AI LOCK PROBED FREE IMMEDIATELY BEFORE AND AFTER THE RUN.** `pytest tests/ -q` with **NOTHING DESELECTED**: **6476 passed, 1 skipped, 72 subtests passed, process exit 0, ZERO failures, 6 min 56 s**. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger (R4 added only test modules and `ui/widgets/note_prompt.py`, inside a collected package). Previous: **6476** on `claude/v3-keep-it-honest` (Part B builder and reviewer, both lock-free), **6310** on `main` before R4 |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
-| Desk restart | **OWED - a restart onto `main`.** The desk is running the OLD `main` tip `93732ef` (started 2026-09-02 21:04, pid 11612 under trampoline 7192), which predates every R4 commit, so **none of R4 is on the desk**: not the session-relative RVOL, not the tracker join, not the digest ranking, not the five win-rate surfaces, not the Market Journal page, not the pass surface stamp. The desk checkout is on `main` and is fast-forwarded to the merged tip; `trading_desk.cmd` launches source, so the next restart picks it up. The restart is the trader's call and the lead never performs it |
+| Desk restart | **OWED, and now it carries F1 as well as R4 - this is the one that ends the freezing.** The desk is running the OLD `main` tip `93732ef` (started 2026-09-02 21:04, pid 11612 under trampoline 7192), which predates every R4 commit, so **none of R4 is on the desk**: not the session-relative RVOL, not the tracker join, not the digest ranking, not the five win-rate surfaces, not the Market Journal page, not the pass surface stamp. The desk checkout is on `main` and is fast-forwarded to the merged tip; `trading_desk.cmd` launches source, so the next restart picks it up. The restart is the trader's call and the lead never performs it |
 
 ### Open gates, newest first
 
@@ -32,6 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 53 | **The desk stays clickable through a build (F1)** - one DESK session after the restart where a scan finishes and: `owned_scan_process_count` shows the build child and Task Manager shows a **below-normal** `python.exe` (source launch) doing the work; the desk stays clickable throughout; the build's `m5_close_recipe_outcomes` stage finishes in **minutes rather than tens of minutes** (`research_lake/manifest_log.jsonl` timestamps, against the 27-57 min baseline of 09-01 to 09-03); and `ui_stalls.jsonl` carries records **after 06:00** | 2026-09-03 F1 entry |
 | 52 | **The surfaces say what they measure (R4 Part B)** - one DESK session and one Weekend Prep open where: the Master AVWAP setups table shows a **Family Win %** cell reading `NN% (>=NN%, n=NNN)` and sorting by the bound, not the rate; the Setup Playbook shows a **Record:** line under a setup and it matches the AWAY digest's ordering for that family; the Daytrade Tracker shows a **Tier** column (PROVEN / MUTED / active / blank) beside **Verdict (edge score)**, and My Decisions carries Held 30m; the Weekend Prep verdict card's research line names a real cell count instead of "no cell has cleared the evidence floor"; the week summary header says **sessions**; and one day-trade PASS recorded from the chart lands in `trader_annotations.jsonl` **with a `surface`** | 2026-09-03 R4 Part B entry |
 | 51 | **The corrected numbers, on the desk (R4 Part A)** - one DESK session and one Weekend Prep open where: the Strength Board's RVOL column is populated on a day the window contains a half day (the number must not jump when one does); the Day Trade Tracker's Held 30m / Held x Ran are filled on the FOUR tabs the outcome log can answer - Bounce Types, Combos, Time of Day, Environment - and BLANK on the four Swing tabs and on RRS (which is reachable and simply not derived yet); an M5 alert row shows "held NN% / ran N.NR" or nothing; the AWAY digest's swing list is ordered with a near-bucket pick above a favorite at least once; the Weekend Prep verdict card's take rate is NOT 100%; and one Market Journal note typed after the close files against TODAY with "written after the session" on it | 2026-09-02 R4 Part A entry |
 | 50 | **The headline statistics agree (V3)** - one DESK session and one Weekend Prep open where every named surface shows the headline first (win rate on swings, Held x Ran on day trades), the sorts agree with it, and the Day Trade Tracker opens on Held x Ran descending | 2026-09-02 V3 entry |
@@ -86,6 +87,49 @@ the dated entry named beside it.
 | 20 | **Today's swing picks** — one desk session: the trader enters their real end-of-day swing list, the names show in swing Focus as THEIRS (no auto marker; "Not today" and the desync repair leave them alone), the bar/strip split drags and the size survives a restart, Paste takes a TC2000 list and Copy hands one back, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" | 2026-08-31 swing picks entry |
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
+
+
+### 2026-09-03 - Packet F1: the desk freeze, measured and fixed
+
+**Branch `claude/f1-desk-freeze` (from `main` at `080495b`). Authorized by the
+trader at ~09:00 PT: "the program has been freezing and has been basically
+unusable all morning" ... "fix it".** The lead measured the running desk first
+(pid 11612, on the OLD `main` tip `93732ef`, with a build in flight); the desk
+was never restarted or touched.
+
+**What was measured.** `uvx py-spy record --gil`, 08:45-08:55 PT: the
+`qt-warehouse-build` thread held the GIL in **82.7%** of samples, `MainThread`
+got **2.3%**, and WM_NULL pings to the desk window from outside the process hung
+**100-606 ms** every few seconds. **84%** of that thread was inside
+`research_warehouse/exchange_calendar.py` (`session_for` -> `trading_session` ->
+`is_trading_day` -> `holidays(year)`), recomputed per M5 bar per occurrence with
+nothing cached. `manifest_log.jsonl`: the `m5_close_recipe_outcomes` stage ran
+**27-57 min after every scan** (09-01: 28/51/57; 09-02: 27/38/44), four scans a
+day, all inside RTH. `ui_stalls.jsonl` **stopped at 06:03:35** with
+`MAX_RECORDS_PER_SESSION` spent overnight (1,614 records between midnight and
+06:03), so the morning in question has no stall evidence at all.
+
+**What was built.** (1) `holidays`, `half_days` and the session builder behind
+`trading_session` are `lru_cache`d - 20,000 `session_for` calls went 0.25 s ->
+0.0114 s. (2) `ScanService.start_warehouse_build` spawns
+`research_warehouse.cli build --run-id <id>` at BELOW_NORMAL priority instead of
+running it on a thread; `launch_gui` answers `--warehouse-build <run_id>` beside
+`--run-scan`; `_run_warehouse_build` is deleted. (3) The stall watchdog's cap is
+`MAX_RECORDS_PER_HOUR = 2000` beside an untouched session total. Rationale and
+numbers: `docs/DESK_INTERNALS.md` (F1 entry) and BD-95. `plan.md`'s Phase 0.9
+line that recorded "a child process was considered and NOT done" is marked
+SUPERSEDED, with each of its three concerns checked rather than waved off.
+
+**Verification.** Every item has a test proven to fail on the un-fixed file
+(calendar 4 failed / 1 passed; the build child, behaviourally, 0 Popen calls with
+`run_build` on `qt-warehouse-build` vs 1 Popen call and nothing inline; the
+watchdog 1 failed / 5 passed). Full-suite result, lock state, ruff, smoke and
+selftest are recorded in the handoff and in the baseline row above.
+
+**Owed: live gate #53, after the trader's restart.** No packaging trigger - no new
+dependency, no new asset, and `research_warehouse` is already collected.
+
+---
 
 ### 2026-09-03 - Round R4 Part B: the surfaces the packets promised
 

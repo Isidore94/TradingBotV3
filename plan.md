@@ -735,6 +735,15 @@ its own fail-before-fix test and a soak between fluidity slices.
    and the ledger's `_record_job` all assume one process, and the filtering
    removes the growth on its own (BD-74). It remains available if the live gate
    shows it is still wanted; that is the trader's call.
+   **SUPERSEDED 2026-09-03 (packet F1, trader-authorized, BD-95): the build DOES
+   run in a child process now**, because the problem it solves turned out to be
+   CPU rather than memory - the build thread held the GIL in 82.7% of py-spy
+   samples and froze the desk for a morning. None of the three concerns above
+   bit: `single_flight` is a lock FILE keyed on a pid with dead-holder reclaim
+   (verified live - a `-m research_warehouse.cli build` run was refused by the
+   desk's own in-flight build), `seal_spool` never touches the active `.open`
+   segment because it already belongs to another writer, and `JobLedger` is an
+   append-only file that replays. The memory gate above still stands as written.
 
    **Observed in the same session, unchanged, NOT authorised here:** the RRS
    scan's O(n^2) intraday profile (CPU, not memory); the

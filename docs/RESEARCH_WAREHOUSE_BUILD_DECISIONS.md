@@ -2577,3 +2577,56 @@ to likes whose own date is missing or unparseable.
 **Reopen if** the like log ever gains a real intraday timestamp worth keeping in
 `event_at`; the partition would be unaffected (still that month) and only the
 hour would sharpen.
+
+
+## BD-95 — The post-scan build runs in a CHILD PROCESS, and the calendar is memoized
+
+**Decision (packet F1, 2026-09-03, trader-authorized: "the program has been
+freezing and has been basically unusable all morning ... fix it").** The post-scan
+warehouse build leaves the desk process. `ScanService.start_warehouse_build`
+spawns `research_warehouse.cli build --run-id <id>` with
+`subprocess.Popen(..., creationflags=BELOW_NORMAL_PRIORITY_CLASS |
+CREATE_NO_WINDOW)` — both flags read by name through `getattr` so macOS still
+launches — registers it with `_register_owned_process`, and waits on it from one
+daemon thread that blocks on the child's pipe. `_run_warehouse_build` is deleted.
+Separately, `exchange_calendar.holidays`, `.half_days` and the session builder
+behind `trading_session` are `functools.lru_cache`d.
+
+**Why, measured on the desk (pid 11612, 2026-09-03 08:45–08:55 PT, `uvx py-spy
+record --gil`).** The `qt-warehouse-build` thread held the GIL in **82.7%** of
+samples; `MainThread` got **2.3%**. WM_NULL pings to the desk window from outside
+the process measured 100–606 ms hangs every few seconds — that is the freeze the
+trader reported. **84%** of that thread's samples were inside
+`exchange_calendar.py` (`session_for` → `trading_session` → `is_trading_day` →
+`holidays(year)`), recomputing Easter and five nth-weekday walks once per M5 bar
+per occurrence. `manifest_log.jsonl` shows the `m5_close_recipe_outcomes` stage
+taking **27–57 minutes** after every scan (09-01: 28/51/57; 09-02: 27/38/44), four
+scans a day, all inside RTH.
+
+Memoizing the calendar is a 21× speed-up on its own (20,000 `session_for` calls:
+0.25 s → 0.0114 s in the desk venv) but it does not make the build small enough to
+belong on a thread: a CPU-bound Python thread holds the GIL by construction, and
+no priority, timer or chunking trick gives the GUI thread back. LD-01 specified
+this work as a *post-scan/EOD CLI build job*; running it in-process was the
+deviation, and it is reverted.
+
+**What did not change.** The build itself, its single-flight lock, its manifest
+authority, the parent-side `warehouse_enabled()` gate (no store → no child), the
+one-build-at-a-time rule, and `wait_for_warehouse_build`'s name and role on the
+shutdown path. A reaped child is safe because `single_flight` reclaims a dead
+holder's lock rather than obeying it. The lru_cache sits behind `trading_session`
+in a positional `_trading_session(day, calendar)` because `lru_cache` keys on the
+call SHAPE, and every in-module caller passes `calendar=` as a keyword — decorated
+directly, the same day would be built and stored twice. `TradingSession` is a
+frozen dataclass, so one shared instance is safe; the holiday dicts are shared and
+**no caller may mutate them** (every caller in `scripts/` and `tests/` only reads,
+checked 2026-09-03).
+
+**A side effect worth knowing:** `owned_scan_process_count` now counts the build
+child too, so the Health tile labelled for scan children can read 1 with no scan
+running.
+
+**Reopen if** the build ever needs to hand a live object back to the desk (it does
+not — it publishes through the lake), or if a platform without
+`BELOW_NORMAL_PRIORITY_CLASS` needs a real nice level rather than the 0 the
+`getattr` falls back to.

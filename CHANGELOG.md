@@ -301,7 +301,10 @@ which is evidence and must not be loaded as context.
 
 - Chart-first review flow, current forming D1 preview, D1/M5 shared snapshot widget,
   log scale, crosshair/OHLCV readout, source/age strip, fallback warning, cache
-  invalidation, background loading, prewarming, and stall watchdog.
+  invalidation, background loading, prewarming, and stall watchdog. **The
+  watchdog's record cap is per HOUR** (F1, 2026-09-03): 2,000 an hour, session
+  total untouched. A per-session cap was spent overnight on an idle desk and the
+  log went blind at 06:03 on the morning the trader reported the desk unusable.
 - Chart Review workspace with lookup for any symbol, hidden-by-default Setups drawer,
   keyboard-first LIKE/veto/note/setup-claim capture, versioned veto vocabulary,
   append-only `trader_annotations.jsonl`, and isolated forward veto cohorts.
@@ -861,6 +864,24 @@ which is evidence and must not be loaded as context.
 - **The headline per-setup R names its exit template** (P4 B6).
   `REPRESENTATIVE_EXIT_TEMPLATE_ID` defaults to today's behaviour, and `setup_docs.py`
   now says the headline R is not measured on the house plan it documents.
+- **The post-scan build runs in a CHILD PROCESS, never a desk thread** (F1,
+  2026-09-03, BD-95). `ScanService.start_warehouse_build` spawns
+  `research_warehouse.cli build --run-id <id>` at BELOW_NORMAL priority (frozen: the
+  app's own `--warehouse-build` flag, since a frozen `sys.executable` cannot take
+  `-m`), registers it for the shutdown reap, and waits on it from one thread that
+  blocks on the child's pipe. It was a `qt-warehouse-build` THREAD, which held the
+  GIL in **82.7%** of py-spy samples while the GUI thread got 2.3% - an unusable
+  desk, for a 27-57 minute build, four times a session, all inside RTH. LD-01
+  specified a CLI build job; in-process was the deviation. The parent-side
+  `warehouse_enabled()` gate, the one-build-at-a-time rule and
+  `wait_for_warehouse_build` are unchanged, and a reaped child is safe because
+  `single_flight` reclaims a dead holder's lock.
+- **The XNYS exchange calendar is memoized** (F1). `holidays`, `half_days` and the
+  session builder behind `trading_session` are `lru_cache`d - **84%** of that build
+  thread's samples were recomputing them once per M5 bar per occurrence. 20,000
+  `session_for` calls: 0.25 s -> 0.0114 s. The cache sits behind
+  `trading_session` positionally because `lru_cache` keys on the call SHAPE, and the
+  returned holiday dicts are shared and must never be mutated.
 
 ### Testing, packaging, and platform
 
@@ -923,6 +944,46 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-03 - Packet F1: the desk freeze, and what was actually holding the GIL
+
+**Branch `claude/f1-desk-freeze`.** Authorized by the trader at ~09:00 PT (*"the
+program has been freezing and has been basically unusable all morning ... fix
+it"*) after the lead measured the running desk (pid 11612, old `main` tip
+`93732ef`). Three items, each with a test PROVEN to fail on the un-fixed file.
+The measurements and the reasoning are in `docs/DESK_INTERNALS.md`; the warehouse
+decision is BD-95.
+
+**What was measured.** `uvx py-spy record --gil`: the `qt-warehouse-build` thread
+held the GIL in **82.7%** of samples, `MainThread` got **2.3%**, and WM_NULL pings
+to the desk window from outside the process hung **100-606 ms** every few seconds.
+**84%** of that thread was inside `research_warehouse/exchange_calendar.py`,
+recomputing holidays once per M5 bar per occurrence. `manifest_log.jsonl`: the
+outcomes stage ran **27-57 minutes after every scan**, four scans a day, all in
+RTH. `ui_stalls.jsonl` stopped at **06:03:35** with its per-session cap spent
+overnight (1,614 records between midnight and 06:03), so the morning in question
+has no stall evidence at all.
+
+**1 - the calendar is memoized.** `holidays`, `half_days` and the session builder
+are `lru_cache`d; 20,000 `session_for` calls went 0.25 s -> 0.0114 s (21x). The
+cache is behind `trading_session` positionally, because `lru_cache` keys on the
+call shape and every in-module caller passes `calendar=` as a keyword.
+
+**2 - the build left the process.** `start_warehouse_build` spawns
+`research_warehouse.cli build` at BELOW_NORMAL priority (`getattr`-read flags, so
+macOS still launches), `launch_gui` answers `--warehouse-build <run_id>` beside
+`--run-scan`, and `_run_warehouse_build` is deleted. A CPU-bound Python thread
+holds the GIL by construction - no priority or timer trick returns the GUI thread,
+which is why nothing smaller was attempted. `owned_scan_process_count` now counts
+the build child too. The three tests in `test_qt_warehouse_tee.py` that pinned the
+in-process mechanism ask the same four questions of the child.
+
+**3 - the stall watchdog's cap rolls hourly.** `MAX_RECORDS_PER_HOUR = 2000` with
+a counter beside the session total; a runaway loop is still bounded at 48k a day,
+and a quiet night can no longer spend the trading morning's budget.
+
+No packaging trigger: no new dependency, no new asset, and `research_warehouse` is
+already a collected package. **Live gate #53.**
 
 ### 2026-09-03 - Round R4 Part B: the surfaces the packets promised
 

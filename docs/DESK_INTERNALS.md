@@ -715,3 +715,81 @@ meanings will pick the flattering one.
 **A segment the learning state has never seen is BLANK, not "active".** "Not
 tracked" and "tracked and unremarkable" are different facts - live, 104 of 295
 rows are the first and 185 the second.
+
+
+## F1 - the desk freeze of 2026-09-03: a build thread that owned the GIL
+
+The trader at ~09:00 PT: *"the program has been freezing and has been basically
+unusable all morning"* ... *"fix it"*. This is what was under it, measured on the
+running desk (pid 11612, on the old `main` tip `93732ef`) rather than reasoned
+about, and the three rules that came out of it.
+
+### What was measured
+
+- `uvx py-spy record --gil` on pid 11612, 08:45-08:55 PT: the **`qt-warehouse-build`
+  thread held the GIL in 82.7% of samples**; `MainThread` got **2.3%**. From
+  outside the process, WM_NULL pings to the desk window measured **100-606 ms**
+  hangs every few seconds. That is the freeze, exactly: the GUI thread was not
+  slow, it was not scheduled.
+- **84% of that thread's samples were inside
+  `scripts/research_warehouse/exchange_calendar.py`** - `session_for` ->
+  `trading_session` -> `is_trading_day` -> `holidays(year)` - recomputing Easter
+  and five nth-weekday walks once per M5 bar per occurrence, with nothing cached.
+  Benchmarked in the desk venv: 20,000 `session_for` calls, **0.25 s uncached,
+  0.0114 s memoized (21x)**.
+- `research_lake/manifest_log.jsonl`: the `m5_close_recipe_outcomes` stage ran
+  **27-57 minutes after EVERY scan** (09-01: 28/51/57 min; 09-02: 27/38/44; the
+  09-03 build started 07:59 and was still running at 08:55). One build per scan,
+  **four scans a day, all inside RTH**.
+- `ui_stalls.jsonl` **stopped at 06:03:35** because `MAX_RECORDS_PER_SESSION =
+  2000` had been spent overnight: the desk came up at 21:04 the night before and
+  wrote **1,614 records between midnight and 06:03**, the 04h and 05h hours
+  burning ~500 each on sub-second native `app.exec` stalls on an idle desk. So the
+  morning the trader called unusable has **no stall evidence at all** - the one
+  morning the diagnostic existed for. A per-DAY cap of 2000 would have gone blind
+  at the same minute.
+
+### The rules this produced
+
+**The post-scan warehouse build runs in a CHILD PROCESS at below-normal priority,
+never a thread.** A CPU-bound Python thread holds the GIL by construction: there
+is no priority setting, no timer, no chunk size and no `sleep(0)` sprinkle that
+gives the GUI thread back, and every one of those would have been a plausible
+"fix" that measured nothing. LD-01 specified this work as a *post-scan/EOD CLI
+build job* in the first place; running it in-process was the deviation.
+`ScanService.start_warehouse_build` now spawns
+`research_warehouse.cli build --run-id <id>` (frozen: the app's own
+`--warehouse-build` flag, because a frozen `sys.executable` is `TradingBotV3.exe`
+and parses `-m` as its own CLI - the same trap that silently killed every
+scheduled scan from 2026-08-12), with `BELOW_NORMAL_PRIORITY_CLASS |
+CREATE_NO_WINDOW` read by name through `getattr` so macOS still launches. The
+child is registered with `_register_owned_process`, so shutdown reaps it - and a
+reaped build is safe because the build's `single_flight` lock **reclaims a dead
+holder rather than obeying it**. One daemon thread, `qt-warehouse-build-wait`,
+blocks on the child's pipe; blocking on I/O holds no GIL, which is the entire
+distinction this rule rests on. Detail and the reopen triggers: BD-95.
+
+**A side effect that is not a defect:** `owned_scan_process_count` now counts the
+build child, so a Health tile labelled for scan children can read 1 with no scan
+running.
+
+**The exchange calendar is memoized.** `holidays(year)`, `half_days(year)` and the
+session builder behind `trading_session` are `functools.lru_cache(maxsize=None)`.
+The cache sits behind `trading_session` in a positional
+`_trading_session(day, calendar)` rather than on the public keyword-only
+signature, because `lru_cache` keys on the **call shape**: `trading_session(day)`
+and `trading_session(day, calendar="XNYS")` are the same question, and decorated
+directly the answer is built and stored twice - which is how the first version of
+the identity test on `session_for` failed. `TradingSession` is a frozen dataclass,
+so sharing one instance is safe. The holiday dicts are **shared and must never be
+mutated**; every caller in `scripts/` and `tests/` only reads them (checked
+2026-09-03), and a caller that ever needs to mutate copies at its own call site.
+
+**The stall watchdog's record cap is per HOUR, not per session.** `_write` keeps
+the session total (`records_written` is unchanged, and `session_summary` reads
+what it always read) and gates on a separate `_hour_records` reset whenever the
+local `%Y-%m-%d %H` key changes. A runaway loop is still bounded - 48k records a
+day, ~50 MB - and a quiet night can no longer spend the trading morning's budget.
+The general form of the lesson: **a diagnostic's budget must roll on a window
+shorter than the thing it is meant to observe**, or the desk goes blind precisely
+when it has been up long enough for something to be wrong.
