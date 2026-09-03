@@ -821,7 +821,7 @@ nobody has to reconstruct it from four entries:
 | Packet | Item | State |
 |---|---|---|
 | V1 | 1 Strength Board = TC2000 | **BUILT** (gates #44, #45). R4 A7/A8 made the RVOL session-relative, dropped the forming daily bar and widened the daily window to `2y` |
-| V1 | 2 `held_run_score` | **BUILT AND WIRED** (R4 A9/A10): the D1 dimension is fed, the tracker's second formula is deleted, and the M5 alert row carries the suffix. Six of the tracker's nine tabs read BLANK because the outcome log does not record what they are cut on |
+| V1 | 2 `held_run_score` | **BUILT AND WIRED** (R4 A9/A10): the D1 dimension is fed, the tracker's second formula is deleted, and the M5 alert row carries the suffix. FOUR of the tracker's nine tabs fill (Bounce Types, Combos, Time of Day, Environment) and five read BLANK - the four `master_avwap_*` Swing tabs because the outcome log cannot be asked those dimensions, `rrs_alignment` because it is reachable and not derived yet (`UNDERIVED_DIMENSIONS` splits the two) |
 | V1 | 3 phone digest ranks across buckets | **BUILT** (R4 A11, horizon corrected in fix round 1) - Wilson lower bound on the family's realized win rate at ONE declared horizon (`SWING_DIGEST_HORIZON_SESSIONS` = 5, stale-horizon rows dropped the way the scan-factor leaderboard drops them), expected R as tiebreak, near cap after the ranking |
 | V1 | 4 Working-lately + priority switch | **NOT BUILT** - this is V4 |
 | V2 | 1 nightly auto-tagging | **BUILT** (gate #46) |

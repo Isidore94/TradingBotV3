@@ -968,10 +968,14 @@ Weekend Prep table carries a ten-row floor through one constant.
 seam before this packet was written. The `alert_center_panel` note dialog was
 already asynchronous; what was wrong in both comments was "MODELESS"
 (`QDialog.open()` is window-modal) and "DEFERRED" (the call is the handler's last
-statement). Six of the Daytrade Tracker's nine tabs now read BLANK for Held and
-Held x Ran, because `intraday_bounce_outcomes.csv` does not record the alert
-context those dimensions are cut on - the honest consequence of deleting the
-second formula, not a regression.
+statement). **FOUR of the Daytrade Tracker's nine tabs fill Held and Held x Ran -
+Bounce Types, Combos, Time of Day, Environment - and five read BLANK** (corrected
+by fix round 1, which made `held_run_score` spell its segments the aggregator's
+way; before that join was an equality, six read blank). The five split two ways in
+`UNDERIVED_DIMENSIONS`: the four `master_avwap_*` Swing tabs are dimensions
+`intraday_bounce_outcomes.csv` cannot be asked for at all, and `rrs_alignment` is
+reachable and simply not derived yet. That is the honest consequence of deleting
+the second formula, not a regression.
 
 ### 2026-09-02 - Phase 0.14 packet V3: keep it honest
 
