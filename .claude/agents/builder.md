@@ -66,6 +66,11 @@ contract; read it first, then `CLAUDE.md` in full.
    rule, `docs/README.md` if a Markdown file was added, and keep `CLAUDE.md` and
    `AGENTS.md` byte-identical.
 8. Never merge to `main`. The lead merges. Never delete a branch.
+9. If the branch already carries red tests from `tester` (files named
+   `tests/test_<slug>_*.py`), your job is to make them pass. You may ADD tests. You may
+   not weaken, skip, delete or rewrite a tester's assertion; if one is wrong, say so in
+   the handoff and leave it red. A test that started red and is now green is the proof
+   the handoff cites.
 
 ## Handoff format (your final message, nothing else)
 
