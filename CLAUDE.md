@@ -276,6 +276,10 @@ baseline rather than diagnostic evidence.
   is not proof; the selftest is what exercises the engines.
 
 ## Working agreement for agents
+- **Edit surgically.** The number of tokens used to edit files is best minimized, all
+  else being equal. Therefore, when it will not affect the end result, try to surgically
+  edit a file rather than rewrite the entire thing. Use `Edit` for a small or medium
+  change; rewrite a file only when it is short or most of it is changing.
 - **The agent team.** A session builds and reviews through the project-defined sub-agents in `.claude/agents/` (`tester` Opus writes the failing tests first, `builder` Opus makes them pass, `reviewer` Opus reproduces, `recon` Sonnet looks things up); the contract, the loop, the lead's delegation policy and the rules are in [`docs/AGENT_TEAM.md`](docs/AGENT_TEAM.md). Read it before spawning one. The lead checks every handoff against `git diff --stat` before believing it. Builders and reviewers work in their own worktrees and never touch the desk's checkout; the lead session merges.
 - Follow the mandatory documentation workflow above. `plan.md` owns build order;
   `CURRENT_CHECKPOINT.md` owns the active item. Do not re-implement anything in
