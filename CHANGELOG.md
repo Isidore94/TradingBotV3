@@ -853,8 +853,8 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ### 2026-09-02 - Phase 0.14 packet V3: keep it honest
 
-**Branch `claude/v3-keep-it-honest`, off `main`.** Live gate #50 owed. P10, V1 and
-V2 were merged first.
+**Branch `claude/v3-keep-it-honest`, off `main` - MERGED to `main` the same evening
+(fast-forward, trader-directed).** Live gate #50 owed. P10, V1 and V2 were merged first.
 
 Six items, all six built, and the shape of all of them is the same: a number the
 trader reads has to mean one thing on every screen, and it has to say what it

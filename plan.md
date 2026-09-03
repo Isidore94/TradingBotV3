@@ -813,8 +813,8 @@ inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
 ## Phase 0.14 — Names first (decision 0016)
 
-**Status at 2026-09-02.** V1 and V2 are merged to `main`; V3 is on
-`claude/v3-keep-it-honest`. What is NOT built, in one place so nobody has to
+**Status at 2026-09-02.** V1, V2 and V3 are all merged to `main` (V3 fast-forwarded
+from `claude/v3-keep-it-honest` the evening of 2026-09-02). What is NOT built, in one place so nobody has to
 reconstruct it from three entries:
 
 | Packet | Item | State |

@@ -18,10 +18,10 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 
 | | |
 |---|---|
-| Working branch | **`claude/v3-keep-it-honest`**, off `main` - Phase 0.14 packet **V3**, all six items built. `main` holds P10, V1 and V2. **The two largest owed items are V1's Working-lately + priority switch and V2's AWAY Recap** - plan.md's Phase 0.14 status table lists every packet item and its state. **Also carries the agent team** (`.claude/agents/` builder/reviewer/recon + `docs/AGENT_TEAM.md`), merged from `claude/agent-team` on 2026-09-02 - docs only, baseline unchanged |
-| Also in flight | **NOTHING unmerged.** `claude/gui-phase-0-9` is CONTAINED in `main` - what is open there is GATE 7 (SOAK 1), not the branch |
+| Working branch | **`main`** - Phase 0.14 packet **V3** was fast-forwarded onto it at ~21:40 on 2026-09-02 (trader: "ok merge to main now"); `claude/v3-keep-it-honest` is now CONTAINED in `main` and carries nothing extra. The agent team (`.claude/agents/`, `docs/AGENT_TEAM.md`) rode in with it. **The two largest owed items are V1's Working-lately + priority switch and V2's AWAY Recap** - plan.md's Phase 0.14 status table lists every packet item and its state |
+| Also in flight | **NOTHING unmerged.** `claude/v3-keep-it-honest` and `claude/agent-team` are both CONTAINED in `main`; `claude/gui-phase-0-9` likewise - what is open there is GATE 7 (SOAK 1), not the branch. The one locked worktree under `.claude/worktrees/` was removed and pruned on 2026-09-02 (clean, nothing lost) |
 | Active roadmap items | **Phase 0.14 V3** (this branch); then V1's item 4 (Working-lately + the priority switch) and V2's item 3 (the AWAY Recap), which are the two largest owed pieces. Live gates #29-#50 are owed across Phase 0.13 and 0.14 |
-| Last verified baseline | `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0, ZERO failures** (2026-09-02, desk `.venv`, on `claude/v3-keep-it-honest`) - the `ai_jobs_runner` lock probed FREE immediately before the run. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger. Previous: **6281 passed** on `main` |
+| Last verified baseline | `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0, ZERO failures, 5 min 42 s** (2026-09-02 21:43, desk `.venv`, on `main` at the V3 fast-forward `7c075d8`, run in a SCRATCH worktree per `docs/AGENT_TEAM.md` rule 6) - the `ai_jobs_runner` lock probed FREE immediately before AND after the run. `ruff` **clean** - smoke **7/7** - source `--selftest` **74/74** - no packaging trigger. Previous: **6310 passed** on `claude/v3-keep-it-honest`, **6281** on the old `main` |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **DONE 2026-09-02 21:04, trader-authorized ("go ahead and start the desk"). THE DESK HAD BEEN DOWN SINCE ~13:02** - `heartbeat.json` last stamped 13:02:29 under the old pid 25884 and no `launch_gui` process existed after it; the cause is not established, and I killed four stuck pytest processes at about that minute, which I cannot rule out. Relaunched through `trading_desk.cmd`, the production launcher, unchanged. New pids **11612** (the desk) under trampoline **7192**. **It runs `claude/v3-keep-it-honest`, not `main`** - another agent holds `main` in a locked worktree, and V3 CONTAINS main (`git merge-base --is-ancestor` succeeds, 3 ahead / 0 behind) and is the commit the 6310-pass baseline was measured on. Verified UP THREE WAYS rather than assumed: the process outlived the launch with 18 s of CPU, `heartbeat.json` re-stamped at 21:05:22 naming pid 11612 (it had read 25884 before), and a second launch printed "another TradingBotV3 desk is already running" and exited 0 |
 
@@ -87,7 +87,8 @@ the dated entry named beside it.
 
 ### 2026-09-02 - Phase 0.14 packet V3: keep it honest (all six items)
 
-**Branch `claude/v3-keep-it-honest`, off `main`.** Live gate 50 owed. P10, V1 and
+**Branch `claude/v3-keep-it-honest`, off `main` - MERGED to `main` at ~21:40 the same
+evening (fast-forward, trader: "ok merge to main now"; gate 50 stays owed).** P10, V1 and
 V2 were merged to `main` first - V3 item 4 verifies P10 Part A and item 6 records
 P10 in Section 12, neither checkable with the branch outside `main`.
 
