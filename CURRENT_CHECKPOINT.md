@@ -153,6 +153,25 @@ and `CHANGELOG.md`. `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md` gains BD-94.
 
 **Advisories were left alone** - they are not this round's.
 
+**A red file the lead must NOT read as this branch's.** Six
+`test_qt_journal_panel.py` tests began failing at midnight on 2026-09-03 for a
+reason that has nothing to do with R4: `journal_feed`'s default range is
+`today - 30 days`, and that fixture's AAPL round trip is dated **2026-08-03** -
+the LAST day inside the window on 09-02, and outside it on 09-03. It is a
+date-relative fixture that expired on the clock. `git diff main..HEAD` over
+`journal_panel.py`, `journal_feed.py`, `journal_store.py` and that test file is
+EMPTY, so it would fail identically on `main` this morning. Left alone
+deliberately: widening a shared fixture's dates is a decision, not a builder's
+improvisation, and it wants its own item.
+
+The SEVENTH failure of that midnight was this branch's and is fixed:
+`test_the_session_picker_never_silently_repoints_the_page` compared
+`panel.session_date()` with `date.today()`, and A16 made that method
+`session_date_for` while A17 moved the roll to the OPEN - before which today has
+not traded and the two genuinely differ. It asserts against `session_date_for`
+now. The test failed asserting the absence of the behaviour A17 was built to
+produce, which is the most useful way a stale assertion can fail.
+
 ### 2026-09-02 - Round R4 Part A: fix what review round 3 found (A1-A18)
 
 **Branch `claude/r4-fixes`, off `main` at `93732ef`. UNMERGED.** Eighteen items,
