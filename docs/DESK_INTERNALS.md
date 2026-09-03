@@ -799,3 +799,37 @@ day, ~50 MB - and a quiet night can no longer spend the trading morning's budget
 The general form of the lesson: **a diagnostic's budget must roll on a window
 shorter than the thing it is meant to observe**, or the desk goes blind precisely
 when it has been up long enough for something to be wrong.
+
+## One chart on the Trading Desk (2026-09-03)
+
+**The trader, verbatim:** *"when i click on a ticker anywhere while on the trading
+desk tab, i want the chart to come up on the visual chart review chart we have in
+the center of that tab. right now i click things in the auto RS/RW board or the
+master avwap setups board and it does a pop up. thats fine on other tabs, but the
+main tab should always be centralized with the main chart"*
+
+**What was true before.** The M5 Strength Board had charted into the pane since
+2026-08-31 (its entry is above, under the Strength Board rule). Every other click
+surface still opened `show_symbol_snapshot`: the RS/RW, entry and Focus-strength
+boards in the Alert Center, the feed's ticker-name label, and the four setups-column
+panels (setups table, RS Window, Industry Board, Watchlists). Each was right when it
+was written - the popup was the only chart a board on another page could reach -
+and became a window in the way once the boards and the pane shared one screen.
+
+**The rules.**
+
+- A board INSIDE the Alert Center always charts in the pane, through
+  `_chart_board_symbol` = `chart_symbol` with a named origin. It is in the same
+  column as the pane in every mode, so there is no case for the popup.
+- A feed ticker-name click is the same as a row click (`_show_alert_detail`): the
+  real alert, with its trigger. A `MANUAL_CHART` of the same name would have thrown
+  away what the scanner said.
+- A setups-column panel is a column of the desk in workspace mode and a sub-tab of
+  its own in tabs mode. It carries `set_chart_sink`; the desk sets it in workspace
+  mode and clears it in tabs mode, because a chart drawn on a sub-tab the trader is
+  not looking at is worse than a popup. `None` - the default - keeps the popup, so
+  a standalone panel and every test of one behave as before.
+- The popup is not retired. `show_board_symbol` is still the AWAY Recap's door, and
+  a page that is not the desk keeps it.
+- The click still uses the lookup box's door and never `_enqueue_review_alert`, for
+  the four reasons in the Strength Board entry.

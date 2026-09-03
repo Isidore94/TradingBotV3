@@ -271,7 +271,14 @@ which is evidence and must not be loaded as context.
   it costs the charts nothing, sides stacked vertically for the column, its own
   RS/RW half retired to the Alert Center's RS/RW Board tab (one tab-click away in
   the same column), and a row click charting into the **Visual Alert Review pane**
-  through `chart_symbol` rather than opening the snapshot popup.
+  through `chart_symbol` rather than opening the snapshot popup. **Since 2026-09-03
+  every ticker click on the Trading Desk does the same** (trader: *"the main tab
+  should always be centralized with the main chart"*): the Alert Center's RS/RW,
+  entry and Focus-strength boards and the feed ticker-name click always chart in
+  the pane; the setups column's four panels (setups table, RS Window, Industry
+  Board, Watchlists) do so through a `set_chart_sink` the desk sets in workspace
+  mode and clears in tabs mode. The popup remains the door for a board on another
+  page (`show_board_symbol`, the AWAY Recap) and for a standalone panel.
 - Auto-populate rules for both regimes, previous-day-extreme gating and DESK
   adoption into M5 Focus. A Focus pick's AUTOMATIC D1 alerts are the pullback set
   only (2026-09-01); the extension set fires solely from a trader-armed D1 event
@@ -948,6 +955,40 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-03 - Every ticker click on the Trading Desk charts in the centre pane
+
+**On `main`, lead-built.** Trader: *"when i click on a ticker anywhere while on
+the trading desk tab, i want the chart to come up on the visual chart review chart
+we have in the center of that tab. right now i click things in the auto RS/RW board
+or the master avwap setups board and it does a pop up. thats fine on other tabs,
+but the main tab should always be centralized with the main chart."* The rule the
+M5 Strength Board got on 2026-08-31 now covers every click surface on the desk.
+
+- **Inside the Alert Center** (`alert_center_panel.py`): the RS/RW board, the entry
+  board and the Focus-strength board connect to a new `_chart_board_symbol`, which
+  is `chart_symbol` with a named origin - the lookup box's door, never
+  `_enqueue_review_alert`. The feed's ticker-name click (`_show_symbol_snapshot`)
+  now does what a row click does (`_show_alert_detail`): the REAL alert reaches the
+  pane with its trigger, not a manual chart of the same name. The popup opener
+  `_show_board_symbol_snapshot` is unchanged and still behind `show_board_symbol`,
+  the AWAY Recap's door.
+- **The setups column** (`master_avwap_panel.py`, `rs_window_panel.py`,
+  `industry_panel.py`, `watchlists_panel.py`): each panel gains `set_chart_sink(sink)`
+  and its opener calls the sink - `sink(symbol, side=..., origin=...)` - before it
+  would build a popup. `TradingDeskPanel.set_mode` points all four at
+  `alert_center.chart_symbol` in workspace mode and at `None` in tabs mode, where
+  the pane is on a different sub-tab and a chart there would be unseen. `None` is
+  the constructor default, so every existing standalone-panel test is untouched.
+  The setups table's Space / Prev / Next walk goes through the same opener, so on
+  the desk it steps the CENTRE chart one row at a time.
+- **Tests**: `tests/test_qt_desk_ticker_clicks_chart_center.py` (14) pins each
+  surface charting in the pane with no popup, the manual-chart tag and origin, the
+  tabs-mode fallback and the way back, the AWAY door still popping, and a sinkless
+  panel still popping. `test_qt_alert_center.py`'s board-click test was asserting
+  the popup and now asserts the pane.
+- **Not changed**: the snapshot popup itself, `chart_symbol`, `_enqueue_review_alert`,
+  movers-only, the arm bar, any store. No packaging trigger.
 
 ### 2026-09-03 - Packet F1: the desk freeze, and what was actually holding the GIL
 

@@ -241,6 +241,7 @@ class MasterAvwapPanel(QWidget):
         self.table.selectionModel().selectionChanged.connect(self._on_selection_changed)
         self._bounce_service = None
         self._chart_watch_host = None
+        self._chart_sink = None
         self.table.clicked.connect(self._on_table_clicked)
         self.table.doubleClicked.connect(self._open_symbol_snapshot_from_double_click)
         self._next_snapshot_shortcut = QShortcut(
@@ -1016,6 +1017,21 @@ class MasterAvwapPanel(QWidget):
         chart-only actions (D1 Focus pin + New HOD/LOD/VWAP-bounce arming)."""
         self._chart_watch_host = host
 
+    def set_chart_sink(self, sink) -> None:
+        """Route a ticker click into the desk's centre chart instead of a popup.
+
+        Trader, 2026-09-03: *"when i click on a ticker anywhere while on the
+        trading desk tab, i want the chart to come up on the visual chart
+        review chart we have in the center of that tab ... thats fine on other
+        tabs, but the main tab should always be centralized with the main
+        chart."* The desk sets this to the Alert Center's `chart_symbol` while
+        this panel is a column of the Trading Desk (workspace mode) and clears
+        it when the panel is a tab of its own, where a chart on another tab
+        would be invisible and the popup is the right answer. `None` keeps the
+        popup, so a standalone panel behaves exactly as before.
+        """
+        self._chart_sink = sink
+
     def _open_symbol_snapshot(self, proxy_index) -> None:
         """Row double-click / context action: D1+M5 candle quick look."""
         if not proxy_index.isValid():
@@ -1028,6 +1044,12 @@ class MasterAvwapPanel(QWidget):
         row = self.model.row_at(source_index.row())
         if row is None or not row.symbol:
             return
+        side = row.side if row.side in {"LONG", "SHORT"} else ""
+        if self._chart_sink is not None:
+            # On the Trading Desk the centre chart is the one chart; the Space
+            # / Prev / Next walk lands there too, one row at a time.
+            self._chart_sink(row.symbol, side=side, origin="the Master AVWAP setups")
+            return
         bot = None
         if self._bounce_service is not None:
             try:
@@ -1036,7 +1058,6 @@ class MasterAvwapPanel(QWidget):
                 bot = None
         from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
 
-        side = row.side if row.side in {"LONG", "SHORT"} else ""
         show_symbol_snapshot(
             self,
             row.symbol,

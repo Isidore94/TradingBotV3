@@ -777,13 +777,17 @@ class AlertCenterPanel(QFrame):
         self.rrs_snapshot = RrsSnapshotWidget()
         if self.focus_service is not None:
             self.rrs_snapshot.set_focus_service(self.focus_service)
-        self.rrs_snapshot.symbolActivated.connect(self._show_board_symbol_snapshot)
+        self.rrs_snapshot.symbolActivated.connect(
+            lambda symbol, side: self._chart_board_symbol(symbol, side, "the RS/RW board")
+        )
 
         # RS/RW Board tab: the automatic entry-assist board on top (regime +
         # pause detection + live window / preview rankings + 30m movers, no
         # clicks) over the RRS sweep snapshot.
         self.entry_board = EntryAssistBoard()
-        self.entry_board.symbolActivated.connect(self._show_board_symbol_snapshot)
+        self.entry_board.symbolActivated.connect(
+            lambda symbol, side: self._chart_board_symbol(symbol, side, "the entry board")
+        )
         board_tab = QWidget()
         board_layout = QVBoxLayout(board_tab)
         board_layout.setContentsMargins(0, 0, 0, 0)
@@ -926,7 +930,11 @@ class AlertCenterPanel(QFrame):
         self.focus_strength = FocusStrengthBoard()
         if self.focus_service is not None:
             self.focus_strength.set_focus_service(self.focus_service)
-        self.focus_strength.symbolActivated.connect(self._show_board_symbol_snapshot)
+        self.focus_strength.symbolActivated.connect(
+            lambda symbol, side: self._chart_board_symbol(
+                symbol, side, "the Focus strength board"
+            )
+        )
         self.focus_strength.reviewAllRequested.connect(self.review_focus_picks)
         self.focus_strength.fadedReviewRequested.connect(self.review_faded_picks)
         # A fade/restore/discard changes a count the board paints. It rides
@@ -5621,10 +5629,16 @@ class AlertCenterPanel(QFrame):
             self.detail_view.setVisible(False)
 
     def _show_symbol_snapshot(self, alert: BounceAlert) -> None:
-        """Ticker-name click: the D1+M5 candle quick look."""
+        """Ticker-name click on a feed row: the same as clicking the row.
+
+        It used to open the snapshot popup. Trader, 2026-09-03: on the Trading
+        Desk every ticker click lands on the centre chart, so the name click
+        charts the alert itself in the review pane - the real alert, with its
+        trigger, not a manual chart of the same name.
+        """
         if not alert.symbol:
             return
-        self._show_board_symbol_snapshot(alert.symbol, alert.side)
+        self._show_alert_detail(alert)
 
     def show_board_symbol(self, symbol: str, side: str = "") -> None:
         """Public entry for boards that live on OTHER pages.
@@ -5657,6 +5671,19 @@ class AlertCenterPanel(QFrame):
         appear.
         """
         self.chart_symbol(symbol, side=side, origin="the M5 Strength Board")
+
+    def _chart_board_symbol(self, symbol: str, side: str, origin: str) -> None:
+        """A click on any board inside this panel charts in the review pane.
+
+        Trader, 2026-09-03: *"i click things in the auto RS/RW board ... and it
+        does a pop up ... the main tab should always be centralized with the
+        main chart."* The RS/RW, entry and Focus-strength boards live in the
+        same column as the pane, so the rule the M5 Strength Board got on
+        2026-08-31 now covers all of them. Same door (`chart_symbol`), same
+        reasons for not using `_enqueue_review_alert`. The popup stays as
+        `show_board_symbol`, the door for a board on ANOTHER page.
+        """
+        self.chart_symbol(symbol, side=side, origin=origin)
 
     #: The tabs the trader never opens (decision 0016 answer 7). HIDDEN, never
     #: removed: the Alerts feed is the review-alert door, the D1 Focus tab holds

@@ -71,6 +71,7 @@ class IndustryPanel(QFrame):
         self.service = service or IndustryBoardService(self)
         self._bounce_service = None
         self._chart_watch_host = None
+        self._chart_sink = None
         #: snapshot_id last rendered by reload_from_disk. Belt-and-braces with
         #: the service's own unchanged-id emit skip: whatever emits, an
         #: unchanged board is never re-read and re-measured.
@@ -212,6 +213,9 @@ class IndustryPanel(QFrame):
         except ValueError:
             rs_score = 0.0
         side = "LONG" if rs_score > 0 else "SHORT" if rs_score < 0 else ""
+        if self._chart_sink is not None:
+            self._chart_sink(symbol, side=side, origin="the Industry Board")
+            return
         bot = None
         if self._bounce_service is not None:
             try:
@@ -223,6 +227,21 @@ class IndustryPanel(QFrame):
         show_symbol_snapshot(
             self, symbol, bot=bot, side=side, watch_host=self._chart_watch_host
         )
+
+    def set_chart_sink(self, sink) -> None:
+        """Route a ticker click into the desk's centre chart instead of a popup.
+
+        Trader, 2026-09-03: *"when i click on a ticker anywhere while on the
+        trading desk tab, i want the chart to come up on the visual chart
+        review chart we have in the center of that tab ... thats fine on other
+        tabs, but the main tab should always be centralized with the main
+        chart."* The desk sets this to the Alert Center's `chart_symbol` while
+        this panel is a column of the Trading Desk (workspace mode) and clears
+        it when the panel is a tab of its own, where a chart on another tab
+        would be invisible and the popup is the right answer. `None` keeps the
+        popup, so a standalone panel behaves exactly as before.
+        """
+        self._chart_sink = sink
 
     def _on_refresh_started(self) -> None:
         self.refresh_button.setEnabled(False)

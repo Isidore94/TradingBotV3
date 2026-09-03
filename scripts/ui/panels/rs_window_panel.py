@@ -103,6 +103,7 @@ class RsWindowPanel(QFrame):
         self.setObjectName("Panel")
         self.bounce_service = bounce_service
         self._chart_watch_host = None
+        self._chart_sink = None
         self._decorated_rows: list[dict[str, Any]] = []
         self._industry_rows: list[dict[str, Any]] = []
         # Auto mode (hands-off default): the panel refreshes the chart and
@@ -290,6 +291,21 @@ class RsWindowPanel(QFrame):
         read-only quick look."""
         self._chart_watch_host = host
 
+    def set_chart_sink(self, sink) -> None:
+        """Route a ticker click into the desk's centre chart instead of a popup.
+
+        Trader, 2026-09-03: *"when i click on a ticker anywhere while on the
+        trading desk tab, i want the chart to come up on the visual chart
+        review chart we have in the center of that tab ... thats fine on other
+        tabs, but the main tab should always be centralized with the main
+        chart."* The desk sets this to the Alert Center's `chart_symbol` while
+        this panel is a column of the Trading Desk (workspace mode) and clears
+        it when the panel is a tab of its own, where a chart on another tab
+        would be invisible and the popup is the right answer. `None` keeps the
+        popup, so a standalone panel behaves exactly as before.
+        """
+        self._chart_sink = sink
+
     def _open_symbol_snapshot(self, index) -> None:
         """Open the cache-only D1+M5 quick look for a ranked symbol."""
         proxy = self.table.model()
@@ -297,6 +313,13 @@ class RsWindowPanel(QFrame):
         row = self.model.row_at(source_index.row()) or {}
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
+            return
+        if self._chart_sink is not None:
+            self._chart_sink(
+                symbol,
+                side=str(row.get("side") or "").strip().upper(),
+                origin="the RS Window",
+            )
             return
         from ui.widgets.symbol_snapshot_dialog import show_symbol_snapshot
 

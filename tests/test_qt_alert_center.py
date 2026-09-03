@@ -442,12 +442,20 @@ def test_rs_rw_boards_emit_snapshot_symbols(monkeypatch):
             (owner, symbol, kwargs.get("bot"), kwargs.get("side"))
         ),
     )
+    # Trader, 2026-09-03: a board inside the Alert Center charts in the review
+    # pane, never in a popup - the pane is in the same column as the board.
+    # The popup remains the door for a board on ANOTHER page (show_board_symbol).
     panel.entry_board.symbolActivated.emit("NVDA", "LONG")
+    assert popup_calls == []
+    assert panel._current_review_alert.symbol == "NVDA"
     panel.rrs_snapshot.symbolActivated.emit("META", "SHORT")
-    assert popup_calls == [
-        (panel, "NVDA", bot, "LONG"),
-        (panel, "META", bot, "SHORT"),
-    ]
+    assert popup_calls == []
+    assert (panel._current_review_alert.symbol, panel._current_review_alert.side) == (
+        "META",
+        "SHORT",
+    )
+    panel.show_board_symbol("META", "SHORT")
+    assert popup_calls == [(panel, "META", bot, "SHORT")]
 
 
 def test_liked_focus_picks_skip_tier_gate_and_always_sound():

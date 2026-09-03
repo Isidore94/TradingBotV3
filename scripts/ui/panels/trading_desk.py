@@ -254,6 +254,9 @@ class TradingDeskPanel(QWidget):
         _clear_layout(self.center_layout)
         if self.workspace_mode == "tabs":
             self.alert_center.set_embedded_detail_enabled(True)
+            # As tabs of their own, the setups panels chart in a popup: the
+            # review pane is on a different tab and would not be seen.
+            self._set_chart_sink(None)
             # Hiding the setups is a workspace-mode idea: as its own tab the
             # column never competes with the charts for width, and a tab that
             # refused to show itself would just look broken.
@@ -273,6 +276,11 @@ class TradingDeskPanel(QWidget):
         # full width along the bottom. Alert clicks show their plan in the
         # workspace's detail pane, not in a second embedded pane.
         self.alert_center.set_embedded_detail_enabled(False)
+        # Trader, 2026-09-03: on the Trading Desk every ticker click lands on
+        # the centre chart. The setups column's four panels chart through the
+        # Alert Center's `chart_symbol` - the lookup box's door - instead of
+        # opening the snapshot popup over the top of the pane.
+        self._set_chart_sink(self.alert_center.chart_symbol)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         # The M5 alert bar is the LEFT column (trader, 2026-08-27, second
@@ -316,6 +324,17 @@ class TradingDeskPanel(QWidget):
         # the column is shown again, not a width measured while it was hidden.
         self.setups_toggle.setVisible(True)
         self.master_workspace.setVisible(self._setups_visible)
+
+    def _set_chart_sink(self, sink) -> None:
+        """Point every setups-column panel's ticker click at `sink` (or back
+        at the popup when `sink` is None)."""
+        for panel in (
+            self.master_panel,
+            self.rs_window_panel,
+            self.industry_panel,
+            self.watchlists_panel,
+        ):
+            panel.set_chart_sink(sink)
 
     # ------------------------------------------------------- swing picks
     def _add_swing_favorites(self, text: str, side: str) -> None:
