@@ -66,7 +66,12 @@ def test_every_like_and_dislike_goes_through_the_one_module():
         if path.name in {"store.py", "verdicts.py"} and "annotations" in str(path):
             continue
         text = path.read_text(encoding="utf-8")
-        hits = re.findall(r"record_annotation(?:_with_bars)?\(", text)
+        # The NAME, not a call site. R4 B5 made the rail pass the store's writer
+        # in as a value (`writer=record_annotation_with_bars`, called as
+        # `(writer or record_annotation)(...)`), and a pattern anchored on the
+        # opening bracket stopped seeing the one module it exists to watch - it
+        # would have gone on passing while a sixth writer was added anywhere.
+        hits = re.findall(r"\brecord_annotation(?:_with_bars)?\b", text)
         if hits:
             callers[str(path.relative_to(ROOT)).replace("\\", "/")] = hits
 
@@ -75,18 +80,13 @@ def test_every_like_and_dislike_goes_through_the_one_module():
     assert set(callers) == {"scripts/ui/widgets/capture_rail.py"}, callers
 
 
-def test_the_rails_veto_carries_a_surface_like_its_like_does(tmp_path):
-    """The seam V3 closed: a veto and a like from one rail had different shapes.
-
-    Any rollup by screen silently omitted every veto, which is exactly the kind
-    of gap that reads as "the trader does not veto from the rail".
-    """
-    source = (ROOT / "scripts" / "ui" / "widgets" / "capture_rail.py").read_text(
-        encoding="utf-8"
-    )
-    record = source.split("def _record(self", 1)[1].split("def commit_veto", 1)[0]
-    assert 'common.setdefault("surface", self._surface)' in record
-    assert 'common.setdefault("scan_context"' in record
+# The behavioural replacement for this file's old source-text assertion lives in
+# `tests/test_r4b_every_verb_stamps_its_surface.py` - R4 B5. That assertion read
+# the TEXT of `_record` and checked the two `setdefault` lines were present,
+# which is true of a method a verb never calls: `commit_pass` wrote through
+# `record_pass_annotation` directly, so every day-trade pass landed with no
+# `surface` and this test passed anyway. The replacement performs each real click
+# handler and reads the row back off disk, one test per verb.
 
 
 def test_every_declared_surface_has_a_gesture_that_writes_it():
