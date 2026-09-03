@@ -276,6 +276,7 @@ baseline rather than diagnostic evidence.
   is not proof; the selftest is what exercises the engines.
 
 ## Working agreement for agents
+- **The agent team.** A session builds and reviews through the project-defined sub-agents in `.claude/agents/` (`builder` Opus, `reviewer` Opus, `recon` Sonnet); the contract, the loop and the rules are in [`docs/AGENT_TEAM.md`](docs/AGENT_TEAM.md). Read it before spawning one. Builders and reviewers work in their own worktrees and never touch the desk's checkout; the lead session merges.
 - Follow the mandatory documentation workflow above. `plan.md` owns build order;
   `CURRENT_CHECKPOINT.md` owns the active item. Do not re-implement anything in
   `CHANGELOG.md` or implement anything directly from `WISHLIST.md`.
