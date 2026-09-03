@@ -139,6 +139,14 @@ with `C50` = **the close 50 bars ago (TC2000 displacement syntax)** and `ATR50` 
 options, price above yesterday's HOD, price above the M5 15EMA. Inverted for
 shorts. Expected yield ~20–40 names per side; the trader dumps them into M5 Focus.
 
+> **STALE, kept for the record (R4 A12, 2026-09-02).** V1 rebuilt this board to
+> decision 0016 answer 9 and the ~20–40/side figure no longer describes it. The
+> universe is `universe_all.txt` PLUS the four watchlists, the D1 $5 / 100 SMA /
+> 200 SMA floors were added, and **a row that misses a filter is GREYED rather
+> than dropped** — so the board's LENGTH is now the measured population, not the
+> survivor count, and the survivors are whatever the filters leave. Read §11 for
+> what the board actually is.
+
 ### B.2 Current state (recon 2026-08-15)
 
 - The existing RS/RW board (`real_relative_strength`/`run_rrs_scan`,
@@ -217,7 +225,9 @@ Deterministic tests green; live proof: one session where the log shows at least 
 staged pick evicted for a VWAP/PDH fallback, one adoption-time refusal, one clean
 "Not today" scoped removal that leaves the user's other entries intact, and a board
 session where the trader adds picks that pass the gate. The trader confirms the
-board's names roughly match the TC2000 scan's character (~20–40/side).
+board's names roughly match the TC2000 scan's character. (The ~20–40/side
+figure this line used to carry is stale — see the note in §B.1 and gate 44, which
+is the parity gate V1 actually owes.)
 
 ## 9. Open questions
 
@@ -228,7 +238,11 @@ board's names roughly match the TC2000 scan's character (~20–40/side).
   but computed for the survivors only (~20–40/side), which is the "handful"
   scale `fetch_session_rvol` documents as safe. Its `period=1mo, interval=5m`
   fetch is far heavier than the board's and its own docstring forbids running it
-  over the whole universe.
+  over the whole universe. **Superseded by V1 (2026-09-02):** the RVOL is
+  computed by `strength_scan.relative_volume` from the board's OWN `1mo` 5m
+  fetch, for every measured symbol rather than for survivors, and
+  `fetch_session_rvol` is not in that path at all. R4 A7 then made the offset
+  session-relative, which is what decision 0016 answer 9 asks for.
 
 ## 10. Transport measurement — 2026-08-15, this desk
 
@@ -680,6 +694,15 @@ module whole and said stop and ask; the trader asked, in packet V1, naming the
 file. The test now pins the seven FORMULA functions byte-identical to the R8
 baseline - stronger than "no edits at all", which could be satisfied by not
 touching the file while the numbers moved underneath it.
+
+**`relative_volume` is NOT one of the seven** (R4 A7, 2026-09-02), and that is
+the whole reason the narrowed fence is the right shape: V1 added the function, so
+R4 could correct it from a flat positional stride to the session-relative offset
+decision 0016 answer 9 actually asks for, while `strength_score`, `atr`,
+`displaced_close`, `sma`, `true_ranges`, `percentile_cut` and `ema` stayed
+byte-identical. The golden gained two symbols - one early close, one missing bar
+- and AAA-EEE's pinned values did not move, which is the proof the correction
+touched only what it was aimed at.
 
 **Parity is a golden, not an impression.** `tests/fixtures/tc2000_parity_v1.json`
 pins strength and RVOL for five symbols over sixteen sessions, and its expected

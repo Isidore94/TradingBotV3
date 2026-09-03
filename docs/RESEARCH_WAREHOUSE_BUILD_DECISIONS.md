@@ -2540,3 +2540,40 @@ itself one of the more interesting things this study can report.
 
 **Reopen if** a stop model that needs no tracker geometry is registered for this
 grid — as its own trial, not as a patch to this one.
+
+
+## BD-94 — A bronze link row is partitioned by the LIKE, not by the run
+
+**Decision (R4 fix round 1, 2026-09-02).** `like_links.link_rows_for_bronze` sets
+`event_at` and `partition_ts` from the like's OWN date
+(`like_links.like_event_at`), not from the nightly run stamp. `observed_at` still
+carries the run stamp, which is what the point-in-time contract says it means -
+when this installation received the row.
+
+**Why.** `bronze_like_occurrence_link` is month-partitioned on `partition_ts`,
+the nightly after-like pass looks back 30 days, and the caller's dedup reads the
+row's OWN partition because BD-74 forbids a month-wide read. With the run stamp
+in `partition_ts`, a like from late September was written into September's
+partition on the 26th and into OCTOBER'S on the 1st, and the dedup could not see
+the earlier copy. Reproduced in a temp lake with one like dated 2026-09-25 over
+passes on 09-26 / 10-01 / 10-02: the same `record_hash` landed twice. Every count
+over the dataset, and the BD-92 join that is the only route from an after-like
+outcome row back to its setup family, over-counted by however many month
+boundaries the lookback had crossed.
+
+The alternative was to widen the dedup to read every partition, which is the
+month-keyed full read BD-74 exists to prevent and which grows for as long as the
+trader keeps liking things.
+
+**The frozen schema is untouched** (plan sec 7.1): same dataset, same columns,
+same `BRONZE_RECORD`, same payload, same `record_hash`. Only which month a row
+lands in moved - and it moved to the one the row is ABOUT, which is what
+`event_at` was always specified to carry.
+
+**A like with no readable date falls back to the run stamp.** A row filed under
+the wrong month beats a row that cannot be written, and the fallback is bounded
+to likes whose own date is missing or unparseable.
+
+**Reopen if** the like log ever gains a real intraday timestamp worth keeping in
+`event_at`; the partition would be unaffected (still that month) and only the
+hour would sharpen.

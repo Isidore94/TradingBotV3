@@ -247,6 +247,40 @@ def link_likes(
     return links
 
 
+def like_event_at(like_date: Any, observed_at: datetime) -> datetime:
+    """The market fact's own moment: the day the trader liked it.
+
+    R4 fix round 1. This used to be the RUN STAMP, and `partition_ts` with it -
+    which put a September like into the October partition the moment a nightly
+    pass ran on 1 October. The dataset is month-partitioned, so the caller's
+    dedup (which reads the row's own partition, as BD-74 requires) could not see
+    the September copy, and every like inside the lookback was republished at
+    each month boundary. Reproduced: one like dated 2026-09-25, three passes on
+    09-26 / 10-01 / 10-02, and the same `record_hash` landed twice.
+
+    `observed_at` still means what the ERD says it means - when this installation
+    received the row - and stays the run stamp. `event_at` is the market fact and
+    is now the like's own date, which is both correct and what makes the row's
+    partition stable for the life of the like.
+
+    Midnight UTC on the like date. A like carries a session date, not a time; the
+    hour is a placement, not a measurement, and the payload keeps the exact
+    `like_date` string either way. A date that cannot be read falls back to the
+    run stamp - a row filed under the wrong month is better than a row that
+    cannot be written, and the fallback is bounded to likes with no readable
+    date.
+    """
+    text = str(like_date or "").strip()[:10]
+    if text:
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            return parsed.replace(tzinfo=observed_at.tzinfo or timezone.utc)
+    return observed_at
+
+
 def link_rows_for_bronze(
     links: Iterable[LikeLink],
     *,
@@ -256,8 +290,11 @@ def link_rows_for_bronze(
     """Bronze records, ready for `ResearchStore.write_rows`.
 
     The record hash is over the payload, so re-running the join on an unchanged
-    lake produces the same rows and the store's own idempotency drops the
-    duplicates rather than accumulating a copy per night.
+    lake produces the same rows, and the row is partitioned by the LIKE'S OWN
+    DATE (:func:`like_event_at`) so a re-run lands in the same partition as the
+    original however many months later it happens - which is what makes the
+    caller's partition-scoped dedup an exact identity rather than a
+    within-the-month one.
     """
     import hashlib
 
@@ -280,9 +317,11 @@ def link_rows_for_bronze(
                 "payload": payload,
                 "payload_format": schemas.BRONZE_FORMAT_JSON,
                 "quality": "OK",
-                "event_at": observed_at,
+                # THE MARKET FACT, not the run (R4 fix round 1). `observed_at`
+                # is still when this installation received the row.
+                "event_at": like_event_at(link.like_date, observed_at),
                 "observed_at": observed_at,
-                "partition_ts": observed_at,
+                "partition_ts": like_event_at(link.like_date, observed_at),
                 "capture_mode": "derived",
                 "run_id": run_id,
             }

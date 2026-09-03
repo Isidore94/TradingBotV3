@@ -550,12 +550,21 @@ def test_the_parity_fixture_is_pinned_to_a_commit_and_not_to_a_branch():
 
 
 def test_the_build_registers_the_trial_ledger():
-    """Gate 37 needs a row and nothing in production wrote one."""
+    """Gate 37 needs a row and nothing in production wrote one.
+
+    R4 A2 moved the registration ABOVE `_run_outcomes`, so the ordering assertion
+    here changed with it: the declaration has to predate the outcomes it governs,
+    and `_run_outcomes` is what simulates and publishes the after-like grid. The
+    behavioural version of this - recorded CALL order through `run_build` - is
+    `test_the_trial_ledger_is_registered_before_the_outcomes_it_governs` in
+    `tests/test_setup_registry_and_trial_ledger.py`; this one only pins that the
+    production writer still exists and is still in the never-costs-the-build
+    shape.
+    """
     source = (ROOT / "scripts" / "research_warehouse" / "cli.py").read_text(encoding="utf-8")
     assert "trial_ledger.backfill(target.root)" in source
-    # Beside the coverage line, in the same never-costs-the-build shape.
-    assert source.index("outcome_coverage.record_firing") < source.index(
-        "trial_ledger.backfill"
+    assert source.index("trial_ledger.backfill") < source.index(
+        'report.steps["outcomes"] = _run_outcomes'
     )
 
 

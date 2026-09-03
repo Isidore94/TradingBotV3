@@ -53,9 +53,27 @@ HELD_WINDOW_MINUTES = 30
 #: each own a "lately" eventually disagree about the trader's own word.
 from evidence_stats import LATELY_SESSIONS as ROLLING_SESSIONS  # noqa: E402
 
-#: Time buckets, market-local. The open and the last hour behave differently
-#: enough from the middle of the day that pooling them hides both.
-TIME_BUCKETS = ("open_30m", "morning", "midday", "power_hour")
+#: Time buckets - THE CHAMPION'S OWN, read from `bounce_bot_lib.learning`
+#: rather than restated (R4 fix round 1).
+#:
+#: This module used to declare four of its own (`open_30m`, `morning`, `midday`,
+#: `power_hour`) and compute them by comparing raw wall-clock hours against
+#: Eastern cutoffs. Two things were wrong with that. The desk is on Pacific time
+#: and `entry_time` in the outcome log is DESK-LOCAL, so 10:40 PT was judged
+#: against a 10:00/11:30/15:00 boundary set that only means anything in New York
+#: - which is precisely the defect `time_bucket_for`'s own docstring records
+#: itself as having fixed ("on a Pacific machine that mislabeled nearly the
+#: entire session"). And a second vocabulary meant the Daytrade Tracker's Time of
+#: Day tab could not join: measured on the live stores, **2 of 10 rows matched**,
+#: and the other eight went blank for a spelling reason while the docs called the
+#: tab measurable.
+TIME_BUCKETS = (
+    "opening_drive",
+    "late_morning",
+    "midday",
+    "afternoon",
+    "closing_window",
+)
 
 #: The market environments the alert context already records. Passed through
 #: verbatim - this module never re-derives a regime, and decision 0016 answer 6
@@ -66,22 +84,71 @@ UNKNOWN = "unknown"
 def time_bucket(entry_time: Any) -> str:
     """Which part of the session an entry sits in. `unknown` when unreadable.
 
-    Boundaries are the trader's own working day: the first half hour, then the
-    morning to 11:30, the middle to 15:00, and the last hour. A row whose time
-    cannot be read is bucketed `unknown` rather than dropped - it still counts
-    toward what was NOT measurable, which is the honest denominator.
+    ONE DEFINITION, and it is the champion's: `bounce_bot_lib.learning`'s public
+    `time_bucket_for`, measured in ELAPSED MINUTES OF ITS OWN SESSION rather than
+    against wall-clock hours. Called, never copied - a drift-tested copy is the
+    right shape when the source might be absent (that is why `group_rrs` has
+    one), and this source ships beside us and the tracker panel imports it
+    already.
+
+    Reading it rather than restating it is what lets the Daytrade Tracker join
+    this module's cells to the aggregator's rows at all; see :data:`TIME_BUCKETS`
+    for the two defects the private copy carried.
+
+    A row whose time cannot be read is bucketed `unknown` rather than dropped -
+    it still counts toward what was NOT measurable, which is the honest
+    denominator.
     """
     stamp = _as_datetime(entry_time)
     if stamp is None:
         return UNKNOWN
-    minutes = stamp.hour * 60 + stamp.minute
-    if minutes < 10 * 60:
-        return "open_30m"
-    if minutes < 11 * 60 + 30:
-        return "morning"
-    if minutes < 15 * 60:
-        return "midday"
-    return "power_hour"
+    try:
+        from bounce_bot_lib.learning import time_bucket_for
+    except Exception:  # pragma: no cover - the module ships beside this one
+        return UNKNOWN
+    return str(time_bucket_for(stamp) or UNKNOWN)
+
+
+#: A `10_candle_high` and a `10_candle_low` are one bounce TYPE to the
+#: aggregator, which records both as `10_candle`. The module reads its type off
+#: the event id, which keeps the side.
+_TYPE_ALIASES = ("10_candle",)
+
+
+def bounce_components(bounce_type: Any) -> tuple[str, ...]:
+    """The individual bounce types inside one episode's label.
+
+    `bounce_type_from_event_id` joins multiple types with `-`
+    (`eod_vwap-impulse_retest_vwap_eod-vwap`), and the aggregator's `bounce_type`
+    dimension counts an episode under EACH of its types - which is what
+    `evaluate_bounce_quality` does with `bounce_types` too. Splitting here is
+    what took the live Bounce Types join from 28 of 36 rows to 36 of 36: the
+    eight it missed were the ones that only ever appear inside a combination.
+    """
+    parts = []
+    for raw in str(bounce_type or "").split("-"):
+        part = raw.strip()
+        if not part:
+            continue
+        for alias in _TYPE_ALIASES:
+            if part.startswith(alias):
+                part = alias
+                break
+        parts.append(part)
+    return tuple(parts)
+
+
+def bounce_combo(bounce_type: Any) -> str:
+    """The whole combination, spelled the way the aggregator spells it.
+
+    The aggregator joins with `+`; the event id joins with `-`. That single
+    separator is why the Combos tab matched **0 of 59** live rows while the docs
+    called it unanswerable - it took a normalisation, not a missing measurement.
+    58 of 59 match now, and the one that does not is a combination that did not
+    fire inside the rolling window, which is an honest absence.
+    """
+    parts = bounce_components(bounce_type)
+    return "+".join(parts) if parts else UNKNOWN
 
 
 def _as_datetime(value: Any) -> datetime | None:
@@ -327,6 +394,33 @@ def segment_index(summaries: Iterable[Mapping[str, Any]]) -> dict[tuple, Mapping
     }
 
 
+def alert_cell(
+    index: Mapping[tuple, Mapping[str, Any]] | None,
+    *,
+    bounce_type: Any,
+    entry_time: Any,
+    market_environment: Any = UNKNOWN,
+    d1_setup_present: Any = False,
+) -> Mapping[str, Any] | None:
+    """One alert's cell out of `segment_index`, or None.
+
+    `segment_index` said it existed "for a per-alert lookup" and no caller ever
+    built the key, so the alert row had nothing to read (R4 A10). The key is
+    built HERE rather than at each call site: four positional strings that must
+    agree with `Episode.segment()` is exactly the sort of thing that drifts.
+    """
+    if not index:
+        return None
+    return index.get(
+        (
+            str(bounce_type or UNKNOWN).strip() or UNKNOWN,
+            time_bucket(entry_time),
+            str(market_environment or UNKNOWN).strip() or UNKNOWN,
+            bool(d1_setup_present),
+        )
+    )
+
+
 def alert_suffix(cell: Mapping[str, Any] | None) -> str:
     """"held 71% / ran 1.9R" for the M5 alert row, or "" below the floor.
 
@@ -394,3 +488,159 @@ def d1_setups_by_session(rows: Iterable[Mapping[str, Any]]) -> dict[str, set]:
         if session and symbol:
             by_session[session].add(symbol)
     return dict(by_session)
+
+#: The tracker dimensions this module can measure, in the AGGREGATOR'S OWN
+#: SPELLING so the join is an equality rather than a hope.
+#:
+#: Measured against the live stores after the fix round: `bounce_type` 36 of 36
+#: rows, `bounce_combo` 58 of 59, `time_bucket` 10 of 10, `market_environment`
+#: 10 of 10. Before it the same four read 28/36, 0/59, 2/10 and 10/10, and the
+#: three that missed were missing for SPELLING reasons - a `-` where the
+#: aggregator writes `+`, an unsplit combination, and a second time-bucket
+#: vocabulary - while the docs called them unanswerable.
+#:
+#: The five that stay blank are two different things, and saying which is the
+#: point. `master_avwap_focus`, `master_avwap_priority_bucket`,
+#: `master_avwap_setup_family` and `master_avwap_swing_trait` are NOT in
+#: `intraday_bounce_outcomes.csv` at all - not in a column and not in
+#: `context_json` - so this module cannot be asked. `rrs_alignment` IS reachable
+#: (`context_json` carries `rrs_spy`) and is simply not derived here yet; it is
+#: named as owed rather than filed under "cannot".
+MEASURABLE_DIMENSIONS = (
+    "bounce_type",
+    "bounce_combo",
+    "time_bucket",
+    "market_environment",
+)
+
+#: Reachable from the outcome log's `context_json` and not derived yet. Kept
+#: separate from "cannot be measured" because the two are different promises.
+UNDERIVED_DIMENSIONS = ("rrs_alignment",)
+
+
+def dimension_summaries(
+    episodes: Iterable[Episode],
+    *,
+    sessions: int = ROLLING_SESSIONS,
+    min_n: int | None = None,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """`{(dimension, direction, value): summary}` - the tracker's own join key.
+
+    The Daytrade Tracker groups by ONE dimension at a time and by side; this
+    module's native cell is the four-way cross. So the marginal is built here,
+    with the SAME arithmetic - `Segment.summary` - rather than by adding up the
+    cross-cells, because a mean of trimmed means is not a trimmed mean.
+
+    A dimension outside :data:`MEASURABLE_DIMENSIONS` simply has no key, and the
+    caller shows a blank. Blank is the honest answer for a question the outcome
+    log cannot be asked.
+    """
+    episodes = list(episodes)
+    wanted = recent_sessions(episodes, sessions=sessions)
+    cells: dict[tuple[str, str, str], Segment] = {}
+    for episode in episodes:
+        if wanted and episode.trade_date not in wanted:
+            continue
+        direction = str(episode.direction or "").strip().lower()
+        # An episode counts under EVERY bounce type it carries, which is what
+        # the aggregator does and what makes the two comparable; it counts once
+        # under its whole combination, its time bucket and its environment.
+        values: dict[str, tuple[str, ...]] = {
+            "bounce_type": bounce_components(episode.bounce_type) or (UNKNOWN,),
+            "bounce_combo": (bounce_combo(episode.bounce_type),),
+            "time_bucket": (time_bucket(episode.entry_time),),
+            "market_environment": (episode.market_environment or UNKNOWN,),
+        }
+        for dimension in MEASURABLE_DIMENSIONS:
+            for raw in values.get(dimension, (UNKNOWN,)):
+                value = str(raw or UNKNOWN)
+                key = (dimension, direction, value)
+                cell = cells.get(key)
+                if cell is None:
+                    # The Segment key is only used for its `summary()` labels,
+                    # which the caller does not read here - the join key above is
+                    # what identifies the row.
+                    cell = cells[key] = Segment(key=(value, value, value, False))
+                cell.episodes += 1
+                if episode.held:
+                    cell.held += 1
+                    if episode.mfe_r is not None:
+                        cell.mfe_of_held.append(episode.mfe_r)
+    return {key: cell.summary(min_n=min_n) for key, cell in cells.items()}
+
+
+def d1_setup_rows(path: Path) -> list[dict[str, str]]:
+    """The scanner's own snapshot, reduced to what the D1 dimension needs.
+
+    R4 A9. `d1_setup_present` had no caller anywhere: every one of the live
+    segments read False, so decision 0016 answer 4 - *"an M5 alert on a name that
+    also carries a D1 setup outranks the same alert on a name that does not"* -
+    was a dimension in the schema and a constant in the data.
+
+    Read from `master_avwap_tracker_scoring_snapshot.json`, which is the
+    scanner's own output and carries `scan_date`, `symbol` and `priority_bucket`
+    per setup. NOT from `master_avwap_setup_tracker.json`, which holds the same
+    three fields and is 1.1 GB - `json.loads` on that file is one of the three
+    measured causes of the 10 GB desk (2026-08-27) and it must never be read to
+    answer a question a 19 MB sibling already answers.
+
+    **Never fetched.** A study that reached for a quote is a study that cannot be
+    re-run. A missing or unreadable snapshot yields no rows, and every episode
+    then reads `d1_setup_present=False` - which is what happened before this
+    existed, so an absent file degrades to the old behaviour rather than to an
+    error.
+    """
+    target = Path(path)
+    if not target.exists():
+        return []
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    setups = payload.get("setups") if isinstance(payload, Mapping) else None
+    if isinstance(setups, Mapping):
+        entries = list(setups.values())
+    elif isinstance(setups, list):
+        entries = setups
+    else:
+        return []
+    rows: list[dict[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        rows.append(
+            {
+                "scan_date": str(entry.get("scan_date") or ""),
+                "symbol": str(entry.get("symbol") or ""),
+                "priority_bucket": str(entry.get("priority_bucket") or ""),
+            }
+        )
+    return rows
+
+
+def load_episodes(
+    *,
+    outcomes_path: Path | None = None,
+    setups_path: Path | None = None,
+    sessions: int = ROLLING_SESSIONS,
+) -> list[Episode]:
+    """The whole build path, in one call, so no caller re-assembles it.
+
+    R4 A9/A10: the D1 dimension was never fed and the tracker computed its own
+    version of the score. One entry point means one answer.
+
+    Both paths default to the live stores through `project_paths`, addressed by
+    their NAMED CONSTANTS - resolving a home-folder store by name under the wrong
+    root shipped a blank page for six days.
+    """
+    from project_paths import (
+        INTRADAY_BOUNCE_OUTCOMES_FILE,
+        MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE,
+    )
+
+    outcomes = Path(outcomes_path or INTRADAY_BOUNCE_OUTCOMES_FILE)
+    setups = Path(setups_path or MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE)
+    rows = read_outcome_rows(outcomes, sessions=sessions)
+    return build_episodes(
+        rows, d1_setups_by_session=d1_setups_by_session(d1_setup_rows(setups))
+    )

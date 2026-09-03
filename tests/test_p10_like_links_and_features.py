@@ -12,13 +12,19 @@ item 6). Both are READ-ONLY over the gold datasets and shadow throughout.
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
-from scripts.research_warehouse import like_links, queries
-from scripts.research_warehouse.schemas import SCHEMA_VERSION
-from scripts.research_warehouse.store import ResearchStore
+SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from scripts.research_warehouse import like_links, queries  # noqa: E402
+from scripts.research_warehouse.schemas import SCHEMA_VERSION  # noqa: E402
+from scripts.research_warehouse.store import ResearchStore  # noqa: E402
 
 UTC = timezone.utc
 
@@ -336,3 +342,87 @@ def test_no_ids_reads_nothing_at_all(store, monkeypatch):
 
     assert queries.occurrence_features(store, []) == {}
     assert reads == []
+
+
+def test_the_nightly_pass_publishes_the_link_dataset_it_is_documented_to_write(
+    store, tmp_path, monkeypatch
+):
+    """R4 A4: `link_rows_for_bronze` had no production caller.
+
+    The ERD, the CHANGELOG and gate 42 all say `bronze_like_occurrence_link` is
+    written nightly, and BD-92 makes it the ONLY route from an after-like
+    outcome row back to the setup family behind it - those rows are keyed by the
+    like episode and carry no family. The dataset was never written, so the
+    documented join did not exist. Do not retract the claim; make it true.
+    """
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    import project_paths
+    from scripts.research_warehouse import cli
+
+    utc = timezone.utc
+    trigger = datetime(2026, 9, 2, 14, 30, tzinfo=utc)
+    store.publish(
+        "setup_occurrence",
+        [_occurrence("occ-1", trigger=trigger)],
+        job_id="tee",
+    )
+
+    log = tmp_path / "trader_annotations.jsonl"
+    rows = [
+        dict(_like("e1"), schema="trader_annotation_v1", ts=trigger.isoformat()),
+        dict(_like("e2", symbol="AMD"), schema="trader_annotation_v1", ts=trigger.isoformat()),
+    ]
+    log.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(project_paths, "TRADER_ANNOTATIONS_FILE", log, raising=False)
+
+    step = cli._run_after_like_pass(
+        store,
+        {},
+        stamp=trigger + timedelta(days=1),
+        run_id="r4",
+    )
+
+    assert step["status"] == "ok", step
+    assert step["link_status"] == "ok", step
+    assert step["link_rows"] == 2, step
+
+    published = store.read_table("bronze_like_occurrence_link").to_pylist()
+    assert len(published) == 2
+    payloads = {json.loads(row["payload"])["event_id"] for row in published}
+    assert payloads == {"e1", "e2"}
+    # A like the scanner never found is written with basis `none`, not dropped -
+    # that population is precisely the one whose behaviour differs.
+    bases = {json.loads(row["payload"])["match_basis"] for row in published}
+    assert "none" in bases
+
+
+def test_a_second_night_on_an_unchanged_lake_writes_no_duplicate_link(
+    store, tmp_path, monkeypatch
+):
+    """The record hash is over the payload, so a re-run is a no-op."""
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    import project_paths
+    from scripts.research_warehouse import cli
+
+    utc = timezone.utc
+    trigger = datetime(2026, 9, 2, 14, 30, tzinfo=utc)
+    log = tmp_path / "trader_annotations.jsonl"
+    log.write_text(
+        json.dumps(dict(_like("e1"), schema="trader_annotation_v1", ts=trigger.isoformat()))
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(project_paths, "TRADER_ANNOTATIONS_FILE", log, raising=False)
+
+    stamp = trigger + timedelta(days=1)
+    cli._run_after_like_pass(store, {}, stamp=stamp, run_id="r4")
+    first = store.read_table("bronze_like_occurrence_link").num_rows
+    cli._run_after_like_pass(store, {}, stamp=stamp, run_id="r4")
+
+    assert store.read_table("bronze_like_occurrence_link").num_rows == first == 1

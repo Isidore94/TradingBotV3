@@ -132,12 +132,31 @@ def test_a_name_that_also_carries_a_d1_setup_is_its_own_segment():
 
 
 def test_the_time_buckets_split_the_open_from_the_middle_of_the_day():
-    import held_run_score as hrs
+    """R4 fix round 1: the buckets are the CHAMPION'S, and so is the arithmetic.
 
-    assert hrs.time_bucket("2026-09-01T09:35:00") == "open_30m"
-    assert hrs.time_bucket("2026-09-01T10:30:00") == "morning"
-    assert hrs.time_bucket("2026-09-01T13:00:00") == "midday"
-    assert hrs.time_bucket("2026-09-01T15:30:00") == "power_hour"
+    V1 declared four of its own here (`open_30m` / `morning` / `midday` /
+    `power_hour`) and read the hour straight off the clock against Eastern
+    cutoffs - on a Pacific desk, with a desk-local `entry_time`, that is the bug
+    `bounce_bot_lib.learning.time_bucket_for` says it exists to have fixed. It
+    also gave the Daytrade Tracker's Time of Day tab a vocabulary the aggregator
+    does not use, so 8 of 10 live rows went blank on a spelling.
+
+    Asserted against `time_bucket_for` rather than against literals: the point is
+    that there is ONE definition, and a literal here would be a second one.
+    """
+    from datetime import datetime
+
+    import held_run_score as hrs
+    from bounce_bot_lib.learning import time_bucket_for
+
+    for text in (
+        "2026-09-01T06:35:00",
+        "2026-09-01T07:30:00",
+        "2026-09-01T10:00:00",
+        "2026-09-01T12:30:00",
+    ):
+        assert hrs.time_bucket(text) == time_bucket_for(datetime.fromisoformat(text))
+    assert set(hrs.TIME_BUCKETS) >= {"opening_drive", "midday", "closing_window"}
     assert hrs.time_bucket("") == "unknown"
     assert hrs.time_bucket("not a time") == "unknown"
 

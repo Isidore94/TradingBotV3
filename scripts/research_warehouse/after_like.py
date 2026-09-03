@@ -67,6 +67,13 @@ def simulate_after_like_rows(
     The derived-series cache is shared across all twenty cells of one like, so
     the four entry rules that need M15/M30 series build each series once per
     like rather than once per cell.
+
+    The cache key includes the WINDOW each cell hands down (R4 A3). Sharing one
+    cache across cells that look at different day offsets is only safe if the
+    key says which offset asked: it did not, so an offset>=1 cell was served
+    offset 0's longer series and its measurability depended on which sibling had
+    run first. A cell simulated alone and a cell simulated after its siblings
+    now produce the same row.
     """
     series_cache: dict = {}
     rows = []

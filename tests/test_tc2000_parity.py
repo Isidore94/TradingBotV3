@@ -7,10 +7,18 @@ impression. The golden's expected values are computed in
 straight from the trader's two formula lines — not by calling the module these
 tests check, which would pin whatever the module does including its mistakes.
 
-Five symbols, sixteen sessions of M5 bars each. Sixteen because the relative
+Seven symbols, sixteen sessions of M5 bars each. Sixteen because the relative
 volume compares each of the last twelve bars with the same offset over the prior
 FIFTEEN sessions; under the old five-day fetch every RVOL on the board would have
 been blank.
+
+R4 A7 added the two symbols the first five could not catch. AAA-EEE are clean
+78-bar sessions, and on those a flat positional stride and a session-relative one
+give the SAME answer - which is why their pinned values are unchanged by A7 and
+why they could never have found the defect. `FFF` carries one early-close session
+and `GGG` one missing bar, and both have a volume series that is a pure function
+of the time of day, so the honest answer is 1.00 and any deviation is the
+alignment rather than the tape.
 """
 
 from __future__ import annotations
@@ -41,7 +49,7 @@ def test_the_fixture_meets_the_milestone_3_contract(golden):
     assert golden["schema"] == "tc2000_parity_v1"
     assert golden["numeric_tolerance"] == pytest.approx(1e-4)
     assert golden["raw_input_keys"] == ["bars"]
-    assert set(golden["bars"]) == {"AAA", "BBB", "CCC", "DDD", "EEE"}
+    assert set(golden["bars"]) == {"AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG"}
 
 
 def test_the_strength_score_matches_the_hand_computation(golden):
@@ -54,7 +62,7 @@ def test_the_strength_score_matches_the_hand_computation(golden):
 
 
 def test_the_relative_volume_matches_the_hand_computation(golden):
-    """`AVG(V / mean(V78, V156, ... V1170), 12)`, to four decimals."""
+    """`AVG(V / mean(V at the same bar offset over the prior 15 sessions), 12)`."""
     from strength_scan import relative_volume
 
     for symbol, bars in golden["bars"].items():
@@ -79,14 +87,71 @@ def test_a_flat_day_reads_as_a_relative_volume_of_about_one(golden):
 
 
 def test_too_little_history_is_blank_and_never_zero(golden):
-    """A zero would rank the name at the bottom of a filter it was never in."""
+    """A zero would rank the name at the bottom of a filter it was never in.
+
+    "Too little history" is counted in SESSIONS since R4 A7, because the offset
+    is counted inside a session. Fifteen prior sessions or the answer is blank;
+    a session that is merely SHORT is a different thing and is handled by
+    dropping the offsets it never reached, never by blanking the symbol.
+    """
     from strength_scan import relative_volume
 
     bars = golden["bars"]["AAA"]
     assert relative_volume(bars) is not None
-    assert relative_volume(bars[-1181:]) is None, "one bar short must be blank"
+    # Fourteen prior sessions is not fifteen.
+    assert relative_volume(bars[78 * 2 :]) is None
     assert relative_volume(bars[:100]) is None
     assert relative_volume([]) is None
+
+
+def test_an_early_close_does_not_move_a_time_of_day_volume_series(golden):
+    """The reproduction, pinned. FFF's volume depends only on the time of day.
+
+    So the honest relative volume is exactly 1.00 on every bar, and anything
+    else is the alignment rather than the tape. V1's flat positional stride
+    reads 1.2949 here: one 39-bar early close shifts every offset past it, so a
+    late bar is compared with a middling one.
+    """
+    from strength_scan import relative_volume
+
+    measured = relative_volume(golden["bars"]["FFF"])
+    assert measured == pytest.approx(1.0, abs=1e-6), measured
+    assert golden["expected"]["FFF"]["rvol"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_a_positional_stride_gets_the_early_close_wrong(golden):
+    """The old rule, run here so the difference is a number and not a claim."""
+    volumes = [bar["volume"] for bar in golden["bars"]["FFF"]]
+    ratios = []
+    for step in range(12):
+        index = len(volumes) - 1 - step
+        prior = [volumes[index - 78 * back] for back in range(1, 16)]
+        ratios.append(volumes[index] / (sum(prior) / 15))
+    positional = sum(ratios) / len(ratios)
+
+    assert positional == pytest.approx(1.2949, abs=1e-4), positional
+    assert positional != pytest.approx(1.0, abs=0.01), (
+        "a series whose volume is a pure function of the time of day has a "
+        "relative volume of exactly 1.00; this is the error the stride adds"
+    )
+
+
+def test_a_prior_session_missing_a_bar_contributes_nothing_and_never_a_zero(golden):
+    """GGG drops one bar from one prior session. The number stays measured.
+
+    A zero in the denominator's mean would read as "that day was dead at that
+    minute", which is a claim about volume rather than about a gap in the tape.
+    The residual is stated rather than hidden: the offset is the bar's INDEX
+    inside its session, so a hole shifts that session's later offsets by one -
+    seven basis points here, against the 29% a 39-bar early close cost the
+    positional stride.
+    """
+    from strength_scan import relative_volume
+
+    measured = relative_volume(golden["bars"]["GGG"])
+    assert measured is not None
+    assert measured == pytest.approx(golden["expected"]["GGG"]["rvol"], abs=1e-4)
+    assert 0.99 < measured < 1.01, measured
 
 
 def test_a_halted_prior_window_is_unmeasurable_rather_than_infinite(golden):
@@ -102,10 +167,12 @@ def test_a_halted_prior_window_is_unmeasurable_rather_than_infinite(golden):
 def _materialised(bars):
     """The fixture stores `dt` as ISO text; the pipeline hands over datetimes.
 
-    `strength_score` and `relative_volume` never look at `dt`, which is why they
-    read the fixture as it stands. `score_symbol` groups by session and needs
-    real datetimes - without them every bar falls into one session and the row
-    is refused for having no prior session to compare with.
+    `strength_score` never looks at `dt`. `relative_volume` and `score_symbol`
+    both group by session, and since R4 A7 `_session_groups` parses ISO text as
+    well as datetimes - it had to, or every stored bar fell into ONE session and
+    the relative volume compared today's bar with itself. This helper stays
+    because the pipeline hands over real datetimes and the fixture should be
+    read both ways.
     """
     from datetime import datetime
 

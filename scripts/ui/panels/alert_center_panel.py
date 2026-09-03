@@ -417,6 +417,25 @@ class _ClickableItem(QFrame):
         super().mousePressEvent(event)
 
 
+#: R4 A10: `held_run_score`'s segment index and the D1 setups by session, built
+#: once per process PER TRADING DAY. `None` means "not built yet"; a dict - even
+#: an empty one - means "built, and this is the answer". A failed read is an
+#: answer too. The payload carries `built_for`, the desk-local date it was built
+#: on, and that is what makes it expire.
+#:
+#: **The day key is the whole point** (R4 fix round 1). Without it the memo was
+#: set once and never invalidated, which broke A9's own fix after one day of
+#: uptime: `d1_setups_by_session` is keyed by `trade_date`, so on day 2 there was
+#: no key for today and every alert read `d1_setup_present=False` again - exactly
+#: the state A9 was built to end. The index is also a 20-TRADING-SESSION window
+#: (`held_run_score.ROLLING_SESSIONS`), so a memo that never rolls stops being
+#: "lately" while still calling itself that, against CLAUDE.md's rule that
+#: "lately" is ONE number counted in trading sessions. The desk is the always-on
+#: mini-PC and the checkpoint records multi-day uptimes, so "once per process"
+#: was never the same thing as "once per session".
+_HELD_RUN_INDEX_MEMO: dict | None = None
+
+
 class AlertCenterPanel(QFrame):
     """The sit-back-and-wait surface, split into two stacked feeds.
 
@@ -457,6 +476,9 @@ class AlertCenterPanel(QFrame):
     #: already fires - this exists so a surface that only shows the FADED
     #: count does not have to listen to every Focus mutation.
     focusFadedChanged = Signal()
+    #: R4 A10: `held_run_score`'s segment index, built once per session on a
+    #: worker. `object` because the payload is a plain dict Qt must not marshal.
+    _heldRunIndexLoaded = Signal(object)
 
     def __init__(
         self,
@@ -692,6 +714,17 @@ class AlertCenterPanel(QFrame):
             else (ReviewGuide() if persist_ignored else ReviewGuide(None, None))
         )
         self._review_guidance: dict[str, AlertGuidance] = {}
+        # R4 A10 - decision 0016 answer 4's day-trade headline on the M5 row.
+        # Built ONCE per session on a worker (the outcome log is ~90 MB) and
+        # then read as a dict, exactly like the take-rate cache above it: a row
+        # suffix must never put a file read in the alert path.
+        self._held_run_index: dict = {}
+        self._held_run_d1_symbols: dict = {}
+        self._held_run_thread = None
+        #: The desk-local date this panel's copy was built for. Empty means it
+        #: has none yet; a date that is not today's means it has expired.
+        self._held_run_built_for = ""
+        self._heldRunIndexLoaded.connect(self._on_held_run_index_loaded)
         if self.focus_service is not None:
             # Liking a pick (here or on the setups table) re-renders both feeds
             # so every alert for that name immediately shows the gold flag.
@@ -2072,6 +2105,7 @@ class AlertCenterPanel(QFrame):
         is_m5 = self._is_m5_review_alert(alert)
         if is_m5:
             self._attach_cached_take_prob(alert)
+            self._attach_held_run_suffix(alert)
             self.m5AlertPosted.emit(alert)
         if (
             self._current_review_alert is not None
@@ -2180,6 +2214,126 @@ class AlertCenterPanel(QFrame):
                 alert.review_take_prob = float(guidance.take_prob)
         except Exception:  # noqa: BLE001 - a row suffix never costs an alert
             logging.debug("Take-rate suffix skipped for %s.", alert.symbol, exc_info=True)
+
+    def _attach_held_run_suffix(self, alert: BounceAlert) -> None:
+        """Hand the M5 bar "held NN% / ran N.NR", IF the cell is already known.
+
+        R4 A10, decision 0016 answer 4. `held_run_score.segment_index` said it
+        existed "for a per-alert lookup" and nothing ever built the key, so the
+        bar's rows carried no such suffix at all.
+
+        A DICT READ, and never anything more. The index is built once per
+        session on a worker started by the first M5 alert; until it lands there
+        is no suffix, which is the honest rendering of "not measured". The same
+        rule the take-rate suffix follows, and for the same reason: a file read
+        in the alert path is the drip three snappiness packets removed.
+
+        Blank below the evidence floor - `alert_suffix` enforces that, not this.
+        A row reading "held 100% / ran 3.2R (n=2)" is read as a strong segment
+        at a glance, and a glance is what the row is for.
+        """
+        try:
+            self._ensure_held_run_index()
+            if not self._held_run_index:
+                return
+            import held_run_score
+
+            feedback = alert.payload.get("feedback") if isinstance(alert.payload, dict) else None
+            feedback = feedback if isinstance(feedback, dict) else {}
+            bounce_type = str(
+                (feedback.get("bounce_types") or "").split(";")[0]
+            ).strip() or str(alert.trigger or "").strip()
+            environment = str(feedback.get("market_environment") or "").strip()
+            trade_date = str(feedback.get("trade_date") or "").strip() or date.today().isoformat()
+            entry_time = f"{trade_date}T{str(alert.time_text or '')[:8]}"
+            cell = held_run_score.alert_cell(
+                self._held_run_index,
+                bounce_type=bounce_type,
+                entry_time=entry_time,
+                market_environment=environment,
+                d1_setup_present=alert.symbol
+                in (self._held_run_d1_symbols.get(trade_date) or set()),
+            )
+            alert.held_run_suffix = held_run_score.alert_suffix(cell)
+        except Exception:  # noqa: BLE001 - a row suffix never costs an alert
+            logging.debug("Held/ran suffix skipped for %s.", alert.symbol, exc_info=True)
+
+    def _held_run_day(self) -> str:
+        """The desk-local date the held/ran index is about.
+
+        A method so the day roll has one seam and a test can move the clock.
+        The SAME string `_attach_held_run_suffix` falls back to when an alert
+        carries no `trade_date`, so the memo and the lookup can never disagree
+        about which day they mean.
+        """
+        return date.today().isoformat()
+
+    def _ensure_held_run_index(self) -> None:
+        """Start the one background build, once per process PER DAY. Never blocks.
+
+        The memo is module-level rather than per panel because the read is ~90 MB
+        of outcome log plus a 19 MB snapshot and the answer is the same for every
+        panel in the process - a second Alert Center (a test, a second window)
+        must not pay for it again. A panel that finds a memo built for TODAY
+        takes it immediately and starts nothing.
+
+        A memo built for an earlier day is discarded and rebuilt, on the worker,
+        at the first M5 alert of the new day. See :data:`_HELD_RUN_INDEX_MEMO`
+        for what a memo that never expired cost.
+        """
+        global _HELD_RUN_INDEX_MEMO
+        today = self._held_run_day()
+        if self._held_run_built_for == today or self._held_run_thread is not None:
+            return
+        memo = _HELD_RUN_INDEX_MEMO
+        if isinstance(memo, dict) and memo.get("built_for") == today:
+            self._on_held_run_index_loaded(memo)
+            return
+        import threading
+
+        self._held_run_thread = threading.Thread(
+            target=self._held_run_index_worker,
+            name="alert-center-held-run",
+            daemon=True,
+        )
+        self._held_run_thread.start()
+
+    def _held_run_index_worker(self) -> None:
+        global _HELD_RUN_INDEX_MEMO
+        payload = {"index": {}, "d1": {}, "built_for": self._held_run_day()}
+        try:
+            import held_run_score
+
+            from project_paths import MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE
+
+            episodes = held_run_score.load_episodes()
+            payload["index"] = held_run_score.segment_index(
+                held_run_score.build_segments(episodes)
+            )
+            payload["d1"] = held_run_score.d1_setups_by_session(
+                held_run_score.d1_setup_rows(MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE)
+            )
+        except Exception:  # noqa: BLE001 - an absent suffix is a real answer
+            logging.debug("Held/ran index unavailable.", exc_info=True)
+        # Memoised even when it came back empty: a failed read is an answer, and
+        # retrying a 90 MB parse on every alert is exactly the drip this avoids.
+        _HELD_RUN_INDEX_MEMO = payload
+        try:
+            self._heldRunIndexLoaded.emit(payload)
+        except RuntimeError:
+            # The panel went away mid-read. Nothing left to update; the memo is
+            # still stamped, so the next panel in this process gets it free.
+            self._held_run_thread = None
+
+    def _on_held_run_index_loaded(self, payload) -> None:
+        if not isinstance(payload, dict):
+            return
+        self._held_run_index = payload.get("index") or {}
+        self._held_run_d1_symbols = payload.get("d1") or {}
+        # Stamped LAST, so a payload that arrived for a day that has already
+        # rolled leaves this panel asking for a fresh one rather than settling.
+        self._held_run_built_for = str(payload.get("built_for") or "")
+        self._held_run_thread = None
 
     def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
         """Cached per-symbol guidance; a failed lookup is neutral, never fatal."""
@@ -5207,40 +5361,43 @@ class AlertCenterPanel(QFrame):
             return
         if written is None:
             return
-        # DEFERRED, exactly as the Master AVWAP prompt is and for the same three
-        # reasons: a modal opened inside the handler never returns in a headless
-        # test, the queue advance must finish first, and A2 asks that the box not
-        # block the 60 s poll.
+        # LAST, and asynchronous - exactly as the Master AVWAP prompt is, and
+        # for the same three reasons: a BLOCKING modal opened inside the handler
+        # never returns in a headless test, the queue advance must finish first,
+        # and A2 asks that the box not block the 60 s poll. (R4 A6: the word
+        # was "DEFERRED", which claimed a later turn of the event loop this call
+        # never takes.)
         self._prompt_for_not_today_note(written)
 
     def _prompt_for_not_today_note(self, written: dict) -> None:
-        """The note box. Optional, MODELESS, and it never blocks the queue.
+        """The note box. Optional, WINDOW-MODAL, and it never blocks the queue.
 
+        R4 A6 corrected "MODELESS" here: `QDialog.open()` shows the dialog
+        window-modal. The property that matters is that it does not BLOCK.
         `QInputDialog.getMultiLineText` runs a nested event loop and does not
         return until the trader answers. That would sit between the "Not today"
         click and the review queue advancing - and in a headless test it never
         returns at all, so every existing test that clicks this button would HANG
-        rather than fail. `open()` shows the same dialog and returns immediately.
+        rather than fail.
+
+        Enter saves and Shift+Enter makes a newline (R4 A6), through the one
+        helper both note boxes on the desk now use.
         """
         try:
-            from PySide6.QtWidgets import QInputDialog
+            from ui.widgets.note_prompt import open_note_prompt
 
-            dialog = QInputDialog(self)
-            dialog.setInputMode(QInputDialog.TextInput)
-            dialog.setOption(QInputDialog.UsePlainTextEditForTextInput, True)
-            dialog.setWindowTitle(f"Not today: {written.get('symbol', '')}")
-            dialog.setLabelText(
-                "Add a note if you want one - it is optional, and the click is "
-                "already saved either way."
+            # Held until it closes: a dialog with no reference is garbage the
+            # moment this method returns.
+            self._not_today_note_dialog = open_note_prompt(
+                self,
+                title=f"Not today: {written.get('symbol', '')}",
+                label=(
+                    "Add a note if you want one - it is optional, and the click "
+                    "is already saved either way. Enter saves; Shift+Enter "
+                    "starts a new line."
+                ),
+                on_text=lambda text, row=written: self._save_not_today_note(row, text),
             )
-            dialog.setAttribute(Qt.WA_DeleteOnClose, True)
-            dialog.textValueSelected.connect(
-                lambda text, row=written: self._save_not_today_note(row, text)
-            )
-            # Held until it closes: a modeless dialog with no reference is
-            # garbage the moment this method returns.
-            self._not_today_note_dialog = dialog
-            dialog.open()
         except Exception:
             return
 

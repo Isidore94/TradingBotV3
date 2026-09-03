@@ -86,6 +86,12 @@ class BounceAlert:
     #: None means "the desk has no guidance for this symbol yet", which the bar
     #: renders as SILENCE. A 0% would be a claim; an absent suffix is not.
     review_take_prob: float | None = None
+    #: "held 71% / ran 1.9R" for this alert's `held_run_score` cell, attached by
+    #: the host at post time (R4 A10). EMPTY below the evidence floor and empty
+    #: when the desk has not measured the cell - never a number in brackets: a
+    #: row reading "held 100% / ran 3.2R" is read as a strong segment at a
+    #: glance, and a glance is what this row is for.
+    held_run_suffix: str = ""
 
     @classmethod
     def from_callback(cls, message: Any, tag: str, timestamp: datetime | None = None) -> "BounceAlert":

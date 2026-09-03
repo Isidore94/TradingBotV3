@@ -106,7 +106,14 @@ def build_entry(
         # Computed, never claimed. An entry about Friday written on Saturday
         # is weaker evidence about what the trader thought at the time, and a
         # reader must not have to work that out from two timestamps.
-        "written_after_the_session": bool(session and written_session > session),
+        #
+        # R4 A17: measured against the session's CLOSE, not against its date.
+        # A note typed at 21:00 Pacific is written five hours after the market
+        # shut, and under the date rule it claimed to have been written during
+        # the session - which is the one thing this field exists to deny. The
+        # date rule is kept as the fallback for a session the calendar cannot
+        # place, because a slightly coarse answer is better than none.
+        "written_after_the_session": _written_after_the_session(session, moment, written_session),
         "timeframe": _normalize_timeframe(timeframe),
         "symbols": [str(item).strip().upper() for item in (symbols or ()) if str(item).strip()],
         "origin": str(origin or ""),
@@ -115,13 +122,47 @@ def build_entry(
     }
 
 
+def _written_after_the_session(session: str, moment: datetime, written_session: str) -> bool:
+    """Had the trader already seen how that session finished?
+
+    The honest reading of the question, which is what the field's name has
+    always claimed and what `session_date_for`'s own docstring describes. At or
+    after the session's regular close, the answer is yes - the same calendar the
+    rest of the desk uses decides when that was.
+
+    Falls back to the calendar-date comparison when the close cannot be read: an
+    entry about Friday written on Saturday is still, unambiguously, after it.
+    """
+    if not session:
+        return False
+    try:
+        from datetime import date as _date
+
+        from market_calendar import session_close
+
+        parts = [int(part) for part in session.split("-")]
+        close = session_close(_date(parts[0], parts[1], parts[2]))
+        stamp = moment if moment.tzinfo else moment.astimezone()
+        return stamp >= close
+    except Exception:  # noqa: BLE001 - a coarse answer beats no answer
+        return bool(written_session > session)
+
+
 def session_date_for(now: datetime | None = None) -> str:
     """The session a note typed NOW is about - V2 item 4, decision 0016 answer 11.
 
-    Today's session until the close; the last completed session after it. A
-    thought written at 18:00 is about the day that just ended, and dating it
-    tomorrow would file it against a session that has not happened yet. On a
-    weekend or a holiday it is the last session that traded.
+    Today's session until the close; then STILL today's session, right up to the
+    next session's open. A thought written at 18:00 is about the day that just
+    ended, and dating it tomorrow would file it against a session that has not
+    happened yet. On a weekend or a holiday it is the last session that traded.
+
+    **The roll is the OPEN, not midnight** (R4 A17). This read the calendar date
+    in New York, so a Pacific trader typing at 21:00 PT - which is 00:00 ET the
+    next day - filed their note against TOMORROW'S session, on a day that had
+    not opened. Worse, `written_after_the_session` then computed False, so the
+    row claimed the note was written during a session that had not started. The
+    trader's own rule: the session ends at the close, and the note is about that
+    session until the next one opens.
 
     This does NOT touch `written_after_the_session`, which `build_entry` still
     COMPUTES from `created_at`. The two answer different questions - which day
@@ -140,13 +181,15 @@ def session_date_for(now: datetime | None = None) -> str:
 
         window = get_market_session_window(reference=local)
         market_date = window.market_date
-        if is_session(market_date):
-            # Today TRADES. Whether the close has passed or not, the note is
-            # about today - before the close it is the running session, after it
-            # the one that just finished. Both are `market_date`.
+        if is_session(market_date) and local >= window.open_local:
+            # Today TRADES and it has OPENED. Whether the close has passed or
+            # not, the note is about today - before the close it is the running
+            # session, after it the one that just finished.
             return market_date.isoformat()
-        # A weekend or a holiday has no session of its own, so the note is about
-        # the last one that actually traded.
+        # Either today never trades (a weekend or a holiday) or it has not
+        # opened yet - the small hours in New York, which is the evening on the
+        # trader's own clock. Both mean the same thing: the note is about the
+        # last session that actually traded.
         return previous_session(market_date).isoformat()
     except Exception:  # noqa: BLE001 - never the reason a thought is lost
         pass

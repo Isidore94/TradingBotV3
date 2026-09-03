@@ -93,7 +93,9 @@ STRENGTH_FETCH_PERIOD = "1mo"
 #: rows. The board's refresh cadence is unchanged.
 STRENGTH_FETCH_PERIOD_BEFORE_RVOL = "5d"
 
-#: Completed M5 bars in one regular session: 6.5 h / 5 min.
+#: Completed M5 bars in one regular session: 6.5 h / 5 min. Used for the FETCH
+#: budget - how many sessions a window has to hold - and no longer for the RVOL
+#: stride, which counts each bar's offset inside its own session (R4 A7).
 SESSION_M5_BARS = 78
 #: The trader's TC2000 relative volume, restated: `AVG(V / mean(V78, V156, ...
 #: V1170), 12)` - each of the last 12 bars against the same bar offset over the
@@ -289,49 +291,93 @@ def relative_volume(
     bars: Sequence[Mapping[str, Any]],
     *,
     bar_count: int = RVOL_BARS,
-    session_bars: int = SESSION_M5_BARS,
     prior_sessions: int = RVOL_PRIOR_SESSIONS,
 ) -> float | None:
     """The trader's TC2000 relative volume, or None when it cannot be measured.
 
-    `AVG(V / mean(V78, V156, ... V1170), 12)`: each of the last 12 completed
-    bars divided by the mean volume at the same bar offset over the prior 15
-    sessions, and those twelve ratios averaged.
+    `AVG(V / mean(V at the same bar offset over the prior 15 sessions), 12)`:
+    each of the last 12 completed bars divided by the mean volume at the SAME
+    OFFSET WITHIN A SESSION over the prior 15 sessions, and those twelve ratios
+    averaged.
 
-    **POSITIONAL, exactly as TC2000 is.** `V78` means "the volume 78 bars ago",
-    not "the volume at this time of day yesterday". On a clean series of regular
-    sessions the two are the same thing. On a half day - 3.25 hours, 39 bars -
-    they are not, and every offset past that half day is shifted by 39 bars, so
-    a 10:00 bar is compared with a 13:00 bar. That is a real divergence from what
-    a reader assumes the number means, and it is TC2000's divergence too: parity
-    with the trader's scan is the requirement, so it is documented here rather
-    than silently corrected into a different number.
+    **SESSION-RELATIVE, which is what decision 0016 answer 9 asks for** and what
+    the same answer calls "the time-of-day relative volume". V1 shipped a flat
+    positional stride - `V78`, `V156`, ... `V1170` - on the argument that TC2000
+    is positional and parity is the requirement. That reading does not survive
+    one short session. A half day is 3.25 hours, 39 bars; a single one of them
+    anywhere in the sixteen-session window shifts every offset past it by 39
+    bars, so a 10:00 bar is compared with a 13:00 bar and the number silently
+    stops being the thing its own name says it is. Measured on a series whose
+    volume depends ONLY on the time of day - the case where the answer must be
+    exactly 1.00 - one early close made the positional stride read 1.10.
+
+    So the offset is counted inside its session. Today's 10:00 bar is compared
+    with the 10:00 bar of each of the prior fifteen sessions, and a session that
+    never reached 10:00 CONTRIBUTES NOTHING rather than contributing a zero: an
+    early close is missing evidence, and a zero in the denominator's mean would
+    read as "that day was dead at 10:00", which is a claim about volume rather
+    than about the calendar.
+
+    **The residual, stated rather than hidden.** The offset is the bar's INDEX
+    inside its session, which is what decision 0016 answer 9 asks for ("the same
+    bar offset"). A session missing a bar in its MIDDLE therefore has its later
+    offsets shifted by one, so the comparison is a few minutes out for the rest
+    of that day. Measured on the golden's `GGG`, whose volume is a pure function
+    of the time of day: seven basis points, against the 29% a single 39-bar early
+    close cost the positional stride. Keying the offset on minutes from the open
+    would remove even that, and it is a different rule from the one the trader
+    stated; it is not made here silently.
 
     **None, never zero, when there is not enough history.** A blank says "not
     measured"; a zero says "no relative volume", which would rank the symbol at
     the bottom of a filter it was never eligible for. The same rule covers a
     prior window whose mean volume is zero - a halted or untraded name divides by
-    nothing, and its ratio is unmeasurable rather than infinite.
+    nothing, and its ratio is unmeasurable rather than infinite - and a bar that
+    no prior session can be lined up against at all. "Not enough history" is now
+    counted in SESSIONS, because the offset is: fifteen prior sessions or blank.
     """
-    if bar_count <= 0 or session_bars <= 0 or prior_sessions <= 0:
+    if bar_count <= 0 or prior_sessions <= 0:
         return None
-    needed = bar_count + session_bars * prior_sessions
-    if len(bars) < needed:
+    sessions = _session_groups(bars)
+    if len(sessions) <= prior_sessions:
         return None
-    volumes = [_finite(bar.get("volume")) for bar in bars]
-    if any(volume is None for volume in volumes[-needed:]):
+
+    # (session index, offset within that session) for every bar, in order. The
+    # last `bar_count` of these are the bars the trader's average is over; a
+    # session boundary inside those twelve is ordinary - each bar is still
+    # measured against its OWN offset.
+    positions = [
+        (session_index, offset)
+        for session_index, session in enumerate(sessions)
+        for offset in range(len(session))
+    ]
+    if len(positions) < bar_count:
         return None
+
     ratios: list[float] = []
-    for step in range(bar_count):
-        index = len(volumes) - 1 - step
-        prior = [
-            volumes[index - session_bars * back]
-            for back in range(1, prior_sessions + 1)
-        ]
-        average = sum(prior) / float(prior_sessions)  # type: ignore[arg-type]
+    for session_index, offset in positions[-bar_count:]:
+        if session_index < prior_sessions:
+            return None  # the window does not reach back fifteen sessions
+        volume = _finite(sessions[session_index][offset].get("volume"))
+        if volume is None:
+            return None
+        prior: list[float] = []
+        for back in range(1, prior_sessions + 1):
+            earlier = sessions[session_index - back]
+            if offset >= len(earlier):
+                # That session ended before this time of day. Missing evidence,
+                # never a measured zero.
+                continue
+            value = _finite(earlier[offset].get("volume"))
+            if value is None:
+                return None
+            prior.append(value)
+        if not prior:
+            return None
+        average = sum(prior) / float(len(prior))
         if average <= 0:
             return None
-        ratios.append(float(volumes[index]) / average)  # type: ignore[arg-type]
+        ratios.append(volume / average)
     return sum(ratios) / float(len(ratios))
 
 
@@ -409,13 +455,36 @@ def floor_checks(
     }
 
 
+def _session_date(bar: Mapping[str, Any]):
+    """The session a bar belongs to, from a datetime OR from ISO text.
+
+    The pipeline hands over real datetimes; the goldens store `dt` as ISO text,
+    because a fixture has to be readable. Reading only the datetime made every
+    stored bar fall into ONE session, which is silent and wrong rather than
+    loud and wrong - `relative_volume` would compare today's bar with itself.
+    A stamp that is neither is None, and a run of Nones is one session, which is
+    the same answer this returned before.
+    """
+    stamp = bar.get("dt")
+    if hasattr(stamp, "date"):
+        return stamp.date()
+    text = str(stamp or "").strip()
+    if not text:
+        return None
+    from datetime import datetime as _datetime
+
+    try:
+        return _datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
+
+
 def _session_groups(bars: Sequence[Mapping[str, Any]]) -> list[list[Mapping[str, Any]]]:
     """Split ascending bars into per-date groups."""
     groups: list[list[Mapping[str, Any]]] = []
     current_date = None
     for bar in bars:
-        stamp = bar.get("dt")
-        bar_date = stamp.date() if hasattr(stamp, "date") else None
+        bar_date = _session_date(bar)
         if bar_date != current_date or not groups:
             groups.append([])
             current_date = bar_date

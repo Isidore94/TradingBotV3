@@ -993,12 +993,22 @@ def _frame_rows(frame) -> list[dict[str, Any]]:
             continue
         if open_val != open_val or close_val != close_val:  # NaN guard
             continue
+        # A MISSING VOLUME IS None, NEVER A ZERO (R4 A8). This coerced to 0.0,
+        # and a zero is a measurement: it reaches the Strength Board's relative
+        # volume as "this bar traded nothing", which is a claim about the tape
+        # rather than about the download. `strength_scan.relative_volume` refuses
+        # an unreadable volume and leaves the cell blank, which is the honest
+        # answer - but only if it is given a blank to refuse.
+        #
+        # A NEGATIVE volume is still dropped to None for the same reason: it is
+        # not a quantity, it is a defect.
+        volume_val: float | None
         try:
             volume_val = float(row["Volume"])
         except (KeyError, TypeError, ValueError):
-            volume_val = 0.0
-        if volume_val != volume_val or volume_val < 0:  # NaN guard
-            volume_val = 0.0
+            volume_val = None
+        if volume_val is not None and (volume_val != volume_val or volume_val < 0):
+            volume_val = None
         rows.append(
             {
                 "dt": stamp.to_pydatetime() if hasattr(stamp, "to_pydatetime") else stamp,
@@ -3325,9 +3335,149 @@ def build_away_operations_lines(audit: Mapping[str, Any] | None) -> dict[str, st
 
 # Near-favorite demotion (2026-07-17 week review): favorite_setup scenario
 # closes ran +1.01R avg (n=1,940) while near_favorite_zone ran -0.18R at 5x
-# the volume (n=9,164). Favorites lead the page; the near bucket is capped so
-# the measured-losing bucket cannot crowd the report.
+# the volume (n=9,164). The near bucket is capped so the measured-losing bucket
+# cannot crowd the report.
+#
+# R4 A11 changed WHERE the cap is applied, not the cap. Decision 0016 answer 8:
+# *"the best pick is often in the near bucket, not the favourite bucket, so the
+# cream is not being sent."* The bucket no longer decides the ORDER - the
+# tracker's realized win rate does - and the cap is applied AFTER that ranking,
+# so a near pick with the best record on the page is printed and it is the
+# WEAKEST near rows that are hidden. Before, a near pick could be dropped by
+# position alone while a worse favorite was printed above it.
 AWAY_REPORT_MAX_NEAR_ROWS = 3
+
+
+#: The ONE horizon the digest's win rate is measured over. The tracker grades
+#: every scan row at 1, 3, 5 and 10 sessions, so the file carries one row per
+#: `(scan_row_id, horizon)` and reading it whole counts each pick up to four
+#: times.
+#:
+#: **FIVE, and the choice is the reason this constant exists.** Measured on the
+#: live file over 2026-08-06..2026-09-02: 11,097 rows over 4,433 distinct
+#: `scan_row_id`, so pooling inflates n by ~2.5x with rows that are four looks at
+#: one decision rather than four decisions. A Wilson bound on an inflated n is
+#: too TIGHT, and unevenly so - it changes the ORDER, which is the whole output.
+#: Horizon 1 is an overnight move and not the thing the trader holds for; its top
+#: family in the live window rests on n=8. Horizon 10 can only grade picks from
+#: the first half of a 20-session window (772 rows), so the ranking would be
+#: about a fortnight ago. Horizon 5 is the shortest that is a swing hold rather
+#: than a gap, and it still grades 13 families with real separation - 2,450
+#: rows before the stale-horizon filter and 2,249 after it, top bounds 0.585 /
+#: 0.543 / 0.522.
+SWING_DIGEST_HORIZON_SESSIONS = 5
+
+
+def swing_family_records(
+    path: Any = None,
+    *,
+    window: Any = None,
+    horizon: int = SWING_DIGEST_HORIZON_SESSIONS,
+) -> dict[str, dict[str, int]]:
+    """`{setup_family: {"wins": w, "losses": l}}` from the tracker's own grading.
+
+    R4 A11. The digest ranks by the record the tracker MEASURED, so the record
+    has to be read from the file the tracker writes -
+    `master_avwap_tier_outcomes.csv`, which is where `setup_docs` already reads
+    the same verdict from. The tracker decides what a win IS (its stop-at-a-level,
+    two-closes rule); nothing here re-derives one from a return, because two
+    definitions of a win in one program is how two screens end up disagreeing.
+
+    **ONE DECLARED HORIZON** (:data:`SWING_DIGEST_HORIZON_SESSIONS`), because
+    that file carries one row per `(scan_row_id, horizon)`. The first version of
+    this function counted them all, which is the same pooled-n defect this round
+    is fixing elsewhere: 11,097 rows over 4,433 picks, n inflated ~2.5x by
+    CORRELATED looks at one decision, every Wilson bound too tight, and the order
+    changed by it - pooled put `favorite_zone_watch` (bound 0.5535) above
+    `mid_earnings_ema21_retest` (0.5481), and at the declared horizon they swap.
+
+    **A row the tracker flagged `stale_horizon` is dropped**, which is the rule
+    the scan-factor leaderboard already applies to the same file: "5 sessions
+    later" indexes a symbol's own scan rows, not exchange sessions, so an
+    irregularly scanned name lands far from its declared horizon. Only an
+    explicit `True` drops - `None` means the drift could not be measured, and
+    uncertainty is not grounds for deletion.
+
+    Bounded to the "lately" window - `evidence_stats.lately_window`, 20 TRADING
+    SESSIONS - so the digest ranks on what has been working recently rather than
+    on a year.
+
+    Returns {} for anything it cannot read. A digest that failed to render
+    because a CSV moved would be worse than one ranked by expected R alone,
+    which is what an empty mapping degrades to.
+    """
+    try:
+        import csv as _csv
+
+        from evidence_stats import lately_window
+        from project_paths import MASTER_AVWAP_TIER_OUTCOMES_FILE
+
+        first, last = window or lately_window()
+        wanted_horizon = str(int(horizon))
+        target = Path(path or MASTER_AVWAP_TIER_OUTCOMES_FILE)
+        records: dict[str, dict[str, int]] = {}
+        with open(target, newline="", encoding="utf-8-sig") as handle:
+            for row in _csv.DictReader(handle):
+                stamp = str(row.get("scan_date") or "")[:10]
+                if stamp and not (first <= stamp <= last):
+                    continue
+                if str(row.get("horizon_sessions") or "").strip() != wanted_horizon:
+                    continue
+                if str(row.get("stale_horizon") or "").strip().lower() == "true":
+                    continue
+                family = normalize_family_key(row.get("setup_family"))
+                if not family:
+                    continue
+                verdict = str(row.get("win") if row.get("win") is not None else "").strip().lower()
+                entry = records.setdefault(family, {"wins": 0, "losses": 0})
+                if verdict in {"1", "true", "yes", "win"}:
+                    entry["wins"] += 1
+                elif verdict in {"0", "false", "no", "loss"}:
+                    entry["losses"] += 1
+                # Anything else is UNMEASURED and counts in neither - folding it
+                # into the denominator drifts every rate downward by however
+                # much the data is missing.
+        return records
+    except Exception:  # noqa: BLE001 - the digest never fails on a reader
+        return {}
+
+
+def normalize_family_key(family: Any) -> str:
+    """One spelling for a setup family, whichever surface wrote it."""
+    return str(family or "").strip().lower().replace(" ", "_").replace("-", "")
+
+
+def swing_pick_rank(pick: Mapping[str, Any], records: Mapping[str, Any] | None) -> tuple:
+    """The sort key: Wilson lower bound on the family's win rate, then expected R.
+
+    Decision 0016 answer 3 makes WIN RATE the swing headline, and answer 8 says
+    the cream is often in the near bucket - so the bucket is printed and never
+    ranked on. The LOWER BOUND rather than the raw rate, and the same Wilson
+    `swing_headline` uses, because a raw 100%-on-three outranks a 62%-on-ninety
+    every single time and that is the ordering this exists to avoid.
+
+    A family the tracker has not graded has NO bound, and sorts below every
+    family that has one rather than at zero - "not measured" is not "measured
+    badly". Expected R breaks every tie, including that whole group's.
+    """
+    from swing_headline import wilson_lower_bound
+
+    entry = (records or {}).get(normalize_family_key(pick.get("family"))) or {}
+    wins = int(entry.get("wins") or 0)
+    losses = int(entry.get("losses") or 0)
+    bound = wilson_lower_bound(wins, wins + losses)
+    try:
+        expected = float(pick.get("expected_r"))
+    except (TypeError, ValueError):
+        expected = None
+    if expected is not None and expected != expected:
+        expected = None
+    return (
+        bound is None,
+        -(bound if bound is not None else 0.0),
+        expected is None,
+        -(expected if expected is not None else 0.0),
+    )
 
 
 # The swing PUSH starts later than the report it rides on. The digest keeps
@@ -3576,21 +3726,20 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]
         return ", ".join(items) if items else "(none)"
 
-    def _swing_bucket_priority(item: Mapping[str, Any]) -> int:
-        bucket = str(item.get("bucket") or "").strip().lower()
-        bucket = " ".join(bucket.replace("_", " ").replace("-", " ").split())
-        if bucket == "high conviction":
-            return 0
-        if bucket in {"favorite", "favorite setup"}:
-            return 1
-        return 2
-
+    # R4 A11: ranked ACROSS the buckets by the tracker's own record, with the
+    # bucket PRINTED rather than ranked on. Decision 0016 answer 8: *"the best
+    # pick is often in the near bucket, not the favourite bucket, so the cream is
+    # not being sent."* `swing_family_records` is read by the caller and handed
+    # in - this renderer stays pure - and an absent mapping degrades to ranking
+    # by expected R, never to a crash and never back to bucket order.
+    records = payload.get("swing_family_records")
+    records = records if isinstance(records, Mapping) else {}
     indexed_picks = [
         (index, pick)
         for index, pick in enumerate(payload.get("swing_picks", []) or [])
         if isinstance(pick, Mapping)
     ]
-    indexed_picks.sort(key=lambda item: (_swing_bucket_priority(item[1]), item[0]))
+    indexed_picks.sort(key=lambda item: (swing_pick_rank(item[1], records), item[0]))
 
     picks_lines = []
     picks_symbols: list[str] = []
@@ -3622,7 +3771,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     if near_rows_suppressed:
         picks_lines.append(
             f"(+{near_rows_suppressed} more near-favorite rows hidden - bucket measured "
-            "-0.18R avg vs favorites +1.01R, week of 2026-07-13)"
+            "-0.18R avg vs favorites +1.01R, week of 2026-07-13; the cap is "
+            "applied AFTER the win-rate ranking, so what is hidden is the "
+            "weakest near rows and never the best one)"
         )
     if picks_symbols:
         picks_lines.append("TV paste: " + ",".join(picks_symbols))

@@ -759,3 +759,34 @@ policies. Measured across both brokers: broker $8,219.81, recomputed $8,220.05,
 difference −$0.2385.
 
 **Owed:** one desk run with the BoC rates booked so the CAD total completes.
+
+
+## Round R4 Part A (2026-09-02) — the Market Journal page and the session roll
+
+The Market Journal is not this plan's subject (R7 owns the TRADE journal), but
+decision 0016 answer 11 — *"one box, one Enter"* — is, and V2 built it on the
+Desk tab only. R4 A16 and A17 finished it.
+
+**The left-nav page was never changed.** It still carried a session picker, a
+Refresh button, a timeframe picker, a Save button and an after-the-fact caption,
+and it showed ONE session at a time — so reading back "what did I think last
+week" meant knowing the date first. It is now one box (Enter saves, Shift+Enter
+newlines, through the same event-filter idiom the Desk tab uses) over a DATED
+newest-first list across every session. The five widgets are **out of the layout,
+not deleted** — `reload()` and `_save()` still read them — and **nothing leaves
+the schema**: `timeframe`, `symbols`, `origin` and both stamps are written
+exactly as before.
+
+**The session rolled at midnight in New York.** `session_date_for` read the
+market-local calendar DATE, so a Pacific note typed at 21:00 — which is 00:00 ET
+the next day — filed against TOMORROW'S session, on a day that had not opened.
+The roll is the session's OPEN now: today's session from the open, and still
+today's session after the close, right up until the next one opens. A weekend or
+a holiday still files against the last session that traded.
+
+**`written_after_the_session` is measured against the CLOSE.** It compared
+calendar dates, so a note typed five hours after the bell claimed to have been
+written DURING the session — the one thing the field exists to deny. It now asks
+`market_calendar.session_close`, and falls back to the date comparison when the
+calendar cannot place the session, because a coarse answer beats none. Existing
+rows are never rewritten; they keep the value they were written with.

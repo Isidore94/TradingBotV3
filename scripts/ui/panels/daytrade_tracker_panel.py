@@ -33,10 +33,17 @@ from ui.widgets.section_header import SectionHeader
 #: two are different questions - the tier says whether the desk should alert on
 #: the segment at all, and these say what the alert offered once the level held -
 #: and the Verdict column already says which is which.
+#:
+#: R4 A10: the column is "Held 30m" now, and the label is not a rename but a
+#: correction. V3 labelled it "Held" because the number came from the
+#: aggregator's own `stop_rate`, over ITS window and over every row rather than
+#: the ones that held - a second formula under the headline key. The number now
+#: comes from `held_run_score`, which asks the thirty-minute question of the raw
+#: outcome log, so the column may finally say what it measures.
 PERFORMANCE_COLUMNS = (
     ("direction", "Side"),
     ("segment", "Segment"),
-    ("held_rate", "Held"),
+    ("held_rate", "Held 30m"),
     ("held_run_score", "Held x Ran"),
     ("sample_count", "N"),
     ("avg_close_r", "Avg R"),
@@ -230,6 +237,9 @@ class DaytradeTrackerPanel(QFrame):
     #: The decisions read lands here, off the worker thread. `object` because
     #: the payload is a plain dict and Qt must not try to marshal it.
     _decisionsLoaded = Signal(object)
+    #: R4 A10: `held_run_score`'s own marginals, read on a worker for the same
+    #: reason - the outcome log is ~90 MB and the panel opens on the Qt thread.
+    _heldRunLoaded = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -237,6 +247,11 @@ class DaytradeTrackerPanel(QFrame):
         self._refresh_thread: threading.Thread | None = None
 
         self._decisions_thread: threading.Thread | None = None
+        self._held_run_thread: threading.Thread | None = None
+        #: `{(dimension, direction, segment): summary}`. Empty until the first
+        #: read lands, and empty means BLANK - never a substitute number.
+        self._held_run_summaries: dict = {}
+        self._performance_rows: list[dict[str, Any]] = []
 
         self.refresh_button = QPushButton("Re-aggregate Outcomes")
         self.refresh_button.setObjectName("PrimaryButton")
@@ -298,6 +313,7 @@ class DaytradeTrackerPanel(QFrame):
 
         self._refreshFinished.connect(self._on_refresh_finished)
         self._decisionsLoaded.connect(self._on_decisions_loaded)
+        self._heldRunLoaded.connect(self._on_held_run_loaded)
         self._build_layout()
         self.reload_from_disk()
         # Off the Qt thread from the first paint: the scoreboard is a 34 KB
@@ -487,24 +503,18 @@ class DaytradeTrackerPanel(QFrame):
 
     # ------------------------------------------------------------------
     def reload_from_disk(self) -> None:
-        perf_rows = _add_held_and_ran(_load_performance_rows())
+        # The held/ran numbers come from `held_run_score` and its read is
+        # expensive, so the table renders with whatever this panel already has
+        # and the worker below fills the two columns in when it lands. Blank
+        # first is honest: it is what an unmeasured cell looks like.
+        self._performance_rows = _load_performance_rows()
+        perf_rows = apply_held_and_ran(self._performance_rows, self._held_run_summaries)
+        self._start_held_run_read()
         by_dimension: dict[str, list[dict]] = {}
         for row in perf_rows:
             by_dimension.setdefault(str(row.get("dimension") or ""), []).append(row)
         for key, (_table, model) in self._dimension_tables.items():
-            # V3 item 2: ordered by the HEADLINE - did the level hold, then how
-            # far did it run - rather than by average R. Answer 4: *"rank by
-            # maximum favourable excursion, not by any exit; exiting well is the
-            # trader's job."* A row that cannot be measured sorts last rather
-            # than at the bottom of the scale, which is a different claim.
-            rows = sorted(
-                by_dimension.get(key, []),
-                key=lambda r: (
-                    r.get("held_run_score") is None,
-                    -_float(r.get("held_run_score"), -999.0),
-                ),
-            )
-            model.set_rows(rows)
+            model.set_rows(_by_headline(by_dimension.get(key, [])))
 
         state = load_bounce_learning_state() or {}
         learning_rows = []
@@ -578,11 +588,41 @@ class DaytradeTrackerPanel(QFrame):
         self.status_label.setText(message)
         self.statusChanged.emit(message)
 
+    # ------------------------------------------------------------------
+    def _start_held_run_read(self) -> None:
+        """One read at a time, on a worker, never blocking the panel."""
+        if self._held_run_thread is not None and self._held_run_thread.is_alive():
+            return
+        self._held_run_thread = threading.Thread(
+            target=self._held_run_worker,
+            name="tracker-held-run-read",
+            daemon=True,
+        )
+        self._held_run_thread.start()
+
+    def _held_run_worker(self) -> None:
+        summaries = load_held_run_summaries()
+        try:
+            self._heldRunLoaded.emit(summaries)
+        except RuntimeError:
+            # The panel went away mid-read. Nothing left to update; drop it.
+            pass
+
+    def _on_held_run_loaded(self, summaries) -> None:
+        self._held_run_summaries = summaries if isinstance(summaries, dict) else {}
+        rows = apply_held_and_ran(self._performance_rows, self._held_run_summaries)
+        by_dimension: dict[str, list[dict]] = {}
+        for row in rows:
+            by_dimension.setdefault(str(row.get("dimension") or ""), []).append(row)
+        for key, (table, model) in self._dimension_tables.items():
+            model.set_rows(_by_headline(by_dimension.get(key, [])))
+            table.fit_columns()
+
     def shutdown(self) -> None:
         """Let no read outlive the panel it was going to update."""
-        thread = self._decisions_thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=2.0)
+        for thread in (self._decisions_thread, self._held_run_thread):
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=2.0)
 
 
 def _load_performance_rows() -> list[dict[str, Any]]:
@@ -597,6 +637,24 @@ def _load_performance_rows() -> list[dict[str, Any]]:
             return [dict(row) for row in csv.DictReader(handle)]
     except OSError:
         return []
+
+
+def _by_headline(rows) -> list[dict]:
+    """V3 item 2's ordering, in one place because two callers now need it.
+
+    Ordered by the HEADLINE - did the level hold, then how far did it run -
+    rather than by average R. Decision 0016 answer 4: *"rank by maximum
+    favourable excursion, not by any exit; exiting well is the trader's job."*
+    A row that cannot be measured sorts LAST rather than at the bottom of the
+    scale, which is a different claim.
+    """
+    return sorted(
+        rows,
+        key=lambda r: (
+            r.get("held_run_score") is None,
+            -_float(r.get("held_run_score"), -999.0),
+        ),
+    )
 
 
 def _float(value: Any, default: float) -> float:
@@ -615,37 +673,50 @@ def _mtime_text(path: Path) -> str:
         return "never"
 
 
-def _add_held_and_ran(rows) -> list[dict]:
-    """Add `held_rate` and `held_run_score` to the aggregator's rows - V3 item 2.
+def apply_held_and_ran(rows, summaries) -> list[dict]:
+    """Join `held_run_score`'s own numbers onto the aggregator's rows - R4 A10.
 
-    ONE IMPLEMENTATION, MANY CALLERS. The arithmetic is `held_run_score`'s, not a
-    second copy here: P(the level held) x the trimmed-mean MFE_R of the ones that
-    held. What this does is read the two inputs the aggregator already publishes -
-    `stop_rate` and `avg_mfe_r` - and combine them the same way.
+    V3 shipped a SECOND FORMULA here under the same column key: `1 - stop_rate`
+    times `avg_mfe_r`, both taken from the aggregator over ITS window and over
+    ALL rows rather than the ones that held, with no thirty-minute question
+    anywhere in it. Two different numbers under one heading is worse than one
+    blank, because the trader reads the column as an ordering.
 
-    **`stop_rate` is the aggregator's own, over its own window**, which is not the
-    30-minute question `held_run_score` asks of the raw log. So the column is an
-    approximation of the same shape rather than the identical number, and it is
-    labelled "Held" rather than "Held in 30m" for exactly that reason. The precise
-    version is what `held_run_score.build_segments` computes from the outcome log;
-    this is what the tracker's existing aggregate can support without a second
-    pass over 300,000 rows on a panel load.
-
-    A row missing either input gets None for both, never a zero - a zero would
-    rank a segment we could not measure at the bottom of a list the trader reads
-    as an ordering.
+    So the arithmetic now comes from the module that owns it and nothing is
+    computed in this file. `summaries` is
+    `held_run_score.dimension_summaries(...)`, keyed `(dimension, direction,
+    segment)`, and a row it cannot answer gets None - which the default sort
+    already puts last, and which the six unmeasurable tabs will show, because
+    `intraday_bounce_outcomes.csv` does not record the alert context those
+    dimensions are cut on.
     """
+    lookup = summaries or {}
     out: list[dict] = []
     for raw in rows or ():
         row = dict(raw)
-        stop = _float(row.get("stop_rate"), None)
-        mfe = _float(row.get("avg_mfe_r"), None)
-        if stop is None or mfe is None:
-            row["held_rate"] = None
-            row["held_run_score"] = None
-        else:
-            held = max(0.0, min(1.0, 1.0 - stop))
-            row["held_rate"] = held
-            row["held_run_score"] = held * mfe
+        key = (
+            str(row.get("dimension") or "").strip(),
+            str(row.get("direction") or "").strip().lower(),
+            str(row.get("segment") or "").strip(),
+        )
+        cell = lookup.get(key)
+        row["held_rate"] = (cell or {}).get("hold_rate")
+        row["held_run_score"] = (cell or {}).get("held_run_score")
         out.append(row)
     return out
+
+
+def load_held_run_summaries() -> dict:
+    """`held_run_score`'s marginals, read off disk. NEVER on the Qt thread.
+
+    The outcome log is ~300,000 rows and ~90 MB and the setups snapshot is
+    ~19 MB, so this is the panel's expensive read and it runs on a worker.
+    A failure yields an empty mapping, which shows blanks - the panel still
+    opens, and a blank is what an unmeasured cell should look like anyway.
+    """
+    try:
+        import held_run_score
+
+        return held_run_score.dimension_summaries(held_run_score.load_episodes())
+    except Exception:
+        return {}

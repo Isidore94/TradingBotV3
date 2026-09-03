@@ -181,7 +181,15 @@ def test_phone_digest_prioritizes_swings_before_intraday_candidates():
 
 def test_phone_digest_caps_near_favorite_rows():
     """2026-07-17 week review: near_favorite_zone measured -0.18R vs favorite
-    +1.01R - favorites always show, the near bucket is capped with a note."""
+    +1.01R - favorites always show, the near bucket is capped with a note.
+
+    R4 A11 moved the cap to AFTER the ranking and took the bucket out of the
+    ORDER. This fixture carries no families and no tracker records, so the
+    ranking falls back to expected R, which puts the favorites first here for
+    their own reason rather than for their bucket - the cap itself is what this
+    test is about and it is unchanged. The ordering rule has its own tests in
+    `test_r4_away_digest_ranking.py`.
+    """
     near = [
         {"symbol": f"NEAR{i}", "side": "LONG", "bucket": "Near", "expected_r": -0.1}
         for i in range(6)
@@ -199,7 +207,8 @@ def test_phone_digest_caps_near_favorite_rows():
     shown_near = [f"NEAR{i}" for i in range(6) if f"NEAR{i} (LONG)" in text]
     assert len(shown_near) == core.AWAY_REPORT_MAX_NEAR_ROWS
     assert "+3 more near-favorite rows hidden" in text
-    # Favorites still lead the section.
+    # Favorites still lead the section - here because they carry the better
+    # expected R, not because of their bucket (R4 A11).
     assert text.index("FAVE0 (LONG)") < text.index("NEAR0 (LONG)")
 
 

@@ -133,13 +133,22 @@ def test_a_desk_written_row_is_marked_in_the_list(panel):
     assert "[desk]" in panel.entries.item(0).text()
 
 
-def test_the_session_picker_never_silently_repoints_the_page(panel):
-    """Adding the first item to an editable combo selects it, which used to
-    change WHICH session was being read as a side effect of loading."""
-    today = date.today().isoformat()
+def test_loading_the_page_never_silently_repoints_which_session_is_read(panel):
+    """Adding the first item to an editable combo selected it, which used to
+    change WHICH session was being read as a side effect of loading.
+
+    R4 A16 removed the picker and A17 changed what "the session" means, so the
+    assertion is against `market_journal.session_date_for` rather than against
+    the calendar date. The two differ for real: before the open, today has not
+    traded and the note belongs to the last session that did - and this test
+    failed at 00:00 on 2026-09-03 for exactly that reason, comparing a computed
+    session against `date.today()`.
+    """
+    import market_journal
+
     _render(panel, [_entry("mj-1", "x")])
 
-    assert panel.session_date() == today
+    assert panel.session_date() == market_journal.session_date_for()
 
 
 # ==========================================================================
@@ -197,7 +206,15 @@ def test_a_pane_that_was_never_captured_is_hidden_not_drawn_empty(panel):
 
 
 def test_a_late_capture_never_lands_under_another_entrys_words(panel):
+    """R4 A16: the list is newest-FIRST now, so the selected row is row 0.
+
+    The point is unchanged - a capture that arrives for an entry the trader is
+    no longer looking at must not repaint the note - so the test selects the
+    OTHER entry explicitly rather than relying on which row the render happened
+    to leave current.
+    """
     _render(panel, [_entry("mj-1", "x"), _entry("mj-2", "y")], digests={"mj-1": {"digest": ""}})
+    panel.entries.setCurrentRow(1)
     before = panel.charts_note.text()
 
     panel._render_capture("mj-1", {"symbol": "DT", "series": {}})

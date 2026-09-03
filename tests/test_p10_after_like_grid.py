@@ -575,3 +575,179 @@ def test_the_narration_view_carries_the_eligible_after_like_cells_only():
     assert view["after_like_eligible"] == [
         {"day_offset": 0, "entry": "first_m5_close", "eligible": True}
     ]
+
+
+def test_a_large_after_like_cell_is_eligible_rather_than_reading_an_absent_key():
+    """R4 A1: `eligible` was read off `evidence_stats.summarize`, which never sets it.
+
+    The key is absent from every `summarize` result, so `bool(summary.get(...))`
+    was `False` for every cell of this grid no matter how large - a 60-episode,
+    60-symbol, 28-session cell reported ineligible and the readout showed
+    nothing. Tested THROUGH `after_like_block` rather than against a hand-written
+    summary dict, because a hand-written dict is exactly the thing that could not
+    have caught this.
+    """
+    from ai_jobs import setup_research
+
+    rows = []
+    for index in range(60):
+        day = 2 + index % 28  # 28 distinct entry sessions
+        rows.append(
+            {
+                "recipe_id": "afterlike_d0_first_m5_close_2r_v1",
+                "occurrence_id": f"afterlike|SYM{index}|LONG|2026-09-02",
+                "net_r": 0.4 if index % 3 else -0.6,
+                "first_hit": "TARGET" if index % 3 else "STOP",
+                "entry_at": f"2026-09-{day:02d}T13:35:00",
+            }
+        )
+
+    block = setup_research.after_like_block(rows)
+    cell = block["cells"][0]
+
+    assert cell["n"] == 60
+    assert cell["n_episodes"] == 60
+    assert cell["meets_n_floor"] is True
+    assert cell["eligible"] is True, "the floors are met; the key was simply absent"
+
+
+def test_the_after_like_floors_are_the_packs_own_and_not_just_the_n_floor():
+    """Sixty rows on ONE session still fails the session floor."""
+    from ai_jobs import setup_research
+
+    rows = [
+        {
+            "recipe_id": "afterlike_d1_m15_acceptance_2r_v1",
+            "occurrence_id": f"afterlike|SYM{index}|LONG|2026-09-02",
+            "net_r": 0.4,
+            "first_hit": "TARGET",
+            "entry_at": "2026-09-09T13:35:00",
+        }
+        for index in range(60)
+    ]
+
+    cell = setup_research.after_like_block(rows)["cells"][0]
+    assert cell["meets_n_floor"] is True
+    assert cell["eligible"] is False, "one entry session is not five"
+
+
+def test_a_cell_measures_the_same_alone_as_it_does_after_its_siblings():
+    """R4 A3: one series cache served twenty cells that look at different windows.
+
+    `simulate_after_like_rows` hands ONE `series_cache` to all twenty cells of a
+    like, and `_entry_from_derived` keyed it `(symbol, timeframe, as_of)` - no
+    offset anywhere in the key. Each cell passes a different `ordered`, the bars
+    from its own day offset onward, so the offset-2 cell was handed the offset-0
+    cell's longer derived series. What a cell measured therefore depended on
+    which sibling had run first, which is the one thing a grid comparing cells
+    may never do.
+
+    Reproduced on this fixture: the d2 M30 cell simulated alone saw 13 derived
+    bars and refused (the EMA floor is 21); simulated after d0 it saw 39 and
+    produced a row.
+    """
+    from research_warehouse import after_like, outcomes
+
+    occurrence, bars = _inputs()
+    as_of = _as_of()
+    like = _like("2026-08-04")
+
+    after_siblings = {
+        row["recipe_id"]: row
+        for row in after_like.simulate_after_like_rows(
+            dict(like), dict(occurrence), bars, as_of=as_of, computed_at=as_of, run_id="test"
+        )
+    }
+
+    for recipe in outcomes.AFTER_LIKE_RECIPES:
+        alone = outcomes.simulate_after_like_entry(
+            dict(like),
+            dict(occurrence),
+            bars,
+            recipe,
+            as_of=as_of,
+            computed_at=as_of,
+            run_id="test",
+            series_cache={},
+        )
+        shared = after_siblings.get(recipe.recipe_id)
+        if alone is None:
+            assert shared is None, (
+                f"{recipe.recipe_id} measured nothing alone but produced a row "
+                "after its siblings ran"
+            )
+            continue
+        assert shared is not None, recipe.recipe_id
+        assert shared["entry_at"] == alone["entry_at"], recipe.recipe_id
+        assert shared["net_r"] == alone["net_r"], recipe.recipe_id
+
+
+def test_a_short_window_is_never_measured_against_a_longer_siblings_series():
+    """The measurable/unmeasurable verdict itself was order-dependent.
+
+    `_entry_from_derived` refuses below `min_bars` completed derived bars - the
+    M30 EMA rule needs 21. An RTH session is 13 M30 bars, so a one-session
+    window is under the floor and a three-session window is over it. Sharing a
+    cache keyed without the window meant the one-session cell was handed the
+    three-session series, cleared a floor it does not clear, and produced a row
+    that the same cell run alone refuses. Which of the two answers a night got
+    depended on which cell the loop reached first.
+    """
+    from research_warehouse import outcomes
+
+    occurrence, bars = _inputs()
+    as_of = _as_of()
+    last_day = max(row["interval_start"].date() for row in bars)
+    one_session = [row for row in bars if row["interval_start"].date() == last_day]
+    assert len(one_session) < len(bars), "the fixture must span more than one session"
+
+    always = lambda *_args: True  # noqa: E731 - the floor is what is under test
+
+    shared: dict = {}
+    outcomes._entry_from_derived(
+        dict(occurrence), bars, timeframe="M30", as_of=as_of,
+        qualifies=always, min_bars=outcomes.SETUP_ENTRY_TIMING_MIN_EMA_BARS,
+        series_cache=shared,
+    )
+    after_sibling = outcomes._entry_from_derived(
+        dict(occurrence), one_session, timeframe="M30", as_of=as_of,
+        qualifies=always, min_bars=outcomes.SETUP_ENTRY_TIMING_MIN_EMA_BARS,
+        series_cache=shared,
+    )
+    alone = outcomes._entry_from_derived(
+        dict(occurrence), one_session, timeframe="M30", as_of=as_of,
+        qualifies=always, min_bars=outcomes.SETUP_ENTRY_TIMING_MIN_EMA_BARS,
+        series_cache={},
+    )
+
+    assert alone == (None, None), "one session is under the 21-bar EMA floor"
+    assert after_sibling == alone, "a sibling's longer series cleared this cell's floor"
+
+
+def test_the_derived_series_cache_is_keyed_by_the_window_it_was_built_from():
+    """Two different windows over one symbol are two different series."""
+    from research_warehouse import outcomes
+
+    occurrence, bars = _inputs()
+    as_of = _as_of()
+    cache: dict = {}
+
+    outcomes._entry_from_derived(
+        dict(occurrence),
+        bars,
+        timeframe="M30",
+        as_of=as_of,
+        qualifies=lambda *_args: False,
+        series_cache=cache,
+    )
+    first_keys = set(cache)
+    outcomes._entry_from_derived(
+        dict(occurrence),
+        bars[len(bars) // 2 :],
+        timeframe="M30",
+        as_of=as_of,
+        qualifies=lambda *_args: False,
+        series_cache=cache,
+    )
+
+    assert set(cache) - first_keys, "the shorter window reused the longer one's key"
