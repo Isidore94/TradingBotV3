@@ -1434,7 +1434,28 @@ def _entry_from_derived(
     # The cache is handed in by the caller, keyed by symbol/timeframe/cutoff and
     # dropped with the occurrence - never a module-level cache that could serve
     # one occurrence's bars to another.
-    cache_key = (str(occurrence.get("symbol") or ""), timeframe, as_of)
+    #
+    # THE WINDOW IS PART OF THE KEY (R4 A3), and it has to be. The after-like
+    # grid hands one cache to all twenty cells of a like, and each cell passes a
+    # DIFFERENT `ordered` - the bars from its own day offset onward. Keyed on
+    # symbol/timeframe/cutoff alone, the offset-2 cell was served the offset-0
+    # cell's series, so what a cell measured depended on which sibling ran
+    # first: d2 M30 simulated alone saw 13 derived bars and refused (below the
+    # 21-bar EMA floor), and simulated after d0 saw 39 and produced a row.
+    # `ordered` is always a suffix of one bar list, so its first bar's start
+    # identifies the window exactly; the length is carried too so a truncated
+    # list can never collide with a longer one sharing a first bar.
+    first_start = None
+    for row in ordered or []:
+        first_start = row.get("interval_start")
+        break
+    cache_key = (
+        str(occurrence.get("symbol") or ""),
+        timeframe,
+        as_of,
+        first_start,
+        len(ordered or []),
+    )
     if series_cache is not None and cache_key in series_cache:
         series = series_cache[cache_key]
     else:

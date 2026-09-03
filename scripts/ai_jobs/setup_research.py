@@ -210,6 +210,33 @@ def _first_m5_session(store) -> dict[str, Any]:
         return {"first_m5_session": None, "first_m5_session_note": f"not readable: {exc}"}
 
 
+def _meets_eligibility_floors(
+    summary: Mapping[str, Any],
+    *,
+    symbols: int | None = None,
+    sessions: int | None = None,
+) -> bool:
+    """The ONE eligibility rule, so every block in this pack states it once.
+
+    `evidence_stats.summarize` deliberately does NOT set `eligible` — the n
+    floor is its business and the symbol/session floors are this pack's. Reading
+    `summary["eligible"]` straight off a `summarize` result therefore reads a key
+    that is never present, which is `False` for every cell no matter how large:
+    the after-like block did exactly that, so a 60-episode, 60-symbol,
+    28-session cell reported ineligible. When `symbols`/`sessions` are not given
+    they are taken from `summarize`'s own `counts` block, which is where it puts
+    the distinct tallies.
+    """
+    counts = summary.get("counts") or {}
+    symbol_count = int(counts.get("symbols") or 0) if symbols is None else int(symbols)
+    session_count = int(counts.get("sessions") or 0) if sessions is None else int(sessions)
+    return bool(
+        summary.get("meets_n_floor")
+        and symbol_count >= MIN_SYMBOLS
+        and session_count >= MIN_SESSIONS
+    )
+
+
 def _summarize(rows: list[dict]) -> dict[str, Any]:
     from evidence_stats import summarize
 
@@ -252,7 +279,7 @@ def _summarize(rows: list[dict]) -> dict[str, Any]:
             if row.get("dependency_cluster_id")
         }
     )
-    stats["eligible"] = bool(stats.get("meets_n_floor") and symbols >= MIN_SYMBOLS and sessions >= MIN_SESSIONS)
+    stats["eligible"] = _meets_eligibility_floors(stats, symbols=symbols, sessions=sessions)
     stats["eligibility_rule"] = (
         f"n >= 30 OUTCOME ROWS, at least {MIN_SYMBOLS} symbols, and at least "
         f"{MIN_SESSIONS} entry sessions; still discovery, never confirmation. "
@@ -348,7 +375,11 @@ def after_like_block(rows) -> dict:
                     else None
                 ),
                 "stop_rate": summary.get("stop_rate"),
-                "eligible": bool(summary.get("eligible")),
+                # THE FLOORS, not a key `summarize` never sets. This read
+                # `summary.get("eligible")`, which is always absent, so every
+                # cell of this grid reported ineligible regardless of its size.
+                # `symbols` here is the EPISODE key, as the call above passes it.
+                "eligible": _meets_eligibility_floors(summary),
                 "meets_n_floor": bool(summary.get("meets_n_floor")),
                 "evidence_label": summary.get("evidence_label", "discovery"),
             }

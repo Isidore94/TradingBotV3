@@ -494,3 +494,45 @@ def test_a_freshly_registered_trial_is_stamped_by_the_ledger(tmp_path):
     stamped = datetime.fromisoformat(row["registered_at"])
     assert stamped.tzinfo is not None
     assert stamped >= before.replace(microsecond=0)
+
+
+def test_the_trial_ledger_is_registered_before_the_outcomes_it_governs(tmp_path, monkeypatch):
+    """R4 A2: a declaration written after the evidence is not a declaration.
+
+    `trial_ledger.backfill` ran two steps BELOW `_run_outcomes` in `run_build`,
+    and `_run_outcomes` is what simulates and publishes the after-like grid. So
+    every night the row that says "this grid was declared before any outcome was
+    inspected" was appended after those outcomes had already been written. The
+    ledger's own contract - "one append-only row per registered grid BEFORE any
+    outcome is inspected" - was false of the code that ran.
+
+    Asserted on CALL ORDER in the real build path, not on the source text.
+    """
+    from datetime import date, datetime, timezone
+
+    from scripts.research_warehouse import cli, trial_ledger
+    from scripts.research_warehouse.store import ResearchStore
+
+    order = []
+
+    def _ledger(root):
+        order.append("trial_ledger")
+        return []
+
+    def _outcomes(store, day, stamp, run_id):
+        order.append("outcomes")
+        return {"status": "ok"}
+
+    monkeypatch.setattr(trial_ledger, "backfill", _ledger)
+    monkeypatch.setattr(cli, "_run_outcomes", _outcomes)
+
+    target = ResearchStore.open(tmp_path / "lake")
+    report = cli.run_build(
+        target,
+        session_date=date(2026, 9, 2),
+        now=datetime(2026, 9, 3, 2, 0, tzinfo=timezone.utc),
+        lock_path=tmp_path / "build.lock",
+    )
+
+    assert report.status == "OK"
+    assert order == ["trial_ledger", "outcomes"], order

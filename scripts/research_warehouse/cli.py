@@ -512,6 +512,38 @@ def _run_after_like_pass(store, m5_by_symbol, *, stamp, run_id: str) -> dict:
                 else []
             )
         }
+        # THE LINK DATASET, PUBLISHED (R4 A4).
+        #
+        # `link_rows_for_bronze` had no production caller, while the ERD, the
+        # CHANGELOG and gate 42 all say `bronze_like_occurrence_link` is written
+        # nightly - and BD-92 makes it the ONLY way to recover the setup family
+        # behind an after-like outcome row, because those rows are keyed by the
+        # like episode. The claims were true of the code that existed and false
+        # of the code that ran; this makes them true.
+        #
+        # Written BEFORE the outcomes below, so a night that fails in simulation
+        # still leaves the join it was asked for. The record hash is over the
+        # payload, so an unchanged lake re-writes nothing. Month-keyed through
+        # the shared bronze record's `partition_ts`, and never allowed to cost
+        # the pass: a failed link publish is reported, never raised.
+        link_rows = like_links.link_rows_for_bronze(
+            list(links.values()), observed_at=stamp, run_id=run_id
+        )
+        links_published = 0
+        link_status = "ok"
+        if link_rows:
+            try:
+                link_rows = _unwritten_link_rows(store, link_rows)
+                if link_rows:
+                    store.publish(
+                        schemas.bronze_dataset_name(like_links.ARTIFACT),
+                        link_rows,
+                        job_id="after_like_links",
+                    )
+                links_published = len(link_rows)
+            except Exception as exc:  # noqa: BLE001
+                link_status = f"skipped: {exc}"
+
         result = after_like.run_after_like(
             likes,
             links,
@@ -532,12 +564,51 @@ def _run_after_like_pass(store, m5_by_symbol, *, stamp, run_id: str) -> dict:
             "likes": result.likes_seen,
             "episodes": result.episodes_graded,
             "rows": published,
+            "link_rows": links_published,
+            "link_status": link_status,
             "excluded": dict(result.excluded_by_reason),
             "basis": like_links.basis_counts(list(links.values())),
             "publish": vars(outcome) if result.rows else None,
         }
     except Exception as exc:  # noqa: BLE001
         return {"status": "skipped", "reason": str(exc)}
+
+
+def _unwritten_link_rows(store, rows: list[dict]) -> list[dict]:
+    """The link rows this month's partition does not already hold.
+
+    `publish` appends a file; it does not merge, so a nightly pass that re-linked
+    the same lookback would leave one copy of every like per night and any count
+    over the dataset would be the number of nights rather than the number of
+    likes. The record hash is over the payload, so an unchanged like hashes the
+    same every night and this is an exact identity rather than a heuristic.
+
+    Read narrowed to the row's OWN month partition (BD-74) - a month-keyed read
+    of the whole dataset is the cost that put the desk at 10 GB, and this
+    dataset will grow for as long as the trader keeps liking things.
+    """
+    spec = schemas.dataset_spec(schemas.bronze_dataset_name(like_links.ARTIFACT))
+    by_partition: dict[str, list[dict]] = {}
+    for row in rows:
+        by_partition.setdefault(store.partition_of(spec, row), []).append(row)
+
+    keep: list[dict] = []
+    for partition, partition_rows in by_partition.items():
+        try:
+            existing = {
+                str(value)
+                for value in store.read_table(
+                    spec.name, partition, columns=["record_hash"]
+                )
+                .column("record_hash")
+                .to_pylist()
+            }
+        except Exception:  # noqa: BLE001 - an unreadable partition is not a reason to lose the row
+            existing = set()
+        keep.extend(
+            row for row in partition_rows if str(row.get("record_hash")) not in existing
+        )
+    return keep
 
 
 def _bands_by_occurrence(store: ResearchStore, known: dict) -> dict:
@@ -644,6 +715,32 @@ def run_build(
                     target, run_id=run_id, now=stamp
                 )
             )
+            # THE TRIAL LEDGER, WRITTEN BY THE BUILD, AND WRITTEN FIRST (R4 A2).
+            #
+            # Gate 37 asks for a ledger row after one overnight run, and nothing
+            # in production wrote one - the module existed and only tests called
+            # it, so the declarations that are supposed to predate every outcome
+            # would have been written after them, by hand, whenever somebody
+            # remembered.
+            #
+            # It now sits ABOVE `_run_outcomes`, which is the whole point of a
+            # trial ledger: "an append-only row per registered grid BEFORE any
+            # outcome is inspected". Below the outcomes step it was written after
+            # the after-like grid had already been simulated and published, so
+            # the declaration that is supposed to predate the evidence followed
+            # it by one step every night.
+            #
+            # Idempotent by construction: `register` refuses a trial_id the
+            # ledger already carries, so every firing after the first writes
+            # nothing. Never allowed to cost the build.
+            try:
+                report.steps["trial_ledger"] = {
+                    "registered": trial_ledger.backfill(target.root)
+                }
+            except Exception:  # noqa: BLE001
+                # Swallowed like the coverage line below: an evidence store
+                # never costs the build that feeds it.
+                report.steps["trial_ledger"] = {"registered": [], "status": "skipped"}
             report.steps["outcomes"] = _run_outcomes(target, day, stamp, run_id)
             # One line per firing naming the symbol bucket it covered, so a
             # fact pack can tell "not measured yet" from "measured and flat".
@@ -654,27 +751,6 @@ def run_build(
                 run_id=run_id,
                 now=stamp,
             )
-            # THE TRIAL LEDGER, WRITTEN BY THE BUILD (R1).
-            #
-            # Gate 37 asks for a ledger row after one overnight run, and nothing
-            # in production wrote one - the module existed and only tests called
-            # it, so the declarations that are supposed to predate every outcome
-            # would have been written after them, by hand, whenever somebody
-            # remembered. Here they are written by the same run that produces the
-            # rows they govern, and BEFORE the report is finished.
-            #
-            # Idempotent by construction: `register` refuses a trial_id the
-            # ledger already carries, so every firing after the first writes
-            # nothing. Never allowed to cost the build, exactly like the line
-            # above it.
-            try:
-                report.steps["trial_ledger"] = {
-                    "registered": trial_ledger.backfill(target.root)
-                }
-            except Exception:  # noqa: BLE001
-                # Swallowed like the coverage line above: an evidence store
-                # never costs the build that feeds it.
-                report.steps["trial_ledger"] = {"registered": [], "status": "skipped"}
             report.steps["backups"] = _run_backups(target, stamp)
             report.steps["retired"] = vars(target.collect_retired(now=stamp))
             _record_job("COMPLETED", {"run_id": run_id})
