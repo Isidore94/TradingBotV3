@@ -418,8 +418,21 @@ class _ClickableItem(QFrame):
 
 
 #: R4 A10: `held_run_score`'s segment index and the D1 setups by session, built
-#: ONCE per process. `None` means "not built yet"; a dict - even an empty one -
-#: means "built, and this is the answer". A failed read is an answer too.
+#: once per process PER TRADING DAY. `None` means "not built yet"; a dict - even
+#: an empty one - means "built, and this is the answer". A failed read is an
+#: answer too. The payload carries `built_for`, the desk-local date it was built
+#: on, and that is what makes it expire.
+#:
+#: **The day key is the whole point** (R4 fix round 1). Without it the memo was
+#: set once and never invalidated, which broke A9's own fix after one day of
+#: uptime: `d1_setups_by_session` is keyed by `trade_date`, so on day 2 there was
+#: no key for today and every alert read `d1_setup_present=False` again - exactly
+#: the state A9 was built to end. The index is also a 20-TRADING-SESSION window
+#: (`held_run_score.ROLLING_SESSIONS`), so a memo that never rolls stops being
+#: "lately" while still calling itself that, against CLAUDE.md's rule that
+#: "lately" is ONE number counted in trading sessions. The desk is the always-on
+#: mini-PC and the checkpoint records multi-day uptimes, so "once per process"
+#: was never the same thing as "once per session".
 _HELD_RUN_INDEX_MEMO: dict | None = None
 
 
@@ -708,6 +721,9 @@ class AlertCenterPanel(QFrame):
         self._held_run_index: dict = {}
         self._held_run_d1_symbols: dict = {}
         self._held_run_thread = None
+        #: The desk-local date this panel's copy was built for. Empty means it
+        #: has none yet; a date that is not today's means it has expired.
+        self._held_run_built_for = ""
         self._heldRunIndexLoaded.connect(self._on_held_run_index_loaded)
         if self.focus_service is not None:
             # Liking a pick (here or on the setups table) re-renders both feeds
@@ -2242,20 +2258,36 @@ class AlertCenterPanel(QFrame):
         except Exception:  # noqa: BLE001 - a row suffix never costs an alert
             logging.debug("Held/ran suffix skipped for %s.", alert.symbol, exc_info=True)
 
+    def _held_run_day(self) -> str:
+        """The desk-local date the held/ran index is about.
+
+        A method so the day roll has one seam and a test can move the clock.
+        The SAME string `_attach_held_run_suffix` falls back to when an alert
+        carries no `trade_date`, so the memo and the lookup can never disagree
+        about which day they mean.
+        """
+        return date.today().isoformat()
+
     def _ensure_held_run_index(self) -> None:
-        """Start the one background build, once per PROCESS. Never blocks.
+        """Start the one background build, once per process PER DAY. Never blocks.
 
         The memo is module-level rather than per panel because the read is ~90 MB
         of outcome log plus a 19 MB snapshot and the answer is the same for every
         panel in the process - a second Alert Center (a test, a second window)
-        must not pay for it again. A panel that finds the memo already filled
+        must not pay for it again. A panel that finds a memo built for TODAY
         takes it immediately and starts nothing.
+
+        A memo built for an earlier day is discarded and rebuilt, on the worker,
+        at the first M5 alert of the new day. See :data:`_HELD_RUN_INDEX_MEMO`
+        for what a memo that never expired cost.
         """
         global _HELD_RUN_INDEX_MEMO
-        if self._held_run_index or self._held_run_thread is not None:
+        today = self._held_run_day()
+        if self._held_run_built_for == today or self._held_run_thread is not None:
             return
-        if _HELD_RUN_INDEX_MEMO is not None:
-            self._on_held_run_index_loaded(_HELD_RUN_INDEX_MEMO)
+        memo = _HELD_RUN_INDEX_MEMO
+        if isinstance(memo, dict) and memo.get("built_for") == today:
+            self._on_held_run_index_loaded(memo)
             return
         import threading
 
@@ -2268,7 +2300,7 @@ class AlertCenterPanel(QFrame):
 
     def _held_run_index_worker(self) -> None:
         global _HELD_RUN_INDEX_MEMO
-        payload = {"index": {}, "d1": {}}
+        payload = {"index": {}, "d1": {}, "built_for": self._held_run_day()}
         try:
             import held_run_score
 
@@ -2289,13 +2321,19 @@ class AlertCenterPanel(QFrame):
         try:
             self._heldRunIndexLoaded.emit(payload)
         except RuntimeError:
-            pass
+            # The panel went away mid-read. Nothing left to update; the memo is
+            # still stamped, so the next panel in this process gets it free.
+            self._held_run_thread = None
 
     def _on_held_run_index_loaded(self, payload) -> None:
         if not isinstance(payload, dict):
             return
         self._held_run_index = payload.get("index") or {}
         self._held_run_d1_symbols = payload.get("d1") or {}
+        # Stamped LAST, so a payload that arrived for a day that has already
+        # rolled leaves this panel asking for a fresh one rather than settling.
+        self._held_run_built_for = str(payload.get("built_for") or "")
+        self._held_run_thread = None
 
     def _guidance_for(self, alert: BounceAlert) -> AlertGuidance:
         """Cached per-symbol guidance; a failed lookup is neutral, never fatal."""

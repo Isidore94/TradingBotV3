@@ -49,8 +49,16 @@ which is evidence and must not be loaded as context.
   formula**: the panel joins `held_run_score.dimension_summaries` and computes
   nothing, which is why the column may finally say "30m" - V3 shipped a SECOND
   formula under the same key (`1 - stop_rate` x `avg_mfe_r`, the aggregator's own
-  window, every row rather than the held ones). Six of the nine tabs are cut on
-  alert context `intraday_bounce_outcomes.csv` does not record and read BLANK.
+  window, every row rather than the held ones). **The join is an equality since
+  R4 fix round 1**: this module spells its segments the aggregator's way - the
+  champion's own `time_bucket_for` (the private copy compared wall-clock hours
+  against Eastern cutoffs on a Pacific desk), an episode counted under EACH of
+  its bounce types, and the combination `+`-joined. Live: `bounce_type` 36/36,
+  `bounce_combo` 58/59, `time_bucket` 10/10, `market_environment` 10/10, against
+  28/36, 0/59, 2/10 and 10/10 before. The four `master_avwap_*` tabs read BLANK
+  because the outcome log does not carry them; `rrs_alignment` is reachable and
+  simply not derived yet, and `UNDERIVED_DIMENSIONS` says so rather than filing
+  it under "cannot".
   The M5 alert row carries "held NN% / ran N.NR" through `alert_cell` +
   `alert_suffix`, silent below the floor, attached as a dict read from an index
   built once per session on a worker. `d1_setup_present` had no caller at all and

@@ -192,19 +192,34 @@ before changing the behaviour a rule governs.**
   first 30 min) x trimmed-mean MFE_R of the ones that held. **ONE formula reaches
   every surface** (R4 A10): the Day Trade Tracker joins
   `held_run_score.dimension_summaries` and computes nothing, and the M5 alert row
-  reads `alert_cell` + `alert_suffix`. A dimension the outcome log cannot be
-  asked - six of the tracker's nine tabs - is **BLANK**, because a second formula
-  under the headline key is worse than a blank when the column is read as an
-  ordering. `d1_setup_present` is fed from the scanner's own
-  `master_avwap_tracker_scoring_snapshot.json` (19 MB), never from the 1.1 GB
-  setup tracker.
+  reads `alert_cell` + `alert_suffix`. **The join is an equality, so this module
+  spells its segments the AGGREGATOR'S way** (R4 fix round 1) - the champion's own
+  `time_bucket_for`, an episode counted under EACH of its bounce types, and the
+  combination `+`-joined. Four of the tracker's nine tabs fill (`bounce_type`
+  36/36 live rows, `bounce_combo` 58/59, `time_bucket` 10/10,
+  `market_environment` 10/10); the four `master_avwap_*` tabs are BLANK because
+  the outcome log does not carry them at all, and `rrs_alignment` is blank because
+  it is REACHABLE and not derived yet - `held_run_score.UNDERIVED_DIMENSIONS`
+  keeps those two facts apart. A blank is right where the question cannot be
+  asked; a second formula under the headline key is worse than a blank when the
+  column is read as an ordering, and a spelling that silently blanks a tab the
+  data CAN answer is worse than both. `d1_setup_present` is fed from the
+  scanner's own `master_avwap_tracker_scoring_snapshot.json` (19 MB), never from
+  the 1.1 GB setup tracker, and its index **expires on the day roll** - a memo
+  that never rolls puts `d1_setup_present` back to False on day 2 of uptime and
+  stops being "lately" while still saying it is.
 - **The AWAY digest ranks swing picks by the tracker's record, not by the bucket**
   (V1 item 3, built R4 A11; decision 0016 answer 8: *"the best pick is often in
   the near bucket, not the favourite bucket, so the cream is not being sent."*)
   The order is the **Wilson lower bound** on the setup family's realized win rate
   - `master_avwap_tier_outcomes.csv`'s own `win` column inside `lately_window()`
-  - with expected R as the tiebreak; an ungraded family sorts BELOW every graded
-  one rather than at zero. The bucket is PRINTED and never ranked on, and the near
+  - at ONE DECLARED HORIZON (`autopilot_core.SWING_DIGEST_HORIZON_SESSIONS`, 5),
+  with expected R as the tiebreak; an ungraded family sorts BELOW every graded
+  one rather than at zero. **The horizon is declared because that file is one row
+  per (pick, horizon)**: pooling all four inflated n ~2.5x with correlated looks
+  at one decision, which tightens every Wilson bound unevenly and CHANGES THE
+  ORDER. A row the tracker flagged `stale_horizon` is dropped, the way the
+  scan-factor leaderboard already drops it from the same file. The bucket is PRINTED and never ranked on, and the near
   cap is applied **after** the ranking, so what is hidden is the weakest near rows
   and never the best one. The read is the caller's, so `render_away_report` stays
   a pure renderer. AWAY is still the only routine pusher.

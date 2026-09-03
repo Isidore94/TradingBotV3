@@ -156,10 +156,17 @@ def test_the_marginal_uses_the_same_arithmetic_as_the_cross_cell():
 
 
 def test_only_the_dimensions_the_outcome_log_carries_are_offered():
+    """R4 fix round 1 added `bounce_combo`: it was never unanswerable.
+
+    It read 0 of 59 live rows because the aggregator joins a combination with
+    `+` and the event id joins it with `-`. See
+    `test_r4fix_tracker_join_vocabulary.py`.
+    """
     import held_run_score
 
     assert held_run_score.MEASURABLE_DIMENSIONS == (
         "bounce_type",
+        "bounce_combo",
         "time_bucket",
         "market_environment",
     )

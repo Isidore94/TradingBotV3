@@ -3348,7 +3348,31 @@ def build_away_operations_lines(audit: Mapping[str, Any] | None) -> dict[str, st
 AWAY_REPORT_MAX_NEAR_ROWS = 3
 
 
-def swing_family_records(path: Any = None, *, window: Any = None) -> dict[str, dict[str, int]]:
+#: The ONE horizon the digest's win rate is measured over. The tracker grades
+#: every scan row at 1, 3, 5 and 10 sessions, so the file carries one row per
+#: `(scan_row_id, horizon)` and reading it whole counts each pick up to four
+#: times.
+#:
+#: **FIVE, and the choice is the reason this constant exists.** Measured on the
+#: live file over 2026-08-06..2026-09-02: 11,097 rows over 4,433 distinct
+#: `scan_row_id`, so pooling inflates n by ~2.5x with rows that are four looks at
+#: one decision rather than four decisions. A Wilson bound on an inflated n is
+#: too TIGHT, and unevenly so - it changes the ORDER, which is the whole output.
+#: Horizon 1 is an overnight move and not the thing the trader holds for; its top
+#: family in the live window rests on n=8. Horizon 10 can only grade picks from
+#: the first half of a 20-session window (772 rows), so the ranking would be
+#: about a fortnight ago. Horizon 5 is the shortest that is a swing hold rather
+#: than a gap, and it still grades 2,450 rows across 13 families with real
+#: separation (top bounds 0.597 / 0.528 / 0.520).
+SWING_DIGEST_HORIZON_SESSIONS = 5
+
+
+def swing_family_records(
+    path: Any = None,
+    *,
+    window: Any = None,
+    horizon: int = SWING_DIGEST_HORIZON_SESSIONS,
+) -> dict[str, dict[str, int]]:
     """`{setup_family: {"wins": w, "losses": l}}` from the tracker's own grading.
 
     R4 A11. The digest ranks by the record the tracker MEASURED, so the record
@@ -3357,6 +3381,21 @@ def swing_family_records(path: Any = None, *, window: Any = None) -> dict[str, d
     the same verdict from. The tracker decides what a win IS (its stop-at-a-level,
     two-closes rule); nothing here re-derives one from a return, because two
     definitions of a win in one program is how two screens end up disagreeing.
+
+    **ONE DECLARED HORIZON** (:data:`SWING_DIGEST_HORIZON_SESSIONS`), because
+    that file carries one row per `(scan_row_id, horizon)`. The first version of
+    this function counted them all, which is the same pooled-n defect this round
+    is fixing elsewhere: 11,097 rows over 4,433 picks, n inflated ~2.5x by
+    CORRELATED looks at one decision, every Wilson bound too tight, and the order
+    changed by it - pooled put `favorite_zone_watch` (bound 0.5535) above
+    `mid_earnings_ema21_retest` (0.5481), and at the declared horizon they swap.
+
+    **A row the tracker flagged `stale_horizon` is dropped**, which is the rule
+    the scan-factor leaderboard already applies to the same file: "5 sessions
+    later" indexes a symbol's own scan rows, not exchange sessions, so an
+    irregularly scanned name lands far from its declared horizon. Only an
+    explicit `True` drops - `None` means the drift could not be measured, and
+    uncertainty is not grounds for deletion.
 
     Bounded to the "lately" window - `evidence_stats.lately_window`, 20 TRADING
     SESSIONS - so the digest ranks on what has been working recently rather than
@@ -3373,12 +3412,17 @@ def swing_family_records(path: Any = None, *, window: Any = None) -> dict[str, d
         from project_paths import MASTER_AVWAP_TIER_OUTCOMES_FILE
 
         first, last = window or lately_window()
+        wanted_horizon = str(int(horizon))
         target = Path(path or MASTER_AVWAP_TIER_OUTCOMES_FILE)
         records: dict[str, dict[str, int]] = {}
         with open(target, newline="", encoding="utf-8-sig") as handle:
             for row in _csv.DictReader(handle):
                 stamp = str(row.get("scan_date") or "")[:10]
                 if stamp and not (first <= stamp <= last):
+                    continue
+                if str(row.get("horizon_sessions") or "").strip() != wanted_horizon:
+                    continue
+                if str(row.get("stale_horizon") or "").strip().lower() == "true":
                     continue
                 family = normalize_family_key(row.get("setup_family"))
                 if not family:

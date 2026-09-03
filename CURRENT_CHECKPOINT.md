@@ -32,7 +32,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 51 | **The corrected numbers, on the desk (R4 Part A)** - one DESK session and one Weekend Prep open where: the Strength Board's RVOL column is populated on a day the window contains a half day (the number must not jump when one does); the Day Trade Tracker's Held 30m / Held x Ran are filled on the three measurable tabs and BLANK on the other six; an M5 alert row shows "held NN% / ran N.NR" or nothing; the AWAY digest's swing list is ordered with a near-bucket pick above a favorite at least once; the Weekend Prep verdict card's take rate is NOT 100%; and one Market Journal note typed after the close files against TODAY with "written after the session" on it | 2026-09-02 R4 Part A entry |
+| 51 | **The corrected numbers, on the desk (R4 Part A)** - one DESK session and one Weekend Prep open where: the Strength Board's RVOL column is populated on a day the window contains a half day (the number must not jump when one does); the Day Trade Tracker's Held 30m / Held x Ran are filled on the FOUR tabs the outcome log can answer - Bounce Types, Combos, Time of Day, Environment - and BLANK on the four Swing tabs and on RRS (which is reachable and simply not derived yet); an M5 alert row shows "held NN% / ran N.NR" or nothing; the AWAY digest's swing list is ordered with a near-bucket pick above a favorite at least once; the Weekend Prep verdict card's take rate is NOT 100%; and one Market Journal note typed after the close files against TODAY with "written after the session" on it | 2026-09-02 R4 Part A entry |
 | 50 | **The headline statistics agree (V3)** - one DESK session and one Weekend Prep open where every named surface shows the headline first (win rate on swings, Held x Ran on day trades), the sorts agree with it, and the Day Trade Tracker opens on Held x Ran descending | 2026-09-02 V3 entry |
 | 49 | **Weekend Prep, read in one click (V2 item 2)** - one open where Refresh builds every step and the verdict card shows five to eight lines with an n on each; then "Tag this week" lists the week's unconfirmed trades and Confirm all shown writes the trader's answer | 2026-09-02 V2 entry |
 | 48 | **The hidden surfaces (V2)** - a desk session with Alerts, D1 Focus, Armed and Universe hidden, and EVERY capture-rail hotkey still firing | 2026-09-02 V2 entry |
@@ -86,6 +86,72 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+### 2026-09-03 - Round R4 Part A, FIX ROUND 1: the reviewer's four blockers
+
+**Branch `claude/r4-fixes`, same branch.** The reviewer returned NO-GO by
+reproduction against copies of the live stores. All four are fixed, each with a
+test proven to fail on the un-fixed file. Every one of them is the same shape as
+the defects Part A was built to remove, which is the uncomfortable part: a claim
+that was true of the code that existed and false of the code that ran.
+
+**1. The tracker join was a string match between two vocabularies.** The panel
+keys on `(dimension, direction, segment)` raw text and `held_run_score` spelled
+all three differently from the aggregator, so rows the data CAN answer went blank
+and Part A's own "three measurable tabs, six blank" was wrong. Live, before:
+`bounce_type` **28/36**, `bounce_combo` **0/59**, `time_bucket` **2/10**,
+`market_environment` 10/10. After: **36/36, 58/59, 10/10, 10/10**. The Combos tab
+was blank for a SEPARATOR - `+` there, `-` here - not for a missing measurement.
+And the time bucket was worse than a spelling difference: this module compared
+raw wall-clock hours against Eastern cutoffs while `entry_time` is DESK-LOCAL,
+which is exactly the bug `bounce_bot_lib.learning.time_bucket_for` records itself
+as having fixed ("on a Pacific machine that mislabeled nearly the entire
+session"). It now CALLS that function - one definition, not a drift-tested copy,
+because the source ships beside us. FOUR tabs fill and five are blank, and the
+five are two different things: the four `master_avwap_*` ones are not in the
+outcome log at all, while `rrs_alignment` is reachable from `context_json` and
+merely not derived - `UNDERIVED_DIMENSIONS` keeps those apart rather than filing
+both under "cannot".
+
+**2. The digest's Wilson bound was computed on a pooled-horizon n** - the same
+defect this round flags elsewhere. `master_avwap_tier_outcomes.csv` is one row
+per `(scan_row_id, horizon)`: live, **11,097 rows over 4,433 picks**, so n was
+inflated ~2.5x by four looks at one decision. An inflated n tightens every bound
+unevenly and CHANGES THE ORDER, on the phone surface the trader acts on.
+`SWING_DIGEST_HORIZON_SESSIONS = 5` is declared and the reason is in the
+constant: horizon 1 is an overnight move and its top live family rests on n=8;
+horizon 10 can only grade the first half of a 20-session window (772 rows);
+horizon 5 is the shortest that is a swing hold and still grades 2,450 rows across
+13 families with real separation. Rows the tracker flagged `stale_horizon` are
+dropped, which is the rule the scan-factor leaderboard already applies to that
+same file. The A11 fixture could not see any of this because it had one row per
+family; every fixture now carries all four horizons.
+
+**3. The link dataset republished at every month roll.** `partition_ts` was the
+RUN STAMP, the dataset is month-partitioned, and the dedup reads the row's own
+partition because BD-74 forbids a month-wide read - so a late-September like was
+written again on 1 October with the same `record_hash`. Reproduced over three
+nightly passes: `[1, 1, 0]` where it should be `[1, 0, 0]`. Now partitioned by the
+LIKE'S OWN DATE, which is also what `event_at` was always specified to carry;
+`observed_at` still means when this installation received the row. Frozen schema
+untouched - see **BD-94**.
+
+**4. The process memo froze A9's own fix after one day of uptime.** Nothing reset
+`_HELD_RUN_INDEX_MEMO`. `d1_setups_by_session` is keyed by `trade_date`, so on
+day 2 there was no key for today and every alert read `d1_setup_present=False`
+again - the state A9 exists to end. The index is also a 20-TRADING-SESSION
+window that never rolled, so the suffix stopped being "lately" while still
+claiming to be. The memo carries `built_for` and expires on the day roll, rebuilt
+on the worker at the first M5 alert of the new day. The desk is the always-on
+mini-PC and this file's own restart record shows multi-day uptimes, so "once per
+process" was never the same thing as the "once per session" the docstring
+claimed.
+
+**Docs corrected in the same commits**, because three of them asserted the false
+claim: gate #51's wording, `CLAUDE.md`/`AGENTS.md`, `plan.md`'s Phase 0.14 table
+and `CHANGELOG.md`. `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md` gains BD-94.
+
+**Advisories were left alone** - they are not this round's.
+
 ### 2026-09-02 - Round R4 Part A: fix what review round 3 found (A1-A18)
 
 **Branch `claude/r4-fixes`, off `main` at `93732ef`. UNMERGED.** Eighteen items,
@@ -136,7 +202,9 @@ exactly **1.0000**, one 39-bar early close made it read **1.2949**.
 `_add_held_and_ran` was `1 - stop_rate` times `avg_mfe_r`, both from the
 aggregator over ITS window and over ALL rows rather than the held ones, with no
 thirty-minute question in it - filed under `held_run_score`'s own column key. It
-is deleted; the panel joins the module and computes nothing. **Six of the nine
+is deleted; the panel joins the module and computes nothing. **Four of the nine tabs FILL and five are blank** (corrected in fix round 1;
+the first pass said three fill and six are blank, and it was wrong because the
+join was a string match between two vocabularies). **Six of the nine
 tabs now read BLANK**, because `intraday_bounce_outcomes.csv` does not record the
 alert context those dimensions are cut on. That is the honest consequence, stated
 here so it is not read later as a regression.

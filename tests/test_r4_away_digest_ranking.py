@@ -193,21 +193,30 @@ def test_an_unreadable_tracker_file_degrades_to_expected_r_and_never_raises():
 
 
 def test_the_records_are_counted_from_the_trackers_own_win_column(tmp_path):
-    """The tracker decides what a win IS; nothing here re-derives one."""
+    """The tracker decides what a win IS; nothing here re-derives one.
+
+    R4 fix round 1: every row carries `horizon_sessions` now, and one row at a
+    horizon that is NOT the declared one rides along - the fixture that could
+    not see the pooling defect was the one with a single row per family.
+    """
     path = tmp_path / "tier_outcomes.csv"
+    horizon = core.SWING_DIGEST_HORIZON_SESSIONS
     path.write_text(
-        "scan_date,setup_family,win,side_return_pct\n"
-        "2026-09-01,AVWAPE Retest,True,1.2\n"
-        "2026-09-01,avwape_retest,False,-0.4\n"
-        "2026-09-01,avwape_retest,,0.0\n"
-        "2026-09-01,other,True,0.3\n",
+        "scan_date,setup_family,horizon_sessions,win,side_return_pct\n"
+        f"2026-09-01,AVWAPE Retest,{horizon},True,1.2\n"
+        f"2026-09-01,avwape_retest,{horizon},False,-0.4\n"
+        f"2026-09-01,avwape_retest,{horizon},,0.0\n"
+        "2026-09-01,avwape_retest,1,True,2.0\n"
+        "2026-09-01,avwape_retest,10,True,2.0\n"
+        f"2026-09-01,other,{horizon},True,0.3\n",
         encoding="utf-8",
     )
 
     records = core.swing_family_records(path, window=("2026-08-01", "2026-09-30"))
 
     assert records["avwape_retest"] == {"wins": 1, "losses": 1}, (
-        "an unreadable verdict is UNMEASURED and belongs in neither count"
+        "an unreadable verdict is UNMEASURED and belongs in neither count, and "
+        "another horizon's look at the same pick is not a second decision"
     )
     assert records["other"] == {"wins": 1, "losses": 0}
 
@@ -215,10 +224,11 @@ def test_the_records_are_counted_from_the_trackers_own_win_column(tmp_path):
 def test_a_row_outside_the_lately_window_is_not_counted(tmp_path):
     """"Lately" is one number and it is counted in trading sessions."""
     path = tmp_path / "tier_outcomes.csv"
+    horizon = core.SWING_DIGEST_HORIZON_SESSIONS
     path.write_text(
-        "scan_date,setup_family,win\n"
-        "2026-01-05,avwape_retest,True\n"
-        "2026-09-01,avwape_retest,True\n",
+        "scan_date,setup_family,horizon_sessions,win\n"
+        f"2026-01-05,avwape_retest,{horizon},True\n"
+        f"2026-09-01,avwape_retest,{horizon},True\n",
         encoding="utf-8",
     )
 

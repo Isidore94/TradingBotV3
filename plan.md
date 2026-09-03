@@ -822,7 +822,7 @@ nobody has to reconstruct it from four entries:
 |---|---|---|
 | V1 | 1 Strength Board = TC2000 | **BUILT** (gates #44, #45). R4 A7/A8 made the RVOL session-relative, dropped the forming daily bar and widened the daily window to `2y` |
 | V1 | 2 `held_run_score` | **BUILT AND WIRED** (R4 A9/A10): the D1 dimension is fed, the tracker's second formula is deleted, and the M5 alert row carries the suffix. Six of the tracker's nine tabs read BLANK because the outcome log does not record what they are cut on |
-| V1 | 3 phone digest ranks across buckets | **BUILT** (R4 A11) - Wilson lower bound on the family's realized win rate, expected R as tiebreak, near cap after the ranking |
+| V1 | 3 phone digest ranks across buckets | **BUILT** (R4 A11, horizon corrected in fix round 1) - Wilson lower bound on the family's realized win rate at ONE declared horizon (`SWING_DIGEST_HORIZON_SESSIONS` = 5, stale-horizon rows dropped the way the scan-factor leaderboard drops them), expected R as tiebreak, near cap after the ranking |
 | V1 | 4 Working-lately + priority switch | **NOT BUILT** - this is V4 |
 | V2 | 1 nightly auto-tagging | **BUILT** (gate #46) |
 | V2 | 2 Weekend Prep | (a)(b)(c)(e) **BUILT** (gate #49). R4 A13/A14/A15/A18 fixed the take rate, moved the 775 ms read off the Qt thread, gave Discovery a real `reload` and its six buttons the exit, stopped Confirm-all confirming a blank, added the per-row edit and put every table on a ten-row floor. The takes table and the collapsed notes are still owed |
