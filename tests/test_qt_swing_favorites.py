@@ -42,6 +42,17 @@ import swing_favorites  # noqa: E402
 def _qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+@pytest.fixture(autouse=True)
+def _no_broker_from_a_test(monkeypatch):
+    """`BouncePanel.__init__` ends in `QTimer.singleShot(0, self.start)`.
+
+    So the first `processEvents` in any test that builds a `TradingDeskPanel`
+    connects to the live TWS on 127.0.0.1:7496. Nothing in this file is about
+    BounceBot, and a test must never reach a broker (S1.5).
+    """
+    from ui.panels.bounce_panel import BouncePanel
+
+    monkeypatch.setattr(BouncePanel, "start", lambda self: None)
 
 
 @pytest.fixture

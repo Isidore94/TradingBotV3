@@ -693,12 +693,26 @@ def _pick_reason(rail) -> str:
     raise AssertionError("no note-free veto reason in the vocabulary")
 
 
+def _finish_typing(pane) -> None:
+    """S1.2: the trader has said what they wanted to say, so the chart moves.
+
+    A retiring verb now holds the chart open until Enter or Escape - trader,
+    2026-09-03: *"when I hit like or not today or anything, it should keep the
+    chart up UNTIL I finish typing."* Every test below that used to assert a
+    retire straight off the click calls this first; the click's own row is on
+    disk either way, which is the part that did not change.
+    """
+    pane.capture_rail._settle_follow_up(write=False)
+
+
 def test_a_veto_retires_the_chart_as_not_today(pane, monkeypatch):
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
     pane.removeTodayRequested.connect(retired.append)
     _pick_reason(pane.capture_rail)
     assert pane.capture_rail.commit_veto() is not None
+    assert retired == [], "S1.2: the chart waits for the trader to finish typing"
+    _finish_typing(pane)
     assert [alert.symbol for alert in retired] == ["AAPL"]
 
 
@@ -989,13 +1003,14 @@ def test_a_letter_key_picks_a_post_earnings_claim(pane, monkeypatch, tmp_path):
     assert json.loads(lines[-1])["claimed_setup_id"] == "post_earnings_candle_break"
 
 
-def test_a_digit_then_a_why_is_the_whole_like(pane, monkeypatch, tmp_path):
-    """Alt+K, a digit, the why, Enter.
+def test_a_digit_with_the_why_already_typed_is_the_whole_like(pane, monkeypatch, tmp_path):
+    """Alt+K, the why if you want one, the digit. ONE row, then the advance.
 
-    Before R9.2 the digit alone committed and the chart was retired as "Not
-    today". The trader asked to be prompted for the why every time
-    (2026-08-22), so the digit now picks and the Enter commits - and the chart
-    advances instead of parking the symbol.
+    R9.2 made the digit pick and the Enter commit, so the trader was always
+    asked for a why. S1.1 removed that gate (trader, 2026-09-03), so the digit
+    commits again - and unlike the pre-R9.2 behaviour it advances rather than
+    parking the symbol, and it advances only once the trader has finished
+    typing (S1.2).
     """
     import json
 
@@ -1005,15 +1020,15 @@ def test_a_digit_then_a_why_is_the_whole_like(pane, monkeypatch, tmp_path):
     pane.removeTodayRequested.connect(retired.append)
     pane.likeAdvanceRequested.connect(advanced.append)
     rail = pane.capture_rail
-    rail.select_setup(rail._claim_hotkeys["2"])
-    assert not (tmp_path / "trader_annotations.jsonl").exists(), "the digit alone is not a like"
     rail.like_note_input.setText("reclaimed the band")
-    rail.commit_like()
+    rail.select_setup(rail._claim_hotkeys["2"])
 
     lines = (tmp_path / "trader_annotations.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["claimed_setup_id"] == rail._claim_hotkeys["2"]
     assert json.loads(lines[0])["note"] == "reclaimed the band"
+    assert advanced == [], "the chart waits until the trader has finished typing"
+    _finish_typing(pane)
     assert retired == []
     assert [alert.symbol for alert in advanced] == ["AAPL"]
 
@@ -1049,14 +1064,22 @@ def test_the_compressed_reason_replaced_the_cluttered_one(pane):
 # of that week - and the system's response to recognising it was to file a
 # research row and take the chart away.
 # --------------------------------------------------------------------------
-def test_a_like_with_no_why_writes_nothing_and_holds_the_chart(pane, monkeypatch, tmp_path):
-    """Trader, 2026-08-22: "if I like a chart I should always be prompted with why".
+def test_a_like_with_no_why_is_written_and_the_chart_waits(pane, monkeypatch, tmp_path):
+    """S1.1 SUPERSEDES R9.2(a)'s required why, and S1.2 replaces what it bought.
 
-    An ignorable prompt would recreate the empty-`dislike_reason` failure - 31
-    rows of the most information-dense prose in the store, discarded because
-    nothing required them. So the why is required, and a like without one is
-    not a like at all.
+    The 2026-08-22 rule existed to stop a repeat of the empty-`dislike_reason`
+    failure: 31 rows of the trader's own prose, captured under a field nothing
+    insisted on, and discarded. Refusing the click was one way to insist. It was
+    also a way to lose the JUDGEMENT as well as the sentence, which is strictly
+    worse - so the trader replaced it on 2026-09-03: *"these are quick buttons
+    to get a note in essentially and do NOT require a pop up note."*
+
+    What protects the prose now is that the CHART STAYS UP with the cursor in
+    the note field, so the trader types when they have something to say and
+    presses Enter when they do not.
     """
+    import json
+
     _show(pane, monkeypatch, "AAPL")
     moved: list = []
     pane.removeTodayRequested.connect(moved.append)
@@ -1064,10 +1087,18 @@ def test_a_like_with_no_why_writes_nothing_and_holds_the_chart(pane, monkeypatch
     pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.like_note_input.setText("")
 
-    assert pane.capture_rail.commit_like() is None
-    assert not (tmp_path / "trader_annotations.jsonl").exists()
-    assert moved == [], "the chart stays until the why is given"
-    assert "why" in pane.capture_rail.status_text().lower()
+    assert pane.capture_rail.commit_like() is not None
+    written = [
+        json.loads(line)
+        for line in (tmp_path / "trader_annotations.jsonl")
+        .read_text(encoding="utf-8")
+        .strip()
+        .splitlines()
+    ]
+    assert [row["event_type"] for row in written] == ["like_claim"]
+    assert str(written[0].get("note", "")) == ""
+    assert moved == [], "the chart stays until the trader has finished typing"
+    assert pane.capture_rail.follow_up_pending()
 
 
 def test_a_like_with_a_why_writes_it_into_the_existing_note_field(pane, monkeypatch, tmp_path):
@@ -1085,17 +1116,19 @@ def test_a_like_with_a_why_writes_it_into_the_existing_note_field(pane, monkeypa
     assert written["claimed_setup_id"]
 
 
-def test_a_whitespace_why_is_not_a_why(pane, monkeypatch, tmp_path):
+def test_a_whitespace_why_is_still_not_a_why(pane, monkeypatch, tmp_path):
+    """It is not recorded as one - but since S1.1 it no longer costs the like."""
     _show(pane, monkeypatch, "AAPL")
     pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.like_note_input.setText("   \t ")
-    assert pane.capture_rail.commit_like() is None
-    assert not (tmp_path / "trader_annotations.jsonl").exists()
+    row = pane.capture_rail.commit_like()
+    assert row is not None
+    assert str(row.get("note", "")) == ""
+    assert (tmp_path / "trader_annotations.jsonl").exists()
 
 
-def test_the_claim_digit_moves_focus_to_the_why_instead_of_committing(pane, monkeypatch, tmp_path):
-    """Same mechanic as the veto vocabulary's `note_required`: the key selects,
-    the why is typed, Enter commits."""
+def test_the_claim_digit_picks_and_commits(pane, monkeypatch, tmp_path):
+    """S1.1: the digit is the whole verb again, and it writes at once."""
     _show(pane, monkeypatch, "AAPL")
     rail = pane.capture_rail
     rail.setup_list.setCurrentRow(0)
@@ -1103,20 +1136,22 @@ def test_the_claim_digit_moves_focus_to_the_why_instead_of_committing(pane, monk
     rail.setup_list.setCurrentRow(-1)
     rail.select_setup(first)
     assert rail.selected_setup_id() == first, "the digit still picks the claim"
-    assert not (tmp_path / "trader_annotations.jsonl").exists(), "but it does not commit"
-    assert "why" in rail.status_text().lower()
+    assert (tmp_path / "trader_annotations.jsonl").exists(), "and it commits"
+    assert "LIKE" in rail.status_text()
 
 
-def test_picking_a_claim_moves_focus_to_the_why_field(pane, monkeypatch):
-    """The stated mechanic, pinned by observation rather than by hasFocus().
+def test_picking_a_claim_puts_the_cursor_in_the_follow_up_field(pane, monkeypatch):
+    """S1.2: the like commits, then the chart waits with the cursor ready.
 
     A widget that was never shown reports no focus, so the assertion is on the
-    call the rail makes - which is the part that has to survive a refactor.
+    call the rail makes - which is the part that has to survive a refactor. The
+    FIELD changed with S1.1/S1.2: it used to be the why the like was refused
+    for, and it is now the note field the waiting chart offers.
     """
     _show(pane, monkeypatch, "AAPL")
     rail = pane.capture_rail
     focused: list = []
-    monkeypatch.setattr(rail.like_note_input, "setFocus", lambda *a: focused.append(True))
+    monkeypatch.setattr(rail.note_input, "setFocus", lambda *a: focused.append(True))
     rail.setup_list.setCurrentRow(0)
     rail.select_setup(rail.selected_setup_id())
     assert focused == [True]
@@ -1127,9 +1162,11 @@ def test_picking_a_claim_moves_focus_to_the_why_field(pane, monkeypatch):
     assert focused == [True]
 
 
-def test_the_why_field_says_it_is_required(pane, monkeypatch):
-    _show(pane, monkeypatch, "AAPL")
-    assert "required" in pane.capture_rail.like_note_input.placeholderText().lower()
+def test_the_why_field_says_it_is_optional(pane, monkeypatch):
+    """S1.1: the claim is the requirement; the why is the offer."""
+    placeholder = pane.capture_rail.like_note_input.placeholderText().lower()
+    assert "optional" in placeholder
+    assert "required" not in placeholder
 
 
 # --------------------------------------------------------------------------
@@ -1165,19 +1202,18 @@ def test_double_clicking_a_claim_commits_the_like_once_the_why_is_there(
     assert written["claimed_setup_id"] == rail.setup_list.item(0).data(_CLAIM_ROLE)
 
 
-def test_double_clicking_a_claim_with_no_why_still_refuses_and_prompts(
+def test_double_clicking_a_claim_with_no_why_commits_it_too(
     pane, monkeypatch, tmp_path
 ):
-    """The 2026-08-22 rule is untouched: the gesture attempts, it does not
-    override. A like without a why is still not a like."""
+    """The gesture attempts the commit, and since S1.1 nothing refuses it."""
     _show(pane, monkeypatch, "AAPL")
     rail = pane.capture_rail
     rail.like_note_input.setText("")
 
     rail.setup_list.itemActivated.emit(rail.setup_list.item(0))
 
-    assert not (tmp_path / "trader_annotations.jsonl").exists()
-    assert "why" in rail.status_text().lower()
+    assert (tmp_path / "trader_annotations.jsonl").exists()
+    assert "LIKE" in rail.status_text()
 
 
 def test_the_digit_commits_too_once_the_why_is_there(pane, monkeypatch, tmp_path):
@@ -1239,6 +1275,8 @@ def test_a_like_advances_the_queue_and_does_not_retire_the_chart(pane, monkeypat
     pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.like_note_input.setText("clean base")
     assert pane.capture_rail.commit_like() is not None
+    assert advanced == [], "S1.2: the chart waits for the trader to finish typing"
+    _finish_typing(pane)
     assert retired == [], "a like must never take the remove-today path"
     assert [alert.symbol for alert in advanced] == ["AAPL"]
 
@@ -1251,6 +1289,7 @@ def test_a_veto_still_retires_and_is_untouched_by_R9_2(pane, monkeypatch):
     pane.likeAdvanceRequested.connect(advanced.append)
     _pick_reason(pane.capture_rail)
     assert pane.capture_rail.commit_veto() is not None
+    _finish_typing(pane)
     assert [alert.symbol for alert in retired] == ["AAPL"]
     assert advanced == []
 

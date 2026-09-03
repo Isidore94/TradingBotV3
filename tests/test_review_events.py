@@ -30,6 +30,39 @@ def _queue_mechanics_only(monkeypatch):
         AlertCenterPanel, "_is_m5_review_alert", staticmethod(lambda alert: False)
     )
 
+
+@pytest.fixture(autouse=True)
+def _annotations_go_to_a_temp_file(tmp_path, monkeypatch):
+    """NO TEST MAY WRITE INTO THE TRADER'S OWN DECISION STREAM (S1.5).
+
+    Every `ui.annotations.verdicts` writer defaults `path` to
+    `project_paths.TRADER_ANNOTATIONS_FILE`, i.e. the LIVE
+    `C:\\TradingBotData\\trader_annotations.jsonl`, and several panel hooks
+    exercised here reach one: `MasterAvwapPanel._record_dislike` and
+    `_add_row_to_focus` through `_record_verdict_annotation`, and
+    `AlertCenterPanel._remove_review_alert_for_today` through
+    `_record_not_today_annotation`. Two of them had been writing real rows -
+    a `veto` for LNG landed in the live file on 2026-09-02 - and an
+    append-only evidence stream cannot have a row taken back out by the code
+    that wrote it.
+
+    Bound as a MODULE attribute rather than per-call, because the panels look
+    the writer up on `verdicts` at call time; and autouse rather than
+    per-test, because the next hook added here would otherwise leak again.
+    """
+    from ui.annotations import verdicts
+
+    annotations = tmp_path / "trader_annotations.jsonl"
+    for name in ("record_like", "record_dislike", "record_not_today", "record_note_on"):
+        real = getattr(verdicts, name)
+
+        def _redirected(*args, _real=real, **kwargs):
+            kwargs.setdefault("path", annotations)
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(verdicts, name, _redirected)
+    return annotations
+
 from review_events import (
     REVIEW_EVENTS_SCHEMA,
     alert_context_fields,

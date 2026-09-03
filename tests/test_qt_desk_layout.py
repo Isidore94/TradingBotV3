@@ -18,9 +18,23 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import pytest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _app = QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def _no_broker_from_a_test(monkeypatch):
+    """`BouncePanel.__init__` ends in `QTimer.singleShot(0, self.start)`.
+
+    So the first `processEvents` in any test that builds a `TradingDeskPanel`
+    connects to the live TWS on 127.0.0.1:7496. Nothing in this file is about
+    BounceBot, and a test must never reach a broker (S1.5).
+    """
+    from ui.panels.bounce_panel import BouncePanel
+
+    monkeypatch.setattr(BouncePanel, "start", lambda self: None)
 
 
 def _desk(width=1640, height=980, *, setups_visible=True):
