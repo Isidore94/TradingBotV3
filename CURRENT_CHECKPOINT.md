@@ -120,8 +120,9 @@ unevenly and CHANGES THE ORDER, on the phone surface the trader acts on.
 `SWING_DIGEST_HORIZON_SESSIONS = 5` is declared and the reason is in the
 constant: horizon 1 is an overnight move and its top live family rests on n=8;
 horizon 10 can only grade the first half of a 20-session window (772 rows);
-horizon 5 is the shortest that is a swing hold and still grades 2,450 rows across
-13 families with real separation. Rows the tracker flagged `stale_horizon` are
+horizon 5 is the shortest that is a swing hold and still grades 13 families with
+real separation (2,249 rows after the stale filter, top bounds 0.585 / 0.543 /
+0.522). Rows the tracker flagged `stale_horizon` are
 dropped, which is the rule the scan-factor leaderboard already applies to that
 same file. The A11 fixture could not see any of this because it had one row per
 family; every fixture now carries all four horizons.

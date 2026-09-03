@@ -3362,8 +3362,9 @@ AWAY_REPORT_MAX_NEAR_ROWS = 3
 #: family in the live window rests on n=8. Horizon 10 can only grade picks from
 #: the first half of a 20-session window (772 rows), so the ranking would be
 #: about a fortnight ago. Horizon 5 is the shortest that is a swing hold rather
-#: than a gap, and it still grades 2,450 rows across 13 families with real
-#: separation (top bounds 0.597 / 0.528 / 0.520).
+#: than a gap, and it still grades 13 families with real separation - 2,450
+#: rows before the stale-horizon filter and 2,249 after it, top bounds 0.585 /
+#: 0.543 / 0.522.
 SWING_DIGEST_HORIZON_SESSIONS = 5
 
 
