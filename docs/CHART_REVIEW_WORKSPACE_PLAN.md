@@ -640,5 +640,18 @@ counts verdicts starts counting a follow-up note as one.
 **A click away is still a SKIP.** The waiting chart retires with nothing extra
 written, and `clicked_away_from_m5_alert` is not renamed.
 
+**ONE RAIL VETO IS ONE `veto` ROW, FROM 2026-09-03** (fix round 1). The rail and
+the Alert Center both wrote one: the rail'''s coded row from the click, and the
+panel'''s own uncoded `chart_review` row from `_record_not_today_annotation` when
+the retire arrived - two rows per click, three when the trader used the panel'''s
+note box, and after S1.2 that box opened AFTER they had typed into the rail. The
+host now recognises a retire the rail earned and writes neither. **Cohort counts
+over this file change meaning at that date**; the file is append-only, so the
+rows either side of it stay exactly as they were written.
+
+**Two verdicts on one chart both take effect.** A veto parks the name for the day
+and a like deliberately does not, so firing only the last verb was dropping a
+judgement the trader had made.
+
 Still analysis-only: nothing here mutes, suppresses, scores, gates, ranks or
 alerts, and `review_policy.json` still has no suppression field.

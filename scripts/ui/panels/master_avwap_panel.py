@@ -1256,9 +1256,13 @@ class MasterAvwapPanel(QWidget):
         grades (`veto_uncoded`); a code the trader did not choose would be worse
         than none, because cohort identity is `(vocab_version, reason_code)` and
         rows are never rewritten. The trader's own words are still theirs to
-        add - S1.4 charts this ticker in the review pane on the same click, and
-        S1.2's inline field takes them there - and they are never coded by
-        machine.
+        add: a click on the row's TICKER charts it in the Visual Chart Review
+        (S1.4), where the capture rail is waiting. That is a SEPARATE click on a
+        different cell - the X charts nothing - and the note it produces stands
+        on its own; nothing links it back to this rejection, because inventing
+        such a link would mean inventing a second identity for the opportunity
+        (plan.md P5.3/P5.4 own that one). What is never done either way is
+        coding the trader's words by machine.
 
         The rejection lane (`focus__swing_dislike`) and every downstream reader
         are unchanged.
@@ -1292,9 +1296,11 @@ class MasterAvwapPanel(QWidget):
         # S1.1 the picklist supplied a code and suppressed the box on the same
         # grounds; the click is quicker now and the rule is the same one.
         #
-        # The words are not lost with the box: the same click charts the ticker
-        # in the Visual Chart Review (S1.4), where the chart waits for them
-        # (S1.2). The ★ keeps its box - it has no other surface to type on.
+        # The words are not lost with the box, but they do cost a second
+        # click: the row's TICKER charts in the Visual Chart Review (S1.4),
+        # where the rail waits for them (S1.2). The X itself charts nothing and
+        # no link is written between the two. The star keeps its box - it has no
+        # other surface to type on.
         self._record_verdict_annotation(
             row,
             kind="dislike",

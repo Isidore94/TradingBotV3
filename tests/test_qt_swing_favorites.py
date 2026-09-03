@@ -42,6 +42,8 @@ import swing_favorites  # noqa: E402
 def _qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
 @pytest.fixture(autouse=True)
 def _no_broker_from_a_test(monkeypatch):
     """`BouncePanel.__init__` ends in `QTimer.singleShot(0, self.start)`.

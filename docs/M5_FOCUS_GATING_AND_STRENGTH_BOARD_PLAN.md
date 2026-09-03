@@ -605,9 +605,11 @@ get narrower, and four measurements shaped the build:
 | Status label | 434 px | word-wrapped — it carries failure reasons, so it can be long |
 | "Add all shown" | 208 px | relabelled "Add all" (124 px); the tooltip still says the whole thing |
 
-The section also **starts closed**, so by default it costs one header row. The
-two sides stack **vertically** now: side by side was right for a full-width page
-and is unreadable in a column.
+The section started **closed**, so by default it cost one header row. **Since
+S1.3 (2026-09-03) it starts OPEN**: the column-wide scroll area over the whole
+Strength surface holds the 360 px floor now, so the section does not have to buy
+it with its own default. The two sides stack **vertically**: side by side was
+right for a full-width page and is unreadable in a column.
 
 **The RS/RW half retired with the page.** The 2026-08-21 addendum above added it
 so the two reads could be compared without flipping **pages**; the Alert Center's

@@ -825,11 +825,21 @@ inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 | S1.4 a setups ticker charts in the review pane | **BUILT**. `MasterAvwapPanel.symbolActivated` → `chart_symbol`, the Alert Center tab raised in tabs mode, the snapshot dialog kept on the row menu |
 | S1.5 no test writes the live decision stream | **BUILT (test-only)**. An autouse fixture in `tests/test_review_events.py` rebinds every `ui.annotations.verdicts` writer to a tmp path; two desk-building test files stop connecting to the live TWS on 7496 |
 
-**One test is deliberately RED**:
-`test_s1_quick_verbs_strength_tab.py::test_the_strength_column_holds_three_sections_and_every_one_is_open`
-asserts three sections and the shipped surface has four, because the lead ruled
-after the tests were written that `FocusStrengthBoard` becomes the first section.
-It is left as the tester wrote it; the shipped shape is asserted separately.
+**Fix round 1 (2026-09-03), after a reviewer NO-GO.** Three blockers, each with
+a test proven to fail first: a rail veto made the Alert Center write a SECOND
+veto row and open a note box after the trader had already typed (one KKR click on
+the live stream is three rows) - the host now recognises a retire the rail earned
+and writes neither; `like_advance` and the veto's `remove_today` were dated by
+the typing rather than the decision and are recorded at the click; and the docs
+asserted a red test that no longer exists. Advisories taken with them: two
+verdicts on one chart both take effect, the setups ✕'s "charts the ticker on the
+same click" sentences are corrected (it does not, and no link is written), and
+the RS Window's `rrsSnapshotChanged` claim is removed - the widget never read it.
+
+**The veto cohort's per-click row count changes at 2026-09-03.** One rail veto
+was two `veto` rows (three with the box) and is now one, plus the follow-up
+`note`. `trader_annotations.jsonl` is append-only, so this is a date to know when
+counting across it, never a migration.
 
 Nothing in this packet reaches a detector, score, gate, alert generator,
 watchlist, Focus list, review queue or `review_policy.json`. `trader_annotations`

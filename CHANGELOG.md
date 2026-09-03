@@ -716,9 +716,18 @@ which is evidence and must not be loaded as context.
   rewritten). The **star** keeps its R4 A6 note box; the X does not, because
   S1.4 gives it a chart to type on.
 - **A RETIRING VERB HOLDS THE CHART UNTIL THE TRADER PRESSES ENTER** (S1.2,
-  2026-09-03). The verdict row, `like_advance`, "reviewed today" and the cohort
-  merge all still happen ON THE CLICK; only `removeTodayRequested` /
-  `likeAdvanceRequested` wait. Enter with a typed line writes ONE additive `note`
+  2026-09-03). The verdict row, its review event (`like_advance` /
+  `remove_today`, with the CLICK-time dwell), "reviewed today" and the cohort
+  merge all happen ON THE CLICK - the host records off `captureVerbRecorded` and
+  the deferred signal only moves the chart; only `removeTodayRequested` /
+  `likeAdvanceRequested` wait. **A retire the rail earned costs the Alert Center
+  nothing**: it recognises one through `retiring_from_capture_verb()` and writes
+  neither a second veto row nor a note box, so **one rail veto is ONE `veto` row
+  from 2026-09-03** where it had been two (three with the box) - a date to know
+  when counting across it, never a migration. Two verdicts on one chart BOTH take
+  effect: a veto parks the name and a like does not, and dropping either would
+  ignore something the trader said. The pane's own "✕ Not today" button is
+  untouched and keeps its row and its box. Enter with a typed line writes ONE additive `note`
   row carrying `supersedes` - the id the verdict row already has, never a second
   opportunity id - then retires; Enter on an empty field or Escape retires and
   writes nothing; a failed note write still retires. A click away is still a
@@ -1332,6 +1341,35 @@ failures**, with the `ai_jobs_runner` lock FREE and re-checked immediately befor
 run · `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix:
 **all 11** new narration tests fail against the un-fixed tree, and the two synthesis
 tests fail against theirs. No packaging trigger.
+### 2026-09-03 - Packet S1 fix round 1: one veto is one row
+
+Reviewer NO-GO on three blockers, each fixed with a test proven to fail first
+(`tests/test_s1_quick_verbs_fix_round_1.py`, 7 of its 9 red on the base commit).
+
+1. **A rail veto wrote two rows and, after S1.2, opened a box after the typing.**
+   `removeTodayRequested` carries both the rail's deferred veto and the pane's own
+   "✕ Not today" button, and the Alert Center answered both by writing its own
+   uncoded veto row and offering a note box. One KKR veto of this morning is
+   THREE rows in the live stream for that reason. `retiring_from_capture_verb()`
+   now distinguishes them; a rail-earned retire writes nothing. **The veto
+   cohort's per-click row count changes at this commit** - see DESK_INTERNALS.
+2. **`like_advance` and `remove_today` were dated by the typing.** Recorded off
+   the deferred retire, `dwell_ms` included however long the trader spent writing
+   their note, and a desk closed before Enter lost the decision. They are written
+   at the click now, through `AlertChartReview.captureVerbRecorded`; the ✕'s
+   auto-pick / Focus / faded branches keep recording their own on the retire.
+3. **The docs asserted a red test and a red baseline that no longer exist.**
+
+Advisories taken in the same round: two verdicts on one chart both take effect
+(`_pending_advance` holds a SET of verb kinds, so a veto's park no longer
+disappears behind a later like); the three sentences claiming the setups ✕ charts
+the ticker "on the same click" are corrected - it does not, the ticker cell does,
+and **no link is written** between a note typed there and the rejection; the
+"RS Window reads `rrsSnapshotChanged`" claim is removed from CLAUDE.md/AGENTS.md,
+DESK_INTERNALS and the panel comment, because it never did (its own 5-minute
+timer plus a `showEvent` tick, which now fires at startup rather than on a tab
+open); and two cosmetic test fixes.
+
 ### 2026-09-03 - Packet S1: quick verbs, a chart that waits, one Strength tab
 
 Four trader asks of that morning, quoted verbatim in
@@ -1348,7 +1386,9 @@ had no other caller and is gone.
 
 **S1.2 - the chart stays up until the trader finishes typing.** The row, the
 review event and the cohort merge stay on the click; the retire waits for Enter
-or Escape in the rail's note field. A typed line becomes one `note` row pointing
+or Escape in the rail's note field. (Fix round 1 made the review-event half of
+that sentence true, and stopped the Alert Center writing a second veto row behind
+the rail's.) A typed line becomes one `note` row pointing
 at the verdict through the `supersedes` key it already carried. `_advance_after_like`
 gained the guard `_skip_review_alert` already had, because a deferred advance can
 now land after the trader has charted something else.

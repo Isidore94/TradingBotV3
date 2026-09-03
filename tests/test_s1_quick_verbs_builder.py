@@ -12,9 +12,8 @@ pins something the packet asks for that no red test covered.
   would have caught its removal.
 * S1.3's Strength surface as it SHIPPED: four open sections, not three. The
   tester wrote `== 3` before the lead ruled that `FocusStrengthBoard` becomes
-  the first section; that assertion is left exactly as it is and this one
-  states what the code does, so the disagreement is visible rather than
-  papered over.
+  the first section; the lead has since tightened that assertion to `== 4`, and
+  this one states the ORDER and the hosting the other does not.
 """
 
 from __future__ import annotations
@@ -287,12 +286,10 @@ def test_a_failed_split_save_is_reported_rather_than_swallowed(monkeypatch, capl
 def test_the_strength_surface_is_four_open_sections_in_one_scroll_area():
     """What the lead ruled and what the code does.
 
-    The tester's `test_the_strength_column_holds_three_sections_and_every_one_is
-    _open` asserts THREE and is deliberately left red: it was written before the
-    lead ruled that `FocusStrengthBoard` - the one strength widget that was not
-    in a section at all - becomes the first one. This states the shipped shape
-    so the difference between the two is a decision on the record and not a
-    silent edit to somebody else's assertion.
+    The tester's sibling counts the sections and checks they are open; this one
+    pins their ORDER and that all four sit inside the one column scroll area -
+    the two facts that make it a single surface rather than four widgets that
+    happen to be stacked.
     """
     from ui.panels.rs_window_panel import RsWindowPanel
     from ui.widgets.collapsible_section import CollapsibleSection

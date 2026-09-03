@@ -856,6 +856,11 @@ class AlertCenterPanel(QFrame):
             self._remove_review_alert_for_today
         )
         self.chart_review.likeAdvanceRequested.connect(self._advance_after_like)
+        # S1.2 fix round 1: the DECISION is recorded on the click and the CHART
+        # moves on Enter. Two different moments, so two different connections.
+        self.chart_review.captureVerbRecorded.connect(
+            self._record_capture_verb_review_event
+        )
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
@@ -2890,12 +2895,18 @@ class AlertCenterPanel(QFrame):
         """
         if alert is None or not alert.symbol:
             return
-        self._record_review_event(
-            "like_advance",
-            alert=alert,
-            dwell_ms=self._review_dwell_ms(alert.symbol),
-            queue_len=len(self._review_queue),
-        )
+        # The event moved to the CLICK when the chart started waiting (S1.2 fix
+        # round 1): `dwell_ms` has to measure the trader reading the chart, not
+        # the trader typing about it, and `review_learning`'s median take dwell
+        # is only comparable across the window if it keeps meaning that. It is
+        # still written exactly once - see `_record_capture_verb_review_event`.
+        if not self._retire_came_from_a_capture_verb():
+            self._record_review_event(
+                "like_advance",
+                alert=alert,
+                dwell_ms=self._review_dwell_ms(alert.symbol),
+                queue_len=len(self._review_queue),
+            )
         self.statusChanged.emit(
             f"♥ {alert.symbol}: liked and claimed; it keeps alerting as normal."
         )
@@ -5354,10 +5365,67 @@ class AlertCenterPanel(QFrame):
                 self.any_bounce_armed_for(current.symbol)
             )
 
+    def _retire_came_from_a_capture_verb(self) -> bool:
+        """Whether the retire being handled was earned by a capture-rail verb.
+
+        S1.2 fix round 1, blocker 1. The rail's veto and the pane's own
+        "✕ Not today" button arrive on the SAME signal, and they are not the
+        same event: the rail has already written its verdict row and this panel
+        has already recorded the review event at the click, so doing either
+        again turns one click into two and three rows. Read synchronously off a
+        direct connection, exactly as `CaptureRail.veto_keeps_chart` is.
+        """
+        try:
+            return bool(self.chart_review.retiring_from_capture_verb())
+        except Exception:
+            # A host without the flag is a host whose retires are all its own.
+            return False
+
+    def _record_capture_verb_review_event(
+        self, alert: BounceAlert, event_type: str
+    ) -> None:
+        """The take/reject row, written when the verb landed (blocker 2).
+
+        S1.2 holds the chart up until the trader has finished typing, so the
+        retire can arrive a minute after the decision. Recording there put the
+        typing INSIDE `dwell_ms` - the denominator `review_learning` reads as
+        "how long did the trader look at this chart" - and lost the decision
+        entirely if the desk closed before Enter.
+
+        The ✕'s special branches (an auto pick declined, a Focus or faded
+        walkthrough) each record their OWN event when the retire runs, and are
+        deliberately not duplicated here: only the plain path's `remove_today`
+        moves to the click.
+        """
+        if alert is None or not alert.symbol:
+            return
+        from ui.annotations.store import EVENT_LIKE_CLAIM
+
+        if event_type == EVENT_LIKE_CLAIM:
+            action = "like_advance"
+        else:
+            if is_auto_pick_alert(alert) or str(alert.tag or "") in (
+                FOCUS_REVIEW_TAG,
+                FOCUS_FADED_TAG,
+            ):
+                return
+            action = "remove_today"
+        self._record_review_event(
+            action,
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+        )
+
     def _remove_review_alert_for_today(self, alert: BounceAlert) -> None:
         """Drop a name from today's visual processing without changing scans."""
         if not alert.symbol:
             return
+        # A retire the capture rail earned: the veto row and the review event
+        # are already on disk from the click, so this call MOVES the chart and
+        # writes nothing (blocker 1). Read once, up front, because the branches
+        # below re-enter this panel.
+        from_capture_verb = self._retire_came_from_a_capture_verb()
         # Unified verb row (2026-07-31): "✕ Not today" on an auto pick is the
         # decline verdict - retire the proposal for the day, advance the
         # queue, and leave the symbol's ordinary alerting untouched.
@@ -5403,13 +5471,14 @@ class AlertCenterPanel(QFrame):
         # below - `remove_if_auto_adopted` refuses it, and that refusal is the
         # never-auto-remove-user-names invariant doing its job.
         dropped = self._drop_auto_adopted_pick(alert)
-        self._record_review_event(
-            "remove_today",
-            alert=alert,
-            dwell_ms=self._review_dwell_ms(alert.symbol),
-            queue_len=len(self._review_queue),
-            detail={"auto_pick_dropped": dropped} if dropped else None,
-        )
+        if not from_capture_verb:
+            self._record_review_event(
+                "remove_today",
+                alert=alert,
+                dwell_ms=self._review_dwell_ms(alert.symbol),
+                queue_len=len(self._review_queue),
+                detail={"auto_pick_dropped": dropped} if dropped else None,
+            )
         # P10 A1/A2. "Not today" has always written a `pick_feedback` verdict
         # with the hardcoded free-text reason "not today" - never a code, never
         # a word of the trader's own. It now ALSO writes one uncoded veto
@@ -5419,7 +5488,13 @@ class AlertCenterPanel(QFrame):
         #
         # The `pick_feedback` row and the Focus removal above are untouched: P5
         # grades them as `focus__m5_not_today` and several surfaces read them.
-        self._record_not_today_annotation(alert)
+        # BLOCKER 1: not for a rail verb. The rail wrote the veto row on the
+        # click, so writing a second one here made one veto land as two rows -
+        # and, after S1.2 deferred this call, the note box opened AFTER the
+        # trader had already typed their note into the rail. The live file shows
+        # one KKR veto of 2026-09-03 as THREE rows for exactly this reason.
+        if not from_capture_verb:
+            self._record_not_today_annotation(alert)
         self._ignore_alert_symbol(alert.symbol)
         if dropped:
             self.statusChanged.emit(
@@ -5826,11 +5901,18 @@ class AlertCenterPanel(QFrame):
     def attach_rs_window(self, panel) -> None:
         """Host the RS Window as the last section of the Strength surface.
 
-        S1.3. The desk owns the widget (it is constructed against BounceBot's
-        service and keeps its `rrsSnapshotChanged` wiring); this panel only
-        gives it a parent. It answers a different question from the RS/RW board
-        beside it - who led over the SELECTED WINDOW at scan time - which is why
-        both are here rather than one replacing the other.
+        S1.3. The desk owns the widget - it is constructed against BounceBot's
+        service - and this panel only gives it a parent. It answers a different
+        question from the RS/RW board beside it (who led over the SELECTED
+        WINDOW at scan time), which is why both are here rather than one
+        replacing the other.
+
+        **It refreshes on its OWN 5-minute timer, not on `rrsSnapshotChanged`**
+        (`rs_window_panel.py`; the fix-round reading found nothing in this widget
+        ever connected to that signal, and three sentences said it did). One
+        consequence of the move is real and wanted: it also ticks on `showEvent`,
+        which used to mean "when the trader opened the tab" and now means "at
+        startup", because an open section is shown.
         """
         if panel is None:
             return

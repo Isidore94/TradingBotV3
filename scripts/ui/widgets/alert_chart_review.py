@@ -89,6 +89,12 @@ class AlertChartReview(QWidget):
     # trade. Two things the host must do, in this order: place it on M5 Focus,
     # then retire it from today's review queue. A request, never a write.
     vetoDayTradeRequested = Signal(object)
+    # (alert, event_type) the moment a retiring capture verb's row reaches disk.
+    # The host records its review event HERE rather than off the deferred
+    # retire, so `dwell_ms` measures the trader looking at the chart and not the
+    # trader typing, and a desk closed between the click and Enter still has the
+    # decision (fix round 1, blocker 2).
+    captureVerbRecorded = Signal(object, str)
 
     def __init__(
         self,
@@ -100,11 +106,20 @@ class AlertChartReview(QWidget):
     ) -> None:
         super().__init__(parent)
         self.alert: BounceAlert | None = None
-        # S1.2: (event_type, alert) of the verb whose chart is being held open
-        # while the trader types. The ALERT is captured here, at the click, so
+        # S1.2: the chart being held open while the trader types, and EVERY
+        # retiring verb recorded on it. The ALERT is captured at the click, so
         # the retire that eventually fires names the chart the verb was about
-        # even if something else has since been charted.
-        self._pending_advance: tuple[str, BounceAlert] | None = None
+        # even if something else has since been charted; the SET is what makes
+        # a veto and a like on one chart both take effect (fix round 1, A7 -
+        # keeping only the last one silently dropped the veto's park).
+        self._pending_advance: tuple[BounceAlert, set[str]] | None = None
+        # True only while a retire the CAPTURE RAIL earned is being emitted.
+        # Same idiom, and for the same reason, as `CaptureRail.veto_keeps_chart`:
+        # the host receives the SAME signal its own "Not today" button sends and
+        # has to be able to tell the two apart, because the rail has already
+        # written the verdict row and asking the host for a second one is what
+        # made a single click land as two and three rows (fix round 1, blocker 1).
+        self._retiring_from_capture_verb = False
         self._cross_labels = ("Add to D1 Focus", "✓ In D1 Focus")
         # Where each control dock goes is the HOST's decision, not this
         # widget's, and the two are decided SEPARATELY because they cost very
@@ -438,9 +453,10 @@ class AlertChartReview(QWidget):
         with the same alert. `like_advance` and "reviewed today" are therefore
         still recorded off the verb, not off the advance.
 
-        A second retiring verb on the same chart writes its own row and simply
-        re-arms the wait, and the LAST verb decides which route retires it -
-        that is the trader's final word on the chart in front of them.
+        A second retiring verb on the same chart writes its own row, re-arms
+        the wait, and takes effect ALONGSIDE the first: a veto parks the name
+        for the day and a like deliberately does not, so dropping either would
+        be ignoring something the trader said.
 
         The day-trade veto does NOT come through here: it needs the Focus
         placement to happen before the chart is retired, so it has its own
@@ -455,11 +471,32 @@ class AlertChartReview(QWidget):
             self._await_follow_up(event_type, _row)
 
     def _await_follow_up(self, event_type: str, row: dict) -> None:
-        """Hold this chart until the trader presses Enter or Escape."""
+        """Hold this chart until the trader presses Enter or Escape.
+
+        The DECISION is announced now, not when the chart moves: the host writes
+        its review event off `captureVerbRecorded`, so the take/reject row and
+        its dwell describe the click. A second retiring verb on the same chart
+        adds itself to the set and re-arms the wait - both will take effect.
+        """
         if self.alert is None:
             return
-        self._pending_advance = (str(event_type or ""), self.alert)
+        kind = str(event_type or "")
+        pending = self._pending_advance
+        if pending is not None and pending[0] is self.alert:
+            pending[1].add(kind)
+        else:
+            self._pending_advance = (self.alert, {kind})
         self.capture_rail.begin_follow_up(event_type, row)
+        self.captureVerbRecorded.emit(self.alert, kind)
+
+    def retiring_from_capture_verb(self) -> bool:
+        """True while a retire the capture rail earned is being emitted.
+
+        The rail has already written the verdict row and the host has already
+        recorded the review event, so a host reading this must not write either
+        again - see `_release_pending_advance`.
+        """
+        return self._retiring_from_capture_verb
 
     def _on_follow_up_settled(self, _event_type: str, _row: dict) -> None:
         """The trader has finished typing: retire the chart they were on."""
@@ -476,13 +513,22 @@ class AlertChartReview(QWidget):
         self._pending_advance = None
         if pending is None:
             return
-        event_type, alert = pending
+        alert, kinds = pending
         if alert is None:
             return
-        if event_type == EVENT_VETO:
-            self.removeTodayRequested.emit(alert)
-        else:
-            self.likeAdvanceRequested.emit(alert)
+        # BOTH, when both were recorded (fix round 1, A7). A veto parks the name
+        # for the day and a like deliberately does not; keeping only the last
+        # verb meant veto-then-like silently dropped the park, which is a
+        # judgement the trader made and the desk then ignored. The order is the
+        # host's existing one - veto first, then the like's advance-only route.
+        self._retiring_from_capture_verb = True
+        try:
+            if EVENT_VETO in kinds:
+                self.removeTodayRequested.emit(alert)
+            if EVENT_LIKE_CLAIM in kinds:
+                self.likeAdvanceRequested.emit(alert)
+        finally:
+            self._retiring_from_capture_verb = False
 
     def _abandon_follow_up(self) -> None:
         """The trader charted something else while a chart was waiting.
