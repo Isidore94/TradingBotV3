@@ -33,6 +33,7 @@ honest gap, not a silent one.
 
 from __future__ import annotations
 
+import functools
 import zoneinfo
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -149,8 +150,21 @@ def _observed(day: date, *, allow_friday: bool = True) -> date:
     return day
 
 
+@functools.lru_cache(maxsize=None)
 def holidays(year: int) -> dict:
-    """Full-closure dates for one year, keyed by date with their names."""
+    """Full-closure dates for one year, keyed by date with their names.
+
+    Memoized: the rules for a year never change inside a process, and the
+    warehouse build asks this question once per M5 bar per occurrence. On
+    2026-09-03 a py-spy trace of the desk's build thread put **84% of its
+    samples** inside this module (``session_for`` -> ``trading_session`` ->
+    ``is_trading_day`` -> here), recomputing Easter and five nth-weekday
+    walks every time. 20,000 ``session_for`` calls measured 0.25 s uncached
+    and 0.012 s cached - 21x. The returned dict is shared, so **no caller may
+    mutate it**; every caller in ``scripts/`` and ``tests/`` only reads (last
+    checked 2026-09-03). If one ever needs to mutate, copy at the call site
+    or return a ``MappingProxyType`` here - never drop the cache.
+    """
     dates: dict[date, str] = {}
 
     def add(day: date, name: str) -> None:
@@ -172,8 +186,9 @@ def holidays(year: int) -> dict:
     return dates
 
 
+@functools.lru_cache(maxsize=None)
 def half_days(year: int) -> dict:
-    """13:00 ET early closes for one year."""
+    """13:00 ET early closes for one year. Memoized; see :func:`holidays`."""
     dates: dict[date, str] = {}
     closures = holidays(year)
 
@@ -209,7 +224,22 @@ def trading_session(day: date, *, calendar: str = EXCHANGE_CALENDAR) -> TradingS
     Boundaries are computed in exchange time and returned in UTC, so DST is
     handled by the zone rather than by an offset constant: the 09:30 open is
     13:30 UTC in summer and 14:30 UTC in winter.
+
+    Memoized through :func:`_trading_session`, and safe to share because
+    :class:`TradingSession` is a frozen dataclass: two callers asking for the
+    same day get the same immutable instance rather than two identical ones
+    built from four ``astimezone`` conversions each. The cache sits behind this
+    keyword-only signature rather than on it, because ``lru_cache`` keys on the
+    call SHAPE: ``trading_session(day)`` and ``trading_session(day,
+    calendar="XNYS")`` are the same question, and a cache decorated directly
+    onto this function would build - and store - the answer twice. Every
+    in-module caller passes the keyword; ``session_for`` is one of them.
     """
+    return _trading_session(day, calendar)
+
+
+@functools.lru_cache(maxsize=None)
+def _trading_session(day: date, calendar: str) -> TradingSession | None:
     if not is_trading_day(day):
         return None
     half = is_half_day(day)
