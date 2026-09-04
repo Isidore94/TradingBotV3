@@ -130,11 +130,15 @@ def test_the_focus_verb_still_places(pane, monkeypatch):
 
 
 def test_a_note_is_still_only_a_recorder(pane, monkeypatch):
-    """Veto and like retire the chart now; a note remains pure capture."""
+    """A VETO retires the chart; a LIKE and a NOTE never do (packet T1, trader
+    2026-09-04: "I still need time to enter alerts"). A note was always on the
+    quiet side of that line and still is."""
     _show(pane, monkeypatch, "AAPL")
     moved: list = []
     pane.skipRequested.connect(moved.append)
     pane.removeTodayRequested.connect(moved.append)
+    pane.vetoRetireRequested.connect(moved.append)
+    pane.likeRecorded.connect(moved.append)
     pane.focusRequested.connect(moved.append)
     pane.capture_rail.note_input.setText("heavy into the 50")
     pane.capture_rail.commit_note()
@@ -273,19 +277,20 @@ def test_a_pass_writes_one_row_carrying_every_ticked_reason(pane, monkeypatch, t
 
 
 def test_a_pass_never_retires_the_chart(pane, monkeypatch):
-    """CLAUDE.md: a veto and a like each retire the chart; a note never does.
-    A pass is on the note side of that line - the trader is still reading it."""
+    """A VETO retires the chart; a LIKE, a NOTE and a PASS never do (packet T1,
+    2026-09-04). A pass was always on the quiet side of that line."""
     _show(pane, monkeypatch)
     retired: list = []
-    advanced: list = []
+    liked: list = []
     pane.removeTodayRequested.connect(retired.append)
-    pane.likeAdvanceRequested.connect(advanced.append)
+    pane.vetoRetireRequested.connect(retired.append)
+    pane.likeRecorded.connect(liked.append)
 
     _tick(pane, _pass_codes(pane))
     assert pane.capture_rail.commit_pass() is not None
 
     assert retired == [], "a pass must not retire the chart"
-    assert advanced == [], "a pass must not advance the queue"
+    assert liked == [], "a pass is not a like"
     assert pane.alert is not None
 
 
@@ -693,13 +698,20 @@ def _pick_reason(rail) -> str:
     raise AssertionError("no note-free veto reason in the vocabulary")
 
 
-def test_a_veto_retires_the_chart_as_not_today(pane, monkeypatch):
+def test_a_veto_retires_the_chart_by_its_own_verb(pane, monkeypatch):
+    """Packet T1.1: the rail's veto retires through `vetoRetireRequested`, NOT
+    through `removeTodayRequested` - that signal is the "✕ Not today" BUTTON's
+    only, because that verb writes a second, uncoded row and opens a note box
+    the trader asked to be rid of on the capture window."""
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
-    pane.removeTodayRequested.connect(retired.append)
+    not_today: list = []
+    pane.vetoRetireRequested.connect(retired.append)
+    pane.removeTodayRequested.connect(not_today.append)
     _pick_reason(pane.capture_rail)
     assert pane.capture_rail.commit_veto() is not None
     assert [alert.symbol for alert in retired] == ["AAPL"]
+    assert not_today == []
 
 
 def test_a_note_still_holds_the_chart(pane, monkeypatch):
@@ -708,6 +720,8 @@ def test_a_note_still_holds_the_chart(pane, monkeypatch):
     _show(pane, monkeypatch, "AAPL")
     moved: list = []
     pane.removeTodayRequested.connect(moved.append)
+    pane.vetoRetireRequested.connect(moved.append)
+    pane.likeRecorded.connect(moved.append)
     pane.skipRequested.connect(moved.append)
     pane.focusRequested.connect(moved.append)
     pane.capture_rail.note_input.setText("watching the 50")
@@ -737,6 +751,7 @@ def test_a_refused_veto_retires_nothing(pane, monkeypatch):
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
     pane.removeTodayRequested.connect(retired.append)
+    pane.vetoRetireRequested.connect(retired.append)
     pane.capture_rail.reason_list.setCurrentRow(-1)
     assert pane.capture_rail.commit_veto() is None
     assert retired == []
@@ -749,6 +764,7 @@ def test_the_day_trade_veto_asks_for_placement_instead_of_retiring(pane, monkeyp
     retired: list = []
     day_traded: list = []
     pane.removeTodayRequested.connect(retired.append)
+    pane.vetoRetireRequested.connect(retired.append)
     pane.vetoDayTradeRequested.connect(day_traded.append)
 
     _pick_reason(pane.capture_rail)
@@ -994,16 +1010,20 @@ def test_a_digit_then_a_why_is_the_whole_like(pane, monkeypatch, tmp_path):
 
     Before R9.2 the digit alone committed and the chart was retired as "Not
     today". The trader asked to be prompted for the why every time
-    (2026-08-22), so the digit now picks and the Enter commits - and the chart
-    advances instead of parking the symbol.
+    (2026-08-22), so the digit now picks and the Enter commits.
+
+    Packet T1.2 (2026-09-04) took the last of the movement away: the like is
+    RECORDED and the chart STAYS, because the trader still has alerts to arm on
+    it. The signal is `likeRecorded`; nothing retires.
     """
     import json
 
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
-    advanced: list = []
+    recorded: list = []
     pane.removeTodayRequested.connect(retired.append)
-    pane.likeAdvanceRequested.connect(advanced.append)
+    pane.vetoRetireRequested.connect(retired.append)
+    pane.likeRecorded.connect(recorded.append)
     rail = pane.capture_rail
     rail.select_setup(rail._claim_hotkeys["2"])
     assert not (tmp_path / "trader_annotations.jsonl").exists(), "the digit alone is not a like"
@@ -1015,7 +1035,8 @@ def test_a_digit_then_a_why_is_the_whole_like(pane, monkeypatch, tmp_path):
     assert json.loads(lines[0])["claimed_setup_id"] == rail._claim_hotkeys["2"]
     assert json.loads(lines[0])["note"] == "reclaimed the band"
     assert retired == []
-    assert [alert.symbol for alert in advanced] == ["AAPL"]
+    assert [alert.symbol for alert in recorded] == ["AAPL"]
+    assert pane.alert is not None, "the chart stays up (packet T1.2)"
 
 
 def test_committing_with_nothing_picked_says_so_and_writes_nothing(pane, monkeypatch, tmp_path):
@@ -1060,7 +1081,8 @@ def test_a_like_with_no_why_writes_nothing_and_holds_the_chart(pane, monkeypatch
     _show(pane, monkeypatch, "AAPL")
     moved: list = []
     pane.removeTodayRequested.connect(moved.append)
-    pane.likeAdvanceRequested.connect(moved.append)
+    pane.vetoRetireRequested.connect(moved.append)
+    pane.likeRecorded.connect(moved.append)
     pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.like_note_input.setText("")
 
@@ -1228,31 +1250,40 @@ def test_the_like_gesture_is_wired_the_same_shape_as_the_veto(pane, monkeypatch)
         assert vetoed == [True], "and the reason list still calls commit_veto"
 
 
-def test_a_like_advances_the_queue_and_does_not_retire_the_chart(pane, monkeypatch):
-    """R9.2(b). The like is still a finished decision - it moves on - but it
-    takes an advance-only path instead of the "Not today" verb's."""
+def test_a_like_is_recorded_and_leaves_the_chart_where_it_is(pane, monkeypatch):
+    """R9.2(b) took the like off the "Not today" verb. Packet T1.2 (trader,
+    2026-09-04) took the movement away as well: "the 'like' button in the visual
+    chart review should NOT advance the char to the next page because i still
+    need time to enter alerts etc."
+
+    So the pane REPORTS the like (`likeRecorded`) and asks for nothing. The
+    review event behind it is still called `like_advance` - historical, because
+    `review_learning.TAKE_ACTIONS` keys on that string.
+    """
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
-    advanced: list = []
+    recorded: list = []
     pane.removeTodayRequested.connect(retired.append)
-    pane.likeAdvanceRequested.connect(advanced.append)
+    pane.vetoRetireRequested.connect(retired.append)
+    pane.likeRecorded.connect(recorded.append)
     pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.like_note_input.setText("clean base")
     assert pane.capture_rail.commit_like() is not None
-    assert retired == [], "a like must never take the remove-today path"
-    assert [alert.symbol for alert in advanced] == ["AAPL"]
+    assert retired == [], "a like must never take a retirement path"
+    assert [alert.symbol for alert in recorded] == ["AAPL"]
+    assert pane.alert is not None, "the chart the trader is arming stays"
 
 
-def test_a_veto_still_retires_and_is_untouched_by_R9_2(pane, monkeypatch):
+def test_a_veto_still_retires_and_a_like_is_not_a_retirement(pane, monkeypatch):
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
-    advanced: list = []
-    pane.removeTodayRequested.connect(retired.append)
-    pane.likeAdvanceRequested.connect(advanced.append)
+    recorded: list = []
+    pane.vetoRetireRequested.connect(retired.append)
+    pane.likeRecorded.connect(recorded.append)
     _pick_reason(pane.capture_rail)
     assert pane.capture_rail.commit_veto() is not None
     assert [alert.symbol for alert in retired] == ["AAPL"]
-    assert advanced == []
+    assert recorded == []
 
 
 def test_a_like_never_reaches_the_ignore_set_and_the_symbol_still_alerts(panel, monkeypatch):
@@ -1270,13 +1301,15 @@ def test_a_like_never_reaches_the_ignore_set_and_the_symbol_still_alerts(panel, 
         raw_text="[B-TIER] AEP: Bounce confirmed",
     )
     panel._current_review_alert = alert
-    panel._advance_after_like(alert)
+    panel._after_like(alert)
 
     assert "AEP" not in panel._ignored_symbols
 
 
 def test_a_like_leaves_the_symbols_other_queued_alerts_alone(panel, monkeypatch):
-    """Parking swept every queued alert for the symbol; advancing takes one."""
+    """Parking swept every queued alert for the symbol. Packet T1.2 takes even
+    the single advance away: the chart stays and the waiting list is untouched,
+    so the trader can arm an alert on the name they just liked."""
     from ui.models.bounce import BounceAlert
 
     def _alert_for(symbol, trigger):
@@ -1296,12 +1329,12 @@ def test_a_like_leaves_the_symbols_other_queued_alerts_alone(panel, monkeypatch)
     panel._current_review_alert = current
     panel._review_queue = [queued_same, queued_other]
 
-    panel._advance_after_like(current)
+    panel._after_like(current)
 
-    # Exactly one advance: the symbol's second alert is now the current chart,
-    # and nothing was dropped for sharing a symbol with the one just liked.
-    assert panel._current_review_alert is queued_same
-    assert panel._review_queue == [queued_other]
+    # No advance at all now: the liked chart is still up, and nothing was
+    # dropped for sharing a symbol with it.
+    assert panel._current_review_alert is current
+    assert panel._review_queue == [queued_same, queued_other]
     assert "AEP" not in panel._ignored_symbols
 
 
@@ -1322,6 +1355,10 @@ def test_the_panel_records_like_advance_not_remove_today(panel, monkeypatch):
         raw_text="[B-TIER] AEP",
     )
     panel._current_review_alert = alert
-    panel._advance_after_like(alert)
+    panel._after_like(alert)
+    # The NAME is historical and must not change - `review_learning.TAKE_ACTIONS`
+    # keys on the string. Since packet T1.2 it means "liked; the symbol keeps
+    # alerting and the chart stays".
     assert recorded == ["like_advance"]
     assert "remove_today" not in recorded
+    assert panel._current_review_alert is alert
