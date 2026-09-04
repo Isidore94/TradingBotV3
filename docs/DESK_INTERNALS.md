@@ -892,7 +892,9 @@ and became a window in the way once the boards and the pane shared one screen.
   event, a status line, and nothing else. **Its event is still named `like_advance`**
   - `review_learning.TAKE_ACTIONS` keys on the exact string, and renaming it would
   drop every past like out of the take side of the scoreboard. The name is historical
-  and now means "liked; the symbol keeps alerting and the chart stays".
+  and now means "liked; the symbol keeps alerting and the chart stays". **Since the
+  second pass below this is the QUICK like only.**
+
 - **A look is not a shown alert.** A `MANUAL_CHART_TAG` chart holds no place, and
   clicking away from one writes NOTHING - not a re-queue and not a `skip`, because a
   look belongs in no P(take | shown) denominator. `_is_manual_chart_look` is a
@@ -962,6 +964,38 @@ and became a window in the way once the boards and the pane shared one screen.
   in the detail, and an underscore makes that value unrepresentable as a ticker under
   `ui.models.bounce.SYMBOL_RE`, so no symbol-keyed join can ever match it. No scanner
   alert was invented for it.
+
+#### Second pass, 2026-09-04 (packet T2): the claimed like is one double-click
+
+The trader read the T1 tree on the desk and answered:
+
+> pretty close. for the "like and claim" part of the capture tab, a double click of
+> any of the setups there should be sufficient. I shouldnt have to type anything
+> below that box. and then double clicking that box should advance the chart.
+
+So the two like modes part company, and R9.2(a)'s required why is superseded for the
+CLAIMED path as well as the quick one:
+
+- **A claimed like needs no why.** `commit_like` refused an empty one and refocused
+  the field (`_prompt_for_why`, now deleted). It records whatever is in the field,
+  empty included; a whitespace-only why strips to nothing and the row simply carries
+  no `note`. The claim itself is the label a later reader can check, which is what
+  the 2026-08-22 `dislike_reason` failure lacked - the why was the ONLY label there.
+  The trader's own prose is still worth more than anything the machine derives, so
+  the field stays, relabelled "why (optional)".
+- **A claimed like ADVANCES; a quick like still does not.** `_on_captured` reads the
+  row's mode through `like_mode_of` (absence reads as claimed, the P9 rule) and fires
+  `likeAdvanceRequested` or `likeRecorded`. Two signals rather than one with a flag:
+  the host's two answers really are different verbs, and a flag is read wrong once.
+- **An advance is NOT a retirement.** `_advance_after_like` records and calls
+  `_advance_review_queue`, and nothing else: `_ignored_symbols` untouched, so the name
+  keeps alerting and keeps reaching the hourly D1 phone push; no auto-adopted Focus
+  pick dropped; the symbol's other queued alerts keep their places; nothing placed.
+  That is R9.2(b)'s measured harm - 40 of 52 likes parking their own symbol - staying
+  fixed while the movement comes back.
+- **One recorder, two callers.** `_record_like_advance` writes the `like_advance`
+  event for both handlers. Two copies is exactly how the quick and claimed paths
+  would drift, one gaining a field the other never got.
 
 ## The research tee burned a core (2026-09-03 evening)
 

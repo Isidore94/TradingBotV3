@@ -21,9 +21,10 @@ there, and because it shares that section's free-text field: a pass is a note
 with the reason ticked. Trader: "many times I really like this stock for a
 daytrade but it has this ONE issue" - so a pass is NOT a veto and, like a
 note, it never retires the chart. The host decides that, and the host's rule
-is the one in CLAUDE.md: a VETO retires the chart; a LIKE and a NOTE never do
-(trader, 2026-09-04: "i still need time to enter alerts"). A pass is on the
-quiet side of that line.
+is the one in CLAUDE.md: a VETO and a CLAIMED like retire the chart; a QUICK
+like and a NOTE never do (trader, 2026-09-04: "i still need time to enter
+alerts", and, second pass, "double clicking that box should advance the
+chart"). A pass is on the quiet side of that line.
 
 The hypothetical stop was removed from this surface on 2026-08-20 (trader:
 "get rid of hypothetical stop for now its not useful"). Only the CONTROL is
@@ -348,9 +349,10 @@ class CaptureRail(QFrame):
         is opened and costs a click to read, which is the opposite of the
         five-second contract the veto list is built to. Main swing holds nine
         claims, so the same 1-9 digits work here, and double-click and Enter
-        commit it exactly as they do a veto - meaning they ATTEMPT the commit
-        and fall back to asking for the why, the way a veto falls back to
-        asking for a `note_required` reason's note (trader, 2026-08-27).
+        commit it exactly as they do a veto (trader, 2026-08-27). Since packet
+        T2 (2026-09-04) the commit cannot fall back to asking for a why, because
+        there is no longer one to require: *"a double click of any of the setups
+        there should be sufficient."*
 
         The nine main-swing claims keep digits 1-9 exactly as before; the
         claims added on 2026-08-21 (the three post-earnings families and the
@@ -373,17 +375,18 @@ class CaptureRail(QFrame):
             self.setup_list.addItem(item)
             if hotkey:
                 self._claim_hotkeys[hotkey] = claim.setup_id
-        # Double-click and the digit do the same thing, and it is the same
-        # thing the veto's reason list does: try to commit, and ask for the why
-        # when there is not one yet (R9.2's required why is enforced inside
-        # `commit_like`, not by refusing to call it).
+        # Double-click and the digit do the same thing, and since packet T2 that
+        # thing is the WHOLE like: `commit_like` refuses only when no setup is
+        # picked.
         self.setup_list.itemActivated.connect(lambda item: self._claim_picked(item))
         rows = max(1, min(self.setup_list.count(), 14))
         self.setup_list.setMaximumHeight(rows * theme.px(21) + theme.px(10))
         inner.addWidget(self.setup_list)
 
         self.like_note_input = QLineEdit()
-        self.like_note_input.setPlaceholderText("why (required)")
+        # Packet T2 (trader, 2026-09-04): the why is OPTIONAL on a claimed like.
+        # "I shouldnt have to type anything below that box."
+        self.like_note_input.setPlaceholderText("why (optional)")
         self.like_note_input.returnPressed.connect(self.commit_like)
         inner.addWidget(self.like_note_input)
         self.like_button = QPushButton("Like + claim setup")
@@ -844,21 +847,17 @@ class CaptureRail(QFrame):
         return str(item.data(_CLAIM_ROLE) or "") if item is not None else ""
 
     def select_setup(self, setup_id: str) -> None:
-        """Select a claim by id, then try to commit it.
+        """Select a claim by id and commit it. One gesture, nothing else.
 
         This is `select_reason`'s shape, deliberately - trader, 2026-08-27:
         "i want to be able to double click the like and claim the same way i
-        can double click the veto." The veto's gesture does not bypass its note
-        rule; it ATTEMPTS the commit and `commit_veto` diverts to the note
-        field when that reason's ``note_required`` is unmet. So the like's
-        gesture now calls `commit_like`, which already carries the identical
-        guard for the why.
+        can double click the veto."
 
-        The 2026-08-22 rule is therefore untouched - "if I like a chart I
-        should always be prompted with why", and a like with no why still
-        writes nothing and still holds the chart. What changes is only the case
-        where the why is ALREADY typed: the gesture used to send the trader
-        back to a field they had just filled in.
+        Since packet T2 (trader, 2026-09-04: *"a double click of any of the
+        setups there should be sufficient. I shouldnt have to type anything
+        below that box"*) the commit is unconditional: `commit_like` no longer
+        has a why to refuse on, so the digit and the double-click each ARE the
+        whole like. A why typed before the gesture is still carried.
         """
         for row in range(self.setup_list.count()):
             if self.setup_list.item(row).data(_CLAIM_ROLE) == setup_id:
@@ -874,10 +873,6 @@ class CaptureRail(QFrame):
             self.setup_list.setCurrentItem(item)
         self.commit_like()
 
-    def _prompt_for_why(self) -> None:
-        self.like_note_input.setFocus()
-        self._set_status("This like needs a why - type it, then Enter.")
-
     def commit_quick_like(self, note: str = "") -> dict | None:
         """One key: "something about this was good", and nothing else.
 
@@ -886,10 +881,10 @@ class CaptureRail(QFrame):
         'something about this was good' and then we can figure out what about
         it / what's the best entry later."*
 
-        This SUPERSEDES R9.2(a)'s "why is required" for this path only. The
-        claimed path - Alt+K, digit, why, Enter - is untouched, and the reason
-        it still demands a why is unchanged: a claim without one is a label
-        nobody can check later.
+        This SUPERSEDED R9.2(a)'s "why is required" for this path in P9, and
+        packet T2 (2026-09-04) has since done the same for the CLAIMED path -
+        there the CLAIM is the label a later reader can check, which is what a
+        why-less quick like has never had.
 
         Everything a claimed like does to the review, this does too. The chart
         STAYS (packet T1, 2026-09-04: a like no longer retires or advances -
@@ -908,9 +903,8 @@ class CaptureRail(QFrame):
         writes no sidecar: a D1 chart's bars are not what the intraday grade
         needs, and an empty sidecar would be a reference that lies.
 
-        `note` is OPTIONAL and defaults to nothing, which is not a
-        contradiction of R9.2(a): that rule REQUIRES a why on a claimed like,
-        and this path has no claim to justify. The keystroke passes none - one
+        `note` is OPTIONAL and defaults to nothing. That was already true here
+        under P9, and since packet T2 it is true of the claimed path too. The keystroke passes none - one
         key has to stay one key - and the chart button offers a box in case the
         trader has a sentence in mind (trader, 2026-09-02: *"maybe it can have a
         pop up with a note I can put in"*).
@@ -1001,18 +995,28 @@ class CaptureRail(QFrame):
         return row
 
     def commit_like(self) -> dict | None:
+        """The CLAIMED like: pick a setup, and that is the whole gesture.
+
+        Trader, 2026-09-04 (packet T2): *"for the 'like and claim' part of the
+        capture tab, a double click of any of the setups there should be
+        sufficient. I shouldnt have to type anything below that box."*
+
+        This SUPERSEDES R9.2(a)'s required why for the claimed path. The why is
+        still carried when it is typed - it is the same `note` field, and the
+        prose the trader does write is still the most valuable thing in the
+        store - but a gesture that refuses is a gesture that stops being used,
+        and the CLAIM is already a label a reader can check later, which is what
+        the `dislike_reason` failure of 2026-08-22 lacked. A whitespace-only why
+        strips to nothing and the row simply carries no note.
+
+        The only refusal left is the one that has nothing to record: no setup
+        picked.
+        """
         setup_id = self.selected_setup_id()
         if not setup_id:
             self._set_status("Pick a setup to claim (1-9).", ok=False)
             return None
         why = self.like_note_input.text().strip()
-        if not why:
-            # Required, not merely offered. The `dislike` rows are the warning:
-            # 31 of the most information-dense strings the trader ever wrote,
-            # captured under a field nothing insisted on, and discarded.
-            # A like without a why is not a like - the chart stays.
-            self._prompt_for_why()
-            return None
         row = self._record_like(
             claimed_setup_id=str(setup_id),
             note=why,

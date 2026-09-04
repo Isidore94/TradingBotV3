@@ -21,7 +21,13 @@ from ui.models.bounce import (
     is_auto_pick_alert,
 )
 from ui import theme
-from ui.annotations.store import EVENT_LIKE_CLAIM, EVENT_VETO, SURFACE_CHART_REVIEW
+from ui.annotations.store import (
+    EVENT_LIKE_CLAIM,
+    EVENT_VETO,
+    LIKE_MODE_QUICK,
+    SURFACE_CHART_REVIEW,
+    like_mode_of,
+)
 from ui.widgets.arm_bar import ArmBar
 from ui.widgets.empty_state import EmptyState
 from ui.widgets.symbol_snapshot_dialog import SymbolSnapshotWidget
@@ -70,12 +76,15 @@ class AlertChartReview(QWidget):
     # "when i double tap something in the capture window ... i shouldnt get a
     # pop up note box").
     vetoRetireRequested = Signal(object)
-    # (alert) - a LIKE was recorded. A REPORT, not a request: since packet T1
-    # (trader, 2026-09-04: "i still need time to enter alerts etc.") the chart
-    # STAYS, so this asks the host for no movement at all. It was
-    # `likeAdvanceRequested`; a signal called "advance" that does not advance
-    # is a lie.
+    # (alert) - a QUICK like was recorded. A REPORT, not a request: since
+    # packet T1 (trader, 2026-09-04: "i still need time to enter alerts etc.")
+    # the chart STAYS for this mode, so it asks the host for no movement.
     likeRecorded = Signal(object)
+    # (alert) - a CLAIMED like: move to the next chart. Packet T2 (trader,
+    # 2026-09-04, second pass: "double clicking that box should advance the
+    # chart"). Two signals rather than one with a flag, because the host's two
+    # answers really are different verbs and a flag would be read wrong once.
+    likeAdvanceRequested = Signal(object)
     focusRequested = Signal(object)
     skipRequested = Signal(object)
     crossFocusToggled = Signal(object)
@@ -414,7 +423,7 @@ class AlertChartReview(QWidget):
             ref_level_family=family,
         )
 
-    def _on_captured(self, event_type: str, _row: dict) -> None:
+    def _on_captured(self, event_type: str, row: dict) -> None:
         """Capture is a decision, so the badge updates without a re-chart.
 
         A VETO moves on, by trader rule (2026-08-20): "when I click veto it
@@ -426,16 +435,30 @@ class AlertChartReview(QWidget):
         'WHY' I like or dislike something"). The retirement itself - the
         review event, the parking, the advance - is identical.
 
-        A LIKE does NOT move on any more (packet T1, trader 2026-09-04: "the
-        'like' button in the visual chart review should NOT advance the char
-        to the next page because i still need time to enter alerts etc.").
-        It is reported (`likeRecorded`) and the chart stays. It already took
-        an advance-only route rather than the "Not today" verb (R9.2,
-        2026-08-22), because parking a liked name was measurably wrong: over
-        2026-07-24..08-21, 40 of 52 likes put the symbol on the day's ignore
-        list, which also silenced its `d1EventRecorded` - so on an AWAY day,
-        liking a chart quietly dropped that name from the hourly D1 phone
-        push. Liking a setup is the opposite of being done with the symbol.
+        A LIKE takes ONE of two routes, decided by its MODE (packet T2, trader
+        2026-09-04 second pass: "for the 'like and claim' part of the capture
+        tab, a double click of any of the setups there should be sufficient ...
+        and then double clicking that box should advance the chart"):
+
+        * a CLAIMED like has said everything it has to say - the setup is
+          named - so it asks for the advance (`likeAdvanceRequested`);
+        * a QUICK like has named nothing and the trader is still working on
+          the chart, so it is merely reported (`likeRecorded`) and the chart
+          stays (packet T1, 2026-09-04: "the 'like' button in the visual chart
+          review should NOT advance the char to the next page because i still
+          need time to enter alerts etc.").
+
+        Absence of `like_mode` reads as CLAIMED - the P9 rule, because a claim
+        was required until then; `like_mode_of` owns that answer so this is not
+        a second copy of it.
+
+        NEITHER route is the "Not today" verb (R9.2, 2026-08-22): parking a
+        liked name was measurably wrong - over 2026-07-24..08-21, 40 of 52
+        likes put the symbol on the day's ignore list, which also silenced its
+        `d1EventRecorded`, so on an AWAY day liking a chart quietly dropped that
+        name from the hourly D1 phone push. An advance is not a retirement:
+        nothing is parked, nothing is dropped from Focus, and the symbol's other
+        queued alerts keep their places.
 
         A NOTE deliberately does not move on either. It is written ABOUT the
         chart in front of the trader, and a rail that skipped to the next one
@@ -455,7 +478,10 @@ class AlertChartReview(QWidget):
         if event_type == EVENT_VETO and not self.capture_rail.veto_keeps_chart():
             self.vetoRetireRequested.emit(self.alert)
         elif event_type == EVENT_LIKE_CLAIM:
-            self.likeRecorded.emit(self.alert)
+            if like_mode_of(row) == LIKE_MODE_QUICK:
+                self.likeRecorded.emit(self.alert)
+            else:
+                self.likeAdvanceRequested.emit(self.alert)
 
     def _on_veto_day_trade(self, _row: dict) -> None:
         """Vetoed the D1, keeping the name for an M5 trade.

@@ -1012,37 +1012,34 @@ def test_a_letter_key_picks_a_post_earnings_claim(pane, monkeypatch, tmp_path):
 
 
 def test_a_digit_then_a_why_is_the_whole_like(pane, monkeypatch, tmp_path):
-    """Alt+K, a digit, the why, Enter.
+    """Alt+K, a digit - and the why only if the trader wants one.
 
-    Before R9.2 the digit alone committed and the chart was retired as "Not
-    today". The trader asked to be prompted for the why every time
-    (2026-08-22), so the digit now picks and the Enter commits.
+    Rewritten for packet T2 (trader, 2026-09-04: *"I shouldnt have to type
+    anything below that box"*). R9.2's required why held from 2026-08-22 until
+    then: the digit picked, the why was typed, Enter committed. Now the DIGIT
+    commits on its own, and a typed why is carried when it is there.
 
-    Packet T1.2 (2026-09-04) took the last of the movement away: the like is
-    RECORDED and the chart STAYS, because the trader still has alerts to arm on
-    it. The signal is `likeRecorded`; nothing retires.
+    The chart advances (`likeAdvanceRequested`) and nothing retires - a claimed
+    like is a take, not a dismissal.
     """
     import json
 
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
-    recorded: list = []
+    advanced: list = []
     pane.removeTodayRequested.connect(retired.append)
     pane.vetoRetireRequested.connect(retired.append)
-    pane.likeRecorded.connect(recorded.append)
+    pane.likeAdvanceRequested.connect(advanced.append)
     rail = pane.capture_rail
-    rail.select_setup(rail._claim_hotkeys["2"])
-    assert not (tmp_path / "trader_annotations.jsonl").exists(), "the digit alone is not a like"
     rail.like_note_input.setText("reclaimed the band")
-    rail.commit_like()
+    rail.select_setup(rail._claim_hotkeys["2"])
 
     lines = (tmp_path / "trader_annotations.jsonl").read_text(encoding="utf-8").strip().splitlines()
-    assert len(lines) == 1
+    assert len(lines) == 1, "the digit alone commits the claim now"
     assert json.loads(lines[0])["claimed_setup_id"] == rail._claim_hotkeys["2"]
     assert json.loads(lines[0])["note"] == "reclaimed the band"
     assert retired == []
-    assert [alert.symbol for alert in recorded] == ["AAPL"]
-    assert pane.alert is not None, "the chart stays up (packet T1.2)"
+    assert [alert.symbol for alert in advanced] == ["AAPL"]
 
 
 def test_committing_with_nothing_picked_says_so_and_writes_nothing(pane, monkeypatch, tmp_path):
@@ -1061,41 +1058,50 @@ def test_the_compressed_reason_replaced_the_cluttered_one(pane):
 
 
 # --------------------------------------------------------------------------
-# R9.2 (2026-08-22): the LIKE always asks why, and stops parking the symbol
+# R9.2 (2026-08-22) required a why on every like, and packet T2 (2026-09-04)
+# SUPERSEDES that for the CLAIMED like:
 #
-# Measured on the window's two capture sessions: 40 of 52 `like_claim` rows
-# retired the chart AND put the symbol on `alert_center_ignored_symbols.txt`
-# for the rest of the day, because the like was routed through the same
-# `remove_today` verb as a veto. Three consequences, all unintended:
-# a parked symbol stops emitting `d1EventRecorded`, so on an AWAY day a LIKE
-# silently dropped the name from the hourly D1 phone push; the other queued
-# alerts for that symbol went with it; and `review_learning.REJECT_ACTIONS`
-# counted every LIKE as a dismissal.
+#     "for the 'like and claim' part of the capture tab, a double click of any
+#     of the setups there should be sufficient. I shouldnt have to type
+#     anything below that box. and then double clicking that box should advance
+#     the chart."
 #
-# On 2026-08-21 the trader liked AEP short at 10:37:15 ET - the best day trade
-# of that week - and the system's response to recognising it was to file a
-# research row and take the chart away.
+# The why is now OPTIONAL on the claimed path - the claim itself is the label,
+# and a gesture that refuses is a gesture the trader stops using. R9.2's other
+# half stands untouched: a like is never a retirement and never parks the
+# symbol. That half was measured - over 2026-07-24..08-21, 40 of 52
+# `like_claim` rows put the symbol on `alert_center_ignored_symbols.txt`,
+# which silenced its `d1EventRecorded` and dropped the name from the hourly D1
+# phone push on an AWAY day.
 # --------------------------------------------------------------------------
-def test_a_like_with_no_why_writes_nothing_and_holds_the_chart(pane, monkeypatch, tmp_path):
-    """Trader, 2026-08-22: "if I like a chart I should always be prompted with why".
+def test_a_like_with_no_why_still_writes_the_claim_and_advances(pane, monkeypatch, tmp_path):
+    """Rewritten for packet T2. It pinned R9.2's refusal until 2026-09-04.
 
-    An ignorable prompt would recreate the empty-`dislike_reason` failure - 31
-    rows of the most information-dense prose in the store, discarded because
-    nothing required them. So the why is required, and a like without one is
-    not a like at all.
+    The trader picks a setup and nothing else: one `like_claim` row with the
+    claim on it, no why, and the chart advances.
     """
     _show(pane, monkeypatch, "AAPL")
-    moved: list = []
-    pane.removeTodayRequested.connect(moved.append)
-    pane.vetoRetireRequested.connect(moved.append)
-    pane.likeRecorded.connect(moved.append)
+    retired: list = []
+    advanced: list = []
+    pane.removeTodayRequested.connect(retired.append)
+    pane.vetoRetireRequested.connect(retired.append)
+    pane.likeAdvanceRequested.connect(advanced.append)
     pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.like_note_input.setText("")
 
-    assert pane.capture_rail.commit_like() is None
-    assert not (tmp_path / "trader_annotations.jsonl").exists()
-    assert moved == [], "the chart stays until the why is given"
-    assert "why" in pane.capture_rail.status_text().lower()
+    assert pane.capture_rail.commit_like() is not None
+    written = [
+        json.loads(line)
+        for line in (tmp_path / "trader_annotations.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    assert [row["event_type"] for row in written] == ["like_claim"]
+    assert written[0]["claimed_setup_id"]
+    assert written[0].get("note", "") == "", "nothing typed, so no why on the row"
+    assert retired == [], "a like is never a retirement (R9.2's surviving half)"
+    assert [alert.symbol for alert in advanced] == ["AAPL"]
 
 
 def test_a_like_with_a_why_writes_it_into_the_existing_note_field(pane, monkeypatch, tmp_path):
@@ -1113,17 +1119,24 @@ def test_a_like_with_a_why_writes_it_into_the_existing_note_field(pane, monkeypa
     assert written["claimed_setup_id"]
 
 
-def test_a_whitespace_why_is_not_a_why(pane, monkeypatch, tmp_path):
+def test_a_whitespace_why_is_written_as_no_why_at_all(pane, monkeypatch, tmp_path):
+    """Rewritten for packet T2: it used to prove the refusal, now it proves the
+    strip. A why of spaces and tabs is not a why, so the row carries none - but
+    the claim is still recorded, because T2 needs no why."""
     _show(pane, monkeypatch, "AAPL")
     pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.like_note_input.setText("   \t ")
-    assert pane.capture_rail.commit_like() is None
-    assert not (tmp_path / "trader_annotations.jsonl").exists()
+    assert pane.capture_rail.commit_like() is not None
+    written = json.loads(
+        (tmp_path / "trader_annotations.jsonl").read_text(encoding="utf-8").strip().splitlines()[0]
+    )
+    assert written.get("note", "") == "", "whitespace is stripped to nothing"
+    assert written["claimed_setup_id"]
 
 
-def test_the_claim_digit_moves_focus_to_the_why_instead_of_committing(pane, monkeypatch, tmp_path):
-    """Same mechanic as the veto vocabulary's `note_required`: the key selects,
-    the why is typed, Enter commits."""
+def test_the_claim_digit_commits_the_like_on_its_own(pane, monkeypatch, tmp_path):
+    """Rewritten for packet T2. Under R9.2 the digit selected and moved focus to
+    the why; now it selects AND commits, because the why is optional."""
     _show(pane, monkeypatch, "AAPL")
     rail = pane.capture_rail
     rail.setup_list.setCurrentRow(0)
@@ -1131,33 +1144,41 @@ def test_the_claim_digit_moves_focus_to_the_why_instead_of_committing(pane, monk
     rail.setup_list.setCurrentRow(-1)
     rail.select_setup(first)
     assert rail.selected_setup_id() == first, "the digit still picks the claim"
-    assert not (tmp_path / "trader_annotations.jsonl").exists(), "but it does not commit"
-    assert "why" in rail.status_text().lower()
+    written = json.loads(
+        (tmp_path / "trader_annotations.jsonl").read_text(encoding="utf-8").strip().splitlines()[0]
+    )
+    assert written["claimed_setup_id"] == first, "and now it commits it too"
 
 
-def test_picking_a_claim_moves_focus_to_the_why_field(pane, monkeypatch):
-    """The stated mechanic, pinned by observation rather than by hasFocus().
-
-    A widget that was never shown reports no focus, so the assertion is on the
-    call the rail makes - which is the part that has to survive a refactor.
-    """
+def test_picking_a_claim_never_sends_the_trader_to_the_why_field(pane, monkeypatch, tmp_path):
+    """Rewritten for packet T2: *"I shouldnt have to type anything below that
+    box."* The digit and the double-click both commit, and neither hands the
+    keyboard to the why field on the way."""
     _show(pane, monkeypatch, "AAPL")
     rail = pane.capture_rail
+    path = tmp_path / "trader_annotations.jsonl"
     focused: list = []
     monkeypatch.setattr(rail.like_note_input, "setFocus", lambda *a: focused.append(True))
     rail.setup_list.setCurrentRow(0)
     rail.select_setup(rail.selected_setup_id())
-    assert focused == [True]
+    assert focused == [], "the digit commits instead of asking for a why"
+    assert len(path.read_text(encoding="utf-8").strip().splitlines()) == 1
 
     # And the same for a double-click, which must not behave differently.
-    focused.clear()
     rail._claim_picked(rail.setup_list.item(0))
-    assert focused == [True]
+    assert focused == []
+    assert len(path.read_text(encoding="utf-8").strip().splitlines()) == 2
+    assert not hasattr(rail, "_prompt_for_why"), (
+        "nothing calls the required-why prompt any more"
+    )
 
 
-def test_the_why_field_says_it_is_required(pane, monkeypatch):
+def test_the_why_field_says_it_is_optional(pane, monkeypatch):
+    """Rewritten for packet T2: the placeholder said "why (required)"."""
     _show(pane, monkeypatch, "AAPL")
-    assert "required" in pane.capture_rail.like_note_input.placeholderText().lower()
+    placeholder = pane.capture_rail.like_note_input.placeholderText().lower()
+    assert "optional" in placeholder
+    assert "required" not in placeholder
 
 
 # --------------------------------------------------------------------------
@@ -1193,19 +1214,34 @@ def test_double_clicking_a_claim_commits_the_like_once_the_why_is_there(
     assert written["claimed_setup_id"] == rail.setup_list.item(0).data(_CLAIM_ROLE)
 
 
-def test_double_clicking_a_claim_with_no_why_still_refuses_and_prompts(
+def test_double_clicking_a_claim_with_no_why_is_the_whole_gesture(
     pane, monkeypatch, tmp_path
 ):
-    """The 2026-08-22 rule is untouched: the gesture attempts, it does not
-    override. A like without a why is still not a like."""
+    """Rewritten for packet T2 - it pinned the refusal until 2026-09-04.
+
+    Trader: *"a double click of any of the setups there should be sufficient. I
+    shouldnt have to type anything below that box. and then double clicking that
+    box should advance the chart."* One gesture: one row, no why, and the
+    advance signal.
+    """
     _show(pane, monkeypatch, "AAPL")
     rail = pane.capture_rail
     rail.like_note_input.setText("")
+    advanced: list = []
+    pane.likeAdvanceRequested.connect(advanced.append)
 
     rail.setup_list.itemActivated.emit(rail.setup_list.item(0))
 
-    assert not (tmp_path / "trader_annotations.jsonl").exists()
-    assert "why" in rail.status_text().lower()
+    path = tmp_path / "trader_annotations.jsonl"
+    assert path.exists(), "the double-click alone is the whole like now"
+    written = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[0])
+    assert written["event_type"] == "like_claim"
+    assert written["like_mode"] == "claimed"
+    assert written.get("note", "") == ""
+    from ui.widgets.capture_rail import _CLAIM_ROLE
+
+    assert written["claimed_setup_id"] == rail.setup_list.item(0).data(_CLAIM_ROLE)
+    assert [alert.symbol for alert in advanced] == ["AAPL"]
 
 
 def test_the_digit_commits_too_once_the_why_is_there(pane, monkeypatch, tmp_path):
@@ -1256,27 +1292,48 @@ def test_the_like_gesture_is_wired_the_same_shape_as_the_veto(pane, monkeypatch)
         assert vetoed == [True], "and the reason list still calls commit_veto"
 
 
-def test_a_like_is_recorded_and_leaves_the_chart_where_it_is(pane, monkeypatch):
-    """R9.2(b) took the like off the "Not today" verb. Packet T1.2 (trader,
-    2026-09-04) took the movement away as well: "the 'like' button in the visual
-    chart review should NOT advance the char to the next page because i still
-    need time to enter alerts etc."
+def test_a_claimed_like_asks_for_the_advance_and_never_for_a_retirement(pane, monkeypatch):
+    """Rewritten for packet T2. R9.2(b) took the like off the "Not today" verb;
+    T1.2 stopped it moving at all; T2 gives the CLAIMED like its advance back
+    (trader, 2026-09-04: *"double clicking that box should advance the chart"*).
 
-    So the pane REPORTS the like (`likeRecorded`) and asks for nothing. The
+    So the pane asks for the advance (`likeAdvanceRequested`) and never for a
+    retirement - the two are different verbs and only one parks the symbol. The
     review event behind it is still called `like_advance` - historical, because
     `review_learning.TAKE_ACTIONS` keys on that string.
     """
     _show(pane, monkeypatch, "AAPL")
     retired: list = []
-    recorded: list = []
+    advanced: list = []
+    reported: list = []
     pane.removeTodayRequested.connect(retired.append)
     pane.vetoRetireRequested.connect(retired.append)
-    pane.likeRecorded.connect(recorded.append)
+    pane.likeAdvanceRequested.connect(advanced.append)
+    pane.likeRecorded.connect(reported.append)
     pane.capture_rail.setup_list.setCurrentRow(0)
     pane.capture_rail.like_note_input.setText("clean base")
     assert pane.capture_rail.commit_like() is not None
     assert retired == [], "a like must never take a retirement path"
-    assert [alert.symbol for alert in recorded] == ["AAPL"]
+    assert [alert.symbol for alert in advanced] == ["AAPL"]
+    assert reported == [], "the quick like's signal is not the claimed like's"
+
+
+def test_a_quick_like_reports_and_never_asks_for_the_advance(pane, monkeypatch):
+    """The other half of T2's split, at the pane: Alt+L stays put."""
+    _show(pane, monkeypatch, "AAPL")
+    retired: list = []
+    advanced: list = []
+    reported: list = []
+    pane.removeTodayRequested.connect(retired.append)
+    pane.vetoRetireRequested.connect(retired.append)
+    pane.likeAdvanceRequested.connect(advanced.append)
+    pane.likeRecorded.connect(reported.append)
+
+    assert pane.capture_rail.commit_quick_like() is not None
+
+    assert retired == []
+    assert advanced == [], "a quick like never advances (packet T1.2)"
+    assert [alert.symbol for alert in reported] == ["AAPL"]
     assert pane.alert is not None, "the chart the trader is arming stays"
 
 
@@ -1312,10 +1369,12 @@ def test_a_like_never_reaches_the_ignore_set_and_the_symbol_still_alerts(panel, 
     assert "AEP" not in panel._ignored_symbols
 
 
-def test_a_like_leaves_the_symbols_other_queued_alerts_alone(panel, monkeypatch):
+def test_a_quick_like_leaves_the_symbols_other_queued_alerts_alone(panel, monkeypatch):
     """Parking swept every queued alert for the symbol. Packet T1.2 takes even
-    the single advance away: the chart stays and the waiting list is untouched,
-    so the trader can arm an alert on the name they just liked."""
+    the single advance away from the QUICK like: the chart stays and the waiting
+    list is untouched, so the trader can arm an alert on the name they just
+    liked. (Packet T2 gives the CLAIMED like its advance back - that is
+    `_advance_after_like`, tested below.)"""
     from ui.models.bounce import BounceAlert
 
     def _alert_for(symbol, trigger):
@@ -1368,3 +1427,90 @@ def test_the_panel_records_like_advance_not_remove_today(panel, monkeypatch):
     assert recorded == ["like_advance"]
     assert "remove_today" not in recorded
     assert panel._current_review_alert is alert
+
+
+# --------------------------------------------------------------------------
+# Packet T2 (trader, 2026-09-04): the CLAIMED like advances the chart.
+#
+#     "for the 'like and claim' part of the capture tab, a double click of any
+#     of the setups there should be sufficient ... and then double clicking
+#     that box should advance the chart."
+#
+# Two handlers, one shared recorder, so the review event can never drift
+# between them.
+# --------------------------------------------------------------------------
+def _bounce(symbol: str, trigger: str = "Bounce confirmed"):
+    from ui.models.bounce import BounceAlert
+
+    return BounceAlert(
+        time_text="09:31:00",
+        symbol=symbol,
+        side="SHORT",
+        trigger=trigger,
+        timeframe="M5",
+        tag="green",
+        raw_text=f"[B-TIER] {symbol}: {trigger}",
+    )
+
+
+def test_a_claimed_like_advances_to_the_next_waiting_chart(panel, monkeypatch):
+    current = _bounce("AEP")
+    waiting = _bounce("NVDA", "second")
+    panel._current_review_alert = current
+    panel._review_queue = [waiting]
+    monkeypatch.setattr(panel, "_review_movers_only", False, raising=False)
+    monkeypatch.setattr(panel, "_record_review_event", lambda *a, **k: None)
+
+    panel._advance_after_like(current)
+
+    assert panel._current_review_alert is waiting, "the claimed like advances"
+    assert panel._review_queue == [], "the liked chart is not re-queued"
+    assert "AEP" not in panel._ignored_symbols, "a like never parks the symbol"
+
+
+def test_the_claimed_like_advance_leaves_the_symbols_other_alerts_alone(
+    panel, monkeypatch
+):
+    """An advance is not a retirement: a second alert on the same name still
+    waits its turn, exactly as it does after a Skip."""
+    current = _bounce("AEP")
+    same_symbol = _bounce("AEP", "second")
+    other = _bounce("NVDA", "third")
+    panel._current_review_alert = current
+    panel._review_queue = [same_symbol, other]
+    monkeypatch.setattr(panel, "_review_movers_only", False, raising=False)
+    monkeypatch.setattr(panel, "_record_review_event", lambda *a, **k: None)
+
+    panel._advance_after_like(current)
+
+    assert panel._current_review_alert is same_symbol
+    assert panel._review_queue == [other]
+    assert "AEP" not in panel._ignored_symbols
+
+
+def test_both_like_handlers_record_like_advance_through_one_helper(panel, monkeypatch):
+    """The packet's anti-drift rule: one private recorder, two callers."""
+    recorded: list = []
+    monkeypatch.setattr(
+        panel, "_record_review_event", lambda action, **kw: recorded.append(action)
+    )
+    monkeypatch.setattr(panel, "_review_movers_only", False, raising=False)
+
+    alert = _bounce("AEP")
+    panel._current_review_alert = alert
+    panel._review_queue = []
+    panel._after_like(alert)
+    panel._advance_after_like(alert)
+
+    assert recorded == ["like_advance", "like_advance"]
+    assert "remove_today" not in recorded
+    assert "skip" not in recorded
+
+
+def test_the_pane_wires_each_like_signal_to_its_own_panel_handler(panel):
+    from PySide6.QtCore import SignalInstance
+
+    assert isinstance(panel.chart_review.likeAdvanceRequested, SignalInstance)
+    assert isinstance(panel.chart_review.likeRecorded, SignalInstance)
+    assert callable(getattr(panel, "_advance_after_like", None))
+    assert callable(getattr(panel, "_after_like", None))
