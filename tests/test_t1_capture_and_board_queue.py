@@ -249,3 +249,39 @@ def test_the_m5_bar_click_away_still_writes_its_skip(panel, events):
     assert skips[0]["alert"] is first
     assert skips[0]["detail"] == {"reason": "clicked_away_from_m5_alert"}
     assert [a.symbol for a in panel._review_queue] == []
+
+
+# ---------------------------------------------------------------------------
+# fix round 1, ADVISORY 3: looking at a QUEUED name takes it out of the queue
+# ---------------------------------------------------------------------------
+def test_looking_at_a_queued_name_from_a_board_takes_it_out_of_the_queue(panel, events):
+    """This is the intended meaning of "once i look and click off, its done",
+    and it is worth pinning because it is the one case where a board look
+    changes the waiting list at all - by REMOVING the name it charted.
+
+    `_select_review_alert` drops both the outgoing and the incoming symbol from
+    the queue before deciding what to do with the outgoing chart. So looking at
+    AAPL - which was waiting behind MUFG - and then clicking away leaves AAPL
+    out: the trader has now seen it. No `skip` is written for it, because the
+    look is not a shown alert; the alert it REPLACED (MUFG, a D1 row that held
+    a place) still goes back to the head.
+    """
+    panel.add_alert(_d1("MUFG", "SHORT"))
+    panel.add_alert(_d1("AAPL"))
+    panel.add_alert(_d1("XOM"))
+    assert panel._current_review_alert.symbol == "MUFG"
+    assert [a.symbol for a in panel._review_queue] == ["AAPL", "XOM"]
+
+    panel.rrs_snapshot.symbolActivated.emit("AAPL", "LONG")
+
+    assert [a.symbol for a in panel._review_queue] == ["MUFG", "XOM"], (
+        "AAPL left the waiting list because the trader is looking at it"
+    )
+    assert panel._current_review_alert.symbol == "AAPL"
+
+    panel.entry_board.symbolActivated.emit("NVDA", "LONG")
+
+    assert [a.symbol for a in panel._review_queue] == ["MUFG", "XOM"], (
+        "and it did not come back when the look was clicked away from"
+    )
+    assert [action for action, _kw in events if action == "skip"] == []

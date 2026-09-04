@@ -912,6 +912,49 @@ and became a window in the way once the boards and the pane shared one screen.
   the marker only when `add` actually added: an existing unmarked entry is the
   trader's and must not change owner. It **never removes**; the ten-session fade and
   "Not today" own removal.
+- **A look at a name that was WAITING takes it out of the waiting list**, and it
+  does not come back. `_select_review_alert` drops both the outgoing and the
+  incoming symbol from the queue before it decides what to do with the outgoing
+  chart, so charting a queued name from a board and then clicking away leaves it
+  out: the trader has now seen it. That IS *"once i look and click off, its
+  done"* and it is deliberate; the chart the look REPLACED still returns to the
+  head if it held a place, and no `skip` is written for the look either way.
+- **The board must not undo a removal, and `_ignored_symbols` was not enough**
+  (fix round 1, 2026-09-04). That set only ever holds names the "Not today" verb
+  parked. FOUR other doors remove a Focus pick without parking anything - the
+  Focus-review walkthrough (`FOCUS_REVIEW_TAG` → `remove_everywhere`), the Focus
+  list's own remove button (`focus_picks_panel._remove`), the chart's cross-focus
+  toggle (`toggle_m5_focus`) and the Master AVWAP unfavorite - and the next
+  fifteen-minute refresh put every one of them straight back, **re-injecting the
+  name into `longs.txt` with it**. Reproduced end to end: adopt NVDA, remove it
+  through the Focus-review walkthrough, republish the same board, NVDA is back.
+  The record is kept in the **STORE**, not at each door: `FocusPickStore` writes
+  a `(symbol, side, category, session_date)` row under an ADDITIVE `declined` key
+  in `focus_auto_picks.json` on every removal (`remove`, `remove_everywhere`,
+  `clear`, the fade; `remove_if_auto_adopted` delegates to `remove`), and
+  `declined_today` answers for TODAY only - a new session clears the meaning and
+  `_load_declined` prunes older rows so the file cannot grow. Deliberately not
+  conditional on a marker existing: a name the trader typed and then deleted is
+  exactly the name the machine must not put back. Adding the name back by hand
+  clears the decline, because that is the trader changing their mind, and
+  `expire_m5_if_new_day` clears the declines with the markers on the day roll.
+- **Every adopted name is also injected into the shared `longs.txt` /
+  `shorts.txt`.** That is `FocusPickStore._inject_into_shared` and it is
+  pre-existing behaviour of every Focus add, but it is worth saying out loud
+  here because the auto-join is the first path that adds names WITHOUT the
+  trader clicking: it grows BounceBot's intraday scan input. Measured on the
+  live store the day this landed: `longs.txt` 29 names, `shorts.txt` 50, of
+  which 33 + 32 were store-injected m5 entries. A removal un-injects again,
+  which is the other half of why the decline record has to exist.
+- **Adds are BATCHED, one `add_many` per side.** `add_many` rewrites the focus
+  file, the membership file and the pick clocks once for the batch; sixty names
+  through `add` measured 781 ms on the Qt thread, and nothing this panel
+  controls bounds the board's row count. The MARKER stays per name - it carries
+  that row's own strength.
+- **The review event counts who already owned each name** (`already_auto` /
+  `already_trader_owned`, read through `store.is_auto_adopted` exactly as the
+  regime-pause auto-join does). Counts only: a marker is never written over a
+  name the trader typed.
 - **One review event per refresh that adopted or refused anything**,
   `strength_board_auto_focus`, carrying `side_counts`, `adopted`, `refused` and
   `as_of`. `record_review_event` refuses a row with an empty symbol, so this one

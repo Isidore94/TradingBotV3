@@ -320,13 +320,38 @@ def test_the_not_today_button_still_writes_the_uncoded_row_and_opens_the_box(
     assert panel._current_review_alert.symbol == "NVDA"
 
 
-def test_the_two_verbs_share_one_body_rather_than_two_branch_ladders(panel):
-    """Both retirement verbs must exist and be distinct entry points.
+def test_the_two_verbs_share_one_body_rather_than_two_branch_ladders(
+    panel, monkeypatch
+):
+    """Both retirement verbs reach ONE body, and differ only in the flag.
 
     The packet's rule is one private body with a flag (or two thin wrappers),
     never a copied branch ladder - the auto-pick / faded / Focus-review
-    branches are where a copy would drift first.
+    branches each return early, and a copy that lost one would silently start
+    parking symbols that must not be parked.
+
+    Rewritten in fix round 1: the earlier version asserted only that the two
+    names existed and were different objects, which is true of two copied
+    ladders as well - it could not fail for the thing it was named after.
     """
     assert callable(getattr(panel, "_retire_after_veto", None))
     assert callable(getattr(panel, "_remove_review_alert_for_today", None))
     assert panel._retire_after_veto is not panel._remove_review_alert_for_today
+
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        panel,
+        "_retire_review_alert",
+        lambda alert, *, write_not_today_annotation: calls.append(
+            (alert.symbol, write_not_today_annotation)
+        ),
+    )
+
+    alert = _d1_alert("AAPL")
+    panel._retire_after_veto(alert)
+    panel._remove_review_alert_for_today(alert)
+
+    assert calls == [("AAPL", False), ("AAPL", True)], (
+        "both verbs must reach the shared body, and the FLAG is the whole "
+        "difference between them"
+    )

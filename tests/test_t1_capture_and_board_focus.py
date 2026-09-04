@@ -442,3 +442,235 @@ def test_the_click_to_add_path_is_still_the_traders_own_like(desk):
 
     assert service_adds == [("NVDA", "long", "m5", "strength_board")]
     assert store.focus_symbols("long", "m5") == ["NVDA"]
+
+
+# ---------------------------------------------------------------------------
+# fix round 1, BLOCKER: a removal through ANY door survives the next refresh
+#
+# `_ignored_symbols` only ever holds names the "Not today" verb parked. Four
+# other doors remove a Focus pick without parking anything - the Focus-review
+# walkthrough (`remove_everywhere`), the Focus list's own remove button
+# (`service.remove`), the chart's cross-focus toggle (`toggle_m5_focus`) and
+# the Master AVWAP unfavorite (`remove_everywhere`) - and the board put every
+# one of them straight back on the next fifteen-minute refresh, re-injecting
+# the name into longs.txt with it.
+#
+# The record lives in the STORE (`declined_today`), so a fifth door counts for
+# free. Each test below drives a REAL removal path and then republishes.
+# ---------------------------------------------------------------------------
+def _longs_text(tmp_path) -> str:
+    path = tmp_path / "longs.txt"
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def test_the_focus_review_walkthrough_removal_is_not_undone(desk, tmp_path):
+    """`FOCUS_REVIEW_TAG` -> `remove_everywhere`. It never parks the symbol."""
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+    assert "NVDA" in store.focus_symbols("long", "m5")
+    assert "NVDA" in _longs_text(tmp_path)
+
+    focus_service.remove_everywhere("NVDA", origin="focus_review", context="")
+    assert "NVDA" not in panel._ignored_symbols, "this door parks nothing"
+
+    service.publish(FULL_BOARD)
+
+    assert store.focus_symbols("long", "m5") == ["AMD"]
+    assert "NVDA" not in _longs_text(tmp_path), "and it stayed out of longs.txt"
+
+
+def test_the_focus_lists_own_remove_button_is_not_undone(desk, tmp_path):
+    """`focus_picks_panel._remove` -> `service.remove(symbol, side, category)`."""
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+
+    assert focus_service.remove("NVDA", "long", "m5") is True
+
+    service.publish(FULL_BOARD)
+
+    assert store.focus_symbols("long", "m5") == ["AMD"]
+    assert "NVDA" not in _longs_text(tmp_path)
+
+
+def test_the_cross_focus_toggle_removal_is_not_undone(desk, tmp_path):
+    """The chart's own toggle: `AlertCenterPanel.toggle_m5_focus`, off."""
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+
+    assert panel.toggle_m5_focus("NVDA", "LONG") is False
+
+    service.publish(FULL_BOARD)
+
+    assert store.focus_symbols("long", "m5") == ["AMD"]
+    assert "NVDA" not in _longs_text(tmp_path)
+
+
+def test_the_master_avwap_unfavorite_is_not_undone(desk, tmp_path):
+    """`master_avwap_panel` unfavorite -> `remove_everywhere` with its origin."""
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+
+    assert focus_service.remove_everywhere("XOM", origin="setups", context="") == 1
+
+    service.publish(FULL_BOARD)
+
+    assert store.focus_symbols("short", "m5") == []
+    shorts = tmp_path / "shorts.txt"
+    assert "XOM" not in (
+        shorts.read_text(encoding="utf-8") if shorts.exists() else ""
+    )
+
+
+def test_clearing_the_side_is_not_undone(desk):
+    """`focus_picks_panel.clear_all` -> `service.clear(side, category)`."""
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+
+    assert focus_service.clear("long", "m5") == 2
+
+    service.publish(FULL_BOARD)
+
+    assert store.focus_symbols("long", "m5") == []
+    assert store.focus_symbols("short", "m5") == ["XOM"], "the short side is untouched"
+
+
+def test_a_faded_pick_is_not_re_adopted_the_same_session(desk):
+    """The ten-session fade is a removal too, and the board must respect it."""
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+    row = {"symbol": "NVDA", "side": "long", "category": "m5", "owner": "auto"}
+
+    store._fade_one("NVDA", "long", "m5", row)
+    assert "NVDA" not in store.focus_symbols("long", "m5")
+
+    service.publish(FULL_BOARD)
+
+    assert store.focus_symbols("long", "m5") == ["AMD"]
+
+
+def test_the_refusal_names_the_removal_in_the_review_event(desk, monkeypatch):
+    """A refusal is NAMED, so the trader can see why a board name is absent."""
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+    written: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        panel, "_record_review_event", lambda action, **kw: written.append((action, kw))
+    )
+
+    focus_service.remove("NVDA", "long", "m5")
+    service.publish(FULL_BOARD)
+
+    rows = [kw for action, kw in written if action == "strength_board_auto_focus"]
+    assert len(rows) == 1
+    refused = (rows[0].get("detail") or {}).get("refused") or []
+    assert any("NVDA" in str(item) and "took it off" in str(item) for item in refused)
+
+
+def test_a_decline_from_a_PRIOR_session_does_not_block_adoption(desk):
+    """"I took it off today" says nothing about tomorrow.
+
+    The file is rewritten with yesterday's `session_date` and RELOADED, so this
+    exercises the prune in `_load_declined` rather than an in-memory shortcut -
+    which is also the proof the file cannot grow session after session.
+    """
+    import json
+    from datetime import date, timedelta
+
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+    focus_service.remove("NVDA", "long", "m5")
+    assert store.declined_today("NVDA", "long", "m5") is True
+
+    path = store._auto_pick_path
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    assert payload["declined"], "the decline was written to focus_auto_picks.json"
+    for row in payload["declined"].values():
+        row["session_date"] = yesterday
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    store.reload()
+
+    assert store.declined_today("NVDA", "long", "m5") is False
+    assert store.declined_entries() == {}, "and yesterday's rows are PRUNED, not kept"
+
+    service.publish(FULL_BOARD)
+
+    assert sorted(store.focus_symbols("long", "m5")) == ["AMD", "NVDA"]
+
+
+def test_putting_the_name_back_by_hand_clears_the_decline(desk):
+    """A trader who re-adds the name has changed their mind about it."""
+    panel, store, focus_service, _adds = desk
+    service = _attach(desk)
+    focus_service.remove("NVDA", "long", "m5")
+    assert store.declined_today("NVDA", "long", "m5") is True
+
+    assert focus_service.add("NVDA", "long", "m5", origin="test") is True
+
+    assert store.declined_today("NVDA", "long", "m5") is False
+
+
+def test_the_declined_key_is_additive_and_the_markers_are_unchanged(desk):
+    """`focus_auto_picks.json` keeps `picks` exactly as it was; `declined` is
+    a new sibling, so a reader that only knows `picks` is unaffected."""
+    import json
+
+    panel, store, focus_service, _adds = desk
+    _attach(desk)
+    focus_service.remove("NVDA", "long", "m5")
+
+    payload = json.loads(store._auto_pick_path.read_text(encoding="utf-8"))
+    assert set(payload) == {"market_date", "picks", "declined"}
+    assert "AMD|long" in payload["picks"], "the surviving marker is untouched"
+    assert "NVDA|long" in payload["declined"]
+    assert payload["declined"]["NVDA|long"]["category"] == "m5"
+
+
+# ---------------------------------------------------------------------------
+# fix round 1, ADVISORY 1 + 4: one write per side, and the ownership counts
+# ---------------------------------------------------------------------------
+def test_the_adds_are_batched_one_call_per_side(desk, monkeypatch):
+    """`add_many` rewrites the focus file, the membership file and the pick
+    clocks ONCE for the batch. Sixty names through `add` measured 781 ms on the
+    Qt thread and the board's row count is not bounded by this panel."""
+    panel, store, _service, _adds = desk
+    batches: list[tuple] = []
+    real = store.add_many
+
+    def _spy(symbols, side, category="m5", **kwargs):
+        batches.append((tuple(symbols), side, category))
+        return real(symbols, side, category, **kwargs)
+
+    monkeypatch.setattr(store, "add_many", _spy)
+    monkeypatch.setattr(
+        store, "add", lambda *a, **k: pytest.fail("the auto-join must not add one by one")
+    )
+
+    _attach(desk)
+
+    assert batches == [(("NVDA", "AMD"), "long", "m5"), (("XOM",), "short", "m5")]
+    assert _focus(store) == {"long": ["AMD", "NVDA"], "short": ["XOM"]}
+
+
+def test_the_review_event_counts_who_already_owned_the_name(desk, monkeypatch):
+    """Counts only - a marker is NEVER written over a name the trader typed."""
+    panel, store, _service, _adds = desk
+    assert store.add("AMD", "long", "m5") is True  # the trader's own
+    written: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        panel, "_record_review_event", lambda action, **kw: written.append((action, kw))
+    )
+
+    service = _attach(desk)
+    service.publish(FULL_BOARD)  # second pass: NVDA/XOM are now already_auto
+
+    rows = [kw for action, kw in written if action == "strength_board_auto_focus"]
+    assert len(rows) == 2
+    first = rows[0].get("detail") or {}
+    assert first.get("already_trader_owned") == 1, "AMD was the trader's"
+    assert first.get("already_auto") == 0
+    second = rows[1].get("detail") or {}
+    assert second.get("already_auto") == 2, "NVDA and XOM are the machine's now"
+    assert second.get("already_trader_owned") == 1
+    assert second.get("adopted") == []
+    assert store.is_auto_adopted("AMD", "long", "m5") is False

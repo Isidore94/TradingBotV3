@@ -727,14 +727,39 @@ only**: AWAY stages nothing here and EVENING/OFF do nothing, so the auto-mode
 matrix is unchanged. It **skips any symbol in `_ignored_symbols`**, so the next
 refresh cannot undo a "Not today".
 
-The write is the MACHINE's, so it goes through the STORE - `store.add` then
-`store.mark_auto_adopted` - and **never `FocusService.add`**, which would forge a
+**And it skips any name the trader took OFF a focus side today, through any
+door** (fix round 1, 2026-09-04). `_ignored_symbols` holds only what the "Not
+today" verb parked; the Focus-review walkthrough, the Focus list's own remove
+button, the chart's cross-focus toggle and the Master AVWAP unfavorite all remove
+without parking, and every one of them was undone by the next fifteen-minute
+refresh - with the name re-injected into `longs.txt`. The record is kept in the
+STORE rather than at each door: `FocusPickStore` writes a
+`(symbol, side, category, session_date)` row under an ADDITIVE `declined` key in
+`focus_auto_picks.json` on `remove`, `remove_everywhere`, `clear` and the fade,
+and `declined_today` answers for TODAY only (older rows are pruned on load, so
+the file cannot grow, and a new session starts clean). It is deliberately not
+conditional on an auto-pick marker existing - a name the trader typed and then
+deleted is exactly the name the machine must not put back - and adding the name
+back by hand clears it. A fifth removal door counts for free.
+
+The write is the MACHINE's, so it goes through the STORE - one
+`store.add_many` per SIDE (sixty names through `add` measured 781 ms on the Qt
+thread) then `store.mark_auto_adopted` per adopted name - and **never
+`FocusService.add`**, which would forge a
 trader "like" into `pick_feedback.jsonl`. The marker is written only when `add`
 actually added: an existing unmarked entry is the trader's and must not change
 owner. It **never removes** - a name that leaves the board stays on Focus, and
 the ten-session fade and "Not today" own removal - and it is idempotent per
 refresh. One `strength_board_auto_focus` review event per refresh that adopted
-or refused anything, and one status line when something was adopted.
+or refused anything - carrying `side_counts`, `adopted`, `refused` and the
+`already_auto` / `already_trader_owned` counts - and one status line when
+something was adopted.
+
+**Every adopted name is injected into the shared `longs.txt` / `shorts.txt`** by
+`FocusPickStore._inject_into_shared`, exactly as every Focus add always has been.
+That is pre-existing, and it is stated here because this is the first path that
+adds names without the trader clicking: the auto-join grows BounceBot's intraday
+scan input.
 
 The **click-to-add path is unchanged**: a click on a row IS the trader liking the
 name, so `_add_symbols` still goes through the service and still writes the

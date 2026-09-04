@@ -1041,6 +1041,34 @@ look and click off, its done."*
   about the board rather than a name, and the underscore makes the value
   unrepresentable as a ticker under `SYMBOL_RE`.
 
+**Fix round 1** (reviewer NO-GO, one blocker + five advisories, all addressed).
+
+- **BLOCKER - the auto-join undid a removal.** `_ignored_symbols` only holds names
+  the "Not today" verb parked, so the Focus-review walkthrough, the Focus list's
+  remove button, the cross-focus toggle and the Master AVWAP unfavorite were all
+  put back by the next refresh - **and the name was re-injected into `longs.txt`
+  with it**. Fixed in the STORE, so every door counts without touching any of
+  them: `FocusPickStore` records `(symbol, side, category, session_date)` under an
+  ADDITIVE `declined` key in `focus_auto_picks.json` on `remove`,
+  `remove_everywhere`, `clear` and the fade; `declined_today` answers for today
+  only, `_load_declined` prunes older rows, adding the name back by hand clears
+  it, and the day roll clears the declines with the markers. The auto-join skips a
+  declined name and names it in `refused` as "(you took it off today)".
+- **Adds are batched**, one `add_many` per side (60 names one at a time measured
+  781 ms on the Qt thread); the marker stays per name.
+- **The review event counts `already_auto` / `already_trader_owned`** through
+  `store.is_auto_adopted` - counts only, never a re-mark.
+- **Pinned and documented, not changed:** looking at a name that was WAITING takes
+  it out of the waiting list and it does not come back (that IS "once i look and
+  click off, its done"); and **every adopted name is injected into the shared
+  `longs.txt` / `shorts.txt`**, as every Focus add always has been, so the
+  auto-join grows BounceBot's intraday scan input (live that day: longs.txt 29,
+  shorts.txt 50, 33 + 32 store-injected m5 entries).
+- `test_the_two_verbs_share_one_body_rather_than_two_branch_ladders` proved only
+  that two differently-named methods existed - true of two copied ladders too. It
+  now patches `_retire_review_alert` and shows both verbs reach it with the right
+  flag.
+
 Full suite with the nightly AI lock probed FREE and nothing deselected: **6577
 passed, 1 skipped, 72 subtests, exit 0** (+43). `ruff` clean, smoke 7/7, source
 `--selftest` 74/74. No packaging trigger. **Live gate #58.**

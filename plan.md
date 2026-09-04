@@ -607,9 +607,16 @@ letters T1/T3/T4 above are a DIFFERENT thing; this is the capture-and-board pack
    untouched.
 4. **The TC2000 board's parity rows auto-join M5 Focus.** DESK only, empty
    `failed_floors` only, the one adoption gate re-run on the row's own numbers,
-   `_ignored_symbols` skipped, through the STORE + `mark_auto_adopted` and never
-   `FocusService.add`, never removes, idempotent, one `strength_board_auto_focus`
-   review event per refresh.
+   `_ignored_symbols` skipped, through the STORE (one `add_many` per side) +
+   `mark_auto_adopted` and never `FocusService.add`, never removes, idempotent,
+   one `strength_board_auto_focus` review event per refresh.
+5. **Fix round 1 (reviewer NO-GO, blocker):** the auto-join also skips any name
+   the trader took OFF a focus side today through ANY door.
+   `FocusPickStore.declined_today`, recorded by the STORE on `remove`,
+   `remove_everywhere`, `clear` and the fade under an additive `declined` key in
+   `focus_auto_picks.json`, same-session only and pruned on load.
+   `_ignored_symbols` alone let four other removal doors be undone by the next
+   fifteen-minute refresh, re-injecting the name into `longs.txt` with it.
 
 **Live gate (#58):** one DESK session where a double-click on a veto reason
 retires the chart with no box and `trader_annotations.jsonl` gains ONE row; a like
@@ -618,7 +625,9 @@ leaves the chart up and the trader arms an alert on it before moving on;
 TC2000 boards leave "queue clear" reading "queue clear"; and after the next
 15-minute Strength refresh the TC2000 parity names are on M5 Focus with markers in
 `focus_auto_picks.json`, and a "Not today" on one of them does not come back on
-the refresh after that.
+the refresh after that. **Fix round 1 adds one clause:** remove one of the
+adopted names from the Focus list itself (not through "Not today") and confirm it
+is still gone after the next refresh, and that `longs.txt` did not regain it.
 
 ## Phase 0.15 — Desk assessment packets (2026-09-03 evening, trader-authorized)
 

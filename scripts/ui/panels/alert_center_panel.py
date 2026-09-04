@@ -5893,7 +5893,14 @@ class AlertCenterPanel(QFrame):
         * the ONE adoption gate is re-run on the row's own numbers (the board
           is up to fifteen minutes old), and UNKNOWN fails as it always does;
         * a symbol the trader said "Not today" to this session is skipped, so
-          the next refresh cannot undo their answer;
+          the next refresh cannot undo their answer - and so is a symbol they
+          took OFF a focus side today through ANY door (``store.declined_today``,
+          fix round 1). ``_ignored_symbols`` only ever holds names the "Not
+          today" verb parked; the Focus-review walkthrough, the Focus list's own
+          remove button, the cross-focus toggle and the Master AVWAP panel all
+          remove without parking, and every one of them was being undone by the
+          next fifteen-minute refresh. The record is kept in the STORE, so a
+          fifth removal door counts for free;
         * DESK only. AWAY stages nothing here and EVENING/OFF do nothing - the
           auto-mode matrix is unchanged;
         * the write goes through the STORE plus an auto-pick marker, NEVER
@@ -5924,10 +5931,15 @@ class AlertCenterPanel(QFrame):
         import focus_adoption_gate
 
         as_of = str(board.get("as_of") or "")
+        declined_today = getattr(store, "declined_today", None)
         adopted: list[str] = []
         refused: list[str] = []
         side_counts = {"long": 0, "short": 0}
+        already_auto = 0
+        already_trader_owned = 0
         for side in ("long", "short"):
+            strengths: dict[str, object] = {}
+            wanted: list[str] = []
             for row in board.get(side) or []:
                 if not isinstance(row, dict):
                     continue
@@ -5940,6 +5952,14 @@ class AlertCenterPanel(QFrame):
                 if symbol in self._ignored_symbols:
                     refused.append(f"{symbol} (you said not today)")
                     continue
+                if callable(declined_today):
+                    try:
+                        taken_off = bool(declined_today(symbol, side, "m5"))
+                    except Exception:
+                        taken_off = False
+                    if taken_off:
+                        refused.append(f"{symbol} (you took it off today)")
+                        continue
                 passes, reason = focus_adoption_gate.passes_focus_adoption_gate(
                     side,
                     row.get("last"),
@@ -5951,30 +5971,69 @@ class AlertCenterPanel(QFrame):
                     # Named, not counted - the same way `_add_all` names one.
                     refused.append(f"{symbol} ({reason})")
                     continue
-                try:
-                    added = bool(store.add(symbol, side, "m5"))
-                    if added:
-                        marker_writer = getattr(store, "mark_auto_adopted", None)
-                        if callable(marker_writer):
-                            marker_writer(
-                                symbol,
-                                side,
-                                "m5",
-                                staged_at=as_of,
-                                reason=(
-                                    f"M5 Strength Board (TC2000) {side} row, "
-                                    f"strength {row.get('strength')}"
-                                ),
-                            )
-                        adopted.append(symbol)
-                        side_counts[side] += 1
-                except Exception:
-                    logging.warning(
-                        "Strength board could not place %s on M5 Focus.",
-                        symbol,
-                        exc_info=True,
-                    )
-                    refused.append(f"{symbol} (add failed)")
+                strengths[symbol] = row.get("strength")
+                wanted.append(symbol)
+            if not wanted:
+                continue
+            # ONE write per side, not one per name. `add_many` rewrites the
+            # focus file, the membership file and the pick clocks once for the
+            # batch; sixty names through `add` measured 781 ms on the Qt thread
+            # and the board's row count is not bounded by anything this panel
+            # controls. The MARKER stays per name - it carries that row's own
+            # strength, and `mark_auto_adopted` is a dict write plus a save.
+            try:
+                added = list(store.add_many(wanted, side, "m5"))
+            except Exception:
+                logging.warning(
+                    "Strength board could not place %s on M5 Focus.",
+                    ", ".join(wanted),
+                    exc_info=True,
+                )
+                refused.extend(f"{symbol} (add failed)" for symbol in wanted)
+                continue
+            marker_writer = getattr(store, "mark_auto_adopted", None)
+            for symbol in added:
+                if callable(marker_writer):
+                    try:
+                        marker_writer(
+                            symbol,
+                            side,
+                            "m5",
+                            staged_at=as_of,
+                            reason=(
+                                f"M5 Strength Board (TC2000) {side} row, "
+                                f"strength {strengths.get(symbol)}"
+                            ),
+                        )
+                    except Exception:
+                        # An evidence store never costs the event it records:
+                        # a lost marker reads as the trader's own name, which
+                        # is the safe direction (packet R2).
+                        logging.warning(
+                            "Strength board could not mark %s as auto-adopted.",
+                            symbol,
+                            exc_info=True,
+                        )
+                adopted.append(symbol)
+                side_counts[side] += 1
+            # Everything asked for and not added was already there. Which KIND
+            # of "already there" is the interesting number - the regime-pause
+            # auto-join distinguishes them the same way - and it is a COUNT
+            # only: no marker is ever written over a name the trader typed.
+            reader = getattr(store, "is_auto_adopted", None)
+            for symbol in wanted:
+                if symbol in added:
+                    continue
+                ours = False
+                if callable(reader):
+                    try:
+                        ours = bool(reader(symbol, side, "m5"))
+                    except Exception:
+                        ours = False
+                if ours:
+                    already_auto += 1
+                else:
+                    already_trader_owned += 1
         if not adopted and not refused:
             return
         self._record_review_event(
@@ -5984,6 +6043,8 @@ class AlertCenterPanel(QFrame):
                 "side_counts": side_counts,
                 "adopted": adopted,
                 "refused": refused,
+                "already_auto": already_auto,
+                "already_trader_owned": already_trader_owned,
                 "as_of": as_of,
             },
         )
