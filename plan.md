@@ -584,6 +584,20 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+## Phase 0.17 — Earnings-anchor bridge (2026-09-04) — BUILT, live gate #59 owed
+
+Trader-authorized 2026-09-04 by their own packet (the swing simulator follow-up). The D1
+scan appends every symbol's cached current and previous earnings anchor to
+`earnings_avwap_anchors.csv` through `append_anchor_candidates`, so the warehouse's
+`anchor_instance` covers the scanned universe instead of 7 symbols. Shadow-only
+additive; `anchors_from_bronze` and `build_anchor_instances` untouched.
+
+**Owed**: gate #59 (next scan writes the rows; next nightly build creates ~2,200
+`anchor_instance` rows and non-null `feature_snapshot_daily` bands; then a forced
+`recompute-outcomes` re-grades `swing_house_v1`). **Not built, separate decision**: the
+investigation's recommendation 4 (the simulator returning `None` instead of a no-target
+run when bands are missing) - that changes outcome semantics and needs its own packet.
+
 ## Phase 0.16 — Capture and board rules (packets T1 + T2, 2026-09-04) — BUILT, live gate #58 owed
 
 Trader-authorized 2026-09-04 in their own words (quoted in full in

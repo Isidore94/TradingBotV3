@@ -128,6 +128,113 @@ def evaluate_setup_tracker_purity(
     )
 
 
+# ---------------------------------------------------------------------------
+# Earnings-anchor bridge to the anchors CSV (research warehouse evidence).
+#
+# The scan computes a current and a previous earnings anchor date for every
+# symbol it processes and keeps them in two JSON caches. The research
+# warehouse's bronze layer reads ONLY `earnings_avwap_anchors.csv`
+# (`research_warehouse.cli.anchors_from_bronze`), which until 2026-09-04 held
+# 14 hand-imported rows - so `anchor_instance` had 7 symbols, 234 of 27,579
+# `feature_snapshot_daily` rows carried AVWAP bands, and `swing_house_v1`
+# graded 0/257 (docs/SWING_SIMULATOR_INVESTIGATION_2026-09-04.md). This step
+# appends the cached dates through the existing `append_anchor_candidates`
+# bridge (de-duplicated on (ticker, anchor_date), append-only, new rows at the
+# END so bronze's line-offset watermark picks up exactly the new ones) so the
+# next nightly build sees every scanned symbol. SHADOW-ONLY ADDITIVE: no
+# detector, score, alert, Focus, watchlist or review_policy.json reads this
+# CSV on a live path; the only in-tree reader besides bronze is
+# `run_anchor_watchlist_scan`, which has no caller. A failure here is logged
+# and never fails the scan.
+# ---------------------------------------------------------------------------
+
+EARNINGS_ANCHOR_BRIDGE_SOURCE = "scanner_earnings_cache"
+
+
+def build_earnings_anchor_bridge_candidates(
+    curr_cache: dict,
+    prev_cache: dict,
+    longs=(),
+    shorts=(),
+) -> list:
+    """One `EarningsGapAnchorCandidate` per (symbol, anchor date) in the caches.
+
+    Only `ticker` and `anchor_date` matter to the warehouse join; the gap /
+    price / volume / cap fields the scanner does not compute for an anchor are
+    left empty or zero rather than guessed. `side` is the symbol's watchlist
+    membership (SHORT only when it is on a short list and no long list), so it
+    records a fact rather than a default. Dates that are not ISO days are
+    skipped, never coerced.
+    """
+    long_set = {str(s).strip().upper() for s in (longs or ())}
+    short_set = {str(s).strip().upper() for s in (shorts or ())}
+    seen = set()
+    candidates = []
+    for cache in (curr_cache or {}, prev_cache or {}):
+        for symbol, raw in sorted(cache.items()):
+            ticker = str(symbol or "").strip().upper()
+            anchor_iso = str(raw or "").strip()[:10]
+            if not ticker or not anchor_iso:
+                continue
+            try:
+                anchor_iso = date.fromisoformat(anchor_iso).isoformat()
+            except ValueError:
+                continue
+            key = (ticker, anchor_iso)
+            if key in seen:
+                continue
+            seen.add(key)
+            side = "SHORT" if (ticker in short_set and ticker not in long_set) else "LONG"
+            candidates.append(
+                EarningsGapAnchorCandidate(
+                    ticker=ticker,
+                    anchor_date=anchor_iso,
+                    gap_date="",
+                    earnings_date=anchor_iso,
+                    release_session="",
+                    gap_atr_multiple=0.0,
+                    price=0.0,
+                    avg_volume20=0,
+                    market_cap=0,
+                    side=side,
+                    notes="scanner earnings-anchor cache",
+                    source=EARNINGS_ANCHOR_BRIDGE_SOURCE,
+                )
+            )
+    return candidates
+
+
+def bridge_earnings_anchor_caches_to_csv(
+    curr_cache: dict,
+    prev_cache: dict,
+    longs=(),
+    shorts=(),
+    path=None,
+) -> int:
+    """Append the cached earnings anchors to the anchors CSV; return rows added.
+
+    Evidence never costs the thing it records: any failure is logged and 0 is
+    returned, and the scan's own outputs are already on disk by the time this
+    runs.
+    """
+    try:
+        candidates = build_earnings_anchor_bridge_candidates(curr_cache, prev_cache, longs, shorts)
+        if not candidates:
+            return 0
+        kwargs = {"path": path} if path is not None else {}
+        added = int(append_anchor_candidates(candidates, **kwargs) or 0)
+        logging.info(
+            "Earnings-anchor bridge: %s cached anchor(s) for %s symbol(s); %s new row(s) appended to the anchors CSV.",
+            len(candidates),
+            len({c.ticker for c in candidates}),
+            added,
+        )
+        return added
+    except Exception:
+        logging.exception("Earnings-anchor bridge failed (scan result unaffected).")
+        return 0
+
+
 def _log_phase_duration(label: str, since: float) -> float:
     """Log wall-clock seconds elapsed for a run_master phase; returns a fresh mark."""
     now = time.perf_counter()
@@ -2765,6 +2872,8 @@ def _run_master_impl(
 
     save_json(CURRENT_CACHE_FILE, curr_cache)
     save_json(PREV_CACHE_FILE, prev_cache)
+    # Warehouse evidence only (see bridge_earnings_anchor_caches_to_csv).
+    bridge_earnings_anchor_caches_to_csv(curr_cache, prev_cache, longs, shorts)
     save_history(history)
     save_json(AI_STATE_FILE, ai_state)
 

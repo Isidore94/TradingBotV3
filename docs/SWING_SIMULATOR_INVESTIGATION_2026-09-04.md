@@ -129,4 +129,18 @@ partials, and trails.
 
 ---
 
-*Read-only investigation. No code, data, detector, score, alert or policy was changed.*
+## Resolution (2026-09-04, ~14:30 PT)
+
+Recommendation 1 answered: the bands were null because `anchor_instance` had 14 rows.
+The scan computed a current and a previous earnings anchor for every symbol and kept
+them only in `earnings_cache.json` / `prev_earnings_cache.json`; the warehouse reads
+only `earnings_avwap_anchors.csv`, which held 14 hand-imported rows from March.
+**Built**: `runner.bridge_earnings_anchor_caches_to_csv` appends the cached anchors to
+that CSV after every scan through the previously uncalled `append_anchor_candidates`
+(append-only, de-duplicated). Recommendation 3 is gate #59 in
+`CURRENT_CHECKPOINT.md`. Recommendation 4 (fallback returns `None`) is NOT built.
+
+---
+
+*The investigation above was read-only. The resolution section records the one
+code change it led to; no detector, score, alert or policy was changed.*

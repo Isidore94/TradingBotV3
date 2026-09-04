@@ -843,7 +843,11 @@ which is evidence and must not be loaded as context.
   `observed_at` and writes `rows_dropped` on the manifest line.
 - Phase 4: versioned XNYS sessions and deterministic M15/M30/H1/W1 aggregation.
 - Phase 5: point-in-time daily/intraday feature snapshots and anchor instances using
-  champion calculations, including AVWAP parity at 1e-9.
+  champion calculations, including AVWAP parity at 1e-9. **Anchor instances come from
+  `earnings_avwap_anchors.csv` (bronze wrap) and nothing else; since 2026-09-04 the D1
+  scan appends every symbol's cached current and previous earnings anchor to that CSV
+  (`runner.bridge_earnings_anchor_caches_to_csv`, append-only, de-duplicated) - before
+  that the CSV held 14 hand-imported rows and the swing bands were 99% null.**
 - Phase 6: deterministic occurrence/revision/episode identity and versioned swing and
   intraday outcome simulation with costs, ambiguity bounds, partials, time stops,
   slippage, and open/truncated states.
@@ -998,6 +1002,26 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-04 - Earnings-anchor bridge: the scan feeds the anchors CSV the warehouse reads
+
+`swing_house_v1` graded 0/257 because `feature_snapshot_daily` had AVWAP bands on 234 of
+27,579 rows, because `anchor_instance` had 14 rows, because `earnings_avwap_anchors.csv`
+- the ONLY source `cli.anchors_from_bronze` reads - held 14 hand-imported rows while the
+scan's current/previous earnings anchors lived only in two JSON caches
+(`docs/SWING_SIMULATOR_INVESTIGATION_2026-09-04.md`).
+
+- `master_avwap_lib/runner.py`: `build_earnings_anchor_bridge_candidates` and
+  `bridge_earnings_anchor_caches_to_csv`, called once in `_run_master_impl` right after
+  the two cache saves. One `EarningsGapAnchorCandidate` per (ticker, ISO anchor date)
+  across both caches through the existing, previously uncalled `append_anchor_candidates`
+  (append-only, de-duplicated on ticker + anchor_date, new rows at the END). `side` is
+  watchlist membership; gap/price/volume/cap are empty or zero; `source` is
+  `scanner_earnings_cache`. A failure is logged and never fails the scan.
+- Shadow-only additive: nothing live reads the CSV (`run_anchor_watchlist_scan` is its
+  only other reader and has no caller). `anchors_from_bronze`, `build_anchor_instances`,
+  every detector, score, alert and Focus path unchanged.
+- `tests/test_earnings_anchor_bridge.py` (11). Live gate #59.
 
 ### 2026-09-04 - Packet T2: a claimed like is one double-click, and it advances
 
