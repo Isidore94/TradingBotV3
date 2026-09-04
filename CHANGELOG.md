@@ -266,7 +266,17 @@ which is evidence and must not be loaded as context.
   yfinance over `universe_all.txt`, **zero IB traffic**, every column click-to-sort
   with blanks last, a row select charting through the desk's one snapshot popup, and
   every add re-running the M5 Focus adoption gate at click time with the refusal
-  reason named. **Since 2026-08-31 it is a collapsible section under the Desk's
+  reason named. **Since 2026-09-04 its TC2000 parity rows also join M5 Focus by
+  themselves** (packet T1.4, trader: *"I want all shorts and longs on the RS/RW
+  board TC2000 to bne auto added to the M5 focus picks"*):
+  `_auto_adopt_strength_board` runs on `boardChanged` and once at attach, over
+  rows with an EMPTY `failed_floors` only, re-running the one adoption gate on
+  each row's own numbers (UNKNOWN fails), skipping any symbol in
+  `_ignored_symbols` so a "Not today" survives the next refresh, **DESK only**,
+  writing through the STORE plus `mark_auto_adopted` and **never
+  `FocusService.add`** - a machine placement is not a trader like. It never
+  removes, never re-marks an existing entry, and writes one
+  `strength_board_auto_focus` review event per refresh. **Since 2026-08-31 it is a collapsible section under the Desk's
   Strength window rather than a left-nav page** (trader request): starting closed so
   it costs the charts nothing, sides stacked vertically for the column, its own
   RS/RW half retired to the Alert Center's RS/RW Board tab (one tab-click away in
@@ -277,7 +287,13 @@ which is evidence and must not be loaded as context.
   entry and Focus-strength boards and the feed ticker-name click always chart in
   the pane; the setups column's four panels (setups table, RS Window, Industry
   Board, Watchlists) do so through a `set_chart_sink` the desk sets in workspace
-  mode and clears in tabs mode. The popup remains the door for a board on another
+  mode and clears in tabs mode. **A board chart holds NO place in the waiting list**
+  (packet T1.3, 2026-09-04, trader: *"once i look and click off, its done"*):
+  `_is_manual_chart_look` is an exact `MANUAL_CHART_TAG` test, a look is never
+  re-queued and never skip-counted - it was never a shown alert, so it belongs in
+  no P(take | shown) denominator - while the M5-alert-bar `skip` with
+  `clicked_away_from_m5_alert` and the dequeued-D1 return-to-head rule are both
+  untouched. The popup remains the door for a board on another
   page (`show_board_symbol`, the AWAY Recap) and for a standalone panel.
 - Auto-populate rules for both regimes, previous-day-extreme gating and DESK
   adoption into M5 Focus. A Focus pick's AUTOMATIC D1 alerts are the pullback set
@@ -697,13 +713,25 @@ which is evidence and must not be loaded as context.
   otherwise collide on `outcome_path`'s grain. **The unlinked bucket is a COUNT**:
   the declared stop needs the occurrence's anchor, and a substitute stop would end
   the grid's one-stop model.
+- **A VETO retires the chart; a LIKE and a NOTE never do** (packet T1, 2026-09-04,
+  trader: *"i still need time to enter alerts"*). A capture-rail veto has its own
+  verb - `AlertChartReview.vetoRetireRequested` -> `_retire_after_veto` - and
+  writes ONE coded row with **no note box and no uncoded second row**; the
+  "✕ Not today" BUTTON keeps `removeTodayRequested` and is unchanged (uncoded
+  row, box, advance), and the day-trade veto retires through the box-free verb
+  after its Focus placement. Both retirements are ONE body with a flag
+  (`_retire_review_alert`), so the auto-pick / faded / Focus-review branches
+  cannot drift. A like is reported through `likeRecorded` -> `_after_like`, which
+  records the review event and moves nothing; **the event is still named
+  `like_advance`** because `review_learning.TAKE_ACTIONS` keys on that string.
 - **`note_vocabulary_audit`** (P10 A4): a deterministic nightly slot listing the
   day's notes beside the vocabulary that exists. It proposes no code and adds
   none - a vocabulary code is permanent and never reused.
 - **A LIKE has two modes** (P9, 2026-09-02). **Alt+L** writes a QUICK like -
   `like_mode: "quick"`, no claimed setup, no why - and **Alt+K** the claimed one,
-  which still requires both. A quick like retires the chart, records
-  `like_advance` and marks the symbol reviewed exactly as a claimed one does, and
+  which still requires both. A quick like LEAVES THE CHART UP (2026-09-04, packet
+  T1.2; it retired until then), records `like_advance` and marks the symbol
+  reviewed exactly as a claimed one does, and
   **places nothing**: a like carries zero privileges (plan.md P3.1). It grades
   under `like_unclaimed`, saves the M5 sidecar on an M5 chart through the writer
   Pass uses, and contributes a **LINK** to the auto-tagger rather than a tag,
@@ -962,6 +990,60 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-04 - Packet T1: a veto with no box, a like that stays, a board click that queues nothing, the TC2000 board on M5 Focus
+
+**Branch `claude/t1-capture-and-board`**, tester-first (48 tests committed red),
+trader-authorized the same day. Trader, verbatim: *"when i double tap something in
+the capture window (either veto or like+claim) i shouldnt get a pop up note
+box ... the 'like' button in the visual chart review should NOT advance the char
+to the next page because i still need time to enter alerts etc. not today can
+continue to go to the next chart with a pop up note box."* and *"I want all shorts
+and longs on the RS/RW board TC2000 to bne auto added to the M5 focus picks.
+additionally when I click on ANYTHING from the RS/RW board it should not make a
+queue of picks if I click on more nor should it add to the 'waiting' list. once i
+look and click off, its done."*
+
+- **T1.1 - one veto click is one veto row.** It used to be two rows and a dialog:
+  the rail wrote the CODED row, the pane forwarded it as the "✕ Not today"
+  button's `removeTodayRequested`, and the panel then wrote an UNCODED row through
+  `verdicts.record_not_today` and opened `open_note_prompt`. The rail's veto now
+  emits `vetoRetireRequested` and the panel answers with `_retire_after_veto`,
+  which shares one body with the button's verb (`_retire_review_alert(...,
+  write_not_today_annotation=)`) and differs only in that flag. The
+  `remove_today` review event, the auto-pick drop, the parking and the advance are
+  all unchanged; the button is unchanged.
+- **The day-trade veto too** (lead ruling 2026-09-04, amending the packet, which
+  had called it untouched): `_veto_but_day_trade` ended in the same method and so
+  carried the same second row and box. It now retires through
+  `_retire_after_veto`, still placing on M5 Focus FIRST, and a failed placement
+  still retires.
+- **T1.2 - a like never advances.** `likeAdvanceRequested` -> `likeRecorded`,
+  `_advance_after_like` -> `_after_like`, and `_advance_review_queue` is not
+  called. **The review event keeps the name `like_advance`** - historical, because
+  `review_learning.TAKE_ACTIONS` keys on that exact string - and now means "liked;
+  the symbol keeps alerting and the chart stays". Covers the claimed like, Alt+L
+  and the chart's "♥ Like" button, whose optional P9 note box is untouched.
+- **T1.3 - a board look queues nothing.** A `MANUAL_CHART_TAG` chart holds no place
+  and, when replaced, is neither re-inserted nor given a `skip` - a look is not a
+  shown alert. Five board clicks now leave the pane reading "queue clear"; they
+  used to leave four names waiting. The M5-alert-bar `skip` with
+  `clicked_away_from_m5_alert` and the dequeued-D1 return-to-head rule are both
+  proven untouched.
+- **T1.4 - the TC2000 board's parity rows auto-join M5 Focus.** On `boardChanged`
+  and once at attach; empty `failed_floors` only; the one adoption gate re-run on
+  the row's own numbers (a fourth call site, never a second definition);
+  `_ignored_symbols` skipped; DESK only; through `store.add` +
+  `mark_auto_adopted`, never `FocusService.add`; never removes; idempotent; one
+  `strength_board_auto_focus` review event per refresh carrying `side_counts`,
+  `adopted`, `refused` and `as_of`. That event's `symbol` is the constant
+  `M5_STRENGTH_BOARD` - `record_review_event` refuses an empty symbol, the event is
+  about the board rather than a name, and the underscore makes the value
+  unrepresentable as a ticker under `SYMBOL_RE`.
+
+Full suite with the nightly AI lock probed FREE and nothing deselected: **6577
+passed, 1 skipped, 72 subtests, exit 0** (+43). `ruff` clean, smoke 7/7, source
+`--selftest` 74/74. No packaging trigger. **Live gate #58.**
 
 ### 2026-09-04 (early) - The last two projects started: forced outcome recompute (BD-98) and the tracker record store (decision 0017)
 

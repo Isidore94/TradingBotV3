@@ -834,6 +834,92 @@ and became a window in the way once the boards and the pane shared one screen.
 - The click still uses the lookup box's door and never `_enqueue_review_alert`, for
   the four reasons in the Strength Board entry.
 
+## T1 - the capture window is the why, and a look is not a queue (2026-09-04)
+
+**The trader, verbatim:**
+
+> when i double tap something in the capture window (either veto or like+claim) i
+> shouldnt get a pop up note box. the point of the capture window is to quickly
+> enter "WHY" I like or dislike something. Additionally the "like" button in the
+> visual chart review should NOT advance the char to the next page because i still
+> need time to enter alerts etc. not today can continue to go to the next chart
+> with a pop up note box.
+>
+> I want all shorts and longs on the RS/RW board TC2000 to bne auto added to the M5
+> focus picks. additionally when I click on ANYTHING from the RS/RW board it should
+> not make a queue of picks if I click on more nor should it add to the "waiting"
+> list. once i look and click off, its done.
+
+### What was measured, on `main` @ `6e05878`
+
+- **One veto click wrote TWO veto rows and opened a box.** The rail's `commit_veto`
+  wrote the CODED row and emitted `captured(EVENT_VETO)`; the pane forwarded it as
+  `removeTodayRequested`, which is the "✕ Not today" BUTTON's signal; the panel's
+  `_remove_review_alert_for_today` then called `_record_not_today_annotation`, which
+  wrote a SECOND, UNCODED veto row through `verdicts.record_not_today` and opened
+  `open_note_prompt`. The box asked for a why the trader had just typed.
+- **The same was true of "Veto D1 - but M5 today."** `_veto_but_day_trade` ended in
+  the same method, so the day-trade veto wrote the uncoded row and opened the box
+  as well. The packet had called that verb untouched; the lead ruled on 2026-09-04
+  that the trader's "either veto or like+claim ... no pop up note box" covers it.
+- **A like took the chart away.** Every like path - the claimed like, Alt+L, and the
+  chart's "♥ Like" button - reached `_record_like`, and `_advance_after_like`
+  called `_advance_review_queue`. The trader was arming alerts on a chart that was
+  already gone.
+- **Five board clicks built a four-deep waiting list.** Every board in the alert
+  column charts through `chart_symbol`, which stamps `MANUAL_CHART_TAG`.
+  `_select_review_alert` set `_current_review_holds_place = not
+  _is_m5_review_alert(alert)`, and that method returns False for `MANUAL_CHART_TAG`
+  - so a look HELD A PLACE and the next board click pushed it to the head of the
+  queue. Clicking META, NVDA, AMD, SOXL and TSLA left `['SOXL', 'AMD', 'NVDA',
+  'META']` waiting and the pane reading "4 waiting".
+- **The TC2000 board reached Focus only by hand**, through `_add_symbols` ->
+  `focus_service.add`, which is a trader LIKE and writes a `pick_feedback` row.
+
+### The rules this produced
+
+- **A VETO retires the chart; a LIKE and a NOTE never do.** The rail's veto has its
+  own verb, `vetoRetireRequested` -> `_retire_after_veto`, and writes ONE row and no
+  box. `removeTodayRequested` is the "✕ Not today" BUTTON's signal alone, and that
+  button is unchanged - uncoded row, box, advance - because the trader kept it in so
+  many words. **The day-trade veto retires through the box-free verb too**, after its
+  Focus placement, in that order, and a failed placement still retires.
+- **Both retirements are ONE body with a flag** (`_retire_review_alert(...,
+  write_not_today_annotation=)`). The auto-pick, faded and Focus-review branches each
+  return early; a second copy of that ladder would have started parking symbols that
+  must not be parked.
+- **A like is a REPORT, not a request.** `likeRecorded` -> `_after_like`: the review
+  event, a status line, and nothing else. **Its event is still named `like_advance`**
+  - `review_learning.TAKE_ACTIONS` keys on the exact string, and renaming it would
+  drop every past like out of the take side of the scoreboard. The name is historical
+  and now means "liked; the symbol keeps alerting and the chart stays".
+- **A look is not a shown alert.** A `MANUAL_CHART_TAG` chart holds no place, and
+  clicking away from one writes NOTHING - not a re-queue and not a `skip`, because a
+  look belongs in no P(take | shown) denominator. `_is_manual_chart_look` is a
+  separate exact test rather than a fold into `_is_m5_review_alert`: that method
+  answers "is this a LINE IN THE M5 BAR", and the two questions share a tag but not
+  an answer. The M5-alert-bar `skip` with `clicked_away_from_m5_alert` is a different
+  population and is byte-for-byte untouched; a dequeued D1 chart still returns to the
+  head of the queue.
+- **The TC2000 board's parity rows auto-join M5 Focus**, on `boardChanged` and once
+  at attach. Only rows with an EMPTY `failed_floors` - a greyed near-miss is a name
+  that missed one of the trader's own filters. The ONE adoption gate is re-run on
+  each row's own numbers (the board can be fifteen minutes old) and UNKNOWN fails. A
+  symbol in `_ignored_symbols` is skipped, so the next refresh cannot undo a "Not
+  today". DESK only; the auto-mode matrix is unchanged.
+- **The machine writes through the STORE, never `FocusService.add`** - the same
+  reason the regime-pause auto-join does. `store.add` then `mark_auto_adopted`, and
+  the marker only when `add` actually added: an existing unmarked entry is the
+  trader's and must not change owner. It **never removes**; the ten-session fade and
+  "Not today" own removal.
+- **One review event per refresh that adopted or refused anything**,
+  `strength_board_auto_focus`, carrying `side_counts`, `adopted`, `refused` and
+  `as_of`. `record_review_event` refuses a row with an empty symbol, so this one
+  carries `symbol="M5_STRENGTH_BOARD"` - the event is about the BOARD, the names are
+  in the detail, and an underscore makes that value unrepresentable as a ticker under
+  `ui.models.bounce.SYMBOL_RE`, so no symbol-keyed join can ever match it. No scanner
+  alert was invented for it.
+
 ## The research tee burned a core (2026-09-03 evening)
 
 ### What was measured

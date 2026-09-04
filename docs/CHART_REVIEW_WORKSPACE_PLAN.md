@@ -426,6 +426,26 @@ set, the symbol's other queued alerts, and any auto-adopted Focus pick are all
 untouched. **The veto's retire-and-park path is unchanged.** Liking a setup is
 the opposite of being finished with the symbol.
 
+**SUPERSEDED IN PART, packet T1, 2026-09-04.** A like no longer advances either
+(trader: *"the 'like' button in the visual chart review should NOT advance the
+char to the next page because i still need time to enter alerts etc."*). The
+signal is `AlertChartReview.likeRecorded` and the handler is `_after_like`; the
+review event keeps the name **`like_advance`**, because `TAKE_ACTIONS` keys on
+that exact string, and it now means "liked; the symbol keeps alerting and the
+chart stays". Everything the paragraph above says a like does NOT do is still
+not done.
+
+**The veto's retire-and-park path is unchanged in substance and changed in
+route** (same packet). A rail veto emits `vetoRetireRequested` and the panel
+answers with `_retire_after_veto`, which does everything the "✕ Not today"
+verb does EXCEPT the uncoded annotation and the note box behind it: the rail
+already wrote the coded row and the trader's own why, and a box asking for it
+again is exactly what they cut (*"the point of the capture window is to quickly
+enter 'WHY' I like or dislike something"*). Both verbs are one body with a
+flag. The "✕ Not today" BUTTON is untouched - uncoded row, box, advance - and
+the day-trade veto retires through the box-free verb after its Focus placement
+(lead ruling, same day).
+
 An earlier draft of this section routed likes through `FocusService.add()` to
 reuse the existing `pick_feedback` machinery. That was wrong by this
 document's own rules: `FocusPickStore.add` writes Focus state AND injects the

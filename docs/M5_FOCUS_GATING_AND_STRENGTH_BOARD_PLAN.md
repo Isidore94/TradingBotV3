@@ -709,3 +709,33 @@ pins strength and RVOL for five symbols over sixteen sessions, and its expected
 values are computed by a SECOND naive implementation written from the trader's
 two formula lines rather than from the module under test. All five agree to four
 decimals.
+
+## The board's parity rows join M5 Focus on their own (packet T1.4, 2026-09-04)
+
+Trader: *"I want all shorts and longs on the RS/RW board TC2000 to bne auto
+added to the M5 focus picks."*
+
+`AlertCenterPanel._auto_adopt_strength_board` runs on `StrengthBoardService`'s
+`boardChanged` and once at attach, so a desk started mid-session does not wait
+fifteen minutes for its first placement. It considers **only rows with an EMPTY
+`failed_floors`** - the TC2000 parity list; a greyed near-miss missed one of the
+trader's own filters and is never adopted. It **re-runs the one adoption gate**
+on each row's own `last / prev_high / prev_low / session_vwap` (the board can be
+fifteen minutes stale, and UNKNOWN fails as always) - a fourth call site for the
+single definition in `focus_adoption_gate.py`, never a second one. It is **DESK
+only**: AWAY stages nothing here and EVENING/OFF do nothing, so the auto-mode
+matrix is unchanged. It **skips any symbol in `_ignored_symbols`**, so the next
+refresh cannot undo a "Not today".
+
+The write is the MACHINE's, so it goes through the STORE - `store.add` then
+`store.mark_auto_adopted` - and **never `FocusService.add`**, which would forge a
+trader "like" into `pick_feedback.jsonl`. The marker is written only when `add`
+actually added: an existing unmarked entry is the trader's and must not change
+owner. It **never removes** - a name that leaves the board stays on Focus, and
+the ten-session fade and "Not today" own removal - and it is idempotent per
+refresh. One `strength_board_auto_focus` review event per refresh that adopted
+or refused anything, and one status line when something was adopted.
+
+The **click-to-add path is unchanged**: a click on a row IS the trader liking the
+name, so `_add_symbols` still goes through the service and still writes the
+pick-feedback row. Live gate #58.
