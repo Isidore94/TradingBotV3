@@ -1,27 +1,32 @@
-"""Packet T1.2 - a LIKE records the judgement and leaves the chart up.
+"""Packets T1.2 and T2 - the two likes, and only one of them moves the chart.
 
-Trader, 2026-09-04:
+Trader, 2026-09-04, first pass (T1.2):
 
     "Additionally the 'like' button in the visual chart review should NOT
     advance the char to the next page because i still need time to enter alerts
     etc."
 
-On `main` @ 6e05878 every like path - the claimed like (Alt+K / digit /
-double-click / the rail button), the quick like by key (Alt+L) and the chart's
-"♥ Like" button - reaches `_record_like`, emits `captured(EVENT_LIKE_CLAIM)`,
-and `AlertChartReview._on_captured` fires `likeAdvanceRequested`, which the
-panel answers with `_advance_after_like` -> `_advance_review_queue`. The chart
-the trader wanted to arm an alert on is gone before they can.
+Trader, 2026-09-04, second pass (T2), about the capture tab's claim list:
 
-The new contract:
+    "pretty close. for the 'like and claim' part of the capture tab, a double
+    click of any of the setups there should be sufficient. I shouldnt have to
+    type anything below that box. and then double clicking that box should
+    advance the chart."
 
-* the pane's signal is `likeRecorded` (a signal called "advance" that does not
-  advance is a lie) and the panel's handler is `_after_like`;
-* the review event keeps the name **`like_advance`** - historical, because
-  `review_learning.TAKE_ACTIONS` keys on that exact string - and now means
-  "liked; the symbol keeps alerting and the chart stays";
-* nothing else changes: no ignore-set entry, no Focus drop, no placement, and
-  the symbol is still marked reviewed today.
+So the two like modes now part company, and this file pins the split:
+
+* a **CLAIMED** like (Alt+K, a digit, a double-click on a setup, the rail's
+  "Like + claim setup" button) needs NO why, commits on the gesture, and
+  **ADVANCES** the chart - the pane's `likeAdvanceRequested`, the panel's
+  `_advance_after_like`;
+* a **QUICK** like (Alt+L, the rail's "♥ Quick like", the chart's "♥ Like"
+  button) is unchanged by T2: still no claim, still `likeRecorded` ->
+  `_after_like`, and the chart still **STAYS** so the trader can arm alerts;
+* both record the review event **`like_advance`** - historical, because
+  `review_learning.TAKE_ACTIONS` keys on that exact string - through ONE shared
+  helper, so the two handlers cannot drift;
+* neither places anything, neither parks the symbol, neither drops a Focus
+  pick, and neither sweeps the symbol's other queued alerts.
 
 The "♥ Like" button's OPTIONAL note box (P9) stays - it is on the chart, not in
 the capture window, and the trader did not name it.
@@ -113,37 +118,101 @@ def _claim(rail, why: str = "reclaimed the band") -> None:
     rail.like_note_input.setText(why)
 
 
-def _assert_chart_stayed(panel, symbol: str = "AAPL") -> None:
+def _assert_chart_advanced(panel, gone: str = "AAPL", now: str = "NVDA") -> None:
+    """T2: a CLAIMED like moves on to the next waiting chart."""
+    assert panel._current_review_alert is not None, (
+        "the claimed like must advance to the next chart, not clear the pane"
+    )
+    assert panel._current_review_alert.symbol == now, (
+        f"the chart is still {panel._current_review_alert.symbol}; a claimed "
+        "like advances (trader, 2026-09-04 second pass)"
+    )
+    assert [a.symbol for a in panel._review_queue] == [], (
+        f"{gone} must not be re-queued behind the chart it just left"
+    )
+    assert gone not in panel._ignored_symbols, "a like never parks the symbol"
+
+
+def _assert_chart_stayed(
+    panel, symbol: str = "AAPL", queue: tuple[str, ...] = ("NVDA",)
+) -> None:
     assert panel._current_review_alert is not None, "the chart was taken away"
     assert panel._current_review_alert.symbol == symbol, (
         f"the chart advanced to {panel._current_review_alert.symbol}; the trader "
         "still needs it to arm an alert"
     )
-    assert [a.symbol for a in panel._review_queue] == ["NVDA"], (
-        "the waiting list must be untouched by a like"
+    assert [a.symbol for a in panel._review_queue] == list(queue), (
+        "the waiting list must be untouched by a quick like"
     )
     assert symbol not in panel._ignored_symbols, "a like never parks the symbol"
 
 
 # ---------------------------------------------------------------------------
-# every like path leaves the chart alone
+# T2: a CLAIMED like advances; every QUICK like path still leaves the chart
 # ---------------------------------------------------------------------------
-def test_a_claimed_like_leaves_the_chart_up(panel):
-    """Alt+K, a digit, the why, Enter - the claimed like."""
+def test_a_claimed_like_advances_the_chart(panel):
+    """Alt+K or a digit, with or without a why - the claimed like ADVANCES.
+
+    Rewritten for packet T2 (trader, 2026-09-04 second pass: *"double clicking
+    that box should advance the chart"*). It asserted the chart stayed up under
+    T1.2, which is now true of the QUICK like only.
+    """
     rail = panel.chart_review.capture_rail
     _claim(rail)
 
     assert rail.commit_like() is not None
 
-    _assert_chart_stayed(panel)
+    _assert_chart_advanced(panel)
 
 
-def test_a_double_clicked_claim_leaves_the_chart_up(panel):
-    """The trader's actual gesture: `setup_list.itemActivated` -> `commit_like`."""
+def test_a_double_clicked_claim_advances_the_chart(panel):
+    """The trader's actual gesture: `setup_list.itemActivated` -> `commit_like`.
+
+    Rewritten for packet T2: the double-click commits and advances.
+    """
     rail = panel.chart_review.capture_rail
     _claim(rail, "second test at the 20")
 
     rail.setup_list.itemActivated.emit(rail.setup_list.item(0))
+
+    _assert_chart_advanced(panel)
+
+
+def test_a_double_clicked_claim_with_nothing_typed_writes_one_row_and_advances(
+    panel, tmp_path
+):
+    """T2's whole point: *"I shouldnt have to type anything below that box."*
+
+    A double-click on a setup with an EMPTY why writes ONE `like_claim` row
+    carrying the claim, with no why on it, and moves to the next chart.
+    """
+    import json
+
+    rail = panel.chart_review.capture_rail
+    rail.like_note_input.setText("")
+
+    rail.setup_list.itemActivated.emit(rail.setup_list.item(0))
+
+    path = tmp_path / "trader_annotations.jsonl"
+    assert path.exists(), "a claim with no why must still write its row"
+    lines = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["event_type"] for row in lines] == ["like_claim"], "exactly one row"
+    assert lines[0]["claimed_setup_id"], "the claim is what the row is for"
+    assert lines[0].get("note", "") == "", "nothing was typed, so there is no why"
+    assert lines[0]["like_mode"] == "claimed"
+    _assert_chart_advanced(panel)
+
+
+def test_the_rails_quick_like_button_leaves_the_chart_up(panel, monkeypatch):
+    """The rail's own "♥ Quick like" is the other verb and it does not move."""
+    monkeypatch.setattr(QInputDialog, "getMultiLineText", lambda *a, **k: ("", True))
+    rail = panel.chart_review.capture_rail
+
+    assert rail.prompt_quick_like() is not None
 
     _assert_chart_stayed(panel)
 
@@ -191,8 +260,9 @@ def test_a_like_still_records_like_advance_under_its_historical_name(
     """`review_learning.TAKE_ACTIONS` keys on the string `like_advance`.
 
     Renaming it would drop every past like out of the take side of the
-    scoreboard, so the name stays and its MEANING changes: liked, the symbol
-    keeps alerting, and since 2026-09-04 the chart stays.
+    scoreboard, so the name stays for BOTH modes. Rewritten for packet T2: the
+    claimed like advances again, the quick like still does not, and the two
+    handlers record through one shared helper so they cannot drift.
     """
     import review_learning
 
@@ -208,7 +278,13 @@ def test_a_like_still_records_like_advance_under_its_historical_name(
     assert "like_advance" in review_learning.TAKE_ACTIONS
     assert "remove_today" not in recorded
     assert "skip" not in recorded
-    _assert_chart_stayed(panel)
+    _assert_chart_advanced(panel)
+
+    # And the quick like on the chart that is now up records the same action.
+    recorded.clear()
+    assert rail.commit_quick_like() is not None
+    assert recorded == ["like_advance"]
+    _assert_chart_stayed(panel, "NVDA", queue=())
 
 
 def test_a_like_writes_exactly_one_annotation_row(panel, tmp_path):
@@ -231,19 +307,37 @@ def test_a_like_writes_exactly_one_annotation_row(panel, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# the names, because a signal called "advance" that does not advance is a lie
+# the names: two signals, one per mode, each doing what it is called
 # ---------------------------------------------------------------------------
-def test_the_pane_offers_like_recorded_and_no_advance_signal(panel):
+def test_the_pane_offers_both_like_signals_one_per_mode(panel):
+    """Rewritten for packet T2: BOTH signals exist and the mode picks one.
+
+    T1.2 asserted `likeAdvanceRequested` was absent. It is back, because there
+    is now a like that really does advance - and `likeRecorded` stays for the
+    quick like that really does not.
+    """
     pane = panel.chart_review
-    assert hasattr(pane, "likeRecorded"), "the like's signal is `likeRecorded` now"
-    assert not hasattr(pane, "likeAdvanceRequested"), (
-        "a signal named 'advance' that does not advance is a lie"
-    )
+    assert hasattr(pane, "likeRecorded"), "the quick like reports and stays"
+    assert hasattr(pane, "likeAdvanceRequested"), "the claimed like advances"
+
+    fired: list[str] = []
+    pane.likeRecorded.connect(lambda _a: fired.append("recorded"))
+    pane.likeAdvanceRequested.connect(lambda _a: fired.append("advance"))
+    rail = pane.capture_rail
+
+    _claim(rail)
+    assert rail.commit_like() is not None
+    assert fired == ["advance"], "a CLAIMED like fires the advance signal"
+
+    fired.clear()
+    assert rail.commit_quick_like() is not None
+    assert fired == ["recorded"], "a QUICK like fires the report signal"
 
 
-def test_the_panel_handler_is_named_after_like(panel):
+def test_the_panel_has_a_handler_for_each_mode(panel):
+    """Rewritten for packet T2: `_after_like` stays, `_advance_after_like` returns."""
     assert callable(getattr(panel, "_after_like", None))
-    assert not hasattr(panel, "_advance_after_like")
+    assert callable(getattr(panel, "_advance_after_like", None))
 
 
 def test_no_tooltip_on_the_like_button_still_claims_the_chart_moves_on(panel):
