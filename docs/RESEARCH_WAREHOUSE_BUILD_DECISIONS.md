@@ -2798,8 +2798,10 @@ untouched; the supersession rule (`SUPERSEDING_DATASETS`, latest by
 **Run.** Started 2026-09-04 07:00 PT against the live lake, 32 buckets over 6,850
 occurrences / 1,715 symbols, 340-minute budget; bucket 0 (48 symbols, 189
 occurrences) took ~2.5 minutes, so the walk runs alongside the session's scans,
-each post-scan build refused only while a bucket is mid-flight. The
-result is recorded in `CURRENT_CHECKPOINT.md`.
+each post-scan build refused only while a bucket is mid-flight. Finished
+07:53 PT: 32/32 buckets in 53 minutes, 6,850 occurrences, 134,502 rows superseded
+(changed result), 3,803 unchanged, 423,395 cells INSUFFICIENT_PATH_DATA, zero errors
+or refusals - the desk's 07:30 scan and its build ran alongside without a collision.
 
 **Reopen if** a recipe ever needs a per-row "inputs revision" so a stale row can
 be detected instead of re-simulated wholesale.

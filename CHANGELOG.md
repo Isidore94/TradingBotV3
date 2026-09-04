@@ -979,7 +979,8 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
   `tests/test_warehouse_recompute_outcomes.py` (4). **Started 07:00 PT 2026-09-04**
   against the live lake with a 340-minute budget (one lock per bucket, so the
   day's post-scan builds interleave) (6,850 occurrences over 1,715
-  symbols, 32 buckets); the result is in the checkpoint.
+  symbols, 32 buckets); finished 07:53 PT: 32/32 buckets, 134,502 rows superseded, 3,803 unchanged, no
+  errors - gate #56 met in full.
 - **Tracker record store, F3 step 1, decision 0017.** `scripts/tracker_store.py`:
   SQLite (`master_avwap_setup_tracker.sqlite` beside the JSON, WAL), one row per
   tracker record with a content hash, so a save rewrites only what changed and a

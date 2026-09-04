@@ -602,8 +602,8 @@ The trader authorized every packet in it. Status per packet:
    `rebuild-month --month 2026-08 --apply` and `--month 2026-09 --apply`
    (`retire_partition` + recompute of `bar_derived` and `feature_snapshot_intraday`,
    BD-97). Outcomes: `recompute-outcomes` (BD-98, `force` re-simulates terminal
-   rows, one lock per bucket) STARTED 2026-09-04 07:00 PT with a 340-minute budget;
-   any bucket it does not reach is re-run by bucket list. Gate #56's last clause.
+   rows, one lock per bucket) RAN 2026-09-04 07:00-07:53 PT: 32/32 buckets,
+   134,502 outcome rows superseded, 3,803 unchanged, no errors. Gate #56 MET in full.
 3. **S3 - the thread gauge (BUILT 2026-09-03 evening).** Always on; verified by
    gate #55's read of `thread_cpu.jsonl`.
 4. **S2 - the M5 cycle (INSTRUMENTED 2026-09-03 night; trim still measure-first).**
