@@ -332,12 +332,24 @@ def _m5_partitions_for(known: dict, day: date) -> list[str]:
     return sorted(months)
 
 
-def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str) -> dict:
+def _run_outcomes(
+    store: ResearchStore,
+    day: date,
+    stamp: datetime,
+    run_id: str,
+    *,
+    bucket: int | None = None,
+    force: bool = False,
+) -> dict:
     """Simulate outcomes for occurrences already in the lake.
 
     Occurrence *ingestion* is still blocked on the BD-44 detector adapter, so
     this step is a clean no-op until something writes ``setup_occurrence``.
     That is a declared gap, not a silent one.
+
+    ``bucket`` overrides the (day, hour)-derived symbol bucket. The nightly
+    build never passes it; ``recompute-outcomes`` (BD-98) walks all 32 with it
+    so a month computed over polluted bars can be re-simulated in full.
     """
     known = {}
     for year in (day.year, day.year - 1):
@@ -349,7 +361,7 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
         }
 
     all_symbols = sorted({str(row.get("symbol") or "") for row in known.values() if row.get("symbol")})
-    bucket = _outcome_bucket(day, stamp)
+    bucket = _outcome_bucket(day, stamp) if bucket is None else int(bucket) % OUTCOME_BUCKETS
     symbols = (
         set(all_symbols)
         if len(all_symbols) <= OUTCOME_BUCKET_MIN_SYMBOLS
@@ -417,6 +429,7 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
         now=stamp,
         run_id=run_id,
         job_id="m5_close_recipe_outcomes",
+        force=force,
     )
     after_like_step = _run_after_like_pass(
         store, m5_by_symbol, stamp=stamp, run_id=run_id
@@ -436,6 +449,7 @@ def _run_outcomes(store: ResearchStore, day: date, stamp: datetime, run_id: str)
         as_of=stamp,
         now=stamp,
         run_id=run_id,
+        force=force,
     ) if slice_rows else None
     context = market_bias_context.record_context(
         store,
@@ -1119,6 +1133,84 @@ def run_rebuild_month(
     return report
 
 
+def run_recompute_outcomes(
+    store: ResearchStore | None,
+    *,
+    buckets=None,
+    apply: bool = False,
+    time_budget_minutes: float | None = None,
+    session_date: date | None = None,
+    now: datetime | None = None,
+    job_id: str = "outcomes_recompute",
+    lock_path: Path | None = None,
+) -> dict:
+    """Re-simulate every outcome bucket, terminal rows included (BD-98).
+
+    The nightly build covers ONE of the 32 symbol buckets per firing and never
+    re-simulates a terminal row. Both are right for a lake whose inputs were
+    right; after the duplicated M5 bars of 2026-08/09 (BD-96/97) the stored
+    outcomes were computed over doubled series, and the only repair is to walk
+    every bucket with ``force``. A re-simulation that reproduces the stored
+    result writes nothing; a changed result supersedes it, so the current view
+    is repaired in place and the old row stays in the ledger.
+
+    The lock is taken PER BUCKET, so a scheduled build slots in between two
+    buckets instead of being refused for hours; ``time_budget_minutes`` stops
+    starting new buckets once spent, and the per-bucket coverage lines
+    (``outcome_coverage.record_firing``) say which buckets a later run still
+    owes. Dry run by default: the plan and nothing else.
+    """
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    stamp = now or utc_now()
+    day = session_date or stamp.date()
+    wanted = [int(b) % OUTCOME_BUCKETS for b in (buckets if buckets is not None else range(OUTCOME_BUCKETS))]
+    report: dict = {
+        "status": "OK",
+        "applied": bool(apply),
+        "session_date": day.isoformat(),
+        "buckets_planned": wanted,
+        "buckets_done": [],
+        "buckets_skipped": [],
+        "steps": {},
+    }
+    if not apply:
+        return report
+    import time as _time
+
+    started = _time.monotonic()
+    budget = None if time_budget_minutes is None else float(time_budget_minutes) * 60.0
+    for bucket in wanted:
+        # The first bucket always starts; the budget decides whether the NEXT one does.
+        if budget is not None and report["buckets_done"] and (_time.monotonic() - started) >= budget:
+            report["buckets_skipped"].append(bucket)
+            report["status"] = "BUDGET_EXHAUSTED"
+            continue
+        try:
+            with single_flight(lock_path):
+                run_id = f"{job_id}-b{bucket:02d}"
+                step = _run_outcomes(store, day, stamp, run_id, bucket=bucket, force=True)
+                outcome_coverage.record_firing(store.root, step, run_id=run_id, now=stamp)
+        except SingleFlightError as exc:
+            report["buckets_skipped"].append(bucket)
+            report["steps"][str(bucket)] = {"status": "REFUSED", "reason": str(exc)}
+            continue
+        except Exception as exc:  # noqa: BLE001 - one bucket must not end the walk
+            report["buckets_skipped"].append(bucket)
+            report["steps"][str(bucket)] = {"status": "ERROR", "reason": f"{type(exc).__name__}: {exc}"}
+            continue
+        report["buckets_done"].append(bucket)
+        report["steps"][str(bucket)] = {
+            "status": step.get("status"),
+            "symbols": step.get("symbols"),
+            "occurrences": step.get("occurrences"),
+            "m5_close_rows": (step.get("m5_close") or {}).get("rows"),
+            "m5_close_skipped": (step.get("m5_close") or {}).get("skipped"),
+        }
+    report["seconds"] = round(_time.monotonic() - started, 1)
+    return report
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="research_warehouse", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1156,6 +1248,14 @@ def main(argv=None) -> int:
     )
     rebuild.add_argument("--month", required=True, help="YYYY-MM")
     rebuild.add_argument("--apply", action="store_true", help="retire and recompute; without it only the plan is printed")
+    recompute = sub.add_parser(
+        "recompute-outcomes",
+        help="re-simulate every outcome bucket with force (BD-98); DRY RUN unless --apply",
+    )
+    recompute.add_argument("--buckets", default="", help="comma list or a-b range; default all 32")
+    recompute.add_argument("--time-budget-minutes", type=float, default=None)
+    recompute.add_argument("--session-date", default="")
+    recompute.add_argument("--apply", action="store_true")
 
     args = parser.parse_args(argv)
     store = ResearchStore.open()
@@ -1170,6 +1270,26 @@ def main(argv=None) -> int:
         report = run_rebuild_month(store, month=args.month, apply=bool(args.apply))
         print(json.dumps(report, indent=2, default=str))
         return 0 if report.get("status") in {"OK", "DISABLED"} else 1
+    if args.command == "recompute-outcomes":
+        buckets = None
+        if args.buckets:
+            buckets = []
+            for piece in str(args.buckets).split(","):
+                piece = piece.strip()
+                if "-" in piece:
+                    low, high = piece.split("-", 1)
+                    buckets.extend(range(int(low), int(high) + 1))
+                elif piece:
+                    buckets.append(int(piece))
+        report = run_recompute_outcomes(
+            store,
+            buckets=buckets,
+            apply=bool(args.apply),
+            time_budget_minutes=args.time_budget_minutes,
+            session_date=date.fromisoformat(args.session_date) if args.session_date else None,
+        )
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status") in {"OK", "DISABLED", "BUDGET_EXHAUSTED"} else 1
     if args.command == "build":
         day = date.fromisoformat(args.session_date) if args.session_date else None
         report = run_build(store, session_date=day, run_id=args.run_id)

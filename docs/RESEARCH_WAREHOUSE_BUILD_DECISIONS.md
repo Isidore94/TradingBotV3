@@ -2765,3 +2765,41 @@ files across 4 partitions and recomputed 4 sessions (123,705 / 208,841). GC move
 
 **Reopen if** the feature step ever stops skipping already-computed keys (then the
 retire becomes optional), or if outcomes gain a per-month recompute entry point.
+
+## BD-98 — A forced outcome recompute exists, for inputs that turned out to be wrong
+
+**Decision (2026-09-04, trader-authorized: "start these last 2 projects").**
+`outcomes.build_outcomes` takes `force: bool = False`. With it, a terminal row
+(`TERMINAL_RESULT_STATES`) is re-simulated like a non-terminal one; the
+"idempotent by knowledge" rule otherwise stands. A re-simulation that reproduces
+the stored result still writes nothing (`_same_outcome`); only a changed result
+supersedes, so the current view is repaired in place and the old row stays in the
+ledger. `_run_outcomes` takes an explicit `bucket` and passes `force` down to both
+`build_outcomes` calls (the M5-close grid and the legacy slice).
+`research_warehouse.cli recompute-outcomes [--buckets a-b,c] [--time-budget-minutes
+N] [--session-date D] [--apply]` walks the buckets with force, taking the
+single-flight lock ONCE PER BUCKET so a scheduled build slots in between, records
+one coverage firing per bucket (`run_id=outcomes_recompute-bNN`), and stops
+starting new buckets once the budget is spent - the report and the coverage file
+name what a later run still owes. Dry run by default.
+
+**Why.** BD-96/97 repaired `bar_m5` and its derived datasets, but the outcome rows
+for 2026-08/09 were simulated over the doubled M5 series (bar-count horizons
+stretched, price paths intact) and are mostly TERMINAL, which the nightly build
+never touches by design. Without `force` they would have stayed wrong forever; with
+a blanket recompute they would be rewritten even where nothing changed. The
+combination - force plus write-only-on-change - is the narrowest repair.
+
+**What did not change.** The nightly build never passes `force` or `bucket`; the
+(day, hour) bucket rotation, the after-like pass and the market-bias context are
+untouched; the supersession rule (`SUPERSEDING_DATASETS`, latest by
+`computed_at`) is what makes the repair a normal write.
+
+**Run.** Started 2026-09-04 07:00 PT against the live lake, 32 buckets over 6,850
+occurrences / 1,715 symbols, 340-minute budget; bucket 0 (48 symbols, 189
+occurrences) took ~2.5 minutes, so the walk runs alongside the session's scans,
+each post-scan build refused only while a bucket is mid-flight. The
+result is recorded in `CURRENT_CHECKPOINT.md`.
+
+**Reopen if** a recipe ever needs a per-row "inputs revision" so a stale row can
+be detected instead of re-simulated wholesale.

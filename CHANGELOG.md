@@ -963,6 +963,36 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-04 (early) - The last two projects started: forced outcome recompute (BD-98) and the tracker record store (decision 0017)
+
+**On `main`, lead-built, trader-authorized** ("go ahead and start these last 2 projects").
+
+- **Outcome recompute, BD-98.** `outcomes.build_outcomes(..., force=True)`
+  re-simulates terminal rows (the nightly's "idempotent by knowledge" rule skips
+  them, which is right until the inputs turn out to have been wrong);
+  `_run_outcomes(..., bucket=, force=)` takes an explicit bucket; and
+  `research_warehouse.cli recompute-outcomes [--buckets a-b] [--time-budget-minutes N]
+  [--apply]` walks every bucket with force, ONE lock per bucket so the nightly
+  build slots in between, recording a coverage firing per bucket
+  (`run_id=outcomes_recompute-bNN`). A re-simulation that reproduces the stored
+  result writes nothing; only a changed result supersedes. Pinned by
+  `tests/test_warehouse_recompute_outcomes.py` (4). **Started 07:00 PT 2026-09-04**
+  against the live lake with a 340-minute budget (one lock per bucket, so the
+  day's post-scan builds interleave) (6,850 occurrences over 1,715
+  symbols, 32 buckets); the result is in the checkpoint.
+- **Tracker record store, F3 step 1, decision 0017.** `scripts/tracker_store.py`:
+  SQLite (`master_avwap_setup_tracker.sqlite` beside the JSON, WAL), one row per
+  tracker record with a content hash, so a save rewrites only what changed and a
+  read can narrow by section / symbol / scan date. `save_setup_tracker_payload`
+  mirrors the SAME payload after `save_json` (`mirror_payload`, behind the
+  `tracker_storage_shadow` setting, default ON, never allowed to cost the save).
+  No reader moves; the JSON stays authoritative. `python scripts/tracker_store.py
+  verify|mirror|counts` measures parity. Pinned by `tests/test_tracker_store.py`
+  (7: exact round trip, changed-only rewrite, narrowed reads, every difference
+  named, the hook never raises and honours the setting, the scanner's save
+  mirrors after the JSON write and survives a mirror failure, the CLI).
+- **Tests**: +11. Full suite in the checkpoint.
+
 ### 2026-09-03 (night) - The rest of the assessment packets: S2 instrumentation, S4 cadence, F2 removal, the rebuild tool
 
 **On `main`, lead-built, trader-authorized** ("go ahead and implement the rest").

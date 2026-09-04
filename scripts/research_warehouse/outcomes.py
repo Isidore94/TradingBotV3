@@ -2346,6 +2346,7 @@ def build_outcomes(
     now: datetime | None = None,
     run_id: str = "",
     job_id: str = "outcome_path",
+    force: bool = False,
 ) -> OutcomeReport:
     """Simulate the declared recipes for each occurrence.
 
@@ -2354,6 +2355,11 @@ def build_outcomes(
     recomputed; a non-terminal row (OPEN/TRUNCATED/NO_TRIGGER) is
     re-simulated against the bars now available and superseded only when the
     result actually changed. Re-running with the same inputs writes nothing.
+
+    ``force`` (BD-98) re-simulates terminal rows too. It exists for one case:
+    rows computed over inputs later found to be wrong (the duplicated M5 bars
+    of 2026-08/09). A re-simulation that reproduces the stored result still
+    writes nothing; only a changed result supersedes.
     """
     report = OutcomeReport()
     if store is None:
@@ -2374,7 +2380,11 @@ def build_outcomes(
         for recipe in selected:
             key = (str(occurrence.get("occurrence_id")), recipe.recipe_id, OUTCOME_DEFINITION_ID)
             previous = existing.get(key)
-            if previous is not None and str(previous.get("result_state")) in TERMINAL_RESULT_STATES:
+            if (
+                not force
+                and previous is not None
+                and str(previous.get("result_state")) in TERMINAL_RESULT_STATES
+            ):
                 report.skip("ALREADY_SIMULATED")
                 continue
             if recipe.timeframe == "D1":

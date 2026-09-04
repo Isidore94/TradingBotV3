@@ -521,6 +521,9 @@ MASTER_AVWAP_D1_ZONE_ARMS_FILE = RUNTIME_DATA_DIR / "master_avwap_d1_zone_arms.j
 # on the shared store where both processes (and both machines) can see it.
 REGIME_PAUSE_OBSERVATIONS_FILE = RUNTIME_DATA_DIR / "regime_pause_observations.json"
 MASTER_AVWAP_SETUP_TRACKER_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_tracker.json"
+# F3 step 1 (2026-09-04): the SQLite mirror of the tracker, one row per record, written
+# AFTER the JSON save and never read by the scanner yet (scripts/tracker_store.py).
+MASTER_AVWAP_SETUP_TRACKER_DB = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_tracker.sqlite"
 MASTER_AVWAP_TRACKER_SCORING_SNAPSHOT_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tracker_scoring_snapshot.json"
 MASTER_AVWAP_SETUP_SCENARIOS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_scenarios.csv"
 MASTER_AVWAP_SETUP_DAILY_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_setup_daily.csv"

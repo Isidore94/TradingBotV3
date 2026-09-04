@@ -601,8 +601,9 @@ The trader authorized every packet in it. Status per packet:
    trader's commands in BD-97's runbook: `dedupe --dataset bar_m5 --apply`, then
    `rebuild-month --month 2026-08 --apply` and `--month 2026-09 --apply`
    (`retire_partition` + recompute of `bar_derived` and `feature_snapshot_intraday`,
-   BD-97). Outcomes for those months stay owed: a month-wide outcome recompute is
-   its own overnight job.
+   BD-97). Outcomes: `recompute-outcomes` (BD-98, `force` re-simulates terminal
+   rows, one lock per bucket) STARTED 2026-09-04 07:00 PT with a 340-minute budget;
+   any bucket it does not reach is re-run by bucket list. Gate #56's last clause.
 3. **S3 - the thread gauge (BUILT 2026-09-03 evening).** Always on; verified by
    gate #55's read of `thread_cpu.jsonl`.
 4. **S2 - the M5 cycle (INSTRUMENTED 2026-09-03 night; trim still measure-first).**
@@ -636,10 +637,12 @@ The trader authorized every packet in it. Status per packet:
    the warehouse's verified ingest of it passes; `bronze_technical_integrity_events`
    now runs nightly, so the trigger has fired and the segment scheme is OWED as its
    own packet. The six ATR implementations stay: two are in fenced formula files.
-10. **F3 - the operational storage tier (FIXTURE-FIRST PACKET, not started).**
-    The 1.15 GB tracker JSON, the 615 MB attributes CSV, the 592 MB features CSV
-    and the 279/309 MB outcome CSVs to SQLite / monthly Parquet. Golden fixtures
-    before any reader changes; after the validation week.
+10. **F3 - the operational storage tier (STEP 1 BUILT 2026-09-04, decision 0017).**
+    `scripts/tracker_store.py` mirrors every tracker save into a SQLite record
+    store beside the JSON (shadow, default ON, never costs the save); no reader
+    moves until gate #57 (five parity-clean live saves). Step 2 moves readers one
+    at a time, narrowest first, each fail-before-fix; the CSV stores follow as
+    their own packets after the tracker's step 2 is live.
 
 ## Phase 0.14 — Names first (decision 0016)
 

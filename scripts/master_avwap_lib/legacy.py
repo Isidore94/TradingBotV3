@@ -5306,6 +5306,16 @@ def save_setup_tracker_payload(
             logging.warning("Could not rotate setup tracker backup before save: %s", exc)
 
     save_json(SETUP_TRACKER_FILE, payload)
+    # F3 step 1 (2026-09-04): mirror the SAME payload into the SQLite record
+    # store beside the JSON. Shadow only - the JSON above stays the file every
+    # reader loads - and never allowed to cost the save (it swallows its own
+    # failures). Parity is measured by `python scripts/tracker_store.py verify`.
+    try:
+        from tracker_store import mirror_payload as _mirror_tracker_payload
+
+        _mirror_tracker_payload(payload)
+    except Exception as exc:
+        logging.warning("Setup tracker SQLite mirror unavailable: %s", exc)
     try:
         _append_setup_tracker_events(payload)
     except Exception as exc:
