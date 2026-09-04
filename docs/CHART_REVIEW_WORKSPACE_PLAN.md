@@ -402,6 +402,17 @@ when to run it is a separate change.
 A like writes **one annotation row** carrying the claimed setup id, and that
 is all. There is deliberately no second likes store.
 
+**SUPERSEDED for the CLAIMED like, packet T2, 2026-09-04** (trader, second
+pass: *"for the 'like and claim' part of the capture tab, a double click of any
+of the setups there should be sufficient. I shouldnt have to type anything below
+that box."*). The why is now **optional on every like path**: the claim key or a
+double-click SELECTS and COMMITS in one gesture, `_prompt_for_why` is deleted,
+and the placeholder reads "why (optional)". A whitespace-only why strips to
+nothing and the row carries no `note`. What replaces the required why as the
+checkable label is the CLAIM itself — which is exactly what the `dislike_reason`
+counter-example below lacked. P9 had already superseded this for the quick like
+(2026-09-02); T2 finishes the job. The paragraph as written until then:
+
 **The why is required (R9.2, trader 2026-08-22: "if I like a chart I should
 always be prompted with why").** The claim key or a double-click selects the
 setup and moves focus to the why field; Enter commits; an empty why does not
@@ -426,14 +437,20 @@ set, the symbol's other queued alerts, and any auto-adopted Focus pick are all
 untouched. **The veto's retire-and-park path is unchanged.** Liking a setup is
 the opposite of being finished with the symbol.
 
-**SUPERSEDED IN PART, packet T1, 2026-09-04.** A like no longer advances either
-(trader: *"the 'like' button in the visual chart review should NOT advance the
-char to the next page because i still need time to enter alerts etc."*). The
-signal is `AlertChartReview.likeRecorded` and the handler is `_after_like`; the
-review event keeps the name **`like_advance`**, because `TAKE_ACTIONS` keys on
-that exact string, and it now means "liked; the symbol keeps alerting and the
-chart stays". Everything the paragraph above says a like does NOT do is still
-not done.
+**SUPERSEDED IN PART, packet T1, 2026-09-04, then split by packet T2 the same
+day.** T1: a like no longer advances (trader: *"the 'like' button in the visual
+chart review should NOT advance the char to the next page because i still need
+time to enter alerts etc."*). T2, second pass: that holds for the **QUICK** like
+only — a **CLAIMED** like advances again (*"double clicking that box should
+advance the chart"*). So there are two signals and two handlers:
+`likeRecorded` → `_after_like` (quick; the chart stays) and
+`likeAdvanceRequested` → `_advance_after_like` (claimed; the next chart shows).
+`ui.annotations.store.like_mode_of` decides which, absence reading as claimed.
+Both write the review event **`like_advance`** through ONE helper
+(`_record_like_advance`), because `TAKE_ACTIONS` keys on that exact string.
+Everything the paragraph above says a like does NOT do is still not done by
+either — an advance is not a retirement: no park, no Focus drop, no sweep of the
+symbol's other queued alerts, no placement.
 
 **The veto's retire-and-park path is unchanged in substance and changed in
 route** (same packet). A rail veto emits `vetoRetireRequested` and the panel

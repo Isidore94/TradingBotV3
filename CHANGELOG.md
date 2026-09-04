@@ -713,25 +713,33 @@ which is evidence and must not be loaded as context.
   otherwise collide on `outcome_path`'s grain. **The unlinked bucket is a COUNT**:
   the declared stop needs the occurrence's anchor, and a substitute stop would end
   the grid's one-stop model.
-- **A VETO retires the chart; a LIKE and a NOTE never do** (packet T1, 2026-09-04,
-  trader: *"i still need time to enter alerts"*). A capture-rail veto has its own
+- **A VETO and a CLAIMED like retire the chart; a QUICK like and a NOTE never do**
+  (packets T1 and T2, 2026-09-04, trader: *"i still need time to enter alerts"* and,
+  second pass, *"double clicking that box should advance the chart"*). A capture-rail veto has its own
   verb - `AlertChartReview.vetoRetireRequested` -> `_retire_after_veto` - and
   writes ONE coded row with **no note box and no uncoded second row**; the
   "✕ Not today" BUTTON keeps `removeTodayRequested` and is unchanged (uncoded
   row, box, advance), and the day-trade veto retires through the box-free verb
   after its Focus placement. Both retirements are ONE body with a flag
   (`_retire_review_alert`), so the auto-pick / faded / Focus-review branches
-  cannot drift. A like is reported through `likeRecorded` -> `_after_like`, which
-  records the review event and moves nothing; **the event is still named
-  `like_advance`** because `review_learning.TAKE_ACTIONS` keys on that string.
+  cannot drift. A QUICK like is reported through `likeRecorded` -> `_after_like`, which
+  records the review event and moves nothing; a CLAIMED like goes
+  `likeAdvanceRequested` -> `_advance_after_like` -> `_advance_review_queue`
+  (packet T2), and an advance is NOT a retirement - no park, no Focus drop, no
+  sweep of the symbol's other queued alerts, no placement. `like_mode_of` picks
+  the route and absence reads as claimed. **Both record the event named
+  `like_advance`, through one helper (`_record_like_advance`)**, because
+  `review_learning.TAKE_ACTIONS` keys on that string.
 - **`note_vocabulary_audit`** (P10 A4): a deterministic nightly slot listing the
   day's notes beside the vocabulary that exists. It proposes no code and adds
   none - a vocabulary code is permanent and never reused.
 - **A LIKE has two modes** (P9, 2026-09-02). **Alt+L** writes a QUICK like -
   `like_mode: "quick"`, no claimed setup, no why - and **Alt+K** the claimed one,
-  which still requires both. A quick like LEAVES THE CHART UP (2026-09-04, packet
-  T1.2; it retired until then), records `like_advance` and marks the symbol
-  reviewed exactly as a claimed one does, and
+  which since packet T2 (2026-09-04) needs only the CLAIM - the why is optional on
+  every like path now, a double-click on a setup is the whole gesture, and
+  `_prompt_for_why` is deleted. A quick like LEAVES THE CHART UP (2026-09-04, packet
+  T1.2; it retired until then, and a CLAIMED like advances again since T2), records
+  `like_advance` and marks the symbol reviewed exactly as a claimed one does, and
   **places nothing**: a like carries zero privileges (plan.md P3.1). It grades
   under `like_unclaimed`, saves the M5 sidecar on an M5 chart through the writer
   Pass uses, and contributes a **LINK** to the auto-tagger rather than a tag,
@@ -990,6 +998,43 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-04 - Packet T2: a claimed like is one double-click, and it advances
+
+Trader, after reading the T1 tree on the desk: *"pretty close. for the 'like and
+claim' part of the capture tab, a double click of any of the setups there should be
+sufficient. I shouldnt have to type anything below that box. and then double clicking
+that box should advance the chart."*
+
+- **A claimed like needs no why.** `CaptureRail.commit_like` refused an empty why and
+  refocused the field; it now records whatever is there, empty included, and
+  `_prompt_for_why` is deleted (nothing else called it). A whitespace-only why strips
+  to nothing and the row carries no `note`. The placeholder reads **"why
+  (optional)"**. The digit, the double-click, Enter and the button all commit at once.
+  This supersedes R9.2(a)'s required why for the CLAIMED path; P9 had already
+  superseded it for the quick one. The only refusal left is "no setup picked".
+- **A claimed like ADVANCES the chart; a quick like still does not.**
+  `AlertChartReview._on_captured` reads the row's mode through
+  `ui.annotations.store.like_mode_of` (absence reads as claimed, the P9 rule) and
+  fires the new **`likeAdvanceRequested`** for a claimed like or the existing
+  `likeRecorded` for a quick one. The panel answers with `_advance_after_like`:
+  record, status line, `_advance_review_queue()`.
+- **An advance is not a retirement.** `_ignored_symbols` is untouched, so the name
+  keeps alerting and keeps reaching the hourly D1 phone push; no auto-adopted Focus
+  pick is dropped; the symbol's other queued alerts keep their places; nothing is
+  placed. R9.2(b)'s measured harm (40 of 52 likes parking their own symbol) stays
+  fixed.
+- **One recorder, two callers.** `_record_like_advance` writes the `like_advance`
+  review event for both handlers, so the quick and claimed paths cannot drift. The
+  name is historical - `review_learning.TAKE_ACTIONS` keys on the exact string.
+- **Tests:** `tests/test_t1_capture_and_board_like.py` and
+  `tests/test_qt_alert_capture.py` - every test that pinned the required why or "the
+  chart stays" for a claimed like was rewritten to the new rule and named in its
+  docstring; nothing was deleted. Proven red on the un-fixed tree: **19 failed, 72
+  passed**; green after: **91 passed**.
+- **Docs:** `CLAUDE.md`/`AGENTS.md` (byte-identical), `docs/DESK_INTERNALS.md`
+  (second-pass section under the T1 entry), `docs/CHART_REVIEW_WORKSPACE_PLAN.md`
+  (R9.2(a) marked superseded for the claimed like), `plan.md` gate #58.
 
 ### 2026-09-04 - Packet T1: a veto with no box, a like that stays, a board click that queues nothing, the TC2000 board on M5 Focus
 

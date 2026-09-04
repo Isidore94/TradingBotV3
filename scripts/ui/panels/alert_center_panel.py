@@ -824,6 +824,7 @@ class AlertCenterPanel(QFrame):
         )
         self.chart_review.vetoRetireRequested.connect(self._retire_after_veto)
         self.chart_review.likeRecorded.connect(self._after_like)
+        self.chart_review.likeAdvanceRequested.connect(self._advance_after_like)
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
@@ -2819,14 +2820,67 @@ class AlertCenterPanel(QFrame):
             )
         self._advance_review_queue()
 
+    def _record_like_advance(self, alert: BounceAlert) -> bool:
+        """The review event both like verbs write. ONE copy, deliberately.
+
+        The action is ``like_advance``, and **the NAME IS HISTORICAL AND MUST
+        NOT CHANGE** - ``review_learning.TAKE_ACTIONS`` keys on the exact
+        string, and renaming it would drop every past like out of the take side
+        of the scoreboard. What it MEANS depends on the mode the like was made
+        in (quick: the chart stays; claimed: the chart advances), and that
+        difference is the caller's, not this row's.
+
+        Two handlers writing their own copy of this call is exactly how the
+        quick and claimed paths would drift - one gaining a dwell field or a
+        detail the other never got - so there is one.
+        """
+        if alert is None or not alert.symbol:
+            return False
+        self._record_review_event(
+            "like_advance",
+            alert=alert,
+            dwell_ms=self._review_dwell_ms(alert.symbol),
+            queue_len=len(self._review_queue),
+        )
+        return True
+
+    def _advance_after_like(self, alert: BounceAlert) -> None:
+        """A CLAIMED like: record it, say so, and show the next chart.
+
+        Trader, 2026-09-04, second pass (packet T2): *"for the 'like and claim'
+        part of the capture tab, a double click of any of the setups there
+        should be sufficient. I shouldnt have to type anything below that box.
+        and then double clicking that box should advance the chart."*
+
+        The claimed like has named the setup, so the trader is done with the
+        chart; the QUICK like has named nothing and stays (`_after_like`).
+
+        An advance is NOT a retirement, and everything the "Not today" route
+        does is still not done here: ``_ignored_symbols`` is untouched, so the
+        name keeps alerting and keeps reaching the hourly D1 phone push; no
+        auto-adopted Focus pick is dropped; the symbol's other queued alerts
+        keep their places and simply come round again; and nothing is placed -
+        a like carries zero privileges (plan.md P3.1).
+        """
+        if not self._record_like_advance(alert):
+            return
+        self.statusChanged.emit(
+            f"♥ {alert.symbol}: liked and claimed - next chart."
+        )
+        self._advance_review_queue()
+
     def _after_like(self, alert: BounceAlert) -> None:
-        """A LIKE is RECORDED and the chart STAYS (packet T1, 2026-09-04).
+        """A QUICK LIKE is RECORDED and the chart STAYS (packet T1, 2026-09-04).
 
         Trader: *"the 'like' button in the visual chart review should NOT
         advance the char to the next page because i still need time to enter
         alerts etc."* So this records and says so, and moves nothing: the
         waiting list is untouched, the liked chart is still on screen, and the
         trader leaves it with Skip or "Not today" when they are done arming.
+
+        Packet T2 (2026-09-04, second pass) narrowed this to the QUICK like -
+        Alt+L, the rail's "♥ Quick like", the chart's "♥ Like" button. A
+        CLAIMED like has named its setup and advances (`_advance_after_like`).
 
         Everything this function deliberately does NOT do was previously done
         to every liked symbol, because a like was routed through
@@ -2846,14 +2900,8 @@ class AlertCenterPanel(QFrame):
         ``remove_today``, and ``REJECT_ACTIONS`` scored 40 of the window's 52
         likes as dismissals (R9.2).
         """
-        if alert is None or not alert.symbol:
+        if not self._record_like_advance(alert):
             return
-        self._record_review_event(
-            "like_advance",
-            alert=alert,
-            dwell_ms=self._review_dwell_ms(alert.symbol),
-            queue_len=len(self._review_queue),
-        )
         self.statusChanged.emit(
             f"♥ {alert.symbol}: liked. The chart stays - arm your alerts, then "
             "Skip or Not today."
