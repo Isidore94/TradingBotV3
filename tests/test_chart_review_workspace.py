@@ -900,11 +900,25 @@ class QuickLikeTests(unittest.TestCase):
         self.assertIn("Alt+K", self.rail.status_label.text())
         self.assertIn("quick", self.rail.status_label.text().lower())
 
-    def test_the_claimed_path_is_untouched(self) -> None:
-        """R9.2(a)'s "why is required" is superseded for the QUICK path only."""
-        self.assertIsNone(self.rail.commit_like())  # no digit
+    def test_the_claimed_path_needs_only_the_claim(self) -> None:
+        """Rewritten for packet T2 (trader, 2026-09-04, second pass).
+
+        It pinned R9.2(a)'s "why is required" for the CLAIMED path, which P9
+        had superseded for the quick one. T2 supersedes it here too: *"a double
+        click of any of the setups there should be sufficient. I shouldnt have
+        to type anything below that box."* The only refusal left is the one
+        with nothing to record - no setup picked. A why is still CARRIED when
+        the trader types one.
+        """
+        self.assertIsNone(self.rail.commit_like())  # no digit, nothing to record
+
         self.rail.setup_list.setCurrentRow(0)
-        self.assertIsNone(self.rail.commit_like())  # no why
+        bare = self.rail.commit_like()  # no why - and that is enough now
+        self.assertIsNotNone(bare)
+        self.assertEqual(bare["like_mode"], "claimed")
+        self.assertTrue(bare["claimed_setup_id"])
+        self.assertEqual(bare.get("note", ""), "")
+
         self.rail.like_note_input.setText("held the band all day")
         row = self.rail.commit_like()
         self.assertIsNotNone(row)
