@@ -595,8 +595,9 @@ The trader authorized every packet in it. Status per packet:
    persisted high-water mark, seal-side dedupe, `dedupe` CLI. Live gate #55: one
    post-restart session where `thread_cpu.jsonl` shows `warehouse-m5-tee` under
    5% of a core after the close and the day's spool holds one session of rows.
-2. **The duplicated lake (both repair tools BUILT; repairs NOT RUN - the lead's
-   `--apply` was blocked by the session's permission classifier).** Gate #56, the
+2. **The duplicated lake (REPAIRED 2026-09-03 22:29-22:42 PT with the trader's
+   permission - 10,530,916 bar_m5 rows dropped, 25 + 4 derived/feature sessions
+   recomputed, BD-97; outcomes for those months still owed).** Original text: Gate #56, the
    trader's commands in BD-97's runbook: `dedupe --dataset bar_m5 --apply`, then
    `rebuild-month --month 2026-08 --apply` and `--month 2026-09 --apply`
    (`retire_partition` + recompute of `bar_derived` and `feature_snapshot_intraday`,
@@ -630,8 +631,7 @@ The trader authorized every packet in it. Status per packet:
    GUI, its shims, the Tk journal/market-prep tabs, `TickerMover.py` and `PyQt5`
    are removed (19 files). `evidence_snapshots/` already had retention (7/4/12,
    `snapshot_to_das.ps1`) - the assessment was wrong there. The 498 MB `.corrupt`
-   copy: the lead's delete was blocked by the permission classifier - trader's to
-   run (`del C:\TradingBotData\datauntime\d1_features_history.csv.corrupt-2026-08-28`).
+   copy was deleted 2026-09-03 22:30 PT with the trader's permission.
    `technical_integrity_events.jsonl` rotation: DECLINED 2026-08-17 (R6(b)) until
    the warehouse's verified ingest of it passes; `bronze_technical_integrity_events`
    now runs nightly, so the trigger has fired and the segment scheme is OWED as its

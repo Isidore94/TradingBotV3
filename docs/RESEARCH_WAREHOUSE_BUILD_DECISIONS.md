@@ -2753,11 +2753,15 @@ plan.md Phase 0.15, not run.
     ..\.venv\Scripts\python.exe -m research_warehouse.cli rebuild-month --month 2026-08 --apply
     ..\.venv\Scripts\python.exe -m research_warehouse.cli rebuild-month --month 2026-09 --apply
 
-The dry runs of all three were run against the live lake on 2026-09-03: 10,530,916
-`bar_m5` rows to drop; August rebuilds 5 partitions over 21 sessions, September 4
-partitions over the sessions so far. The lead's own attempt to run `--apply` was
-refused by the session's permission classifier (a rewrite of the DAS), which is
-why these are the trader's commands and not a done item.
+**RUN 2026-09-03 22:29-22:42 PT by the lead with the trader's explicit permission**
+(an earlier attempt was refused by the session's permission classifier): dedupe
+dropped 10,198,313 + 332,603 rows (two COMPACT lines); August retired 250 files
+across 5 partitions and recomputed 21 sessions (1,072,253 derived, 5,825 weekly,
+1,816,970 intraday feature rows - one per repaired M5 bar); September retired 44
+files across 4 partitions and recomputed 4 sessions (123,705 / 208,841). GC moved
+483 + 44 retired files. Checked afterwards: M15 August has 15 over-counted rows of
+605,909 (0.002%) and 99.9% COMPLETE; September 0 of 70,047. The whole repair took
+~13 minutes under the build lock while the nightly AI-jobs runner was up.
 
 **Reopen if** the feature step ever stops skipping already-computed keys (then the
 retire becomes optional), or if outcomes gain a per-month recompute entry point.

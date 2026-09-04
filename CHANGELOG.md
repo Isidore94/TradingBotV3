@@ -1001,11 +1001,14 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
   `bar_m5`. Dry run by default. Pinned by `tests/test_warehouse_rebuild_month.py`
   (5), which reproduces the pollution (`constituent_count` 6 for 3 bars) and the
   repair.
-- **Blocked, and handed to the trader**: `dedupe --apply` on the live lake and
-  the deletion of `d1_features_history.csv.corrupt-2026-08-28` were both refused
-  by the session's permission classifier. The commands are in BD-97 and the
-  checkpoint. `rebuild-month --apply` is the same class of action and was not
-  attempted.
+- **Applied 22:28-22:45 PT with the trader's explicit permission** (an earlier
+  attempt had been refused by the session's permission classifier): the desk
+  restarted onto this code (1.7% of a core, was 101%), `dedupe --apply` dropped
+  10,530,916 `bar_m5` rows, `rebuild-month --apply` recomputed August (21
+  sessions, 250 files retired) and September (4 sessions, 44 files), and the
+  498 MB `.corrupt` copy was deleted. Rebuilt M15 bars: 15 of 605,909 August rows
+  over-count (0.002%, was every row), 99.9% COMPLETE. Outcomes for those months
+  stay owed.
 - **Corrected from the assessment**: `evidence_snapshots/` already has retention
   (`ops/evidence_snapshot.prune`, 7 daily / 4 weekly / 12 monthly, run by
   `snapshot_to_das.ps1`); the 5.8 GB is inside that policy. Rotation of
