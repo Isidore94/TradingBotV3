@@ -138,6 +138,42 @@ class RetirementResult:
 
 
 @dataclass
+class DedupeResult:
+    """One partition's answer to "how many rows repeat at the grain?" (BD-96)."""
+
+    dataset: str = ""
+    partition: str = ""
+    rows_before: int = 0
+    rows_after: int = 0
+    rows_dropped: int = 0
+    #: The COMPACT line that replaced the inputs; None for a dry run or a
+    #: partition that had nothing to drop.
+    entry: ManifestEntry | None = None
+
+
+def _duplicate_mask(table: pa.Table, grain) -> pa.Array:
+    """True for every row whose grain key equals the row BEFORE it.
+
+    Vectorised and order-dependent: the caller sorts on the grain first (and on
+    whatever should win inside a key), so the first row of each run is the one
+    kept. A null on either side compares as "different", so uncertainty never
+    drops a row.
+    """
+    n = table.num_rows
+    if n == 0:
+        return pa.array([], type=pa.bool_())
+    columns = [name for name in grain if name in table.column_names]
+    if not columns:
+        return pa.array([False] * n, type=pa.bool_())
+    same = None
+    for name in columns:
+        column = table.column(name).combine_chunks()
+        equal = pc.fill_null(pc.equal(column.slice(1), column.slice(0, n - 1)), False)
+        same = equal if same is None else pc.and_(same, equal)
+    return pa.concat_arrays([pa.array([False], type=pa.bool_()), same])
+
+
+@dataclass
 class ReconcileResult:
     torn_manifest_tail_repaired: bool = False
     adopted: list[ManifestEntry] = field(default_factory=list)
@@ -538,6 +574,79 @@ class ResearchStore:
             git_commit=definitions_git_commit(),
             supersedes=[entry.file_path for entry in snapshot.entries],
         )
+
+    def duplicate_rows(self, dataset: str, partition: str) -> DedupeResult:
+        """Count rows repeated at the dataset's declared grain. Reads grain
+        columns only; writes nothing. The dry run behind ``dedupe_partition``."""
+        spec = dataset_spec(dataset)
+        result = DedupeResult(dataset=dataset, partition=partition)
+        table = self.read_table(dataset, partition, columns=list(spec.grain))
+        result.rows_before = table.num_rows
+        if table.num_rows:
+            table = table.sort_by([(name, "ascending") for name in spec.grain])
+            result.rows_after = table.num_rows - int(pc.sum(_duplicate_mask(table, spec.grain)).as_py())
+        else:
+            result.rows_after = 0
+        result.rows_dropped = result.rows_before - result.rows_after
+        return result
+
+    def dedupe_partition(self, dataset: str, partition: str, *, job_id: str = "") -> DedupeResult:
+        """Rewrite a partition with ONE row per grain key, keeping the earliest.
+
+        A COMPACT line whose replacement is SMALLER than its inputs (BD-96). Like
+        ``compact`` it is one atomic manifest switch and the inputs are retired,
+        not deleted; unlike ``compact`` the row count is allowed to fall, and the
+        line records how far (``rows_dropped``) and on which key (``grain``), so
+        a reader of the ledger can see that rows were dropped and why.
+
+        "Earliest" is the row with the smallest ``observed_at`` where the
+        dataset carries one - the first capture is the evidence, a later twin
+        is the tee re-offering it - and otherwise the first in file order.
+        Refused for datasets that are never compacted and for the ones whose
+        grain legitimately repeats (``SUPERSEDING_DATASETS``).
+        """
+        spec = dataset_spec(dataset)
+        if not spec.compactable:
+            raise ValueError(f"{dataset} is never a compaction input (bronze raw / evidence freeze, sec 8.3)")
+        if dataset in SUPERSEDING_DATASETS:
+            raise ValueError(f"{dataset}: a repeated grain key is this dataset's normal shape; nothing to dedupe")
+        result = DedupeResult(dataset=dataset, partition=partition)
+        snapshot = self.manifest.resolve(dataset=dataset, partition=partition)
+        if not snapshot.entries:
+            return result
+        paths = [self.root / entry.file_path for entry in snapshot.entries]
+        missing = [str(path) for path in paths if not path.exists()]
+        if missing:
+            raise LakeIntegrityError(f"{dataset}/{partition}: manifest-live files are missing: {missing}")
+        table = pa.concat_tables([_read_parquet_file(path) for path in paths]).combine_chunks()
+        if table.num_rows != snapshot.row_count:
+            raise LakeIntegrityError(
+                f"{dataset}/{partition}: dedupe reconciliation failed - "
+                f"{table.num_rows} rows read, manifest says {snapshot.row_count}"
+            )
+        result.rows_before = table.num_rows
+        if "observed_at" in table.column_names:
+            order = [(name, "ascending") for name in spec.grain] + [("observed_at", "ascending")]
+            table = table.sort_by(order)
+        else:
+            table = table.sort_by([(name, "ascending") for name in spec.grain])
+        mask = _duplicate_mask(table, spec.grain)
+        result.rows_dropped = int(pc.sum(mask).as_py()) if table.num_rows else 0
+        result.rows_after = result.rows_before - result.rows_dropped
+        if result.rows_dropped == 0:
+            return result  # nothing to rewrite: no line, no retirement
+        kept = table.filter(pc.invert(mask))
+        result.entry = self._seal_table(
+            spec,
+            partition,
+            kept,
+            action=ACTION_COMPACT,
+            job_id=job_id,
+            git_commit=definitions_git_commit(),
+            supersedes=[entry.file_path for entry in snapshot.entries],
+            extra={"dedupe_grain": list(spec.grain), "rows_dropped": result.rows_dropped},
+        )
+        return result
 
     def retired_pending(self) -> list[str]:
         """Retired file paths still physically present in the live tree."""

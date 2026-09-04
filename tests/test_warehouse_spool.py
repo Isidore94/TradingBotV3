@@ -266,3 +266,31 @@ def test_torn_segment_tail_seals_the_complete_records(writer, store):
     result = seal_spool(store, writer.dir)
     assert result.rows_published == 1
     assert store.read_table("bar_m5").num_rows == 1
+
+
+# --- BD-96: the seal de-duplicates at the grain ----------------------------
+def test_seal_drops_rows_already_live_in_the_lake_and_counts_them(writer, store):
+    """Until 2026-09-03 the seal trusted the tee, and bar_m5 held 10.2M
+    duplicate rows for August. A key already in the lake, or already sealed
+    earlier in the same call, is dropped and counted - never published twice."""
+    store.publish("bar_m5", [_bar_row(minute=0), _bar_row(minute=5)])
+    writer.write("bar_m5", [_bar_row(minute=0), _bar_row(minute=5), _bar_row(minute=10)], now=NOW)
+    writer.roll()
+    writer.write("bar_m5", [_bar_row(minute=10), _bar_row(minute=15)], now=NOW + timedelta(minutes=1))
+    writer.roll()
+
+    result = seal_spool(store, writer.dir)
+
+    assert result.rows_published == 2 and result.rows_deduplicated == 3
+    assert result.segments_sealed == 2 and spool_mod.closed_segments(writer.dir) == []
+    table = store.read_table("bar_m5")
+    assert table.num_rows == 4
+    starts = sorted(value.as_py() for value in table.column("interval_start"))
+    assert starts == [datetime(2026, 8, 3, 13, 30, tzinfo=UTC) + timedelta(minutes=m) for m in (0, 5, 10, 15)]
+
+
+def test_seal_dedupe_leaves_superseding_datasets_alone(store):
+    """A repeated grain key is the normal shape of a superseding dataset."""
+    rows = [{"a": 1}, {"a": 1}]
+    kept, dropped = spool_mod._drop_rows_already_in_the_lake(store, "outcome_path", rows, {})
+    assert kept == rows and dropped == 0

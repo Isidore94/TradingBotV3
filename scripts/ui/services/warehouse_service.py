@@ -18,11 +18,13 @@ worked; it never means a setup is predictive.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 STATUS_OK = "OK"
@@ -286,21 +288,37 @@ class WarehouseTeeCapture:
       never build a backlog.
     * **Spool-only.** ``store`` is deliberately ``None``, so ``capture_m5_tee``
       does no lake I/O at all - not even the read that normally seeds its
-      de-duplication. This object's own ``seen`` set does that instead, which is
-      what ``capture_m5_tee(seen=...)`` is for, and the EOD build job seals the
-      segments.
+      de-duplication. This object's own per-symbol **high-water mark** does
+      that instead (``capture_m5_tee(high_water=...)``), and the EOD build job
+      seals the segments.
+    * **The high-water mark is persisted beside the spool and never reset by
+      the clock (BD-96).** Until 2026-09-03 the dedupe state was a ``seen``
+      set cleared whenever the UTC date changed - so at 17:00 PT every
+      evening, and at every desk restart, the tee re-spooled the champion's
+      whole five-day cache (346,111 rows / 240 MB on 2026-09-03), and because
+      the seal does not dedupe, ``bar_m5`` carried 10.2M duplicate rows for
+      August. The mark lives in ``tee_high_water.json`` in the spool
+      directory: a restart resumes where the last capture stopped, and a
+      symbol whose newest bar is behind its mark is not even walked.
     * **Never fatal.** A capture failure is logged once per session and the
       desk carries on. Research evidence must never be able to break trading.
     """
 
     #: How long ``close()`` waits for an in-flight capture before giving up.
     CLOSE_TIMEOUT = 2.0
+    #: The persisted per-symbol mark. Lives in the spool directory because
+    #: that directory already IS the machine-local capture state (sec 8.4).
+    HIGH_WATER_NAME = "tee_high_water.json"
+    #: A symbol not captured for this long is dropped from the mark file so it
+    #: cannot grow with every name that ever passed through a watchlist.
+    HIGH_WATER_RETENTION_DAYS = 14
 
     def __init__(self, *, spool=None, provider: str = "IBKR"):
         self._spool = spool
         self._provider = provider
-        self._seen: set = set()
-        self._seen_date = None
+        # {symbol: newest interval_start captured}; loaded on the worker thread
+        # the first time it is needed, so the GUI half never touches the file.
+        self._high_water: dict[str, datetime] | None = None
         self.last_report = None
         self.last_error = ""
         self.captures = 0
@@ -395,13 +413,61 @@ class WarehouseTeeCapture:
             self._capture_snapshot(snapshot, moment)
         self._idle.set()
 
-    def _session_seen(self, moment: datetime) -> set:
-        """De-dup keys, reset per session so the set cannot grow unbounded."""
-        day = moment.date()
-        if day != self._seen_date:
-            self._seen = set()
-            self._seen_date = day
-        return self._seen
+    # -- the high-water mark ------------------------------------------------
+    def _high_water_path(self) -> Path | None:
+        """Where the mark is persisted, or None for a writer with no directory
+        (the test doubles): then the mark lives for this object only."""
+        directory = getattr(self.spool, "dir", None)
+        if not directory:
+            return None
+        try:
+            return Path(directory) / self.HIGH_WATER_NAME
+        except TypeError:
+            return None
+
+    def high_water(self) -> dict[str, datetime]:
+        """The per-symbol mark, loaded from disk on first use. Worker thread."""
+        if self._high_water is not None:
+            return self._high_water
+        marks: dict[str, datetime] = {}
+        path = self._high_water_path()
+        if path is not None and path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                for symbol, stamp in (payload.get("high_water") or {}).items():
+                    parsed = datetime.fromisoformat(str(stamp))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    marks[str(symbol).strip().upper()] = parsed.astimezone(timezone.utc)
+            except (OSError, ValueError, TypeError, AttributeError):
+                # An unreadable mark file means one re-spool of the cache, which
+                # the seal now de-duplicates. Never a reason to stop capturing.
+                logging.warning("Warehouse tee high-water file unreadable; starting from an empty mark.")
+                marks = {}
+        self._high_water = marks
+        return marks
+
+    def _save_high_water(self, moment: datetime) -> None:
+        """Persist the mark atomically. Worker thread only; never raises."""
+        path = self._high_water_path()
+        marks = self._high_water
+        if path is None or marks is None:
+            return
+        cutoff = moment - timedelta(days=self.HIGH_WATER_RETENTION_DAYS)
+        for symbol in [symbol for symbol, stamp in marks.items() if stamp < cutoff]:
+            marks.pop(symbol, None)
+        payload = {
+            "schema_version": 1,
+            "saved_at": moment.isoformat(),
+            "high_water": {symbol: stamp.isoformat() for symbol, stamp in sorted(marks.items())},
+        }
+        temp = path.with_name(path.name + ".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp.write_text(json.dumps(payload, indent=0), encoding="utf-8")
+            os.replace(temp, path)
+        except OSError:
+            logging.debug("Warehouse tee high-water file could not be written.", exc_info=True)
 
     def _capture_snapshot(self, snapshot: dict, moment: datetime):
         """Spool one already-taken snapshot. Worker thread only."""
@@ -419,7 +485,7 @@ class WarehouseTeeCapture:
                 now=moment,
                 provider=self._provider,
                 spool=self.spool,
-                seen=self._session_seen(moment),
+                high_water=self.high_water(),
             )
         except Exception as exc:  # research capture never breaks the desk
             if str(exc) != self.last_error:
@@ -429,7 +495,10 @@ class WarehouseTeeCapture:
         self.last_error = ""
         self.last_report = report
         self.captures += 1
-        self.rows_spooled += int(getattr(report, "rows_published", 0) or 0)
+        spooled = int(getattr(report, "rows_published", 0) or 0)
+        self.rows_spooled += spooled
+        if spooled:
+            self._save_high_water(moment)
         return report
 
     def capture(self, bot, *, now: datetime | None = None):

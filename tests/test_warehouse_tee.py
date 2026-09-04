@@ -391,3 +391,78 @@ def test_session_context_wraps_the_champion_session_helper():
     assert context.phase_of(context.rth_open_at - timedelta(minutes=1)) == "PRE"
     assert context.phase_of(context.rth_open_at) == "RTH"
     assert context.phase_of(context.rth_close_at) == "POST"
+
+
+# --- BD-96: de-duplication happens BEFORE any per-bar work ------------------
+class _NullSpool:
+    """A writer that only counts: the tee's spool-only path needs a `write`."""
+
+    def __init__(self):
+        self.rows = 0
+
+    def write(self, dataset, rows, **kwargs):
+        rows = list(rows)
+        self.rows += len(rows)
+        return len(rows)
+
+
+def test_a_re_tee_does_no_per_bar_work_for_bars_already_seen(session, monkeypatch):
+    """On 2026-09-03 the tee hashed and session-tagged 346k cached bars every
+    60 s and THEN dropped them as duplicates - a full core, 91% of the desk's
+    GIL samples. A bar that is already captured must cost nothing but its key."""
+    seen: set = set()
+    cohort = {"AAPL": _bars(3), "MSFT": _bars(3, symbol_base=400.0)}
+    now = OPEN_UTC + timedelta(minutes=20)
+    first = _capture(None, session, cohort, now=now, spool=_NullSpool(), seen=seen)
+    assert first.rows_published == 6
+
+    hashed: list = []
+    sessions: list = []
+    monkeypatch.setattr(tee, "_source_hash", lambda *args: hashed.append(args) or "0" * 64)
+    monkeypatch.setattr(tee, "session_context", lambda *args, **kwargs: sessions.append(args) or session)
+
+    again = _capture(None, session, cohort, now=now, spool=_NullSpool(), seen=seen)
+
+    assert again.rows_published == 0 and again.duplicates_skipped == 6
+    assert hashed == [] and sessions == []
+
+
+def test_a_high_water_mark_skips_an_unchanged_symbol_without_walking_it(session, monkeypatch):
+    """The champion's cache is a sorted rolling window, so its LAST bar answers
+    for the whole list: a symbol whose newest bar is at or behind the mark is
+    counted as unchanged and never iterated."""
+    marks: dict = {}
+    spool = _NullSpool()
+    cohort = {"AAPL": _bars(3), "MSFT": _bars(3, symbol_base=400.0)}
+    now = OPEN_UTC + timedelta(minutes=20)
+
+    first = _capture(None, session, cohort, now=now, spool=spool, high_water=marks)
+    assert first.rows_published == 6
+    assert marks == {"AAPL": OPEN_UTC + timedelta(minutes=10), "MSFT": OPEN_UTC + timedelta(minutes=10)}
+
+    looked_at: list = []
+    real_bar_start = tee._bar_start
+    monkeypatch.setattr(tee, "_bar_start", lambda bar, tz: looked_at.append(bar) or real_bar_start(bar, tz))
+
+    again = _capture(None, session, cohort, now=now, spool=spool, high_water=marks)
+    assert again.rows_published == 0 and again.symbols_unchanged == 2
+    assert len(looked_at) == 2, "one look at the newest bar per symbol, and nothing else"
+
+    # One symbol grows by one completed bar: exactly that bar is spooled and
+    # only that symbol's mark moves.
+    grown = {"AAPL": _bars(4), "MSFT": _bars(3, symbol_base=400.0)}
+    third = _capture(None, session, grown, now=OPEN_UTC + timedelta(minutes=25), spool=spool, high_water=marks)
+    assert third.rows_published == 1 and third.symbols_unchanged == 1
+    assert marks["AAPL"] == OPEN_UTC + timedelta(minutes=15)
+    assert marks["MSFT"] == OPEN_UTC + timedelta(minutes=10)
+
+
+def test_unreadable_bars_are_still_reported_as_unreadable_not_duplicate(session):
+    """A twin with bad prices behind a readable one is unreadable, not a dup:
+    the count must say what happened, and dedupe-first must not change it."""
+    good = _bars(1)[0]
+    no_price = {"dt": OPEN_UTC.replace(tzinfo=None), "open": None, "high": 2.0, "low": 1.0, "close": 1.5}
+    report = _capture(
+        None, session, {"AAPL": [good, no_price]}, now=OPEN_UTC + timedelta(minutes=20), spool=_NullSpool()
+    )
+    assert report.rows_published == 1 and report.unparsable_skipped == 1 and report.duplicates_skipped == 0

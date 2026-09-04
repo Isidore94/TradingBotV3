@@ -798,6 +798,13 @@ which is evidence and must not be loaded as context.
   projection with source hashes and watermarks.
 - Phase 3/3b: zero-extra-request M5 tee, coverage/gap rows, capped spool, capture-only
   pacer, IB backfill transport, nightly/weekly backfill, and trickled yfinance seed.
+  Since 2026-09-03 (BD-96) the tee de-duplicates BEFORE any per-bar work against a
+  persisted per-symbol high-water mark (`tee_high_water.json` beside the spool,
+  never reset by a clock), the seal de-duplicates at the dataset grain and counts
+  the drop (`SealResult.rows_deduplicated`), and `research_warehouse.cli dedupe`
+  (dry run; `--apply` rewrites) repairs a partition through
+  `ResearchStore.dedupe_partition`, a COMPACT-shaped rewrite that keeps the earliest
+  `observed_at` and writes `rows_dropped` on the manifest line.
 - Phase 4: versioned XNYS sessions and deterministic M15/M30/H1/W1 aggregation.
 - Phase 5: point-in-time daily/intraday feature snapshots and anchor instances using
   champion calculations, including AVWAP parity at 1e-9.
@@ -955,6 +962,53 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-03 (evening) - The research tee burned a core; the lake was 85% duplicates; a thread gauge
+
+**On `main`, lead-built, trader-authorized** ("go ahead and implement all packets"
+on the evening desk assessment). Measured on the running desk (pid 18548, `f903ca4`)
+at 21:05 PT: 101% of one core, 26,540 of the process's 29,909 CPU-seconds on
+`warehouse-m5-tee`, 91% of GIL samples in `capture_m5_tee`, the GUI thread in 0 of
+362. Detail and the rules in `docs/DESK_INTERNALS.md` ("The research tee burned a
+core") and BD-96.
+
+- **`research_warehouse/bar_archive.py`**: `capture_m5_tee` runs in two passes -
+  identity (timestamp, forming, high-water / `seen`) first, prices + hash + session
+  tag for survivors only. New `high_water=` argument (per-symbol newest
+  `interval_start`, advanced in place); a symbol whose newest bar is behind its mark
+  is `symbols_unchanged` and never walked. Session lookups cached per session date;
+  `_market_session_module` memoized (its `Path.resolve()` ran per bar).
+- **`ui/services/warehouse_service.py`**: `WarehouseTeeCapture` replaces the
+  UTC-date-keyed `seen` set with the persisted mark (`tee_high_water.json` in the
+  spool dir, atomic replace, 14-day per-symbol retention, unreadable = empty +
+  warning). A restart resumes; a UTC midnight re-spools nothing.
+- **`research_warehouse/spool.py`**: `seal_spool` drops rows whose grain key is
+  already live in the target partition or already sealed in the same call, and
+  counts them (`SealResult.rows_deduplicated`). Superseding datasets exempt.
+- **`research_warehouse/store.py`**: `duplicate_rows` (dry run) and
+  `dedupe_partition` (COMPACT-shaped rewrite, earliest `observed_at` kept, inputs
+  retired, `rows_dropped` + `dedupe_grain` on the line; refuses non-compactable and
+  superseding datasets). **`research_warehouse/cli.py`**: `dedupe` subcommand, dry
+  run unless `--apply`, apply under the build's single-flight lock.
+- **`ui/thread_cpu_gauge.py`** (new, always on from `app.main`): per-thread CPU
+  time once a minute from the OS (`GetThreadTimes` / `/proc`), one record per tick
+  in `diagnostics/thread_cpu.jsonl`, a WARNING naming any non-GUI thread above 50%
+  of a core. CLI summary: `python scripts/ui/thread_cpu_gauge.py`.
+- **Lake state at the time of writing (dry run, read-only)**: `bar_m5
+  month=2026-08` 12,015,283 rows / 1,816,970 keys (10,198,313 to drop);
+  `month=2026-09` 541,444 / 208,841 (332,603). `bar_d1`, `bar_derived`,
+  `feature_snapshot_intraday`: 0 grain duplicates, but the derived/feature rows for
+  those months were computed from the duplicated M5 rows and need a rebuild.
+- **Tests** (+16): `test_warehouse_tee.py` (dedupe-first does zero hashes/session
+  lookups for seen bars; high-water skips an unchanged symbol without walking it;
+  unreadable stays unreadable), `test_qt_warehouse_tee.py` (UTC midnight re-spools
+  nothing; the mark survives a restart; an unreadable mark file starts empty),
+  `test_warehouse_spool.py` (seal drops and counts lake/in-seal duplicates;
+  superseding datasets untouched), `test_warehouse_dedupe.py` (5: dry run writes
+  nothing, earliest observation kept + inputs retired + idempotent, refusals, CLI
+  dry-run vs apply, inert without a store), `test_ui_thread_cpu_gauge.py` (3: hot
+  thread named and the GUI thread never, a real spinning thread measured from the
+  OS, summary).
 
 ### 2026-09-03 - Every ticker click on the Trading Desk charts in the centre pane
 

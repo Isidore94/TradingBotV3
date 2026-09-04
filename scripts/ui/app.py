@@ -1230,6 +1230,12 @@ def main(argv: list[str] | None = None) -> int:
     from ui.stall_watchdog import install as install_stall_watchdog
 
     window.stall_watchdog = install_stall_watchdog(window)
+    # Always on, one syscall per thread per minute: names any thread that is
+    # holding the interpreter lock, which the stall watchdog cannot see
+    # (2026-09-03: the M5 tee thread at 91% of GIL samples, unnamed for 8 h).
+    from ui.thread_cpu_gauge import install as install_thread_cpu_gauge
+
+    window.thread_cpu_gauge = install_thread_cpu_gauge()
     try:
         return app.exec()
     finally:

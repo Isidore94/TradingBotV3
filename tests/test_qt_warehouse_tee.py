@@ -549,3 +549,54 @@ def test_a_disabled_warehouse_builds_nothing_after_a_scan(monkeypatch):
         assert children == []
     finally:
         service.wait_for_warehouse_build(10.0)
+
+
+# --- BD-96: the mark is persisted, and the clock never resets it -----------
+def test_a_utc_midnight_does_not_re_spool_the_cache(enabled):
+    """The old dedupe state was a set keyed on the UTC date, so at 17:00 PT
+    every evening the whole five-day cache went to the spool again (346,111
+    rows / 240 MB on 2026-09-03) and, because the seal did not dedupe, into
+    the lake. A capture just after 00:00 UTC must add nothing."""
+    spool = _RecordingSpool()
+    capture = WarehouseTeeCapture(spool=spool)
+    late = OPEN_UTC.replace(hour=23, minute=59)
+    capture.capture(_FakeBot(_cache()), now=late)
+    spooled = capture.rows_spooled
+    assert spooled > 0
+
+    again = capture.capture(_FakeBot(_cache()), now=late + timedelta(minutes=2))  # 00:01 UTC, next date
+
+    assert capture.rows_spooled == spooled
+    assert again is not None and again.rows_published == 0
+
+
+def test_the_high_water_mark_survives_a_desk_restart(enabled, tmp_path):
+    """A restart used to mean a fresh `seen` set and a full re-spool (107,119
+    rows at 13:05 PT on 2026-09-03). The mark lives beside the spool, so a NEW
+    capture object over the same directory resumes where the last one stopped."""
+    from research_warehouse.spool import ResearchSpoolWriter
+
+    first = WarehouseTeeCapture(spool=ResearchSpoolWriter(tmp_path / "spool"))
+    report = first.capture(_FakeBot(_cache()), now=OPEN_UTC + timedelta(minutes=20))
+    assert report is not None and report.rows_published == 6
+    assert (tmp_path / "spool" / WarehouseTeeCapture.HIGH_WATER_NAME).exists()
+
+    restarted = WarehouseTeeCapture(spool=ResearchSpoolWriter(tmp_path / "spool"))
+    again = restarted.capture(_FakeBot(_cache()), now=OPEN_UTC + timedelta(minutes=21))
+
+    assert again is not None and again.rows_published == 0 and again.symbols_unchanged == 2
+
+
+def test_an_unreadable_high_water_file_starts_empty_and_never_raises(enabled, tmp_path):
+    import json
+
+    from research_warehouse.spool import ResearchSpoolWriter
+
+    writer = ResearchSpoolWriter(tmp_path / "spool")
+    (tmp_path / "spool" / WarehouseTeeCapture.HIGH_WATER_NAME).write_text("{not json", encoding="utf-8")
+    capture = WarehouseTeeCapture(spool=writer)
+    report = capture.capture(_FakeBot(_cache()), now=OPEN_UTC + timedelta(minutes=20))
+    assert report is not None and report.rows_published == 6
+    # ...and the bad file is replaced by a good one on the way out.
+    payload = json.loads((tmp_path / "spool" / WarehouseTeeCapture.HIGH_WATER_NAME).read_text(encoding="utf-8"))
+    assert set(payload["high_water"]) == {"AAPL", "MSFT"}

@@ -820,6 +820,55 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+## Phase 0.15 — Desk assessment packets (2026-09-03 evening, trader-authorized)
+
+The evening assessment of 2026-09-03 (artifact "Where the Desk's Time Goes";
+record in `CURRENT_CHECKPOINT.md` and `docs/DESK_INTERNALS.md`) measured the desk
+after F1 and found the research tee thread at 101% of one core, the M5 scan cycle
+preamble at 513-535 s against a 300 s candle, and 24 live gates owed on built work.
+The trader authorized every packet in it. Status per packet:
+
+1. **S1 - the tee (BUILT 2026-09-03 evening, BD-96).** Dedupe before work,
+   persisted high-water mark, seal-side dedupe, `dedupe` CLI. Live gate #55: one
+   post-restart session where `thread_cpu.jsonl` shows `warehouse-m5-tee` under
+   5% of a core after the close and the day's spool holds one session of rows.
+2. **The duplicated lake (repair tool BUILT; repair NOT RUN).** Gate #56: run
+   `research_warehouse.cli dedupe --dataset bar_m5 --apply` once (under the build
+   lock, when no build is running), confirm the manifest carries two COMPACT lines
+   with `rows_dropped` 10,198,313 and 332,603, then rebuild `bar_derived`,
+   `feature_snapshot_intraday` and the outcome datasets for 2026-08 and 2026-09 -
+   they were computed from the duplicated rows and are wrong in value.
+3. **S3 - the thread gauge (BUILT 2026-09-03 evening).** Always on; verified by
+   gate #55's read of `thread_cpu.jsonl`.
+4. **S2 - the M5 cycle (NOT BUILT; measure first).** The four preamble numbers
+   were taken under a contended lock. After S1 reaches the desk, read one RTH
+   morning of "Scan cycle N preamble" lines; then trim (the three log-only RRS
+   scans per cycle, the retired engines' sweeps, the ATR cache rebuild) and decide
+   on a detector process. Edits `bounce_bot_lib/legacy.py`: **ask-first**.
+5. **S4 - scan cadence (TRADER DECISION).** Six D1 scans inside RTH today; three
+   would halve the child-process traffic. Not a code change until decided.
+6. **E1 - validation week (TRADER DECISION).** No new packets until gates #53,
+   #54, #51, #52, #39 and #41 are closed with the trader watching.
+7. **E2 - bar source (RESOLVED 2026-09-03 evening: it is a PIN, not a defect).**
+   The desk's `local_settings.json` carries `daily_bars_source: "yahoo"`, the
+   R10.0b §1.3 interim pin (`master_avwap_lib.daily_bars_source_pin`), so every
+   D1 scan's daily bars come from Yahoo by configuration; IB serves intraday bars
+   and the champion's M5 loop. `CLAUDE.md`'s market-data line now says so.
+8. **F1 - the control documents (NEXT COMMIT).** Archive `CURRENT_CHECKPOINT.md`
+   and `CHANGELOG.md` past their 1,500-line rule, move BUILT phases out of this
+   section's work queue, cut `CLAUDE.md` to rule + pointer where
+   `docs/DESK_INTERNALS.md` holds the story.
+9. **F2 - dead weight (CLEANUP PACKET, not started).** The Tk GUI and its two
+   shims (~6,700 lines unreachable from the desk), `TickerMover.py` and the PyQt5
+   dependency it keeps, the 498 MB `.corrupt` copy in the runtime folder (trader's
+   file - confirm before deleting), retention for `evidence_snapshots/` (5.8 GB in
+   11 days) and `technical_integrity_events.jsonl` (691 MB, +24 MB/day). The six
+   ATR implementations stay: two are in fenced formula files.
+10. **F3 - the operational storage tier (FIXTURE-FIRST PACKET, not started).**
+    The 1.15 GB tracker JSON, the 615 MB attributes CSV, the 592 MB features CSV
+    and the 279/309 MB outcome CSVs to SQLite / monthly Parquet. Golden fixtures
+    before any reader changes; after the validation week.
+
 ## Phase 0.14 — Names first (decision 0016)
 
 **Status at 2026-09-02, after round R4 Part A.** V1, V2 and V3 are all merged to

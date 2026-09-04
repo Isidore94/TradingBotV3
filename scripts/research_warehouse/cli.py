@@ -976,6 +976,67 @@ def run_status(store: ResearchStore | None = None) -> dict:
     }
 
 
+def run_dedupe(
+    store: ResearchStore | None,
+    *,
+    dataset: str = "bar_m5",
+    partitions=None,
+    apply: bool = False,
+    job_id: str = "dedupe",
+    lock_path: Path | None = None,
+) -> dict:
+    """Count (and with ``apply``, drop) rows repeated at the dataset grain.
+
+    A dry run by default: the lake is read, nothing is written, and the report
+    says what ``--apply`` would retire. With ``apply`` each partition is
+    rewritten through ``ResearchStore.dedupe_partition`` - one COMPACT manifest
+    line each, inputs retired never deleted - so the change is reversible by
+    repointing the manifest, exactly like a compaction (BD-96).
+    """
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    wanted = list(partitions or [])
+    if not wanted:
+        wanted = sorted({entry.partition for entry in store.manifest.resolve(dataset=dataset).entries})
+    report: dict = {"status": "OK", "dataset": dataset, "applied": bool(apply), "partitions": []}
+
+    def _one(partition: str):
+        try:
+            result = (
+                store.dedupe_partition(dataset, partition, job_id=job_id)
+                if apply
+                else store.duplicate_rows(dataset, partition)
+            )
+        except Exception as exc:
+            report["status"] = "ERROR"
+            report["partitions"].append({"partition": partition, "error": str(exc)})
+            return
+        report["partitions"].append(
+            {
+                "partition": partition,
+                "rows_before": result.rows_before,
+                "rows_after": result.rows_after,
+                "rows_dropped": result.rows_dropped,
+                "rewritten": bool(result.entry is not None),
+            }
+        )
+
+    if apply:
+        # A rewrite shares the build's single-flight lock so it can never
+        # interleave with a seal of the same partition. A dry run reads only.
+        try:
+            with single_flight(lock_path):
+                for partition in wanted:
+                    _one(partition)
+        except SingleFlightError as exc:
+            return {"status": "REFUSED", "dataset": dataset, "applied": True, "reason": str(exc)}
+    else:
+        for partition in wanted:
+            _one(partition)
+    report["rows_dropped"] = sum(int(item.get("rows_dropped") or 0) for item in report["partitions"])
+    return report
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="research_warehouse", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1000,11 +1061,22 @@ def main(argv=None) -> int:
     restore.add_argument("--target", required=True)
     restore.add_argument("--dataset", default="bar_m5")
     restore.add_argument("--partition", default="")
+    dedupe = sub.add_parser(
+        "dedupe",
+        help="drop rows repeated at the dataset grain (BD-96); a DRY RUN unless --apply is given",
+    )
+    dedupe.add_argument("--dataset", default="bar_m5")
+    dedupe.add_argument("--partition", action="append", default=[], help="repeatable; default: every live partition")
+    dedupe.add_argument("--apply", action="store_true", help="rewrite the partitions; without it only counts are printed")
 
     args = parser.parse_args(argv)
     store = ResearchStore.open()
     if args.command == "status":
         print(json.dumps(run_status(store), indent=2, default=str))
+        return 0
+    if args.command == "dedupe":
+        report = run_dedupe(store, dataset=args.dataset, partitions=args.partition or None, apply=bool(args.apply))
+        print(json.dumps(report, indent=2, default=str))
         return 0
     if args.command == "build":
         day = date.fromisoformat(args.session_date) if args.session_date else None

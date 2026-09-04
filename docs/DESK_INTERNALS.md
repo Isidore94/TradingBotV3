@@ -833,3 +833,66 @@ and became a window in the way once the boards and the pane shared one screen.
   a page that is not the desk keeps it.
 - The click still uses the lookup box's door and never `_enqueue_review_alert`, for
   the four reasons in the Strength Board entry.
+
+## The research tee burned a core (2026-09-03 evening)
+
+### What was measured
+
+The desk was restarted at 13:02 PT onto `f903ca4` (past F1). At 21:05 PT, five
+hours after the close, `python.exe` was at **101% of one core**: 29,909 CPU-seconds
+in eight hours, **26,540 of them on one thread, `warehouse-m5-tee`**. A 15-second
+`uvx py-spy record --gil` put **330 of 362 GIL-holding samples (91%)** in
+`research_warehouse/bar_archive.py::capture_m5_tee`; the GUI thread appeared in
+**0 of 362**. The largest leaf was `session_context` ->
+`_market_session_module` -> `_ensure_scripts_on_path` -> `Path(__file__).resolve()`,
+a real-path syscall made once per cached bar (197 us, benchmarked in the desk venv),
+then `get_market_session_window`, then the sha256 in `_source_hash`.
+
+The mechanism: `bounce_service.capture_warehouse_tee` fires every 60 s and hands
+the tee a copy of the whole `bot.latest_bars` - 888 symbols x 5 sessions x 78 bars =
+**346,111 bars** after the close, 275 symbols right after a restart. The tee parsed,
+session-tagged and hashed every one of them and only THEN checked the `seen` set.
+That is at least 72 s of work per walk against a 60 s timer, so the thread never
+rested. The 2026-09-03 timer recon had ranked this timer "cheap, low confidence"
+from its docstring; nobody had sampled the GIL after F1 moved the build out.
+
+The same day's stall log (`ui_stalls.jsonl`) carried 5,719 records and 1,336 s
+blocked, **816 s of it attributed to `app.py:1234`** - the event loop itself -
+because a stall caused by another thread holding the lock leaves the GUI thread's
+own stack innocent. The first M5 scan cycle after the restart logged a **1,751 s
+preamble** (`focus_fast_lane` 1,210 s); the old desk's RTH preambles the same
+afternoon were 513-535 s against a 300 s candle.
+
+The second half: `_session_seen` keyed its set on `moment.date()` of a UTC
+moment. At 00:00 UTC (17:00 PT) the set emptied and the tee re-spooled the whole
+five-day cache: `segment-20260904T000029-*.open.jsonl`, **346,111 rows / 240 MB**,
+four of its five sessions already in the lake. A restart did the same (107,119
+rows at 13:05). The seal published whatever the spool held, so
+**`bar_m5 month=2026-08` held 12,015,283 rows for 1,816,970 distinct grain keys
+(85% duplicates)** and `month=2026-09` 541,444 for 208,841. The derived bars and
+intraday features for those months were computed from the duplicated rows.
+
+### The rules this produced
+
+- **The tee de-duplicates BEFORE it does any per-bar work, and its mark is
+  persisted and never reset by a clock** (BD-96). `capture_m5_tee` runs two
+  passes: identity first (timestamp, forming check, high-water / `seen`), then
+  prices, hash and session tag for survivors only. The live desk's state is a
+  per-symbol high-water mark in `tee_high_water.json` beside the spool; a symbol
+  whose newest bar is behind its mark is not walked. A restart resumes; a UTC
+  midnight changes nothing.
+- **The seal de-duplicates at the dataset grain and counts what it drops.**
+  Trusting an upstream dedupe was the defect. `SealResult.rows_deduplicated` is
+  the number; superseding datasets are exempt.
+- **A repeated grain key in the lake is repaired by a COMPACT-shaped rewrite,
+  never by deleting files**: `research_warehouse.cli dedupe --apply`, dry run
+  by default, earliest observation kept, inputs retired, the drop written on the
+  manifest line.
+- **Every desk thread's CPU time is measured once a minute and a hot one is
+  named** (`ui/thread_cpu_gauge.py`, always on, `thread_cpu.jsonl`). The stall
+  watchdog can only name a stall the GUI thread caused; this gauge names the
+  thread that starved it. On 2026-09-03 that answer took a py-spy session at
+  21:05 for a thread that had been hot since 13:02.
+- **A recon that rates a timer from its docstring has not measured it.** The F1
+  packet fixed the build thread; the tee thread had the identical shape and was
+  found the same evening by sampling the GIL, not by reading the code.

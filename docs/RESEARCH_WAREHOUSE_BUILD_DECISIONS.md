@@ -2638,3 +2638,78 @@ OBJECTS rather than pids, because the OS recycles pids.
 not — it publishes through the lake), or if a platform without
 `BELOW_NORMAL_PRIORITY_CLASS` needs a real nice level rather than the 0 the
 `getattr` falls back to.
+
+## BD-96 — The tee de-duplicates BEFORE it works, the mark is persisted, and the seal de-duplicates too
+
+**Decision (2026-09-03 evening, trader-authorized: "go ahead and implement all
+packets" on the desk assessment).** Three changes, one defect.
+
+1. `bar_archive.capture_m5_tee` now runs in two passes. Pass 1 parses only the
+   bar's timestamp, drops forming bars and anything already captured, and
+   stages the rest; pass 2 parses prices, hashes and session-tags only the bars
+   that will actually be published. The session lookup is cached per session
+   DATE inside the call, and `_market_session_module` is memoized so the
+   `Path(__file__).resolve()` it used to run on every call runs once per
+   process. A new optional `high_water={symbol: newest interval_start}` is the
+   live desk's dedupe state: a bar at or before its symbol's mark is a
+   duplicate, and a symbol whose NEWEST bar is at or before the mark is counted
+   as `symbols_unchanged` and never walked - the champion's cache is sorted by
+   `_dedupe_bars`, so the last bar answers for the list.
+2. `WarehouseTeeCapture` keeps that mark instead of a `seen` set, and persists
+   it as `tee_high_water.json` in the spool directory (atomic replace, 14-day
+   retention per symbol, unreadable file = empty mark and a warning, never a
+   raise). It is never reset by the clock.
+3. `spool.seal_spool` de-duplicates at the dataset grain: rows whose grain key
+   is already live in the target partition, or already sealed earlier in the
+   same call, are dropped and COUNTED (`SealResult.rows_deduplicated`).
+   `SUPERSEDING_DATASETS` are exempt. The lake read is grain columns only, per
+   touched partition, in the build child.
+
+Repair: `ResearchStore.duplicate_rows` (dry run) and `dedupe_partition`, and the
+CLI `research_warehouse.cli dedupe [--dataset] [--partition ...] [--apply]`
+(dry run without `--apply`). `dedupe_partition` is a COMPACT-shaped rewrite -
+one manifest line, inputs retired never deleted, restorable by repointing the
+manifest - that is allowed to make the partition SMALLER and says by how much
+(`rows_dropped`, `dedupe_grain` on the line). It keeps the row with the earliest
+`observed_at`: the first capture is the evidence, a later twin is the tee
+re-offering it.
+
+**Why, measured on the desk (pid 18548, main `f903ca4`, 2026-09-03 21:02-21:10
+PT, after the close).** The process had used 29,909 CPU-seconds in eight hours;
+thread `warehouse-m5-tee` alone had 26,540 of them and was at 101% of one core
+at 21:05. `uvx py-spy record --gil` for 15 s: 330 of 362 samples (91%) in
+`capture_m5_tee`, the largest leaf `session_context` -> `_market_session_module`
+-> `_ensure_scripts_on_path` -> `Path.resolve()` (197 us each, benchmarked), then
+`get_market_session_window`, then `_source_hash`. The 60-second timer handed the
+tee the whole `latest_bars` cache every tick - 888 symbols x 5 sessions x 78 bars
+= 346,111 bars after the close - and every one of them was parsed, session-tagged
+and hashed BEFORE the `seen` check dropped it. That is >=72 s of work per walk
+against a 60 s timer; the one-slot mailbox meant the thread never queued and
+never rested. The GUI thread appeared in 0 of 362 GIL samples.
+
+The second half of the defect: `_session_seen` keyed the `seen` set on
+`moment.date()` of a UTC moment, so at 00:00 UTC (17:00 PT) the set emptied and
+the tee re-spooled the whole cache - `segment-20260904T000029-*.open.jsonl`
+holds 346,111 rows / 240 MB for five sessions, four of them already in the lake -
+and a restart did the same (107,119 rows at 13:05 PT). `seal_spool` published
+whatever the spool held ("the tee de-duplicates before spooling"), so the lake
+now carries the duplicates: `bar_m5 month=2026-08` 12,015,283 rows for 1,816,970
+distinct grain keys (10,198,313 duplicates, 85%); `month=2026-09` 541,444 rows
+for 208,841 keys (332,603 duplicates). `bar_d1`, `bar_derived` and
+`feature_snapshot_intraday` carry NO grain duplicates (checked with the dry run),
+but the derived and feature rows for those months were COMPUTED FROM the
+duplicated M5 rows: `aggregate_symbol_session` counts every twin as a
+constituent (volume x N, `constituent_count` > expected, quality PARTIAL) and
+`compute_intraday_features` windows over the doubled list. Those rows need a
+rebuild after the dedupe; that rebuild is an overnight job and is recorded as
+owed, not run here.
+
+**What did not change.** The tee still issues no provider request and touches no
+lake; `seen=` still works for the CLI and backfill callers; the seal's
+`sealed_before` crash guard stands beside the new dedupe; `compact` is untouched
+and still refuses a row-count change (a compaction that loses rows is a defect,
+a dedupe that loses rows is the point, and the two are different verbs).
+
+**Reopen if** the champion's cache ever stops being sorted (then the last-bar
+short-circuit must go back to a full walk), or if a dataset other than the
+superseding two legitimately needs a repeated grain key at the seal.

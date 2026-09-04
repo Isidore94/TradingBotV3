@@ -73,6 +73,9 @@ class SealResult:
     rows_published: int = 0
     rows_quarantined: int = 0
     gaps_recorded: int = 0
+    #: Rows the seal dropped because their grain key was already in the lake
+    #: or earlier in the same seal (BD-96). Counted, never silently absorbed.
+    rows_deduplicated: int = 0
     segments_failed: list = field(default_factory=list)
     status: str = "OK"  # OK | DISABLED | NOTHING_TO_SEAL
 
@@ -303,9 +306,17 @@ def seal_spool(
 
     The active ``.open`` segment is never touched: it belongs to the writer.
     A segment is unlinked only after its rows are sealed and their manifest
-    lines exist, so an interrupted seal re-seals on the next run (publishes are
-    idempotent per dataset only insofar as the caller made them so, which is
-    why the tee de-duplicates before spooling).
+    lines exist, so an interrupted seal re-seals on the next run.
+
+    **The seal de-duplicates at the dataset grain (BD-96).** Until 2026-09-03
+    it published whatever the spool held, trusting the tee to have de-duplicated
+    - and the tee's dedupe state reset every UTC midnight and every restart, so
+    ``bar_m5`` accumulated 10.2M duplicate rows in August alone. A row whose
+    grain key is already live in its lake partition, or already sealed earlier
+    in this same call, is now dropped and COUNTED (``rows_deduplicated``).
+    Datasets whose grain legitimately repeats (``SUPERSEDING_DATASETS``) are
+    published as before. The lake read is grain columns only, per touched
+    partition, so its cost is a few seconds in the build child, never the desk.
     """
     result = SealResult()
     if store is None:
@@ -327,6 +338,10 @@ def seal_spool(
         segment_name = entry.extra.get("spool_segment")
         if segment_name:
             sealed_before.add((entry.dataset, str(segment_name)))
+    # Grain keys already live per (dataset, partition), read lazily on first
+    # touch and extended with every key this call publishes, so a key repeated
+    # across two segments of one seal is published once.
+    sealed_keys: dict[tuple[str, str], set] = {}
 
     for segment in segments:
         grouped: dict[str, list[dict]] = {}
@@ -350,6 +365,10 @@ def seal_spool(
         for dataset, rows in sorted(grouped.items()):
             if (dataset, segment.name) in sealed_before:
                 continue  # already in the lake; a crash only prevented the unlink
+            rows, dropped = _drop_rows_already_in_the_lake(store, dataset, rows, sealed_keys)
+            result.rows_deduplicated += dropped
+            if not rows:
+                continue
             try:
                 published = store.publish(dataset, rows, job_id=job_id, extra={"spool_segment": segment.name})
             except Exception:
@@ -365,6 +384,73 @@ def seal_spool(
 
     result.gaps_recorded = _seal_shed_log(store, shed_log, job_id=job_id)
     return result
+
+
+def _key_value(value):
+    """One comparable shape for a grain value from JSON or from Parquet."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return value
+        if isinstance(parsed, datetime) and ("T" in value or " " in value):
+            return _key_value(parsed)
+    return value
+
+
+def _drop_rows_already_in_the_lake(store: ResearchStore, dataset: str, rows: list[dict], sealed_keys: dict):
+    """Rows minus the ones whose grain key the lake (or this seal) already has.
+
+    Returns ``(kept_rows, dropped_count)``. A dataset without a grain, or one
+    in ``SUPERSEDING_DATASETS``, is returned untouched: no key means nothing to
+    compare on, and a repeated key there is the dataset's normal shape.
+    """
+    try:
+        from .schemas import dataset_spec
+        from .store import SUPERSEDING_DATASETS
+    except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+        from schemas import dataset_spec  # type: ignore
+        from store import SUPERSEDING_DATASETS  # type: ignore
+    if dataset in SUPERSEDING_DATASETS:
+        return rows, 0
+    try:
+        spec = dataset_spec(dataset)
+    except KeyError:
+        return rows, 0
+    grain = [name for name in spec.grain]
+    if not grain:
+        return rows, 0
+    kept: list[dict] = []
+    dropped = 0
+    for raw in rows:
+        try:
+            partition = store.partition_of(spec, store._coerce_row(spec, raw)[0])
+        except Exception:
+            kept.append(raw)  # publish decides what to do with a row it cannot place
+            continue
+        bucket = sealed_keys.get((dataset, partition))
+        if bucket is None:
+            bucket = sealed_keys[(dataset, partition)] = _live_grain_keys(store, dataset, partition, grain)
+        key = tuple(_key_value(raw.get(name)) for name in grain)
+        if key in bucket:
+            dropped += 1
+            continue
+        bucket.add(key)
+        kept.append(raw)
+    return kept, dropped
+
+
+def _live_grain_keys(store: ResearchStore, dataset: str, partition: str, grain: list[str]) -> set:
+    try:
+        table = store.read_table(dataset, partition, columns=grain)
+    except Exception:
+        return set()
+    columns = [table.column(name).to_pylist() for name in grain]
+    return {tuple(_key_value(value) for value in values) for values in zip(*columns)}
 
 
 def _seal_shed_log(store: ResearchStore, shed_log: Path, *, job_id: str) -> int:

@@ -65,21 +65,35 @@ CAPTURE_DELAYED = "DELAYED"
 CAPTURE_BACKFILL = "BACKFILL"
 
 
+#: Resolved ONCE. ``Path(__file__).resolve()`` is a real-path syscall (~200 us
+#: on the desk), and until 2026-09-03 it ran once per cached bar per tee tick -
+#: see BD-96 for the measurement (91% of the desk's GIL samples).
+_SCRIPTS_DIR = str(Path(__file__).resolve().parents[1])
+_MARKET_SESSION_MODULE = None
+
+
 def _ensure_scripts_on_path() -> None:
     import sys
 
-    scripts_dir = str(Path(__file__).resolve().parents[1])
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
+    if _SCRIPTS_DIR not in sys.path:
+        sys.path.insert(0, _SCRIPTS_DIR)
 
 
 def _market_session_module():
-    """Wrapped read of the champion's own session helper - never a second one."""
+    """Wrapped read of the champion's own session helper - never a second one.
+
+    Imported once and memoized: the import machinery is cheap on a hit, but the
+    path check in front of it was not, and this is called per session lookup.
+    """
+    global _MARKET_SESSION_MODULE
+    if _MARKET_SESSION_MODULE is not None:
+        return _MARKET_SESSION_MODULE
     _ensure_scripts_on_path()
     try:
         import market_session
     except ImportError:  # pragma: no cover - packaged import
         from scripts import market_session  # type: ignore
+    _MARKET_SESSION_MODULE = market_session
     return market_session
 
 
@@ -132,6 +146,9 @@ class CaptureReport:
     forming_skipped: int = 0
     duplicates_skipped: int = 0
     unparsable_skipped: int = 0
+    #: Symbols whose newest cached bar was already behind the caller's
+    #: high-water mark, so the tee never walked their list (BD-96).
+    symbols_unchanged: int = 0
 
 
 @dataclass
@@ -238,6 +255,7 @@ def capture_m5_tee(
     job_id: str = "m5_tee",
     spool=None,
     seen=None,
+    high_water=None,
 ) -> CaptureReport:
     """Archive already-fetched M5 bars into ``bar_m5``. Zero provider cost.
 
@@ -249,6 +267,18 @@ def capture_m5_tee(
     session never writes the lake directly; the EOD build job seals those
     segments. Pass ``seen`` - a caller-held set of (symbol, interval_start) -
     to keep de-duplication working while the lake is unreachable.
+
+    ``high_water`` is the cheaper de-duplication the live desk uses (BD-96): a
+    caller-held ``{symbol: newest interval_start already captured}``. A bar at
+    or before its symbol's mark is a duplicate, and a symbol whose NEWEST bar
+    is at or before the mark is skipped without walking its list at all - the
+    champion's cache is a rolling window that only ever grows at the end
+    (``_dedupe_bars`` sorts it), so the last bar answers for the whole list.
+    The mapping is advanced in place for every bar this call spools.
+
+    **De-duplication happens before any per-bar work.** The old order parsed,
+    hashed and session-tagged every bar of every symbol and THEN dropped it as
+    a duplicate; on 2026-09-03 that was 346k bars every 60 s and a full core.
     """
     report = CaptureReport()
     if store is None and spool is None:
@@ -265,70 +295,102 @@ def capture_m5_tee(
 
     tz = market_tz or market_local_timezone()
     context = session or session_context(observed_at)
+    # One session lookup per session DATE, not per bar. The cache holds five
+    # sessions of bars, so this is five lookups instead of 346k (BD-96).
+    contexts: dict[date, SessionContext] = {context.session_date: context}
     rows: list[dict] = []
     partitions_needed: set[str] = set()
-    staged: list[tuple[str, datetime, dict]] = []
+    candidates: list[tuple[str, datetime, object]] = []
+    watermark = high_water if isinstance(high_water, dict) else None
 
+    # Pass 1 - identity only. Parse the timestamp, drop forming bars and
+    # anything already captured, and stage the rest. No price, hash or
+    # session work happens for a bar that is about to be thrown away.
     for symbol, bars in sorted(cohort.items()):
         report.symbols += 1
+        mark = watermark.get(symbol) if watermark is not None else None
+        if mark is not None and bars:
+            newest = _bar_start(bars[-1], tz)
+            if newest is not None and newest <= mark:
+                report.symbols_unchanged += 1
+                continue
         for bar in bars:
             start = _bar_start(bar, tz)
-            open_ = _as_float(_bar_field(bar, "open"))
-            high = _as_float(_bar_field(bar, "high"))
-            low = _as_float(_bar_field(bar, "low"))
-            close = _as_float(_bar_field(bar, "close"))
-            if start is None or None in (open_, high, low, close):
+            if start is None:
                 report.unparsable_skipped += 1
                 continue
-            end = start + M5_INTERVAL
-            if end > observed_at:
+            if start + M5_INTERVAL > observed_at:
                 # The interval has not closed yet: preview, never evidence.
                 report.forming_skipped += 1
                 continue
-            volume = _as_float(_bar_field(bar, "volume")) or 0.0
-            bar_session = context if context.session_date == start.astimezone(tz).date() else session_context(start)
-            row = {
-                "symbol": symbol,
-                "interval_start": start,
-                "interval_end": end,
-                "session_id": bar_session.session_id,
-                "session_phase": bar_session.phase_of(start),
-                "open": open_,
-                "high": high,
-                "low": low,
-                "close": close,
-                # As provided by the provider. IB historical TRADES volume is
-                # in round lots while Yahoo is in shares; that difference is a
-                # sentinel-parity check against `provider`, never a rewrite of
-                # captured evidence (plan sec 7.1, 9.1).
-                "volume": int(volume),
-                "vwap": _as_float(_bar_field(bar, "vwap", "average", "wap")),
-                "trade_count": _as_int(_bar_field(bar, "trade_count", "barCount", "bar_count")),
-                "provider": provider,
-                "is_complete": True,
-                "quality": QUALITY_COMPLETE,
-                "source_hash": _source_hash(symbol, start, (open_, high, low, close, volume)),
-                "event_at": end,
-                "observed_at": observed_at,
-                "capture_mode": capture_mode,
-                "revision_id": "",
-                "supersedes_revision_id": "",
-                "schema_version": SCHEMA_VERSION,
-                "run_id": run_id,
-            }
+            if (mark is not None and start <= mark) or (seen is not None and (symbol, start) in seen):
+                report.duplicates_skipped += 1
+                continue
             partitions_needed.add(f"month={start:%Y-%m}")
-            staged.append((symbol, start, row))
+            candidates.append((symbol, start, bar))
 
-    known = _known_bar_keys(store, partitions_needed) if store is not None else set()
-    if seen is not None:
-        known |= set(seen)
-    for symbol, start, row in staged:
+    known = _known_bar_keys(store, partitions_needed) if store is not None and candidates else set()
+
+    # Pass 2 - the real work, only for bars that will actually be published.
+    staged: list[tuple[str, datetime, dict]] = []
+    for symbol, start, bar in candidates:
+        open_ = _as_float(_bar_field(bar, "open"))
+        high = _as_float(_bar_field(bar, "high"))
+        low = _as_float(_bar_field(bar, "low"))
+        close = _as_float(_bar_field(bar, "close"))
+        if None in (open_, high, low, close):
+            # Unreadable is reported as unreadable, never folded into
+            # "duplicate" because a readable twin happened to come first.
+            report.unparsable_skipped += 1
+            continue
         if (symbol, start) in known:
             report.duplicates_skipped += 1
             continue
         known.add((symbol, start))
+        end = start + M5_INTERVAL
+        volume = _as_float(_bar_field(bar, "volume")) or 0.0
+        bar_day = start.astimezone(tz).date()
+        bar_session = contexts.get(bar_day)
+        if bar_session is None:
+            bar_session = contexts[bar_day] = session_context(start)
+        row = {
+            "symbol": symbol,
+            "interval_start": start,
+            "interval_end": end,
+            "session_id": bar_session.session_id,
+            "session_phase": bar_session.phase_of(start),
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            # As provided by the provider. IB historical TRADES volume is
+            # in round lots while Yahoo is in shares; that difference is a
+            # sentinel-parity check against `provider`, never a rewrite of
+            # captured evidence (plan sec 7.1, 9.1).
+            "volume": int(volume),
+            "vwap": _as_float(_bar_field(bar, "vwap", "average", "wap")),
+            "trade_count": _as_int(_bar_field(bar, "trade_count", "barCount", "bar_count")),
+            "provider": provider,
+            "is_complete": True,
+            "quality": QUALITY_COMPLETE,
+            "source_hash": _source_hash(symbol, start, (open_, high, low, close, volume)),
+            "event_at": end,
+            "observed_at": observed_at,
+            "capture_mode": capture_mode,
+            "revision_id": "",
+            "supersedes_revision_id": "",
+            "schema_version": SCHEMA_VERSION,
+            "run_id": run_id,
+        }
+        staged.append((symbol, start, row))
+
+    for symbol, start, row in staged:
         if seen is not None:
             seen.add((symbol, start))
+        if watermark is not None:
+            current = watermark.get(symbol)
+            if current is None or start > current:
+                watermark[symbol] = start
         rows.append(row)
 
     if not rows:
