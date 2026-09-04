@@ -30,9 +30,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 #: Modules the suite imports but never constructs, so nothing else would
 #: notice a name vanishing out from under them.
 UNCONSTRUCTED_MODULES = (
-    "master_avwap_lib.gui",
-    "gui_app.app",
-    "gui_app.master_panel",
+    # The Tk modules this test used to guard were removed on 2026-09-03 (F2);
+    # the two runner shims copy legacy names the same way and take their place.
+    "master_avwap_lib.runner",
+    "bounce_bot_lib.runner",
 )
 
 
@@ -48,6 +49,12 @@ def _bound_names(node: ast.AST) -> set[str]:
         for sub in ast.walk(child):
             if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
                 bound.add(sub.id)
+            elif isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                # A def inside an `if`/`with`/`try` binds its name in THIS scope
+                # too (runner.py's `add_signal`, found 2026-09-03 when the test
+                # first pointed at it). Over-binding a deeper nested def only
+                # costs a false negative, never a false alarm.
+                bound.add(sub.name)
             elif isinstance(sub, ast.arg):
                 bound.add(sub.arg)
             elif isinstance(sub, (ast.Import, ast.ImportFrom)):

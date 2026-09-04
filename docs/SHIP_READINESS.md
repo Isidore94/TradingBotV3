@@ -22,7 +22,7 @@ compatibility shims while the legacy Tk app is retired.
 
 ## Current Shape
 
-- `launch_gui.py` is the primary PySide6 launcher. `scripts/gui.py --ui tk` is
+- `launch_gui.py` is the only launcher (the Tk app was removed 2026-09-03). Historically `scripts/gui.py --ui tk` was
   the legacy compatibility path during migration.
 - `scripts/ui/` is the new consumer UI layer.
 - `scripts/master_avwap_lib/` and `scripts/bounce_bot_lib/` contain the existing

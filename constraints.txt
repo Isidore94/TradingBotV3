@@ -34,14 +34,6 @@ pycparser==2.23
 pydantic==2.13.4
 pydantic_core==2.46.4
 Pygments==2.20.0
-PyQt5==5.15.11
-# PyQt5-Qt5 5.15.2 (the desktop's installed Qt runtime) ships no macOS
-# wheel, so a plain install fails outright on a Mac. Windows/Linux keep the
-# exact pin; macOS pins the oldest release with Apple Silicon wheels.
-# PyQt5 survives only for legacy TickerMover.py (CLAUDE.md).
-PyQt5-Qt5==5.15.2; sys_platform != "darwin"
-PyQt5-Qt5==5.15.17; sys_platform == "darwin"
-PyQt5_sip==12.17.2
 pyqtgraph==0.14.0
 PySide6==6.11.1
 PySide6_Addons==6.11.1

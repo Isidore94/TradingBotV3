@@ -23,6 +23,26 @@ def test_swing_slots_start_open_plus_hour_then_hourly_from_first_full_hour():
     assert slots == ["07:30", "09:00", "10:00", "11:00", "12:00", "12:45", "13:00"]
 
 
+def test_reduced_desk_cadence_keeps_first_midday_preview_and_close(monkeypatch):
+    """S4 (2026-09-03): four desk-day scans, and the close slot - the tracker's
+    single writer - never moves. The hourly ladder is unchanged for AWAY days."""
+    reduced = core.get_autopilot_swing_slots(REF, local_timezone_name=PACIFIC, cadence="reduced")
+    assert reduced == ["07:30", "10:00", "12:45", "13:00"]
+    assert core.slot_writes_setup_tracker("13:00", REF, PACIFIC)
+    assert core.get_autopilot_swing_slots(REF, local_timezone_name=PACIFIC, cadence="hourly") == core.get_autopilot_swing_slots(
+        REF, local_timezone_name=PACIFIC
+    )
+    # The setting: anything but "hourly" is the reduced default; a typo never pins hourly.
+    import project_paths
+
+    monkeypatch.setattr(project_paths, "get_local_setting", lambda key, default="": "hourly")
+    assert core.desk_scan_cadence() == "hourly"
+    monkeypatch.setattr(project_paths, "get_local_setting", lambda key, default="": "houry")
+    assert core.desk_scan_cadence() == "reduced"
+    monkeypatch.setattr(project_paths, "get_local_setting", lambda key, default="": "")
+    assert core.desk_scan_cadence() == "reduced"
+
+
 def test_hourly_away_report_slots_start_at_0700_and_run_once_per_hour():
     before = datetime(2026, 7, 2, 6, 59)
     at_seven = datetime(2026, 7, 2, 7, 0)

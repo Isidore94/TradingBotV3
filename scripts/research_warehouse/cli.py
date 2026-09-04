@@ -1037,6 +1037,88 @@ def run_dedupe(
     return report
 
 
+#: What a month rebuild recomputes, in dependency order. Both are DERIVED from
+#: ``bar_m5`` and both were computed from the duplicated rows (BD-96): the
+#: aggregator counted every twin as a constituent (volume x N, quality PARTIAL)
+#: and the intraday features windowed over the doubled list. ``bar_m5`` itself
+#: is repaired by ``dedupe``; ``bar_d1`` and the daily features never read it.
+REBUILD_DATASETS = ("bar_derived", "feature_snapshot_intraday")
+
+
+def run_rebuild_month(
+    store: ResearchStore | None,
+    *,
+    month: str,
+    apply: bool = False,
+    job_id: str = "rebuild_month",
+    now: datetime | None = None,
+    lock_path: Path | None = None,
+) -> dict:
+    """Retire a month's derived partitions and recompute them session by session.
+
+    A dry run (the default) lists the partitions that would be retired and the
+    sessions that would be rebuilt, and writes nothing. With ``apply`` it takes
+    the build's single-flight lock, appends one RETIRE line per partition, then
+    for every exchange session of the month runs the derived-bar, weekly-bar and
+    intraday-feature steps exactly as the nightly build does. Nothing is deleted:
+    the retired files move to ``_retired/`` on the next GC and stay restorable.
+    Run it AFTER ``dedupe --apply`` on ``bar_m5``, never before.
+    """
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    try:
+        first = date.fromisoformat(f"{month}-01")
+    except ValueError:
+        return {"status": "ERROR", "message": f"--month must be YYYY-MM, got {month!r}"}
+    stamp = now or utc_now()
+    last_day = (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    try:
+        from . import exchange_calendar as xcal
+    except ImportError:  # pragma: no cover - scripts/ directly on sys.path
+        import exchange_calendar as xcal  # type: ignore
+    sessions = [
+        session.session_date if hasattr(session, "session_date") else session
+        for session in xcal.sessions_between(first, min(last_day, stamp.date()))
+    ]
+    live = store.manifest.resolve()
+    partitions = sorted(
+        {
+            (entry.dataset, entry.partition)
+            for entry in live.entries
+            if entry.dataset in REBUILD_DATASETS and entry.partition.endswith(f"month={month}")
+        }
+    )
+    report: dict = {
+        "status": "OK",
+        "month": month,
+        "applied": bool(apply),
+        "partitions": [f"{dataset}/{partition}" for dataset, partition in partitions],
+        "sessions": [day.isoformat() for day in sessions],
+        "retired_files": 0,
+        "steps": {},
+    }
+    if not apply:
+        return report
+    try:
+        with single_flight(lock_path):
+            for dataset, partition in partitions:
+                report["retired_files"] += len(
+                    store.retire_partition(dataset, partition, job_id=job_id, reason=f"rebuild {month} (BD-96)")
+                )
+            for day in sessions:
+                steps: dict = {}
+                steps["derived"] = vars(build_derived_bars(store, [day], as_of=stamp, now=stamp, run_id=job_id))
+                steps["weekly"] = vars(build_weekly_bars(store, [day], as_of=stamp, now=stamp, run_id=job_id))
+                steps["features_intraday"] = vars(
+                    features.build_intraday_snapshots(store, day, now=stamp, run_id=job_id)
+                )
+                report["steps"][day.isoformat()] = steps
+            report["retired"] = vars(store.collect_retired(now=stamp))
+    except SingleFlightError as exc:
+        return {"status": "REFUSED", "month": month, "applied": True, "reason": str(exc)}
+    return report
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="research_warehouse", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1068,6 +1150,12 @@ def main(argv=None) -> int:
     dedupe.add_argument("--dataset", default="bar_m5")
     dedupe.add_argument("--partition", action="append", default=[], help="repeatable; default: every live partition")
     dedupe.add_argument("--apply", action="store_true", help="rewrite the partitions; without it only counts are printed")
+    rebuild = sub.add_parser(
+        "rebuild-month",
+        help="retire a month's bar_derived + feature_snapshot_intraday partitions and recompute them (BD-96); DRY RUN unless --apply",
+    )
+    rebuild.add_argument("--month", required=True, help="YYYY-MM")
+    rebuild.add_argument("--apply", action="store_true", help="retire and recompute; without it only the plan is printed")
 
     args = parser.parse_args(argv)
     store = ResearchStore.open()
@@ -1078,6 +1166,10 @@ def main(argv=None) -> int:
         report = run_dedupe(store, dataset=args.dataset, partitions=args.partition or None, apply=bool(args.apply))
         print(json.dumps(report, indent=2, default=str))
         return 0
+    if args.command == "rebuild-month":
+        report = run_rebuild_month(store, month=args.month, apply=bool(args.apply))
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status") in {"OK", "DISABLED"} else 1
     if args.command == "build":
         day = date.fromisoformat(args.session_date) if args.session_date else None
         report = run_build(store, session_date=day, run_id=args.run_id)

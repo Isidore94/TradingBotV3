@@ -95,7 +95,7 @@ conversation behind every one are preserved verbatim in
 before changing the behaviour a rule governs.**
 
 **Shape**
-- Entry: `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). One desk role, no flag to change it — Desk Link/satellite and the mini-PC scanner were retired 2026-08-08 and their code removed 2026-08-24 (no `desk_link`, no `ui/satellite.py`, no `master_avwap_mini_pc.py`, no `--satellite`/`--desk-role`). `scripts/gui.py --ui tk` is the legacy Tk UI.
+- Entry: `launch_gui.py` → `scripts/ui/app.py` (PySide6 Trading Desk). One desk role, no flag to change it — Desk Link/satellite and the mini-PC scanner were retired 2026-08-08 and their code removed 2026-08-24 (no `desk_link`, no `ui/satellite.py`, no `master_avwap_mini_pc.py`, no `--satellite`/`--desk-role`). **The legacy Tk UI, its shims, the Tk journal/market-prep tabs and `TickerMover.py` were REMOVED on 2026-09-03** (assessment packet F2); there is no second UI and no `PyQt5` in the dependency set.
 - Market data: IBKR TWS/Gateway `127.0.0.1:7496` (`ibapi`) primary, `yfinance` fallback; bar source tracked per scan (`docs/BROKER_ADAPTERS.md`). **On the desk the D1 scan's daily bars are PINNED to Yahoo** by `local_settings.json` `daily_bars_source: "yahoo"` (R10.0b §1.3 interim pin, `master_avwap_lib.daily_bars_source_pin`) - a run manifest showing 400+ Yahoo daily-bar successes and single-digit IB is the pin working, not IB failing (checked 2026-09-03). IB serves the intraday bars and the champion's M5 loop.
 - Engines: `scripts/master_avwap.py` (+`master_avwap_lib/`) D1 AVWAP swing scanner; `scripts/bounce_bot.py` (+`bounce_bot_lib/`) intraday M5 bounce detector; `market_prep/` pre-session services.
 - Inputs: plain-text watchlists (`longs.txt`, `shorts.txt`, `swinglongs.txt`, `shortswings.txt`) in the shared home folder.
@@ -249,7 +249,7 @@ measurement in `docs/DESK_INTERNALS.md` ("Headline statistics, long form").
 - Python ≥3.12 (desk `.venv` measured 3.12.13, a uv-managed CPython built 2026-08-07; the repo venv
   has no `pip` — install with `uv pip install -r … -c constraints.txt --python .venv\Scripts\python.exe`),
   Windows-first with macOS support (`docs/MACOS_SETUP.md`; same code, no fork — platform differences live in launchers, `project_paths.py`, and `ai_credentials.py`), repo-local `.venv`.
-- `PySide6`/`qtawesome`/`pyqtgraph` — new Trading Desk UI (`PyQt5` remains only for legacy `TickerMover.py`); Tk — legacy GUI.
+- `PySide6`/`qtawesome`/`pyqtgraph` — the Trading Desk UI, and the only UI since 2026-09-03 (the Tk GUI and `PyQt5`/`TickerMover.py` are gone; the spec still EXCLUDES `PyQt5` as a guard).
 - `ibapi` — IBKR market data; `yfinance` — fallback bars; `pandas`/`pyarrow` — bar frames and arrow-backed columns.
 - `feedparser` — news RSS for market prep; `openai` — provider-neutral one-way advisory summaries (`scripts/ai_summary.py`, `market_prep/services/ai_service.py`).
 - `pytest` (markers: `network`, `broker`, `slow`, `qt`), `ruff` (narrow defect-class select), `pyinstaller` — packaging, via `packaging/tradingbotv3.spec`.

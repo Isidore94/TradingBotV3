@@ -34,10 +34,7 @@ target-version = "py312"
 extend-exclude = [
     "scripts/master_avwap_lib/legacy.py",
     "scripts/bounce_bot_lib/legacy.py",
-    "scripts/master_avwap_lib/gui.py",
     "scripts/master_avwap_lib/runner.py",
-    "scripts/bounce_bot_lib/gui.py",
-    "scripts/gui_app/",
 ]
 
 [tool.ruff.lint]

@@ -80,11 +80,7 @@ Optional theme override:
 .venv\Scripts\python.exe launch_gui.py --theme dark
 ```
 
-The legacy Tk UI remains available only during migration:
-
-```powershell
-.venv\Scripts\python.exe scripts\gui.py --ui tk
-```
+The legacy Tk UI was removed on 2026-09-03; `launch_gui.py` is the only launcher.
 
 `scripts/master_avwap_mini_pc.py` was removed on 2026-08-24. The named-slot scheduling
 shape it established lives on in `scripts/ai_jobs/runner.py`.

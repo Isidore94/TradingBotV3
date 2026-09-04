@@ -374,10 +374,17 @@ class AutopilotService(QObject):
         threading.Thread(target=worker, name="autopilot-reconnect", daemon=True).start()
 
     def _swing_slots(self, now: datetime) -> list[str]:
-        """Today's swing slots; Evening mode adds the open+30 early run."""
+        """Today's swing slots; Evening mode adds the open+30 early run.
+
+        DESK days use the reduced cadence (S4, 2026-09-03: four scans instead
+        of six, the close slot kept) unless ``desk_scan_cadence`` says hourly;
+        AWAY and EVENING keep the hourly ladder the phone digest reads.
+        """
+        cadence = core.desk_scan_cadence() if self._profile == AUTO_PROFILE_DESK else "hourly"
         return core.get_autopilot_swing_slots(
             now,
             include_early_slot=self._enabled and self._profile == AUTO_PROFILE_EVENING,
+            cadence=cadence,
         )
 
     def run_swing_scan_now(self) -> None:

@@ -101,7 +101,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests/ -q  # fully green be
 
 These mirror the Windows commands in CLAUDE.md (`.venv\Scripts\python.exe …`).
 `QT_QPA_PLATFORM=offscreen` keeps the Qt widget tests headless. Note the
-dependency pins: `constraints.txt` gives macOS its own `PyQt5-Qt5` pin
+dependency pins: `constraints.txt` used to give macOS its own `PyQt5-Qt5` pin (PyQt5 left the dependency set on 2026-09-03)
 (5.15.17 — the Windows 5.15.2 pin has no macOS wheel).
 
 ## Still Windows-only

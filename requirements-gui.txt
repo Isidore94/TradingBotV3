@@ -1,5 +1,4 @@
 -r requirements-core.txt
-PyQt5
 PySide6
 qtawesome
 pyqtgraph

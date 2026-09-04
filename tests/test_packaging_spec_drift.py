@@ -61,15 +61,6 @@ PACKAGES_NOT_IN_THE_BUNDLE = {
         "scripts/run_ai_jobs.py, a scheduled CLI run from the repo checkout; "
         "launch_gui.py never reaches it."
     ),
-    "gui_app": (
-        "legacy Tk UI, imported only by scripts/gui.py --ui tk. launch_gui.py "
-        "enters the Qt desk directly and never hops through it."
-    ),
-    "market_prep_gui": (
-        "legacy Tk market-prep UI, imported only by scripts/market_prep_tab.py, "
-        "which in turn is imported only by gui_app - so it is reachable from the "
-        "Tk entry point alone, not the frozen Qt desk."
-    ),
 }
 #: The A4 suite's name for the same allowlist.
 UNCOLLECTED_PACKAGES = PACKAGES_NOT_IN_THE_BUNDLE

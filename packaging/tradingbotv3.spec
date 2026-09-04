@@ -182,7 +182,8 @@ a = Analysis(
     runtime_hooks=[str(SPEC_DIR / "rthook_qt_api.py")],
     # PyQt5 must not enter the bundle: two Qt bindings in one process is a
     # crash, and qtpy would be free to pick the wrong one. The Qt desk is
-    # PySide6-only; PyQt5 exists in the venv solely for legacy TickerMover.py.
+    # PySide6-only. PyQt5 left the dependency set on 2026-09-03 with TickerMover.py;
+    # the exclude stays as a guard against a stray install.
     excludes=["PyQt5", "PyQt5.sip", "PyQt6", "PySide2", "matplotlib", "pytest", "_pytest"],
     noarchive=False,
     optimize=0,

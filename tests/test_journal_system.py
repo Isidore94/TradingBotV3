@@ -294,13 +294,6 @@ class JournalSystemTests(unittest.TestCase):
             self.assertIn("Questrade skipped: disabled.", summary["messages"])
             self.assertIn("IBKR skipped: disabled.", summary["messages"])
 
-    def test_gui_wires_journal_only_into_tabbed_layout(self):
-        gui_text = (SCRIPTS_DIR / "gui_app" / "app.py").read_text(encoding="utf-8")
-        self.assertIn("from journal_tab import JournalTab", gui_text)
-        self.assertIn('notebook.add(journal_tab, text="Journal")', gui_text)
-        self.assertNotIn("trading_notebook.add(journal_tab", gui_text)
-        self.assertEqual(gui_text.count('text="Journal"'), 1)
-
 
 if __name__ == "__main__":
     unittest.main()

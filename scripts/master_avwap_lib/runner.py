@@ -2794,16 +2794,40 @@ def _run_master_impl(
     return run_result
 
 
-def launch_gui():
-    from .gui import launch_gui as _launch_gui
-
-    return _launch_gui()
-
-
 def main():
-    from .gui import main as _main
+    """The scanner's CLI (``master_avwap.py --once`` / ``--loop``).
 
-    return _main()
+    Moved here from the Tk module when that module was removed (2026-09-03,
+    assessment packet F2); the ``--gui`` branch went with it. Nothing in the
+    repo invokes this - the desk spawns ``scan_worker`` - but the entry point
+    is kept because it is documented and costs nothing.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run Master AVWAP scanner")
+    tracker_window_start, tracker_window_end = get_setup_tracker_update_window_labels()
+    parser.add_argument("--once", action="store_true", help="Run a single AVWAP scan and exit.")
+    parser.add_argument("--loop", action="store_true", help="Run AVWAP scan in hourly loop.")
+    parser.add_argument(
+        "--force-setup-tracker-update",
+        action="store_true",
+        help=(
+            "Update the setup tracker even outside the default "
+            f"{tracker_window_start}-{tracker_window_end} local live-update window."
+        ),
+    )
+    args = parser.parse_args()
+
+    if args.loop:
+        logging.info("Starting hourly Master AVWAP loop (once per hour)...")
+        while True:
+            start = time.time()
+            run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
+            elapsed = time.time() - start
+            sleep_seconds = max(0, 3600 - elapsed)
+            logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run...")
+            time.sleep(sleep_seconds)
+    run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
 
 
 def run_master(

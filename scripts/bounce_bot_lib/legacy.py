@@ -19,9 +19,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, date
 import zoneinfo
 import queue
-import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
-import tkinter.font as tkFont
 
 import pandas as pd
 import yfinance as yf
@@ -231,7 +228,7 @@ CHECK_BOUNCE_EOD_VWAP_LOWER_BAND = False
 LOGGING_MODE = True
 SCAN_OUTSIDE_MARKET_HOURS = True
 LOG_PRICE_APPROACHING = True
-USE_GUI = True  # New parameter to toggle GUI on/off
+USE_GUI = False  # The Tk GUI was removed 2026-09-03; console mode is the only CLI mode
 RECLAIM_LOOKBACK_CANDLES = 3
 CONFLUENCE_MAX_SPREAD_ATR = 0.25
 VWAP_BOUNCE_NEAR_ATR = 0.08
@@ -13619,11 +13616,15 @@ class BounceBot(EWrapper, EClient):
                 cycle_clock.mark("focus_fast_lane")
 
                 # Log strongest/weakest names for key intraday timeframes each cycle.
+                # Each run is timed on its own (S2 instrumentation, 2026-09-03):
+                # the preamble line used to say "rrs_scan 272s" for four runs and
+                # could not say which of them, or whether the GUI one, was slow.
                 for timeframe_key in ("5m", "15m", "1h"):
                     self.run_rrs_scan(timeframe_key_override=timeframe_key, emit_gui=False)
+                    cycle_clock.mark(f"rrs_scan_{timeframe_key}")
                 # Keep the GUI view synced with user-selected RRS timeframe.
                 self.run_rrs_scan()
-                cycle_clock.mark("rrs_scan")
+                cycle_clock.mark("rrs_scan_gui")
 
                 # Regime-pause bangers: SPY paused against the tape -> flag the
                 # longs/shorts.txt names that refuse to participate.
@@ -13660,20 +13661,30 @@ class BounceBot(EWrapper, EClient):
 
                 # Trader-favorite day-trade sweeps on longs/shorts.txt: delayed
                 # 5m opening-range breaks and 8-EMA grind squeezes into HOD/LOD.
+                # One clock mark per sweep (S2 instrumentation, 2026-09-03): the
+                # preamble line used to fold six engines into "m5_and_h1_engines
+                # 215-253s", which named a stage and not a sweep. Behaviour is
+                # unchanged - every sweep still runs, in the same order, with the
+                # same exception guards; only the timing got finer.
                 try:
                     self.check_orb_break_setups()
                 except Exception:
                     logging.exception("ORB break sweep failed.")
+                cycle_clock.mark("engine_orb_break")
                 try:
                     self.check_ema8_grind_setups()
                 except Exception:
                     logging.exception("8-EMA grind sweep failed.")
+                cycle_clock.mark("engine_ema8_grind")
                 try:
                     self.check_lrsi_cross_setups()
+                    cycle_clock.mark("engine_lrsi_cross")
                     self.check_confluence_setups()
+                    cycle_clock.mark("engine_confluence")
                     self.check_orb_first_candle_setups()
                 except Exception:
                     logging.exception("LRSI cross sweep failed.")
+                cycle_clock.mark("engine_orb_first_candle")
 
                 # H1 candle-color signals under test: green-regime 10-EMA
                 # bounces + blue-after-red reclaims (longs), green->yellow
@@ -13682,7 +13693,7 @@ class BounceBot(EWrapper, EClient):
                     self.check_h1_color_setups()
                 except Exception:
                     logging.exception("H1 color sweep failed.")
-                cycle_clock.mark("m5_and_h1_engines")
+                cycle_clock.mark("engine_h1_color")
 
                 d1_watch_symbols = set(self.get_master_avwap_d1_watch_symbols())
                 monitored_symbols = self.get_monitored_extreme_symbols() | d1_watch_symbols
@@ -13959,22 +13970,9 @@ def run_bot_with_gui(gui_callback, start_scanning_enabled=False):
     return bot
 
 ##########################################
-# GUI Code using Tkinter
+# The Tk GUI was removed on 2026-09-03 (assessment packet F2). The desk is
+# scripts/ui (PySide6) via launch_gui.py; this module keeps the console path.
 ##########################################
-# Find and replace the light_grey variable definition with dark theme colors
-# Around line 677 in the start_gui() function
-
-from .gui import (
-    append_alert_message,
-    build_environment_focus_copy_text,
-    choose_gui_mode,
-    configure_alert_tags,
-    copy_text_to_clipboard,
-    create_rrs_confirmed_panel,
-    prompt_change_home_folder,
-    start_gui,
-    start_lightweight_gui,
-)
 
 
 ##########################################
@@ -14035,9 +14033,8 @@ def main():
         print(f"Using GUI: {use_gui}")
 
         if use_gui:
-            print("Initializing GUI mode...")
-            start_gui(mode=args.gui_mode)
-        else:
+            print("The Tk GUI was removed on 2026-09-03; the desk is launch_gui.py. Running console mode.")
+        if True:
             print("Initializing console mode...")
             configure_app_logging()
             print("Logging configured.")

@@ -91,11 +91,38 @@ _CANDIDATE_REGISTRY_LOCK = threading.Lock()
 # ---------------------------------------------------------------------------
 # Scheduling
 # ---------------------------------------------------------------------------
+#: Desk-day scan cadence (S4, 2026-09-03). ``"hourly"`` is the away-day
+#: schedule below; ``"reduced"`` is four scans: open+60, the midday slot
+#: (open+210 = 13:00 ET), the R3 near-close preview and the close slot that
+#: owns the tracker write. On 2026-09-03 the desk ran six scans inside RTH,
+#: each 7-26 minutes of a child process plus a warehouse build and a
+#: GUI-thread table rebuild, while the trader sat on the Capture tab. AWAY and
+#: EVENING keep the hourly slots because the hourly phone digest reads them
+#: (decision 0016 answer 8: "keep what it does now"). The setting is read at
+#: slot-build time so a change applies on the next day roll.
+DESK_SCAN_CADENCE_SETTING = "desk_scan_cadence"
+DESK_SCAN_CADENCE_DEFAULT = "reduced"
+DESK_SCAN_CADENCES = ("reduced", "hourly")
+AUTOPILOT_REDUCED_MIDDAY_SCAN_AFTER_OPEN_MINUTES = 210
+
+
+def desk_scan_cadence() -> str:
+    """``"reduced"`` (default) or ``"hourly"``; anything else reads as the default."""
+    try:
+        from project_paths import get_local_setting
+
+        raw = str(get_local_setting(DESK_SCAN_CADENCE_SETTING, "") or "").strip().lower()
+    except Exception:
+        raw = ""
+    return raw if raw in DESK_SCAN_CADENCES else DESK_SCAN_CADENCE_DEFAULT
+
+
 def get_autopilot_swing_slots(
     reference: datetime | None = None,
     local_timezone_name: str | None = None,
     *,
     include_early_slot: bool = False,
+    cadence: str = "hourly",
 ) -> list[str]:
     """The away-day swing scan slots as local HH:MM labels.
 
@@ -108,6 +135,11 @@ def get_autopilot_swing_slots(
     a normal 06:30 session - so the Master AVWAP setups are already scanned
     when the trader arrives at 07:00-07:30, and the morning briefing can rank
     the best D1s off a current run instead of yesterday's.
+
+    ``cadence="reduced"`` (the desk-day default, see ``DESK_SCAN_CADENCE_*``)
+    replaces the hourly ladder with the midday slot only; the first, the
+    near-close preview and the close slot are the same in both cadences, so
+    the tracker's single writer never moves.
     """
     session = get_market_session_window(reference=reference, local_timezone_name=local_timezone_name)
     open_naive = session.open_local.replace(tzinfo=None)
@@ -119,12 +151,19 @@ def get_autopilot_swing_slots(
         early = open_naive + timedelta(minutes=AUTOPILOT_EVENING_EARLY_SCAN_AFTER_OPEN_MINUTES)
         if early < first:
             slots.insert(0, early)
-    cursor = first + timedelta(minutes=60)
-    if cursor.minute or cursor.second or cursor.microsecond:
-        cursor = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    while cursor <= close_naive:
-        slots.append(cursor)
-        cursor += timedelta(hours=1)
+    if str(cadence or "hourly") == "reduced":
+        midday = open_naive + timedelta(minutes=AUTOPILOT_REDUCED_MIDDAY_SCAN_AFTER_OPEN_MINUTES)
+        if first < midday < close_naive:
+            slots.append(midday)
+        if close_naive not in slots:
+            slots.append(close_naive)
+    else:
+        cursor = first + timedelta(minutes=60)
+        if cursor.minute or cursor.second or cursor.microsecond:
+            cursor = cursor.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        while cursor <= close_naive:
+            slots.append(cursor)
+            cursor += timedelta(hours=1)
     # R3 pre-close honesty: keep one explicitly labeled preview close enough to
     # the bell to be actionable, while retaining the close slot that publishes
     # completed-bar outputs and owns the single tracker write.

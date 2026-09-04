@@ -26,14 +26,6 @@ from pathlib import Path
 from statistics import mean, median
 from dataclasses import dataclass, asdict, is_dataclass
 
-try:
-    import tkinter as tk
-    from tkinter import filedialog, ttk, messagebox
-except Exception:
-    tk = None
-    ttk = None
-    filedialog = None
-    messagebox = None
 
 import requests
 import pandas as pd
@@ -32928,7 +32920,7 @@ from .runner import run_master
 # GUI / ENTRYPOINT
 # ============================================================================
 
-from .gui import MasterAvwapGUI, launch_gui, main
+from .runner import main
 
 
 if __name__ == "__main__":

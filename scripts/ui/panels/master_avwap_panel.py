@@ -690,7 +690,14 @@ class MasterAvwapPanel(QWidget):
         today_iso = now.date().isoformat()
         if self.scheduler_day == today_iso and self.scheduler_slots_state:
             return False
-        schedule = list(get_default_hourly_scan_schedule(reference=now))
+        # The manual Setups-page scheduler follows the desk cadence too (S4,
+        # 2026-09-03): reduced by default, hourly when `desk_scan_cadence` says so.
+        import autopilot_core as _core
+
+        if _core.desk_scan_cadence() == "reduced":
+            schedule = list(_core.get_autopilot_swing_slots(now, cadence="reduced"))
+        else:
+            schedule = list(get_default_hourly_scan_schedule(reference=now))
         self.scheduler_day = today_iso
         self.scheduler_slots_state = {slot: "pending" for slot in schedule}
         self.scheduler_note = (

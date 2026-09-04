@@ -2713,3 +2713,51 @@ a dedupe that loses rows is the point, and the two are different verbs).
 **Reopen if** the champion's cache ever stops being sorted (then the last-bar
 short-circuit must go back to a full walk), or if a dataset other than the
 superseding two legitimately needs a repeated grain key at the seal.
+
+## BD-97 — A polluted derived partition is RETIRED whole and recomputed, never patched
+
+**Decision (2026-09-03 late evening, trader-authorized: "implement the rest").**
+`ResearchStore.retire_partition(dataset, partition)` appends ONE `RETIRE` manifest
+line whose `supersedes` names every live file of the partition (no replacement
+file, a `reason` on the line); the files leave the live set at once and move to
+`_retired/<day>/` on the next GC, restorable by repointing the manifest. Refused
+for non-compactable datasets (bronze raw / evidence). The CLI
+`research_warehouse.cli rebuild-month --month YYYY-MM [--apply]` (dry run by
+default; `--apply` under the build's single-flight lock) retires that month's
+`bar_derived` (every timeframe) and `feature_snapshot_intraday` partitions and
+then, for every exchange session of the month, runs the derived-bar, weekly-bar
+and intraday-feature steps exactly as the nightly build does, with
+`run_id="rebuild_month"` on every row.
+
+**Why.** BD-96's duplicated `bar_m5` polluted its DERIVED datasets in VALUE, not
+by duplication: `aggregate_symbol_session` counted every twin as a constituent
+(`constituent_count` 6 where 3 were expected, volume x2, quality PARTIAL - pinned
+by `tests/test_warehouse_rebuild_month.py`), and `compute_intraday_features`
+windowed over the doubled list. Neither carries a repeated grain key, so
+`dedupe` cannot repair them; and `build_intraday_snapshots` skips every
+`ALREADY_COMPUTED` key, so recomputing without retiring first would change
+nothing. Retire-then-rebuild is the only shape that both repairs and leaves the
+audit trail: the polluted parts are still on disk for 30 days, and the RETIRE
+line says why they left.
+
+**Not rebuilt: outcomes.** `outcome_path` rows for those months were computed
+over the doubled series (bar-count horizons stretched; price paths unchanged).
+They are SUPERSEDING rows revisited by the nightly build's bucket rotation, and a
+month-wide outcome recomputation is its own overnight job - recorded as owed in
+plan.md Phase 0.15, not run.
+
+**Runbook (trader's commands, in this order, with no build running):**
+
+    cd scripts
+    ..\.venv\Scripts\python.exe -m research_warehouse.cli dedupe --dataset bar_m5 --apply
+    ..\.venv\Scripts\python.exe -m research_warehouse.cli rebuild-month --month 2026-08 --apply
+    ..\.venv\Scripts\python.exe -m research_warehouse.cli rebuild-month --month 2026-09 --apply
+
+The dry runs of all three were run against the live lake on 2026-09-03: 10,530,916
+`bar_m5` rows to drop; August rebuilds 5 partitions over 21 sessions, September 4
+partitions over the sessions so far. The lead's own attempt to run `--apply` was
+refused by the session's permission classifier (a rewrite of the DAS), which is
+why these are the trader's commands and not a done item.
+
+**Reopen if** the feature step ever stops skipping already-computed keys (then the
+retire becomes optional), or if outcomes gain a per-month recompute entry point.

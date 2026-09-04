@@ -963,6 +963,59 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-03 (night) - The rest of the assessment packets: S2 instrumentation, S4 cadence, F2 removal, the rebuild tool
+
+**On `main`, lead-built, trader-authorized** ("go ahead and implement the rest").
+
+- **S2 - the M5 cycle, instrumented, not trimmed** (`bounce_bot_lib/legacy.py`,
+  the detector file, under the trader's blanket authorization). The preamble log
+  line now carries one clock mark per RRS run (`rrs_scan_5m/15m/1h/gui`) and one
+  per engine sweep (`engine_orb_break`, `engine_ema8_grind`, `engine_lrsi_cross`,
+  `engine_confluence`, `engine_orb_first_candle`, `engine_h1_color`) instead of two
+  folded stages. Every sweep still runs, in the same order, with the same guards:
+  nothing detects differently. The trim waits for the first uncontended morning
+  after the restart - every cycle number so far was taken under a held lock.
+- **S4 - desk-day scan cadence** (`autopilot_core.get_autopilot_swing_slots(...,
+  cadence=)`, `desk_scan_cadence()` reading the `desk_scan_cadence` local setting,
+  default `reduced`): DESK days run four scans - open+60, open+210 (13:00 ET), the
+  R3 near-close preview and the close slot that owns the tracker write - instead
+  of six. AWAY and EVENING keep the hourly ladder the phone digest reads. The
+  manual Setups-page scheduler follows the same setting. `hourly` restores the
+  old schedule on the next day roll.
+- **F2 - the Tk stack is gone**: `scripts/gui.py`, `gui_app/` (7 files),
+  `market_prep_gui/` (4), `market_prep_tab.py`, `journal_tab.py`,
+  `master_avwap_lib/gui.py`, `bounce_bot_lib/gui.py`, `bounce_bot_lib/alerts.py`
+  (three Tk-only re-exports), `TickerMover.py` and `tests/test_market_prep_tab_helpers.py`
+  - 19 files. The two legacy cores lose their `tkinter` imports and their Tk
+  tails; the scanner CLI (`master_avwap.py --once` / `--loop`) moved into
+  `master_avwap_lib/runner.py` without its `--gui` branch; BounceBot's
+  `--use_gui` prints a notice and runs console mode. `PyQt5` left
+  `requirements-gui.txt` and `constraints.txt` (the spec keeps its exclude as a
+  guard). `pyproject.toml`'s lint excludes shrink by three; the packaging
+  allowlist by two. `tests/test_module_globals_resolve.py` now guards the two
+  runner shims and learned that a `def` inside an `if` binds a name (it was
+  blind to that). Decision 0004 carries an amendment.
+- **The rebuild tool** (`ResearchStore.retire_partition`, `cli rebuild-month`,
+  BD-97): retire a month's `bar_derived` + `feature_snapshot_intraday` partitions
+  by one RETIRE line each and recompute them session by session from the repaired
+  `bar_m5`. Dry run by default. Pinned by `tests/test_warehouse_rebuild_month.py`
+  (5), which reproduces the pollution (`constituent_count` 6 for 3 bars) and the
+  repair.
+- **Blocked, and handed to the trader**: `dedupe --apply` on the live lake and
+  the deletion of `d1_features_history.csv.corrupt-2026-08-28` were both refused
+  by the session's permission classifier. The commands are in BD-97 and the
+  checkpoint. `rebuild-month --apply` is the same class of action and was not
+  attempted.
+- **Corrected from the assessment**: `evidence_snapshots/` already has retention
+  (`ops/evidence_snapshot.prune`, 7 daily / 4 weekly / 12 monthly, run by
+  `snapshot_to_das.ps1`); the 5.8 GB is inside that policy. Rotation of
+  `technical_integrity_events.jsonl` was DECLINED on 2026-08-17 (R6(b)) until the
+  warehouse's verified ingest of it passes - that ingest now runs nightly
+  (`bronze_technical_integrity_events`), so the trigger has fired and the
+  segment scheme is owed as its own packet, not done here.
+- **Tests**: +6 (rebuild 5, reduced cadence 1), -1 file; the removed Tk tests
+  replaced by one that asserts the stack is gone. Full suite in the checkpoint.
+
 ### 2026-09-03 (evening) - The research tee burned a core; the lake was 85% duplicates; a thread gauge
 
 **On `main`, lead-built, trader-authorized** ("go ahead and implement all packets"
@@ -1701,7 +1754,7 @@ only when the history of a specific change is not answered here or by the govern
   M5 Focus adoption.
 - The legacy shared review-event ledger is read-only; per-installation shards are the
   current writer path.
-- The legacy Tk UI remains only for migration compatibility and is not the product
-  direction.
+- The legacy Tk UI, its shims, the Tk journal/market-prep tabs, `TickerMover.py` and
+  `PyQt5` were REMOVED on 2026-09-03 (assessment packet F2). `scripts/ui` is the only UI.
 - Historical plans and handoffs listed as such in `docs/README.md` are evidence, not
   current execution authority.

@@ -48,6 +48,7 @@ try:  # package import (scripts.research_warehouse.store)
         ACTION_COMPACT,
         ACTION_PUBLISH,
         ACTION_QUARANTINE,
+        ACTION_RETIRE,
         ManifestCorruptionError,
         ManifestEntry,
         ManifestLog,
@@ -62,6 +63,7 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
         ACTION_COMPACT,
         ACTION_PUBLISH,
         ACTION_QUARANTINE,
+        ACTION_RETIRE,
         ManifestCorruptionError,
         ManifestEntry,
         ManifestLog,
@@ -647,6 +649,36 @@ class ResearchStore:
             extra={"dedupe_grain": list(spec.grain), "rows_dropped": result.rows_dropped},
         )
         return result
+
+    def retire_partition(self, dataset: str, partition: str, *, job_id: str = "", reason: str = "") -> list[str]:
+        """Take every live file of a partition out of the live set. One RETIRE line.
+
+        The files are not touched: they leave the live set the instant the line
+        lands and ``collect_retired`` moves them into ``_retired/<day>/`` later,
+        exactly as a compaction's inputs do, so the partition is restorable by
+        repointing the manifest. Returns the retired file paths. This is the
+        first half of a REBUILD (BD-96): a derived partition computed from
+        polluted inputs is retired whole, then recomputed session by session.
+        Refused for datasets that are never compacted (bronze raw / evidence).
+        """
+        spec = dataset_spec(dataset)
+        if not spec.compactable:
+            raise ValueError(f"{dataset} is never retired wholesale (bronze raw / evidence freeze, sec 8.3)")
+        snapshot = self.manifest.resolve(dataset=dataset, partition=partition)
+        paths = [entry.file_path for entry in snapshot.entries]
+        if not paths:
+            return []
+        self.manifest.append(
+            action=ACTION_RETIRE,
+            dataset=dataset,
+            partition=partition,
+            file_path="",
+            supersedes=paths,
+            git_commit=definitions_git_commit(),
+            job_id=job_id,
+            reason=reason,
+        )
+        return paths
 
     def retired_pending(self) -> list[str]:
         """Retired file paths still physically present in the live tree."""

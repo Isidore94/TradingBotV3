@@ -33,7 +33,7 @@ The operating topology is now simple:
 - ntfy and the verified `autopilot_today.txt` digest are the remote surfaces;
 - there is no cloud sync (decision 0015): `C:\TradingBotData` is a plain local folder
   and the DAS `\\MINI-PC\Trading Bot Data` is the durable storage tier;
-- the Tk GUI remains a temporary compatibility path during migration.
+- the Tk GUI was removed on 2026-09-03 (assessment packet F2); `scripts/ui` is the only UI.
 
 **What the program is for, in the trader's words (decision 0016, 2026-09-02).** The
 trader answered twelve questions one at a time; the record is
@@ -595,21 +595,26 @@ The trader authorized every packet in it. Status per packet:
    persisted high-water mark, seal-side dedupe, `dedupe` CLI. Live gate #55: one
    post-restart session where `thread_cpu.jsonl` shows `warehouse-m5-tee` under
    5% of a core after the close and the day's spool holds one session of rows.
-2. **The duplicated lake (repair tool BUILT; repair NOT RUN).** Gate #56: run
-   `research_warehouse.cli dedupe --dataset bar_m5 --apply` once (under the build
-   lock, when no build is running), confirm the manifest carries two COMPACT lines
-   with `rows_dropped` 10,198,313 and 332,603, then rebuild `bar_derived`,
-   `feature_snapshot_intraday` and the outcome datasets for 2026-08 and 2026-09 -
-   they were computed from the duplicated rows and are wrong in value.
+2. **The duplicated lake (both repair tools BUILT; repairs NOT RUN - the lead's
+   `--apply` was blocked by the session's permission classifier).** Gate #56, the
+   trader's commands in BD-97's runbook: `dedupe --dataset bar_m5 --apply`, then
+   `rebuild-month --month 2026-08 --apply` and `--month 2026-09 --apply`
+   (`retire_partition` + recompute of `bar_derived` and `feature_snapshot_intraday`,
+   BD-97). Outcomes for those months stay owed: a month-wide outcome recompute is
+   its own overnight job.
 3. **S3 - the thread gauge (BUILT 2026-09-03 evening).** Always on; verified by
    gate #55's read of `thread_cpu.jsonl`.
-4. **S2 - the M5 cycle (NOT BUILT; measure first).** The four preamble numbers
-   were taken under a contended lock. After S1 reaches the desk, read one RTH
-   morning of "Scan cycle N preamble" lines; then trim (the three log-only RRS
-   scans per cycle, the retired engines' sweeps, the ATR cache rebuild) and decide
-   on a detector process. Edits `bounce_bot_lib/legacy.py`: **ask-first**.
-5. **S4 - scan cadence (TRADER DECISION).** Six D1 scans inside RTH today; three
-   would halve the child-process traffic. Not a code change until decided.
+4. **S2 - the M5 cycle (INSTRUMENTED 2026-09-03 night; trim still measure-first).**
+   The preamble line now names each RRS run and each engine sweep (`rrs_scan_5m`
+   ... `engine_h1_color`); no detection change. After S1 reaches the desk, read
+   one RTH morning of "Scan cycle N preamble" lines, then trim what the line names
+   and decide on a detector process. Further edits to `bounce_bot_lib/legacy.py`
+   remain ask-first.
+5. **S4 - scan cadence (BUILT 2026-09-03 night).** DESK days run four scans
+   (open+60, 13:00 ET, the 15:45 ET preview, the close slot that writes the
+   tracker); AWAY/EVENING keep the hourly ladder for the phone digest;
+   `desk_scan_cadence: "hourly"` restores the ladder. Live check: one DESK day
+   whose run manifests show four `master_scan` runs.
 6. **E1 - validation week (TRADER DECISION).** No new packets until gates #53,
    #54, #51, #52, #39 and #41 are closed with the trader watching.
 7. **E2 - bar source (RESOLVED 2026-09-03 evening: it is a PIN, not a defect).**
@@ -621,12 +626,16 @@ The trader authorized every packet in it. Status per packet:
    and `CHANGELOG.md` past their 1,500-line rule, move BUILT phases out of this
    section's work queue, cut `CLAUDE.md` to rule + pointer where
    `docs/DESK_INTERNALS.md` holds the story.
-9. **F2 - dead weight (CLEANUP PACKET, not started).** The Tk GUI and its two
-   shims (~6,700 lines unreachable from the desk), `TickerMover.py` and the PyQt5
-   dependency it keeps, the 498 MB `.corrupt` copy in the runtime folder (trader's
-   file - confirm before deleting), retention for `evidence_snapshots/` (5.8 GB in
-   11 days) and `technical_integrity_events.jsonl` (691 MB, +24 MB/day). The six
-   ATR implementations stay: two are in fenced formula files.
+9. **F2 - dead weight (BUILT 2026-09-03 night, two items handed back).** The Tk
+   GUI, its shims, the Tk journal/market-prep tabs, `TickerMover.py` and `PyQt5`
+   are removed (19 files). `evidence_snapshots/` already had retention (7/4/12,
+   `snapshot_to_das.ps1`) - the assessment was wrong there. The 498 MB `.corrupt`
+   copy: the lead's delete was blocked by the permission classifier - trader's to
+   run (`del C:\TradingBotData\datauntime\d1_features_history.csv.corrupt-2026-08-28`).
+   `technical_integrity_events.jsonl` rotation: DECLINED 2026-08-17 (R6(b)) until
+   the warehouse's verified ingest of it passes; `bronze_technical_integrity_events`
+   now runs nightly, so the trigger has fired and the segment scheme is OWED as its
+   own packet. The six ATR implementations stay: two are in fenced formula files.
 10. **F3 - the operational storage tier (FIXTURE-FIRST PACKET, not started).**
     The 1.15 GB tracker JSON, the 615 MB attributes CSV, the 592 MB features CSV
     and the 279/309 MB outcome CSVs to SQLite / monthly Parquet. Golden fixtures

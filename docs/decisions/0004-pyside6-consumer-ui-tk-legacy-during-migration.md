@@ -16,3 +16,7 @@ during migration. `PyQt5` stays installed only for the legacy `TickerMover.py`.
 The migration itself is evident (consumer polish beyond what Tk offers, per
 SHIP_READINESS). The specific choice of PySide6 over PyQt (or web/other toolkits)
 is not documented — RATIONALE UNKNOWN - confirm with Aaron.
+
+## Amendment (2026-09-03)
+
+The Tk app, its shims (`scripts/gui.py`, `gui_app/`, `market_prep_gui/`, `market_prep_tab.py`, `journal_tab.py`, `master_avwap_lib/gui.py`, `bounce_bot_lib/gui.py`, `bounce_bot_lib/alerts.py`) and `TickerMover.py` were removed by the trader-authorized assessment packet F2. `PyQt5` left the dependency set with them; the frozen spec keeps its `PyQt5` exclude as a guard. The scanner CLI (`master_avwap.py --once` / `--loop`) moved into `master_avwap_lib/runner.py`. PySide6 is the only UI.
