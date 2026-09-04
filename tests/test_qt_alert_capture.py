@@ -814,9 +814,14 @@ def test_the_panel_places_on_m5_focus_then_retires_the_chart(panel, monkeypatch)
 
     monkeypatch.setattr(panel, "focus_service", _Focus())
     retired: list = []
+    # Lead ruling 2026-09-04: the day-trade veto retires through the BOX-FREE
+    # verb now. It is a capture-rail veto with its reason code already on
+    # disk, so the trader's "either veto or like+claim ... no pop up note box"
+    # covers it too. The ORDER - place, then retire - is what this test is for
+    # and is unchanged.
     monkeypatch.setattr(
         panel,
-        "_remove_review_alert_for_today",
+        "_retire_after_veto",
         lambda alert: (calls.append(("retire", alert.symbol)), retired.append(alert)),
     )
     alert = BounceAlert(
@@ -845,8 +850,9 @@ def test_a_failed_placement_still_retires_the_chart(panel, monkeypatch):
 
     monkeypatch.setattr(panel, "focus_service", _Broken())
     retired: list = []
+    # Lead ruling 2026-09-04: the box-free verb, as above.
     monkeypatch.setattr(
-        panel, "_remove_review_alert_for_today", lambda alert: retired.append(alert)
+        panel, "_retire_after_veto", lambda alert: retired.append(alert)
     )
     alert = BounceAlert(
         time_text="09:31:00",

@@ -21,8 +21,9 @@ there, and because it shares that section's free-text field: a pass is a note
 with the reason ticked. Trader: "many times I really like this stock for a
 daytrade but it has this ONE issue" - so a pass is NOT a veto and, like a
 note, it never retires the chart. The host decides that, and the host's rule
-is the one in CLAUDE.md: a veto and a like each retire the chart, a note never
-does. A pass is on the note side of that line.
+is the one in CLAUDE.md: a VETO retires the chart; a LIKE and a NOTE never do
+(trader, 2026-09-04: "i still need time to enter alerts"). A pass is on the
+quiet side of that line.
 
 The hypothetical stop was removed from this surface on 2026-08-20 (trader:
 "get rid of hypothetical stop for now its not useful"). Only the CONTROL is
@@ -891,9 +892,11 @@ class CaptureRail(QFrame):
         nobody can check later.
 
         Everything a claimed like does to the review, this does too. The chart
-        RETIRES (a like retires, a note never does), the symbol is marked
-        reviewed today through the existing `_ANNOTATION_DECISIONS`, and the
-        review event is `like_advance` so the scoreboard counts it as a take.
+        STAYS (packet T1, 2026-09-04: a like no longer retires or advances -
+        the trader still has alerts to arm on the name they just liked), the
+        symbol is marked reviewed today through the existing
+        `_ANNOTATION_DECISIONS`, and the review event is still called
+        `like_advance` so the scoreboard counts it as a take.
 
         And everything a like has never done, this does not do either: NO Focus
         placement, no park, no watch, no alert, no watchlist. A like carries

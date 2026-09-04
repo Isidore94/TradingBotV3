@@ -822,7 +822,8 @@ class AlertCenterPanel(QFrame):
         self.chart_review.removeTodayRequested.connect(
             self._remove_review_alert_for_today
         )
-        self.chart_review.likeAdvanceRequested.connect(self._advance_after_like)
+        self.chart_review.vetoRetireRequested.connect(self._retire_after_veto)
+        self.chart_review.likeRecorded.connect(self._after_like)
         self.chart_review.focusRequested.connect(self._add_review_alert_to_focus)
         self.chart_review.skipRequested.connect(self._skip_review_alert)
         self.chart_review.crossFocusToggled.connect(self._toggle_review_cross_focus)
@@ -2187,6 +2188,21 @@ class AlertCenterPanel(QFrame):
             return False
         return True
 
+    @staticmethod
+    def _is_manual_chart_look(alert: BounceAlert) -> bool:
+        """A chart the TRADER opened - a board row click or the lookup box.
+
+        `chart_symbol` is the one door that builds these and it stamps
+        `MANUAL_CHART_TAG` on every one, so this is an exact test rather than
+        a heuristic; nothing the scanner produces carries that tag.
+
+        Deliberately NOT folded into `_is_m5_review_alert`, which already
+        returns False for this tag and must keep doing so: that method decides
+        whether an alert is a LINE IN THE M5 BAR, and a look is not. Two
+        different questions, two different answers, one tag.
+        """
+        return str(getattr(alert, "tag", "") or "") == MANUAL_CHART_TAG
+
     def chart_alert(self, alert: BounceAlert) -> None:
         """Public: chart this alert now (the M5 bar's click). Same path as a
         feed-row click. A D1 chart in front keeps its place at the head of
@@ -2374,6 +2390,14 @@ class AlertCenterPanel(QFrame):
         the waiting list (trader, same day, second pass: "it shouldn't queue
         the old m5 alert in the waiting list"). Its line already left the bar
         when it was clicked; the feed and History keep it.
+
+        A chart the trader opened from a BOARD or the lookup box holds no
+        place either, and unlike the M5 bar it is not even a skip (packet T1,
+        trader 2026-09-04: *"when I click on ANYTHING from the RS/RW board it
+        should not make a queue of picks if I click on more nor should it add
+        to the 'waiting' list. once i look and click off, its done."*). It was
+        a LOOK, never a shown alert, so it belongs in no P(take | shown)
+        denominator - as neither a take nor a skip. Nothing at all is written.
         """
         if not alert.symbol or alert.symbol in self._ignored_symbols:
             return
@@ -2386,6 +2410,10 @@ class AlertCenterPanel(QFrame):
             ]
             if self._current_review_holds_place:
                 self._review_queue.insert(0, current)
+            elif self._is_manual_chart_look(current):
+                # A look the trader opened themselves. Write NOTHING - see the
+                # docstring. The M5 branch below is a different population.
+                pass
             else:
                 # A click away IS a pass, and that is the intended meaning -
                 # trader decision 2026-09-01: "clicking away = a pass". See
@@ -2404,7 +2432,9 @@ class AlertCenterPanel(QFrame):
                 queued for queued in self._review_queue if queued.symbol != alert.symbol
             ]
         self._current_review_alert = alert
-        self._current_review_holds_place = not self._is_m5_review_alert(alert)
+        self._current_review_holds_place = not (
+            self._is_m5_review_alert(alert) or self._is_manual_chart_look(alert)
+        )
         self._render_current_review()
 
     def _advance_review_queue(self) -> None:
@@ -2789,8 +2819,14 @@ class AlertCenterPanel(QFrame):
             )
         self._advance_review_queue()
 
-    def _advance_after_like(self, alert: BounceAlert) -> None:
-        """A LIKE moves to the next chart and does nothing else (R9.2).
+    def _after_like(self, alert: BounceAlert) -> None:
+        """A LIKE is RECORDED and the chart STAYS (packet T1, 2026-09-04).
+
+        Trader: *"the 'like' button in the visual chart review should NOT
+        advance the char to the next page because i still need time to enter
+        alerts etc."* So this records and says so, and moves nothing: the
+        waiting list is untouched, the liked chart is still on screen, and the
+        trader leaves it with Skip or "Not today" when they are done arming.
 
         Everything this function deliberately does NOT do was previously done
         to every liked symbol, because a like was routed through
@@ -2802,9 +2838,13 @@ class AlertCenterPanel(QFrame):
         Focus verb remains the one thing that places.
 
         What it does record is ``like_advance``, which
-        ``review_learning.TAKE_ACTIONS`` reads as positive engagement. The old
-        route wrote ``remove_today``, and ``REJECT_ACTIONS`` scored 40 of the
-        window's 52 likes as dismissals.
+        ``review_learning.TAKE_ACTIONS`` reads as positive engagement. **The
+        NAME IS HISTORICAL AND MUST NOT CHANGE** - that module keys on the
+        exact string, and renaming it would drop every past like out of the
+        take side of the scoreboard. Since 2026-09-04 it means "liked; the
+        symbol keeps alerting and the chart stays". The route it replaced wrote
+        ``remove_today``, and ``REJECT_ACTIONS`` scored 40 of the window's 52
+        likes as dismissals (R9.2).
         """
         if alert is None or not alert.symbol:
             return
@@ -2815,9 +2855,9 @@ class AlertCenterPanel(QFrame):
             queue_len=len(self._review_queue),
         )
         self.statusChanged.emit(
-            f"♥ {alert.symbol}: liked and claimed; it keeps alerting as normal."
+            f"♥ {alert.symbol}: liked. The chart stays - arm your alerts, then "
+            "Skip or Not today."
         )
-        self._advance_review_queue()
 
     def _add_review_alert_to_focus(self, alert: BounceAlert) -> None:
         # Unified verb row (2026-07-31): the add button's "yes" for a DESK
@@ -2896,6 +2936,12 @@ class AlertCenterPanel(QFrame):
         The Focus entry carries NO auto-pick marker, so it is the trader's own
         - "Not today" and the desync repair cannot reach it (packet R2
         provenance rule).
+
+        The retire is `_retire_after_veto`, not the "Not today" button's verb
+        (lead ruling 2026-09-04): this click came from the capture rail with a
+        reason code already on disk, so the trader's "either veto or
+        like+claim ... no pop up note box" covers it. The ORDER is unchanged
+        and a failed placement still retires.
         """
         if alert is None:
             return
@@ -2931,7 +2977,7 @@ class AlertCenterPanel(QFrame):
             if added
             else f"✕ {alert.symbol}: D1 vetoed - M5 Focus unchanged (already there or unavailable)."
         )
-        self._remove_review_alert_for_today(alert)
+        self._retire_after_veto(alert)
 
     def _remove_alert_from_focus(self, alert: BounceAlert, *, origin: str) -> None:
         """Delete the charted name from Focus Picks and walk on."""
@@ -5265,7 +5311,50 @@ class AlertCenterPanel(QFrame):
             )
 
     def _remove_review_alert_for_today(self, alert: BounceAlert) -> None:
-        """Drop a name from today's visual processing without changing scans."""
+        """The "✕ Not today" BUTTON: retire the name, and offer the note box.
+
+        This verb has no reason picklist, so the uncoded row plus the optional
+        box IS its why (P10 A1/A2, and the trader kept it in so many words on
+        2026-09-04: *"not today can continue to go to the next chart with a pop
+        up note box"*). A veto from the capture rail takes `_retire_after_veto`
+        instead - same retirement, no second row, no box.
+        """
+        self._retire_review_alert(alert, write_not_today_annotation=True)
+
+    def _retire_after_veto(self, alert: BounceAlert) -> None:
+        """A CODED veto from the capture rail: retire, write nothing more.
+
+        Trader, 2026-09-04: *"when i double tap something in the capture window
+        (either veto or like+claim) i shouldnt get a pop up note box. the point
+        of the capture window is to quickly enter 'WHY' I like or dislike
+        something."* The rail has already written one veto row carrying the
+        reason code and the trader's own words; a second, UNCODED row and a box
+        asking for the why again are both noise.
+
+        Everything else the "Not today" verb does still happens, through the
+        SAME body: the auto-pick / faded / Focus-review branches, the
+        auto-adopted Focus drop, the `remove_today` review event (the name is
+        historical and `review_learning.REJECT_ACTIONS` keys on the string),
+        parking the symbol for the day, and the advance that
+        `_ignore_alert_symbol` performs.
+
+        Also the retire half of the day-trade veto (lead ruling 2026-09-04):
+        that verb ends here too, after its Focus placement.
+        """
+        self._retire_review_alert(alert, write_not_today_annotation=False)
+
+    def _retire_review_alert(
+        self, alert: BounceAlert, *, write_not_today_annotation: bool
+    ) -> None:
+        """Drop a name from today's visual processing without changing scans.
+
+        ONE body for both retirement verbs. The flag is the ONLY difference:
+        whether the uncoded "Not today" annotation (and the note box behind it)
+        is written. Two copies of the branch ladder below would drift at the
+        auto-pick / faded / Focus-review branches first, and those three each
+        return early - a copy that lost one of them would silently start
+        parking symbols that must not be parked.
+        """
         if not alert.symbol:
             return
         # Unified verb row (2026-07-31): "✕ Not today" on an auto pick is the
@@ -5322,14 +5411,20 @@ class AlertCenterPanel(QFrame):
         )
         # P10 A1/A2. "Not today" has always written a `pick_feedback` verdict
         # with the hardcoded free-text reason "not today" - never a code, never
-        # a word of the trader's own. It now ALSO writes one uncoded veto
+        # a word of the trader's own. It ALSO writes one uncoded veto
         # annotation and then offers a note box, which is the surface the trader
         # named: *"not-for-today in visual chart review I SHOULD get a little
         # pop-up that lets me write a note if I am not using the quick buttons."*
         #
+        # Packet T1 (2026-09-04) made that the BUTTON's half alone. A veto from
+        # the capture rail arrives here with `write_not_today_annotation=False`,
+        # because its coded row and its why are already on disk and the trader
+        # asked for no box on that path.
+        #
         # The `pick_feedback` row and the Focus removal above are untouched: P5
         # grades them as `focus__m5_not_today` and several surfaces read them.
-        self._record_not_today_annotation(alert)
+        if write_not_today_annotation:
+            self._record_not_today_annotation(alert)
         self._ignore_alert_symbol(alert.symbol)
         if dropped:
             self.statusChanged.emit(
@@ -5734,12 +5829,31 @@ class AlertCenterPanel(QFrame):
         """
         from ui.panels.strength_board_panel import StrengthBoardPanel
 
-        board = StrengthBoardPanel(
-            service=service,
-            focus_service=self.focus_service if focus_service is None else focus_service,
+        adopting_service = (
+            self.focus_service if focus_service is None else focus_service
         )
+        board = StrengthBoardPanel(service=service, focus_service=adopting_service)
         board.symbolActivated.connect(self._chart_strength_board_symbol)
         self.strength_board = board
+        # T1.4 (trader, 2026-09-04): *"I want all shorts and longs on the RS/RW
+        # board TC2000 to bne auto added to the M5 focus picks."* The refresh
+        # signal, then once for the board already in hand - a desk that starts
+        # mid-session must not wait fifteen minutes for its first placement.
+        self._strength_focus_service = adopting_service
+        try:
+            service.boardChanged.connect(self._auto_adopt_strength_board)
+        except Exception:
+            logging.warning(
+                "Strength board auto-Focus could not be connected.", exc_info=True
+            )
+        else:
+            try:
+                self._auto_adopt_strength_board(service.board())
+            except Exception:
+                logging.warning(
+                    "Strength board auto-Focus failed on the attached board.",
+                    exc_info=True,
+                )
 
         # The alert column's floor is 360 px and the tab stack already claims
         # 170 of it. The board asks for 270 (two side tables, each with a
@@ -5755,6 +5869,129 @@ class AlertCenterPanel(QFrame):
         scroll.setWidget(board)
         scroll.setMinimumWidth(theme.px(170))
         self.strength_board_section.set_content(scroll)
+
+    #: The `symbol` on the ONE review-event row the board's auto-join writes.
+    #: `record_review_event` refuses a row with no symbol, and this event is
+    #: about the BOARD rather than about any one name - the names are in the
+    #: detail. An underscore makes it unrepresentable as a ticker under this
+    #: repo's own grammar (`ui.models.bounce.SYMBOL_RE`), so no symbol-keyed
+    #: join can ever match it, and no scanner alert had to be invented for it.
+    STRENGTH_BOARD_EVENT_SYMBOL = "M5_STRENGTH_BOARD"
+
+    def _auto_adopt_strength_board(self, board: dict) -> None:
+        """Place the TC2000 board's parity rows on M5 Focus (packet T1.4).
+
+        Trader, 2026-09-04: *"I want all shorts and longs on the RS/RW board
+        TC2000 to bne auto added to the M5 focus picks."*
+
+        This is the MACHINE placing a name, so it is modelled on the
+        regime-pause auto-join and not on the board's own "Add" button:
+
+        * only rows with an EMPTY ``failed_floors`` are considered - those are
+          the rows the TC2000 parity list shows, and a greyed near-miss is a
+          name that missed one of the trader's own filters;
+        * the ONE adoption gate is re-run on the row's own numbers (the board
+          is up to fifteen minutes old), and UNKNOWN fails as it always does;
+        * a symbol the trader said "Not today" to this session is skipped, so
+          the next refresh cannot undo their answer;
+        * DESK only. AWAY stages nothing here and EVENING/OFF do nothing - the
+          auto-mode matrix is unchanged;
+        * the write goes through the STORE plus an auto-pick marker, NEVER
+          ``FocusService.add``, which would forge a trader "like" into
+          ``pick_feedback.jsonl``. An existing entry is COUNTED, never
+          re-marked: absence of a marker is what makes a pick the trader's.
+
+        It NEVER removes. A name that drops off the board stays on Focus - the
+        ten-session fade and "Not today" own removal.
+
+        Cheap enough for the Qt thread by construction: a walk over the board's
+        own rows, a pure-Python gate per row, and the store writes the store
+        already batches. No fetch, no re-measurement, no timer.
+        """
+        if not isinstance(board, dict):
+            return
+        try:
+            if self._auto_mode_now() != "DESK":
+                return
+        except Exception:
+            return
+        focus_service = (
+            getattr(self, "_strength_focus_service", None) or self.focus_service
+        )
+        store = getattr(focus_service, "store", None)
+        if store is None:
+            return
+        import focus_adoption_gate
+
+        as_of = str(board.get("as_of") or "")
+        adopted: list[str] = []
+        refused: list[str] = []
+        side_counts = {"long": 0, "short": 0}
+        for side in ("long", "short"):
+            for row in board.get(side) or []:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("failed_floors"):
+                    # Greyed near-miss: it is not on the trader's TC2000 list.
+                    continue
+                symbol = str(row.get("symbol") or "").strip().upper()
+                if not symbol or not SYMBOL_RE.fullmatch(symbol):
+                    continue
+                if symbol in self._ignored_symbols:
+                    refused.append(f"{symbol} (you said not today)")
+                    continue
+                passes, reason = focus_adoption_gate.passes_focus_adoption_gate(
+                    side,
+                    row.get("last"),
+                    row.get("prev_high"),
+                    row.get("prev_low"),
+                    row.get("session_vwap"),
+                )
+                if not passes:
+                    # Named, not counted - the same way `_add_all` names one.
+                    refused.append(f"{symbol} ({reason})")
+                    continue
+                try:
+                    added = bool(store.add(symbol, side, "m5"))
+                    if added:
+                        marker_writer = getattr(store, "mark_auto_adopted", None)
+                        if callable(marker_writer):
+                            marker_writer(
+                                symbol,
+                                side,
+                                "m5",
+                                staged_at=as_of,
+                                reason=(
+                                    f"M5 Strength Board (TC2000) {side} row, "
+                                    f"strength {row.get('strength')}"
+                                ),
+                            )
+                        adopted.append(symbol)
+                        side_counts[side] += 1
+                except Exception:
+                    logging.warning(
+                        "Strength board could not place %s on M5 Focus.",
+                        symbol,
+                        exc_info=True,
+                    )
+                    refused.append(f"{symbol} (add failed)")
+        if not adopted and not refused:
+            return
+        self._record_review_event(
+            "strength_board_auto_focus",
+            symbol=self.STRENGTH_BOARD_EVENT_SYMBOL,
+            detail={
+                "side_counts": side_counts,
+                "adopted": adopted,
+                "refused": refused,
+                "as_of": as_of,
+            },
+        )
+        if adopted:
+            self.statusChanged.emit(
+                f"★ {side_counts['long']} long, {side_counts['short']} short "
+                "added to M5 Focus from the TC2000 board."
+            )
 
     def _show_board_symbol_snapshot(self, symbol: str, side: str = "") -> None:
         """RS/RW-board ticker click: use the same cache-only quick look."""

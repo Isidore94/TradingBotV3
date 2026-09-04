@@ -172,6 +172,15 @@ def desk(tmp_path, monkeypatch):
     monkeypatch.setattr(made, "_review_movers_only", False, raising=False)
     monkeypatch.setattr(made, "_auto_mode_now", lambda: "DESK")
     monkeypatch.setattr(made.chart_review, "_reviewed_symbols", lambda: set())
+    # `PARKED_LONG_IGN` is the board's sixth row and its docstring calls it
+    # "one name the trader parked" - IGN clears every TC2000 floor AND passes
+    # the adoption gate, so the ONLY thing that may keep it off Focus is the
+    # trader's own "Not today". Parking it here is what makes "exactly three
+    # of the six may be adopted" true of every test that publishes FULL_BOARD,
+    # and it is fail-loud: an implementation that dropped the
+    # `_ignored_symbols` skip fails all nine of them rather than one.
+    # (Builder, 2026-09-04 - the fixture said this and the setup did not.)
+    made._ignore_alert_symbol("IGN")
     yield made, store, focus_service, service_adds
     made.close()
     made.deleteLater()
