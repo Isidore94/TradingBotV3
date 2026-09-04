@@ -94,6 +94,31 @@ the dated entry named beside it.
 
 
 
+### 2026-09-04 (~14:00 PT) - Lake assessment: integrity passes, swing simulator 0/257 wins, like links broken
+
+Read-only assessment of the repaired lake (`docs/analysis/LAKE_ASSESSMENT_2026-09-04.md`).
+Scripts at `docs/analysis/scripts/`. No code changed, no lake writes, no promotions.
+
+**Integrity passes.** 0 duplicate grains in bar_m5 (both months), 32/32 outcome buckets
+recomputed, 141,774 outcome rows in the current view.
+
+**Swing house recipe 0/257 wins.** The control_fixed_1r2r recipe on the SAME occurrences
+is 45.3% blended WR (n=532), proving the signal exists. One TARGETED row has MFE=0.0
+(self-contradictory). The simulator needs investigation before any headline uses it. Only
+2 of 16 occurrence families have swing outcomes (the other 14 need `PRIMARY_RECIPE_BY_SETUP`
+entries).
+
+**Every M5-close recipe with n>500 has negative mean net_r** (-0.21 to -1.58 R). MFE
+confirms the opportunity (53% >= 1R for the tightest stops); the exit cannot capture it.
+P8's 20-session window (~2026-09-30) is designed to answer this.
+
+**Like links broken.** 74 bronze rows, all `basis=unknown`. The after-like grid grades
+against unresolved matches. Fix before the window closes.
+
+**HTF LRSI: 16/16 cells pass the floor, all negative.** No promotion case.
+
+Four recommendations (R1-R4) with evidence, counterfactuals, and gates — see the report.
+
 ### 2026-09-04 (~12:40 PT) - Packet T2: a claimed like is one double-click, and it advances
 
 **Trader, after T1 was on the desk:** *"pretty close. for the 'like and claim' part of the
