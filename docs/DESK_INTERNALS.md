@@ -896,3 +896,176 @@ intraday features for those months were computed from the duplicated rows.
 - **A recon that rates a timer from its docstring has not measured it.** The F1
   packet fixed the build thread; the tee thread had the identical shape and was
   found the same evening by sampling the GIL, not by reading the code.
+
+## Headline statistics, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)
+
+`CLAUDE.md` keeps the rules of this block; this is the block as it stood, with every
+measurement and the reasoning behind each rule.
+
+**Headline statistics and the priority switch (V3, decision 0016)**
+
+- **The priority switch reorders and never withholds** - and it is **NOT BUILT
+  YET** (V4 owns it; R4 B3 removed the sentence that cited a test for it). When
+  it is built: "prioritise what is working" is display-only (decision 0016
+  answer 5), it sorts the review queue, the M5 list and the setups table, and it
+  may never hide, mute, park or withhold a row. The tier gate, movers-only and
+  repetition control stay untouched by it. **The identical-visible-rows test is
+  owed with the switch**, not before it - a doc that cites a test nothing runs is
+  worse than a doc that says the work is owed.
+- **Win rate leads every trader-facing SWING surface; MFE-after-a-held-level
+  leads every DAY-TRADE surface** (decision 0016 answers 3 and 4). The trader
+  gives swings room and their losses run ~1.5x their best wins, so mean R ranks
+  their swings by the statistic their loss profile makes misleading. Win rate
+  goes FIRST, with `n` and a **Wilson lower bound** beside it (`swing_headline`),
+  and **sorting is by the lower bound** - the raw rate puts a 100%-on-three cell
+  above a 62%-on-ninety every time. Mean R stays beside it, never replaced.
+  **PARTIAL** (R4 B3). Wired: the AWAY digest's swing ranking (A11), the setup
+  docs' record line (`setup_docs.family_record_sentence`, rendered at read time
+  from the tracker), the Master AVWAP setups table's **Family Win %** column, the
+  Setup Tracker's **Last 30 Days** tab, and all four Weekend Prep cohort tables
+  (veto, like, pass, rejection), which now sort by the bound. **Still owed: the
+  Setup Tracker's Setup Types tab**, and the reason is measured rather than
+  scheduling - `master_avwap_setup_type_stats.csv` carries no win column at all
+  (only `target_hit_rate` and `stop_rate`, which are different questions), and
+  the outcomes file cannot be joined at that table's grain: its 184 rows collapse
+  to 71 (side, bucket, family, zone) groups, so a joined rate would repeat across
+  up to six rows and read as each row's own. **ONE WILSON**: `swing_headline`'s z
+  (1.96, 95% two-sided) is every trader-facing win rate.
+  `master_avwap_lib/expected_r.py`'s z of 1.28 is a PARAMETER of the Expected-R
+  proven-quality score inside a fenced scoring file, not a column anyone reads;
+  no trader-facing surface may reach for it. On
+  the day-trade side the headline is `held_run_score`: P(the level held in the
+  first 30 min) x trimmed-mean MFE_R of the ones that held. **ONE formula reaches
+  every surface** (R4 A10): the Day Trade Tracker joins
+  `held_run_score.dimension_summaries` and computes nothing, and the M5 alert row
+  reads `alert_cell` + `alert_suffix`. **The join is an equality, so this module
+  spells its segments the AGGREGATOR'S way** (R4 fix round 1) - the champion's own
+  `time_bucket_for`, an episode counted under EACH of its bounce types, and the
+  combination `+`-joined. Four of the tracker's nine tabs fill (`bounce_type`
+  36/36 live rows, `bounce_combo` 58/59, `time_bucket` 10/10,
+  `market_environment` 10/10); the four `master_avwap_*` tabs are BLANK because
+  the outcome log does not carry them at all, and `rrs_alignment` is blank because
+  it is REACHABLE and not derived yet - `held_run_score.UNDERIVED_DIMENSIONS`
+  keeps those two facts apart. A blank is right where the question cannot be
+  asked; a second formula under the headline key is worse than a blank when the
+  column is read as an ordering, and a spelling that silently blanks a tab the
+  data CAN answer is worse than both. `d1_setup_present` is fed from the
+  scanner's own `master_avwap_tracker_scoring_snapshot.json` (19 MB), never from
+  the 1.1 GB setup tracker, and its index **expires on the day roll** - a memo
+  that never rolls puts `d1_setup_present` back to False on day 2 of uptime and
+  stops being "lately" while still saying it is. **Every number on that table
+  names its own basis** (R4 B4): the champion tier is a COLUMN (PROVEN / MUTED /
+  active from the bounce learning state, blank for a segment it never saw - live
+  4 / 2 / 185 / 104 of 295 rows), and the aggregator's verdict is headed
+  **"Verdict (edge score)"** because it is computed from average R and sits three
+  columns from a headline computed from something else. **The My Decisions tabs
+  carry the headline too**, through the same `apply_held_and_ran`; those rows name
+  no side, so `held_run_score.ALL_DIRECTIONS` gives them a pooled cell
+  accumulated FROM THE EPISODES - never an average of the long cell and the short
+  one, which would be a mean of trimmed means and a second formula in that file
+  again.
+- **The AWAY digest ranks swing picks by the tracker's record, not by the bucket**
+  (V1 item 3, built R4 A11; decision 0016 answer 8: *"the best pick is often in
+  the near bucket, not the favourite bucket, so the cream is not being sent."*)
+  The order is the **Wilson lower bound** on the setup family's realized win rate
+  - `master_avwap_tier_outcomes.csv`'s own `win` column inside `lately_window()`
+  - at ONE DECLARED HORIZON (`evidence_stats.SWING_HORIZON_SESSIONS`, 5, which
+  `autopilot_core.SWING_DIGEST_HORIZON_SESSIONS` re-exports and `setup_docs`
+  reads too - R4 B2),
+  with expected R as the tiebreak; an ungraded family sorts BELOW every graded
+  one rather than at zero. **The horizon is declared because that file is one row
+  per (pick, horizon)**: pooling all four inflated n ~2.5x with correlated looks
+  at one decision, which tightens every Wilson bound unevenly and CHANGES THE
+  ORDER. A row the tracker flagged `stale_horizon` is dropped, the way the
+  scan-factor leaderboard already drops it from the same file. The bucket is PRINTED and never ranked on, and the near
+  cap is applied **after** the ranking, so what is hidden is the weakest near rows
+  and never the best one. The read is the caller's, so `render_away_report` stays
+  a pure renderer. AWAY is still the only routine pusher.
+- **The Research tab is not a trader surface.** It is the builder's
+  (decision 0016 answer 7: the trader never opens it). Nothing the trader must
+  see may live only there - a number that matters gets a line on the Trading
+  Desk, the Journal, Weekend Prep or the AWAY Recap, and the full readout stays
+  in Research. The same rule retires "it is on the Research tab" as an answer to
+  "where does the trader see this?"
+- **"Lately" is ONE number and it is counted in trading sessions.**
+  `evidence_stats.LATELY_SESSIONS` (20) is the home; `lately_window()` walks the
+  exchange calendar. Twenty calendar days is fourteen sessions in a normal month
+  and twelve across a holiday week, so a calendar window silently shortens the
+  sample exactly when the market was closed. **The review board is inside this
+  rule** (R4 B6): `review_learning.DEFAULT_WINDOW_SESSIONS` IS `LATELY_SESSIONS`,
+  it was a 90-CALENDAR-DAY literal, and the blind-spot and leak callouts are cut
+  on it. Weekend Prep's week is `evidence_stats.WEEK_SESSIONS` (5) for the same
+  reason - it printed "Week of <Mon> to <Fri>" over the last 7 calendar days, so
+  a holiday week measured four sessions and still called itself a week. The state
+  key, the report header, the CLI flag and every renderer say **sessions**.
+
+## Frozen exe rebuild policy, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)
+
+`CLAUDE.md` keeps the policy, the guards and the triggers; this is the section as it
+stood, with the Smart App Control history, the `d0aebd5` delivery-gap story and the
+selftest count history.
+
+## Frozen exe rebuild policy
+Build: `.venv\Scripts\pyinstaller.exe .\packaging\tradingbotv3.spec --noconfirm` → `dist/TradingBotV3/TradingBotV3.exe`
+(onedir, ~400MB, ~4 min). `dist/` and `build/` are gitignored, so the exe is never a commit artifact —
+rebuilding is verification only, and skipping it can never leave the tree broken.
+
+**Rebuilding is not the same as delivering, and a build that completes is not a build that
+runs.** `dist/` being gitignored means an unrebuilt commit cannot break the *tree*; it also
+means it cannot reach the *desk*. Always start the exe (or its `--selftest`) after building —
+success from PyInstaller is not evidence that Windows will let it launch.
+
+**The desk runs from source** — `.venv\Scripts\python.exe launch_gui.py`, normally via the
+`trading_desk.cmd` launcher — **by trader decision (2026-08-26), and it stays that way until a
+deliberate rebuild + frozen selftest is scheduled.** The original reason was that **Windows Smart
+App Control was enforced** (`HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` →
+`VerifiedAndReputablePolicyState = 1`) and refused the unsigned local build with "An Application
+Control policy has blocked this file" — open from 2026-08-19, and on 2026-08-21 the trader was
+launching the exe. **On 2026-08-26 the registry reads OFF** (`VerifiedAndReputablePolicyState = 0`,
+`SAC_PreviousState = 1`, `SAC_EnforcementReason = 6`). Read the registry value, never recall it. **SAC verdicts are per file hash**, so one build can run for days while the next
+is refused — never assume the last successful frozen run generalizes. SAC has no exclusion list;
+the only exits are a reputable code-signing certificate or turning SAC off, which cannot be undone
+without reinstalling Windows. That is the trader's call.
+
+While this holds, **the source launch IS production**: a pushed commit is live at the trader's next
+restart and the exe is a verification artifact only. If the trader ever returns to the frozen exe,
+it becomes production again and so does the delivery gap it carries — a fix the trader will actually
+use is not delivered until the exe is rebuilt, which is what kept the `d0aebd5` responsiveness
+repair off the desk overnight on 2026-08-20 and made that night's `ui_stalls.jsonl` a pre-fix
+baseline rather than diagnostic evidence.
+
+- **Do NOT rebuild per commit.** ~4 min machine time plus 5-10 min of the user's click-through is not
+  worth it on the ~90% of commits that cannot affect freezing. Logic changes inside existing modules
+  are invisible to PyInstaller.
+- **Rebuild before each merge to `main`** (same point as the plan.md sec 6 live-validation day), and
+  immediately when a change hits a trigger below. Ask the user before spending their time on the
+  click-through; the build itself is unattended.
+- **Both guards are now BUILT** (2026-08-09, branch `claude/a4-paint-lines-packaging-nug5km`):
+  - `tests/test_packaging_spec_drift.py` executes the spec with the PyInstaller API stubbed and
+    asserts every top-level `scripts/` package is in its `collect_submodules` list and every
+    non-`.py` runtime asset is covered by a `datas` rule. It found the spec five packages behind
+    the tree (`ai_jobs`, `desk_link`, `gui_app`, `indicators`, `market_prep_gui`). `desk_link` was
+    bundled from then until P1.5 **removed the package entirely (2026-08-24)**; `indicators` and
+    `ops` are bundled; the rest are documented allowlist entries — each unreachable from
+    `launch_gui.py`, the frozen entry point.
+    **Fix the spec, never the test** — deliberate omissions go in its documented allowlists.
+  - `launch_gui.py --selftest` (`scripts/selftest.py`) imports every lazily-loaded engine and loads
+    every `__file__`-relative asset (theme.qss, the veto vocabulary), no window and no network,
+    exiting non-zero with every failure named. Run it against the FROZEN exe:
+    `dist\TradingBotV3\TradingBotV3.exe --selftest`. Expect `selftest OK: N/N checks passed (frozen)` and exit 0 - **N is a running total that grows as checks are added, not a fixed number**; it was 29 on 2026-08-09, 30 later, and the unfrozen tree measured 72 on 2026-08-27. Compare the run against the *current* unfrozen count, never against a number recalled from a doc - that is what replaces the trader's click-through (desk-verified 2026-08-09).
+  - The two lists must never contradict each other: a package in `PACKAGES_NOT_IN_THE_BUNDLE` cannot
+    also be in `selftest.LAZY_ENGINE_MODULES`, because the frozen exe genuinely does not contain it.
+    The unfrozen suite cannot see such a clash — a repo checkout imports anything under `scripts/` —
+    so `test_the_selftest_never_demands_a_package_the_bundle_excludes` now asserts the two are
+    disjoint. It exists because `ai_jobs` was in both, the unfrozen selftest passed 30/30 all week,
+    and the desk's first frozen run (2026-08-09) was the first execution anywhere to catch it.
+  - Between them, triggers 2-4 below are now caught by the normal test run.
+- **Triggers — a change of these kinds can break the bundle, so rebuild and run the frozen selftest:**
+  1. New third-party dependency (`requirements-*.txt` / `constraints.txt`) — may need hiddenimports or `collect_data_files`. **Not** covered by the guards.
+  2. New non-`.py` runtime asset. The spec mirrors every `FIRST_PARTY_PACKAGES` tree plus `config/`; an asset outside those silently goes missing. *(spec-drift test catches it)*
+  3. New top-level package under `scripts/` that is imported lazily — the spec's `collect_submodules` list is hardcoded. *(spec-drift test catches it)*
+  4. New dynamic import by string name (`importlib`, name-keyed panel/service lookup) in an uncollected package. *(add the module to `selftest.LAZY_ENGINE_MODULES` — but only if a frozen run can actually reach it; see the disjointness rule above)*
+  5. Any change touching `__file__` / `ROOT_DIR` / `sys.path` — `ROOT_DIR` is `sys._MEIPASS` when frozen. **Not** fully covered; the selftest checks the phantom-root assumption only.
+- Read `packaging/README.md` "Things that will bite you" before touching the spec or any of the above.
+  The signature failure is a bundle that starts fine and dies at the first lazy import, so "it launched"
+  is not proof; the selftest is what exercises the engines.
