@@ -181,6 +181,20 @@ tomorrow.**
   **Gate #56 is met in full.** That 134,502 : 3,803 ratio is the measure of how wrong
   the outcome tables had been: nearly every terminal row computed over the doubled
   bars changed on re-simulation.
+
+  **What the AI pass will now read, measured 08:05 PT** (`outcome_path year=2026`, the
+  recomputed rows against the latest prior version of the same (occurrence, recipe)):
+  137,439 recomputed rows, of which only **20,132 had any prior version** - the other
+  117,307 are outcomes the polluted bars could not produce at all, so the lake holds
+  roughly 6.8x the outcome evidence it did yesterday. Of the 20,132 that existed:
+  **2,794 changed result state** (745 STOPPED->TARGETED, 514 TARGETED->STOPPED, 501
+  AMBIGUOUS_BAR resolved, 509 OPEN resolved), 2,172 changed `first_hit`, 5,396 moved
+  `net_r` by more than 0.05 R and **1,505 flipped its sign**. Per-recipe mean `net_r`
+  moved by 0.02-0.11 R (e.g. `m5close_current_anchor1_1r_v1` -0.126 -> -0.212 over
+  584 rows). Every fact pack, HTF-LRSI read and after-like cell published before
+  2026-09-04 was computed on the wrong lake and is VOID as evidence; the first honest
+  pack is tonight's 22:00 `setup_research` run. The trader-facing headline statistics
+  (win rate, held-and-ran, Expected-R) never read the lake and are unaffected.
 - **F3 step 1 (decision 0017).** `scripts/tracker_store.py` mirrors each tracker
   save into `master_avwap_setup_tracker.sqlite` (one row per record, content
   hashes, WAL) after the JSON write. Shadow only: no reader moves, the JSON is
