@@ -471,7 +471,8 @@ class StrengthBoardPanel(QWidget):
 
         The board refreshes on a 15-minute cadence, so a row can be several
         minutes stale by the time the trader clicks it. The gate is the same
-        one the auto path uses - one definition, three call sites.
+        one the auto path uses - one definition, four call sites (packet T1.4
+        added the TC2000 board's automatic join).
         """
         return focus_adoption_gate.passes_focus_adoption_gate(
             side,

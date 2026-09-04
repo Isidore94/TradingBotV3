@@ -49,17 +49,33 @@ class AlertChartReview(QWidget):
       be proposed again today. Watchlists and scanning are never touched by
       a scanner-alert dismissal.
 
-    All three advance the review queue. Everything on the arm dock is a
-    TOGGLE that leaves the chart in place: the cross-focus button (M5 pick
-    -> pin into the D1 Focus feed; swing pick -> add to the M5 Focus
-    day-trade list) and the one-shot chart watches (click again to disarm).
+    All three advance the review queue, and so does a VETO from the capture
+    rail. A LIKE does NOT (packet T1, trader 2026-09-04: the chart stays so
+    the trader can arm their alerts on it), and neither does a note or a
+    day-trade pass. Everything on the arm dock is a TOGGLE that leaves the
+    chart in place: the cross-focus button (M5 pick -> pin into the D1 Focus
+    feed; swing pick -> add to the M5 Focus day-trade list) and the one-shot
+    chart watches (click again to disarm).
     """
 
+    # The "✕ Not today" BUTTON's signal, and since packet T1 (2026-09-04) only
+    # that button's. The verb behind it writes an UNCODED veto row and then
+    # opens a note box, which is exactly what the trader asked to be rid of on
+    # the capture window - so the rail's coded veto no longer borrows it.
     removeTodayRequested = Signal(object)
-    # A LIKE is finished with the chart but NOT finished with the symbol
-    # (R9.2). Separate from `removeTodayRequested` because that verb parks the
-    # name for the rest of the day, which a like must never do.
-    likeAdvanceRequested = Signal(object)
+    # (alert) - the trader vetoed this chart FROM THE CAPTURE RAIL, with a
+    # reason code and the why already written. The host retires the chart and
+    # parks the symbol exactly as "Not today" does, and writes NO second row
+    # and NO note box: the capture window IS the why (trader, 2026-09-04:
+    # "when i double tap something in the capture window ... i shouldnt get a
+    # pop up note box").
+    vetoRetireRequested = Signal(object)
+    # (alert) - a LIKE was recorded. A REPORT, not a request: since packet T1
+    # (trader, 2026-09-04: "i still need time to enter alerts etc.") the chart
+    # STAYS, so this asks the host for no movement at all. It was
+    # `likeAdvanceRequested`; a signal called "advance" that does not advance
+    # is a lie.
+    likeRecorded = Signal(object)
     focusRequested = Signal(object)
     skipRequested = Signal(object)
     crossFocusToggled = Signal(object)
@@ -196,7 +212,7 @@ class AlertChartReview(QWidget):
             "Something about this chart was good. Opens a box for an optional "
             "note; no setup to pick and no reason required. Alt+L does the same "
             "with no box. Nothing is added to Focus or any watchlist, and the "
-            "chart moves on."
+            "chart stays up so you can arm your alerts."
         )
         # Late-bound: the rail is constructed further down this __init__, and
         # the same lambda idiom the other verb buttons use resolves at click
@@ -401,22 +417,29 @@ class AlertChartReview(QWidget):
     def _on_captured(self, event_type: str, _row: dict) -> None:
         """Capture is a decision, so the badge updates without a re-chart.
 
-        A VETO and a LIKE both MOVE ON, by trader rule (2026-08-20): "when I
-        click veto it should just disappear as 'not for today'" and "when I
-        pick a like and claim setup reason, we should just move onto the next
-        chart". Neither is an annotation about a chart still being read.
+        A VETO moves on, by trader rule (2026-08-20): "when I click veto it
+        should just disappear as 'not for today'". It does so through its OWN
+        verb (`vetoRetireRequested`, packet T1) rather than the "✕ Not today"
+        button's: that button writes a second, UNCODED veto row and opens a
+        note box, and the trader cut both from the capture window
+        (2026-09-04: "the point of the capture window is to quickly enter
+        'WHY' I like or dislike something"). The retirement itself - the
+        review event, the parking, the advance - is identical.
 
-        They move on by DIFFERENT routes (R9.2, 2026-08-22). A veto keeps the
-        "Not today" verb, which retires the chart and parks the symbol. A like
-        takes an advance-only route, because parking it was measurably wrong:
-        over 2026-07-24..08-21, 40 of 52 likes put the symbol on the day's
-        ignore list, which also silenced its `d1EventRecorded` - so on an AWAY
-        day, liking a chart quietly dropped that name from the hourly D1 phone
+        A LIKE does NOT move on any more (packet T1, trader 2026-09-04: "the
+        'like' button in the visual chart review should NOT advance the char
+        to the next page because i still need time to enter alerts etc.").
+        It is reported (`likeRecorded`) and the chart stays. It already took
+        an advance-only route rather than the "Not today" verb (R9.2,
+        2026-08-22), because parking a liked name was measurably wrong: over
+        2026-07-24..08-21, 40 of 52 likes put the symbol on the day's ignore
+        list, which also silenced its `d1EventRecorded` - so on an AWAY day,
+        liking a chart quietly dropped that name from the hourly D1 phone
         push. Liking a setup is the opposite of being done with the symbol.
 
-        A NOTE deliberately does not. It is written ABOUT the chart in front
-        of the trader, and a rail that skipped to the next one would make
-        every note cost them the thing they were writing it about.
+        A NOTE deliberately does not move on either. It is written ABOUT the
+        chart in front of the trader, and a rail that skipped to the next one
+        would make every note cost them the thing they were writing it about.
 
         The annotation is written first and the queue move is never
         conditional on it - `_record` has already returned by the time we get
@@ -430,17 +453,20 @@ class AlertChartReview(QWidget):
         if self.alert is None:
             return
         if event_type == EVENT_VETO and not self.capture_rail.veto_keeps_chart():
-            self.removeTodayRequested.emit(self.alert)
+            self.vetoRetireRequested.emit(self.alert)
         elif event_type == EVENT_LIKE_CLAIM:
-            self.likeAdvanceRequested.emit(self.alert)
+            self.likeRecorded.emit(self.alert)
 
     def _on_veto_day_trade(self, _row: dict) -> None:
         """Vetoed the D1, keeping the name for an M5 trade.
 
-        The plain-veto auto-advance is suppressed for this one commit: the
-        host has to place the name on M5 Focus BEFORE the alert is retired
+        The plain veto's own retire verb is suppressed for this one commit:
+        the host has to place the name on M5 Focus BEFORE the alert is retired
         from the queue, because retiring it is what drops the object both
-        steps need. The host does both, in that order.
+        steps need. The host does both, in that order - and since packet T1
+        the retire it performs is the same box-free one a plain veto gets
+        (lead ruling 2026-09-04: the trader's "either veto or like+claim ...
+        no pop up note box" covers this verb too).
         """
         if self.alert is not None:
             self.vetoDayTradeRequested.emit(self.alert)

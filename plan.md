@@ -242,6 +242,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.5** | Trader refinement packets | Build the trader's 2026-08-14/15 desk requests in ranked order (R1–R8) |
 | **0.8** | GUI fluidity Wave P1 | Repair the measured Standard-mode stalls and three verified GUI defects |
 | **0.13** | Grade what the trader already said (P0-P10) | Every verdict gets a forward record; a like starts a five-session watch. **MERGED; live gates #29-#43 owed** |
+| **0.16** | Capture and board rules (packet T1) | A veto with no box, a like that stays, a board click that queues nothing, the TC2000 board on M5 Focus. **BUILT; live gate #58 owed** |
 | **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1 and V2 merged, V3 on its branch; V2's item 3 (the AWAY Recap) is NOT BUILT** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
@@ -582,6 +583,51 @@ comparison must condition on the entry's position relative to the band.
 Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
+
+## Phase 0.16 — Capture and board rules (packet T1, 2026-09-04) — BUILT, live gate #58 owed
+
+Trader-authorized 2026-09-04 in their own words (quoted in full in
+`docs/DESK_INTERNALS.md`, "T1 - the capture window is the why, and a look is not a
+queue"). Tester-first: 48 tests committed red on `claude/t1-capture-and-board`
+before any fix existed. **Note the name collision:** the sigma-band research
+letters T1/T3/T4 above are a DIFFERENT thing; this is the capture-and-board packet.
+
+1. **A rail veto retires with no box and one row.** `vetoRetireRequested` →
+   `_retire_after_veto`; `removeTodayRequested` is the "✕ Not today" BUTTON's
+   signal alone and that button is unchanged. Both verbs share one body
+   (`_retire_review_alert(..., write_not_today_annotation=)`). **Lead ruling
+   2026-09-04:** the day-trade veto retires through the box-free verb too, after
+   its Focus placement, in that order.
+2. **A like never advances.** `likeRecorded` → `_after_like`. The review event
+   keeps the name `like_advance` - `review_learning.TAKE_ACTIONS` keys on the
+   string.
+3. **A board look holds no place and is never skip-counted.**
+   `_is_manual_chart_look` on `MANUAL_CHART_TAG`; the M5-bar `skip` with
+   `clicked_away_from_m5_alert` and the dequeued-D1 return-to-head rule are both
+   untouched.
+4. **The TC2000 board's parity rows auto-join M5 Focus.** DESK only, empty
+   `failed_floors` only, the one adoption gate re-run on the row's own numbers,
+   `_ignored_symbols` skipped, through the STORE (one `add_many` per side) +
+   `mark_auto_adopted` and never `FocusService.add`, never removes, idempotent,
+   one `strength_board_auto_focus` review event per refresh.
+5. **Fix round 1 (reviewer NO-GO, blocker):** the auto-join also skips any name
+   the trader took OFF a focus side today through ANY door.
+   `FocusPickStore.declined_today`, recorded by the STORE on `remove`,
+   `remove_everywhere`, `clear` and the fade under an additive `declined` key in
+   `focus_auto_picks.json`, same-session only and pruned on load.
+   `_ignored_symbols` alone let four other removal doors be undone by the next
+   fifteen-minute refresh, re-injecting the name into `longs.txt` with it.
+
+**Live gate (#58):** one DESK session where a double-click on a veto reason
+retires the chart with no box and `trader_annotations.jsonl` gains ONE row; a like
+leaves the chart up and the trader arms an alert on it before moving on;
+"✕ Not today" still opens the box and advances; five clicks across the RS/RW and
+TC2000 boards leave "queue clear" reading "queue clear"; and after the next
+15-minute Strength refresh the TC2000 parity names are on M5 Focus with markers in
+`focus_auto_picks.json`, and a "Not today" on one of them does not come back on
+the refresh after that. **Fix round 1 adds one clause:** remove one of the
+adopted names from the Focus list itself (not through "Not today") and confirm it
+is still gone after the next refresh, and that `longs.txt` did not regain it.
 
 ## Phase 0.15 — Desk assessment packets (2026-09-03 evening, trader-authorized)
 

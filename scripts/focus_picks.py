@@ -291,6 +291,9 @@ class FocusPickStore:
         self._m5_state_path = _m5_state_path_for(focus_longs_path)
         self._auto_pick_path = _auto_pick_state_path_for(focus_longs_path)
         self._auto_picks: dict[str, dict] = {}
+        # T1 fix round 1: the names the trader took OFF a focus side today,
+        # through any door. Same file, additive key - see `_record_decline`.
+        self._declined: dict[str, dict] = {}
         # A3: the fade clock and the faded list. This store is their single
         # writer - the panel asks, it decides and writes.
         self._pick_clock_path = _pick_clock_path_for(focus_longs_path)
@@ -312,6 +315,7 @@ class FocusPickStore:
                 self._lists[category][side] = read_watchlist_symbols(path)
         self._membership = self._load_membership()
         self._auto_picks = self._load_auto_picks()
+        self._declined = self._load_declined()
         self._pick_clocks = self._load_pick_clocks()
         self._faded = self._load_faded()
         # m5 is a day-trade list: a new calendar day starts it empty. This
@@ -368,8 +372,11 @@ class FocusPickStore:
         # The markers describe picks that no longer exist. Keeping them would
         # let yesterday's provenance authorize removing a name the trader types
         # this morning, which is the one thing the sidecar exists to prevent.
-        if self._auto_picks:
+        # The same argument covers the declines beside them: "I took this off
+        # today" is a statement about a session, and the session has rolled.
+        if self._auto_picks or self._declined:
             self._auto_picks = {}
+            self._declined = {}
             self._save_auto_picks()
         _write_m5_market_date(self._m5_state_path, today_text)
         if removed:
@@ -453,6 +460,9 @@ class FocusPickStore:
         sym = normalize_symbol(symbol)
         if not sym or sym in self._lists[category][side]:
             return False
+        # Putting the name back is the trader changing their mind, so today's
+        # "I took this off" stops being true of it.
+        self._clear_decline(sym, side, category)
         self._lists[category][side].append(sym)
         self._start_pick_clock(sym, side, category, today=today, reason="added")
         self._write_focus(side, category)
@@ -491,6 +501,7 @@ class FocusPickStore:
         added: list[str] = []
         for sym in incoming:
             if sym and sym not in self._lists[category][side]:
+                self._clear_decline(sym, side, category, defer_save=True)
                 self._lists[category][side].append(sym)
                 self._start_pick_clock(
                     sym, side, category, today=today, reason="added", defer_save=True
@@ -501,6 +512,7 @@ class FocusPickStore:
             self._write_focus(side, category)
             self._save_membership()
             self._save_pick_clocks()
+            self._save_auto_picks()
             stamp = datetime.now().astimezone().isoformat(timespec="seconds")
             for sym in added:
                 self._emit_membership(
@@ -532,6 +544,7 @@ class FocusPickStore:
         self._write_focus(side, category)
         self._uninject_from_shared(sym, side, category)
         self._forget_auto_marker(sym, side, category)
+        self._record_decline(sym, side, category)
         self._forget_pick_clock(sym, side, category)
         left_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self._emit_membership(
@@ -637,6 +650,7 @@ class FocusPickStore:
                 self._write_focus(side, category)
                 self._uninject_from_shared(sym, side, category, defer_membership_save=True)
                 self._forget_auto_marker(sym, side, category, defer_save=True)
+                self._record_decline(sym, side, category, defer_save=True)
                 self._forget_pick_clock(sym, side, category, defer_save=True)
                 removed += 1
         if removed:
@@ -656,6 +670,7 @@ class FocusPickStore:
         for sym in symbols:
             self._uninject_from_shared(sym, side, category, defer_membership_save=True)
             self._forget_auto_marker(sym, side, category, defer_save=True)
+            self._record_decline(sym, side, category, defer_save=True)
             self._forget_pick_clock(sym, side, category, defer_save=True)
         self._save_membership()
         self._save_auto_picks()
@@ -836,6 +851,7 @@ class FocusPickStore:
         self._write_focus(side, category)
         self._uninject_from_shared(sym, side, category)
         self._forget_auto_marker(sym, side, category)
+        self._record_decline(sym, side, category)
         self._forget_pick_clock(sym, side, category, defer_save=True)
         left_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self._emit_membership(
@@ -1106,6 +1122,100 @@ class FocusPickStore:
         if not defer_save:
             self._save_auto_picks()
 
+    def _record_decline(
+        self, symbol: str, side: str, category: str, *, defer_save: bool = False
+    ) -> None:
+        """Remember that the trader took this name OFF a focus side today.
+
+        Every removal door funnels through here - `remove`,
+        `remove_if_auto_adopted` (which delegates to it), `remove_everywhere`,
+        `clear` and the fade - so the record is made ONCE, in the store, rather
+        than at each of the four panels that can remove a pick. That is the
+        whole point: T1's board auto-join re-adopted a name the trader had just
+        deleted through the Focus-review walkthrough, because the panel's
+        `_ignored_symbols` set was the only thing it consulted and only the
+        "Not today" verb writes to that set.
+
+        Deliberately NOT conditional on a marker existing. A trader-typed name
+        the trader then deleted is exactly the name the machine must not put
+        back, and `_forget_auto_marker` returns early for it.
+
+        Same file as the markers (`focus_auto_picks.json`) under an ADDITIVE
+        `declined` key: an older reader ignores it, and the file already has a
+        day-scoped loader, which is the semantics a decline needs. It is a
+        statement about TODAY only - a new session starts with a clean slate,
+        and `_load_declined` prunes anything older so the file cannot grow.
+        """
+        if not symbol:
+            return
+        self._declined[_membership_key(symbol, side, category)] = {
+            "symbol": symbol,
+            "side": side,
+            "category": category,
+            "session_date": date.today().isoformat(),
+            "declined_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        if not defer_save:
+            self._save_auto_picks()
+
+    def _clear_decline(
+        self, symbol: str, side: str, category: str, *, defer_save: bool = False
+    ) -> None:
+        """The trader put the name back; today's decline no longer describes it."""
+        if self._declined.pop(_membership_key(symbol, side, category), None) is None:
+            return
+        if not defer_save:
+            self._save_auto_picks()
+
+    def declined_today(
+        self, symbol: object, side: object, category: object = "m5"
+    ) -> bool:
+        """True when the trader removed this entry earlier in TODAY's session.
+
+        Same-session only, by design: "I took it off today" says nothing about
+        tomorrow, and a permanent refusal would need the trader to say so.
+        """
+        sym = normalize_symbol(symbol)
+        if not sym:
+            return False
+        try:
+            side = normalize_focus_side(side)
+            category = normalize_focus_category(category)
+        except ValueError:
+            return False
+        row = self._declined.get(_membership_key(sym, side, category))
+        if not isinstance(row, dict):
+            return False
+        return str(row.get("session_date") or "") == date.today().isoformat()
+
+    def declined_entries(self) -> dict[str, dict]:
+        return dict(self._declined)
+
+    def _load_declined(self, today: date | None = None) -> dict[str, dict]:
+        """Today's declines only; anything older is PRUNED rather than kept.
+
+        Validated per entry for the same reason the markers are: a file that
+        outlived a day roll (restored from a backup, or written by a process
+        that died before `expire_m5_if_new_day` fired) must not smuggle
+        yesterday's refusals into this morning.
+        """
+        try:
+            payload = json.loads(self._auto_pick_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        declined = payload.get("declined")
+        if not isinstance(declined, dict):
+            return {}
+        today_text = (today or date.today()).isoformat()
+        return {
+            str(key): row
+            for key, row in declined.items()
+            if isinstance(row, dict)
+            and str(row.get("session_date") or "") == today_text
+        }
+
     def _load_auto_picks(self, today: date | None = None) -> dict[str, dict]:
         """Markers for TODAY only, validated per entry (R2.1).
 
@@ -1158,7 +1268,13 @@ class FocusPickStore:
             tmp = self._auto_pick_path.with_name(self._auto_pick_path.name + ".tmp")
             tmp.write_text(
                 json.dumps(
-                    {"market_date": date.today().isoformat(), "picks": self._auto_picks},
+                    {
+                        "market_date": date.today().isoformat(),
+                        "picks": self._auto_picks,
+                        # Additive (T1 fix round 1). An older reader takes
+                        # `picks` and ignores this exactly as before.
+                        "declined": self._declined,
+                    },
                     indent=2,
                     sort_keys=True,
                 ),
