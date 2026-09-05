@@ -1,5 +1,18 @@
 # Lake assessment 2026-09-04
 
+> **Correction, later 2026-09-04:** Treat the conclusions below as historical,
+> not validated current advice. The audit scripts read `basis`, but the bronze
+> payload field is `match_basis`. A later bounded read found 77 distinct likes:
+> 41 matched and 36 unmatched (84 stored versions), refuting the broken-link claim.
+> Missing bands explain fallback use, but no-target expiry can still be profitable;
+> TARGETED does not itself mean positive net return. The M5-close study can hold
+> for 18 sessions and is not the live day-trade alert population. Neither its MFE
+> nor the control win rate proves edge or identifies exits as the cause of losses.
+> The probability claim below is invalid and must not be reused. R1–R4 below
+> confer no authorization or promotion readiness. See the source-backed
+> [process review](PROJECT_PROCESS_REVIEW_2026-09-04.md) before using these results.
+> The historical scripts and saved JSON have not been corrected or rerun.
+
 ## Verdict card
 
 1. **Integrity PASSES** — 0 duplicate grains in bar_m5; 32/32 outcome buckets recomputed; 141,774 outcome rows in the current view. 15 bar_derived M15 constituent violations in August (0.002%), acceptable.

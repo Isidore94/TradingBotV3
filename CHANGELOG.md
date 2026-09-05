@@ -188,8 +188,8 @@ which is evidence and must not be loaded as context.
   the seam is `daytrade_tracker_panel._by_headline`.
 
 
-- PySide6 Trading Desk launched by `launch_gui.py`, with the legacy Tk UI retained
-  as a compatibility path.
+- PySide6 Trading Desk launched by `launch_gui.py`; the legacy Tk compatibility
+  path was removed on 2026-09-03 (F2).
 - Main-desk single-process ownership, bounded BounceBot startup/shutdown, generation
   guards, child-process reaping, runtime heartbeat, durable job ledger, typed retry
   budgets, stale-run marking, and a hardened single-instance launch guard that also
@@ -1002,6 +1002,15 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-04 - Project process review and evidence-note corrections
+
+Source-backed advisory review in `docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md`.
+Corrected the historical zero-like-link claim (`match_basis`, not `basis`), the
+no-target-guaranteed-loss claim, and stale built-state descriptions. Recorded
+held/overlap measurement gaps, unsupported AI position language and measured
+scorecard/scan costs. No runtime change, new authorization or gate completion;
+the 6608-pass recorded baseline is unchanged and was not rerun.
 
 ### 2026-09-04 - Earnings-anchor bridge: the scan feeds the anchors CSV the warehouse reads
 

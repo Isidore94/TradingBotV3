@@ -2,8 +2,15 @@
 
 **Date:** 2026-09-04  
 **Scope:** Read-only analysis of `swing_house_v1` outcome rows in the research lake  
-**Verdict:** The simulator logic is correct. The band data pipeline is 99.15% empty,
-so 942 of 947 occurrences run a fallback path that has no target and can never win.
+**Verdict:** Missing bands explain the fallback use. The band data pipeline is 99.15% empty,
+so 942 of 947 occurrences run a fallback path that has no target. That path can
+still realize a positive return at expiry; it cannot reach the TARGETED state.
+
+**Later review correction:** The historical counts below were not rerun. They
+identify missing inputs, not proof that the setup has edge or that every simulator
+case is correct. A direct `_walk_plain` probe with no target returned EXPIRED at
++1.5 gross R. See [the process review](analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)
+for eligibility, historical feature repair and point-in-time limitations.
 
 ---
 
@@ -48,9 +55,10 @@ _walk_plain(..., target_price=None, ...)
 - **EXPIRED** — 18 sessions elapse
 
 `STATE_TARGETED` requires `target_hit`, which requires `target_price is not None`.
-So winning is structurally impossible on this path.
+So TARGETED is impossible on this path. EXPIRED uses the final close and can
+produce positive gross/net R; the open population must not be assumed to lose.
 
-### 3. The 101 high-MFE STOPPED rows confirm the simulator works correctly
+### 3. The 101 high-MFE STOPPED rows are consistent with the no-target fallback
 
 101 rows reached MFE > 1R (some above 10R) but ended STOPPED. Without a target to lock
 in gains, the position rides the full path until the stop fires. Examples:
@@ -96,12 +104,11 @@ to judge.
 
 ## What this is NOT
 
-- **Not a simulator logic defect.** The `_walk_managed` and `_walk_plain` implementations
-  are correct for the inputs they receive. The managed path's partial/trail/runner logic
-  is internally consistent.
-- **Not bad occurrences.** The control recipe (`control_fixed_1r2r_v1`) runs on the same
+- **Not proof of a simulator defect.** The missing inputs explain the plain fallback.
+  This investigation does not independently prove every managed-path case correct.
+- **Not a verdict on occurrence quality.** The control recipe (`control_fixed_1r2r_v1`) runs on the same
   947 occurrences with a fixed 1R stop and 2R target and shows a 45.3% blended win rate.
-  The setups find real edges.
+  This control result alone does not establish a real edge.
 - **Not a cost-model problem.** Gross R (before transaction costs) is also 0 wins.
 
 ## What it IS
@@ -124,8 +131,9 @@ partials, and trails.
    `research_warehouse.cli recompute-outcomes`.
 
 4. **The fallback path itself is debatable.** When bands are missing, should the simulator
-   skip the row (return None), or run with no target? Currently it runs to a guaranteed
-   loss. Returning None would be more honest — the recipe *requires* bands to function.
+   skip the row (return None), or run with no target? The fallback is a different
+   management path. Explicitly counting it as incomplete evidence would preserve
+   coverage without presenting it as a fully observed managed-recipe trial.
 
 ---
 

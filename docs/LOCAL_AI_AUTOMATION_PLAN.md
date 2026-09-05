@@ -9,7 +9,9 @@ Historical key: accepted into the former plan.md Section 12 as item 13b (trader-
 code landed, Ollama installed and benchmarked on the main desk, all three
 tiers chosen and verified, and the exit gate verified end to end. Phase 1 is
 implementation-complete on `testing-week-2026-08-10` (2026-08-09); its live
-five-session exit gate has not started. Phase 2 remains stopped for redesign.**
+five-session exit gate remains subject to the recorded live proofs. Phase 2's
+deterministic digest was subsequently built; see its later implementation section
+and the current CHANGELOG. Later implementation notes supersede this original brief.**
 Subordinate to `plan.md` — this
 document never overrides plan.md sections 5-7 or the section 12 execution
 order. Section 6 is the binding implementation spec; phases execute in order,

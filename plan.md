@@ -243,7 +243,7 @@ where the phase says so; it never authorizes an early promotion.
 | **0.8** | GUI fluidity Wave P1 | Repair the measured Standard-mode stalls and three verified GUI defects |
 | **0.13** | Grade what the trader already said (P0-P10) | Every verdict gets a forward record; a like starts a five-session watch. **MERGED; live gates #29-#43 owed** |
 | **0.16** | Capture and board rules (packets T1 + T2) | A veto with no box, a quick like that stays, a claimed like that is one double-click and advances, a board click that queues nothing, the TC2000 board on M5 Focus. **BUILT; live gate #58 owed** |
-| **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1 and V2 merged, V3 on its branch; V2's item 3 (the AWAY Recap) is NOT BUILT** |
+| **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1–V3/R4 merged; V4's Working-lately switch and AWAY Recap remain NOT BUILT** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -823,9 +823,18 @@ Enter, filed against the right session.
 **Live gate (#48):** a desk session with the four surfaces hidden and every rail
 hotkey still firing.
 
-### Phase 0.14 packet V1 — Names first (2026-09-02) — items 1 and 2 BUILT; 2's surfaces, 3 and 4 NOT BUILT
+### Phase 0.14 packet V1 — Names first (2026-09-02) — original build record; R4 advanced items 2 and 3
 
 Authorized by the trader pasting the packet.
+
+**Current state:** R4 wired the tracker and alert suffix and implemented
+cross-bucket phone ranking. Only the Working-lately surface/priority switch below
+remains V4 work. The original formula/fetch descriptions below are historical;
+the current Phase 0.14 table above includes the session-relative RVOL correction.
+The [2026-09-04 process review](docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)
+recommends measured-held, side/time-aware overlap and evidence-quality checks
+before ranking influence. These are review findings, not newly authorized work;
+existing live and promotion gates remain owed.
 
 **Item 1 — the Strength Board becomes the trader's TC2000 scan. BUILT.**
 
@@ -854,7 +863,7 @@ file. The test now asserts the seven FORMULA functions are byte-identical to the
 R8 baseline — stronger than "no edits", which could be satisfied by not touching
 the file while the numbers moved underneath it.
 
-**Item 2 — `held_run_score`. THE SCORE IS BUILT; ITS THREE SURFACES ARE NOT.**
+**Item 2 — `held_run_score`. BUILT; tracker and suffix wired by R4; switch owed.**
 
 `scripts/held_run_score.py` computes P(level held in the first 30 min) x
 trimmed-mean MFE_R of the held ones, per (bounce_type, time_bucket,
@@ -862,15 +871,13 @@ market_environment, d1_setup_present), over a rolling 20 sessions with
 `evidence_stats` floors. Shadow only: the champion tier, the mutes and the PROVEN
 stamp are untouched, and a test asserts the champion never imports it.
 
-**NOT BUILT and owed by this item:** the Daytrade Tracker column and sort, the M5
-alert-bar row suffix (`alert_suffix` exists and is tested; nothing calls it yet),
-and the Alert Center ordering switch.
+The Daytrade Tracker column/sort and M5 alert-bar suffix are built. The Alert
+Center ordering switch remains V4 work.
 
-**Items 3 and 4 — NOT BUILT.**
+**Item 3 BUILT; item 4 NOT BUILT.**
 
-3. The phone digest still ranks the best-swing block inside the favourite bucket
-   only. Decision 0016 answer 8 says the best pick is often in `near_favorite_zone`,
-   so the cream is still not being sent.
+3. R4 made the phone digest rank across favorite and near buckets, using family
+   Wilson bounds at one declared horizon with expected R as tiebreak.
 4. There is no "Working lately" section on the Trading Desk and no priority
    switch. `review_learning`'s callouts, the tracker's per-family outcomes and the
    four verdict cohorts all still require leaving the desk to read.
