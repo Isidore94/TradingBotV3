@@ -43,46 +43,17 @@ TRACKER_PURITY_MAX_QUARANTINE_FRACTION = 0.2
 # ---------------------------------------------------------------------------
 
 
-def build_anchor_band_variant_meta(df, anchor_index, anchor_date) -> dict:
-    """The challenger's answer for one anchor, in the anchor-meta shape.
-
-    Always returns a dict, and it always says why when it has no numbers -
-    missing data is uncertainty, so an absent sigma is `None` with a stated
-    reason rather than a zero or a silently missing key. Fewer than the
-    challenger's 20-close lookback before the anchor bar is the ordinary case
-    for a newly listed name, and it must read as "not measured", never as a
-    band sitting exactly on its centre.
-
-    Never raises: this is evidence beside a live scan, and an evidence store is
-    never allowed to cost the thing it records.
-    """
-    block = {
-        "formula_version": "",
-        "date": str(anchor_date or ""),
-        "vwap": None,
-        "stdev": None,
-        "bands": {},
-        "reason": "",
-    }
-    if df is None or anchor_index is None:
-        block["reason"] = "no anchor bar in the frame"
-        return block
-    try:
-        from indicators.avwap_band_variants import FEATURE_VERSION, oneoption_avwap_bands
-
-        block["formula_version"] = FEATURE_VERSION
-        vwap, stdev, bands = oneoption_avwap_bands(df, int(anchor_index))
-    except Exception as exc:  # pragma: no cover - defensive; shadow must never throw
-        block["reason"] = f"band variant failed: {exc}"
-        return block
-    block["vwap"] = float(vwap) if vwap is not None else None
-    block["stdev"] = float(stdev) if stdev is not None else None
-    block["bands"] = {key: float(value) for key, value in (bands or {}).items()}
-    if block["vwap"] is None:
-        block["reason"] = "no positive-volume bar since the anchor"
-    elif block["stdev"] is None:
-        block["reason"] = "fewer than the lookback's closes before this bar"
-    return block
+# `build_anchor_band_variant_meta` MOVED to `legacy.py` on 2026-09-05 (packet M1),
+# body unchanged. It was written here, beside the live scan, and the tracker
+# staleness catch-up in `legacy.py` could not reach it - so the catch-up's own
+# symbol entry never carried the block, every persisted tracker record stamped
+# "no band-variant block on the scan entry", and the challenger measured nothing
+# from 2026-08-26 to 2026-09-05. One function, two call paths.
+#
+# The `globals().update(vars(_legacy))` above already re-exports it; this alias
+# is written out so a reader of the call sites below can find the definition,
+# and so deleting the star-style re-export could never silently unbind it.
+build_anchor_band_variant_meta = _legacy.build_anchor_band_variant_meta
 
 
 def evaluate_setup_tracker_purity(

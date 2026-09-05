@@ -8,6 +8,7 @@ import bisect
 import re
 import math
 import csv
+import collections
 import copy
 import random
 import ast
@@ -5497,6 +5498,58 @@ def _setup_id_for_row(row: dict, symbol_entry: dict, scan_date: str | None = Non
 #: Marks a stop candidate/scenario as challenger evidence rather than a stop the
 #: champion would ever take. Every champion aggregate filters on it.
 BAND_VARIANT_STOP_SOURCE = "band_variant"
+
+
+def build_anchor_band_variant_meta(df, anchor_index, anchor_date) -> dict:
+    """The challenger's answer for one anchor, in the anchor-meta shape.
+
+    Always returns a dict, and it always says why when it has no numbers -
+    missing data is uncertainty, so an absent sigma is `None` with a stated
+    reason rather than a zero or a silently missing key. Fewer than the
+    challenger's 20-close lookback before the anchor bar is the ordinary case
+    for a newly listed name, and it must read as "not measured", never as a
+    band sitting exactly on its centre.
+
+    Never raises: this is evidence beside a live scan, and an evidence store is
+    never allowed to cost the thing it records.
+
+    **It lives here, in `legacy.py`, because TWO call paths need it** (packet
+    M1, 2026-09-05). It was written in `runner.py` beside the live scan, and
+    the tracker staleness catch-up - `backfill_setup_tracker_from_recent_sessions`
+    -> `_evaluate_priority_snapshot_for_date`, which builds its OWN symbol entry
+    and is what writes the persisted tracker on a normal day - could not reach
+    it there, so every tracker record stamped the placeholder
+    "no band-variant block on the scan entry" and the challenger measured
+    nothing for ten days. `runner.py` re-exports this name, so the live scan is
+    byte-identical: one function, two callers, never two copies of a formula.
+    """
+    block = {
+        "formula_version": "",
+        "date": str(anchor_date or ""),
+        "vwap": None,
+        "stdev": None,
+        "bands": {},
+        "reason": "",
+    }
+    if df is None or anchor_index is None:
+        block["reason"] = "no anchor bar in the frame"
+        return block
+    try:
+        from indicators.avwap_band_variants import FEATURE_VERSION, oneoption_avwap_bands
+
+        block["formula_version"] = FEATURE_VERSION
+        vwap, stdev, bands = oneoption_avwap_bands(df, int(anchor_index))
+    except Exception as exc:  # pragma: no cover - defensive; shadow must never throw
+        block["reason"] = f"band variant failed: {exc}"
+        return block
+    block["vwap"] = float(vwap) if vwap is not None else None
+    block["stdev"] = float(stdev) if stdev is not None else None
+    block["bands"] = {key: float(value) for key, value in (bands or {}).items()}
+    if block["vwap"] is None:
+        block["reason"] = "no positive-volume bar since the anchor"
+    elif block["stdev"] is None:
+        block["reason"] = "fewer than the lookback's closes before this bar"
+    return block
 
 
 def _is_band_variant_stop(stop_candidate: object) -> bool:
@@ -11440,6 +11493,13 @@ def build_recent_setup_type_stat_rows(payload: dict) -> list[dict]:
 
 #: Column order for `master_avwap_band_variant_stats.csv`. Counts first, then
 #: the paired measures, so a reader meets the n before any rate.
+#:
+#: `top_unmeasured_reason` was added by packet M1 (2026-09-05) for ONE reader:
+#: the Setup Tracker's Band variant view, which shows a coverage sentence above
+#: the table and reads nothing but this file. The reasons live on the tracker
+#: records, and the live tracker JSON is 1.1 GB - a panel that opened it to name
+#: a reason would freeze the Qt thread, so the aggregation is done here, where
+#: the records are already in memory.
 BAND_VARIANT_STATS_COLUMNS = (
     "setup_family",
     "side",
@@ -11448,6 +11508,7 @@ BAND_VARIANT_STATS_COLUMNS = (
     "n",
     "n_variant",
     "n_variant_unmeasured",
+    "top_unmeasured_reason",
     "n_closed_champion",
     "n_closed_variant",
     "avg_total_r_champion",
@@ -11527,6 +11588,19 @@ def _band_variant_mean(values: list[float]):
     return (sum(values) / len(values)) if values else ""
 
 
+def _band_variant_top_reason(counts) -> str:
+    """The commonest stated reason nothing was measured, or a blank.
+
+    Ties break alphabetically so the export is deterministic run to run - a cell
+    that flips between two equally common reasons would read as a change in the
+    data. A group with nothing unmeasured says nothing rather than "".join-ing a
+    reason it does not have.
+    """
+    if not counts:
+        return ""
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
 def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
     """One row per (setup family, side, priority bucket): champion vs challenger.
 
@@ -11558,6 +11632,7 @@ def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
                 "exit_template_id": template,
                 "n": 0,
                 "n_variant_unmeasured": 0,
+                "unmeasured_reasons": collections.Counter(),
                 "champion": [],
                 "variant": [],
             },
@@ -11573,6 +11648,16 @@ def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
             )
             if stdev is None:
                 group["n_variant_unmeasured"] += 1
+                # The record's own words for why. Carried verbatim - a machine
+                # must never re-code a stated reason, and "the block was never
+                # handed over" and "the 20-close window was short" are different
+                # defects with different fixes.
+                reason = (
+                    str(variant_block.get("reason") or "").strip()
+                    if isinstance(variant_block, dict)
+                    else ""
+                )
+                group["unmeasured_reasons"][reason or "reason not stated"] += 1
             continue
         group["variant"].append((setup, variant))
 
@@ -11586,6 +11671,7 @@ def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
             "n": group["n"],
             "n_variant": len(group["variant"]),
             "n_variant_unmeasured": group["n_variant_unmeasured"],
+            "top_unmeasured_reason": _band_variant_top_reason(group["unmeasured_reasons"]),
         }
         for label in ("champion", "variant"):
             pairs = group[label]
@@ -24016,6 +24102,12 @@ def _evaluate_priority_snapshot_for_date(
     symbol_multi_day = []
     current_anchor_meta = None
     prev_anchor_meta = None
+    # Phase 0.10 shadow, packet M1: always present, always says why when it has
+    # no numbers - exactly as the live scan sets it in `runner.py`. This path is
+    # what writes the persisted tracker on a normal day, so a block missing here
+    # is a block missing from every setup record.
+    current_anchor_variant = build_anchor_band_variant_meta(None, None, "")
+    previous_anchor_variant = build_anchor_band_variant_meta(None, None, "")
     skip_current_events = False
 
     if recent_earnings_dates:
@@ -24040,6 +24132,10 @@ def _evaluate_priority_snapshot_for_date(
         if not idxs.empty:
             anchor_idx = int(idxs[0])
             vwap_c, sd_c, bands_c = calc_anchored_vwap_bands(df, anchor_idx)
+            # Shadow, beside the champion and from the same frame + index.
+            current_anchor_variant = build_anchor_band_variant_meta(
+                df, anchor_idx, current_anchor_iso
+            )
             if pd.notna(vwap_c) and bands_c:
                 current_anchor_meta = {
                     "date": current_anchor_iso,
@@ -24086,6 +24182,9 @@ def _evaluate_priority_snapshot_for_date(
         if not idxs.empty:
             anchor_idx = int(idxs[0])
             vwap_p, sd_p, bands_p = calc_anchored_vwap_bands(df, anchor_idx)
+            previous_anchor_variant = build_anchor_band_variant_meta(
+                df, anchor_idx, previous_anchor_iso
+            )
             if pd.notna(vwap_p) and bands_p:
                 prev_anchor_meta = {
                     "date": previous_anchor_iso,
@@ -24427,6 +24526,11 @@ def _evaluate_priority_snapshot_for_date(
         "last_trade_date": last_trade_date.isoformat(),
         "current_anchor": current_anchor_meta,
         "previous_anchor": prev_anchor_meta,
+        # Phase 0.10 shadow blocks (packet M1). Additive; nothing live reads
+        # them - `build_tracker_setup_record` copies them onto the record so the
+        # challenger's stop can be graded beside the champion's.
+        "current_anchor_variant": current_anchor_variant,
+        "previous_anchor_variant": previous_anchor_variant,
         "events_today": symbol_events_today,
         "multi_day_patterns": symbol_multi_day,
         "events_all_for_day": full_event_list,

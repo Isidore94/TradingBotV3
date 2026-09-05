@@ -352,6 +352,13 @@ class SetupTrackerPanel(QFrame):
         self.attribute_status_label.setWordWrap(True)
         self.attribute_rows: list[dict[str, Any]] = []
         self._attributes_thread: threading.Thread | None = None
+        # The Band variant tab's coverage line (packet M1). It sits ABOVE the
+        # table because it is the first thing that must be true about the table:
+        # for ten days every row read n_variant = 0 and the empty comparison
+        # looked like a comparison.
+        self.band_variant_status_label = QLabel(BAND_VARIANT_NO_EXPORT_SENTENCE)
+        self.band_variant_status_label.setObjectName("MutedLabel")
+        self.band_variant_status_label.setWordWrap(True)
 
         self.tabs = QTabWidget()
         self.current_table, self.current_model = self._make_table(CURRENT_PICK_COLUMNS)
@@ -427,6 +434,7 @@ class SetupTrackerPanel(QFrame):
                 "whose challenger sigma could not be computed. A wider band is stopped out less often BY "
                 "CONSTRUCTION when entry sits inside it, so read the stop-distance columns before the rates.",
                 self.band_variant_table,
+                status=self.band_variant_status_label,
             ),
             "Band Variant",
         )
@@ -525,7 +533,9 @@ class SetupTrackerPanel(QFrame):
         table.setShowGrid(False)
         return table, model
 
-    def _make_explained_tab(self, description: str, table: DataTable, *, footer=None) -> QWidget:
+    def _make_explained_tab(
+        self, description: str, table: DataTable, *, footer=None, status=None
+    ) -> QWidget:
         tab = QWidget()
         label = QLabel(description)
         label.setObjectName("MutedLabel")
@@ -534,6 +544,10 @@ class SetupTrackerPanel(QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         layout.addWidget(label)
+        # `status` is what the table currently says about itself and belongs
+        # ABOVE it; `footer` is how the read went and belongs below.
+        if status is not None:
+            layout.addWidget(status)
         layout.addWidget(table, 1)
         if footer is not None:
             layout.addWidget(footer)
@@ -623,7 +637,11 @@ class SetupTrackerPanel(QFrame):
         # Shadow section. Same inline read as every other export on this page
         # (plan.md Phase 0.9 G-P2.3 owns moving this panel off the Qt thread as
         # a whole; doing it for one section would leave the page half on each).
-        self.band_variant_rows = _rank_band_variants(_load_csv_rows_cached(BAND_VARIANT_STATS_FILE))
+        band_variant_export_rows = _load_csv_rows_cached(BAND_VARIANT_STATS_FILE)
+        self.band_variant_rows = _rank_band_variants(band_variant_export_rows)
+        self.band_variant_status_label.setText(
+            band_variant_coverage_sentence(band_variant_export_rows)
+        )
 
         self.current_model.set_rows(self.current_pick_rows[:300])
         self.human_pick_model.set_rows(self.human_pick_rows)
@@ -826,6 +844,53 @@ def _rank_attribute_leaderboard(rows: list[dict[str, Any]]) -> list[dict[str, An
             str(row.get("value_label") or ""),
         ),
     )
+
+
+#: What the Band variant tab says when the export has never been written.
+BAND_VARIANT_NO_EXPORT_SENTENCE = "No band-variant comparison has been written yet."
+
+
+def band_variant_coverage_sentence(rows: list[dict[str, Any]]) -> str:
+    """One sentence: how much of the comparison was actually measured.
+
+    Packet M1, 2026-09-05. The challenger shipped on 2026-08-26 and measured
+    NOTHING for the ten days after it - `n_variant` read 0 on all 40 rows of
+    `master_avwap_band_variant_stats.csv` across 11,292 setups - and the table
+    gave no sign of it: a family, a side, a champion R and blank challenger
+    cells read as "no difference" rather than "never computed". This line makes
+    an empty comparison impossible to mistake for a comparison.
+
+    Pure, and built from the export's OWN counts. It never re-reads the file, it
+    never opens the 1.1 GB tracker JSON, and it never writes anything.
+    """
+    if not rows:
+        return BAND_VARIANT_NO_EXPORT_SENTENCE
+
+    def _count(row: dict[str, Any], key: str) -> int:
+        try:
+            return int(float(str(row.get(key) or "0").strip() or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    total = sum(_count(row, "n") for row in rows)
+    measured = sum(_count(row, "n_variant") for row in rows)
+    unmeasured = sum(_count(row, "n_variant_unmeasured") for row in rows)
+
+    sentence = f"Measured {measured} of {total} setups"
+    if not unmeasured:
+        return f"{sentence}."
+
+    reasons: dict[str, int] = {}
+    for row in rows:
+        count = _count(row, "n_variant_unmeasured")
+        reason = str(row.get("top_unmeasured_reason") or "").strip()
+        if count and reason:
+            reasons[reason] = reasons.get(reason, 0) + count
+    if not reasons:
+        return f"{sentence} ({unmeasured} unmeasured)."
+    # Ties break alphabetically so the line is stable between refreshes.
+    top = sorted(reasons.items(), key=lambda item: (-item[1], item[0]))[0][0]
+    return f"{sentence} ({unmeasured} unmeasured: {top})."
 
 
 def _rank_band_variants(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
