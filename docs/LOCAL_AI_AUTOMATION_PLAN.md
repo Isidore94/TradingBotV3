@@ -1552,6 +1552,15 @@ not by a second list); `pending_experiments` from
 opens a brief only for a STATED question. `digest.read_entry_index` is there
 for the System Health / Research readers to come; **nothing consumes it yet**.
 
+Every `pack_path` the index prints is the file its numbers were READ from - the newest
+superseding sibling, never `facts_path`'s version 1 - because three of the nine live
+sessions are superseded and a citation to a corrected pack is a citation to the wrong
+record. `changes_vs_prior_window` also carries `this_window_packs` and
+`prior_window_packs`, so "46 cleared, 0 fell" reads as "there was no prior window"
+when that is what it is. The System Health gate strip shows
+`sessions_consecutive_clean`, the number the gate turns on, on both the Digest and the
+Enrichment counter.
+
 Owed live gate **#63**, the first nightly run after merge: the ledger shows the
 deterministic rows completed before `ai_summary` started; `entry_index.json`
 exists beside the packs and names the session; `digest_gate_state` prints the

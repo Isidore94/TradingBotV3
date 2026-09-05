@@ -50,6 +50,23 @@ class GateCounter:
         return f"{self.label} {self.have}/{self.need}"
 
 
+def _digest_have(state) -> int:
+    """The number the digest gate actually TURNS ON.
+
+    Q4.1 kept `sessions_collected` - the distinct count - so every pre-Q4
+    reader still reads what it read, and moved the verdict onto the run of
+    CONSECUTIVE clean sessions. A counter that showed the distinct count beside
+    the consecutive verdict could read "Digest 11/10" while not met, which is
+    the strip teaching the trader to distrust the strip. The ratio and the
+    verdict come from one number; `sessions_collected` is the fallback for a
+    caller that predates the key.
+    """
+    have = state.get("sessions_consecutive_clean")
+    if have is None:
+        have = state.get("sessions_collected")
+    return int(have or 0)
+
+
 def _digest_counter(root: Path | None = None) -> GateCounter:
     """Phase 1's counter. `root` is injectable so a desk with no AI store
     configured - which raises before the gate function is even reached - can be
@@ -64,7 +81,7 @@ def _digest_counter(root: Path | None = None) -> GateCounter:
     return GateCounter(
         "digest",
         "Digest",
-        have=int(state.get("sessions_collected") or 0),
+        have=_digest_have(state),
         need=int(state.get("sessions_required") or 0),
         met=bool(state.get("window_met")),
         detail=str(state.get("statement") or ""),
@@ -95,7 +112,7 @@ def _enrichment_counter() -> GateCounter:
     return GateCounter(
         "enrichment",
         "Enrichment",
-        have=int(state.get("sessions_collected") or 0),
+        have=_digest_have(state),
         need=int(state.get("sessions_required") or 0),
         met=bool(met),
         detail=str(state.get("statement") or ""),

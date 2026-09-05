@@ -1103,6 +1103,29 @@ no journal block. The temptation is to fill them from `master_avwap_tier_outcome
 and the journal store; that would put two grains in one index and let a reader compare
 them. A blank is right where the question cannot be asked of this record.
 
+**A citation names the file the numbers came from.** Reviewer blocker, caught before
+merge: the index cited `facts_path(root, day)` - always version 1 - while every value was
+read from `latest_pack_files_by_session`'s newest sibling. **Three of the nine live
+sessions are superseded** (`2026-08-25.2.json`, `2026-08-26.2.json`, `2026-08-27.3.json`),
+so on a third of the store the index handed the reader the pack that had been corrected.
+`read_fact_pack_files` exists to carry the path beside the payload. The tie between two
+siblings with the same `generated_at` breaks on the SUPERSESSION INDEX, never on the file
+name: `2026-08-25.1.json` sorts before `2026-08-25.json` alphabetically, which would give
+the correction's place to the pack it corrects.
+
+**A ratio and a verdict must come from one number.** Same review: both gate counters
+passed `have=sessions_collected` - the distinct count Q4.1 deliberately kept for pre-Q4
+readers - beside a `met` that turns on the consecutive run. Ten scattered packs and a
+two-session run rendered "Digest 10/10" and not met. `gate_counters._digest_have` is the
+one place that answers it, and the strip test asserts the TEXT rather than the flag,
+because the text is what the trader reads.
+
+**`.git` is a FILE in a git worktree.** `definitions_git_commit` reads `.git/HEAD`
+directly and therefore returned `""` for every index built by an agent - which is all of
+them. `digest.repo_commit` follows the `gitdir:` pointer, then `commondir` for the refs
+and `packed-refs`, and still yields `""` rather than failing: provenance is evidence, not
+a gate.
+
 ---
 
 ## Headline statistics, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)

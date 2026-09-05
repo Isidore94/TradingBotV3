@@ -236,6 +236,44 @@ def test_the_gate_strip_never_says_enrichment_is_met_while_it_refuses(tmp_path, 
     assert gate_counters._enrichment_counter().met is True
 
 
+def test_both_gate_counters_show_the_number_the_gate_turns_on(tmp_path, monkeypatch):
+    """The RATIO and the verdict must come from the same count.
+
+    Reviewer blocker 1. Both counters passed `have=sessions_collected` - the
+    distinct count Q4.1 deliberately kept for old readers - while `met` turned
+    on the consecutive run. With ten scattered packs and a two-session run the
+    strip read "Digest 10/10" and not met, which is the strip inviting the
+    trader to distrust the strip.
+    """
+    from ai_jobs import enrichment as enrichment_mod
+    from ai_jobs import gate_counters
+
+    # Ten distinct session packs; the hole at 2026-08-13 leaves a run of six
+    # (2026-08-14 .. 2026-08-21), so the two numbers cannot be confused.
+    _write_sessions(tmp_path, [day for day in TEN_SESSIONS if day != "2026-08-13"])
+    digest.run_daily_digest(
+        session_date="2026-07-31", now=NOW, root=tmp_path, narrate=False,
+        finals=[_final("AAPL", "2026-07-31")],
+    )
+    state = digest.digest_gate_state(tmp_path)
+    assert (state["sessions_collected"], state["sessions_consecutive_clean"]) == (10, 6)
+
+    monkeypatch.setattr(
+        enrichment_mod, "gate_state", lambda *a, **k: digest.digest_gate_state(tmp_path)
+    )
+    digest_counter = gate_counters._digest_counter(tmp_path)
+    enrichment_counter = gate_counters._enrichment_counter()
+
+    # The TEXT, not just `.met`: the ratio is what the trader reads.
+    assert digest_counter.text() == "Digest 6/10"
+    assert enrichment_counter.text() == "Enrichment 6/10"
+    assert digest_counter.have == 6 and enrichment_counter.have == 6
+    assert digest_counter.met is False and enrichment_counter.met is False
+    assert gate_counters.strip_text([digest_counter, enrichment_counter]) == (
+        "Digest 6/10 · Enrichment 6/10"
+    )
+
+
 def test_the_cli_refuses_fewer_than_three_packs(tmp_path):
     _write_sessions(tmp_path, TEN_SESSIONS)
     with pytest.raises(ValueError, match="at least 3"):
@@ -381,11 +419,20 @@ def test_every_deterministic_ledger_row_is_written_before_ai_summary_starts(tmp_
     assert order.index("daily_digest") < order.index("ai_summary")
 
 
-def test_a_raising_narration_slot_leaves_every_earlier_row_completed(tmp_path):
+def test_a_raising_narration_slot_leaves_every_deterministic_row_already_written(tmp_path):
+    """Not just `ok` - already WRITTEN, which is what the reorder bought.
+
+    Renamed and strengthened after the reviewer's advisory (a): asserting only
+    the statuses passes on the OLD order too, because a failure never took the
+    rest of the night down there either. What decision 0018 changed is that
+    every deterministic row is on disk BEFORE the narration slot is entered, so
+    that is what this asserts.
+    """
     from ai_jobs.runner import default_slots
 
     names = [slot.name for slot in default_slots()]
     rows = _run_stubbed(tmp_path, _stub_slots(names, raises=("ai_summary",)))
+    order = [row["job"] for row in rows]
     by_job = {row["job"]: row for row in rows}
     assert by_job["ai_summary"]["status"] == "failed"
     for deterministic in (
@@ -395,6 +442,7 @@ def test_a_raising_narration_slot_leaves_every_earlier_row_completed(tmp_path):
         "preference_trade_outcomes", "evidence_report", "daily_digest",
     ):
         assert by_job[deterministic]["status"] == "ok", deterministic
+        assert order.index(deterministic) < order.index("ai_summary"), deterministic
 
 
 # ==========================================================================
@@ -414,7 +462,11 @@ def test_the_digest_run_writes_the_entry_index_beside_the_packs(tmp_path):
     assert index["schema_version"] == digest.ENTRY_INDEX_SCHEMA
     assert index["latest_complete_session"] == "2026-08-21"
     assert index["generated_at"]
-    assert "git_commit" in index
+    # A real sha, not "". `definitions_git_commit` reads `.git/HEAD`, and in a
+    # git WORKTREE - which is where every agent builds - `.git` is a FILE
+    # pointing at the real gitdir, so it returned empty for the whole packet.
+    assert len(index["git_commit"]) == 40, index["git_commit"]
+    assert all(char in "0123456789abcdef" for char in index["git_commit"])
     # The version identifiers the packs actually carry - nothing invented.
     assert index["versions"]["facts_schema"] == digest.FACTS_SCHEMA
     assert index["versions"]["statistics_schema"]
@@ -433,6 +485,65 @@ def test_a_superseded_pack_is_marked_and_counted(tmp_path):
     assert by_day["2026-08-21"]["superseded"] is False
     assert by_day["2026-08-21"]["versions"] == 1
     assert by_day["2026-08-21"]["coverage"] is not None
+
+    # Reviewer blocker 2: the path must be the file the VALUES came from. It
+    # cited `facts_path`, which is always version 1, while every number was
+    # read from the newest sibling - so a reader following the citation on a
+    # superseded session would open the pack that was corrected.
+    cited = Path(by_day["2026-08-20"]["pack_path"])
+    assert cited.name == "2026-08-20.1.json", by_day["2026-08-20"]["pack_path"]
+    payload = json.loads(cited.read_text(encoding="utf-8"))
+    assert payload["generated_at"] == (NOW + timedelta(hours=1)).isoformat(timespec="seconds")
+    assert payload["unavailable"] == by_day["2026-08-20"]["failures"]
+    # An unsuperseded session still cites its only file.
+    assert Path(by_day["2026-08-21"]["pack_path"]).name == "2026-08-21.json"
+
+
+def test_a_same_second_correction_still_wins_over_the_pack_it_corrects(tmp_path):
+    """The tiebreak when two siblings share a `generated_at`.
+
+    A re-run inside the same second is normal, and sorting by NAME would put
+    `2026-08-20.1.json` before `2026-08-20.json` - '1' sorts before 'j' - and
+    hand the correction's place to the pack it corrects.
+    """
+    digest.run_daily_digest(
+        session_date="2026-08-20", now=NOW, root=tmp_path, narrate=False,
+        finals=[_final("AAPL", "2026-08-20")],
+    )
+    correction = digest.build_fact_pack(
+        session_date="2026-08-20", is_session=True,
+        finals=[_final("AAPL", "2026-08-20")],
+        unavailable={"alert review events": "file is locked"},
+        now=NOW,  # the SAME second as the pack it supersedes
+    )
+    digest._publish(
+        digest.superseding_path(digest.facts_path(tmp_path, "2026-08-20")),
+        digest.render_fact_pack(correction),
+    )
+
+    newest = digest.latest_pack_files_by_session(tmp_path)["2026-08-20"]
+    assert newest[0].name == "2026-08-20.1.json"
+    assert digest.pack_failures(newest[1]) == {"alert review events": "file is locked"}
+    assert digest.digest_gate_state(tmp_path)["sessions_consecutive_clean"] == 0
+
+
+def test_every_cited_pack_path_is_the_pack_the_numbers_came_from(tmp_path):
+    """The same rule, everywhere the index prints a `pack_path`."""
+    _write_sessions(tmp_path, ["2026-08-20", "2026-08-21"], unavailable_on=("2026-08-20",))
+    index = digest.build_entry_index(tmp_path, as_of="2026-08-21")
+
+    cited = {row["pack_path"] for row in index["sessions"]}
+    for section in digest.ENTRY_INDEX_SECTIONS:
+        cited |= {entry["pack_path"] for entry in index[section]["entries"]}
+    for change in index["changes_vs_prior_window"]["cleared_the_floor"]:
+        if change["pack_path"]:
+            cited.add(change["pack_path"])
+
+    for path in cited:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        day = payload["session_date"]
+        newest = digest.latest_packs_by_session(tmp_path)[day]
+        assert payload["generated_at"] == newest["generated_at"], path
 
 
 def test_the_four_sections_are_distinct_keys_and_never_merged(tmp_path):
@@ -475,6 +586,19 @@ def test_a_cell_that_clears_the_floor_only_this_window_is_named(tmp_path):
     assert row["this_window"]["n"] >= floor
     assert row["prior_window"]["n"] < floor
     assert row["pack_path"]
+    # "46 cleared, 0 fell" reads as a finding when it is often just "there was
+    # no prior window". The count says which.
+    assert index["changes_vs_prior_window"]["prior_window_packs"] == 1
+    assert index["changes_vs_prior_window"]["this_window_packs"] == 1
+
+
+def test_an_empty_prior_window_says_so_rather_than_reading_as_a_finding(tmp_path):
+    _write_sessions(tmp_path, ["2026-08-20", "2026-08-21"])
+    index = digest.build_entry_index(tmp_path, as_of="2026-08-21")
+    changes = index["changes_vs_prior_window"]
+    assert changes["prior_window_packs"] == 0
+    assert changes["this_window_packs"] == 2
+    assert "no pack" in changes["note"].lower() or "prior window" in changes["note"].lower()
 
 
 def test_the_index_write_is_superseding_and_a_failure_leaves_the_last_good_one(
@@ -492,6 +616,28 @@ def test_the_index_write_is_superseding_and_a_failure_leaves_the_last_good_one(
         digest.write_entry_index(tmp_path, as_of="2026-08-20")
     assert first.read_text(encoding="utf-8") == good
     assert not list(first.parent.glob("entry_index.json.tmp"))
+
+
+def test_a_failed_rename_leaves_no_half_written_temp_behind(tmp_path, monkeypatch):
+    """The rename is where a share drops out, and the tmp is what it leaves.
+
+    The previous test patches `_publish` whole, so it never exercised the
+    rename. This one lets the temp file be written and then fails `os.replace`,
+    which is the real failure and the one that leaves litter beside the packs.
+    """
+    _write_sessions(tmp_path, ["2026-08-20"])
+    first = digest.write_entry_index(tmp_path, as_of="2026-08-20")
+    good = first.read_text(encoding="utf-8")
+
+    def _explode(src, dst):
+        raise OSError("the share went away between write and rename")
+
+    monkeypatch.setattr(digest.os, "replace", _explode)
+    with pytest.raises(OSError):
+        digest.write_entry_index(tmp_path, as_of="2026-08-20")
+
+    assert first.read_text(encoding="utf-8") == good
+    assert list(first.parent.glob("*.tmp")) == []
 
 
 def test_a_failed_index_write_never_fails_the_digest(tmp_path, monkeypatch):

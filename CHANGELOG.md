@@ -1083,6 +1083,19 @@ Packet Q4 on `claude/q4-overnight-gates`, authorized by the trader over
 - Measured read-only against the live store at build time: **9 of 10 consecutive clean
   sessions** (2026-08-24..2026-09-03), the run stopping at 2026-08-21, `audit_recorded:
   false`. The old count was also 9, so the live number does not move.
+- **Reviewer NO-GO fixed on the branch, red-first** (2026-09-04, two blockers). (1) Both
+  gate counters showed `sessions_collected` beside a `met` that turns on the consecutive
+  run, so the strip could read "Digest 11/10" at a two-session run - `_digest_have` now
+  answers both, and the test asserts the TEXT. (2) The index cited `facts_path` (always
+  version 1) beside values read from the newest sibling; **three of the nine live sessions
+  are superseded**, so a third of the store pointed the reader at the corrected pack.
+  `read_fact_pack_files` / `latest_pack_files_by_session` carry the path, and a
+  same-`generated_at` tie breaks on the SUPERSESSION INDEX rather than the file name
+  (`.1.json` sorts before `.json`). Advisories taken: `repo_commit()` resolves HEAD through
+  the `gitdir:` pointer so a git WORKTREE no longer yields `""`; `_publish` removes its
+  temp on a failed rename; `evidence_stats` constants are imported hard with no literal
+  fallback; `changes_vs_prior_window` carries `this_window_packs` / `prior_window_packs`;
+  and the narration-failure test asserts the ORDERING it was renamed for.
 - Live gate **#63** owed at merge.
 
 ### 2026-09-04 - Project process review and evidence-note corrections

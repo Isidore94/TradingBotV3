@@ -719,10 +719,25 @@ def superseding_path(path: Path) -> Path:
 
 
 def _publish(path: Path, content: str) -> Path:
+    """Temp-and-rename, and **no litter when the rename fails**.
+
+    The share can drop out between the write and the replace. Without the
+    cleanup that leaves a half-published `<name>.tmp` beside the packs, which
+    the next reader has to be told to ignore - and a store that needs a
+    told-to-ignore file is a store nobody trusts. The last good file is
+    untouched either way, which is what the rename buys.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:  # pragma: no cover - nothing more can be done here
+            _log.warning("Daily digest: could not remove the temp file %s.", tmp)
+        raise
     return path
 
 
@@ -1121,12 +1136,22 @@ def _coverage_dict(coverage: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def read_fact_packs(root: Path, *, since: str = "", until: str = "") -> list[dict[str, Any]]:
-    """Every pack in the window, newest last. Reads only; writes nothing."""
+def read_fact_pack_files(
+    root: Path, *, since: str = "", until: str = ""
+) -> list[tuple[Path, dict[str, Any]]]:
+    """`(path, pack)` for every pack in the window, newest last.
+
+    The path is carried because a session can have SUPERSEDING siblings
+    (`2026-08-20.1.json` corrects `2026-08-20.json`, D6) and any reader that
+    cites a pack must cite the file its numbers came from. `read_fact_packs`
+    discarded the path, so the entry index cited `facts_path()` - always
+    version 1 - beside values read from the newest sibling, which pointed a
+    reader at the pack that had been corrected.
+    """
     base = Path(root) / "facts"
     if not base.is_dir():
         return []
-    packs: list[dict[str, Any]] = []
+    entries: list[tuple[Path, dict[str, Any]]] = []
     for path in sorted(base.rglob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1139,9 +1164,30 @@ def read_fact_packs(root: Path, *, since: str = "", until: str = "") -> list[dic
             continue
         if until and day > until:
             continue
-        packs.append(dict(payload))
-    packs.sort(key=lambda pack: (str(pack.get("session_date")), str(pack.get("generated_at"))))
-    return packs
+        entries.append((path, dict(payload)))
+    entries.sort(key=lambda item: (
+        str(item[1].get("session_date")),
+        str(item[1].get("generated_at")),
+        _supersession_index(item[0]),
+    ))
+    return entries
+
+
+def _supersession_index(path: Path) -> int:
+    """`2026-08-25.json` -> 0, `2026-08-25.1.json` -> 1, and so on.
+
+    The tiebreak when two siblings carry the same `generated_at`, which a
+    same-second re-run produces. Sorting by NAME would put `.1` before the
+    base file - '1' < 'j' - and hand the correction's place to the pack it
+    corrected.
+    """
+    tail = path.stem.rsplit(".", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def read_fact_packs(root: Path, *, since: str = "", until: str = "") -> list[dict[str, Any]]:
+    """Every pack in the window, newest last. Reads only; writes nothing."""
+    return [pack for _path, pack in read_fact_pack_files(root, since=since, until=until)]
 
 
 def rollup(root: Path, *, since: str = "", until: str = "") -> dict[str, Any]:
@@ -1194,18 +1240,25 @@ def pack_failures(pack: Mapping[str, Any]) -> dict[str, str]:
     return {str(name): str(reason) for name, reason in (pack.get("unavailable") or {}).items()}
 
 
-def latest_packs_by_session(root: Path) -> dict[str, dict[str, Any]]:
-    """Newest pack per session date. A superseding sibling wins (D6).
+def latest_pack_files_by_session(root: Path) -> dict[str, tuple[Path, dict[str, Any]]]:
+    """Newest `(path, pack)` per session date. A superseding sibling wins (D6).
 
-    `read_fact_packs` already sorts by `(session_date, generated_at)`, so the
-    last pack seen for a day is the one that corrects the ones before it.
+    `read_fact_pack_files` already sorts by `(session_date, generated_at,
+    name)`, so the last entry seen for a day is the one that corrects the ones
+    before it - and the path travels with it, because a citation to a
+    superseded file is a citation to a pack that was corrected.
     """
-    latest: dict[str, dict[str, Any]] = {}
-    for pack in read_fact_packs(root):
+    latest: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for path, pack in read_fact_pack_files(root):
         day = str(pack.get("session_date") or "")
         if day:
-            latest[day] = pack
+            latest[day] = (path, pack)
     return latest
+
+
+def latest_packs_by_session(root: Path) -> dict[str, dict[str, Any]]:
+    """Newest pack per session date. A superseding sibling wins (D6)."""
+    return {day: pack for day, (_path, pack) in latest_pack_files_by_session(root).items()}
 
 
 def collected_digest_sessions(root: Path) -> int:
@@ -1476,21 +1529,66 @@ ENTRY_INDEX_SECTIONS = (
 #: The one statistics contract (ground rule 10). A cell under it is UNMEASURED,
 #: never a weak edge - which is why `changes_vs_prior_window` reports FLOOR
 #: STATUS and never a ranking of immature cells. "Lately" is counted in trading
-#: SESSIONS. Both are re-exports; the contract lives in `evidence_stats`.
-ENTRY_INDEX_FLOOR = 30
-ENTRY_INDEX_WINDOW_SESSIONS = 20
-
-try:
-    from evidence_stats import LATELY_SESSIONS as _LATELY_SESSIONS, MIN_REPORTABLE_N as _MIN_N
-
-    ENTRY_INDEX_FLOOR = int(_MIN_N)
-    ENTRY_INDEX_WINDOW_SESSIONS = int(_LATELY_SESSIONS)
-except Exception:  # noqa: BLE001 - a headless import path must not lose the module
-    _log.debug("evidence_stats unavailable; the entry index uses its written-down constants")
+#: SESSIONS.
+#:
+#: RE-EXPORTS, imported hard and with no literal fallback: a fallback is a
+#: second copy of the contract that silently wins whenever the import is the
+#: thing that broke, and this repo has a rule against a list written in two
+#: places for exactly that reason.
+from evidence_stats import LATELY_SESSIONS as ENTRY_INDEX_WINDOW_SESSIONS  # noqa: E402
+from evidence_stats import MIN_REPORTABLE_N as ENTRY_INDEX_FLOOR  # noqa: E402
 
 
 def entry_index_path(root: Path) -> Path:
     return Path(root) / ENTRY_INDEX_FILENAME
+
+
+def repo_commit(repo_root: Path | None = None) -> str:
+    """HEAD, read from `.git` without spawning a process. `""` if unreadable.
+
+    `research_warehouse.manifest.definitions_git_commit` is the precedent and
+    reads `.git/HEAD` directly, which is right in a normal checkout and empty
+    in a git WORKTREE - where `.git` is a FILE holding `gitdir: <path>` and the
+    refs live in the COMMON dir the worktree points back at. Every agent builds
+    in a worktree, so an index built there carried no commit at all.
+
+    Provenance is evidence, not a gate: an unreadable repo yields `""` rather
+    than failing the index.
+    """
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
+    try:
+        dot_git = root / ".git"
+        if dot_git.is_file():
+            pointer = dot_git.read_text(encoding="utf-8").strip()
+            if not pointer.startswith("gitdir:"):
+                return ""
+            git_dir = Path(pointer.split(":", 1)[1].strip())
+            if not git_dir.is_absolute():
+                git_dir = (root / git_dir).resolve()
+        else:
+            git_dir = dot_git
+        common = git_dir
+        common_file = git_dir / "commondir"
+        if common_file.exists():
+            target = Path(common_file.read_text(encoding="utf-8").strip())
+            common = target if target.is_absolute() else (git_dir / target).resolve()
+
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref:"):
+            return head
+        ref = head.split(" ", 1)[1].strip()
+        for base in (git_dir, common):
+            candidate = base / ref
+            if candidate.exists():
+                return candidate.read_text(encoding="utf-8").strip()
+        packed = common / "packed-refs"
+        if packed.exists():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                if line.endswith(f" {ref}"):
+                    return line.split(" ", 1)[0].strip()
+    except OSError:
+        return ""
+    return ""
 
 
 def read_entry_index(root: Path) -> dict[str, Any]:
@@ -1711,13 +1809,13 @@ def _window_days(end: str, sessions: int) -> list[str]:
 def build_entry_index(root: Path, *, as_of: str | date | None = None) -> dict[str, Any]:
     """The whole index, computed. Deterministic; no model is called from here."""
     root = Path(root)
-    packs = latest_packs_by_session(root)
+    newest = latest_pack_files_by_session(root)
     versions: dict[str, int] = {}
     for pack in read_fact_packs(root):
         day = str(pack.get("session_date") or "")
         if day:
             versions[day] = versions.get(day, 0) + 1
-    sessions = {day: pack for day, pack in packs.items() if pack.get("is_session")}
+    sessions = {day: pack for day, (_path, pack) in newest.items() if pack.get("is_session")}
 
     limit = ""
     if as_of is not None:
@@ -1725,7 +1823,10 @@ def build_entry_index(root: Path, *, as_of: str | date | None = None) -> dict[st
     in_scope = [day for day in sorted(sessions) if not limit or day <= limit]
     latest_session = in_scope[-1] if in_scope else ""
 
-    paths = {day: str(facts_path(root, day)) for day in sessions}
+    # The file each session's numbers were READ from - the newest sibling, not
+    # `facts_path`'s version 1. A citation to a superseded pack points a reader
+    # at the record that was corrected.
+    paths = {day: str(newest[day][0]) for day in sessions}
 
     window = _window_days(latest_session, ENTRY_INDEX_WINDOW_SESSIONS) if latest_session else []
     prior_end = ""
@@ -1785,17 +1886,11 @@ def build_entry_index(root: Path, *, as_of: str | date | None = None) -> dict[st
 
     newest_pack = sessions.get(latest_session) or {}
     statistics = ((newest_pack.get("outcomes") or {}).get("overall") or {}).get("statistics") or {}
-    try:
-        from research_warehouse.manifest import definitions_git_commit
-
-        commit = definitions_git_commit()
-    except Exception:  # noqa: BLE001 - provenance is evidence, not a gate
-        commit = ""
 
     return {
         "schema_version": ENTRY_INDEX_SCHEMA,
         "generated_at": _now().isoformat(timespec="seconds"),
-        "git_commit": commit,
+        "git_commit": repo_commit(),
         "latest_complete_session": latest_session,
         "versions": {
             # Read off a pack. Nothing invented: the pack carries no recipe id
@@ -1824,10 +1919,18 @@ def build_entry_index(root: Path, *, as_of: str | date | None = None) -> dict[st
             "cleared_the_floor": cleared,
             "fell_below_the_floor": fell,
             "floor": ENTRY_INDEX_FLOOR,
+            # Both counts, because "46 cleared, 0 fell" is a finding when the
+            # prior window had packs and an artefact of a young store when it
+            # had none - and the two look identical without this line.
+            "this_window_packs": len([day for day in (window or in_scope) if day in sessions]),
+            "prior_window_packs": len([day for day in prior if day in sessions]),
             "note": (
                 "By FLOOR STATUS only. A cell that crossed the evidence floor "
                 "since the prior equal-length window is worth a look; an "
-                "immature cell is never ranked and no value is compared."
+                "immature cell is never ranked and no value is compared. "
+                "`prior_window_packs` is 0 when there was no pack in the prior "
+                "window at all, in which case every 'cleared' row is a first "
+                "sighting rather than a change."
             ),
         },
         **section_payload,
