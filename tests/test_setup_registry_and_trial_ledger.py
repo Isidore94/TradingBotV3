@@ -13,6 +13,7 @@ the identity graph on top of it.
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -431,8 +432,21 @@ def test_the_trial_ledger_has_exactly_one_production_writer():
     Still an explicit list rather than "no importer": a SECOND writer would be a
     real decision, because a ledger written from two places can disagree about
     when a declaration was made.
+
+    Q4 (2026-09-04) added the first READER - `entry_index.json` lists the
+    trials that are still collecting, with their frozen windows, unranked. So
+    the allowlist now names each importer's ROLE, and the writer property is
+    asserted DIRECTLY on the readers rather than inferred from their absence:
+    a reader that ever called `register` or `backfill` fails this test.
     """
     import subprocess
+
+    #: importer -> role. Adding a WRITER here is a real decision; adding a
+    #: reader costs it the assertion below.
+    ALLOWED = {
+        "scripts/research_warehouse/cli.py": "writer",
+        "scripts/ai_jobs/digest.py": "reader",
+    }
 
     # IMPORT-shaped, not any mention: P8's authorization block in `outcomes.py`
     # names the trial ledger in prose, which is exactly what a registered grid
@@ -444,8 +458,25 @@ def test_the_trial_ledger_has_exactly_one_production_writer():
         text=True,
     )
     importers = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-    # The module does not import itself, so the one name here is the one writer.
-    assert importers == {"scripts/research_warehouse/cli.py"}, importers
+    # The module does not import itself, so the names here are the whole set.
+    assert importers == set(ALLOWED), importers
+    assert [name for name, role in ALLOWED.items() if role == "writer"] == [
+        "scripts/research_warehouse/cli.py"
+    ]
+
+    for name, role in ALLOWED.items():
+        if role == "writer":
+            continue
+        source = (ROOT / name).read_text(encoding="utf-8")
+        for write_call in ("trial_ledger.register", "trial_ledger.backfill"):
+            assert write_call not in source, f"{name} is a reader"
+        tree = ast.parse(source)
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        assert not called & {"register", "backfill"}, f"{name} is a reader"
 
 
 def test_every_trial_row_says_when_it_was_registered(tmp_path):

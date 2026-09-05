@@ -213,6 +213,29 @@ def test_enrichment_refuses_until_the_audit_is_recorded(tmp_path, monkeypatch):
     assert "refused: audit not recorded" in result["reason"]
 
 
+def test_the_gate_strip_never_says_enrichment_is_met_while_it_refuses(tmp_path, monkeypatch):
+    """A counter that reported `window_met` would contradict the slot.
+
+    Out of the packet's file list by one line, and deliberately: Q4.2 makes the
+    slot refuse on `gate_met`, and a strip that says "Enrichment met (10/10)"
+    on a night the ledger says `refused: audit not recorded` is a surface
+    lying about a job.
+    """
+    from ai_jobs import enrichment as enrichment_mod
+    from ai_jobs import gate_counters
+
+    _write_sessions(tmp_path, TEN_SESSIONS)
+    monkeypatch.setattr(
+        enrichment_mod, "gate_state", lambda *a, **k: digest.digest_gate_state(tmp_path)
+    )
+    assert gate_counters._enrichment_counter().met is False
+
+    digest.record_audit_approval(
+        tmp_path, packs=["2026-08-19", "2026-08-20", "2026-08-21"], now=NOW,
+    )
+    assert gate_counters._enrichment_counter().met is True
+
+
 def test_the_cli_refuses_fewer_than_three_packs(tmp_path):
     _write_sessions(tmp_path, TEN_SESSIONS)
     with pytest.raises(ValueError, match="at least 3"):

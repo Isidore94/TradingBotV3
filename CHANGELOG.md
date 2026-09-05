@@ -1075,6 +1075,14 @@ Packet Q4 on `claude/q4-overnight-gates`, authorized by the trader over
   no AI store configured a test pack records a real failure and is no longer
   clean, which is environment noise rather than the thing under test. No
   assertion was weakened.
+- Two changes outside the packet's file list, disclosed: `gate_counters._enrichment_counter`
+  now reports `gate_met` (fallback `window_met`), so the System Health strip cannot say
+  "Enrichment met" on a night the slot refuses; and the trial ledger's one-importer guard
+  names each importer's ROLE and asserts the writer property directly on the readers, since
+  `entry_index.json` is the ledger's first reader.
+- Measured read-only against the live store at build time: **9 of 10 consecutive clean
+  sessions** (2026-08-24..2026-09-03), the run stopping at 2026-08-21, `audit_recorded:
+  false`. The old count was also 9, so the live number does not move.
 - Live gate **#63** owed at merge.
 
 ### 2026-09-04 - Project process review and evidence-note corrections

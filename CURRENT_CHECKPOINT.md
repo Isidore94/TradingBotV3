@@ -154,7 +154,11 @@ the runs. Two existing digest-gate helpers now patch the job-ledger read: with n
 store configured a test pack records a real failure and is no longer clean, which is
 environment noise rather than the thing under test. **No assertion was weakened.**
 
-**Owed:** reviewer pass, live gate **#63**, and the lead's merge. No packaging trigger.
+**Two changes OUTSIDE the packet's file list, both disclosed for the lead to keep or drop.** (1) `ai_jobs/gate_counters.py`, one line: the Enrichment counter's `met` now reads `gate_met` with `window_met` as the fallback - reporting `window_met` would have put "Enrichment met (10/10)" on the System Health strip on the exact nights the slot refuses. (2) `tests/test_setup_registry_and_trial_ledger.py`: the trial ledger's one-importer guard now names each importer's ROLE and asserts the writer property DIRECTLY on the readers (a reader that calls `register` or `backfill` fails), because `entry_index.json` is the ledger's first reader. That assertion is stronger, not weaker.
+
+**Measured against the LIVE store, read-only, at build time:** `python -m ai_jobs.digest gate --root "//MINI-PC/Trading Bot Data/ai_store/digests"` reports **9 of 10 consecutive clean sessions** (2026-08-24..2026-09-03), the run stopping at 2026-08-21 for want of a pack, and `audit_recorded: false`. Under the old count it was also 9, so this change does not move the live number - it makes the next nine honest.
+
+**Owed:** reviewer pass, live gate **#63**, and the lead's merge. plan.md is the lead's per the packet. No packaging trigger.
 
 ### 2026-09-04 (~14:30 PT) - Earnings-anchor bridge: the scan feeds the anchors CSV the warehouse reads
 

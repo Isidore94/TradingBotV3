@@ -75,19 +75,29 @@ def _enrichment_counter() -> GateCounter:
     """Phase 2's gate, which IS the digest gate - `enrichment.gate_state`
     delegates to it. Reported separately anyway, because "enrichment is gated"
     is the fact the trader is looking for and inferring it from the digest
-    line is exactly the inference a counter exists to remove."""
+    line is exactly the inference a counter exists to remove.
+
+    **`met` reads `gate_met`, not `window_met`** (Q4, 2026-09-04). Since the
+    audit half became real, the window being met is no longer what decides
+    whether this slot runs - so a counter reporting `window_met` would say
+    "Enrichment met" on the exact nights the slot refuses. `window_met` is the
+    fallback for a caller that predates the key.
+    """
     try:
         from ai_jobs import enrichment
 
         state = enrichment.gate_state()
     except Exception as exc:  # noqa: BLE001
         return GateCounter("enrichment", "Enrichment", detail=f"unreadable: {exc}")
+    met = state.get("gate_met")
+    if met is None:
+        met = state.get("window_met")
     return GateCounter(
         "enrichment",
         "Enrichment",
         have=int(state.get("sessions_collected") or 0),
         need=int(state.get("sessions_required") or 0),
-        met=bool(state.get("window_met")),
+        met=bool(met),
         detail=str(state.get("statement") or ""),
     )
 
