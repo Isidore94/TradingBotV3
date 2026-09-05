@@ -1128,6 +1128,58 @@ a gate.
 
 ---
 
+## N2 - the synthesis was not malformed, it was cut (2026-09-05)
+
+Two of the last four nightly `ai_summary_*.json` files carried
+`map_reduce.synthesized: false`. Both errors read as a broken model:
+
+```
+RuntimeError: local provider returned invalid summary JSON after 2 attempt(s):
+  Unterminated string starting at: line 1 column 14502 (char 14501)   <- run of 2026-09-03 02:10
+  Unterminated string starting at: line 1 column 14709 (char 14708)   <- run of 2026-09-05 02:41
+```
+
+Both offsets are **3,500 tokens of dense JSON at ~4.2 characters per token**, and 3,500
+was the single hard-coded `max_tokens` that every local call sent - the map slices, which
+answer with a handful of findings about one chunk, and the reduce call, which answers with
+the whole document. The parser's complaint was true and pointed at the wrong thing: a
+length cut is a valid JSON PREFIX that stops, so it always reads as an unterminated
+string. Worse, the existing retry re-sent the **identical** request with the validator's
+rejection appended - more prompt against the same ceiling - so it cut again in the same
+place, at roughly seven minutes of generation per attempt. `unsynthesized_summary` then
+published 12 rows per section and hid 52 and 39; it is designed as a rare last resort and
+it fired on half the nights.
+
+There are now **two output caps**: `LOCAL_MAP_GENERATION_TOKENS` (3,500) and
+`LOCAL_SYNTHESIS_GENERATION_TOKENS` (8,000), selected per request by
+`local_generation_tokens(evidence)` from the `map_reduce_synthesis` scope that
+`findings_package` already stamps on the reduce package. `LOCAL_GENERATION_TOKENS` stays
+as an alias of the map cap because the evidence budget and two test modules import it.
+**The evidence budget keeps subtracting the MAP cap**: the reduce prompt is the model's
+own findings, a few tens of KB against a 65,536-token window, so 8k of output sits beside
+it - and widening what the synthesis may WRITE must never narrow what a map slice may
+READ. The cloud payloads are untouched at 3,500. A length stop is now read from
+`choices[0].finish_reason` or Ollama's top-level `done_reason` **before the text is
+parsed**, and earns ONE retry asking for at most 8 findings per section; a second cut
+raises `LocalOutputLengthError`, whose `stop_reason` reaches the manifest as
+`synthesis_stop_reason` instead of being re-derived from a message.
+
+**The map-slice failures are a DIFFERENT bug and were not fixed by this** (packet item 0).
+The desk log names each one, and the 2026-09-05 pair are Q3 grounding rejections:
+
+```
+map slice 18/47 (setups.short_horizon [1/1]) failed: ... 1 row(s) dropped:
+    what_is_working[0]: numeric claim without a resolvable metric_ref
+map slice 32/47 (setups.playbooks [3/11]) failed: ... executive_summary cannot be blank
+```
+
+Every earlier one in the log (2026-08-28 through 2026-09-04) is the same family - "every
+citing statement was unsupported". Those are exactly what the rejection-feedback retry is
+for, and they are unaffected by an output cap. The map half of the length detection is
+therefore **unobserved live** and is covered by test only.
+
+---
+
 ## Headline statistics, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)
 
 `CLAUDE.md` keeps the rules of this block; this is the block as it stood, with every

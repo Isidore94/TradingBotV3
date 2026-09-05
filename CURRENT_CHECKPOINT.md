@@ -20,7 +20,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 |---|---|
 | Latest review | **2026-09-04: [project process review](docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)** over `f641421` (Codex). The trader said *"please review and implement the suggested changes"*; the lead turned it into five packets (Q1-Q5, Phase 0.18, `.claude/packets/Q*.md`), each built, reviewed by reproduction and merged the same evening. NOT built, ask-first (`bounce_bot_lib/legacy.py`): per-alert bar-close -> shown latency instrumentation, the H1 SPY recompute, a `stop_hit_at` column, the sweep autorun default. Also NOT in the review: the day's largest stall (19,922 ms at 07:03:47 in `ui/app.py:1240`). |
 | Working branch | **`main`** - **2026-09-04 evening: Phase 0.18 (Q1-Q5) MERGED at `b0db9bbe`** in a scratch worktree, packet order, every branch with a reviewer GO. Q1 `held_run_score` says what it MEASURED (5,222 held / 1,960 broken / 979 unmeasured live; D1 keeps the side, 8 opposed; the window is `lately_window`; a Measured column on the Daytrade Tracker). Q2 warehouse: `anchor_knowledge` observed/reconstructed/legacy, `path_kind`, read-only `band-coverage`, `rebuild-daily-features` (dry run by default) - gate #59's chain is now BD-100's four steps. Q3 AI grounding: typed source kinds, a position claim needs a surviving ref in `POSITION_SOURCE_IDS`, which is `journal.trades_and_reviews` only (the executive summary may never assert one; it is WITHHELD when it does), `metric_ref` on numeric claims, the morning file's three counts, `LikeLink.from_payload` and the audit scripts read `match_basis` (live 84 rows / 77 events / 41 linked / 36 none). Q4 overnight: consecutive clean exchange sessions + a RECORDED trader spot-audit gate enrichment (**enrichment refuses until `python -m ai_jobs.digest approve-audit` is run - 9 of 10 clean sessions today**), decision 0018 puts the deterministic slots before narration, `entry_index.json` is the frontier handoff. Q5: the pick scorecard runs on one owned worker with streamed reads, success-only `picks_scored_at` (15.7 s Qt stall the day before). Before it: the earnings-anchor bridge (14:30), T2 (12:40), T1 (11:30) - see the dated entries. |
-| Also in flight | **Nothing unmerged from today**: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
+| Also in flight | **`claude/n2-synthesis-output-cap` is BUILT AND UNMERGED (2026-09-05)**: two local output caps, a length stop read before parsing, `synthesis_stop_reason` / `synthesis_retry` / `slices_retried` on the `map_reduce` block, and the `currently shorted` position-claim fix. Suite 6724 passed / 1 skipped / exit 0 on the branch with the AI lock free, ruff clean, smoke 7/7, selftest 74/74, fail-before-fix proven. Live gate #65. From the Q1-Q5 round: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
 | Active roadmap items | **V4** (Working-lately + the priority switch - which now inherits Q1's rule that only an ALIGNED same-session D1 setup carries the privilege - the AWAY Recap rebuild, the Setup Types tab, P10's `after_like` split, the R4 advisories). **Gate #59's runbook** (BD-100): nightly build -> `rebuild-daily-features --from 2026-08-01 --to <today>` dry run, then `--apply` on the trader's go -> `recompute-outcomes --apply` -> `band-coverage --month 2026-08` / `2026-09`. **Trader action owed**: `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>` (from `scripts/`) after spot-auditing three packs, or enrichment stays silent. Live gates #29-#52 owed across Phases 0.13 and 0.14; #53-#64 listed below. |
 | Last verified baseline | **`main` at `b0db9bbe`, 2026-09-04 evening, run in the SCRATCH merge worktree on the merged tree as committed, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 6710 passed, 1 skipped, 72 subtests passed, ZERO failures, 5 min 34 s - run as 6709 passed + 1 failed on the merged tree BEFORE this block was refreshed (the Q3 doc-scan test demands the glance block name `POSITION_SOURCE_IDS`; the merge had kept the pre-Q3 rows), and that one test re-run green after the refresh with no other file touched.** `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7, source selftest green. No packaging trigger (no dependency, asset or new top-level package; every new module is inside an already-collected package). Previous: 6608 passed at the earnings-anchor bridge (14:30 PT). |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
@@ -33,6 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 65 | **The nightly synthesis completes (N2)** - the next nightly run after merge: that night's `ai_summary_*.json` has `map_reduce.synthesized: true` (or, if it retried, `synthesis_retry: "shorter"` and a document that was WEIGHED rather than the 12-row unsynthesized pile), `synthesis_stop_reason` is present and `""`, and the `ai_job_ledger.jsonl` row's reason no longer ends "NOT synthesized". **Two consecutive synthesized nights close it.** Two things to check while reading it: the reduce call now sends 8,000 output tokens against a 65,536 window, so watch `trading_bot.log` for any new prompt-truncation refusal; and `slices_retried` being EMPTY is the expected result, not proof the map half works - the map slices fail for Q3 grounding reasons, not for length | packet N2, 2026-09-05 |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
 | 62 | **The AI grounding contract holds on a real night (Q3)** - the first nightly run after `claude/q3-ai-grounding` merges: `ai_morning_brief.txt` OPENS with `Analyzed A of N. Membership-only B. Failed C.` and `A + B + C == N`; every membership-only block leads with `membership only - ...` and carries NO position language; and `ai_jobs`' dropped-row log names any position or numeric drop with its detail - the three strings the code emits are **`position claim without a position source`**, **`position claim in the executive summary`** and **`numeric claim without a resolvable metric_ref`**, and those are what to grep for. **Read the executive summaries too**: 480 of 1,478 published ones asserted a position, so expect the system's `Executive summary withheld: ...` line to appear on the first night and to become rare as the model learns the rule. A night with ZERO drops is also a pass - the rule is that a drop, when it happens, is named. **Watch for over-drop**: if the analyzed count collapses versus the prior night, the numeric regex is catching prose and the packet's `NUMERIC_CLAIM_PATTERNS` is the one thing to widen or narrow. | packet Q3, 2026-09-04 |
@@ -100,6 +101,52 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+
+### 2026-09-05 - Packet N2: the synthesis stops shearing at 3,500 tokens (branch `claude/n2-synthesis-output-cap`, UNMERGED)
+
+Trader, after the overnight assessment: *"Go ahead and build these fixes out."* Tester first
+(`tests/test_n2_synthesis_cap.py`, 8 red + 1 passing regression guard at `09ed0e66`), then builder.
+
+**What was wrong.** Two of the last four nightly runs published UNSYNTHESIZED. The reduce answer
+stopped mid-string at **char 14501** (run of 2026-09-03 02:10) and **char 14708** (run of
+2026-09-05 02:41) - both ~3,500 tokens of dense JSON at ~4.2 chars/token, i.e. the ONE hard-coded
+`max_tokens` that the map slices and the synthesis shared. The parser reported
+`Unterminated string starting at: line 1 column 14709`, which is true and describes the wrong
+problem, and the existing retry then re-sent the **identical** request with the validator's
+rejection appended - more prompt, same ceiling - so it cut again, at ~7 min of generation per
+attempt. `unsynthesized_summary` published 12 rows per section and hid 52 and 39.
+
+**Built.** `scripts/ai_summary.py`: two caps - `LOCAL_MAP_GENERATION_TOKENS` (3,500) and
+`LOCAL_SYNTHESIS_GENERATION_TOKENS` (8,000) - chosen per request by
+`local_generation_tokens(evidence)` on the `map_reduce_synthesis` scope `findings_package` already
+stamps; `LOCAL_GENERATION_TOKENS` survives as an alias of the map cap, and **the evidence budget
+keeps subtracting the map cap** so widening what the synthesis may WRITE never narrows what a slice
+may READ. The cloud payloads stay at 3,500 and a test pins them there even for a reduce-scoped
+package. A **length stop** (`choices[0].finish_reason`, or Ollama's top-level `done_reason`) is
+detected BEFORE parsing and earns ONE retry asking for at most 8 findings per section; a second cut
+raises `LocalOutputLengthError`, a `RuntimeError` subclass carrying `stop_reason`. The ordinary
+validation-rejection retry is unchanged and a test holds the two apart.
+`scripts/ai_jobs/map_reduce.py`: the block gains `synthesis_stop_reason`, `synthesis_retry` and
+`slices_retried`, all always present, and an older manifest without them still loads. Advisory
+one-liner: `currently\s+(?:long|short)(?:ed)?` - the alternation is wrapped in `\b(?:...)\b`, so
+"APPS is currently shorted" was not a position claim and reached `ai_morning_brief.txt` that
+morning; "currently shorting" still misses.
+
+**Packet item 0 is ANSWERED and is a different bug.** The 1-2 map slices that fail each night are
+**Q3 grounding rejections, not length cuts**: the desk log names
+`setups.short_horizon [1/1]` "numeric claim without a resolvable metric_ref" and
+`setups.playbooks [3/11]` "executive_summary cannot be blank", and every earlier one back to
+2026-08-28 reads "every citing statement was unsupported". The rejection-feedback retry already
+handles those. **The map half of the length detection is unobserved live and is covered by test
+only** - do not read a quiet `slices_retried` as proof it works.
+
+Verification on the branch, nightly AI lock FREE (probed): `pytest tests/ -q` **6724 passed, 1
+skipped, 72 subtests, exit 0** (7 min 14 s); `ruff` clean; smoke 7/7; source selftest 74/74.
+Fail-before-fix PROVEN by stashing `ai_summary.py` + `map_reduce.py` back to `09ed0e66` and
+re-running: 14 failed / 88 passed (all 8 tester reds, the 3 new local-provider guards, the widened
+Q3 vocabulary fixture, the 2 cloud-cap guards on an ImportError), restored, 122 passed. **No model
+was called from the worktree.** No packaging trigger: no dependency, no non-`.py` asset, no new
+top-level `scripts/` package, no new dynamic import.
 
 ### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
 

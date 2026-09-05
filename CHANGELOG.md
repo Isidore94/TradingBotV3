@@ -892,6 +892,22 @@ which is evidence and must not be loaded as context.
   `render_morning_file` prints `Analyzed A of N. Membership-only B. Failed C.`;
   `Briefed 152 of 152` on 2026-09-03 counted 40 symbols that never reached a model at
   all. Each membership-only block leads with `membership only - <reason>`.
+- **The local provider has TWO output caps, and a length stop is read before the text
+  is parsed** (N2, 2026-09-05). `LOCAL_MAP_GENERATION_TOKENS` (3,500) is what a
+  single-shot summary or one map slice sends and is what the evidence budget subtracts;
+  `LOCAL_SYNTHESIS_GENERATION_TOKENS` (8,000) is what the map-reduce REDUCE call sends,
+  chosen by `local_generation_tokens(evidence)` from the `map_reduce_synthesis` scope
+  `findings_package` already stamps. `LOCAL_GENERATION_TOKENS` survives as an alias of
+  the map cap. **Widening what the synthesis may WRITE never narrows what a map slice
+  may READ** - the budget keeps subtracting the map cap, because the reduce prompt is
+  findings rather than evidence. The cloud payloads stay at 3,500. A **length stop**
+  (`choices[0].finish_reason`, or Ollama's top-level `done_reason`) is detected BEFORE
+  parsing and earns ONE retry asking for at most 8 findings per section - never the
+  identical request with the validator's rejection appended, which is more prompt
+  against the same ceiling. A second cut raises `LocalOutputLengthError`, a
+  `RuntimeError` subclass carrying `stop_reason`. The `map_reduce` block gains
+  `synthesis_stop_reason` ("length" or "", always present), `synthesis_retry`
+  ("shorter" or "") and `slices_retried`; older manifests without them still load.
 - Local-AI Phase 0 is complete. Phase 1 implementation is complete; its five-session
   unattended live gate remains in `plan.md`.
 
@@ -1102,6 +1118,45 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-05 - N2: the synthesis stops shearing at 3,500 tokens (branch `claude/n2-synthesis-output-cap`)
+
+Two of the last four nightly runs published UNSYNTHESIZED. The reduce answer stopped
+mid-string at **char 14501** (the run of 2026-09-03 02:10) and **char 14708** (the run
+of 2026-09-05 02:41) - both ~3,500 tokens of dense JSON at ~4.2 chars/token, which is
+the ONE hard-coded `max_tokens` the map slices and the synthesis shared. The parser's
+complaint (`Unterminated string starting at: line 1 column 14709`) was true and
+described the wrong problem, and the existing retry re-sent the identical request with
+the validator's rejection appended - more prompt against the same ceiling - so it cut
+again, at ~7 minutes of generation per attempt. `unsynthesized_summary` then published
+12 rows per section and hid 52 and 39.
+
+- **Two caps.** `LOCAL_MAP_GENERATION_TOKENS` (3,500) for a single-shot summary or a
+  map slice, `LOCAL_SYNTHESIS_GENERATION_TOKENS` (8,000) for the reduce call, selected
+  by `local_generation_tokens(evidence)` on the `map_reduce_synthesis` scope that
+  `findings_package` already stamps. `LOCAL_GENERATION_TOKENS` is kept as an alias of
+  the map cap (`local_evidence_budget_ceiling_chars`,
+  `DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS` and two tests import it). **The evidence budget
+  keeps subtracting the MAP cap.** The OpenAI and Anthropic payloads are untouched at
+  3,500 and a test pins them there even for a reduce-scoped package.
+- **A length stop is read before the text is parsed** - `choices[0].finish_reason` on
+  every OpenAI-compatible server, or Ollama's top-level `done_reason`. It earns ONE
+  retry carrying a shorter-output instruction (at most 8 findings per section) and
+  never the identical request. A second cut raises `LocalOutputLengthError`, a
+  `RuntimeError` subclass whose message names the stop reason and the cap and which
+  carries `stop_reason` so a caller records rather than re-derives it. The ordinary
+  validation-rejection retry is unchanged, and a test holds the two apart.
+- **The manifest tells the truth.** The `map_reduce` block gains
+  `synthesis_stop_reason`, `synthesis_retry` and `slices_retried`; all three are always
+  present, and an older manifest without them still loads.
+- `currently\s+(?:long|short)(?:ed)?`: the alternation is wrapped in `\b(?:...)\b`, so
+  "APPS is currently shorted" was not a position claim and reached
+  `ai_morning_brief.txt` on 2026-09-05. "currently shorting" still misses, and should.
+- **Not this bug** (packet item 0): the 2026-09-05 map-slice failures were Q3 grounding
+  rejections - `setups.short_horizon [1/1]` "numeric claim without a resolvable
+  metric_ref", `setups.playbooks [3/11]` "executive_summary cannot be blank" - which
+  the existing rejection-feedback retry already handles. The map half of the length
+  detection is unobserved live and is covered by test only.
 
 ### 2026-09-04 - Q3: typed sources, a position claim needs a position source, honest brief counts, one reader for `match_basis`
 

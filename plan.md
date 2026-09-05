@@ -587,6 +587,21 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+## Phase 0.20 — Overnight-assessment packets (2026-09-05)
+
+Trader, 2026-09-05, after the lead's overnight assessment of four nights of nightly output:
+*"Go ahead and build these fixes out."* Each packet is a separate branch built through the
+agent team (`.claude/packets/N*.md`, machine-local); this section records what landed.
+
+| Packet | What was wrong | What it changes | State |
+|---|---|---|---|
+| N2 | Two of four nights published UNSYNTHESIZED: the reduce answer was CUT at char 14501 (2026-09-03) and 14708 (2026-09-05), both 3,500 tokens of dense JSON at ~4.2 chars/token - the one hard-coded `max_tokens` the map slices and the synthesis shared - and the retry re-sent the identical request with the validator's rejection appended, which is more prompt against the same ceiling | `ai_summary`: two output caps (`LOCAL_MAP_GENERATION_TOKENS` 3,500 / `LOCAL_SYNTHESIS_GENERATION_TOKENS` 8,000) chosen from the reduce package's own scope, the evidence budget still subtracting the MAP cap, the cloud payloads untouched; a length stop read BEFORE parsing with ONE shorter-output retry and `LocalOutputLengthError` after a second cut; `map_reduce` gains `synthesis_stop_reason` / `synthesis_retry` / `slices_retried`; `currently shorted` is a position claim | **BUILT** on `claude/n2-synthesis-output-cap`; live gate #65 |
+
+**Answered, not built (N2 item 0):** the 1-2 map slices that fail each night are Q3 grounding
+rejections (`numeric claim without a resolvable metric_ref`, `executive_summary cannot be blank`,
+`every citing statement was unsupported`), which the existing rejection-feedback retry handles.
+The map half of N2's length detection is therefore **unobserved live** and covered by test only.
+
 ## Phase 0.19 — AVWAP band challenger: make the comparison measure (QUEUED by the trader 2026-09-05)
 
 Trader, 2026-09-05 ~01:45 PT, after the lead reported the comparison is built but empty:
