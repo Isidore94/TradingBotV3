@@ -235,6 +235,24 @@ unchanged lake writes nothing new.
 in `outcome_path` are keyed by the LIKE EPISODE (BD-92), so the setup family
 behind one is only reachable through this dataset.
 
+## Two additive columns that say what a row IS (packet Q2, 2026-09-04)
+
+| Dataset | Column | Values | What NULL means |
+|---|---|---|---|
+| `feature_snapshot_daily` | `anchor_knowledge` | `observed` / `reconstructed` / `""` (no anchor used) | the row was written before the column existed; readers call it **`legacy`** (`features.anchor_knowledge_bucket`) and never `observed` |
+| `outcome_path` | `path_kind` | `managed` / `plain_target` / `plain_no_target` | the row predates the column, or its recipe walks no swing path; readers call it **`unlabelled`** (`outcomes.path_kind_bucket`) |
+
+`anchor_knowledge` is the anchor's knowledge interval (Section 6.2) folded onto
+the snapshot that used it: `observed` when the `anchor_instance` row's own
+`system_from` lands on or before the session, market-local. A `reconstructed`
+row is research evidence and **never** promotion evidence (BD-99) — the same
+rule the `AS_OBSERVED` availability declaration above states for coverage and
+promotion. `path_kind` names which walk produced an outcome row, so a
+no-target row (which can only stop, expire or stay open) is never pooled with a
+targeted one (BD-42's fallback, Q2.2). Neither column changes any stored value,
+and `path_kind` is excluded from the BD-98 unchanged-comparison so an existing
+row is not rewritten merely to gain a label.
+
 ## Point-in-time columns
 
 `event_at` (market fact), `observed_at` (when this installation received it),

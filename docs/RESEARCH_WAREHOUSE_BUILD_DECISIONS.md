@@ -2805,3 +2805,83 @@ or refusals - the desk's 07:30 scan and its build ran alongside without a collis
 
 **Reopen if** a recipe ever needs a per-row "inputs revision" so a stale row can
 be detected instead of re-simulated wholesale.
+
+## BD-99 — An anchor's KNOWLEDGE travels with the snapshot, and a reconstructed one is research evidence only
+
+**Decision (2026-09-04, packet Q2.1).** `cli.anchor_dates_by_symbol(store, day)`
+returns `{symbol: features.AnchorChoice}` — the anchor bar date it always
+returned, plus a `knowledge` of `observed` or `reconstructed`. `observed` means
+the row's own `system_from`, converted to market-local with `astimezone` (never
+by stripping the timezone), lands **on or before** the session; anything later,
+and anything with no stamp at all, is `reconstructed`. The
+"an anchor that had not happened yet is not knowable" exclusion
+(`anchor_bar_date > day`) is unchanged. Where one bar date carries several
+rows the **earliest** `system_from` wins — the first moment it became knowable.
+`feature_snapshot_daily` gains the additive column `anchor_knowledge`, written
+only where an anchor was actually used (`""` when the row used none); a row
+written before the column reads NULL and `features.anchor_knowledge_bucket`
+calls it **`legacy`**, never `observed`.
+
+**Why.** The 2026-09-04 earnings-anchor bridge appends ~2,200 anchors whose
+BARS are months old and whose knowledge stamp is that night. Sec 6.2 already
+says an anchor is available once observed and not retroactively at its bar, and
+`anchor_dates_by_symbol` was ignoring `system_from` entirely — so a daily
+snapshot rebuilt for 2026-08-12 would have presented tonight's imports as
+something the desk knew that day. The band repair (BD-100) is worth doing and
+the rows it produces are legitimate RESEARCH evidence; they are not
+point-in-time evidence and must never be counted as such.
+
+**The rule that binds.** A `reconstructed` row is evidence for research and
+**never for a plan.md sec 7 promotion gate**: sec 7 requires "a declared
+evidence window frozen before inspection", and a knowledge stamp from after the
+session is the opposite of that. Every reader that pools these rows reports the
+split; `band-coverage` (Q2.3) prints it by bucket.
+
+**What did not change.** No number moves. The bands, the favourite-zone block
+and the AVWAP formula are untouched; `build_daily_snapshots` still accepts a
+bare date from any caller that has one and reads it as `reconstructed`, because
+a caller that did not state the knowledge has not established it.
+
+**Reopen if** anchors ever arrive with a trustworthy "known at" of their own
+(a broker or vendor timestamp), in which case `observed` should be decided from
+that field rather than from the lake's write time.
+
+## BD-100 — Past daily features are rebuilt by their own command, and the gate #59 runbook is four steps
+
+**Decision (2026-09-04, packet Q2.4).** `research_warehouse.cli
+rebuild-daily-features --from YYYY-MM-DD --to YYYY-MM-DD [--apply]`, dry run by
+default. It is a **sibling** of `rebuild-month`, not a third entry in
+`REBUILD_DATASETS`, for one reason: `feature_snapshot_daily` is partitioned by
+**year**, so "retire the month's partitions" — right for `bar_derived` and
+`feature_snapshot_intraday`, which are month-keyed — would retire every other
+month of that year with it. The mechanics are otherwise BD-97's: under the
+build's single-flight lock, one RETIRE line per affected year partition (files
+kept, restorable by repointing the manifest), then a **verbatim carry** of
+every row outside the requested range, then a per-session
+`features.build_daily_snapshots` with the Q2.1 stamped anchors. A second
+`--apply` therefore supersedes rather than duplicating, and the carried rows
+keep their own values, including a NULL `anchor_knowledge` where they predate
+the column: the rebuild never relabels history.
+
+**Why.** The nightly build writes daily features for ONE day
+(`day = session_date or stamp.date()`), so every August and early-September
+session was computed before the anchors CSV held anything and carries null
+AVWAP bands. `_bands_by_occurrence` correctly reads the TRIGGER session's own
+feature row and correctly finds nothing, which is why `swing_house_v1` graded
+0/257 and why `recompute-outcomes` alone could not have repaired it — there was
+nothing new for it to read.
+
+**The gate #59 runbook, in order.** 1. the nightly build (the bridge's anchors
+are ingested into `anchor_instance`); 2. `rebuild-daily-features --from
+2026-08-01 --to <today> --apply` (dry run first, read the session list);
+3. `recompute-outcomes --apply` (BD-98 `force`, one lock per bucket);
+4. `band-coverage --month 2026-08` and `--month 2026-09`. Step 3 before step 2
+measures nothing new. Every step is dry-run-by-default, and none of them is run
+against the live lake by an agent without the trader's go.
+
+**Cost note.** The carry materialises the year partition's out-of-range rows
+once. That is the price of a year-keyed partition; it is why this is a
+maintenance command under the lock and never a step in the nightly build.
+
+**Reopen if** the daily-feature partition is ever re-keyed by month, which
+would let `rebuild-month` own it directly and delete the carry.
