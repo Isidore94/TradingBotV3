@@ -465,6 +465,60 @@ Three things learned in the build that this document did not predict:
 accrual with ≥ 40 finalized setups before T3 counts. B-4 (the T1 level-quality
 backfill and the T2 playbook re-run) is the next packet and is NOT started.
 
+#### 2026-09-05 — T3 measured NOTHING for the first ten days, and why (packet M1)
+
+Between the shadow landing on 2026-08-26 and this fix, **not one setup was
+compared.** `master_avwap_band_variant_stats.csv` held 40 rows over 11,292
+setups with `n_variant = 0` and `n_variant_unmeasured = n` on every single one;
+all four `_variant` columns were blank. The Setup Tracker's Band variant view
+rendered that file faithfully, which is the second half of the defect: a family,
+a side, a champion R and four empty cells read as *"the challenger was no
+different"* rather than *"the challenger was never computed."*
+
+**Root cause: two builders for one symbol entry.** T3 step 1 above names
+`runner.py`, and `runner.py` did exactly what it says — every symbol of the
+2026-09-04 scan carries a full block in `master_avwap_ai_state.json`. But the
+persisted tracker on a normal day is written by the staleness catch-up
+(`backfill_setup_tracker_from_recent_sessions` →
+`_evaluate_priority_snapshot_for_date`, `docs/DURABILITY_CATCHUP_PLAN.md` §2.1),
+which builds its **own** ~100-key symbol entry in `legacy.py` and never set
+`current_anchor_variant` / `previous_anchor_variant`. So
+`build_tracker_setup_record` stamped its placeholder — `"no band-variant block
+on the scan entry"`, 186 of 186 setups on scan_date 2026-09-03 —
+`_find_tracker_stop_candidates` added no `band_variant` stop, and
+`_build_tracker_scenarios` built no variant scenario. AAON is the clean example:
+stdev 4.72 on anchor 2026-08-10 in the AI state, "no block" on its setup record
+for the same anchor date.
+
+**Fix.** `build_anchor_band_variant_meta` moved from `runner.py` into
+`legacy.py`, body unchanged, and `runner.py` re-exports the name — one function,
+two call paths, never two copies of a formula. The catch-up now computes the
+block from the same frame and the same anchor index as the champion's meta, in
+both anchor branches. The placeholder is now **unreachable** from the catch-up
+path and a test asserts it; a frame too short for the 20-close window says
+`"fewer than the lookback's closes before this bar"` instead. A tracker record
+is rebuilt on every persisted write, so existing records pick the block up on
+the next write — no migration.
+
+**The view now names its own coverage.** One sentence above the table,
+`Measured N of M setups (K unmeasured: <top reason>).`, built from the export's
+own `n_variant` / `n` / `n_variant_unmeasured` sums plus a new
+`top_unmeasured_reason` column. That column is the one thing the CSV gained, and
+only because the reasons live on the records and the live tracker JSON is 1.1 GB
+— a panel that opened it to name a reason would freeze the Qt thread.
+
+**Storage, re-measured.** 5,590 bytes per record (+16.5%: 33,813 → 39,403) on
+the M1 fixture, for the two anchor blocks and four challenger scenarios on the
+four baseline exit templates. B-2's 9,982 bytes was measured before the
+experimental templates were excluded; the point stands either way — §4 T3's "a
+few hundred bytes" is an order of magnitude low. At ~186 setups per scan date
+that is roughly 1 MB per session, on records written from now on.
+
+**T4's clock.** The ≥ 20 sessions of forward accrual and ≥ 40 finalized setups
+start at the **first measured row**, not at 2026-08-26. Nothing accrued before
+today. Live gate #65 is the first persisted tracker write that shows
+`n_variant > 0`.
+
 ### Placement
 
 - Not in `plan.md`. If promoted, the natural home is the next free Phase 0.x packet (0.9 is now the GUI follow-ons)

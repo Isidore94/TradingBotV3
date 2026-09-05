@@ -1098,10 +1098,81 @@ which is evidence and must not be loaded as context.
   transitions beside legacy D1 alerts and cannot alter the champion path.
 - Champion-invariance tests prove enabled, failing, or poisoned shadow engines leave
   production SPY/D1 results unchanged.
+- **AVWAP band challenger** (Phase 0.10, `scripts/indicators/avwap_band_variants.py`):
+  an anchored HLC/3 centre with a 20-close Bollinger sigma, replicated from OneOption,
+  carried on every setup record beside the champion's frozen
+  `calc_anchored_vwap_bands` and graded on the SAME exit template.
+  `build_anchor_band_variant_meta` lives in `legacy.py` and **serves both call paths** -
+  the live scan in `runner.py` (which re-exports it) and the tracker staleness catch-up
+  (`_evaluate_priority_snapshot_for_date`), which is what writes the persisted tracker
+  on a normal day. **It measured nothing from 2026-08-26 to 2026-09-05** because only
+  the scan path set the block; packet M1 fixed the hand-off, and the Setup Tracker's
+  Band variant view now states `Measured N of M setups (K unmeasured: <top reason>)`
+  above the table so an empty comparison can never again look like a comparison.
+  `_is_band_variant_scenario` fences the shadow out of every champion aggregate and
+  the B-2 parity fixture pins the champion's records byte-identical.
 
-Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
+Neither of the first two challengers is promoted, and the band challenger's ≥ 20
+sessions of forward accrual start at its first measured row. Their remaining evidence
+gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-05 - M1: the AVWAP band challenger finally measures, and its view names its coverage
+
+Trader authorization, 2026-09-05: *"I want us to compare both to see what is better"* ...
+*"Add this to the queue"* ... *"Fix all of these failures including the one we just
+queued."* plan.md Phase 0.19. Branch `claude/m1-band-variant-handoff`. Shadow only:
+no detector, score, rank, tier, alert, zone arm, Focus, review queue or
+`review_policy.json` change, and `calc_anchored_vwap_bands` is untouched and frozen
+(decision 0008). Governing spec `docs/AVWAP_BAND_VARIANT_STUDY.md` T3/T4.
+
+**The comparison had compared nothing for ten days.**
+`master_avwap_band_variant_stats.csv` held 40 rows over 11,292 setups with
+`n_variant = 0` and `n_variant_unmeasured = n` on every row, all four `_variant`
+columns blank, since the shadow shipped on 2026-08-26.
+
+**Root cause: two builders for one symbol entry.** `runner.py`'s live scan set
+`current_anchor_variant` / `previous_anchor_variant` on every symbol - all 423 of the
+last scan carry a full block in `master_avwap_ai_state.json`. The persisted tracker on
+a normal day is written by the staleness catch-up
+(`backfill_setup_tracker_from_recent_sessions` → `_evaluate_priority_snapshot_for_date`),
+which builds its own ~100-key entry in `legacy.py` and never set them. So
+`build_tracker_setup_record` stamped `"no band-variant block on the scan entry"` on
+every record (186 of 186 setups on scan_date 2026-09-03),
+`_find_tracker_stop_candidates` added no `band_variant` stop and
+`_build_tracker_scenarios` built no variant scenario. AAON: stdev 4.72 on anchor
+2026-08-10 in the AI state, "no block" on its setup record for the same anchor date.
+
+**One function, two call paths.** `build_anchor_band_variant_meta` moved from
+`runner.py` into `legacy.py` with its body unchanged; `runner.py` re-exports the name,
+so the live scan is byte-identical. The catch-up computes the block from the SAME frame
+and the SAME anchor index as the champion's meta, in both anchor branches. The
+placeholder is now **unreachable** from the catch-up path (a test asserts it); a frame
+shorter than the 20-close window says `"fewer than the lookback's closes before this
+bar"`. A tracker record is rebuilt on every persisted write, so existing records pick
+the block up on the next write - no migration.
+
+**The view says what it measured.** The Setup Tracker's Band variant tab renders one
+sentence above the table - `Measured N of M setups (K unmeasured: <top reason>).` -
+as a pure function of the export's own counts, with an honest empty state when the file
+has never been written. `master_avwap_band_variant_stats.csv` gained exactly one
+column, `top_unmeasured_reason`, because the reasons live on the tracker records and
+the live tracker JSON is 1.1 GB: a panel that opened it to name a reason would freeze
+the Qt thread. Reasons are carried verbatim and never re-coded.
+
+**The champion did not move.** The B-2 parity fixture
+(`tests/test_tracker_band_variant_parity.py`, frozen before the shadow existed) passes
+unchanged, with the fence guard, the stats export and the panel-section suites: 104
+passed. `n_variant` already counted a paired challenger scenario whether open or
+closed, with `n_closed_variant` separate; a passing test now pins that.
+
+**Storage, re-measured**: 5,590 bytes per record (+16.5%: 33,813 → 39,403) on the M1
+fixture - two anchor blocks plus four challenger scenarios on the four baseline exit
+templates - roughly 1 MB per session at ~186 setups per scan date, on records written
+from now on. The study's "a few hundred bytes" estimate stays an order of magnitude low.
+
+**T4's clock starts at the first measured row**, not at 2026-08-26. Live gate #65.
 
 ### 2026-09-04 - Q3: typed sources, a position claim needs a position source, honest brief counts, one reader for `match_basis`
 
