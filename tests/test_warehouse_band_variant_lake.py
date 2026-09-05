@@ -658,6 +658,28 @@ def test_an_occurrence_missing_under_either_recipe_is_counted_not_paired(store):
     assert "not_paired" in table
 
 
+def test_the_twins_rows_are_invisible_to_the_house_default_readers(compare_lake):
+    """The fence, stated as a test: `queries.slice_readout` filters on
+    `house_default_v1`, so a challenger row can never reach an aggregate that was
+    computed over the champion's levels."""
+    from scripts.research_warehouse import queries  # noqa: PLC0415 - local to the claim
+
+    snapshot = queries.slice_readout(compare_lake, year=2026, as_of=NOW)
+    recipe_ids = {str(row.get("recipe_id")) for row in snapshot.rows}
+    assert "swing_house_v1" in recipe_ids, "the champion is still read"
+    assert "swing_house_variant_v1" not in recipe_ids
+
+    widened = queries.slice_readout(
+        compare_lake,
+        year=2026,
+        as_of=NOW,
+        outcome_definition_id=outcomes.outcome_definition_for(outcomes.SWING_HOUSE_VARIANT_V1),
+    )
+    assert {str(row.get("recipe_id")) for row in widened.rows} == {"swing_house_variant_v1"}, (
+        "a reader that ASKS for the challenger's definition gets it, and only it"
+    )
+
+
 def test_the_compare_writes_nothing(compare_lake):
     ledger = compare_lake.manifest.path.read_bytes()
     cli.run_band_coverage_compare(
