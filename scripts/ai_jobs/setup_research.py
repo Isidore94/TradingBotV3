@@ -649,7 +649,36 @@ def _policy_rows(rows) -> list[str]:
     return out
 
 
-def render_markdown(pack: Mapping[str, Any]) -> str:
+def _narration_coverage_lines(narrated: Mapping[str, Any] | None) -> list[str]:
+    """The "Narration" heading and the one line that says what was left out.
+
+    N3: the narration is bounded (`_bounded_narration_view`), so the pack on
+    disk carries cells the words were never written over. A reader of the
+    markdown alone has no other way to know that, and a coverage line that
+    appeared only in the json would be a rule nobody reads.
+
+    Absent `narrated` prints NOTHING rather than "0 of 0": no narration was
+    attempted (the gate was not met, or `narrate=False`), and claiming coverage
+    of a narration that does not exist is worse than saying nothing.
+    """
+    if not narrated:
+        return []
+    kept = _int_or_zero(narrated.get("eligible_policy_cells"))
+    total = _int_or_zero(narrated.get("of"))
+    return [
+        "\n## Narration\n\n",
+        f"Narration covers {kept} of {total} eligible cells, selected by "
+        f"{narrated.get('selected_by') or NARRATION_SELECTED_BY}; "
+        f"{max(total - kept, 0)} omitted for size. The selection is a SIZE rule "
+        "and never a ranking by result (gate #43) - the cells the model was not "
+        "shown are in this pack, above, and are neither better nor worse than "
+        "the ones it was.\n",
+    ]
+
+
+def render_markdown(
+    pack: Mapping[str, Any], *, narrated: Mapping[str, Any] | None = None
+) -> str:
     """The pack a person reads, opening with the part that cleared the floor.
 
     It used to open with one table sorted by trimmed mean across every cell,
@@ -723,6 +752,7 @@ def render_markdown(pack: Mapping[str, Any]) -> str:
             )
         lines.append(f"\n{pack.get('non_trade_families_note', '')}\n")
 
+    lines += _narration_coverage_lines(narrated)
     lines.append(f"\n{pack.get('not_a_control_signal')}\n")
     return "".join(lines)
 
@@ -846,8 +876,173 @@ def _hoist_shared_conventions(
     return trimmed, conventions
 
 
-def narration_view(pack: Mapping[str, Any]) -> dict[str, Any]:
-    """What the model is asked to narrate - a VIEW, never the whole pack.
+#: How the bounded view says it chose its cells. ONE string, copied into the
+#: view's `narrated` block, the pack markdown and the nightly ledger reason, so
+#: a reader of any one of the three knows the basis without the other two.
+NARRATION_SELECTED_BY = "evidence count descending, then recipe_id/family/side"
+
+
+def _encoded_chars(value: Any) -> int:
+    """The size of `value` exactly as `_evidence_package` encodes and hashes it."""
+    return len(json.dumps(value, sort_keys=True, default=str).encode("utf-8"))
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _policy_cell_order_key(cell: Any) -> tuple[int, str, str, str]:
+    """Order the eligible policy cells for the bounded view. A SIZE RULE ONLY.
+
+    **Gate #43 is a refusal, not a check**: no cell of a frozen research grid
+    may be read for a verdict before its declared window closes, including by
+    the code that assembles the narration and including if an early cell looks
+    good. So the only thing this key is allowed to know is HOW MUCH evidence a
+    cell rests on - never how that evidence turned out. `mean_r`, `win_rate`,
+    `profit_factor`, `expectancy`, the bootstrap bounds and the trimmed means
+    are all deliberately absent: a cell that looks good early is exactly what
+    the frozen window protects, and ranking the narration by result would hand
+    the model the flattering half of the grid and call it a selection.
+
+    `stats.n` is the outcome-row count the eligibility floor itself gates on
+    ("n >= 30 OUTCOME ROWS"), so what survives the budget is the most-measured
+    evidence. `stats.n_episodes` sits beside it and is equal on all 619 cells of
+    the 2026-09-04 pack; it is the honest sample size and does not yet gate
+    (BD-81), so if the floor ever moves onto it this key moves with it.
+
+    Ties break on `recipe_id`, then `family`, then `side` - identifiers, so the
+    order is total and the same list comes back on every run of the same pack.
+    """
+    stats = cell.get("stats") if isinstance(cell, Mapping) else None
+    if not isinstance(stats, Mapping):
+        stats = {}
+    identity = cell if isinstance(cell, Mapping) else {}
+    return (
+        -_int_or_zero(stats.get("n")),
+        str(identity.get("recipe_id") or ""),
+        str(identity.get("family") or ""),
+        str(identity.get("side") or ""),
+    )
+
+
+def _after_like_order_key(cell: Any) -> tuple[int, str, int]:
+    """The same size rule for the after-like grid, whose cells are FLAT.
+
+    Their evidence count is a TOP-LEVEL `n_episodes` - there is no `stats`
+    wrapper on this grid - so reading `stats.n` here would silently order every
+    cell as zero. Gate #43 covers this grid by name (`after_like_entry_grid_v1`,
+    still `collecting`), so no result statistic is in this key either.
+    """
+    identity = cell if isinstance(cell, Mapping) else {}
+    return (
+        -_int_or_zero(identity.get("n_episodes")),
+        str(identity.get("entry") or ""),
+        _int_or_zero(identity.get("day_offset")),
+    )
+
+
+def _narration_budget(budget: int | None = None) -> int:
+    if budget is not None:
+        return int(budget)
+    import ai_summary
+
+    return int(ai_summary.local_evidence_budget_chars())
+
+
+def _fill_to_budget(
+    cells: list[Any], *, budget: int, used: int
+) -> tuple[list[Any], int]:
+    """Add cells in the given order while the NEXT one still fits.
+
+    Sizes are measured per cell rather than by re-encoding the whole view each
+    time: a JSON list contributes each element's own encoding plus the two-char
+    `", "` separator between them, and `json.dumps` renders a nested value
+    exactly as it renders it alone. 619 re-encodings of a 78,000-char view would
+    be 48 MB of work inside a nightly job for the same answer.
+    """
+    kept: list[Any] = []
+    for cell in cells:
+        cost = _encoded_chars(cell) + (2 if kept else 0)
+        if used + cost > budget:
+            break
+        kept.append(cell)
+        used += cost
+    return kept, used
+
+
+def _bounded_narration_view(
+    pack: Mapping[str, Any], budget: int
+) -> tuple[dict[str, Any], int]:
+    """The view, cut to `budget`, plus the size of its fixed head.
+
+    Select, then fill. The head - everything that is not a cell - is encoded
+    first, because it is what makes the rest readable: without the gate, the
+    coverage and the conventions the cells are numbers with no basis. Cells are
+    then added in `_policy_cell_order_key` order until the next one would cross
+    the budget, and the after-like ELIGIBLE cells (P10 C3) follow under the same
+    rule.
+
+    The head is measured with `narrated` holding the TOTALS rather than the
+    kept counts, so the placeholder can only ever be longer than the truth: K is
+    at most N, so it cannot have more digits, and the finished view is therefore
+    never larger than what was budgeted for. The head size is returned because
+    the refusal needs it - "the head alone is too big" and "the head fits but no
+    cell does" are different failures and only one of them is about the grid.
+    """
+    view = _whole_narration_view(pack)
+    policy = sorted(view["eligible_policies"], key=_policy_cell_order_key)
+    after_like = sorted(view["after_like_eligible"], key=_after_like_order_key)
+    view["eligible_policies"] = []
+    view["after_like_eligible"] = []
+    view["narrated"] = {
+        "eligible_policy_cells": len(policy),
+        "of": len(policy),
+        "selected_by": NARRATION_SELECTED_BY,
+        "after_like_cells": len(after_like),
+        "of_after_like": len(after_like),
+    }
+    head_chars = _encoded_chars(view)
+    kept_policy, used = _fill_to_budget(policy, budget=budget, used=head_chars)
+    kept_after_like, _used = _fill_to_budget(after_like, budget=budget, used=used)
+    view["eligible_policies"] = kept_policy
+    view["after_like_eligible"] = kept_after_like
+    view["narrated"]["eligible_policy_cells"] = len(kept_policy)
+    view["narrated"]["after_like_cells"] = len(kept_after_like)
+    return view, head_chars
+
+
+def narration_view(
+    pack: Mapping[str, Any], *, budget: int | None = None
+) -> dict[str, Any]:
+    """What the model is asked to narrate - a VIEW, never the whole pack, and
+    BOUNDED to what the local model can actually read.
+
+    N3 (2026-09-05): the view used to carry every eligible cell, and the whole
+    of it or nothing was sent. Gate #59's lake recompute took the grid from
+    23,802 recipe outcomes to 141,299 overnight, and with it the eligible block
+    from 128 cells to 619 - 658,292 chars against a 78,119-char budget. The
+    ledger had already read `narration absent` on 09-02, 09-03 and 09-04. No
+    budget a 64k-context model can read will ever fit 658k chars, so "raise the
+    budget" is not a fix; the view has to SELECT, and it has to say that it did.
+
+    The selection is a SIZE rule and never a ranking by result - see
+    `_policy_cell_order_key` for why gate #43 makes that binding - and the
+    `narrated` block states K of N in the view, the pack markdown and the
+    nightly ledger line, so nothing reads as "these were the findings".
+    """
+    view, _head_chars = _bounded_narration_view(pack, _narration_budget(budget))
+    return view
+
+
+def _whole_narration_view(pack: Mapping[str, Any]) -> dict[str, Any]:
+    """Every eligible cell, deduplicated but UNBOUNDED - the input to the cut.
+
+    Kept separate from `narration_view` so the bounding step has something whole
+    to select from, and so the refusal can price the whole view against the head
+    without a second construction of either.
 
     The pack is the deterministic product and it grew: P3 added the ineligible
     block, the excluded families and the coverage detail, and the recipe grid
@@ -973,21 +1168,29 @@ def _evidence_package(pack: Mapping[str, Any]) -> dict[str, Any]:
     to the context window); a prompt above it is not a longer answer, it is a
     silently sheared one, and output generated from a sheared prompt is not
     trustworthy even when it validates.
+
+    Since N3 the view CUTS itself to that budget, so the refusal narrows to the
+    one case a cut cannot answer: the fixed head plus the FIRST cell does not
+    fit. That is a fact about the head or the model's window, never about the
+    grid being large, and the message names the head's size so the ledger line
+    says which. A pack with no eligible cells at all is not this failure - the
+    gate stops the job before the model is called.
     """
     import ai_summary
 
-    view = narration_view(pack)
+    budget = int(ai_summary.local_evidence_budget_chars())
+    view, head_chars = _bounded_narration_view(pack, budget)
     encoded = json.dumps(view, sort_keys=True, default=str).encode("utf-8")
-    budget = ai_summary.local_evidence_budget_chars()
-    if len(encoded) > budget:
+    narrated = view["narrated"]
+    if len(encoded) > budget or (narrated["of"] and not narrated["eligible_policy_cells"]):
         raise NarrationTooLarge(
             f"the narration view is {len(encoded)} chars against a budget of "
-            f"{budget}; refusing to send a prompt the model would shear. The "
-            f"deterministic pack is published and complete "
-            f"({len(view.get('eligible_policies') or ())} eligible cell(s)). "
-            f"Raise "
+            f"{budget}; its fixed head alone is {head_chars} chars, so not even "
+            f"the first of the {narrated['of']} eligible cell(s) fits. Refusing "
+            "to send a prompt the model would shear. The deterministic pack is "
+            f"published and complete. Raise "
             f"'{ai_summary.LOCAL_EVIDENCE_BUDGET_SETTING_KEY}' or the model's "
-            "num_ctx, or narrate fewer cells."
+            "num_ctx; narrating fewer cells is already what the view does."
         )
     source_sha = hashlib.sha256(encoded).hexdigest()
     source = {
@@ -1049,6 +1252,10 @@ def _narrate(pack: Mapping[str, Any], *, now: datetime | None = None) -> dict[st
         "facts_sha256": package["sources"][0]["sha256"],
         "facts_package_id": package["package_id"],
         "model": result.get("model", ""),
+        # N3: the same block that is inside the view the hash covers. A reader
+        # who opens the narration alone and never the pack must still be able to
+        # see that it was written over K of N cells and on what basis.
+        "narrated": dict(package["sources"][0]["content"]["narrated"]),
         "narration": result.get("summary") or {},
         "note": "Advisory words over deterministic facts. No live rule was changed.",
     }
@@ -1150,9 +1357,29 @@ def run_setup_research(
         )
         target_root = Path(root) if root is not None else _default_root()
         stamp = session_date or moment.date().isoformat()
+        # The narration's coverage is decided BEFORE the markdown is written,
+        # not after it is narrated: the `.md` is published once, beside one pack
+        # for the date (gate #40), and re-rendering it after the model answered
+        # would either write a second file or rewrite a published one. The cut
+        # is deterministic from the pack and the budget alone - no model call is
+        # involved in deciding it - so knowing it early costs nothing, and a
+        # failure to compute it leaves the line off rather than costing the pack.
+        will_narrate = bool(narrate and pack["gate"]["met"])
+        narrated: dict[str, Any] | None = None
+        if will_narrate:
+            try:
+                narrated = dict(narration_view(pack)["narrated"])
+            except Exception as exc:  # noqa: BLE001 - a coverage line never costs the pack
+                _log.info("Setup research narration coverage unavailable (%s).", exc)
         json_path = _superseding(target_root / str(moment.year) / f"{stamp}.json")
         outputs = [str(_publish(json_path, json.dumps(pack, indent=1, sort_keys=True, default=str) + "\n"))]
-        outputs.append(str(_publish(json_path.with_suffix(".md"), render_markdown(pack))))
+        outputs.append(
+            str(
+                _publish(
+                    json_path.with_suffix(".md"), render_markdown(pack, narrated=narrated)
+                )
+            )
+        )
     except Exception as exc:  # noqa: BLE001
         return {"status": "failed", "model": "", "reason": f"setup research failed: {exc}", "outputs": []}
 
@@ -1191,7 +1418,16 @@ def run_setup_research(
             "reason": f"{base}; narration absent: {exc}",
             "outputs": outputs,
         }
-    return {"status": "ok", "model": str(narration.get("model") or ""), "reason": base + "; narrated", "outputs": outputs}
+    # N3: the ledger line says HOW MUCH was narrated, because "narrated" alone
+    # read the same on the 47-cell night and on the 619-cell one.
+    covered = narration.get("narrated") or {}
+    told = (
+        f"; narrated {_int_or_zero(covered.get('eligible_policy_cells'))} of "
+        f"{_int_or_zero(covered.get('of'))} eligible cell(s)"
+        if covered
+        else "; narrated"
+    )
+    return {"status": "ok", "model": str(narration.get("model") or ""), "reason": base + told, "outputs": outputs}
 
 
 __all__ = ["FACTS_SCHEMA", "NARRATION_SCHEMA", "build_fact_pack", "render_markdown", "run_setup_research"]

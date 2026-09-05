@@ -97,9 +97,17 @@ def _pack(*, eligible: int = 60, ineligible: int = 40, contexts: int = 80) -> di
 def test_the_view_carries_the_finding_and_omits_the_input():
     from ai_jobs import setup_research
 
-    view = setup_research.narration_view(_pack())
+    # N3 (2026-09-05) made the view BOUNDED: it now cuts itself to the local
+    # model's budget and says so in `narrated`. That is a size rule and a
+    # different question from this one, which is about WHAT KIND of thing may be
+    # in the view at all - so the budget is opened wide here and the cut is
+    # tested on its own in `tests/test_n3_narration_bounded.py`. Without this
+    # the test would silently be measuring whatever budget the machine running
+    # it happens to resolve (11,066 chars under the test harness' isolated
+    # settings, 78,119 on the desk) instead of the rule it was written for.
+    view = setup_research.narration_view(_pack(), budget=10_000_000)
 
-    # Every eligible cell: those ARE the finding.
+    # Every eligible cell is a CANDIDATE: those ARE the finding.
     assert len(view["eligible_policies"]) == 60
     # And none of the input.
     assert "ineligible_policies" not in view
