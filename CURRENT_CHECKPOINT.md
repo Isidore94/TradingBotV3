@@ -33,7 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 68 | **`unresolved` means UNMEASURED (M2)** - the first after-close sweep after merge logs the four-way split (`Outcome sweep finalized N pending trade(s): measured_eod A, swept_measured B, unmeasured C, expired D ...`) in `trading_bot.log`; the Daytrade Tracker's status line shows the coverage sentence after Q1's window sentence; and `outcome_semantics.terminal_kind` over the live file for the last 20 sessions reports `measured_eod + measured_swept` at or above the 7,427 measured at merge (3,820 + 3,607 of 8,161 events) with `unmeasured` near 644. **The packet's gate text said 7,600 and about 495**; those were read a day earlier over a window one session back, and the branch's own streamed read is the number to compare against | 2026-09-05 M2 entry |
+| 68 | **`unresolved` means UNMEASURED (M2)** - the first after-close sweep after merge logs the four-way split in `trading_bot.log` - `Outcome sweep finalized N pending trade(s): measured_eod A, swept_measured B, unmeasured C (of which expired D); already final in the CSV: E (counted in the total, not in the split); ...` - where **A + B + C + E == N**, because `expired` is a SUBSET of `unmeasured` and an already-final row's status was written by an earlier attempt this run never saw; the Daytrade Tracker's status line shows the coverage sentence after Q1's window sentence; and `outcome_semantics.terminal_kind` over the live file for the last 20 sessions reports `measured_eod + measured_swept` at or above the 7,427 measured at merge (3,820 + 3,607 of 8,161 events) with `unmeasured` near 644. **The packet's gate text said 7,600 and about 495**; those were read a day earlier over a window one session back, and the branch's own streamed read is the number to compare against | 2026-09-05 M2 entry |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
 | 62 | **The AI grounding contract holds on a real night (Q3)** - the first nightly run after `claude/q3-ai-grounding` merges: `ai_morning_brief.txt` OPENS with `Analyzed A of N. Membership-only B. Failed C.` and `A + B + C == N`; every membership-only block leads with `membership only - ...` and carries NO position language; and `ai_jobs`' dropped-row log names any position or numeric drop with its detail - the three strings the code emits are **`position claim without a position source`**, **`position claim in the executive summary`** and **`numeric claim without a resolvable metric_ref`**, and those are what to grep for. **Read the executive summaries too**: 480 of 1,478 published ones asserted a position, so expect the system's `Executive summary withheld: ...` line to appear on the first night and to become rare as the model learns the rule. A night with ZERO drops is also a pass - the rule is that a drop, when it happens, is named. **Watch for over-drop**: if the analyzed count collapses versus the prior night, the numeric regex is catching prose and the packet's `NUMERIC_CLAIM_PATTERNS` is the one thing to widen or narrow. | packet Q3, 2026-09-04 |
@@ -150,6 +150,8 @@ The 4,251 `unresolved` rows split 2,054 `last_measured_bar` + 1,553
 | 09-03 | 30 | 244 | 94 | 0 |
 | 09-04 | 212 | 297 | 30 | 0 |
 
+**The table starts at 08-20 deliberately.** The window's first eight sessions (08-10..08-19) hold 2,515 events that are near-all clean: **2,449 `measured_eod`, 63 `measured_swept`, 3 `unmeasured`, 0 `open`**. They are omitted because they show nothing - the story is entirely in the days below.
+
 Those four days are the F1 GIL-freeze days: the live thread stopped scanning symbols through
 the close and the sweep finalized the backlog. **Nothing is re-finalized.** Those trades keep
 the R they measured and now read `measured_swept`. Whether a sweep running inside the same
@@ -167,6 +169,25 @@ additive value, header unchanged, `schema_version` still 4. The sweep counts
 `outcome_sweep_log_line` prints the split. The Daytrade Tracker status line and the AWAY
 digest print `format_terminal_coverage`'s one sentence off reads they already do.
 
+**A whole-file status scan (read-only, streamed) found two things the windowed read could
+not.** Every `final` row in the 308 MB store carries one of six statuses: `eod_complete`
+14,863, `unresolved` 4,309, and **749 pre-R10.A schema-1 rows** - `stop_seen` 397,
+`target2_seen` 166, `complete` 129, `stop_and_target2_seen` 57.
+
+1. **Those 749 grade `unmeasured` under the unknown-status rule, and at least `complete` was a
+   measured outcome** (its sample rows carry a real `close_r`: `complete` 0.4054, `stop_seen`
+   -1.4, `target2_seen` 2.25, `stop_and_target2_seen` 1.9767). Missing data is uncertainty, so
+   `unmeasured` is the safe reading and this packet does not guess at pre-R10.A semantics - but
+   **a future ALL-HISTORY report will understate `measured` by up to 749 rows** until those four
+   statuses are classified. They are outside the 20-session window, so no live gate or surface
+   is affected today. Classifying them is a follow-up, not this packet.
+2. **13,703 of the 14,863 `eod_complete` finals carry no `finalization` block at all** (they
+   predate R10.A), and every single one carries a numeric `close_r` or `eod_close` - **zero do
+   not**. They reach `terminal_kind` status-less through `setup_scoreboard`'s frames, which
+   never load the `status` column, so the reviewer's advisory that such a row must never read
+   `open` is now the rule: a claimed `final` with neither status nor basis is `measured_eod`
+   when it recorded a close and `unmeasured` when it did not.
+
 **Status-keyed reader survey** (every one found, and what changed):
 `_latest_bounce_outcome_rows` in `bounce_bot_lib/legacy.py` is the ONLY production reader
 keyed on the status column, and it feeds the champion tier, the mute and the PROVEN stamp -
@@ -181,12 +202,15 @@ for the sentence on "the evidence report" too - that count is the outcome LEDGER
 in `scripts/ai_jobs/evidence_report.py`, which this packet was told not to touch, so it did
 not get it.
 
-Verification on the branch: `tests/test_m2_unresolved_means_unmeasured.py` 23 tests, committed
-RED at `448840c2` and proven so on `e7b12ebe` (21 failed, 2 passed - both unchanged-behaviour
-guards). Targeted band (golden / bounce / outcome / scoreboard / held / autopilot / away /
-daytrade / tracker / learning / sweep / digest / evidence) 1,491 passed, 1 skipped, 27
-subtests; `ruff` clean. Five pre-existing assertions asserting the OLD label on rows that DID
-measure were updated with every numeric assertion kept. **No packaging trigger**: no
+Verification on the branch: `tests/test_m2_unresolved_means_unmeasured.py` **40 tests** - 23
+committed RED at `448840c2` and proven so on `e7b12ebe` (21 failed, 2 passed, both
+unchanged-behaviour guards), then 17 more for the reviewer advisories, each proven red before
+its fix (15 for the blank-status rule, 2 for the nested sweep split). Full suite `6733 passed,
+1 skipped, 72 subtests, exit 0` with the nightly AI lock probed FREE; targeted band (golden /
+bounce / outcome / scoreboard / held / autopilot / away / daytrade / tracker / learning /
+sweep / digest / evidence) exit 0; `ruff` clean; smoke 7/7; source selftest 74/74. Five
+pre-existing assertions asserting the OLD label on rows that DID measure were updated with
+every numeric assertion kept. **No packaging trigger**: no
 dependency, no non-`.py` asset, no new top-level package, no dynamic import. The desk was NOT
 restarted (pid 29260 up throughout) and no live store was written.
 

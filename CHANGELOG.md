@@ -1184,7 +1184,21 @@ joins by `event_id`, and `ai_jobs.digest` reads through
 outcome count is the LEDGER's row count and lives in `scripts/ai_jobs`, which M4
 owns - it did not get the sentence.
 
-Tests: `tests/test_m2_unresolved_means_unmeasured.py` (23), committed RED first and
+**Reviewer advisories, same branch.** A claimed `final` row with neither a status nor a
+basis is decided by whether it recorded a close - `measured_eod` with a numeric `close_r` or
+`eod_close`, `unmeasured` without, never `open` - because 13,703 of the live file's 14,863
+`eod_complete` finals predate R10.A's `finalization` block and reach the reader status-less
+through `setup_scoreboard`'s frames (all 13,703 carry a close; zero do not). A `status` that
+reads `nan` - what a pandas frame with no `status` column yields per row - follows the same
+rule instead of being read as an unknown status. The sweep log line nests `expired` inside
+`unmeasured` and names the already-final rows, so the split accounts for every finalization.
+A whole-file scan also found **749 pre-R10.A schema-1 finals** (`stop_seen` 397,
+`target2_seen` 166, `complete` 129, `stop_and_target2_seen` 57) that grade `unmeasured` under
+the unknown-status rule though `complete` at least was a measured outcome: an all-history
+report will understate `measured` by up to 749 until those four are classified, which is a
+follow-up and is recorded in the checkpoint entry.
+
+Tests: `tests/test_m2_unresolved_means_unmeasured.py` (40), committed RED first and
 proven so on `e7b12ebe`. Five pre-existing assertions in `tests/test_outcome_sweep.py`
 and `tests/test_outcome_no_fabrication.py` asserted the OLD label on rows that DID
 measure and were updated with every numeric assertion kept. Live gate #68.

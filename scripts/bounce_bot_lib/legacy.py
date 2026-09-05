@@ -1544,13 +1544,23 @@ def outcome_sweep_log_line(counts) -> str:
     comes from `counts["by_terminal_kind"]`, which the sweep accumulates from
     the status the WRITER wrote - never re-derived here, or the log and the
     file could disagree.
+
+    **`expired` is a SUBSET of `unmeasured`, and is printed inside it** - a
+    trade expires only when it measured nothing (`expired = sessions >= expiry
+    and not measured`), so listing the two as siblings made the split read as
+    more than the total it belongs to. **`already final in the CSV` counts
+    toward `finalized` but NOT toward the split**: those rows were appended by
+    an interrupted earlier attempt, so this run never learned their status and
+    guessing it would be an invention. With that stated, the three kinds plus
+    the already-final count account for every finalization.
     """
     split = (counts or {}).get("by_terminal_kind") or {}
     return (
         "Outcome sweep finalized {finalized} pending trade(s): "
-        "measured_eod {eod}, swept_measured {swept}, unmeasured {unmeasured}, "
-        "expired {expired}; {existing} already final in the CSV, "
-        "{commit_failed} commit failure(s); {open} still open."
+        "measured_eod {eod}, swept_measured {swept}, "
+        "unmeasured {unmeasured} (of which expired {expired}); "
+        "already final in the CSV: {existing} (counted in the total, not in "
+        "the split); {commit_failed} commit failure(s); {open} still open."
     ).format(
         finalized=int((counts or {}).get("finalized", 0)),
         eod=int(split.get(outcome_semantics.TERMINAL_MEASURED_EOD, 0)),

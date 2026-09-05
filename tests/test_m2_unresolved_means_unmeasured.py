@@ -27,6 +27,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -139,6 +140,59 @@ def test_a_final_row_carrying_a_status_the_registry_has_never_seen_is_unmeasured
     assert (
         outcome_semantics.terminal_kind(_row("something_new", ""))
         == outcome_semantics.TERMINAL_UNMEASURED
+    )
+
+
+# ---------------------------------------------------------------------------
+# reviewer advisory 1: a `final` row with NO status and NO basis
+# ---------------------------------------------------------------------------
+# 2,960 schema-4 `eod_complete` finals carry no `finalization` block at all -
+# they predate R10.A's block - and they reach `terminal_kind` through
+# `setup_scoreboard`'s frames, which never load the `status` column. Reading
+# those as `open` would call a finished, measured trade unfinished.
+def test_a_final_with_no_status_and_no_basis_but_a_measured_close_is_measured_eod():
+    row = {
+        "event_id": "AA_long_20260810_10_30_00_regime_pause_rs",
+        "event_type": "final",
+        "close_r": "0.4312",
+        "eod_close": "31.05",
+        "context_json": '{"tier":"B"}',
+    }
+    assert outcome_semantics.terminal_kind(row) == outcome_semantics.TERMINAL_MEASURED_EOD
+
+
+def test_an_eod_close_alone_is_enough_for_measured_eod():
+    row = {"event_id": "a", "event_type": "final", "close_r": "", "eod_close": "31.05"}
+    assert outcome_semantics.terminal_kind(row) == outcome_semantics.TERMINAL_MEASURED_EOD
+
+
+def test_a_final_with_no_status_no_basis_and_no_close_is_unmeasured_not_open():
+    """Nothing says what it measured and nothing shows it measured anything."""
+    row = {"event_id": "a", "event_type": "final", "close_r": "", "eod_close": ""}
+    assert outcome_semantics.terminal_kind(row) == outcome_semantics.TERMINAL_UNMEASURED
+
+
+@pytest.mark.parametrize("blank", [float("nan"), "nan", "NaN", "", None, "none"])
+def test_a_status_that_reads_nan_follows_the_no_status_rule(blank):
+    """A pandas frame with no `status` column yields NaN, and `str(nan)` is
+    `"nan"` - which must not be read as a status the registry has never seen."""
+    row = {"event_id": "a", "event_type": "final", "status": blank, "close_r": "0.5"}
+    assert outcome_semantics.terminal_kind(row) == outcome_semantics.TERMINAL_MEASURED_EOD
+    bare = {"event_id": "a", "event_type": "final", "status": blank}
+    assert outcome_semantics.terminal_kind(bare) == outcome_semantics.TERMINAL_UNMEASURED
+
+
+@pytest.mark.parametrize("value", ["", "nan", "inf", "-inf", None, "abc"])
+def test_an_unreadable_close_is_not_a_measurement(value):
+    row = {"event_id": "a", "event_type": "final", "close_r": value, "eod_close": value}
+    assert outcome_semantics.terminal_kind(row) == outcome_semantics.TERMINAL_UNMEASURED
+
+
+def test_a_row_that_never_says_it_is_final_is_still_open():
+    """The no-status rule is scoped to a row that CLAIMS to be final."""
+    assert (
+        outcome_semantics.terminal_kind({"event_id": "a", "close_r": "0.5"})
+        == outcome_semantics.TERMINAL_OPEN
     )
 
 
@@ -365,8 +419,32 @@ def test_the_sweep_log_line_names_the_split(tmp_path):
     assert "finalized 2" in text
     assert "measured_eod 0" in text
     assert "swept_measured 1" in text
-    assert "unmeasured 1" in text
-    assert "expired 0" in text
+    # `expired` is a SUBSET of `unmeasured` - a trade expires only when it
+    # measured nothing - so printing them as siblings made the split read as
+    # more than the total. Nested, the three kinds sum to `finalized`.
+    assert "unmeasured 1 (of which expired 0)" in text
+    assert "already final in the CSV: 0" in text
+
+
+def test_an_expired_trade_is_counted_inside_unmeasured_not_beside_it(tmp_path):
+    """The sweep's own numbers, not just the sentence: expired ⊂ unmeasured."""
+    import bounce_bot_lib.legacy as legacy
+
+    host = _host(tmp_path)
+    _seed(host, {"a": _state(event_id="a")})
+    # Three completed sessions later: nothing was ever measured, so it expires.
+    counts = host.sweep_pending_bounce_outcomes(now=datetime(2026, 8, 27, 14, 30))
+    assert counts["expired"] == 1
+    split = counts["by_terminal_kind"]
+    assert split[outcome_semantics.TERMINAL_UNMEASURED] == 1
+    assert (
+        split[outcome_semantics.TERMINAL_MEASURED_EOD]
+        + split[outcome_semantics.TERMINAL_MEASURED_SWEPT]
+        + split[outcome_semantics.TERMINAL_UNMEASURED]
+        + counts["recorded_existing"]
+        == counts["finalized"]
+    ), "the split plus the already-final rows account for every finalization"
+    assert "unmeasured 1 (of which expired 1)" in legacy.outcome_sweep_log_line(counts)
 
 
 # ---------------------------------------------------------------------------

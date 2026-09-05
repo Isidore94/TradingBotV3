@@ -351,9 +351,17 @@ def status_for_finalization_basis(basis: str | None) -> str:
 
     The writer's one decision, spelled here so the reader and the writer cannot
     drift. `measured` (bars through the close) is `eod_complete`; a basis that
-    used a prior measurement is `swept_measured`; anything else - including a
-    blank basis, which is what a row with a non-positive risk gets - is
-    `unresolved`, which now means UNMEASURED and nothing else.
+    used a prior measurement is `swept_measured`; anything else is `unresolved`,
+    which now means UNMEASURED and nothing else.
+
+    **A blank basis does not reach this from the live writer.**
+    `_append_bounce_outcome_row` sets `finalization_basis = "measured"` the
+    moment `finalize_eod` is true and only narrows it afterwards, so a final row
+    whose risk is non-positive - the one case that skips both narrowing branches
+    - still writes `eod_complete` today, exactly as it did before this packet.
+    That is pre-existing behaviour and M2 deliberately does not change it; the
+    blank-basis mapping here is the safe default for a caller that has one, not
+    a description of what the writer produces.
     """
     key = str(basis or "").strip().lower()
     if key == BASIS_MEASURED:
@@ -386,6 +394,39 @@ def _finalization(row: Mapping[str, Any]) -> Mapping[str, Any]:
     return found if isinstance(found, Mapping) else {}
 
 
+#: A `status` cell that carries no status. A pandas frame with no `status`
+#: column - `setup_scoreboard`'s, for one - yields NaN per row, and
+#: `str(float("nan"))` is `"nan"`, which must never be read as a status the
+#: registry has never seen.
+_BLANK_STATUS = frozenset({"", "nan", "none", "null", "<na>"})
+
+
+def _measured_number(value: Any) -> float | None:
+    """A finite number, or None. `inf` is a division that should not have run."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        value = text
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _shows_a_measured_close(row: Mapping[str, Any]) -> bool:
+    """Did this row record a close at all? `close_r` or `eod_close`, either."""
+    return any(
+        _measured_number(row.get(name)) is not None
+        for name in ("close_r", "eod_close")
+    )
+
+
 def terminal_kind(row: Mapping[str, Any] | None) -> str:
     """What this outcome row's finalization MEASURED - one of `TERMINAL_KINDS`.
 
@@ -397,13 +438,32 @@ def terminal_kind(row: Mapping[str, Any] | None) -> str:
       **never under `eod_hold`**, which it has no number for.
     * ``unmeasured`` - nothing was ever measured after the entry. Nothing about
       this row may be averaged.
-    * ``open`` - not a final row: the trade has no terminal statement yet.
+    * ``open`` - the row does not claim to be a final: no terminal statement.
 
-    Read the STATUS first, and the basis only when the status cannot answer:
-    the historical `unresolved` label is ambiguous and the current writer's is
-    not. A final row carrying a status this registry has never seen is
-    `unmeasured` - missing data is uncertainty, never confirmation (plan.md
-    sec 5).
+    Read the STATUS first and the basis only when the status cannot answer: the
+    historical `unresolved` label is ambiguous and the current writer's is not.
+    A final row carrying a status this registry has never seen is `unmeasured` -
+    missing data is uncertainty, never confirmation (plan.md sec 5). Measured
+    whole-file 2026-09-05, those are the **749** pre-R10.A schema-1 finals
+    (`stop_seen` 397, `target2_seen` 166, `complete` 129,
+    `stop_and_target2_seen` 57); see the M2 checkpoint entry, because `complete`
+    at least WAS a measured outcome and an all-history report will understate
+    `measured` by up to 749 until those four are classified.
+
+    **A row that claims to be `final` and carries neither a status nor a basis
+    is decided by whether it recorded a close** (reviewer advisory, 2026-09-05).
+    13,703 of the 14,863 `eod_complete` finals on the live file predate R10.A's
+    `finalization` block, and they arrive here status-less through
+    `setup_scoreboard`'s frames, which never load the `status` column. Reading
+    them as `open` would call a finished, measured trade unfinished - so a
+    numeric `close_r` or `eod_close` makes it `measured_eod` (all 13,703 have
+    one; **zero** do not), and the absence of both makes it `unmeasured`. It is
+    never `open`: the row said it was final. A row that never claims `final`
+    still is.
+
+    Note this reports what the FINALIZATION claimed, not whether the number is
+    usable: `setup_scoreboard.unsettled_close_mask` separately excludes the old
+    `close_r == 0 and eod_close == entry` sentinel from every `eod_hold` mean.
     """
     if not isinstance(row, Mapping):
         return TERMINAL_OPEN
@@ -411,26 +471,26 @@ def terminal_kind(row: Mapping[str, Any] | None) -> str:
     if event_type and event_type != "final":
         return TERMINAL_OPEN
     status = str(row.get("status") or "").strip().lower()
+    if status in _BLANK_STATUS:
+        status = ""
     if status in (STATUS_EOD_COMPLETE, STATUS_SWEPT_MEASURED):
         return TERMINAL_KIND_BY_STATUS[status]
-    if status and status != STATUS_UNRESOLVED and status != STATUS_OPEN:
+    if status == STATUS_OPEN:
+        return TERMINAL_OPEN
+    if status and status != STATUS_UNRESOLVED:
         return TERMINAL_UNMEASURED
     basis = str(_finalization(row).get("basis") or "").strip().lower()
-    if not basis:
-        # No status the registry knows and no basis either. `open` when the
-        # row never claimed to be final; otherwise there is genuinely nothing
-        # to read, and nothing to read is not a measurement.
-        return TERMINAL_OPEN if status != STATUS_UNRESOLVED else TERMINAL_UNMEASURED
-    # A row whose STATUS is blank but which is explicitly `final` and carries a
-    # basis is answered from the basis. `setup_scoreboard.OUTCOME_COLUMNS` does
-    # not read the `status` column at all - it has always worked off
-    # `finalization.basis` - so its frames arrive here status-less and must not
-    # read as `open`.
-    if basis == BASIS_MEASURED:
-        return TERMINAL_MEASURED_EOD
-    if basis in SWEPT_MEASURED_BASES:
-        return TERMINAL_MEASURED_SWEPT
-    return TERMINAL_UNMEASURED
+    if basis:
+        if basis == BASIS_MEASURED:
+            return TERMINAL_MEASURED_EOD
+        if basis in SWEPT_MEASURED_BASES:
+            return TERMINAL_MEASURED_SWEPT
+        return TERMINAL_UNMEASURED
+    if status == STATUS_UNRESOLVED:
+        return TERMINAL_UNMEASURED
+    if event_type == "final":
+        return TERMINAL_MEASURED_EOD if _shows_a_measured_close(row) else TERMINAL_UNMEASURED
+    return TERMINAL_OPEN
 
 
 def terminal_coverage(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
