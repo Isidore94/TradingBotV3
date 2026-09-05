@@ -73,6 +73,11 @@ BRIEF_STATUS_FAILED = "failed"
 #: ``failed`` symbol deliberately is not one: the next firing retries it.
 RESOLVED_BRIEF_STATUSES = frozenset({BRIEF_STATUS_BRIEFED, BRIEF_STATUS_MEMBERSHIP_ONLY})
 
+#: What a membership-only section leads with, ABOVE anything else in its block
+#: (Q3.3). The reason line was already printed; the prefix is what makes the
+#: status readable without counting back to the header.
+MEMBERSHIP_ONLY_PREFIX = "membership only - "
+
 #: A failure reason is a header line, not a stack trace. Long provider errors
 #: are cut here so the outcome stays readable on a phone.
 MAX_FAILURE_REASON_CHARS = 160
@@ -716,7 +721,15 @@ def _morning_section(entry: Mapping[str, Any]) -> str:
         # Deterministic, model-free, and deliberately one line: there was
         # nothing to narrate, and a paraphrase of "it is on a list" is the
         # class of output least likely to say anything (TB-2).
-        return f"{heading}\n{entry.get('reason') or 'no session evidence beyond membership'}\n"
+        #
+        # Q3.3: the line is PREFIXED so the reader of the file sees the status
+        # and not only the reason. There is no prose under it to confuse with a
+        # brief - a membership-only entry never reaches a model, so it carries
+        # no `result` - and a position claim is impossible here for the same
+        # reason, on top of the Q3.2 rule that would drop one anyway (a
+        # membership source is kind `watchlist`, never `journal`).
+        reason = str(entry.get("reason") or "no session evidence beyond membership")
+        return f"{heading}\n{MEMBERSHIP_ONLY_PREFIX}{reason}\n"
     result = entry.get("result") if isinstance(entry.get("result"), Mapping) else {}
     summary = result.get("summary") if isinstance(result.get("summary"), Mapping) else {}
     lines = [heading, str(summary.get("executive_summary") or "No supported finding.")]
@@ -760,7 +773,24 @@ def render_morning_file(
     generated = (generated_at or datetime.now().astimezone()).isoformat(timespec="seconds")
     resolved = len(briefs)
     requested = int(total) if total is not None else resolved + len(failures)
-    outcome = f"Briefed {resolved} of {requested}.{_failure_clause(failures)}"
+    # Q3.3: three counts, never one total. "Briefed 152 of 152" on 2026-09-03
+    # counted 40 symbols that were never analysed at all -- `resolved` is
+    # briefed PLUS membership-only, and a membership-only symbol got no model
+    # call, no evidence beyond a list it is on, and nothing that could be read
+    # as a finding. One number cannot say that, so it says three.
+    analyzed = sum(
+        1 for entry in briefs if str((entry or {}).get("status") or "") == BRIEF_STATUS_BRIEFED
+    )
+    membership_only = sum(
+        1
+        for entry in briefs
+        if str((entry or {}).get("status") or "") == BRIEF_STATUS_MEMBERSHIP_ONLY
+    )
+    outcome = (
+        f"Analyzed {analyzed} of {requested}. "
+        f"Membership-only {membership_only}. "
+        f"Failed {len(failures)}.{_failure_clause(failures)}"
+    )
     note_lines = "".join(f"{str(note).strip()}\n" for note in notes if str(note).strip())
     header = (
         "# LOCAL-AI MORNING TICKER BRIEFS — ADVISORY ONLY\n"

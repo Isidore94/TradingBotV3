@@ -23,6 +23,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from collections import deque
 from datetime import date, datetime
 from pathlib import Path
@@ -430,6 +431,21 @@ _SUMMARY_ITEM_SCHEMA = {
         "statement": {"type": "string"},
         "evidence_refs": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        # Q3.2: optional in the schema, REQUIRED by the validator on any
+        # statement that states a percentage, an N of M, an n=N or a decimal R.
+        # Optional here because most statements state no figure at all, and a
+        # schema that demanded one would make the model invent them.
+        "metric_ref": {
+            "type": "object",
+            "properties": {
+                "source_id": {"type": "string"},
+                "key": {"type": "string"},
+                "horizon": {"type": "string"},
+                "denominator": {"type": "string"},
+            },
+            "required": ["source_id", "key", "horizon", "denominator"],
+            "additionalProperties": False,
+        },
     },
     "required": ["statement", "evidence_refs", "confidence"],
     "additionalProperties": False,
@@ -1859,6 +1875,14 @@ def build_evidence_package(
         "schema_version": "ai_evidence_coverage_v1",
         "requested_session": session_text,
         "usable_source_ids": [str(source["source_id"]) for source in usable],
+        # Q3.1: what KIND of fact each usable source can support. Additive, and
+        # in the machine-owned coverage block rather than the model's view, so
+        # it reaches the published document and any later reader of the
+        # artifact without inviting the model to paraphrase it.
+        "source_kinds": {
+            str(source["source_id"]): kind_for_source_id(str(source["source_id"]))
+            for source in usable
+        },
         "excluded": [
             {
                 "source_id": str(source["source_id"]),
@@ -1966,6 +1990,229 @@ def has_usable_sources(evidence: Mapping[str, Any]) -> bool:
     return bool(usable_source_ids(evidence))
 
 
+#: What KIND of fact a source can support -- Q3.1, 2026-09-04.
+#:
+#: The validator used to ask only whether a cited id EXISTS, never whether it
+#: could support the kind of claim the sentence made. On 2026-09-03 the morning
+#: file called BULL "a held long" while citing watchlist membership: a true
+#: source, cited correctly, for a claim it cannot make. **A watchlist is a list
+#: of names; only the trade journal states a position.**
+#:
+#: One table, keyed by the id's FAMILY (the part before the first dot, plus the
+#: two membership-style ids that live inside a broader family). Every id a
+#: package can carry is here; an unknown family RAISES rather than defaulting,
+#: because a default is exactly the guess this table exists to remove.
+SOURCE_KIND_JOURNAL = "journal"
+SOURCE_KIND_WATCHLIST = "watchlist"
+SOURCE_KIND_SCANNER = "scanner"
+SOURCE_KIND_MARKET = "market"
+SOURCE_KIND_NARRATIVE = "narrative"
+SOURCE_KIND_FEEDBACK = "feedback"
+SOURCE_KIND_WALKAWAY = "walkaway"
+SOURCE_KIND_OPS = "ops"
+
+#: Ids that are MEMBERSHIP even though their family is something else.
+#: ``market.auto_state`` is the Auto Pilot state, whose content is the current
+#: watchlists and Focus lists; ``watchlists.membership`` is the ticker brief's
+#: own membership source (`ai_jobs/briefs.MEMBERSHIP_SOURCE_ID`). Both name
+#: lists a symbol is ON, which is not a position and not a measurement.
+MEMBERSHIP_SOURCE_IDS = frozenset({"market.auto_state", "watchlists.membership"})
+
+#: Family prefix -> kind. Families, not ids, so a source added to a scope keeps
+#: its kind without touching this table; a NEW family is a deliberate decision
+#: and shows up as a raise the first time it is built.
+SOURCE_KINDS_BY_FAMILY = {
+    # The only source that states a position, and the reason the table exists.
+    "journal": SOURCE_KIND_JOURNAL,
+    "watchlists": SOURCE_KIND_WATCHLIST,
+    "setups": SOURCE_KIND_SCANNER,
+    "setup_performance": SOURCE_KIND_SCANNER,
+    "forensics": SOURCE_KIND_SCANNER,
+    "outcomes": SOURCE_KIND_SCANNER,
+    "market": SOURCE_KIND_MARKET,
+    "daily": SOURCE_KIND_NARRATIVE,
+    "digest": SOURCE_KIND_NARRATIVE,
+    "analysis": SOURCE_KIND_NARRATIVE,
+    "feedback": SOURCE_KIND_FEEDBACK,
+    "judgement": SOURCE_KIND_FEEDBACK,
+    "review": SOURCE_KIND_FEEDBACK,
+    "walkaway": SOURCE_KIND_WALKAWAY,
+    "ops": SOURCE_KIND_OPS,
+}
+
+#: What an id whose family is not in the table reads as INSIDE the validator.
+#: :func:`kind_for_source_id` raises for it -- that is the packet's rule and how
+#: a new family gets noticed. The validator cannot raise, because the digest and
+#: the map-reduce reducer admit ``citable_aliases`` drawn from whatever
+#: provenance a fact pack happens to print, and a document must never be thrown
+#: away over a source_id's SPELLING. Reading unknown here is the conservative
+#: direction: unknown is not ``journal``, so an unknown source can never satisfy
+#: a position claim, and the row is dropped rather than published.
+SOURCE_KIND_UNKNOWN = "unknown"
+
+
+def kind_for_source_id(source_id: str) -> str:
+    """The kind of fact ``source_id`` can support. Raises if it is unknown."""
+    name = str(source_id or "").strip()
+    if name in MEMBERSHIP_SOURCE_IDS:
+        return SOURCE_KIND_WATCHLIST
+    family = name.split(".", 1)[0]
+    kind = SOURCE_KINDS_BY_FAMILY.get(family)
+    if kind is None:
+        raise ValueError(
+            f"{name!r} has no source kind: family {family!r} is not in "
+            "SOURCE_KINDS_BY_FAMILY. Add it there rather than defaulting -- a "
+            "default is the guess the table exists to remove."
+        )
+    return kind
+
+
+def _kind_or_unknown(source_id: str) -> str:
+    try:
+        return kind_for_source_id(source_id)
+    except ValueError:
+        return SOURCE_KIND_UNKNOWN
+
+
+def source_kinds(evidence: Mapping[str, Any]) -> dict[str, str]:
+    """``{source_id: kind}`` for every source in the package.
+
+    Sibling of :func:`usable_source_ids`, which is unchanged. This reads the
+    package's own ``sources`` list rather than that function's set, because the
+    set is widened by ``citable_aliases`` -- provenance strings printed inside a
+    fact pack, which are not sources this package assembled and whose families
+    the builder never chose.
+    """
+    return {
+        str(source.get("source_id")): kind_for_source_id(str(source.get("source_id")))
+        for source in evidence.get("sources") or []
+        if isinstance(source, Mapping) and source.get("source_id")
+    }
+
+
+#: The position vocabulary -- Q3.2, 2026-09-04. A SMALL LISTED set, not a
+#: cleverness: every phrase here asserts that a position is or was HELD, which
+#: only the trade journal can establish. Matched case-insensitively and on WORD
+#: BOUNDARIES, so "prolonged", "longshot" and "the longs watchlist" are prose
+#: about a name rather than a claim about an account.
+#:
+#: Deliberately NOT here: "long setup", "short candidate", "on the longs list".
+#: Those describe a direction or a membership, and the scanner and the
+#: watchlists establish both.
+POSITION_CLAIM_PATTERNS = (
+    r"held\s+long",
+    r"held\s+short",
+    r"holding",
+    r"long\s+position",
+    r"short\s+position",
+    r"currently\s+(?:long|short)",
+    r"we\s+are\s+(?:long|short)",
+    r"open\s+position",
+    r"in\s+a\s+position",
+)
+
+_POSITION_CLAIM_RE = re.compile(
+    r"\b(?:" + "|".join(POSITION_CLAIM_PATTERNS) + r")\b", re.IGNORECASE
+)
+
+#: What counts as STATING A NUMBER, in one constant so the rule can be read.
+#: Four shapes, all listed: a percentage, ``N of M``, ``n=N``, and a decimal R
+#: value. A bare integer is not here on purpose - "3 setups triggered" is a
+#: count the reader can check against the cited source, while "62%", "8 of 13",
+#: "n=37" and "1.8R" are DERIVED figures whose denominator and horizon the
+#: reader cannot recover from the sentence.
+NUMERIC_CLAIM_PATTERNS = (
+    r"\d+(?:\.\d+)?\s*%",
+    r"\b\d+\s+of\s+\d+\b",
+    r"\bn\s*=\s*\d+",
+    r"\b-?\d+\.\d+\s*R\b",
+    r"\bR\s*[:=]\s*-?\d+\.\d+",
+)
+
+_NUMERIC_CLAIM_RE = re.compile("|".join(NUMERIC_CLAIM_PATTERNS), re.IGNORECASE)
+
+#: The four fields a ``metric_ref`` must carry when one is present.
+METRIC_REF_FIELDS = ("source_id", "key", "horizon", "denominator")
+
+
+def states_a_position(statement: str) -> bool:
+    """True when the sentence asserts a HELD position (:data:`POSITION_CLAIM_PATTERNS`)."""
+    return bool(_POSITION_CLAIM_RE.search(str(statement or "")))
+
+
+def states_a_number(statement: str) -> bool:
+    """True when the sentence states a derived figure (:data:`NUMERIC_CLAIM_PATTERNS`)."""
+    return bool(_NUMERIC_CLAIM_RE.search(str(statement or "")))
+
+
+def _source_content(evidence: Mapping[str, Any], source_id: str) -> Any:
+    for source in evidence.get("sources") or []:
+        if isinstance(source, Mapping) and str(source.get("source_id")) == str(source_id):
+            return source.get("content")
+    return None
+
+
+def metric_key_exists(evidence: Mapping[str, Any], source_id: str, key: str) -> bool:
+    """Is ``key`` a cell a reader can find inside ``source_id``'s content?
+
+    Three answers count as yes, and nothing else does:
+
+    1. **A mapping key at any depth** -- a top-level key of a JSON source, or a
+       CSV/JSONL column name (every row is a mapping, so a column name is a
+       mapping key). The walk is depth- and width-bounded; a source's content is
+       already capped by the read budget, and an unbounded walk on the 762 MB
+       tracker extract is not something a validator may do.
+    2. **A row key** -- the value of the FIRST field of a row in a list-of-rows
+       content. ``master_avwap_setup_type_stats.csv`` is keyed by its first
+       column, so ``AVWAP_RECLAIM`` names a row the way ``win_rate`` names a
+       column, and a model citing either is pointing at a real cell.
+    3. **A literal occurrence in TEXT content** -- the narrative sources
+       (``daily.*``, the rendered reports) are prose with labelled figures, so
+       the label is the only handle there is. Case-insensitive substring.
+
+    A source that is missing, or whose content was dropped for staleness, has no
+    keys and answers False. That is the conservative direction: the row is
+    dropped rather than published.
+    """
+    wanted = str(key or "").strip()
+    if not wanted:
+        return False
+    content = _source_content(evidence, source_id)
+    if content is None:
+        return False
+    if isinstance(content, str):
+        return wanted.lower() in content.lower()
+
+    folded = wanted.casefold()
+    seen = 0
+
+    def walk(node: Any, depth: int) -> bool:
+        nonlocal seen
+        if depth > 6 or seen > 20000:
+            return False
+        if isinstance(node, Mapping):
+            for name, value in node.items():
+                seen += 1
+                if str(name).casefold() == folded:
+                    return True
+                if walk(value, depth + 1):
+                    return True
+            return False
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                seen += 1
+                if isinstance(item, Mapping):
+                    first = next(iter(item.values()), None)
+                    if first is not None and str(first).casefold() == folded:
+                        return True
+                if walk(item, depth + 1):
+                    return True
+            return False
+        return False
+
+    return walk(content, 0)
+
+
 def _system_instruction() -> str:
     return (
         "You are an evidence-review assistant for a decision-support trading scanner and journal. "
@@ -1989,12 +2236,33 @@ COVERAGE_PROMPT_LINE = (
 )
 
 
+#: The two grounding sentences (Q3.2, 2026-09-04). Told to the model as well as
+#: enforced by the validator: a rule the model never hears costs a whole row
+#: every night for no reason, and the retry's fed-back error is a worse teacher
+#: than the instruction.
+GROUNDING_PROMPT_LINES = (
+    "A watchlist, a scanner file and a market snapshot say what a symbol IS or DID; only "
+    "the trade journal (source ids beginning 'journal.') says what is HELD. Do not write "
+    "'held long', 'holding', 'we are long/short', 'open position' or 'in a position' about "
+    "any symbol unless the same statement cites a 'journal.' source; a statement that does "
+    "will be discarded.\n"
+    "Any statement that states a percentage, an 'N of M', an 'n=N' or a decimal R value must "
+    "also carry a metric_ref object {source_id, key, horizon, denominator}: the source_id must "
+    "be one of that statement's own evidence_refs, the key must be a column, top-level field or "
+    "row name that really appears in that source, and horizon and denominator must say over what "
+    "period and out of what population the figure was measured. A numeric statement without a "
+    "resolvable metric_ref will be discarded."
+)
+
+
 def _user_prompt(evidence: Mapping[str, Any]) -> str:
     return (
         "Review the selected scopes. Summarize what is working, what is failing, the strongest already-qualified "
         "candidates (if any), lessons for tomorrow, data-quality gaps, and risks. Separate measured outcomes from "
         "hypotheses. Return only the required JSON object.\n"
         + COVERAGE_PROMPT_LINE
+        + "\n"
+        + GROUNDING_PROMPT_LINES
         + "\n\nEVIDENCE PACKAGE:\n"
         + json.dumps(_model_visible_package(evidence), sort_keys=True, default=str)
     )
@@ -2232,6 +2500,29 @@ def _parse_json_text(text: str) -> dict[str, Any]:
     return value
 
 
+def _metric_ref_failure(
+    metric_ref: Any, surviving_refs: Sequence[str], evidence: Mapping[str, Any]
+) -> str:
+    """``""`` when the ref resolves, else why it does not (Q3.2).
+
+    Every condition is checkable from the package alone, which is the point: a
+    figure whose source, cell, horizon and denominator cannot all be named is a
+    figure nobody can audit, and the desk publishes no such number.
+    """
+    if not isinstance(metric_ref, Mapping):
+        return "no metric_ref"
+    missing = [field for field in METRIC_REF_FIELDS if not str(metric_ref.get(field) or "").strip()]
+    if missing:
+        return f"metric_ref is missing {', '.join(missing)}"
+    source_id = str(metric_ref.get("source_id")).strip()
+    if source_id not in set(surviving_refs):
+        return f"metric_ref cites {source_id}, which is not one of this row's surviving refs"
+    key = str(metric_ref.get("key")).strip()
+    if not metric_key_exists(evidence, source_id, key):
+        return f"metric_ref key {key!r} is not in {source_id}"
+    return ""
+
+
 def validate_ai_summary(
     payload: Mapping[str, Any],
     evidence: Mapping[str, Any],
@@ -2304,7 +2595,14 @@ def validate_ai_summary(
             raise ValueError(f"{section} must be an array")
         normalized_rows = []
         for index, row in enumerate(rows[:50]):
-            if not isinstance(row, Mapping) or set(row) != {"statement", "evidence_refs", "confidence"}:
+            # ``metric_ref`` is the one OPTIONAL key (Q3.2). Everything else is
+            # still exact: an unexpected key is a provider answering a
+            # different contract, which is a malformed document.
+            if (
+                not isinstance(row, Mapping)
+                or not {"statement", "evidence_refs", "confidence"} <= set(row)
+                or set(row) - {"statement", "evidence_refs", "confidence", "metric_ref"}
+            ):
                 raise ValueError(f"{section}[{index}] has an invalid shape")
             statement = str(row.get("statement") or "").strip()
             refs = row.get("evidence_refs")
@@ -2350,11 +2648,61 @@ def validate_ai_summary(
                         }
                     )
                 continue
+            # Q3.2, rule one: a POSITION claim needs a POSITION source.
+            # Applies to every section, ``data_quality`` and ``risk_notes``
+            # included -- those are exempt from CITATION, not from asserting a
+            # position they cannot support. The row is omitted, never softened:
+            # rewriting a model's sentence into something defensible is the
+            # desk deciding what the model meant.
+            if states_a_position(statement) and not any(
+                _kind_or_unknown(ref) == SOURCE_KIND_JOURNAL for ref in clean_refs
+            ):
+                sink.append(
+                    {
+                        "section": section,
+                        "index": index,
+                        "statement": statement,
+                        "struck_refs": [],
+                        "detail": "position claim without a journal source",
+                        "row_dropped": True,
+                    }
+                )
+                continue
+
+            # Q3.2, rule two: a NUMERIC claim names the cell it read. Scoped to
+            # rows that must cite, because a ``metric_ref``'s source_id has to
+            # be one of the row's surviving refs and the two exempt sections
+            # deliberately have none -- the system's own
+            # "[system] Evidence coverage: 3 of 3" is exactly that shape.
+            metric_ref = row.get("metric_ref")
+            if must_cite and states_a_number(statement):
+                detail = _metric_ref_failure(metric_ref, clean_refs, evidence)
+                if detail:
+                    sink.append(
+                        {
+                            "section": section,
+                            "index": index,
+                            "statement": statement,
+                            "struck_refs": [],
+                            "detail": "numeric claim without a resolvable metric_ref",
+                            "reason": detail,
+                            "row_dropped": True,
+                        }
+                    )
+                    continue
+
             if must_cite:
                 rows_kept_with_citation += 1
-            normalized_rows.append(
-                {"statement": statement, "evidence_refs": clean_refs, "confidence": confidence}
-            )
+            normalized_row = {
+                "statement": statement,
+                "evidence_refs": clean_refs,
+                "confidence": confidence,
+            }
+            if isinstance(metric_ref, Mapping):
+                normalized_row["metric_ref"] = {
+                    field: str(metric_ref.get(field) or "").strip() for field in METRIC_REF_FIELDS
+                }
+            normalized_rows.append(normalized_row)
         normalized[section] = normalized_rows
     if rows_needing_citation and not rows_kept_with_citation:
         detail = "; ".join(

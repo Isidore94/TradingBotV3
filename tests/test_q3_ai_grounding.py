@@ -430,9 +430,9 @@ def test_a_membership_only_section_leads_with_its_reason_line():
         SESSION, [_entry("BULL", briefs.BRIEF_STATUS_MEMBERSHIP_ONLY)], total=1
     )
 
-    block = text.split("## BULL")[1]
-    first_line = [line for line in block.splitlines() if line.strip()][0]
-    assert first_line.startswith("membership only - no session evidence beyond")
+    lines = [line for line in text.splitlines() if line.strip()]
+    heading = next(index for index, line in enumerate(lines) if line.startswith("## BULL"))
+    assert lines[heading + 1].startswith("membership only - no session evidence beyond")
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +494,9 @@ def test_the_audit_scripts_count_through_the_production_reader():
     """Neither script may reach for a field name of its own again."""
     for name in ("lake_assessment.py", "lake_likes_and_details.py"):
         text = (ROOT_DIR / "docs" / "analysis" / "scripts" / name).read_text(encoding="utf-8")
-        assert "like_links" in text, name
+        assert "like_links.basis_of" in text, name
+        # The field is `match_basis`; the default is what made a rename read as
+        # a fact about the lake.
         assert 'get("basis"' not in text, name
-        assert '"unknown"' not in text, name
+        assert '"basis", "unknown"' not in text, name
+        assert "AUDIT ERROR" in text, name

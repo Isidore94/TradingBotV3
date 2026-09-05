@@ -25,7 +25,7 @@ from research_warehouse.outcomes import (
     TERMINAL_RESULT_STATES, latest_outcomes,
 )
 from research_warehouse.occurrences import latest_occurrences
-from research_warehouse import outcome_coverage, trial_ledger
+from research_warehouse import like_links, outcome_coverage, trial_ledger
 from evidence_stats import (
     MIN_REPORTABLE_N, lately_window,
 )
@@ -468,32 +468,35 @@ results["Q5"] = q5
 
 print("\n=== Q6: Likes ===")
 q6 = {}
-try:
-    like_table = store.read_table("like_occurrence_link", "month=2026-08")
-    like_rows_08 = like_table.to_pylist()
-except Exception:
-    like_rows_08 = []
-try:
-    like_table = store.read_table("like_occurrence_link", "month=2026-09")
-    like_rows_09 = like_table.to_pylist()
-except Exception:
-    like_rows_09 = []
-like_rows = like_rows_08 + like_rows_09
+# The dataset is `bronze_like_occurrence_link` (`schemas.bronze_dataset_name`);
+# this block read the unprefixed name, so both reads raised and the audit
+# counted zero links. Q3.4, 2026-09-04.
+like_rows = []
+for _part in ("month=2026-08", "month=2026-09"):
+    try:
+        like_rows.extend(store.read_table("bronze_like_occurrence_link", _part).to_pylist())
+    except Exception:
+        pass
 q6["total_like_links"] = len(like_rows)
 
-# Parse basis
+# The basis field is `match_basis`, read through the production reader
+# (`like_links.basis_of`). Reaching for `payload["basis"]` with a default is
+# what made every link on the lake read as `unknown`; an unreadable payload is
+# an audit error that stops the script with the row printed, not a bucket.
 basis_counts = Counter()
 for row in like_rows:
     payload = row.get("payload", "")
     if isinstance(payload, str):
         try:
             p = json.loads(payload)
-        except Exception:
-            p = {}
+        except Exception as exc:
+            raise SystemExit(f"AUDIT ERROR: undecodable like-link payload: {row!r} ({exc})")
     else:
-        p = payload or {}
-    basis = p.get("basis", "unknown")
-    basis_counts[basis] += 1
+        p = payload
+    try:
+        basis_counts[like_links.basis_of(p)] += 1
+    except ValueError as exc:
+        raise SystemExit(f"AUDIT ERROR: unreadable like-link payload: {row!r} ({exc})")
 
 q6["basis_distribution"] = dict(basis_counts)
 linked = sum(v for k, v in basis_counts.items() if k != "none")
