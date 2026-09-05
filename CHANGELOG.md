@@ -808,6 +808,29 @@ which is evidence and must not be loaded as context.
   completions resume on a read-stamp-independent evidence key, the morning file is
   republished after every resolved symbol, and the slot spends at most three attempts
   a session.
+- **The local AI cannot change a fact's meaning** (Q3, 2026-09-04,
+  `docs/LOCAL_AI_AUTOMATION_PLAN.md` §9). Every source in an evidence package carries
+  a KIND (`ai_summary.SOURCE_KINDS_BY_FAMILY`: `journal` / `watchlist` / `scanner` /
+  `market` / `narrative` / `feedback` / `walkaway` / `ops`); an unknown family
+  **raises** rather than defaulting, and `coverage.source_kinds` publishes the map.
+  `market.auto_state` and `watchlists.membership` are `watchlist` despite their
+  family, because their content is a list of names. **A statement that asserts a HELD
+  position is DROPPED unless a `journal` source is among its surviving refs** - the
+  2026-09-03 morning file called BULL a held long while citing watchlist membership.
+  **A statement stating a percentage, an `N of M`, an `n=N` or a decimal R must carry
+  a resolvable `metric_ref` `{source_id, key, horizon, denominator}`** whose source is
+  one of its own refs and whose key really exists in that source
+  (`metric_key_exists`: a mapping key at any depth, a first-column row key, or a
+  literal occurrence in text content). Both rules DROP THE ROW and never rewrite it;
+  the 2026-08-28 rule stands, so the document still publishes and one supported by
+  nothing still raises. `metric_ref` is the one optional key in the row shape and in
+  `AI_SUMMARY_JSON_SCHEMA`; `GROUNDING_PROMPT_LINES` tells the model both rules.
+  `validate_ai_summary` is the ONLY validator - the ticker briefs reach it through
+  `request_ai_summary`, so there is no second implementation to drift.
+- **The morning file publishes three counts, never one total** (Q3, 2026-09-04).
+  `render_morning_file` prints `Analyzed A of N. Membership-only B. Failed C.`;
+  `Briefed 152 of 152` on 2026-09-03 counted 40 symbols that never reached a model at
+  all. Each membership-only block leads with `membership only - <reason>`.
 - Local-AI Phase 0 is complete. Phase 1 implementation is complete; its five-session
   unattended live gate remains in `plan.md`.
 
@@ -1002,6 +1025,70 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-04 - Q3: typed sources, a position claim needs a position source, honest brief counts, one reader for `match_basis`
+
+Trader authorization, 2026-09-04: *"please review and implement the suggested
+changes"* over `docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md` findings 4 and 5.
+Branch `claude/q3-ai-grounding`. Advisory-only: no detector, score, watchlist, alert
+or bot state is touched, and no test calls a model. Contract in
+`docs/LOCAL_AI_AUTOMATION_PLAN.md` §9.
+
+**Sources carry a kind.** `validate_ai_summary` checked that a cited id EXISTS and
+never that it could support the KIND of claim the sentence made - which is how the
+2026-09-03 morning file called BULL "a held long" while citing watchlist membership,
+a real source cited correctly for a claim it cannot make.
+`ai_summary.SOURCE_KINDS_BY_FAMILY` maps every id family the package builder can
+produce to `journal` / `watchlist` / `scanner` / `market` / `narrative` / `feedback` /
+`walkaway` / `ops`; `kind_for_source_id` RAISES on an unknown family rather than
+defaulting, `source_kinds(evidence)` returns the map, `usable_source_ids` is
+unchanged, and `coverage.source_kinds` is additive. `market.auto_state` and
+`watchlists.membership` are `watchlist` despite their family, because their content is
+a list of names.
+
+**A position claim needs a position source.** A statement matching
+`POSITION_CLAIM_PATTERNS` - a listed, word-bounded, case-insensitive vocabulary - is
+dropped unless a `journal`-kind source is among its surviving refs, with
+`detail: "position claim without a journal source"`. `data_quality` and `risk_notes`
+stay exempt from CITATION and are NOT exempt from this.
+
+**A numeric claim names its cell.** A statement stating a percentage, an `N of M`, an
+`n=N` or a decimal R must carry a `metric_ref` `{source_id, key, horizon,
+denominator}` whose source is one of its own surviving refs and whose key really
+exists in that source (`metric_key_exists`: a mapping key at any depth, the value of
+a row's first field, or a literal occurrence in text content); otherwise the row is
+dropped with `detail: "numeric claim without a resolvable metric_ref"`. `metric_ref`
+is the one optional key in the row shape and in `AI_SUMMARY_JSON_SCHEMA`; the numeric
+rule is scoped to rows that must cite, because the two exempt sections carry no refs
+for a `metric_ref` to name. `GROUNDING_PROMPT_LINES` states both rules to the model.
+Both rules DROP THE ROW and never rewrite it - the 2026-08-28 rule stands, the
+document still publishes, and a document supported by nothing still raises.
+`validate_ai_summary` is the ONLY validator: `validate_published_summary` delegates to
+it and the ticker briefs reach it through `request_ai_summary`.
+
+**Three counts, never one total.** `render_morning_file` printed
+`Briefed {len(briefs)} of {total}`, and `briefs` is briefed PLUS membership-only - so
+2026-09-03 read "Briefed 152 of 152" while 40 of those symbols got no model call and
+no evidence beyond a list they were on. It now prints
+`Analyzed A of N. Membership-only B. Failed C.`, and each membership-only block leads
+with `membership only - <reason>`. Six `Briefed N of M.` assertions in
+`tests/test_ai_ticker_briefs.py` were updated; one of them (`Briefed 2 of 2` with one
+membership-only symbol) is the exact defect.
+
+**One reader for `match_basis`.** `LikeLink.as_payload` had no inverse, so both lake
+audit scripts reached for `payload["basis"]` with a default of `"unknown"` and
+reported every link on the lake as unknown; `lake_assessment.py` additionally read the
+unprefixed dataset name (`like_occurrence_link`, not `bronze_like_occurrence_link`),
+so its like block counted zero. `LikeLink.from_payload` is strict in both directions -
+a MISSING key and an UNKNOWN key both raise, naming the key - with `basis_of` and
+`count_payload_bases` beside it, and both scripts read through them; an unreadable
+payload is an audit error that stops the script with the offending row printed, never
+a bucket. Re-read of the live lake through the fixed reader (read-only): **84 link
+versions over 77 distinct event ids; by version 48 `any_family` + 36 `none`, by
+distinct event id 41 `any_family` + 36 `none`, and zero `exact_family` either way** -
+which reconciles exactly with the review's 84 / 77 / 41 / 36.
+
+Live gate **#62** owed at merge (see `CURRENT_CHECKPOINT.md`).
 
 ### 2026-09-04 - Project process review and evidence-note corrections
 
