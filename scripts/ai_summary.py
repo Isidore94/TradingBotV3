@@ -121,12 +121,38 @@ LOCAL_EVIDENCE_BUDGET_SETTING_KEY = "ai_local_evidence_budget_chars"
 #: own model to 65536 on 2026-08-28 and set this to match.
 LOCAL_CONTEXT_SETTING_KEY = "ai_local_context_tokens"
 DEFAULT_LOCAL_CONTEXT_TOKENS = 12_288
-#: `max_tokens` every local request sends. It comes out of the same window as
-#: the prompt, so it is subtracted before any of it is offered to evidence.
+#: `max_tokens` a local MAP request sends -- a single-shot summary or one slice
+#: of the map-reduce. It comes out of the same window as the prompt, so it is
+#: subtracted before any of it is offered to evidence, and it is THIS cap that
+#: `local_evidence_budget_ceiling_chars` subtracts.
 #: (There was a `LOCAL_SCAFFOLD_TOKENS = 1000` here until 2026-08-28. It was a
 #: guess, and a 13x-too-small one: the real envelope is measured in
 #: `_BUDGET_PROMPT_OVERHEAD` and scales with the package instead.)
-LOCAL_GENERATION_TOKENS = 3_500
+LOCAL_MAP_GENERATION_TOKENS = 3_500
+#: `max_tokens` the map-reduce SYNTHESIS (reduce) request sends -- packet N2,
+#: 2026-09-05. Two nights of four published UNSYNTHESIZED because the reduce
+#: answer stopped mid-string at ~14,500 characters, which is 3,500 tokens at the
+#: measured ~4.2 chars/token of dense JSON: the one shared cap was the ceiling,
+#: not a malformed model. The reduce prompt is the model's own FINDINGS rather
+#: than raw evidence -- a few tens of KB against a 65,536-token window -- so 8k
+#: of output sits beside it comfortably. **The evidence budget keeps subtracting
+#: the MAP cap and not this one**: widening what the synthesis may WRITE must
+#: never narrow what a map slice is allowed to READ.
+LOCAL_SYNTHESIS_GENERATION_TOKENS = 8_000
+#: Kept as the map cap's name because it is the one every other module and test
+#: already imports (`local_evidence_budget_ceiling_chars`,
+#: `DEFAULT_LOCAL_EVIDENCE_BUDGET_CHARS`, `tests/test_local_ai_provider.py`).
+#: An alias, never a third number.
+LOCAL_GENERATION_TOKENS = LOCAL_MAP_GENERATION_TOKENS
+#: The scope name `ai_jobs.map_reduce.findings_package` stamps on the reduce
+#: package. Restated here rather than imported so `ai_summary` keeps no import
+#: of `ai_jobs`; `tests/test_n2_synthesis_cap.py` pins the two against a real
+#: `run_map_reduce` call, so they cannot drift apart silently.
+LOCAL_SYNTHESIS_SCOPE = "map_reduce_synthesis"
+#: How many findings per section the ONE length-stop retry asks for. Not a
+#: schema limit -- the validator is unchanged -- just the instruction that makes
+#: the second answer fit where the first did not.
+LOCAL_SHORTER_RETRY_FINDINGS_PER_SECTION = 8
 #: Chars per token used to size the BUDGET, and deliberately NOT the same
 #: constant as `_ESTIMATED_CHARS_PER_TOKEN`. The two are conservative in
 #: OPPOSITE directions and must never be merged: sizing a budget safely means
@@ -2122,7 +2148,13 @@ POSITION_CLAIM_PATTERNS = (
     r"holding",
     r"long\s+position",
     r"short\s+position",
-    r"currently\s+(?:long|short)",
+    # The `(?:ed)?` is load-bearing: the whole alternation is wrapped in
+    # `\b(?:...)\b`, so "currently short" inside "currently shorted" has no
+    # trailing word boundary and the pattern missed entirely. "APPS is currently
+    # shorted" reached `ai_morning_brief.txt` on 2026-09-05 (packet N2 item 4).
+    # "currently shorting" still misses, and should: neither "ed" nor a boundary
+    # follows.
+    r"currently\s+(?:long|short)(?:ed)?",
     r"we\s+are\s+(?:long|short)",
     r"open\s+position",
     r"in\s+a\s+position",
@@ -3049,6 +3081,82 @@ def degraded_result(
     }
 
 
+class LocalOutputLengthError(RuntimeError):
+    """The local model's answer was CUT because it hit ``max_tokens``.
+
+    A subclass of :class:`RuntimeError` so every existing ``except Exception``
+    and ``pytest.raises(RuntimeError)`` around this path behaves exactly as it
+    did; what it adds is :attr:`stop_reason`, so a caller can record WHY the
+    document is missing instead of re-deriving it from the message text. The
+    2026-09-03 and 2026-09-05 nightly runs both reported ``Unterminated string
+    starting at: line 1 column 14502/14709``, which sent the reader looking for
+    a malformed model rather than a ceiling.
+    """
+
+    def __init__(self, message: str, *, stop_reason: str = "length") -> None:
+        super().__init__(message)
+        self.stop_reason = str(stop_reason or "")
+
+
+def local_generation_tokens(evidence: Mapping[str, Any] | None = None) -> int:
+    """The ``max_tokens`` a local request sends for THIS evidence package.
+
+    Two caps, not one (packet N2). The map-reduce reduce package is the only
+    thing that needs the larger one, and it names itself: ``findings_package``
+    stamps ``selected_scopes: ["map_reduce_synthesis"]`` on it. Detected from
+    the package rather than passed down through ``request_ai_summary`` so that
+    every caller of the local path -- the runner, the map-reduce, the research
+    narration -- gets the right cap without a new keyword each.
+    """
+    scopes = (evidence or {}).get("selected_scopes") if isinstance(evidence, Mapping) else None
+    if isinstance(scopes, (list, tuple, set)):
+        if LOCAL_SYNTHESIS_SCOPE in {str(scope) for scope in scopes}:
+            return LOCAL_SYNTHESIS_GENERATION_TOKENS
+    return LOCAL_MAP_GENERATION_TOKENS
+
+
+def _length_stop_reason(body: Mapping[str, Any]) -> str:
+    """The stop reason when the server says the answer was cut, else ``""``.
+
+    Two dialects, both read: ``choices[0].finish_reason`` is where every
+    OpenAI-compatible server (llama.cpp, vLLM, Ollama's ``/v1`` shim) puts it,
+    and ``done_reason`` at the top level is Ollama's native field. Only a LENGTH
+    stop is reported -- a clean ``stop`` reads ``""`` -- because the one thing a
+    caller does with this is decide not to parse.
+    """
+    choices = body.get("choices") if isinstance(body, Mapping) else None
+    if isinstance(choices, (list, tuple)) and choices:
+        first = choices[0]
+        if isinstance(first, Mapping):
+            reason = str(first.get("finish_reason") or "").strip().lower()
+            if reason == "length":
+                return "length"
+    done = str(body.get("done_reason") or "").strip().lower() if isinstance(body, Mapping) else ""
+    if done == "length":
+        return "length"
+    return ""
+
+
+def _shorter_output_note() -> str:
+    """The ONE retry a length stop earns: the same question, asked smaller.
+
+    Deliberately not ``_correction_note``. A length cut is not malformed output
+    the model can repair, and feeding the validator's complaint back appends
+    MORE prompt against the SAME ceiling -- which is exactly what the 2026-09-03
+    and 2026-09-05 runs did, twice, for about seven minutes of generation each.
+    """
+    return (
+        "\n\nYOUR PREVIOUS ANSWER WAS CUT OFF BEFORE IT FINISHED because it was "
+        "too long for the output budget. It stopped mid-sentence and could not "
+        "be read at all. Answer the SAME question again, but shorter: return at "
+        f"most {LOCAL_SHORTER_RETRY_FINDINGS_PER_SECTION} findings per section, "
+        "keeping the most specific and best-supported ones and dropping the "
+        "rest; keep every statement to one or two sentences. Returning fewer "
+        "complete findings is correct; returning more and being cut off again "
+        "is not."
+    )
+
+
 def _request_local_summary(
     *,
     model: str,
@@ -3057,7 +3165,7 @@ def _request_local_summary(
     timeout_seconds: int,
     post,
     previous_error: str = "",
-) -> tuple[Mapping[str, Any], dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[Mapping[str, Any], dict[str, Any], list[dict[str, Any]], str]:
     """One local chat-completions call, validated the same way as the cloud.
 
     A local server is not assumed to honour ``response_format`` json-schema, so
@@ -3065,6 +3173,11 @@ def _request_local_summary(
     anywhere: by validating the returned text against ``AI_SUMMARY_JSON_SCHEMA``
     through the shared ``validate_ai_summary``. Evidence references are checked
     identically, so a local model can no more invent a source than a cloud one.
+
+    Returns ``(body, summary, drops, length_retry)``. ``length_retry`` is
+    ``"shorter"`` when the answer was cut once and the shorter-output retry got
+    a whole document, and ``""`` otherwise -- so a caller can say in its
+    manifest that the document it published is the smaller one.
     """
     base_url = local_endpoint_url()
     if not base_url:
@@ -3079,7 +3192,9 @@ def _request_local_summary(
             {"role": "system", "content": _system_instruction()},
             {"role": "user", "content": _local_user_prompt(evidence, previous_error)},
         ],
-        "max_tokens": 3500,
+        # Two caps (packet N2): the reduce package asks for the synthesis one,
+        # everything else keeps the map cap the evidence budget is sized against.
+        "max_tokens": local_generation_tokens(evidence),
         # Advisory output that gets re-read and audited should not wander
         # between runs over the same evidence.
         "temperature": 0,
@@ -3098,6 +3213,11 @@ def _request_local_summary(
         },
     }
     last_error: Exception | None = None
+    #: Whether the ONE shorter-output retry has already been spent, and how many
+    #: answers were cut. Kept apart from `attempt` because a length stop and a
+    #: validation rejection are different failures that share the same budget.
+    retried_shorter = False
+    length_stops = 0
     for attempt in range(LOCAL_JSON_RETRIES + 1):
         try:
             response = post(
@@ -3135,13 +3255,37 @@ def _request_local_summary(
         truncated = _prompt_truncation_error(payload, body)
         if truncated:
             raise RuntimeError(truncated)
+        # Checked BEFORE the text is parsed (packet N2). A cut answer is a valid
+        # JSON prefix that simply stops, so the parser's complaint is
+        # "Unterminated string starting at: line 1 column 14709" -- true, and a
+        # description of the wrong problem. The retry a length stop earns is a
+        # SHORTER question, never the identical one with the rejection appended.
+        stop_reason = _length_stop_reason(body)
+        if stop_reason:
+            length_stops += 1
+            if retried_shorter or attempt >= LOCAL_JSON_RETRIES:
+                raise LocalOutputLengthError(
+                    "local provider's answer was cut: it stopped for "
+                    f"{stop_reason} "
+                    + ("twice" if length_stops >= 2 else "once")
+                    + f" over {attempt + 1} attempt(s), so no document was parsed. "
+                    "The output cap "
+                    f"({payload.get('max_tokens')} tokens) is the ceiling, not the "
+                    "model -- raise it or ask for fewer findings.",
+                    stop_reason=stop_reason,
+                )
+            retried_shorter = True
+            payload["messages"][1]["content"] = (
+                _local_user_prompt(evidence, previous_error) + _shorter_output_note()
+            )
+            continue
         text = _extract_chat_completion_text(body)
         if not text:
             raise RuntimeError("local provider returned no text content")
         try:
             drops: list[dict[str, Any]] = []
             summary = validate_ai_summary(_parse_json_text(text), evidence, dropped=drops)
-            return body, summary, drops
+            return body, summary, drops, "shorter" if retried_shorter else ""
         except (ValueError, json.JSONDecodeError) as exc:
             # Only malformed output is worth retrying, and only once -- and the
             # retry now carries the exact rejection back to the model rather
@@ -3181,7 +3325,7 @@ def request_ai_summary(
         raise ValueError("provider API key is missing")
     started = datetime.now().astimezone()
     if normalized_provider == "local":
-        body, summary, drops = _request_local_summary(
+        body, summary, drops, length_retry = _request_local_summary(
             model=selected_model,
             api_key=key,
             evidence=evidence,
@@ -3209,6 +3353,11 @@ def request_ai_summary(
             # Empty on a clean answer; never absent, so a reader can tell "no
             # drops" from "this build did not measure drops".
             "citation_drops": drops,
+            # "shorter" when this document is the second, smaller answer after a
+            # length stop; "" otherwise. LOCAL ONLY -- the cloud providers do
+            # not go through this retry, and adding a key to their envelopes
+            # would say something was measured there that was not.
+            "length_retry": length_retry,
         }
     if normalized_provider == "openai":
         response = post(

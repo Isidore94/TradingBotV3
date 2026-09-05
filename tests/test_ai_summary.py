@@ -287,6 +287,52 @@ def test_provider_requests_use_current_structured_output_contracts(provider, tmp
         assert kwargs["headers"]["x-api-key"] == "super-secret"
 
 
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+def test_the_cloud_output_caps_are_untouched_by_the_local_two_cap_split(provider, tmp_path):
+    """Packet N2 item 1 changed ONE literal, and it is the local one.
+
+    ``ai_summary.py`` sends 3,500 in three places: the local chat-completions
+    payload, OpenAI's ``max_output_tokens`` and Anthropic's ``max_tokens``. Only
+    the first shares a window with the evidence budget and only the first
+    sheared the synthesis, so the other two stay exactly as they were - and they
+    stay 3,500 even for the reduce package, which is why this drives the reduce
+    scope through both cloud branches.
+    """
+    from ai_summary import LOCAL_SYNTHESIS_SCOPE, build_evidence_package, request_ai_summary
+
+    evidence = dict(build_evidence_package(["daily_report"], source_overrides=_daily_overrides(tmp_path)))
+    evidence["selected_scopes"] = [LOCAL_SYNTHESIS_SCOPE]
+    summary_text = json.dumps(_valid_summary("daily.auto_report"))
+    sent = []
+
+    def fake_post(url, **kwargs):
+        sent.append(kwargs["json"])
+        if provider == "openai":
+            return _Response(
+                {
+                    "id": "resp-openai",
+                    "output": [
+                        {"type": "message", "content": [{"type": "output_text", "text": summary_text}]}
+                    ],
+                }
+            )
+        return _Response({"id": "msg-anthropic", "content": [{"type": "text", "text": summary_text}]})
+
+    result = request_ai_summary(
+        provider=provider,
+        model="test-model",
+        api_key="k",
+        evidence=evidence,
+        post=fake_post,
+    )
+
+    key = "max_output_tokens" if provider == "openai" else "max_tokens"
+    assert sent[0][key] == 3500
+    # The local-only retry field must not appear on a cloud envelope: it would
+    # claim a measurement that path never makes.
+    assert "length_retry" not in result
+
+
 def test_validated_export_contains_manifest_and_no_secret(tmp_path):
     from ai_summary import build_evidence_package, export_ai_summary
 
