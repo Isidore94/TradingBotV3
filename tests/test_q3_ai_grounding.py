@@ -295,6 +295,96 @@ def test_the_position_vocabulary_is_word_bounded_and_case_insensitive():
     assert not states_a_position("BULL is on the longs watchlist")
 
 
+def test_an_executive_summary_that_asserts_a_position_is_withheld():
+    """It carries no refs, so it can never support a position claim.
+
+    480 of 1,478 published executive summaries assert one; the brief the packet
+    cites opens "BULL is currently long...". A sentence with nowhere to cite
+    from cannot be repaired by striking a ref, so the whole summary is replaced
+    with the system's own sentence and the substitution is recorded.
+    """
+    from ai_summary import WITHHELD_EXECUTIVE_SUMMARY, validate_ai_summary
+
+    evidence = _package([_watchlist_source(), _stats_source()])
+    payload = _summary(
+        [
+            {
+                "statement": "The reclaim family leads the board.",
+                "evidence_refs": ["setups.type_stats"],
+                "confidence": "medium",
+            }
+        ]
+    )
+    payload["executive_summary"] = "BULL is currently long and working well."
+
+    dropped: list[dict] = []
+    normalized = validate_ai_summary(payload, evidence, dropped=dropped)
+
+    assert normalized["executive_summary"] == WITHHELD_EXECUTIVE_SUMMARY
+    assert WITHHELD_EXECUTIVE_SUMMARY.startswith("Executive summary withheld:")
+    # The document still publishes on its surviving rows.
+    assert [row["statement"] for row in normalized["what_is_working"]] == [
+        "The reclaim family leads the board."
+    ]
+    entry = next(item for item in dropped if item["section"] == "executive_summary")
+    assert entry["detail"] == "position claim in the executive summary"
+    assert entry["row_dropped"] is True
+    assert entry["statement"] == "BULL is currently long and working well."
+
+
+def test_an_executive_summary_that_states_no_position_is_untouched():
+    from ai_summary import validate_ai_summary
+
+    evidence = _package([_stats_source()])
+    payload = _summary(
+        [
+            {
+                "statement": "The reclaim family leads the board.",
+                "evidence_refs": ["setups.type_stats"],
+                "confidence": "medium",
+            }
+        ]
+    )
+    payload["executive_summary"] = "BULL is on the longs watchlist and set up well."
+
+    dropped: list[dict] = []
+    normalized = validate_ai_summary(payload, evidence, dropped=dropped)
+
+    assert normalized["executive_summary"] == "BULL is on the longs watchlist and set up well."
+    assert dropped == []
+
+
+def test_the_prompt_forbids_a_position_in_the_executive_summary():
+    import ai_summary
+
+    assert "executive summary" in ai_summary.GROUNDING_PROMPT_LINES.lower()
+
+
+def test_the_last_instruction_of_the_local_prompt_names_metric_ref():
+    """A closing sentence saying "exactly the keys statement, evidence_refs,
+    confidence" told the model the opposite of the grounding ask, and it is the
+    last thing the model reads."""
+    import ai_summary
+
+    prompt = ai_summary._local_user_prompt(_package([_stats_source()]))
+
+    assert "metric_ref" in prompt[-260:]
+    assert prompt.rindex("metric_ref") > prompt.rindex("copied verbatim")
+    assert "exactly the keys statement, evidence_refs, confidence." not in prompt
+
+
+def test_metric_key_exists_refuses_a_source_that_is_not_usable():
+    """An excluded or stale source's content is not a cell anyone can read."""
+    from ai_summary import metric_key_exists
+
+    stale = dict(_stats_source(), status="stale", content=None)
+    excluded = dict(_stats_source(), source_id="setups.playbooks", status="empty")
+    evidence = _package([stale, excluded])
+
+    assert not metric_key_exists(evidence, "setups.type_stats", "win_rate")
+    assert not metric_key_exists(evidence, "setups.playbooks", "setup_type")
+
+
 def test_a_numeric_claim_without_a_metric_ref_is_dropped():
     from ai_summary import validate_ai_summary
 
@@ -548,6 +638,54 @@ def test_the_counter_over_three_payloads_reports_the_real_bases():
     three = dict(one, event_id="evt-3", match_basis=like_links.BASIS_NONE, occurrence_id="")
 
     assert like_links.count_payload_bases([one, two, three]) == {"any_family": 2, "none": 1}
+
+
+def test_the_likes_audit_names_the_grain_of_its_distribution():
+    """84 rows and 77 distinct event ids are different answers.
+
+    The dataset keeps every VERSION of a link, so a bare "basis distribution"
+    silently mixes the two and cannot be reconciled with a count taken the other
+    way. The script now labels the row grain and prints the event grain beside
+    it.
+    """
+    text = (
+        ROOT_DIR / "docs" / "analysis" / "scripts" / "lake_likes_and_details.py"
+    ).read_text(encoding="utf-8")
+
+    assert "by row" in text
+    assert "distinct event" in text.lower()
+    assert "count_payload_bases" in text
+
+
+# ---------------------------------------------------------------------------
+# the documentation quotes the strings the code actually emits
+
+
+def test_no_active_document_quotes_a_detail_string_the_code_no_longer_emits():
+    """A gate the trader reads by grepping the log is worth nothing if it quotes
+    a string the log cannot contain."""
+    import ai_summary
+
+    stale = "position claim without a journal source"
+    for name in (
+        "CURRENT_CHECKPOINT.md",
+        "CHANGELOG.md",
+        "CLAUDE.md",
+        "AGENTS.md",
+        "docs/LOCAL_AI_AUTOMATION_PLAN.md",
+    ):
+        text = (ROOT_DIR / name).read_text(encoding="utf-8", errors="replace")
+        assert stale not in text, name
+
+    checkpoint = (ROOT_DIR / "CURRENT_CHECKPOINT.md").read_text(
+        encoding="utf-8", errors="replace"
+    )
+    assert "position claim without a position source" in checkpoint
+    # And the glance block states the rule the code enforces, not the one that
+    # was overturned in the fix round.
+    glance = checkpoint.split("## Active state at a glance", 1)[1].split("\n\n\n", 1)[0]
+    assert "POSITION_SOURCE_IDS" in glance
+    assert sorted(ai_summary.POSITION_SOURCE_IDS)[0] in glance
 
 
 def test_the_audit_scripts_count_through_the_production_reader():
