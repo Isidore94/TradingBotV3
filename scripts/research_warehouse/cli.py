@@ -24,13 +24,14 @@ import os
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 try:  # package import
     from . import (
         backup as backup_mod,
         config,
+        exchange_calendar as xcal,
         features,
         market_bias_context,
         occurrences,
@@ -46,10 +47,11 @@ try:  # package import
     from .ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots
     from .manifest import utc_now
     from .spool import seal_spool
-    from .store import ResearchStore
+    from .store import LakeIntegrityError, ResearchStore
 except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     import backup as backup_mod  # type: ignore
     import config  # type: ignore
+    import exchange_calendar as xcal  # type: ignore
     import features  # type: ignore
     import market_bias_context  # type: ignore
     import occurrences  # type: ignore
@@ -61,7 +63,7 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     from ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots  # type: ignore
     from manifest import utc_now  # type: ignore
     from spool import seal_spool  # type: ignore
-    from store import ResearchStore  # type: ignore
+    from store import LakeIntegrityError, ResearchStore  # type: ignore
     import outcome_coverage  # type: ignore
     import trial_ledger  # type: ignore
     import after_like  # type: ignore
@@ -262,8 +264,22 @@ def cohort_for(store: ResearchStore, day: date) -> list[str]:
 
 
 def anchor_dates_by_symbol(store: ResearchStore, day: date) -> dict:
-    """Current-earnings anchor bar date per symbol, for the daily AVWAP block."""
-    dates: dict[str, date] = {}
+    """Current-earnings anchor per symbol for the daily AVWAP block, STAMPED.
+
+    Returns ``{symbol: features.AnchorChoice}``: the newest anchor bar on or
+    before ``day`` (an anchor that had not happened yet is not knowable and is
+    still excluded), plus whether the lake KNEW it then - the row's own
+    ``system_from``, read market-local (sec 6.2: "an anchor is available once
+    observed, not retroactively at its bar").
+
+    Q2.1/BD-99: the 2026-09-04 bridge back-fills ~2,200 anchors whose bars are
+    months old and whose knowledge stamp is that night. Without this
+    distinction a snapshot rebuilt for an August session would present them as
+    something the desk knew that day. Where one bar date carries several rows
+    the EARLIEST ``system_from`` wins - the first time it became knowable.
+    """
+    chosen: dict[str, features.AnchorChoice] = {}
+    known_from: dict[str, datetime | None] = {}
     for year in (day.year, day.year - 1):
         for row in store.read_table("anchor_instance", f"year={year}").to_pylist():
             if str(row.get("anchor_type") or "") != features.ANCHOR_TYPE_CURRENT:
@@ -274,9 +290,41 @@ def anchor_dates_by_symbol(store: ResearchStore, day: date) -> dict:
             if bar_date is None or bar_date > day:
                 continue  # an anchor that had not happened yet is not knowable
             symbol = str(row.get("symbol") or "")
-            if symbol and (symbol not in dates or bar_date > dates[symbol]):
-                dates[symbol] = bar_date
-    return dates
+            if not symbol:
+                continue
+            current = chosen.get(symbol)
+            stamp = row.get("system_from")
+            if current is not None:
+                if bar_date < current.anchor_bar_date:
+                    continue
+                if bar_date == current.anchor_bar_date and not _earlier_stamp(stamp, known_from.get(symbol)):
+                    continue
+            chosen[symbol] = features.AnchorChoice(bar_date, _anchor_knowledge_for(stamp, day))
+            known_from[symbol] = stamp
+    return chosen
+
+
+def _earlier_stamp(candidate, current) -> bool:
+    if candidate is None:
+        return False
+    if current is None:
+        return True
+    return candidate < current
+
+
+def _anchor_knowledge_for(system_from, day: date) -> str:
+    """``observed`` only when the row's knowledge stamp lands on or before the
+    session, market-local. A missing stamp establishes nothing, so it reads as
+    ``reconstructed`` - uncertainty is never confirmation."""
+    if not isinstance(system_from, datetime):
+        return features.ANCHOR_KNOWLEDGE_RECONSTRUCTED
+    stamped = system_from if system_from.tzinfo else system_from.replace(tzinfo=timezone.utc)
+    local_day = stamped.astimezone(xcal.EXCHANGE_TZ).date()
+    return (
+        features.ANCHOR_KNOWLEDGE_OBSERVED
+        if local_day <= day
+        else features.ANCHOR_KNOWLEDGE_RECONSTRUCTED
+    )
 
 
 def _run_backups(store: ResearchStore, stamp: datetime) -> dict:
@@ -1051,6 +1099,210 @@ def run_dedupe(
     return report
 
 
+# ---------------------------------------------------------------------------
+# Band coverage (Q2.3) - read-only
+# ---------------------------------------------------------------------------
+#: The D1 recipes a coverage report can speak about: the default set
+#: ``build_outcomes`` simulates for a swing occurrence. Each is asked for its
+#: OWN required bands (``outcomes.required_band_numbers``), never a shared list.
+BAND_COVERAGE_RECIPES = (
+    outcomes.SWING_HOUSE_V1,
+    outcomes.CONTROL_FIXED_1R2R_V1,
+    outcomes.CONTROL_TIME_ONLY_V1,
+)
+#: An occurrence with no ``outcome_path`` row for this recipe is NAMED rather
+#: than dropped: "not simulated" and "simulated and flat" are different facts.
+STATE_NOT_SIMULATED = "NOT_SIMULATED"
+#: An occurrence whose trigger session has no ``feature_snapshot_daily`` row at
+#: all. Distinct from a row that HAS one and used no anchor (``none``) and from
+#: one written before the column existed (``legacy``).
+KNOWLEDGE_NO_SNAPSHOT = "no_snapshot"
+
+
+def _month_bounds(month: str) -> tuple[date, date]:
+    first = date.fromisoformat(f"{month}-01")
+    last = (first.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    return first, last
+
+
+def _empty_coverage_bucket() -> dict:
+    return {
+        "occurrences": 0,
+        "required_bands_present": 0,
+        "plain_no_target": 0,
+        "geometry_valid": 0,
+        "geometry_checked": 0,
+        "null_bands": 0,
+        "by_result_state": {},
+    }
+
+
+def _bands_from_snapshot(snapshot: dict) -> dict:
+    return {
+        band.upper(): snapshot.get(f"avwape_{band}")
+        for band in ("upper_1", "upper_2", "upper_3", "lower_1", "lower_2", "lower_3")
+    }
+
+
+def run_band_coverage(
+    store: ResearchStore | None,
+    *,
+    month: str,
+    recipe_id: str | None = None,
+) -> dict:
+    """How much of a month's swing evidence actually had bands to walk (Q2.3).
+
+    READ-ONLY: it resolves files, reads them Arrow-narrowed, and writes no row,
+    no manifest line and no file. Per recipe and per anchor-knowledge bucket it
+    reports the occurrences, how many carried every band the RECIPE ITSELF
+    requires, how many fell to the no-target path, how many had valid geometry
+    for their side, how many had no band at all, and the ``result_state``
+    spread. The 2026-09-04 investigation had to INFER 942 of 947 no-target
+    losses; this is that number, read.
+    """
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    try:
+        first, last = _month_bounds(month)
+    except ValueError:
+        return {"status": "ERROR", "message": f"--month must be YYYY-MM, got {month!r}"}
+    start = datetime(first.year, first.month, first.day, tzinfo=timezone.utc)
+    end = datetime(last.year, last.month, last.day, tzinfo=timezone.utc) + timedelta(days=1)
+
+    selected = [
+        recipe
+        for recipe in BAND_COVERAGE_RECIPES
+        if not recipe_id or recipe.recipe_id == recipe_id
+    ]
+    if not recipe_id and not selected:  # pragma: no cover - defensive
+        return {"status": "ERROR", "message": "no recipe selected"}
+    if recipe_id and not selected:
+        return {
+            "status": "ERROR",
+            "message": f"unknown recipe {recipe_id!r}; known: "
+            + ", ".join(item.recipe_id for item in BAND_COVERAGE_RECIPES),
+        }
+
+    # Session-scoped and narrowed Arrow-side on the trigger stamp (BD-91), the
+    # same +/- one year span `latest_occurrences` reads for the boundary case.
+    latest: dict[str, dict] = {}
+    for year in (first.year - 1, first.year, first.year + 1):
+        for row in store.read_rows(
+            "setup_occurrence",
+            f"year={year}",
+            interval_start_range=(start, end),
+            time_column="trigger_at",
+        ):
+            identity = str(row.get("occurrence_id") or "")
+            current = latest.get(identity)
+            if current is None or occurrences._revision_number(
+                row.get("revision_id")
+            ) > occurrences._revision_number(current.get("revision_id")):
+                latest[identity] = row
+
+    symbols = sorted({str(row.get("symbol") or "") for row in latest.values()})
+    snapshots: dict[tuple[str, date], dict] = {}
+    if symbols:
+        for year in {first.year, last.year}:
+            for row in store.read_rows(
+                "feature_snapshot_daily", f"year={year}", symbols=symbols
+            ):
+                day = row.get("session_date")
+                if isinstance(day, datetime):
+                    day = day.date()
+                snapshots[(str(row.get("symbol") or ""), day)] = row
+
+    report: dict = {
+        "status": "OK",
+        "month": month,
+        "occurrences_in_month": len(latest),
+        "recipes": {},
+    }
+    for recipe in selected:
+        stored = outcomes.latest_outcomes(
+            store, sorted(latest) or None, recipe_ids=[recipe.recipe_id]
+        )
+        required = list(outcomes.required_band_numbers(recipe))
+        buckets: dict[str, dict] = {}
+        totals = _empty_coverage_bucket()
+        for identity, occurrence in sorted(latest.items()):
+            trigger = occurrence.get("trigger_at")
+            trigger_day = trigger.date() if isinstance(trigger, datetime) else trigger
+            snapshot = snapshots.get((str(occurrence.get("symbol") or ""), trigger_day))
+            if snapshot is None:
+                knowledge = KNOWLEDGE_NO_SNAPSHOT
+                bands = {}
+            else:
+                knowledge = features.anchor_knowledge_bucket(snapshot.get("anchor_knowledge"))
+                bands = _bands_from_snapshot(snapshot)
+            geometry = outcomes.swing_geometry(occurrence, recipe, bands)
+            levels = geometry["bands"]
+            state = stored.get((identity, recipe.recipe_id, outcomes.OUTCOME_DEFINITION_ID))
+            state_name = str(state.get("result_state")) if state else STATE_NOT_SIMULATED
+
+            bucket = buckets.setdefault(knowledge, _empty_coverage_bucket())
+            for target in (bucket, totals):
+                target["occurrences"] += 1
+                if required and all(levels.get(number) is not None for number in required):
+                    target["required_bands_present"] += 1
+                if geometry["path_kind"] == outcomes.PATH_KIND_PLAIN_NO_TARGET:
+                    target["plain_no_target"] += 1
+                if geometry["valid"] is not None:
+                    target["geometry_checked"] += 1
+                    if geometry["valid"]:
+                        target["geometry_valid"] += 1
+                if all(value is None for value in levels.values()):
+                    target["null_bands"] += 1
+                target["by_result_state"][state_name] = (
+                    target["by_result_state"].get(state_name, 0) + 1
+                )
+        if not required:
+            # A recipe whose target is an R multiple needs no band, so "every
+            # required band present" is not a fact about it. Counting every
+            # occurrence made the live table read
+            # `control_fixed_1r2r_v1 n=2437 bands=2437 null=2431`, which is a
+            # contradiction rather than a measurement; the honest value is "not
+            # applicable", and `null_bands` still says what the lake holds.
+            for block in (totals, *buckets.values()):
+                block["required_bands_present"] = None
+        report["recipes"][recipe.recipe_id] = {
+            "required_bands": required,
+            "by_knowledge": buckets,
+            "totals": totals,
+        }
+    return report
+
+
+def format_band_coverage(report: dict) -> str:
+    """One line per (recipe, knowledge bucket). The report is the evidence; the
+    table is how a human reads it."""
+    if report.get("status") != "OK":
+        return f"{report.get('status')}: {report.get('message', '')}".strip()
+    lines = [
+        f"band coverage {report['month']} - {report['occurrences_in_month']} occurrence(s)",
+        f"{'recipe':<24}{'knowledge':<14}{'n':>6}{'bands':>7}{'noTgt':>7}{'geom':>7}{'null':>6}  states",
+    ]
+    for recipe_id, block in sorted(report["recipes"].items()):
+        required = block["required_bands"]
+        lines.append(
+            f"  {recipe_id} - required bands: "
+            + (",".join(str(number) for number in required) if required else "none")
+        )
+        rows = list(sorted(block["by_knowledge"].items())) + [("TOTAL", block["totals"])]
+        for knowledge, bucket in rows:
+            states = ", ".join(
+                f"{name}={count}" for name, count in sorted(bucket["by_result_state"].items())
+            )
+            present = bucket["required_bands_present"]
+            present_cell = "n/a" if present is None else str(present)
+            lines.append(
+                f"{recipe_id:<24}{knowledge:<14}{bucket['occurrences']:>6}"
+                f"{present_cell:>7}{bucket['plain_no_target']:>7}"
+                f"{bucket['geometry_valid']:>7}{bucket['null_bands']:>6}  {states}"
+            )
+    return "\n".join(lines)
+
+
 #: What a month rebuild recomputes, in dependency order. Both are DERIVED from
 #: ``bar_m5`` and both were computed from the duplicated rows (BD-96): the
 #: aggregator counted every twin as a constituent (volume x N, quality PARTIAL)
@@ -1130,6 +1382,135 @@ def run_rebuild_month(
             report["retired"] = vars(store.collect_retired(now=stamp))
     except SingleFlightError as exc:
         return {"status": "REFUSED", "month": month, "applied": True, "reason": str(exc)}
+    return report
+
+
+#: The daily-feature rebuild is its OWN command rather than a third entry in
+#: ``REBUILD_DATASETS``: ``feature_snapshot_daily`` is partitioned by YEAR, so
+#: ``rebuild-month``'s "retire the month's partitions" mechanic would retire
+#: every other month of that year with it. Same shape, different key.
+REBUILD_DAILY_DATASET = "feature_snapshot_daily"
+
+
+def run_rebuild_daily_features(
+    store: ResearchStore | None,
+    *,
+    start: date,
+    end: date,
+    apply: bool = False,
+    job_id: str = "rebuild_daily_features",
+    now: datetime | None = None,
+    lock_path: Path | None = None,
+) -> dict:
+    """Recompute ``feature_snapshot_daily`` for past sessions, WITH their anchors.
+
+    The nightly build writes daily features for ONE day, so every session that
+    ran before the 2026-09-04 earnings-anchor bridge carries null AVWAP bands
+    and no amount of re-simulating outcomes can fix that: ``_bands_by_occurrence``
+    reads the trigger session's own feature row and correctly finds nothing.
+    This walks the exchange sessions in ``[start, end]`` and rebuilds them with
+    ``anchor_dates_by_symbol``'s stamped choice, so every rebuilt row SAYS
+    whether its anchor was knowable then (Q2.1/BD-99). Expect ``reconstructed``
+    to dominate, and expect it to dominate completely once the bridge has run:
+    the choice keeps the NEWEST anchor bar on or before the session **regardless
+    of knowledge**, so a bridged anchor with a newer bar displaces the 14
+    hand-imported ones rather than losing to them. `observed` rows appear only
+    for a symbol whose newest qualifying anchor bar was already in the lake
+    before that session. The report is the SPLIT, not a target for one bucket.
+
+    A dry run by default: it lists the sessions and writes nothing. With
+    ``apply`` it takes the build's single-flight lock and, per affected YEAR
+    partition, retires the partition (one RETIRE line, files kept and
+    restorable, exactly as BD-97's month rebuild does), republishes verbatim
+    every row OUTSIDE the range - the partition is year-keyed, so a January row
+    must survive an August rebuild - and then recomputes each session. A second
+    run therefore supersedes rather than duplicating.
+
+    Cost note: the carry materialises the year partition's out-of-range rows
+    once. That is the price of a year-keyed partition and is why this is a
+    maintenance command under the lock, never a step in the nightly build.
+    """
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    if end < start:
+        return {"status": "ERROR", "message": f"--to {end} is before --from {start}"}
+    stamp = now or utc_now()
+    sessions = [
+        session.session_date if hasattr(session, "session_date") else session
+        for session in xcal.sessions_between(start, end)
+    ]
+    partitions = sorted({f"year={day.year}" for day in sessions})
+    report: dict = {
+        "status": "OK",
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "applied": bool(apply),
+        "sessions": [day.isoformat() for day in sessions],
+        "partitions": partitions,
+        "retired_files": 0,
+        "carried_rows": 0,
+        "steps": {},
+    }
+    if not apply or not sessions:
+        return report
+
+    try:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        with single_flight(lock_path):
+            for partition in partitions:
+                table = store.read_table(REBUILD_DAILY_DATASET, partition)
+                survivors = None
+                if table.num_rows:
+                    outside = pc.or_(
+                        pc.less(table.column("session_date"), pa.scalar(start, pa.date32())),
+                        pc.greater(table.column("session_date"), pa.scalar(end, pa.date32())),
+                    )
+                    survivors = table.filter(outside)
+                retired = store.retire_partition(
+                    REBUILD_DAILY_DATASET,
+                    partition,
+                    job_id=job_id,
+                    reason=f"rebuild daily features {start}..{end} (BD-100)",
+                )
+                report["retired_files"] += len(retired)
+                if survivors is not None and survivors.num_rows:
+                    # Carried verbatim: a row outside the range keeps its own
+                    # values, including a NULL `anchor_knowledge` where it
+                    # predates the column. The rebuild never relabels history.
+                    published = store.publish(REBUILD_DAILY_DATASET, survivors, job_id=job_id)
+                    # A carried row was LIVE a moment ago and its old file is
+                    # already retired. If the republish is short by even one row
+                    # or quarantines any, that data is out of the live set and
+                    # the run must say so loudly - a count that cannot fail is
+                    # not evidence. The retired files are still on disk, so the
+                    # repair is repointing the manifest.
+                    if (
+                        published.rows_published != survivors.num_rows
+                        or published.rows_quarantined
+                    ):
+                        raise LakeIntegrityError(
+                            f"{REBUILD_DAILY_DATASET}/{partition}: carried "
+                            f"{published.rows_published} of {survivors.num_rows} out-of-range "
+                            f"row(s), {published.rows_quarantined} quarantined; the retired "
+                            "files are still on disk - repoint the manifest before re-running."
+                        )
+                    report["carried_rows"] += published.rows_published
+            for day in sessions:
+                report["steps"][day.isoformat()] = vars(
+                    features.build_daily_snapshots(
+                        store,
+                        day,
+                        anchors_by_symbol=anchor_dates_by_symbol(store, day),
+                        now=stamp,
+                        run_id=job_id,
+                        job_id=job_id,
+                    )
+                )
+            report["retired"] = vars(store.collect_retired(now=stamp))
+    except SingleFlightError as exc:
+        return {"status": "REFUSED", "applied": True, "reason": str(exc)}
     return report
 
 
@@ -1248,6 +1629,22 @@ def main(argv=None) -> int:
     )
     rebuild.add_argument("--month", required=True, help="YYYY-MM")
     rebuild.add_argument("--apply", action="store_true", help="retire and recompute; without it only the plan is printed")
+    rebuild_daily = sub.add_parser(
+        "rebuild-daily-features",
+        help="recompute feature_snapshot_daily for a past date range WITH its anchors (BD-100); DRY RUN unless --apply",
+    )
+    rebuild_daily.add_argument("--from", dest="start", required=True, help="YYYY-MM-DD")
+    rebuild_daily.add_argument("--to", dest="end", required=True, help="YYYY-MM-DD")
+    rebuild_daily.add_argument(
+        "--apply", action="store_true", help="retire and recompute; without it only the plan is printed"
+    )
+    coverage = sub.add_parser(
+        "band-coverage",
+        help="read-only: how much of a month's swing evidence had the bands its recipe needs (Q2.3)",
+    )
+    coverage.add_argument("--month", required=True, help="YYYY-MM")
+    coverage.add_argument("--recipe", default="", help="one recipe id; default every D1 recipe")
+    coverage.add_argument("--json", action="store_true", help="print the report object instead of the table")
     recompute = sub.add_parser(
         "recompute-outcomes",
         help="re-simulate every outcome bucket with force (BD-98); DRY RUN unless --apply",
@@ -1269,6 +1666,23 @@ def main(argv=None) -> int:
     if args.command == "rebuild-month":
         report = run_rebuild_month(store, month=args.month, apply=bool(args.apply))
         print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status") in {"OK", "DISABLED"} else 1
+    if args.command == "rebuild-daily-features":
+        report = run_rebuild_daily_features(
+            store,
+            start=date.fromisoformat(args.start),
+            end=date.fromisoformat(args.end),
+            apply=bool(args.apply),
+        )
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report.get("status") in {"OK", "DISABLED"} else 1
+    if args.command == "band-coverage":
+        report = run_band_coverage(store, month=args.month, recipe_id=args.recipe or None)
+        print(
+            json.dumps(report, indent=2, default=str)
+            if args.json
+            else format_band_coverage(report)
+        )
         return 0 if report.get("status") in {"OK", "DISABLED"} else 1
     if args.command == "recompute-outcomes":
         buckets = None

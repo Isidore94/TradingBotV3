@@ -2561,6 +2561,33 @@ are pointed to, not repeated.
 6. Confirm the Class-A backup set includes everything you consider
    irreplaceable.
 
+### Repairing a month of daily features (packet Q2, 2026-09-04; BD-99/BD-100)
+
+The nightly build writes `feature_snapshot_daily` for ONE session, so every
+session that ran before the 2026-09-04 earnings-anchor bridge carries null AVWAP
+bands and `swing_house_v1` had nothing to walk. The repair is four steps, in
+this order, and every one of them is dry-run-by-default:
+
+1. the nightly build, so the bridge's anchors are ingested into `anchor_instance`;
+2. `python -m scripts.research_warehouse.cli rebuild-daily-features --from
+   2026-08-01 --to <today>` — read the session list, then re-run with `--apply`;
+3. `... recompute-outcomes --apply` (BD-98 `force`, one lock per bucket, so the
+   day's scheduled builds slot in between);
+4. `... band-coverage --month 2026-08` and `--month 2026-09` — the read-only
+   report of what the repair actually achieved, per recipe and split by
+   `observed` / `reconstructed` / `legacy` anchor knowledge.
+
+Step 3 before step 2 measures nothing new: the outcome walk reads the trigger
+session's own feature row. A row rebuilt over an anchor imported after that
+session is labelled `reconstructed` and is **research evidence only** — Section
+7's promotion ladder requires a declared evidence window frozen before
+inspection, which a knowledge stamp from after the session cannot satisfy.
+Expect `reconstructed` to dominate the split, and to dominate completely once
+the bridge has run: the anchor choice keeps the newest bar on or before the
+session regardless of knowledge, so a bridged anchor with a newer bar displaces
+a hand-imported one. Step 4's job is to PRINT the split, not to reach a number
+in any one bucket.
+
 ## 24. Definition of done
 
 This program is complete when:

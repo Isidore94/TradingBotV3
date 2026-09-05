@@ -867,6 +867,22 @@ which is evidence and must not be loaded as context.
 - Phase 6: deterministic occurrence/revision/episode identity and versioned swing and
   intraday outcome simulation with costs, ambiguity bounds, partials, time stops,
   slippage, and open/truncated states.
+- **A daily snapshot says whether its anchor was KNOWN then, and a swing outcome row
+  names its path** (packet Q2, 2026-09-04, BD-99/BD-100; branch
+  `claude/q2-warehouse-eligibility`, gate #61 owed). `anchor_dates_by_symbol` returns
+  `{symbol: features.AnchorChoice}` - bar date plus `observed`/`reconstructed`, decided
+  from the row's own `system_from` read market-local; `feature_snapshot_daily`'s additive
+  `anchor_knowledge` carries it, NULL reads as **`legacy`** and never as observed, and a
+  **reconstructed anchor is research evidence, never promotion evidence**.
+  `outcome_path`'s additive `path_kind` (`managed`/`plain_target`/`plain_no_target`) is
+  written by the one decision `simulate_swing` already makes and is EXCLUDED from BD-98's
+  unchanged-comparison, so no stored row is rewritten merely to gain a label.
+  `cli band-coverage --month YYYY-MM [--recipe] [--json]` is the read-only report - per
+  recipe, per knowledge bucket, against the recipe's OWN required bands - and
+  `cli rebuild-daily-features --from --to [--apply]` recomputes past sessions WITH their
+  anchors (dry run by default; a year-partition RETIRE plus a verbatim carry of every row
+  outside the range, because the partition is year-keyed). Runbook order:
+  build -> rebuild-daily-features -> recompute-outcomes -> band-coverage.
 - Phase 7: manifest-resolved read path and read-only Research panel; DuckDB remains
   optional and pyarrow can answer every slice.
 - Phase 8: three-class backups, restore check, single-flight build/status CLI, job
@@ -1018,6 +1034,69 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-04 - Packet Q2: the band repair chain is verifiable (branch `claude/q2-warehouse-eligibility`)
+
+**Trader-authorized** ("please review and implement the suggested changes" over
+`docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md`, finding 3). Builder-built,
+NOT merged; live gate #61 owed. Shadow-only and additive throughout: no
+detector, score, alert, watchlist, Focus list, review queue or
+`review_policy.json` is reached, and no stored number moves.
+
+- **The anchor's KNOWLEDGE travels with the snapshot (Q2.1, BD-99).**
+  `cli.anchor_dates_by_symbol` returns `{symbol: features.AnchorChoice}` -
+  the bar date plus `observed` / `reconstructed`, decided from the
+  `anchor_instance` row's own `system_from` read MARKET-LOCAL (`astimezone`,
+  never a stripped tzinfo). The "not knowable yet" exclusion is unchanged;
+  where one bar date has several rows the earliest `system_from` wins.
+  `feature_snapshot_daily` gains the additive `anchor_knowledge`, written only
+  where an anchor was used; NULL reads as **`legacy`**
+  (`features.anchor_knowledge_bucket`), never as observed. **A reconstructed
+  anchor is research evidence and never promotion evidence.**
+- **The outcome row names its path (Q2.2).** `outcome_path` gains the additive
+  `path_kind` (`managed` / `plain_target` / `plain_no_target`), written by
+  `simulate_swing` through the one `outcomes.swing_plan` decision the walk
+  itself makes, so label and walk cannot drift. It is EXCLUDED from BD-98's
+  `_same_outcome` comparison - every stored row lacks it, so comparing on it
+  would rewrite the lake to add a label rather than to correct a number; an
+  existing row stays `unlabelled` until a real change supersedes it. A golden
+  test pins `result_state`/`gross_r`/`net_r`/`mfe_r` across five recipes,
+  read off the un-labelled code.
+- **`band-coverage`, the report the review asked for (Q2.3).**
+  `research_warehouse.cli band-coverage --month YYYY-MM [--recipe ID] [--json]`:
+  READ-ONLY (a test asserts the manifest is byte-identical before and after),
+  session-scoped, Arrow-narrowed on `trigger_at`. Per recipe and per knowledge
+  bucket: occurrences, rows carrying every band the RECIPE requires
+  (`outcomes.required_band_numbers`, read from the recipe, never a hard-coded
+  list), rows on the no-target path, rows whose geometry points the way the
+  side does (`outcomes.swing_geometry`), rows with no band at all, and the
+  `result_state` spread with `NOT_SIMULATED` named rather than dropped.
+- **Past daily features can be rebuilt, with anchors (Q2.4, BD-100).**
+  `cli rebuild-daily-features --from --to [--apply]`, dry run by default. A
+  SIBLING of `rebuild-month` rather than a third `REBUILD_DATASETS` entry
+  because `feature_snapshot_daily` is YEAR-partitioned and the month mechanic
+  would retire eleven innocent months. Otherwise BD-97's mechanics: one RETIRE
+  line per year partition under the build lock (files kept, restorable), a
+  verbatim carry of every row outside the range - a January row survives an
+  August rebuild and keeps its NULL label - then a per-session
+  `build_daily_snapshots` with the stamped anchors. A second `--apply`
+  supersedes rather than duplicating.
+- **The gate #59 runbook is four steps, in order** (BD-100, also in
+  `docs/ULTIMATE_SETUP_DATABASE_PLAN.md`): nightly build -> `rebuild-daily-features
+  --apply` -> `recompute-outcomes --apply` -> `band-coverage`. Step 3 before
+  step 2 measures nothing new.
+- **Not built here:** the fact pack / digest labelling of fallback cells, which
+  belongs to Q4's owner files.
+- **Reviewer advisories, same branch:** `band-coverage` prints each recipe's
+  required-band list and reports `n/a` rather than a full house where a recipe
+  requires no band; the carry raises `LakeIntegrityError` if the republish is
+  short or quarantines anything; `anchor_knowledge_bucket` returns `unknown`
+  for an unrecognised value instead of `none`; BD-100 and gate #61 no longer
+  imply the 14 hand anchors will yield `observed` rows - the newest anchor bar
+  wins regardless of knowledge, so the gate is the SPLIT being printed.
+- `tests/test_warehouse_band_eligibility.py` (19). 14 of the first 15 proven
+  red on `6b74165`; the 15th is the golden pin that must pass on both sides,
+  because its claim is that no number moved. Live gate **#61**.
 
 ### 2026-09-04 - Q1: `held_run_score` says what it measured
 
