@@ -33,7 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 69 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot: `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE (no "refresh skipped" line); the payload's `saved_by` reads `close_slot`; the three stats CSVs carry that same `tracker_saved_at`; the Setup Tracker's status line shows BOTH clocks (`Tracker as of ... (close_slot); scan factors as of ...`); the recompute logs `n_expired_unmeasured` >= 37 + 41 and the Current Picks / Setup Types tabs say `N expired unmeasured, excluded`; and the family win rates are unchanged to the cent where those setups contributed only a denominator. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation | 2026-09-05 M3 entry |
+| 69 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot, checked against REPRODUCIBLE numbers rather than the audit's prose (reviewer, 2026-09-05: the first wording was unsatisfiable). (1) `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE, with no "refresh skipped" line. (2) The payload's `saved_by` reads `close_slot` and its `saved_at` is market-local with an offset. (3) The three stats CSVs carry that same `tracker_saved_at`, and the Setup Tracker's status line shows BOTH clocks in ONE zone - `Tracker as of ... (close_slot); scan factors as of ...`, the two offsets equal. (4) `trading_bot.log` carries the literal token **`n_expired_unmeasured=`**; on the 2026-09-04 mirror the reproducible counts are **setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7, control 0, 52 total**, so expect ~52 on a tracker of that vintage - not the audit's "37 + 41", which counted a different thing. (5) The Setup Types tab says `N expired unmeasured, excluded` with N matching the summed CSV column (Current Picks deliberately says nothing - different population). (6) Family win rates unchanged to the cent where those setups contributed only a denominator, and the champion's scoring population unchanged by construction. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation, and **the FIRST save after merge rewrites every record's content hash** (`saved_at`/`saved_by` join the header, and `last_replayed_session` / `expiry_reason` / `stale_sessions` join the records), so a large `written` count on that one save is expected and is not a parity failure | 2026-09-05 M3 entry |
 | 65 | **The band challenger measures (M1)** - after the next persisted tracker write: `master_avwap_band_variant_stats.csv` shows `n_variant > 0` on the rows whose records have >= 20 closes before the anchor, the four `_variant` columns fill, and the Setup Tracker's Band variant view reads `Measured N of M setups` rather than `Measured 0 of M`. **T4's >= 20 sessions of forward accrual start that day**, not 2026-08-26 - nothing accrued before it | 2026-09-05 M1 entry |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
@@ -154,10 +154,29 @@ merges.** Tip `cb7dded7` + docs.
   `analyze_master_avwap_scoring.py` reads - that script is the only thing that writes
   live scoring weights, and it reads the ATTRIBUTE exports, which this branch never
   touches.
+- **Reviewer round (NO-GO on `4108a0a9`, fixed at `cc070819`).** Three blockers: the two
+  clocks were rendered in two ZONES (market-local with an offset beside a machine-local
+  mtime with none, reading a three-hour gap that did not exist); an all-expired group
+  took its own `n_expired_unmeasured` with it when `if not rows_for_group: continue`
+  dropped the group, so the live sentence said 16 where 45 had expired; and gate #69 was
+  unsatisfiable as written. Five advisories taken: the naive timestamp is ATTACHED not
+  converted, a symbol with NO frame is `n_no_frame` and out of the purity fraction rather
+  than counted as pinned, the reason is `no_replay_stale_sessions` with `stale_sessions`
+  beside it (and `TRACKER_STALE_SESSIONS` now READS `evidence_stats.LATELY_SESSIONS`), the
+  expired sentence is off Current Picks (wrong population), and `saved_by` rides the scan
+  payload with ABSENCE READING AS `manual` so a hand-run `--run-scan` cannot forge
+  `close_slot`. Eleven tests, all proven RED on `4108a0a9`.
+- **A THIRD POPULATION IS NAMED AND NOT EXPIRED; a decision is owed.** The audit counted
+  41 setups with `open_scenario_count == closed_scenario_count == 0`. On the 2026-09-04
+  mirror only 13 of them are `no_baseline_scenarios`. **The other 28 DO have baseline
+  scenarios, in a status that is neither open nor closed** - so they are not expired by
+  either rule and this packet deliberately leaves them alone. What that status is, and
+  whether such a record is evidence, is a question for the trader and the lead; naming it
+  here is the point, so it is not rediscovered as a defect later.
 - **Verification:** `tests/test_m3_tracker_keeps_up.py` (31 tests), 26 of the first 30
-  proven RED on `e744afd5` before any fix existed and committed red as `60161275`, plus
-  four more for the lead's ruling proven RED on `259cf42c`. Ruff clean. No packaging
-  trigger.
+  proven RED on `e744afd5` before any fix existed and committed red as `60161275`; four
+  more for the lead's ruling, RED on `259cf42c`; eleven more for the reviewer round, RED
+  on `4108a0a9`. **48 tests in that file, all green.** Ruff clean. No packaging trigger.
 
 ### 2026-09-05 - M1 BUILT: the band challenger's hand-off, on `claude/m1-band-variant-handoff`
 

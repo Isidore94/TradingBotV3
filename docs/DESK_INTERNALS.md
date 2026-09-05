@@ -1312,6 +1312,55 @@ The rules around it matter more than the status:
   replayed scenario comes back through the recompute as OPEN or CLOSED and the
   reason is cleared.
 
+### What the reviewer caught, and why each one hid
+
+Three blockers on the first build, all of them the same species: a number that
+looked right in a unit test and was wrong on the live file.
+
+**Two clocks, two zones.** The point of the two-clock line was that the tracker
+snapshot and the scan factors have different ages. `saved_at` was rendered
+market-local with an offset and the scan-factor mtime machine-local with none,
+so on this PT desk the pair read *three hours apart for the same instant* — the
+line invented a staleness it existed to disprove. Both are market-local ISO with
+the offset printed now. The test stamps both from ONE instant and asserts the two
+rendered strings are equal, because asserting a format would have passed.
+
+**An all-expired group took its own count with it.** `if not rows_for_group:
+continue` looked like a guard against an empty row; it was actually the branch
+that dropped `expired_rows`. `build_tracker_stats_rows` had the identical dead
+shape one level down (`grouped.setdefault(key, [])` followed by `if not rows:
+continue`). Every unit test passed because every fixture had at least one
+surviving record per group. On the live 2026-09-04 mirror the sentence said
+**16 where 45 records had expired** — under-reporting by exactly the groups that
+were worst, which is the direction that hides a problem. Both builders now emit
+the row: zero measured setups, blank measures, the real count. The stats builder
+needed a `representative_by_group` to do it, because `rows[0]` does not exist
+when every row in the group was expired.
+
+**A gate nobody could satisfy.** The first #69 asked for `n_expired_unmeasured
+>= 37 + 41` from the audit's prose. Those two numbers counted different things
+from what the implemented rules count, so the gate could not pass however
+correct the code was. It is restated to numbers reproducible from the mirror
+(setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7,
+control 0, 52 total), and the expiry now logs the literal token
+`n_expired_unmeasured=N` — unconditionally, including zero, since an absent line
+and a count of nought are different facts and a gate is checked by grep.
+
+Two advisories are worth keeping as rules rather than fixes. A naive moment is
+**attached** to market-local, never converted — the `_gate_moment` rule, and
+`astimezone` on a naive value silently read it as machine-local. And a symbol
+with **no frame at all** is `n_no_frame`, excluded from the purity fraction: it
+is neither the declared source nor a fallback, and counting it as pinned would
+have reported a symbol the scan never saw as evidence that the pin was working.
+
+**A third population exists and is deliberately untouched.** The audit counted 41
+records with no open and no closed scenario. Only 13 are `no_baseline_scenarios`;
+**the other 28 have baseline scenarios in a status that is neither open nor
+closed**, so neither expiry rule reaches them. What that status means, and
+whether such a record is evidence, is a trader-and-lead question. It is written
+down here so the next reader meets it as a known open question rather than as a
+fresh defect.
+
 ### The exclusion is opt-in, because one function serves two masters
 
 The builder shipped M3.3 excluding the expired everywhere and reported the

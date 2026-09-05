@@ -913,7 +913,8 @@ which is evidence and must not be loaded as context.
   `last_replayed_session` per record, `tracker_saved_at` / `tracker_saved_by` on the
   three stats CSVs, and the Setup Tracker's two-clock status line.
 - `EXPIRED_UNMEASURED` terminal setup status with `expiry_reason`
-  (`no_replay_20_sessions` over 20 exchange sessions, or `no_baseline_scenarios`),
+  (`no_replay_stale_sessions` over `evidence_stats.LATELY_SESSIONS` exchange sessions,
+  with the threshold recorded on the row, or `no_baseline_scenarios`),
   applied after the closure rule. The exclusion is DISPLAY-ONLY and opt-in
   (`exclude_expired_unmeasured`, default False): the stats exports and the Setup Tracker
   tabs drop the expired from numerator and denominator, the champion's scoring
@@ -1182,9 +1183,12 @@ setups were older than 20 sessions on 2026-09-04, several with scenarios still r
 "Awaiting update" - never replayed since creation - and 41 more carried no baseline
 scenario at all. All of them sat in denominators as though they were evidence. New
 terminal `setup_status` `EXPIRED_UNMEASURED` with `expiry_reason` in
-{`no_replay_20_sessions` (more than `TRACKER_STALE_SESSIONS` = 20 exchange sessions
+{`no_replay_stale_sessions` (more than `TRACKER_STALE_SESSIONS` exchange sessions
 since the last replay, counted with `market_calendar.trading_days_between` and never
-with weekday arithmetic), `no_baseline_scenarios` (an empty `scenarios` dict, or nothing
+with weekday arithmetic; the constant READS `evidence_stats.LATELY_SESSIONS` because
+"lately" is one number in this codebase, and the threshold is written onto the row as
+`stale_sessions` rather than baked into the reason string, which would become a lie the
+day the number moved), `no_baseline_scenarios` (an empty `scenarios` dict, or nothing
 but experimental / band-variant entries)}. Applied AFTER the closure rule, so a setup
 that closes normally is never expired; a calendar that refuses an endpoint expires
 nothing (uncertainty never deletes). It runs inside the daily recompute AND as a sweep
@@ -1220,11 +1224,39 @@ is 0), and the packet did not name it. Also unchanged: the two exports
 attribute leaderboard) - that script is the only thing that writes live scoring weights,
 and this branch does not touch its inputs.
 
+**Reviewer round (NO-GO on `4108a0a9`, fixed at `cc070819`).** Three blockers. (1) The
+two clocks were rendered in two ZONES - `saved_at` market-local with an offset beside a
+machine-local mtime with none - so on a PT desk the line read a three-hour gap that did
+not exist; both are now market-local ISO with the offset printed, pinned by a test that
+stamps them from one instant and asserts the rendered strings are equal. (2) An
+all-expired group took its own `n_expired_unmeasured` with it: `if not rows_for_group:
+continue` dropped the count along with the group, and `build_tracker_stats_rows` had the
+same dead shape, so the live sentence said 16 where 45 records had expired -
+under-reporting by exactly the worst groups. Both builders now emit the row with zero
+measured setups and blank measures, which needed a `representative_by_group` for identity
+because `rows[0]` does not exist when every row was expired. (3) Gate #69 was
+unsatisfiable as written and is restated to reproducible counts (2026-09-04 mirror: setups
+32 + 13 = 45, study 7, control 0, 52 total). Five advisories taken: the naive timestamp is
+ATTACHED rather than converted (CLAUDE.md's `_gate_moment` rule); a symbol with NO frame
+is `n_no_frame` and out of the purity fraction rather than counted as pinned; the reason
+carries its threshold as a field; the expired sentence is off the Current Picks tab, which
+renders a different population; and `saved_by` rides the scan payload with **absence
+reading as `manual`**, so a hand-run `--run-scan` can never forge `close_slot`.
+
+**A third population is named and deliberately not expired.** Of the audit's 41 records
+with no open and no closed scenario count, only 13 are `no_baseline_scenarios` on the
+2026-09-04 mirror; **the other 28 DO have baseline scenarios, in a status that is neither
+open nor closed**, so neither rule reaches them. Whether such a record is evidence is a
+trader-and-lead decision, recorded here so it is not rediscovered as a defect.
+
 **Files:** `scripts/master_avwap_lib/runner.py`, `scripts/master_avwap_lib/legacy.py`,
 `scripts/tracker_store.py`, `scripts/ui/panels/setup_tracker_panel.py`,
-`tests/test_m3_tracker_keeps_up.py` (31 tests; 26 of the first 30 proven RED on
-`e744afd5` before any fix existed), `tests/test_tracker_store.py` (fixture now models a
-stamped payload).
+`scripts/scan_worker.py`, `scripts/ui/services/scan_service.py`,
+`tests/test_m3_tracker_keeps_up.py` (48 tests: 26 of the first 30 proven RED on
+`e744afd5`, four more RED on `259cf42c` for the lead's ruling, eleven more RED on
+`4108a0a9` for the reviewer round), `tests/test_tracker_store.py` and
+`tests/test_scan_worker_spawn.py` (both fixtures now model the current payload; neither
+assertion weakened).
 
 **Live gate #69** is owed at merge: see `CURRENT_CHECKPOINT.md`.
 
