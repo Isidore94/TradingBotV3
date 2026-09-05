@@ -169,6 +169,14 @@ additive value, header unchanged, `schema_version` still 4. The sweep counts
 `outcome_sweep_log_line` prints the split. The Daytrade Tracker status line and the AWAY
 digest print `format_terminal_coverage`'s one sentence off reads they already do.
 
+**Verified through the SHIPPED path, not a replica** (read-only, after the advisory round):
+`held_run_score.load_episodes()` -> `terminal_coverage()` over the live file returns
+`{measured_eod 3,820, measured_swept 3,607, unmeasured 644, open 90, measured 7,427, events
+8,161}` and `format_terminal_coverage` renders *"Outcomes: measured 7,427 (eod 3,820 / swept
+3,607), unmeasured 644, open 90 over the window."* - which is the exact sentence the Daytrade
+Tracker's status line will show. The blank-status rule changed nothing inside the window, as
+expected: every final row in the last twenty sessions is schema 4 and carries a status.
+
 **A whole-file status scan (read-only, streamed) found two things the windowed read could
 not.** Every `final` row in the 308 MB store carries one of six statuses: `eod_complete`
 14,863, `unresolved` 4,309, and **749 pre-R10.A schema-1 rows** - `stop_seen` 397,
