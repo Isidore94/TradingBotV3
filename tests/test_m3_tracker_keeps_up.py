@@ -223,6 +223,29 @@ def test_an_unstamped_legacy_payload_reads_as_unknown_rather_than_now(tracker_fi
     assert reloaded["saved_by"] is None
 
 
+def test_a_pre_m3_payload_still_verifies_clean_against_the_mirror(tmp_path):
+    """Gate #57 measures five parity-clean saves. A header key added on this
+    branch must not make every pre-M3 payload read as a difference."""
+    from tracker_store import TrackerStore
+
+    store = TrackerStore(tmp_path / "tracker.sqlite")
+    legacy_payload = {
+        "schema_version": 2,
+        "updated_at": "2026-09-03T07:15:53",
+        "data_session": "2026-09-02",
+        "daily_watchlists": {},
+        "setups": {},
+        "control_setups": {},
+        "study_setups": {},
+        "stats": [],
+        "setup_type_stats": [],
+        "attribute_registry": {},
+    }
+    store.save_payload(legacy_payload)
+
+    assert store.verify(legacy_payload).ok
+
+
 def test_the_close_slot_save_says_close_slot():
     payload = _tracker_payload()
     with mock.patch.object(legacy, "export_setup_tracker_views"), mock.patch.object(
@@ -375,7 +398,9 @@ def _setup_record(symbol, *, scan_date="2026-08-03", scenarios=None, status="OPE
 
 def test_the_three_stats_exports_carry_the_tracker_clock(tmp_path, monkeypatch):
     _redirect_exports(monkeypatch, tmp_path)
-    setup = _setup_record("AAA")
+    # Inside the recent-window lookback, so all three exports have a row: the
+    # "what worked lately" view is by definition empty for an old setup.
+    setup = _setup_record("AAA", scan_date=date.today().isoformat())
     payload = {
         "setups": {setup["setup_id"]: setup},
         "saved_at": "2026-09-05T13:02:11",

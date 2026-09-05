@@ -360,6 +360,16 @@ class SetupTrackerPanel(QFrame):
         self.band_variant_status_label.setObjectName("MutedLabel")
         self.band_variant_status_label.setWordWrap(True)
 
+        # M3.3: the two tabs the trader reads for "what is working" each say how
+        # many records aged out UNMEASURED and were left out of their numbers.
+        # An exclusion nobody can see is a second version of the defect it fixes.
+        self.current_pick_status_label = QLabel("")
+        self.current_pick_status_label.setObjectName("MutedLabel")
+        self.current_pick_status_label.setWordWrap(True)
+        self.setup_type_status_label = QLabel("")
+        self.setup_type_status_label.setObjectName("MutedLabel")
+        self.setup_type_status_label.setWordWrap(True)
+
         self.tabs = QTabWidget()
         self.current_table, self.current_model = self._make_table(CURRENT_PICK_COLUMNS)
         self.setup_type_table, self.setup_type_model = self._make_table(SETUP_TYPE_COLUMNS)
@@ -375,7 +385,14 @@ class SetupTrackerPanel(QFrame):
             ATTRIBUTE_LEADERBOARD_COLUMNS
         )
 
-        self.tabs.addTab(self.current_table, "Current Picks")
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "Today's tier picks from the scanner's own tier list.",
+                self.current_table,
+                status=self.current_pick_status_label,
+            ),
+            "Current Picks",
+        )
         self.tabs.addTab(
             self._make_explained_tab(
                 "Which setup families follow through in the FIRST 1-2 SESSIONS after entry (mark-to-market R, "
@@ -392,7 +409,14 @@ class SetupTrackerPanel(QFrame):
             ),
             "Human Picks",
         )
-        self.tabs.addTab(self.setup_type_table, "Setup Types")
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "Every tracked setup grouped by side, bucket, family, zone, retest and compression.",
+                self.setup_type_table,
+                status=self.setup_type_status_label,
+            ),
+            "Setup Types",
+        )
         self.tabs.addTab(
             self._make_explained_tab(
                 "What's worked in the last 30 days across live setups and measured-only study families. "
@@ -679,7 +703,17 @@ class SetupTrackerPanel(QFrame):
         self.best_factor_tile.set_value(_best_factor_label(self.scan_factor_rows))
         self.summary_view.setHtml(_summary_html(self))
 
-        status = f"Setup tracker refreshed from exports. Last export: {_latest_mtime_text(_export_files())}"
+        # M3.2: two clocks, named. The tracker snapshot's own `saved_at` /
+        # `saved_by` come off the export the tracker pass stamped them onto -
+        # never off the 1.1 GB JSON, which this panel must never open.
+        expired_sentence = expired_unmeasured_sentence(all_setup_type_rows)
+        self.setup_type_status_label.setText(expired_sentence)
+        self.current_pick_status_label.setText(expired_sentence)
+        status = tracker_clock_sentence(
+            _first_non_empty(all_setup_type_rows, "tracker_saved_at"),
+            _first_non_empty(all_setup_type_rows, "tracker_saved_by"),
+            _latest_mtime_text([MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE]),
+        )
         self.status_label.setText(status)
         self.statusChanged.emit(status)
 
@@ -1271,6 +1305,53 @@ def _export_files() -> list[Path]:
         HUMAN_FOCUS_PERFORMANCE_FILE,
         HUMAN_FOCUS_OUTCOMES_FILE,
     ]
+
+
+#: Packet M3.2 (2026-09-05). This page reads TWO stores with two different
+#: clocks: the setup-tracker snapshot (written only by a pass that actually
+#: replayed the tracker) and the `scan_factor_*` exports (rewritten by every
+#: scan). Showing one mtime for both made the tables look as fresh as the last
+#: scan even on the days the tracker write was refused outright - which, with
+#: the daily-bar pin in force, was every day. Two clocks, both named.
+TRACKER_CLOCK_UNKNOWN = "unknown"
+
+
+def tracker_clock_sentence(saved_at: str, saved_by: str, scan_factor_text: str) -> str:
+    """`Tracker as of <saved_at> (<saved_by>); scan factors as of <mtime>`.
+
+    Pure, and blank-preserving: an export with no stamp reads ``unknown``, never
+    the current time and never the scan-factor clock. A page that borrows one
+    store's freshness for another is the defect this replaces.
+    """
+    stamp = str(saved_at or "").strip() or TRACKER_CLOCK_UNKNOWN
+    writer = str(saved_by or "").strip() or TRACKER_CLOCK_UNKNOWN
+    factors = str(scan_factor_text or "").strip() or TRACKER_CLOCK_UNKNOWN
+    return f"Tracker as of {stamp} ({writer}); scan factors as of {factors}"
+
+
+def _first_non_empty(rows: list[dict[str, Any]], key: str) -> str:
+    for row in rows:
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def expired_unmeasured_sentence(rows: list[dict[str, Any]]) -> str:
+    """`N expired unmeasured, excluded` - or nothing when there are none.
+
+    The count comes from the export's OWN column; this never opens the 1.1 GB
+    tracker JSON.
+    """
+    total = 0
+    for row in rows:
+        try:
+            total += int(float(str(row.get("n_expired_unmeasured") or "0").strip() or 0))
+        except (TypeError, ValueError):
+            continue
+    if total <= 0:
+        return ""
+    return f"{total} expired unmeasured, excluded"
 
 
 def _latest_mtime_text(paths: list[Path]) -> str:
