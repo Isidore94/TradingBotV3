@@ -914,8 +914,10 @@ which is evidence and must not be loaded as context.
   three stats CSVs, and the Setup Tracker's two-clock status line.
 - `EXPIRED_UNMEASURED` terminal setup status with `expiry_reason`
   (`no_replay_20_sessions` over 20 exchange sessions, or `no_baseline_scenarios`),
-  applied after the closure rule and excluded from numerator and denominator of every
-  champion aggregate, each export carrying `n_expired_unmeasured` beside its `n`.
+  applied after the closure rule. The exclusion is DISPLAY-ONLY and opt-in
+  (`exclude_expired_unmeasured`, default False): the stats exports and the Setup Tracker
+  tabs drop the expired from numerator and denominator, the champion's scoring
+  population keeps them, and `n_expired_unmeasured` is carried either way.
 - Technical Integrity follow-up and breadth-ledger deterministic backfill with
   bounded retries, explicit `capture_mode`, honest gap rows, and live/backfill audit
   separation.
@@ -1188,18 +1190,35 @@ that closes normally is never expired; a calendar that refuses an endpoint expir
 nothing (uncertainty never deletes). It runs inside the daily recompute AND as a sweep
 over the stored records, because a setup whose daily frame comes back empty is skipped
 before the recompute is ever reached - and those are the records the rule exists for.
-`build_tracker_setup_type_rows`, `build_tracker_stats_rows` and
-`build_band_variant_stats_rows` exclude expired records from numerator AND denominator
-and each carry `n_expired_unmeasured` beside their `n`; the Setup Tracker's Current
-Picks and Setup Types tabs say `N expired unmeasured, excluded`. Rows are never deleted
-and the status is reversible - a replayed scenario comes back through the closure rule,
-which is the only thing that un-expires a record.
+`build_tracker_stats_rows` and `build_band_variant_stats_rows` (both display-only)
+exclude expired records from numerator AND denominator, and
+`build_tracker_setup_type_rows` does so **only when asked**. Each carries
+`n_expired_unmeasured` beside its `n`; the Setup Tracker's Current Picks and Setup Types
+tabs say `N expired unmeasured, excluded`. Rows are never deleted and the status is
+reversible - a replayed scenario comes back through the closure rule, which is the only
+thing that un-expires a record.
+
+**The exclusion is opt-in, and the champion's scoring population never moves** (lead
+ruling, 2026-09-05, over the builder's reported tension). `build_tracker_setup_type_rows`
+is read by two callers with different rights: `export_setup_tracker_views` renders it for
+the trader, but `_load_ranked_tracker_setup_type_rows` -> `rank_tracker_setup_type_rows`
+-> `apply_tracker_setup_type_adjustments` turns it into `row["score"]`, where
+`tracked_setups` is the sort's third key. plan.md sec 5 forbids changing a scoring input
+without golden fixtures first, so `exclude_expired_unmeasured` defaults to **False**; the
+export passes True and the scoring path passes nothing. The export builds the rows twice
+from one tracker (0.449 s per pass over 11,000 setups, after the close, off the Qt
+thread): the CSVs and the panel get the display reading, `payload["setup_type_stats"]`
+keeps the scoring population because `_load_ranked_tracker_setup_type_rows` falls back to
+it. Counting the expired out of the champion's own inputs is a future golden-fixture
+decision.
 
 **Deliberately NOT changed:** `build_recent_tracker_setup_family_rows`, which feeds
 `apply_recent_tracker_setup_family_adjustments` and therefore live scoring. The
 `no_baseline_scenarios` class is already invisible to it (`tradeable_scenario_count`
-is 0), and the packet did not name it. Excluding the `no_replay` class there would be
-a scoring change, which the packet's own invariants forbid.
+is 0), and the packet did not name it. Also unchanged: the two exports
+`analyze_master_avwap_scoring.py` reads (`master_avwap_setup_attributes.csv` and the
+attribute leaderboard) - that script is the only thing that writes live scoring weights,
+and this branch does not touch its inputs.
 
 **Files:** `scripts/master_avwap_lib/runner.py`, `scripts/master_avwap_lib/legacy.py`,
 `scripts/tracker_store.py`, `scripts/ui/panels/setup_tracker_panel.py`,

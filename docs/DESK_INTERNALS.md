@@ -1312,15 +1312,61 @@ The rules around it matter more than the status:
   replayed scenario comes back through the recompute as OPEN or CLOSED and the
   reason is cleared.
 
-One tension is worth naming rather than hiding: `build_tracker_setup_type_rows`
-is read by `apply_tracker_setup_type_adjustments`, which turns it into a live
-`score_delta`, and `tracked_setups` is one of that ranking's sort tiebreaks. So
-excluding the expired can move a setup-type rank in a group that contains them.
-That is the packet's own item and the trader's instruction, not a side effect —
-but it is the one place where "no score change" and "exclude the expired from
-every denominator" pull against each other, and it is why
+### The exclusion is opt-in, because one function serves two masters
+
+The builder shipped M3.3 excluding the expired everywhere and reported the
+tension rather than hiding it; the lead ruled on the same day, and the ruling is
+the rule now.
+
+`build_tracker_setup_type_rows` is read by two callers with different rights.
+`export_setup_tracker_views` renders it for the trader. But
+`_load_ranked_tracker_setup_type_rows` -> `rank_tracker_setup_type_rows` ->
+`apply_tracker_setup_type_adjustments` turns it into `row["score"]`, and
+`tracked_setups` is the third key that ranking sorts on. Dropping records from it
+is therefore a scoring change, and plan.md sec 5 forbids one without golden
+fixtures first.
+
+So `exclude_expired_unmeasured` defaults to **False**. The export passes True;
+nothing on the scoring path passes anything. `export_setup_tracker_views` builds
+the rows twice from one tracker — measured at 0.449 s per pass over 11,000
+setups, in the after-close export and off the Qt thread — because
+`payload["setup_type_stats"]` is what `_load_ranked_tracker_setup_type_rows`
+falls back to and it must keep the champion's population.
+`n_expired_unmeasured` is carried in both readings: "19 setups, 3 of them
+unmeasured" is a fact the scoring row is entitled to state while it still counts
+all 19. `build_tracker_stats_rows` and `build_band_variant_stats_rows` keep the
+exclusion unconditionally, and that was checked rather than assumed — the only
+thing that writes live scoring weights is `analyze_master_avwap_scoring.py`, and
+it reads the ATTRIBUTE exports, which this work never touches.
+
+`open_setups` does follow the status, and that is display-only by inspection:
+`_compute_tracker_setup_type_ranking_score` reads `tracked_setups`, the metric
+pair and its baselines, `target_hit_rate`, `stop_rate` and `closed_setups`, and
+the sort reads `ranking_score`, `closed_setups`, `tracked_setups`,
+`avg_closed_r` and `type_label`. Neither mentions it. The test asserts that
+`open_setups`, `n_expired_unmeasured` and `sample_setups` are the ONLY cells that
+differ, so a third one moving is a failure rather than a discovery.
+
+**Counting the expired out of the champion's own inputs is a future
+golden-fixture decision, not something to do in passing.**
+
+One note on the test, because it took three attempts to make it capable of
+failing — the 2026-09-02 lesson about tests written by the agent that wrote the
+fix. The first fixture put every setup in one rank group, so `score_delta` was 0
+on both sides and nothing could move. The second put the two families in
+different groups, because `_tracker_priority_bucket` demotes `favorite_setup` to
+`near_favorite_zone` for any family outside `MAIN_SWING_SETUP_FAMILIES`. The
+third works: three families in one (side, bucket), a third family dragging the
+baseline so two carry an identical positive edge, tying their `ranking_score` and
+`closed_setups` so `tracked_setups` is the only separator, and `zeta_pattern`
+sorting after `alpha_pattern` by `type_label` so dropping its stale records
+reverses the two. `score_delta` is confidence-capped at 3 either way, so the test
+asserts the rank published into `symbol_entry["priority_setup_type_rank"]` — the
+value that actually moves — and asserts the delta is non-zero first so it can
+never pass vacuously.
+
 `build_recent_tracker_setup_family_rows` (the other live scoring input, which the
-packet did not name) was deliberately left untouched.
+packet did not name) was left untouched throughout.
 
 ## Headline statistics, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)
 

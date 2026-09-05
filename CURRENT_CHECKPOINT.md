@@ -136,18 +136,28 @@ merges.** Tip `cb7dded7` + docs.
   `build_band_variant_stats_rows`, each carrying `n_expired_unmeasured`; the two tabs say
   `N expired unmeasured, excluded`. Rows are never deleted and only the closure rule
   un-expires one.
-- **Deliberately NOT done:** `build_recent_tracker_setup_family_rows` is untouched. It
-  feeds `apply_recent_tracker_setup_family_adjustments` and therefore LIVE SCORING; the
-  packet did not name it, and the `no_baseline` class is already invisible to it. **What
-  the lead should look at:** `build_tracker_setup_type_rows` IS reachable by
-  `apply_tracker_setup_type_adjustments`' `score_delta` - `tracked_setups` is a sort
-  tiebreak and `avg_total_r` feeds the ranking metric - so M3.3's exclusion can move a
-  setup-type rank where a group contains expired records. That is the packet's own item,
-  not a side effect, but it is the one line where "no score change" and "exclude the
-  expired from every denominator" pull against each other.
+- **The exclusion is OPT-IN and the scoring population never moves** (lead ruling,
+  2026-09-05, over the builder's reported tension; fix commit `2577623a`).
+  `build_tracker_setup_type_rows` is read by two callers with different rights - the
+  export renders it, and `_load_ranked_tracker_setup_type_rows` ->
+  `apply_tracker_setup_type_adjustments` turns it into `row["score"]`, where
+  `tracked_setups` is the sort's third key. plan.md sec 5 forbids changing a scoring
+  input without golden fixtures, so `exclude_expired_unmeasured` defaults to False, the
+  export passes True, and the export builds the rows TWICE from one tracker (0.449 s per
+  pass over 11,000 setups, after the close): the CSVs and tabs get the display reading,
+  `payload["setup_type_stats"]` keeps the scoring population. Four tests pin it, all four
+  proven RED on the pre-ruling tip `259cf42c`. **Counting the expired out of the
+  champion's own inputs is a future golden-fixture decision.**
+- **Deliberately NOT done:** `build_recent_tracker_setup_family_rows` is untouched (it
+  feeds `apply_recent_tracker_setup_family_adjustments` and therefore live scoring; the
+  `no_baseline` class is already invisible to it). Nor are the two exports
+  `analyze_master_avwap_scoring.py` reads - that script is the only thing that writes
+  live scoring weights, and it reads the ATTRIBUTE exports, which this branch never
+  touches.
 - **Verification:** `tests/test_m3_tracker_keeps_up.py` (31 tests), 26 of the first 30
-  proven RED on `e744afd5` before any fix existed and committed red as `60161275`. Ruff
-  clean. No packaging trigger.
+  proven RED on `e744afd5` before any fix existed and committed red as `60161275`, plus
+  four more for the lead's ruling proven RED on `259cf42c`. Ruff clean. No packaging
+  trigger.
 
 ### 2026-09-05 - M1 BUILT: the band challenger's hand-off, on `claude/m1-band-variant-handoff`
 
