@@ -105,7 +105,7 @@ the dated entry named beside it.
 ### 2026-09-05 - Packet M2: `unresolved` means UNMEASURED (branch `claude/m2-unresolved-means-unmeasured`)
 
 Trader authorization, 2026-09-05: *"Fix all of these failures"* over the measurement audit
-above, finding 2. That is the recorded yes for the evidence-side
+in the entry BELOW this one (2026-09-05 ~02:00 PT), finding 2. That is the recorded yes for the evidence-side
 `scripts/bounce_bot_lib/legacy.py` edits under the file-scoped ask-first rule - writer and
 sweep rows only, no detection change. Base `e7b12ebe`; NOT merged.
 
