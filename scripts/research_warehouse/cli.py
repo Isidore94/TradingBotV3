@@ -1436,14 +1436,6 @@ def run_band_coverage_compare(
             + ", ".join(known),
         }
 
-    singles = {
-        recipe_id: run_band_coverage(store, month=month, recipe_id=recipe_id)
-        for recipe_id in wanted
-    }
-    for report in singles.values():
-        if report.get("status") != "OK":
-            return report
-
     try:
         first, last = _month_bounds(month)
     except ValueError:
