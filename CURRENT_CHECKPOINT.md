@@ -20,7 +20,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 |---|---|
 | Latest review | **2026-09-04: [project process review](docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)** over `f641421` (Codex). The trader said *"please review and implement the suggested changes"*; the lead turned it into five packets (Q1-Q5, Phase 0.18, `.claude/packets/Q*.md`), each built, reviewed by reproduction and merged the same evening. NOT built, ask-first (`bounce_bot_lib/legacy.py`): per-alert bar-close -> shown latency instrumentation, the H1 SPY recompute, a `stop_hit_at` column, the sweep autorun default. Also NOT in the review: the day's largest stall (19,922 ms at 07:03:47 in `ui/app.py:1240`). |
 | Working branch | **`main`** - **2026-09-04 evening: Phase 0.18 (Q1-Q5) MERGED at `b0db9bbe`** in a scratch worktree, packet order, every branch with a reviewer GO. Q1 `held_run_score` says what it MEASURED (5,222 held / 1,960 broken / 979 unmeasured live; D1 keeps the side, 8 opposed; the window is `lately_window`; a Measured column on the Daytrade Tracker). Q2 warehouse: `anchor_knowledge` observed/reconstructed/legacy, `path_kind`, read-only `band-coverage`, `rebuild-daily-features` (dry run by default) - gate #59's chain is now BD-100's four steps. Q3 AI grounding: typed source kinds, a position claim needs a surviving ref in `POSITION_SOURCE_IDS`, which is `journal.trades_and_reviews` only (the executive summary may never assert one; it is WITHHELD when it does), `metric_ref` on numeric claims, the morning file's three counts, `LikeLink.from_payload` and the audit scripts read `match_basis` (live 84 rows / 77 events / 41 linked / 36 none). Q4 overnight: consecutive clean exchange sessions + a RECORDED trader spot-audit gate enrichment (**enrichment refuses until `python -m ai_jobs.digest approve-audit` is run - 9 of 10 clean sessions today**), decision 0018 puts the deterministic slots before narration, `entry_index.json` is the frontier handoff. Q5: the pick scorecard runs on one owned worker with streamed reads, success-only `picks_scored_at` (15.7 s Qt stall the day before). Before it: the earnings-anchor bridge (14:30), T2 (12:40), T1 (11:30) - see the dated entries. |
-| Also in flight | **Nothing unmerged from today**: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
+| Also in flight | **`claude/m2-unresolved-means-unmeasured` is BUILT AND UNMERGED** (packet M2, base `e7b12ebe`, tip pushed): the after-close sweep labelled every row it finalized `unresolved`, including 3,607 of the last twenty sessions' 4,251 whose bars WERE measured. `outcome_semantics.terminal_kind` now reads history correctly without rewriting a row and the writer emits `swept_measured`; the champion tier/mute/PROVEN aggregator is deliberately untouched. Live gate #68. **Nothing unmerged from 2026-09-04**: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
 | Active roadmap items | **V4** (Working-lately + the priority switch - which now inherits Q1's rule that only an ALIGNED same-session D1 setup carries the privilege - the AWAY Recap rebuild, the Setup Types tab, P10's `after_like` split, the R4 advisories). **Gate #59's runbook** (BD-100): nightly build -> `rebuild-daily-features --from 2026-08-01 --to <today>` dry run, then `--apply` on the trader's go -> `recompute-outcomes --apply` -> `band-coverage --month 2026-08` / `2026-09`. **Trader action owed**: `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>` (from `scripts/`) after spot-auditing three packs, or enrichment stays silent. Live gates #29-#52 owed across Phases 0.13 and 0.14; #53-#64 listed below. |
 | Last verified baseline | **`main` at `b0db9bbe`, 2026-09-04 evening, run in the SCRATCH merge worktree on the merged tree as committed, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 6710 passed, 1 skipped, 72 subtests passed, ZERO failures, 5 min 34 s - run as 6709 passed + 1 failed on the merged tree BEFORE this block was refreshed (the Q3 doc-scan test demands the glance block name `POSITION_SOURCE_IDS`; the merge had kept the pre-Q3 rows), and that one test re-run green after the refresh with no other file touched.** `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7, source selftest green. No packaging trigger (no dependency, asset or new top-level package; every new module is inside an already-collected package). Previous: 6608 passed at the earnings-anchor bridge (14:30 PT). |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
@@ -33,6 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 68 | **`unresolved` means UNMEASURED (M2)** - the first after-close sweep after merge logs the four-way split (`Outcome sweep finalized N pending trade(s): measured_eod A, swept_measured B, unmeasured C, expired D ...`) in `trading_bot.log`; the Daytrade Tracker's status line shows the coverage sentence after Q1's window sentence; and `outcome_semantics.terminal_kind` over the live file for the last 20 sessions reports `measured_eod + measured_swept` at or above the 7,427 measured at merge (3,820 + 3,607 of 8,161 events) with `unmeasured` near 644. **The packet's gate text said 7,600 and about 495**; those were read a day earlier over a window one session back, and the branch's own streamed read is the number to compare against | 2026-09-05 M2 entry |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
 | 62 | **The AI grounding contract holds on a real night (Q3)** - the first nightly run after `claude/q3-ai-grounding` merges: `ai_morning_brief.txt` OPENS with `Analyzed A of N. Membership-only B. Failed C.` and `A + B + C == N`; every membership-only block leads with `membership only - ...` and carries NO position language; and `ai_jobs`' dropped-row log names any position or numeric drop with its detail - the three strings the code emits are **`position claim without a position source`**, **`position claim in the executive summary`** and **`numeric claim without a resolvable metric_ref`**, and those are what to grep for. **Read the executive summaries too**: 480 of 1,478 published ones asserted a position, so expect the system's `Executive summary withheld: ...` line to appear on the first night and to become rare as the model learns the rule. A night with ZERO drops is also a pass - the rule is that a drop, when it happens, is named. **Watch for over-drop**: if the analyzed count collapses versus the prior night, the numeric regex is catching prose and the packet's `NUMERIC_CLAIM_PATTERNS` is the one thing to widen or narrow. | packet Q3, 2026-09-04 |
@@ -100,6 +101,94 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+
+### 2026-09-05 - Packet M2: `unresolved` means UNMEASURED (branch `claude/m2-unresolved-means-unmeasured`)
+
+Trader authorization, 2026-09-05: *"Fix all of these failures"* over the measurement audit
+above, finding 2. That is the recorded yes for the evidence-side
+`scripts/bounce_bot_lib/legacy.py` edits under the file-scoped ask-first rule - writer and
+sweep rows only, no detection change. Base `e7b12ebe`; NOT merged.
+
+**What was wrong.** `sweep_pending_bounce_outcomes` "needs no bars and no IB": it finalizes
+from what each trade already measured, so `finalize_outcome_once` is called with no bars and
+the writer's one-liner - `status = "eod_complete" if basis == "measured" else "unresolved"` -
+labelled every swept row `unresolved`, the same word as a trade that measured nothing at all.
+Decision A (2026-08-25) had already got the ARITHMETIC right: `setup_scoreboard.exit_policy_r`
+reads those rows under `stop_exit` / `last_measured`. Only the label lied.
+
+**Measured, streamed read-only over the live 308 MB store** (`terminal_kind` over the twenty
+sessions to 2026-09-05: 8,161 events, 324,605 rows scanned, nothing loaded):
+
+| kind | events |
+|---|---|
+| `measured_eod` | 3,820 |
+| `measured_swept` | 3,607 |
+| `unmeasured` | 644 |
+| `open` (no final row) | 90 |
+
+The 4,251 `unresolved` rows split 2,054 `last_measured_bar` + 1,553
+`stop_hit_from_prior_measurement` - **all 3,607 with `bars_elapsed > 0` and reason
+`no_eod_close`** - against 644 with basis `unresolved` (284 `no_bars_after_entry`, 360
+`no_measurement_in_checkpoint`). The audit's "3,942 unresolved (48.3%)" and the packet's
+"4,099 / 3,604" are the same population read a day earlier.
+
+**M2.4 - the 08-24..08-27 backlog is understood, not repaired.** Per date, `measured_eod` /
+`measured_swept` / `unmeasured` / `open`:
+
+| date | eod | swept | unmeasured | open |
+|---|---|---|---|---|
+| 08-20 | 232 | 22 | 0 | **90** |
+| 08-21 | 388 | 72 | 15 | 0 |
+| **08-24** | **0** | **466** | 87 | 0 |
+| **08-25** | **2** | **636** | 84 | 0 |
+| **08-26** | **25** | **541** | 25 | 0 |
+| **08-27** | **38** | **663** | 112 | 0 |
+| 08-28 | 1 | 0 | 77 | 0 |
+| 08-31 | 1 | 218 | 39 | 0 |
+| 09-01 | 0 | 381 | 77 | 0 |
+| 09-02 | 442 | 4 | 1 | 0 |
+| 09-03 | 30 | 244 | 94 | 0 |
+| 09-04 | 212 | 297 | 30 | 0 |
+
+Those four days are the F1 GIL-freeze days: the live thread stopped scanning symbols through
+the close and the sweep finalized the backlog. **Nothing is re-finalized.** Those trades keep
+the R they measured and now read `measured_swept`. Whether a sweep running inside the same
+session could fetch the missing close bars from cache is a detector-side question and stays
+ask-first. The 90 `open` rows on 08-20 are events with no final row at all - a separate
+question this packet only counts.
+
+**What was built.** `outcome_semantics.terminal_kind(row)` is the one reader-side truth
+(`measured_eod` / `measured_swept` / `unmeasured` / `open`, from `status` +
+`context_json.finalization`), so history is READ correctly and no row is rewritten. The writer
+now emits `swept_measured` through the single decision `status_for_finalization_basis` -
+additive value, header unchanged, `schema_version` still 4. The sweep counts
+`by_terminal_kind` from the status the writer actually WROTE (a caller-owned `record` dict on
+`finalize_outcome_once`, never an attribute, because two threads call it) and
+`outcome_sweep_log_line` prints the split. The Daytrade Tracker status line and the AWAY
+digest print `format_terminal_coverage`'s one sentence off reads they already do.
+
+**Status-keyed reader survey** (every one found, and what changed):
+`_latest_bounce_outcome_rows` in `bounce_bot_lib/legacy.py` is the ONLY production reader
+keyed on the status column, and it feeds the champion tier, the mute and the PROVEN stamp -
+**deliberately unchanged**, since it takes `eod_complete` rows only and `swept_measured` is
+excluded exactly as `unresolved` was; a test asserts it. Whether it SHOULD count
+swept-measured rows is a scoring question and is ASK-FIRST, not this packet's. `setup_scoreboard`
+never loaded the column (`status` is not in `OUTCOME_COLUMNS`); `held_run_score` keys on
+`event_type`/`stop_hit`; `review_learning.load_outcomes_for` keys on `outcome_mode`;
+`autopilot_core.score_autopilot_picks` joins by `event_id`; `ai_jobs.digest` reads through
+`load_intraday_finals` and its `by_status` is the AI JOB ledger's. **Deviation**: M2.3 asked
+for the sentence on "the evidence report" too - that count is the outcome LEDGER's row count
+in `scripts/ai_jobs/evidence_report.py`, which this packet was told not to touch, so it did
+not get it.
+
+Verification on the branch: `tests/test_m2_unresolved_means_unmeasured.py` 23 tests, committed
+RED at `920aebf8` and proven so on `e7b12ebe` (21 failed, 2 passed - both unchanged-behaviour
+guards). Targeted band (golden / bounce / outcome / scoreboard / held / autopilot / away /
+daytrade / tracker / learning / sweep / digest / evidence) 1,491 passed, 1 skipped, 27
+subtests; `ruff` clean. Five pre-existing assertions asserting the OLD label on rows that DID
+measure were updated with every numeric assertion kept. **No packaging trigger**: no
+dependency, no non-`.py` asset, no new top-level package, no dynamic import. The desk was NOT
+restarted (pid 29260 up throughout) and no live store was written.
 
 ### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
 

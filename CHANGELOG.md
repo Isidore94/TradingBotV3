@@ -589,6 +589,27 @@ which is evidence and must not be loaded as context.
 
 ### Journal, explanations, and learning
 
+- **`unresolved` means UNMEASURED** (M2, 2026-09-05). `scripts/outcome_semantics.py`
+  gained a second half beside `claim_kind`: `terminal_kind(row)` returns
+  `measured_eod` / `measured_swept` / `unmeasured` / `open` from the outcome row's
+  `status` plus `context_json.finalization`. The after-close sweep needs no bars, so
+  every row it wrote was `unresolved` by construction - **3,607 of the 4,251
+  `unresolved` rows in the twenty sessions to 2026-09-05 carry a measured basis**
+  (`last_measured_bar` / `stop_hit_from_prior_measurement`), and their R was already
+  readable under `setup_scoreboard.exit_policy_r`. The writer now says which
+  (`swept_measured` when a prior measurement was used, `unresolved` ONLY when nothing
+  was measured, `eod_complete` unchanged) through the one decision,
+  `status_for_finalization_basis`; the value is ADDITIVE, the CSV header is unchanged,
+  `schema_version` stays 4 and **no historical row is rewritten** - `terminal_kind`
+  reads them. The sweep logs the four-way split (`outcome_sweep_log_line`), the
+  Daytrade Tracker status line and the AWAY digest print
+  `format_terminal_coverage`'s one sentence, and `held_run_score.Episode` carries
+  `terminal_kind` off the read it already does. **The champion aggregator
+  (`_latest_bounce_outcome_rows`) is deliberately unchanged** - it takes
+  `eod_complete` rows ONLY, so no tier, mute or PROVEN stamp moved; whether it
+  SHOULD count swept-measured rows is a scoring question and stays ask-first.
+  `setup_scoreboard` never read the status column at all. Live at merge:
+  measured_eod 3,820, measured_swept 3,607, unmeasured 644, open 90 of 8,161 events.
 - **R7/R8 adversarial release-candidate repair (2026-08-15).** Every verified
   A1–A19 and B1–B14 finding was closed before handoff. The repair normalizes
   broker-ledger casing and Flex dates; preserves shared Focus wiring and exact
@@ -1102,6 +1123,71 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-05 - M2: a swept trade that measured its bars is not unresolved
+
+Trader authorization, 2026-09-05: *"Fix all of these failures"* over the lead's
+measurement audit (`CURRENT_CHECKPOINT.md`, 2026-09-05 ~02:00 PT, finding 2). That is
+the recorded yes for the evidence-side `scripts/bounce_bot_lib/legacy.py` edits under
+the file-scoped ask-first rule - writer and sweep rows only, no detection change.
+Branch `claude/m2-unresolved-means-unmeasured`, base `e7b12ebe`.
+
+**The defect.** `sweep_pending_bounce_outcomes` "needs no bars and no IB": it
+finalizes from what each trade already measured, so `finalize_outcome_once` is called
+with no bars and `status = "eod_complete" if basis == "measured" else "unresolved"`
+made every swept row `unresolved` - including a trade whose stop is a recorded fact.
+Streamed read-only over the live 308 MB store, twenty sessions to 2026-09-05 (8,161
+events, 324,605 rows): 4,251 `unresolved`, of which 2,054 `last_measured_bar`, 1,553
+`stop_hit_from_prior_measurement` (all 3,607 with `bars_elapsed > 0` and reason
+`no_eod_close`) and only 644 with basis `unresolved`. **63% of the mislabelled rows
+fall on 2026-08-24..08-27**, the GIL-freeze days (F1), when the live thread stopped
+scanning through the close and the sweep finalized the backlog.
+
+**M2.1 - one reader-side truth.** `outcome_semantics.terminal_kind(row)` -
+`measured_eod`, `measured_swept`, `unmeasured`, `open` - reads the status first and
+the basis only when the status cannot answer, so classifying the live file never
+parses 308 MB of JSON. `terminal_coverage` folds per EVENT (the final row decides; no
+final row is `open`); `format_terminal_coverage` is the one sentence every surface
+prints. A final row with an unknown status is `unmeasured`, never a guess.
+
+**M2.2 - the writer says what it did.** `status_for_finalization_basis` is the ONE
+decision and lives in `outcome_semantics`, so the writer and the readers cannot
+drift. `finalize_outcome_once` takes an optional caller-owned `record` dict and fills
+it with the status it actually WROTE - a dict rather than an attribute on `self`,
+because the scan thread and the sweep both call it - and the sweep accumulates
+`by_terminal_kind` from that rather than re-deriving it. `outcome_sweep_log_line`
+prints `finalized N: measured_eod A, swept_measured B, unmeasured C, expired D ...`.
+
+**M2.3 - coverage is shown, never hidden.** `held_run_score.Episode.terminal_kind`
+and `terminal_coverage(episodes)` ride the ONE streamed read `load_episodes` already
+does; `daytrade_tracker_panel.outcome_coverage_text` appends the sentence after Q1's
+window sentence, off the Qt thread through the existing worker seam;
+`autopilot_core.outcome_coverage_line` puts it beside the AWAY digest's scorecard
+line from the rows `read_scorecard_inputs` already streamed.
+
+**M2.4 - the 08-24..08-27 backlog is understood, not repaired.** Nothing is
+re-finalized. Those trades keep their measured R and now read `measured_swept`
+through `terminal_kind`. Per-date counts are in the 2026-09-05 checkpoint entry.
+
+**What did NOT change.** No detection, tier, mute, PROVEN or alert behaviour;
+`M5_SIGNAL_TYPE_DEFAULTS` and `LRSI_M5_ALERTS_RETIRED` untouched; the bounce goldens
+byte-identical; no evidence row rewritten. `_latest_bounce_outcome_rows` - the only
+production reader keyed on the status column, and the one that feeds the champion
+tier, the mute and the PROVEN stamp - still takes `eod_complete` rows ONLY, so
+`swept_measured` is excluded exactly as `unresolved` was and it sees the identical
+population. A test asserts that. **Whether it should count swept-measured rows is a
+scoring question and stays ask-first.** `setup_scoreboard` needed no change:
+`status` is not in its `OUTCOME_COLUMNS` and `exit_policy_r` always read the basis.
+`review_learning` keys on `outcome_mode`, `autopilot_core.score_autopilot_picks`
+joins by `event_id`, and `ai_jobs.digest` reads through
+`setup_scoreboard.load_intraday_finals`; none is status-keyed. The evidence report's
+outcome count is the LEDGER's row count and lives in `scripts/ai_jobs`, which M4
+owns - it did not get the sentence.
+
+Tests: `tests/test_m2_unresolved_means_unmeasured.py` (23), committed RED first and
+proven so on `e7b12ebe`. Five pre-existing assertions in `tests/test_outcome_sweep.py`
+and `tests/test_outcome_no_fabrication.py` asserted the OLD label on rows that DID
+measure and were updated with every numeric assertion kept. Live gate #68.
 
 ### 2026-09-04 - Q3: typed sources, a position claim needs a position source, honest brief counts, one reader for `match_basis`
 
