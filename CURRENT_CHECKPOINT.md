@@ -96,6 +96,21 @@ the dated entry named beside it.
 
 
 
+### 2026-09-04 (evening) - Packet Q1: `held_run_score` says what it measured (lead-built, `claude/q1-held-honesty`)
+
+Process review findings 1 and 2, built by the lead after the Opus tester hit the session
+rate limit. Red first (17 tests, `tests/test_q1_held_honesty.py`), then the fix. Live counts
+that drove it: 979 of 8,161 recent episodes read held with the question never answered; 8
+of 2,646 D1-present episodes were the opposite side. Contract changes (tests rewritten,
+named in the commit): a lone late stop is `break_time_unknown`, not held; a `final` row
+that never reached 30 minutes is not held; the D1 map is `{session: {SYMBOL: {sides}}}`;
+`d1_setup_rows` returns None for a missing snapshot; the segment key's fourth element is
+the alignment string; the window is `evidence_stats.lately_window` (`as_of` keyword
+everywhere, default today). Surfaces: the Daytrade Tracker's Measured column and the
+window sentence on its status line; the M5 alert suffix passes `d1_alignment`. Targeted
+files green, ruff clean. **Reviewer NO-GO round 1, fixed**: rule 2 read a `registered` row's replay `logged_at` (median 1,013 min after entry, 8,931 such rows in the window) as "the window passed", calling 728 unmeasured episodes held; now a hold needs a row that MEASURED bars (`_measured_minutes`: `minutes_elapsed`, or `bars_elapsed > 0` before the `logged_at` gap counts; a `registered` row never). Live after the fix: 5,222 held / 1,960 broken / 979 unmeasured (recon's split, exactly); D1 aligned 2,638 / opposed 8 / none 4,976 / unknown 539. **Live gate #60** owed. Owed, ask-first: `stop_hit_at` and
+the sweep autorun default in `legacy.py`.
+
 ### 2026-09-04 (evening) - Packet Q5: the pick scorecard leaves the Qt thread (lead-built, `claude/q5-scorecard-worker`)
 
 Process review performance item. Red first (8 tests, `tests/test_q5_scorecard_worker.py`),
@@ -106,6 +121,7 @@ lead's 5.66 s old / 5.40 s streamed (parse-bound - the thread is the fix). The d
 stall, 19,922 ms at 07:03:47 in `ui/app.py:1240`, is NOT in the review and NOT in this
 packet; it is named here so it is not lost. Targeted files green (78), ruff clean. **Live
 gate #64** owed.
+
 
 ### 2026-09-04 (~14:30 PT) - Earnings-anchor bridge: the scan feeds the anchors CSV the warehouse reads
 

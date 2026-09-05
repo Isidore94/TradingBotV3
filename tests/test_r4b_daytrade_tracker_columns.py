@@ -120,12 +120,12 @@ def test_the_pooled_direction_cell_is_measured_and_not_an_average_of_averages():
             bounce_type="vwap",
             entry_time="10:00",
             market_environment="BULLISH",
-            broke_early=False,
+            measurement=hrs.MEASURED_HELD,
             mfe_r=1.0 + index,
         )
         for index in range(8)
     ]
-    summaries = hrs.dimension_summaries(episodes, sessions=0)
+    summaries = hrs.dimension_summaries(episodes, as_of="2026-09-01")
     pooled = summaries.get(("bounce_type", hrs.ALL_DIRECTIONS, "vwap"))
     assert pooled is not None, "no pooled-direction cell to join a sideless row to"
     assert pooled["n"] == 8

@@ -178,9 +178,18 @@ which is evidence and must not be loaded as context.
   the weakest near rows and never the best one. `render_away_report` stays a pure
   renderer - the read is the caller's. AWAY is still the only routine pusher.
 - **`held_run_score` measures whether the level held and then how far it ran**
-  (V1 item 2, decision 0016 answer 4): P(no stop inside 30 minutes) x trimmed-mean
-  MFE_R of the held ones, per (bounce_type, time_bucket, environment,
-  d1_setup_present), rolling 20 sessions. **A SECOND score** - the champion tier,
+  (V1 item 2, decision 0016 answer 4): P(the level MEASURED held inside 30 minutes) x
+  trimmed-mean MFE_R of the held ones, per (bounce_type, time_bucket, environment,
+  d1_alignment), over the shared `lately_window`. **Since packet Q1 (2026-09-04)** every
+  episode carries a measurement state - `measured_held` / `measured_broken` / `pending` /
+  `unmeasured` (reasons `no_follow_up`, `window_not_reached`, `break_time_unknown`) - and
+  only the first is held; `hold_rate` is held / MEASURED and every cell carries
+  `n_measured`, `n_broken`, `n_pending`, `n_unmeasured` and `coverage` (the Daytrade
+  Tracker's **Measured** column, `35 / 41`). The D1 dimension keeps the setup's SIDE
+  (`aligned` / `opposed` / `none` / `unknown`; `d1_setup_present` is aligned only; a missing
+  snapshot is UNKNOWN, never False; basis `same_session_retrospective`). The window is
+  `evidence_stats.lately_window` and `window_report` names the missing sessions on the
+  tracker's status line. **A SECOND score** - the champion tier,
   the mutes and the PROVEN stamp are untouched and a test pins that the champion
   never imports it. The row suffix is BLANK below the floor, never a number in
   brackets. **Its surfaces landed with R4 A9/A10** - the Daytrade Tracker column
@@ -1010,6 +1019,20 @@ Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-04 - Q1: `held_run_score` says what it measured
+
+Process review findings 1 and 2. Live: 979 of 8,161 recent episodes read `held=True`
+with the thirty-minute question never answered (2 registered-only, 977 never reaching 30
+minutes); 8 of 2,646 "D1 present" episodes were the OPPOSITE side of the swing setup.
+Now: a measurement state per episode (only `measured_held` is held; a stop first seen
+past the window with no earlier row bracketing it is `break_time_unknown`, never held);
+`hold_rate` = held / measured with the five counts and `coverage` on every cell and a
+**Measured** column on the Daytrade Tracker; the D1 join keeps the side (aligned /
+opposed / none / unknown, basis retrospective - the snapshot carries no time of day) and
+only ALIGNED carries the privilege; the window is `evidence_stats.lately_window` with its
+gaps on the status line. `alert_suffix` text unchanged. Owed, ask-first (`legacy.py`): a
+first-break-time column and the sweep autorun default. Live gate #60.
+
 ### 2026-09-04 - Q5: the pick scorecard leaves the Qt thread
 
 Process review, performance: `ui_stalls.jsonl` recorded 15,739 ms at 13:00:44 PT in
@@ -1022,6 +1045,7 @@ attempts then `picks_scoring_failed_at`. Measured read-only on the live files: t
 materialise 5.66 s, the streamed pass 5.40 s (the parse dominates; the win is the thread,
 not the seconds) - 7,933 candidates and 12,030 outcome rows for the day kept out of
 324,605 + 100,506. Live gate #64.
+
 
 ### 2026-09-04 - Project process review and evidence-note corrections
 

@@ -2276,8 +2276,12 @@ class AlertCenterPanel(QFrame):
                 bounce_type=bounce_type,
                 entry_time=entry_time,
                 market_environment=environment,
-                d1_setup_present=alert.symbol
-                in (self._held_run_d1_symbols.get(trade_date) or set()),
+                # Packet Q1: the SIDE travels with the join. A SHORT swing setup
+                # on a long M5 alert is OPPOSED, not "a D1 setup"; no snapshot
+                # is UNKNOWN, not False.
+                d1_alignment=held_run_score.d1_alignment(
+                    self._held_run_d1_symbols, trade_date, alert.symbol, alert.side
+                ),
             )
             alert.held_run_suffix = held_run_score.alert_suffix(cell)
         except Exception:  # noqa: BLE001 - a row suffix never costs an alert
@@ -2354,7 +2358,7 @@ class AlertCenterPanel(QFrame):
         if not isinstance(payload, dict):
             return
         self._held_run_index = payload.get("index") or {}
-        self._held_run_d1_symbols = payload.get("d1") or {}
+        self._held_run_d1_symbols = payload.get("d1")  # None = no snapshot = UNKNOWN (packet Q1); never flattened to {}
         # Stamped LAST, so a payload that arrived for a day that has already
         # rolled leaves this panel asking for a fresh one rather than settling.
         self._held_run_built_for = str(payload.get("built_for") or "")

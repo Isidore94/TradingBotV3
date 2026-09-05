@@ -1162,6 +1162,32 @@ measurement and the reasoning behind each rule.
   a holiday week measured four sessions and still called itself a week. The state
   key, the report header, the CLI flag and every renderer say **sessions**.
 
+### Held is MEASURED held (packet Q1, 2026-09-04)
+
+Process review 2026-09-04, findings 1 and 2. `Episode.held` was `not broke_early`, so an
+episode nothing had followed up read as held. Recon on the live outcome log (default
+window, 8,161 episodes): 2 registered-only, 977 with rows but none reaching 30 minutes,
+1,960 broken inside 30 min, 5,222 held past 30 min - and all 979 unanswered ones read
+`held=True`. The producer (`legacy.py` `BOUNCE_OUTCOME_COLUMNS`) writes `stop_hit` as a
+boolean over ALL bars since entry and no first-break time; `minutes_elapsed` is entry to
+the LAST bar the row knew. A `final` row is written only by the per-symbol update path or
+the sweep, whose autorun is OFF by default, which is why registered-only events exist.
+
+Rule now: `measured_held` / `measured_broken` / `pending` / `unmeasured` per episode, only
+the first is held, `hold_rate` = held / measured, counts and `coverage` on every cell and
+a Measured column on the tracker. A stop first seen past the window with no earlier
+no-stop row at or past 30 minutes is `break_time_unknown`. Two producer changes are OWED
+and ask-first: a `stop_hit_at` column, and the sweep autorun default.
+
+D1 overlap: the scoring snapshot carries `side` per setup and `scan_date` only (no time),
+and the join dropped the side - 8 of 2,646 "D1 present" episodes were the opposite side.
+The join now keeps it (`aligned` / `opposed` / `none` / `unknown`), only ALIGNED carries
+the privilege, a missing snapshot is UNKNOWN, and every summary carries
+`d1_basis: same_session_retrospective` because "known when the alert fired" cannot be
+established from a date-only file. "Lately" is `evidence_stats.lately_window` with
+`window_report` naming the missing sessions; the old "last 20 dates present" widened
+silently on sparse data.
+
 ## Frozen exe rebuild policy, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)
 
 `CLAUDE.md` keeps the policy, the guards and the triggers; this is the section as it

@@ -48,7 +48,9 @@ def _outcome_rows(symbol, *, trade_date, held, mfe, bounce="ema_15", n=1):
                 "event_type": "final",
                 "mfe_r": f"{mfe}",
                 "stop_hit": "False" if held else "True",
-                "minutes_elapsed": "5",
+                # A `final` row is written at the close: a held level has seen
+                # the window pass (packet Q1 - an unreached window is not held).
+                "minutes_elapsed": "60" if held else "5",
             }
         )
     return rows
@@ -70,11 +72,13 @@ def test_the_d1_dimension_is_read_from_the_scanners_own_snapshot(tmp_path):
                     "2026-09-01:NVDA:LONG:2026-08-01:favorite_setup": {
                         "scan_date": "2026-09-01",
                         "symbol": "NVDA",
+                        "side": "LONG",
                         "priority_bucket": "favorite_setup",
                     },
                     "2026-09-01:AMD:LONG:2026-08-01:watch": {
                         "scan_date": "2026-09-01",
                         "symbol": "AMD",
+                        "side": "LONG",
                         "priority_bucket": "watch",
                     },
                 }
@@ -86,7 +90,7 @@ def test_the_d1_dimension_is_read_from_the_scanners_own_snapshot(tmp_path):
     rows = held_run_score.d1_setup_rows(snapshot)
     by_session = held_run_score.d1_setups_by_session(rows)
 
-    assert by_session == {"2026-09-01": {"NVDA"}}, (
+    assert by_session == {"2026-09-01": {"NVDA": {"LONG"}}}, (
         "only the favorite / near-favorite buckets count as a D1 setup"
     )
 
@@ -97,21 +101,22 @@ def test_an_episode_on_a_name_with_a_d1_setup_says_so(tmp_path):
 
     rows = _outcome_rows("NVDA", trade_date="2026-09-01", held=True, mfe=2.0)
     episodes = held_run_score.build_episodes(
-        rows, d1_setups_by_session={"2026-09-01": {"NVDA"}}
+        rows, d1_setups_by_session={"2026-09-01": {"NVDA": {"LONG"}}}
     )
 
     assert [episode.d1_setup_present for episode in episodes] == [True]
-    assert episodes[0].segment()[3] is True
+    assert episodes[0].segment()[3] == held_run_score.D1_ALIGNED
 
 
-def test_a_missing_snapshot_is_no_rows_and_never_an_error(tmp_path):
-    """An absent file degrades to the old behaviour, which is False everywhere."""
+def test_a_missing_snapshot_is_none_and_never_an_error(tmp_path):
+    """An absent file reads UNKNOWN everywhere (packet Q1), never False."""
     import held_run_score
 
-    assert held_run_score.d1_setup_rows(tmp_path / "nope.json") == []
+    assert held_run_score.d1_setup_rows(tmp_path / "nope.json") is None
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")
-    assert held_run_score.d1_setup_rows(bad) == []
+    assert held_run_score.d1_setup_rows(bad) is None
+    assert held_run_score.d1_setups_by_session(None) is None
 
 
 def test_the_build_path_reads_the_snapshot_and_not_the_gigabyte_tracker(tmp_path):
@@ -194,7 +199,7 @@ def test_the_alert_row_carries_the_held_and_ran_suffix():
         bounce_type="ema_15",
         entry_time="2026-09-01T09:35:00",
         market_environment="trend_up",
-        d1_setup_present=False,
+        d1_alignment=held_run_score.D1_UNKNOWN,  # built with no snapshot
     )
     assert cell is not None
 

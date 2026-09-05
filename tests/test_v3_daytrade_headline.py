@@ -118,7 +118,7 @@ def test_the_expensive_read_never_runs_on_the_qt_thread():
     assert "_start_held_run_read()" in body
 
     worker = source.split("def _held_run_worker(", 1)[1].split("\n    def ", 1)[0]
-    assert "load_held_run_summaries()" in worker
+    assert "load_held_run_report()" in worker, "the ONE read (summaries + window) belongs on the worker"
 
 
 def test_the_column_says_what_it_measures_now_that_it_measures_it():
