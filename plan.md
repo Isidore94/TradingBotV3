@@ -185,7 +185,10 @@ challenger requires:
 
 1. a versioned configuration and stable identity;
 2. golden/replay fixtures and a declared evidence window frozen before inspection;
-3. complete coverage and data-quality accounting;
+3. complete coverage and data-quality accounting - and, since packet Q2 (2026-09-04),
+   the knowledge basis of every input: a `feature_snapshot_daily` row whose anchor is
+   `reconstructed` or `legacy` and an outcome row on the `plain_no_target` path are
+   research evidence and NEVER count toward a promotion gate (BD-99/BD-100);
 4. comparison with the active champion on the same inputs and outcome definition;
 5. representative live sessions across relevant regimes, sides, and day parts;
 6. explicit success, non-inferiority, and rollback criteria;
@@ -583,6 +586,29 @@ comparison must condition on the entry's position relative to the band.
 Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
+
+## Phase 0.18 — Process-review packets Q1-Q5 (2026-09-04) — BUILT, live gates #60-#64 owed
+
+Trader-authorized 2026-09-04 (*"please review and implement the suggested changes"*) over
+`docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md`. Five packets, disjoint files, built
+through the agent team (`.claude/packets/Q1.md`-`Q5.md`, machine-local):
+
+| Packet | Review finding | What it changes | State |
+|---|---|---|---|
+| Q1 | 1, 2, "lately" | `held_run_score`: held is MEASURED held (held / broken / pending / unmeasured, live 979 of 8,161 unmeasured read held), a break time the log cannot place is `unmeasured`, the D1 overlap keeps the SIDE (aligned / opposed / none / unknown, basis retrospective), the window is `evidence_stats.lately_window` with gaps reported, a Measured column on the Daytrade Tracker | **BUILT** (reviewer GO after one blocker round: a `registered` row's replay `logged_at` was counted as a measured hold - 728 phantom holds); gate #60 |
+| Q2 | 3 | warehouse: `anchor_knowledge` observed / reconstructed on the daily snapshot, `path_kind` on the swing outcome row, a read-only `band-coverage` report, a rebuild of PAST `feature_snapshot_daily` with anchors (dry run by default) - the missing link in gate #59's chain | **BUILT** (reviewer GO; advisory round taken); gate #61 |
+| Q3 | 4, 5 | AI grounding: typed source kinds, a position claim needs a journal source, a numeric claim names its `metric_ref`, the morning file prints analyzed / membership-only / failed; `LikeLink.from_payload` and the audit scripts read `match_basis` | **BUILT** (reviewer GO after one blocker round: the executive summary may never assert a position - 480 of 1,478 published ones did; only `journal.trades_and_reviews` supports a position claim); gate #62 |
+| Q4 | 6, 7 | overnight runner: consecutive clean exchange sessions + a RECORDED trader spot-audit (CLI) gate enrichment; decision 0018 puts the deterministic slots before narration; `entry_index.json` is the compact frontier handoff | **BUILT** (reviewer GO after one blocker round: the gate strip's number and the index's pack path); gate #63. **Behaviour change**: `journal_enrichment` refuses until the trader runs `python -m ai_jobs.digest approve-audit --pack ... x3` |
+| Q5 | performance | the daily pick scorecard streams both CSVs on ONE owned worker, writes `picks_scored_at` only on success, keeps last-good on failure (15.7 s Qt-thread stall on 2026-09-04) | **BUILT** (reviewer GO; advisories taken); gate #64 |
+
+**Deliberately NOT in these packets (ask-first, detector file):** per-alert bar-close ->
+shown latency instrumentation per engine and the H1 SPY recompute in
+`bounce_bot_lib/legacy.py`; a first-break-time column (`stop_hit_at`) on the outcome log;
+the sweep autorun default. Each needs the trader's yes for that file.
+
+**Owed at merge**: live gates #60-#64 (one per packet, text in each packet). Gate #59's
+runbook becomes Q2.4's chain: nightly build -> daily-feature rebuild `--apply` for 2026-08
+and 2026-09 -> forced `recompute-outcomes` -> `band-coverage`.
 
 ## Phase 0.17 — Earnings-anchor bridge (2026-09-04) — BUILT, live gate #59 owed
 
