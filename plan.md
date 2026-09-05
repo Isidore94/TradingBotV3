@@ -413,7 +413,7 @@ are listed in `CURRENT_CHECKPOINT.md`.
    **Trader rule 2, same morning - BUILT 2026-08-27:** **Live gate owed:** a DESK session confirming the hidden count moves at show time, that a revealed name is badged `wrong side of VWAP`, and a before/after count of charts shown per hour against the 124-in-46-minutes baseline of 2026-08-27.
    **Trader rule 3, same morning - BUILT 2026-08-27:** **Live gate owed:** with the other two, one DESK session. **Not built, the trader's call:** the scanner still EMITS trend-contrary D1 shorts (it has `directional_sma_stack_aligned` and does not gate on it) - a detector change with golden fixtures first; and an IB fetch path for the forming daily candle of names outside the M5 scan set, which would spend the locked pacing budget per double-click (today those previews are Yahoo rows, labelled).
    **Trader rule 4, same morning - BUILT 2026-08-27: the M5 alert bar.** **Live gate owed:** one DESK session - the bar fills in alert order, Copy all pastes into TC2000, a click charts, clicking down the bar leaves the waiting count D1-only and unchanged. **Not built, the trader's call:** the 15-minute regime-pause expiry does not reach the bar (rows carry their time; the queue rule was "queue only"); and whether the bar should fold repeats per symbol.
-   **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision), then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`, one live gate owed.** **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision), then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`, one live gate owed.** The rebuild was authorized as an Opus build session ("make me a prompt to get Opus to do it") and built to `docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md` packets T-1..T-4; that prompt's hard rules bound the build and all ten held (zero IB, no `legacy.py` change, completed today-only bars, UNKNOWN never invented, the RS Window tab untouched, fail-before-fix per file).
+   **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision), then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`, one live gate owed.** **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision), then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`, one live gate owed.** The rebuild was authorized as an Opus build session ("make me a prompt to get Opus to do it") and built to `docs/archive/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md` packets T-1..T-4; that prompt's hard rules bound the build and all ten held (zero IB, no `legacy.py` change, completed today-only bars, UNKNOWN never invented, the RS Window tab untouched, fail-before-fix per file).
    **The rebuild - BUILT** Optional, later, and explicitly NOT built: industry = median member return over the same bars (the `industry_intraday_rs_snapshot` contract) instead of the ETF proxy - that needs member bars, which is an IB-budget question. **Live gate owed (one DESK session):** the tape moves every five minutes (not 10-30); the 06:30-07:00 read carries no overnight gap and windows that cannot answer yet are blank rather than zero; a stale or failed read says so on the callout line; a chip click still charts the ETF. **Separate finding, still parked:** the 27-minute scan cycle that day (302 symbols through IB in `rrs_scan`) - a cycle-time question, not a tape question.
 
 12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).**
@@ -435,7 +435,7 @@ are listed in `CURRENT_CHECKPOINT.md`.
 
 ### Phase 0.6 — R9: trade-review response packet (authorized 2026-08-22)
 
-Source: `docs/analysis/TRADE_REVIEW_2026-08-21.md` §8–§9, its nine questions
+Source: `docs/archive/analysis/TRADE_REVIEW_2026-08-21.md` §8–§9, its nine questions
 answered on 2026-08-22 (Opus answer + Fable verification; working copies in the
 session scratchpad). The trader answered the three decisions that needed him on
 2026-08-22 and **authorized this packet in writing the same day** ("I authorize
@@ -514,7 +514,7 @@ influence a live decision path.
    - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** Frozen exe rebuilt, `--selftest` 68/68 (frozen). **Extended 2026-08-27 on trader instruction (BUILT, three live gates owed).** The page had no `reload()` caller and the desk tab held a second service, so a day with five entries rendered empty; both fixed (show-once load, one `shared_journal_service()`). *Owed:* (a) a Desk-tab note appearing on the left-nav page with no Refresh, with its charts; (b) one real auto-mode flip producing a `[desk]` row with SPY's tape; (c) one nightly `ai_summary` packet naming `journal.chart_digests` and `journal.entries`.
 
 10. **R10.I Scheduled report slot and opt-in AI scope**
-   Spec: `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md`. Build record: `CHANGELOG.md`.
+   Spec: `docs/archive/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md`. Build record: `CHANGELOG.md`.
    **AWAY day recap and queue routing** - **BUILT 2026-08-24, GREEN offline; live mechanics canary OWED (not yet repeated).** The live AWAY day of 2026-08-25 correctly produced zero `shown` review impressions while the backing alert/evidence streams continued to fill, but the recap was empty because `MainWindow` never supplied either Alert Center backing list to `AwayRecapPanel.set_alerts`.
 
 11. **R10.V Daily-bar unit repair**
@@ -522,11 +522,11 @@ influence a live decision path.
 
 ### Phase 0.8 — GUI fluidity Wave P1 (authorized 2026-08-26)
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.9 — GUI follow-ons from the 2026-08-26 live session (authorized 2026-08-26)
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.10 — AVWAP band challenger (authorized 2026-08-26)
 
@@ -535,7 +535,7 @@ harnesses, §4 T4 the pre-declared decision criteria). The trader replicated
 OneOption's band on 2026-08-26 — `AVWAP(HLC/3) ± k · stdev(close, 20,
 population)` — and authorized testing it in the setup tracker ("throw it into
 the setup tracker and begin testing it out"). Build prompt:
-`docs/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`.
+`docs/archive/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`.
 
 **Scope bound.** Shadow only. `calc_anchored_vwap_bands` stays frozen (decision
 0008); no detector, score, rank, tier, alert, zone arm, Focus, queue or
@@ -944,67 +944,67 @@ alert column and neither widens the column.
 
 ### Phase 0.13 packet P3 — The fact pack tells the truth (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P7 — One name per setup (2026-09-01) — BUILT, no live gate
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, no live gate**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, no live gate**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 — Trader decisions of 2026-09-01 (packet P0) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P1 — Grade what you already said (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P2 — Show me (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P4 — The variables you are not looking at (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P5 — Pass and not-today get graded (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P6 — Preference to trade (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P6a — Tag the backlog (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P8 / Phase 6.1 addendum — First setup-parameter grid (2026-09-02) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P9 — Quick like (2026-09-02) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P10 — What happens after I like it (2026-09-02) — BUILT, live gates owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gates owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gates owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 review round R2 (2026-09-02) — TWO GUARDS, BUILT
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 review round R1 (2026-09-02) — BLOCKERS FIXED, ALL PACKETS MERGED
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.12 — Focus de-clutter + higher-timeframe LRSI research (authorized 2026-09-01)
 
-Long form moved to [`docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
@@ -1255,7 +1255,7 @@ champions, and the supported interactive product is fully Qt.
 Everything else stays in `WISHLIST.md` until explicitly promoted into this sequence.
 
 **Long form.** The verbatim build narrative for Phases 0.5–0.7 moved to
-[`docs/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](docs/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md) on
+[`docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md) on
 2026-08-28. Every numbered item and every owed gate stayed here, unabridged; only the
 description of work already built moved. That file is evidence — if it disagrees with
 this section, this section wins.

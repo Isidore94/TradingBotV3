@@ -1,7 +1,7 @@
 """Pure Real Relative Strength maths for the group RS/RW tape.
 
 plan.md Phase 0.5 item 11, packet T-1. Spec:
-`docs/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md`.
+`docs/archive/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md`.
 
 Why this module exists at all
 -----------------------------

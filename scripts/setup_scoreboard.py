@@ -107,7 +107,7 @@ PLAYBOOK_COLUMNS = [
 ]
 BASELINE_FAMILY = "baseline_every5"
 
-#: Decision A (`docs/analysis/POST_ATTACK_AUTHORIZATION_2026-08-25.md`). The
+#: Decision A (`docs/archive/analysis/POST_ATTACK_AUTHORIZATION_2026-08-25.md`). The
 #: after-close sweep finalizes with a BLANK eod-hold ``close_r`` by design
 #: (``no_eod_close``): without bars through the close there is no such number
 #: and inventing one would make the same trade report differently depending on

@@ -164,7 +164,7 @@ before building it.**
 
 ## 6. Recovered Alert Center quality contract (2026-08-14)
 
-Historical source: `docs/ALERT_CENTER_QUALITY_PACKET.md`, recovered from commit
+Historical source: `docs/archive/ALERT_CENTER_QUALITY_PACKET.md`, recovered from commit
 `671ee57` on 2026-08-16 and classified as historical evidence. Packet R2 later
 absorbed its auto-pick provenance, scoped M5-side removal, persistent decline,
 and **`not_today`, not trader dislike** outcomes. Do not rebuild those under a

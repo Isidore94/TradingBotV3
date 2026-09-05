@@ -299,7 +299,7 @@ the 40-session evidence floor.
 ## 7. Post-review amendments (checkpoint review 2026-08-08 — binding before merge)
 
 Steps 1-4 are built on branch `durability-catchup` (see
-`docs/CHECKPOINT_REVIEW_2026-08-08.md` for the full ruling). Two amendments
+`docs/archive/CHECKPOINT_REVIEW_2026-08-08.md` for the full ruling). Two amendments
 are required on the branch before it merges:
 
 1. **Task start time (amends 2.2):** the desk is US Pacific and the open is

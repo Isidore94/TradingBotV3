@@ -68,7 +68,7 @@ validates collection mechanics only; it does not make any signal promotable.
 ## Evidence-floor counting declaration (checkpoint review 2026-08-08)
 
 Ruled at review so the in-flight collection is never relitigated
-(`docs/CHECKPOINT_REVIEW_2026-08-08.md`):
+(`docs/archive/CHECKPOINT_REVIEW_2026-08-08.md`):
 
 - A session counts toward the 40-session evidence floor **iff** its
   collection audit is HEALTHY **and** all prediction-side events (level

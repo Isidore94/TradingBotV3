@@ -23,7 +23,7 @@ where a choice binds future phases. Format: decision → why → what was reject
 Status of the build: Phases 0-8 landed (code); the 20-session pilot is a live
 run that has not happened. Test baseline and branch live in
 [`CURRENT_CHECKPOINT.md`](../CURRENT_CHECKPOINT.md). The 2026-08-04 review
-([`RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md`](RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md)) repaired the outcome engine
+([`RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md`](archive/RESEARCH_WAREHOUSE_REVIEW_2026-08-04.md)) repaired the outcome engine
 (BD-53..BD-57) plus four mechanical defects (Windows lock probe, protected
 spool shedding, spool re-seal dedup, capture reconnect). The follow-up defect
 pass closed every remaining defect in that review — feature windowing (BD-58,

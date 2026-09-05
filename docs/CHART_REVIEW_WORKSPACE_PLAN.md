@@ -382,7 +382,7 @@ the caveat by itself. A registry the headless path cannot read degrades to a
 stated UNKNOWN caveat, never to a remembered list — the hand-maintained
 version went stale across the 08-21 widening while its content-pinning test
 stayed green, which is the failure mode derivation exists to close
-(`docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` AI-P5). The veto-day-trade
+(`docs/archive/analysis/AI_LAYER_REVIEW_2026-08-24.md` AI-P5). The veto-day-trade
 caveat stays a constant: it describes a verb, not a list.
 
 Nothing reads these files back into a detector, a score, an alert, a watchlist,
@@ -556,7 +556,7 @@ capture write would mean editing `alert_center_panel.py`, which is fenced.
 
 Trendline caveat: the record only exists for symbols that reached
 priority-candidate status in the last scan, so a looked-up name usually has
-none. Full findings and a measurement tool: `docs/D1_TRENDLINE_SURVEY.md`.
+none. Full findings and a measurement tool: `docs/archive/D1_TRENDLINE_SURVEY.md`.
 
 The schema already carries `ref_level_id` / `ref_level_family`, so painted-level
 references need no schema change when A4 arrives. The chart area shows a stated

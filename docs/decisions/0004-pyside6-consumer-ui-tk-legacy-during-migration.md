@@ -4,7 +4,7 @@ Date: backfilled 2026-08-01
 
 ## Context
 The original GUI is Tkinter. The product direction (docs/SHIP_READINESS.md,
-GUI_PRODUCT_PLAN.md) is a consumer-grade desktop app with a themed shell, eventually
+docs/archive/GUI_PRODUCT_PLAN.md) is a consumer-grade desktop app with a themed shell, eventually
 a `TradingBotV3.exe`.
 
 ## Decision

@@ -258,7 +258,7 @@ def _bounce_alert(symbol, tier, **overrides):
 def test_panel_orders_review_queue_by_guidance_score(tmp_path):
     """Characterization replay of the pre-gate preference ordering.
 
-    Phase 0 task 6 of GUI_TRADE_DISCOVERY_LEARNING_PLAN.md requires this
+    Phase 0 task 6 of docs/archive/GUI_TRADE_DISCOVERY_LEARNING_PLAN.md requires this
     behavior to stay reproducible behind the switch while the active queue
     runs FIFO, so the champion can be restored without a code revert.
     """

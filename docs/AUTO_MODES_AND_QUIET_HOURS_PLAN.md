@@ -325,7 +325,7 @@ and auto desk is for when I am actively trading. Only auto desk should send
 What this changes, and what it deliberately does not:
 
 - **Changes (BUILD PENDING — the AWAY day-recap packet,
-  `docs/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` sec 5, absorbs this):**
+  `docs/archive/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` sec 5, absorbs this):**
   in AWAY, the chart-review queue is not the return surface. Alerts do not
   accumulate as 317 pending review items; the return surface is the EOD recap —
   the day's best-ranked output (staged picks, classified D1 events, the

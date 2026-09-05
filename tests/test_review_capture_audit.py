@@ -1,6 +1,6 @@
 """Phase 0 capture readiness: the audit must make silent failures visible.
 
-Covers GUI_TRADE_DISCOVERY_LEARNING_PLAN.md Phase 0 tasks 3, 4, 7, and 8 -
+Covers docs/archive/GUI_TRADE_DISCOVERY_LEARNING_PLAN.md Phase 0 tasks 3, 4, 7, and 8 -
 decision-log durability and schema, scoreboard/outcome/policy visibility, the
 champion scoring snapshot, and the Exploratory / Non-Promotable label.
 """

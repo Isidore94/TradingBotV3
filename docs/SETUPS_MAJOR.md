@@ -128,7 +128,7 @@ Anything marked ⚠ is a point I'm least sure of — please check those first.
   bypass, an always-sound and a repetition escalation. **Nothing in the tree ever
   emitted the token**: no detector path builds it (the regime-pause sweep is
   deliberately untiered and stamps no token), and 0 of 8,818 recorded review rows
-  carried `banger=True` (`docs/analysis/EVIDENCE_AUDIT_2026-08-22.md`, row D8b). The
+  carried `banger=True` (`docs/archive/analysis/EVIDENCE_AUDIT_2026-08-22.md`, row D8b). The
   matcher, the bypass, the sound branch and the escalation branches are removed;
   the `banger` column stays in `trader_annotations`/review rows as a constant `False`
   so historical readers and the row shape are unchanged. The `REGIME_BANGER_*`

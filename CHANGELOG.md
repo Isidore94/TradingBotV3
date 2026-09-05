@@ -30,7 +30,7 @@ and green while its live or promotion gate remains open in `plan.md`.
 **This is the contract: what exists, by area. Search it before building anything so you
 do not rebuild landed work.** It is deliberately short. The dated entries under
 `Recent changes` below cover the last two build days; everything older is in
-[`docs/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](docs/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md),
+[`docs/archive/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](docs/archive/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md),
 which is evidence and must not be loaded as context.
 
 ### Application, runtime, and data ownership
@@ -2278,15 +2278,15 @@ recur. `ruff` clean · smoke **7/7** · source `--selftest` **74/74** · spec-dr
 ### Older entries
 
 Entries from **2026-09-01 back to 2026-08-26** (56 entries) moved to
-[`docs/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md`](docs/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md)
+[`docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md`](docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md)
 on 2026-09-03 (F1 docs packet). Recent changes holds the last two build days.
 
 ## Revision history
 
 Entries from **2026-09-01 back to 2026-08-26** moved to
-[`docs/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md`](docs/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md)
+[`docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md`](docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md)
 on 2026-09-03 (56 entries); entries from **2026-08-19 back to the initial system in 2025-11** moved to
-[`docs/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](docs/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md)
+[`docs/archive/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](docs/archive/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md)
 on 2026-08-27 (36 entries). Newer revisions are dated entries at the top of
 `Current implemented inventory` above. The archive is evidence, not authority — read it
 only when the history of a specific change is not answered here or by the governing spec.

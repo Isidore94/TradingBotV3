@@ -6,7 +6,7 @@ This file is the frequently refreshed active-work, branch, and verification stam
 - Remaining work and gates: [`plan.md`](plan.md)
 - Supporting-document roles: [`docs/README.md`](docs/README.md)
 - Entries dated 2026-08-25 and earlier:
-  [`docs/CHECKPOINT_ARCHIVE_2026-08.md`](docs/CHECKPOINT_ARCHIVE_2026-08.md)
+  [`docs/archive/CHECKPOINT_ARCHIVE_2026-08.md`](docs/archive/CHECKPOINT_ARCHIVE_2026-08.md)
 
 ---
 
@@ -100,6 +100,16 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+
+### 2026-09-05 (~11:00 PT) - Repo cleanup, commit 1 of 2: history moved under `docs/archive/`, Codex agents committed
+
+Trader: *"What documents/files are unnecessary repo clutter? ... make it easier for a new AI model to read key documents ... using less tokens"*, then *"Let's implement your ideas and commit the codex/agent folder"*. The audit (artifact "TradingBotV3 Repo Clutter Audit") found the clutter small (~1.8 MB of Markdown nothing in the code reads) and the token cost in the four ACTIVE files. This commit is the mechanical half; the slimming is commit 2.
+
+- **Moved with `git mv` into `docs/archive/`** (33 files, 1.8 MB): the five checkpoint / changelog / roadmap archives; the three July GUI plans from the repo root; `GUI_REDESIGN_PLAN_2026-08-25`, `HANDOFF_A4_PACKAGING`, `RESEARCH_WAREHOUSE_REVIEW_2026-08-04`, `CHECKPOINT_REVIEW_2026-08-08`, `MULTI_MACHINE_DESK_PROPOSAL`, `ALERT_CENTER_QUALITY_PACKET`, `FOCUS_PRICE_ALERTS_PROPOSAL`, `D1_TRENDLINE_SURVEY`; every `docs/prompts/*` (all built) plus the desk-memory build prompt under `archive/prompts/` and `archive/analysis/`; the nine frozen August reviews under `archive/analysis/`. `OFFLINE_BUILD_AUTHORIZATION_2026-08-24` stays (cited as authority by the AI jobs and their tests); `analysis/scripts/` stays (pinned by path in `tests/test_q3_ai_grounding.py`). Every link in an active file was rewritten (a script over root, `docs/`, `scripts/`, `tests/`, `packaging/`); relative links INSIDE archived files were not.
+- **`docs/WISHLIST_OPEN_QUESTIONS.md` merged into `WISHLIST.md`** as its last section, text unchanged except heading depth.
+- **`docs/README.md` rewritten**: one line per file, status left to the control set, `archive/` listed once as a folder.
+- **`.codex/agents/*.toml` committed** (the four Codex roles, twin of `.claude/agents/`); `.gitignore` now mirrors the `.claude` rule for `.codex`, lists `.ruff_cache/` and `.test_tmp/`, and no longer lists `dist`/`build` twice. `desk_report.xml` (345 KB gitignored run artifact from 08-22) deleted from disk. **`.test_tmp/final_01` could not be deleted** - owned by a sandbox account, `takeown` refused without elevation - so it is ignored instead; the trader can remove it from an admin prompt.
+- Verification: `pytest tests/ -q` **6710 passed, 1 skipped, 72 subtests, exit 0, 5 min 58 s**; `ruff` clean; CLAUDE.md == AGENTS.md.
 
 ### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
 
@@ -739,9 +749,9 @@ packets"). No code changed. What moved, and where:
 
 | File | Before | After | Moved to |
 |---|---|---|---|
-| `CURRENT_CHECKPOINT.md` | 4,664 lines / 305 KB | ~1,900 lines / 140 KB | `docs/CHECKPOINT_ARCHIVE_2026-08.md` (entries 2026-08-26 to 2026-08-31, verbatim) |
-| `CHANGELOG.md` | 4,814 / 323 KB | ~1,700 / 113 KB | `docs/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md` (new; 56 entries) |
-| `plan.md` | 1,885 / 139 KB | ~1,140 / 94 KB | `docs/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md` (new; Phases 0.8, 0.9, 0.11, 0.12, the 0.13 packets and review rounds) |
+| `CURRENT_CHECKPOINT.md` | 4,664 lines / 305 KB | ~1,900 lines / 140 KB | `docs/archive/CHECKPOINT_ARCHIVE_2026-08.md` (entries 2026-08-26 to 2026-08-31, verbatim) |
+| `CHANGELOG.md` | 4,814 / 323 KB | ~1,700 / 113 KB | `docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md` (new; 56 entries) |
+| `plan.md` | 1,885 / 139 KB | ~1,140 / 94 KB | `docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md` (new; Phases 0.8, 0.9, 0.11, 0.12, the 0.13 packets and review rounds) |
 | `CLAUDE.md` = `AGENTS.md` | 418 lines / 68 KB | rules kept, two long-form sections moved | `docs/DESK_INTERNALS.md` ("Headline statistics, long form", "Frozen exe rebuild policy, long form", verbatim) |
 
 **The one deviation from the letter of the archive rule, stated.** `CLAUDE.md` says to
@@ -1862,7 +1872,7 @@ test asserts it does not move the stamp either.
 
 **One thing the trader should know about the checkout.** When this session
 started, the working copy of this file was a 6,881-line PRE-ARCHIVE version -
-every entry already moved to `docs/CHECKPOINT_ARCHIVE_2026-08.md` was back, and
+every entry already moved to `docs/archive/CHECKPOINT_ARCHIVE_2026-08.md` was back, and
 the "Active state at a glance" block was gone. It contained nothing dated
 2026-09-01 and nothing absent from `HEAD` or the archive, so it was a stale
 revert rather than someone's work in progress. It was backed up to the session
@@ -2563,7 +2573,7 @@ invariant (every tag group is declared non-exclusive) rather than the length.
 ## Earlier entries
 
 Everything dated **2026-08-26 to 2026-08-31** moved to
-[`docs/CHECKPOINT_ARCHIVE_2026-08.md`](docs/CHECKPOINT_ARCHIVE_2026-08.md) on
+[`docs/archive/CHECKPOINT_ARCHIVE_2026-08.md`](docs/archive/CHECKPOINT_ARCHIVE_2026-08.md) on
 2026-09-03 (F1 docs packet: this file was 4,657 lines against its own ~1,500-line
 rule). The open-gates table above still names those entries in its "Owed by"
 column; read them in the archive. **Everything dated 2026-08-25 and earlier** moved

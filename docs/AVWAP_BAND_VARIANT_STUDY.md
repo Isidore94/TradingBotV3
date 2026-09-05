@@ -2,7 +2,7 @@
 
 Document role: **governing spec for `plan.md` Phase 0.10** (AUTHORIZED 2026-08-26,
 evening — replication done the same day, §2b; build prompt
-`docs/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`). Packets B-0..B-3 are the
+`docs/archive/prompts/AVWAP_BAND_CHALLENGER_OPUS_PROMPT.md`). Packets B-0..B-3 are the
 authorized build; B-4 (the backfills) follows their review.
 
 What it is NOT: a change to `calc_anchored_vwap_bands`. Decision 0008 and

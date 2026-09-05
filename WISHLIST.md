@@ -61,13 +61,13 @@ the next section was assessed for whether it is buildable from its description
 plus the codebase. One was — the TradingView deep link, now `BUILT`. Each of the
 rest turned out to need exactly one trader judgment whose plausible answers lead
 to *different code*; those questions are written down, one per item, in
-`docs/WISHLIST_OPEN_QUESTIONS.md` rather than guessed at. Nothing else here was
+the **Open questions** section at the end of this file rather than guessed at. Nothing else here was
 implemented, and nothing here was promoted into `plan.md`.
 
 | Idea | Status | Value | Prerequisite or decision needed |
 |---|---|---|---|
 | Voice dictation for the live commentary journal | `CANDIDATE` | Faster capture while watching charts | Choose local vs cloud speech, privacy, correction workflow, and storage format after P3.5 |
-| Deep-link a symbol/timeframe into TradingView or TC2000 | `BUILT` | Faster transition to external deep TA | **Promoted and built trader-directed 2026-08-18.** TradingView link built (`scripts/external_chart_links.py`, "Open in TradingView" on the arm bar, URL template is a machine-local setting); TC2000 deliberately not wired because it answers no documented URL scheme - see `docs/WISHLIST_OPEN_QUESTIONS.md` |
+| Deep-link a symbol/timeframe into TradingView or TC2000 | `BUILT` | Faster transition to external deep TA | **Promoted and built trader-directed 2026-08-18.** TradingView link built (`scripts/external_chart_links.py`, "Open in TradingView" on the arm bar, URL template is a machine-local setting); TC2000 deliberately not wired because it answers no documented URL scheme - see the **Open questions** section below |
 | User-selectable chart line-density presets | `CANDIDATE` | Adapt the chart to symbol volatility and screen size | First resolve P1.2's red-level threshold and clutter budget; preferences stay display-only |
 | Read-only mobile/web dashboard beyond the text digest | `CANDIDATE` | Richer Away review | Define authentication, hosting, freshness, and zero-write boundary after P5.3 |
 | Self-hosted ntfy deployment | `CANDIDATE` | More control over notification privacy/availability | Decide operational burden, TLS, backups, and phone reachability; hosted ntfy already works |
@@ -176,3 +176,114 @@ rule stays staged, its data already attached); the existing ~1,500-symbol univer
 for the strength board; build order R1 → R2 first, R3–R6 behind; the full pre-close
 honesty bundle; "previous AVWAP" = the prior anchor's VWAP line itself;
 checked-today = recorded decisions only; "Not today" removes just that M5 entry.
+
+## Open questions — items that need one trader decision before they can be built
+
+Merged from `docs/WISHLIST_OPEN_QUESTIONS.md` on 2026-09-05 (repo cleanup); the text below is that file's, unchanged except for heading depth.
+
+Status: **active** — one question per item, each blocking a build that is
+otherwise ready. Created 2026-08-18 under the trader's integration redirect,
+which asked for every implementable `WISHLIST.md` item to be built and for
+anything "too vague to build without a trading judgment" to get a spec stub
+stating the open question instead of a guess.
+
+This section is not a roadmap and nothing here is authorized: an item leaves this section
+by the trader answering its question, at which point it follows the normal
+promotion path into `plan.md`.
+
+**Why a stub rather than a best guess.** Each item below has exactly one
+unanswered question whose plausible answers lead to *different code*, not
+different polish — a different storage location, a different data budget, a
+different failure posture. Building the wrong branch and calling it a default
+would hide the decision inside an implementation, which is the thing the
+ask-first rule exists to prevent.
+
+---
+
+### Built instead of stubbed (2026-08-18)
+
+| Item | What landed |
+|---|---|
+| Deep-link a symbol/timeframe into TradingView or TC2000 | `scripts/external_chart_links.py` plus an **Open in TradingView** button on the arm bar, so every chart surface that carries the bar inherits it. The URL is a machine-local setting (`external_chart_url_template`), the symbol is validated before a URL is built, and a refused open is reported rather than swallowed. **TC2000 is deliberately not wired**: it is a desktop app whose documented automation surface is its own scripting layer, not a URL scheme, and a `tc2000://` link that silently does nothing would be worse than the honest gap — the template setting is the seam for it the day the trader confirms what their install answers to. |
+
+---
+
+### User-experience items
+
+#### Voice dictation for the live commentary journal
+
+**Open question — local or cloud speech, and what happens to a bad
+transcription?** Local (whisper.cpp on the 8845HS) keeps every word on the desk
+and costs GPU time during a session; cloud is more accurate and sends the
+trader's live commentary to a third party. The correction workflow follows from
+that choice: a local model needs an edit-before-commit step, a cloud one could
+commit and correct after.
+
+Blocked also by ordering: `plan.md` P3.5 owns the commentary journal itself,
+and there is nothing to dictate into yet.
+
+#### User-selectable chart line-density presets
+
+**Open question — what does "too many lines" mean on the trader's screen?**
+The prerequisite recorded in `WISHLIST.md` is P1.2's red-level threshold and
+clutter budget, and that is a desk-evidence decision, not a preference toggle:
+presets built before it would encode a guess about which levels matter, and the
+trader would then be choosing between three wrong densities.
+
+#### Read-only mobile/web dashboard beyond the text digest
+
+**Open question — who may read it, and from where?** A phone-reachable page
+showing positions and candidates is an authentication and hosting decision
+before it is a UI one, and the answer changes the whole build (a LAN-only page
+behind the router is a different system from an internet-reachable one with
+accounts). `plan.md` P5.3's one-snapshot work is the natural prerequisite.
+
+#### Self-hosted ntfy deployment
+
+**Open question — is the operational burden worth it?** Hosted ntfy already
+works and costs nothing to run. Self-hosting buys privacy and control and costs
+TLS certificates, a reachable endpoint, backups, and a new way for the phone to
+go silent on a Sunday. This is an operations judgment, not a code one; the
+sender is already a thin seam, so the build is small once it is wanted.
+
+#### macOS equivalents for the Windows scheduled jobs
+
+**Open question — will a Mac ever be the unattended host?** The wishlist entry
+answers this conditionally ("only if macOS becomes an unattended host"), and
+today the 8845HS is the sole always-on machine and sole writer. Building launchd
+equivalents now would create a second scheduling surface that nothing runs and
+nobody tests.
+
+#### Broader US universe for the M5 strength board
+
+**Explicitly gated, not vague.** The trader chose the existing ~1,500-name
+universe on 2026-08-15, and the entry says to widen it only after the R2 board
+proves itself and a data/pacing budget is agreed. That is a live gate; it is
+listed here only so the reason it was skipped is recorded.
+
+---
+
+### Research and data items
+
+Every entry under "Candidate research and data integrations" shares one shape:
+each needs a **registered consumer** before it may be captured. That is the
+locked warehouse plan's own rule (`docs/ULTIMATE_SETUP_DATABASE_PLAN.md`) —
+capture is justified by a question someone will actually ask, because an
+append-only lake makes "collect it in case" a permanent cost.
+
+| Item | The one question |
+|---|---|
+| DYNAMIC and EOD session-VWAP variants in the warehouse | Which registered study needs the variants? Capturing all three triples the VWAP surface and STANDARD must stay untouched either way. |
+| Tier-2 anchor families (catalyst/gap bars, confirmed pivots, period opens) | Same: which study, and is the anchor's point-in-time availability provable at the simulated decision time? |
+| Optional completed-bar tracker preview lane | The trader must ask for it. It is a labeled preview lane that can never write confirmed evidence, so its value is entirely about whether the trader wants an earlier, weaker read after a missed final scan. |
+| Additional external universe feeds | What is the incremental value over the current sources (P5.5 measures it), and what is the pacing budget? Manual names can never be auto-removed regardless. |
+| Options-chain / theta history | Data rights, IB pacing budget, and whether point-in-time quotes are actually retrievable. Any one of those can make the capture impossible rather than merely expensive. |
+| News/catalyst archive with point-in-time availability | Which licensed source, and can published-vs-observed timestamps both be preserved? Without both, hindsight leaks into every study that reads it. |
+
+---
+
+### Not stubbed, deliberately
+
+`TRIGGERED_LATER` items already carry explicit revisit triggers and
+`PERMANENT_NO` items are settled product boundaries. Neither belongs here:
+the first are waiting on a measurable event, and the second are not questions.

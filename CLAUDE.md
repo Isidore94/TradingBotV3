@@ -45,10 +45,10 @@ Before proposing, planning, or changing anything:
    disagree, the code is the fact and the doc is the defect** — fix the doc, and say so.
 
 Archived history is deliberately outside this read and must never be pulled into it
-wholesale: [`docs/CHECKPOINT_ARCHIVE_2026-08.md`](docs/CHECKPOINT_ARCHIVE_2026-08.md)
+wholesale: [`docs/archive/CHECKPOINT_ARCHIVE_2026-08.md`](docs/archive/CHECKPOINT_ARCHIVE_2026-08.md)
 (checkpoint entries to 2026-08-31),
-[`docs/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md`](docs/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md)
-and [`docs/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](docs/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md)
+[`docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md`](docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md)
+and [`docs/archive/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](docs/archive/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md)
 (revision history), and the two `docs/ROADMAP_ARCHIVE_PHASES_*.md` files (built phases)
 are evidence for one specific question, not context to load.
 
@@ -355,7 +355,7 @@ undone without reinstalling Windows. That is the trader's call. The history is i
 - Commit small and green; push after each commit. If a task will exceed usage limits, commit and push so another agent can take over from a green state.
 - First live session on any new build: run plan.md sec 6 checklist; do NOT tune thresholds from one session.
 - **File-scoped ask-first rule** (checkpoint review 2026-08-08): any edit to a file housing detector/scoring/alert code is asked about BEFORE it is made — even for capture-side or evidence-only changes in that file. Ambiguity is the trigger to ask, not a license to judge.
-- While unmerged branch code runs in production via a scheduled task (see `docs/CHECKPOINT_REVIEW_2026-08-08.md`): never switch branches on the desk without disarming that task first.
+- While unmerged branch code runs in production via a scheduled task (see `docs/archive/CHECKPOINT_REVIEW_2026-08-08.md`): never switch branches on the desk without disarming that task first.
 
 ## Where to read more
 - `CHANGELOG.md` — **`Current implemented inventory` is the contract: search it before building.** `Recent changes` holds the last two build days; older entries are archived under `docs/`.
@@ -365,8 +365,8 @@ undone without reinstalling Windows. That is the trader's call. The history is i
 - `WISHLIST.md` — trader-visible candidate integrations and deferred ideas; never an implementation queue.
 - `docs/README.md` — classifies every supporting file as active runbook/reference or historical evidence.
 - `docs/BRANCH_HISTORY.md` — what each development branch held and where it landed; the containment proof (`git merge-base --is-ancestor <branch> main`) required before deleting one, and the branches deliberately left open.
-- `GUI_TRADE_DISCOVERY_LEARNING_PLAN.md` (+ historical `GUI_LEARNING_PROGRESS.md` pointer) — preserved GUI learning design; never overrides plan.md Sections 5–7 or Phase order.
-- `GUI_PRODUCT_PLAN.md` — historical consumer GUI product design reference.
+- `docs/archive/GUI_TRADE_DISCOVERY_LEARNING_PLAN.md` (+ historical `docs/archive/GUI_LEARNING_PROGRESS.md` pointer) — preserved GUI learning design; never overrides plan.md Sections 5–7 or Phase order.
+- `docs/archive/GUI_PRODUCT_PLAN.md` — historical consumer GUI product design reference.
 - `docs/decisions/` — backfilled decision records; read before changing a library, storage, or architecture choice.
 - **`docs/decisions/0016-trader-vision-and-priorities.md` — the trader's goals and their twelve answers of 2026-09-02, the tie-breaker for every prioritisation call: names before entries, win rate as the swing headline, MFE after a held level for day trades, "what is working lately" on the Trading Desk never in Research, likes are training data. Read it before proposing or ordering work.**
 - `docs/REVIEW_LEARNING_LOOP.md` — how the AI reads review artifacts and writes `review_policy.json`.
@@ -375,7 +375,7 @@ undone without reinstalling Windows. That is the trader's call. The history is i
 - `docs/RESEARCH_WAREHOUSE_BUILD_DECISIONS.md` — the warehouse builder decision log (BD-01…): every implementation choice the locked plan left open, with rationale and reopen triggers. Read before changing warehouse internals; add a BD entry when you make a new one. `docs/RESEARCH_WAREHOUSE_ERD.md` is its dataset/identity map.
 - `docs/SETUPS_MAJOR.md` / `docs/SETUPS_TEST.md` — AI-stated understanding of the production setups and the study/research setups, under trader review; fold corrections back in.
 - `docs/FIRST_SESSION_CHECKLIST.md`, `docs/AWAY_SCANNER_RUNBOOK.md`, `docs/REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md` — operational runbooks for live sessions.
-- `docs/FOCUS_PRICE_ALERTS_PROPOSAL.md`, `docs/EVENING_MODE_RUNBOOK.md` — Focus price-alert delivery and ntfy phone setup. `docs/MULTI_MACHINE_DESK_PROPOSAL.md` is historical and is now the ONLY record of that design: Desk Link/satellites retired 2026-08-08, code removed 2026-08-24.
+- `docs/archive/FOCUS_PRICE_ALERTS_PROPOSAL.md`, `docs/EVENING_MODE_RUNBOOK.md` — Focus price-alert delivery and ntfy phone setup. `docs/archive/MULTI_MACHINE_DESK_PROPOSAL.md` is historical and is now the ONLY record of that design: Desk Link/satellites retired 2026-08-08, code removed 2026-08-24.
 - `docs/LOCAL_AI_AUTOMATION_PLAN.md` — local LLM batch layer on the always-on main desk: automated AI summaries, daily digest ledger, journal enrichment, review-policy curation, frontier synthesis. Advisory-only; no inference during market hours. **Section 7 (2026-08-20)** owns the deterministic `veto_cohort_grading` slot and the opt-in `trader_judgement` scope, including what is deliberately NOT built (the weekly synthesis: cadence decided, gated on two weeks of graded rows, unauthorized).
 - `docs/DURABILITY_CATCHUP_PLAN.md` — durability design: self-healing launch task, deterministic backfill with `capture_mode` provenance, never-reconstruct boundary, and the Master AVWAP tracker staleness override.
 - `docs/CHART_REVIEW_WORKSPACE_PLAN.md` — Chart Review workspace and trader decision capture: `trader_annotations.jsonl` schema v1, the versioned veto vocabulary, veto forward-tracking cohorts, and why a lookup never writes a watchlist. The stream is analysis-only evidence — it must never mute, suppress, score, gate, or alert.
