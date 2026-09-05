@@ -33,6 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 68 | **`unresolved` means UNMEASURED (M2)** - the first after-close sweep after merge logs the four-way split in `trading_bot.log` - `Outcome sweep finalized N pending trade(s): measured_eod A, swept_measured B, unmeasured C (of which expired D); already final in the CSV: E (counted in the total, not in the split); ...` - where **A + B + C + E == N**, because `expired` is a SUBSET of `unmeasured` and an already-final row's status was written by an earlier attempt this run never saw; the Daytrade Tracker's status line shows the coverage sentence after Q1's window sentence; and `outcome_semantics.terminal_kind` over the live file for the last 20 sessions reports `measured_eod + measured_swept` at or above the 7,427 measured at merge (3,820 + 3,607 of 8,161 events) with `unmeasured` near 644. **The packet's gate text said 7,600 and about 495**; those were read a day earlier over a window one session back, and the branch's own streamed read is the number to compare against | 2026-09-05 M2 entry |
 | 66 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
 | 65 | **The band challenger measures (M1)** - after the next persisted tracker write: `master_avwap_band_variant_stats.csv` shows `n_variant > 0` on the rows whose records have >= 20 closes before the anchor, the four `_variant` columns fill, and the Setup Tracker's Band variant view reads `Measured N of M setups` rather than `Measured 0 of M`. **T4's >= 20 sessions of forward accrual start that day**, not 2026-08-26 - nothing accrued before it | 2026-09-05 M1 entry |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
@@ -102,6 +103,126 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+
+### 2026-09-05 - Packet M2: `unresolved` means UNMEASURED (branch `claude/m2-unresolved-means-unmeasured`)
+
+Trader authorization, 2026-09-05: *"Fix all of these failures"* over the measurement audit
+in the entry BELOW this one (2026-09-05 ~02:00 PT), finding 2. That is the recorded yes for the evidence-side
+`scripts/bounce_bot_lib/legacy.py` edits under the file-scoped ask-first rule - writer and
+sweep rows only, no detection change. Base `e7b12ebe`; NOT merged.
+
+**What was wrong.** `sweep_pending_bounce_outcomes` "needs no bars and no IB": it finalizes
+from what each trade already measured, so `finalize_outcome_once` is called with no bars and
+the writer's one-liner - `status = "eod_complete" if basis == "measured" else "unresolved"` -
+labelled every swept row `unresolved`, the same word as a trade that measured nothing at all.
+Decision A (2026-08-25) had already got the ARITHMETIC right: `setup_scoreboard.exit_policy_r`
+reads those rows under `stop_exit` / `last_measured`. Only the label lied.
+
+**Measured, streamed read-only over the live 308 MB store** (`terminal_kind` over the twenty
+sessions to 2026-09-05: 8,161 events, 324,605 rows scanned, nothing loaded):
+
+| kind | events |
+|---|---|
+| `measured_eod` | 3,820 |
+| `measured_swept` | 3,607 |
+| `unmeasured` | 644 |
+| `open` (no final row) | 90 |
+
+The 4,251 `unresolved` rows split 2,054 `last_measured_bar` + 1,553
+`stop_hit_from_prior_measurement` - **all 3,607 with `bars_elapsed > 0` and reason
+`no_eod_close`** - against 644 with basis `unresolved` (284 `no_bars_after_entry`, 360
+`no_measurement_in_checkpoint`). The audit's "3,942 unresolved (48.3%)" and the packet's
+"4,099 / 3,604" are the same population read a day earlier.
+
+**M2.4 - the 08-24..08-27 backlog is understood, not repaired.** Per date, `measured_eod` /
+`measured_swept` / `unmeasured` / `open`:
+
+| date | eod | swept | unmeasured | open |
+|---|---|---|---|---|
+| 08-20 | 232 | 22 | 0 | **90** |
+| 08-21 | 388 | 72 | 15 | 0 |
+| **08-24** | **0** | **466** | 87 | 0 |
+| **08-25** | **2** | **636** | 84 | 0 |
+| **08-26** | **25** | **541** | 25 | 0 |
+| **08-27** | **38** | **663** | 112 | 0 |
+| 08-28 | 1 | 0 | 77 | 0 |
+| 08-31 | 1 | 218 | 39 | 0 |
+| 09-01 | 0 | 381 | 77 | 0 |
+| 09-02 | 442 | 4 | 1 | 0 |
+| 09-03 | 30 | 244 | 94 | 0 |
+| 09-04 | 212 | 297 | 30 | 0 |
+
+**The table starts at 08-20 deliberately.** The window's first eight sessions (08-10..08-19) hold 2,515 events that are near-all clean: **2,449 `measured_eod`, 63 `measured_swept`, 3 `unmeasured`, 0 `open`**. They are omitted because they show nothing - the story is entirely in the days below.
+
+Those four days are the F1 GIL-freeze days: the live thread stopped scanning symbols through
+the close and the sweep finalized the backlog. **Nothing is re-finalized.** Those trades keep
+the R they measured and now read `measured_swept`. Whether a sweep running inside the same
+session could fetch the missing close bars from cache is a detector-side question and stays
+ask-first. The 90 `open` rows on 08-20 are events with no final row at all - a separate
+question this packet only counts.
+
+**What was built.** `outcome_semantics.terminal_kind(row)` is the one reader-side truth
+(`measured_eod` / `measured_swept` / `unmeasured` / `open`, from `status` +
+`context_json.finalization`), so history is READ correctly and no row is rewritten. The writer
+now emits `swept_measured` through the single decision `status_for_finalization_basis` -
+additive value, header unchanged, `schema_version` still 4. The sweep counts
+`by_terminal_kind` from the status the writer actually WROTE (a caller-owned `record` dict on
+`finalize_outcome_once`, never an attribute, because two threads call it) and
+`outcome_sweep_log_line` prints the split. The Daytrade Tracker status line and the AWAY
+digest print `format_terminal_coverage`'s one sentence off reads they already do.
+
+**Verified through the SHIPPED path, not a replica** (read-only, after the advisory round):
+`held_run_score.load_episodes()` -> `terminal_coverage()` over the live file returns
+`{measured_eod 3,820, measured_swept 3,607, unmeasured 644, open 90, measured 7,427, events
+8,161}` and `format_terminal_coverage` renders *"Outcomes: measured 7,427 (eod 3,820 / swept
+3,607), unmeasured 644, open 90 over the window."* - which is the exact sentence the Daytrade
+Tracker's status line will show. The blank-status rule changed nothing inside the window, as
+expected: every final row in the last twenty sessions is schema 4 and carries a status.
+
+**A whole-file status scan (read-only, streamed) found two things the windowed read could
+not.** Every `final` row in the 308 MB store carries one of six statuses: `eod_complete`
+14,863, `unresolved` 4,309, and **749 pre-R10.A schema-1 rows** - `stop_seen` 397,
+`target2_seen` 166, `complete` 129, `stop_and_target2_seen` 57.
+
+1. **Those 749 grade `unmeasured` under the unknown-status rule, and at least `complete` was a
+   measured outcome** (its sample rows carry a real `close_r`: `complete` 0.4054, `stop_seen`
+   -1.4, `target2_seen` 2.25, `stop_and_target2_seen` 1.9767). Missing data is uncertainty, so
+   `unmeasured` is the safe reading and this packet does not guess at pre-R10.A semantics - but
+   **a future ALL-HISTORY report will understate `measured` by up to 749 rows** until those four
+   statuses are classified. They are outside the 20-session window, so no live gate or surface
+   is affected today. Classifying them is a follow-up, not this packet.
+2. **13,703 of the 14,863 `eod_complete` finals carry no `finalization` block at all** (they
+   predate R10.A), and every single one carries a numeric `close_r` or `eod_close` - **zero do
+   not**. They reach `terminal_kind` status-less through `setup_scoreboard`'s frames, which
+   never load the `status` column, so the reviewer's advisory that such a row must never read
+   `open` is now the rule: a claimed `final` with neither status nor basis is `measured_eod`
+   when it recorded a close and `unmeasured` when it did not.
+
+**Status-keyed reader survey** (every one found, and what changed):
+`_latest_bounce_outcome_rows` in `bounce_bot_lib/legacy.py` is the ONLY production reader
+keyed on the status column, and it feeds the champion tier, the mute and the PROVEN stamp -
+**deliberately unchanged**, since it takes `eod_complete` rows only and `swept_measured` is
+excluded exactly as `unresolved` was; a test asserts it. Whether it SHOULD count
+swept-measured rows is a scoring question and is ASK-FIRST, not this packet's. `setup_scoreboard`
+never loaded the column (`status` is not in `OUTCOME_COLUMNS`); `held_run_score` keys on
+`event_type`/`stop_hit`; `review_learning.load_outcomes_for` keys on `outcome_mode`;
+`autopilot_core.score_autopilot_picks` joins by `event_id`; `ai_jobs.digest` reads through
+`load_intraday_finals` and its `by_status` is the AI JOB ledger's. **Deviation**: M2.3 asked
+for the sentence on "the evidence report" too - that count is the outcome LEDGER's row count
+in `scripts/ai_jobs/evidence_report.py`, which this packet was told not to touch, so it did
+not get it.
+
+Verification on the branch: `tests/test_m2_unresolved_means_unmeasured.py` **40 tests** - 23
+committed RED at `448840c2` and proven so on `e7b12ebe` (21 failed, 2 passed, both
+unchanged-behaviour guards), then 17 more for the reviewer advisories, each proven red before
+its fix (15 for the blank-status rule, 2 for the nested sweep split). Full suite `6733 passed,
+1 skipped, 72 subtests, exit 0` with the nightly AI lock probed FREE; targeted band (golden /
+bounce / outcome / scoreboard / held / autopilot / away / daytrade / tracker / learning /
+sweep / digest / evidence) exit 0; `ruff` clean; smoke 7/7; source selftest 74/74. Five
+pre-existing assertions asserting the OLD label on rows that DID measure were updated with
+every numeric assertion kept. **No packaging trigger**: no
+dependency, no non-`.py` asset, no new top-level package, no dynamic import. The desk was NOT
+restarted (pid 29260 up throughout) and no live store was written.
 
 ### 2026-09-05 - Packet M4: both AVWAP band families in the lake, and a twin swing recipe (branch, UNMERGED)
 

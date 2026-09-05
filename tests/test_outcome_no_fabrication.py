@@ -151,7 +151,7 @@ def test_the_existing_context_survives():
 # ---------------------------------------------------------------------------
 # bars were seen earlier, but not through the close
 # ---------------------------------------------------------------------------
-def test_a_stop_hit_without_eod_bars_is_unresolved_with_its_stop_exit_recorded():
+def test_a_stop_hit_without_eod_bars_is_swept_measured_with_its_stop_exit_recorded():
     """MAJOR-3, trader decision 2026-08-23: `close_r` means ONE thing.
 
     It is R at the EOD close under `eod_hold`, everywhere. Writing -1.0 into it
@@ -169,7 +169,10 @@ def test_a_stop_hit_without_eod_bars_is_unresolved_with_its_stop_exit_recorded()
     assert state["last_measured"]["stop_hit"] is True
 
     row = _final(host, state)
-    assert row["status"] == "unresolved", "no bars through the close, so no eod_hold number"
+    # No bars through the close, so no eod_hold number - and packet M2 makes the
+    # LABEL say so honestly: the stop was measured, so this is `swept_measured`,
+    # not `unresolved`, which now means UNMEASURED and nothing else.
+    assert row["status"] == "swept_measured"
     assert row["close_r"] == "" and row["eod_close"] == ""
     assert row["stop_hit"] is True, "what WAS measured is still recorded"
     assert row["mae_r"] != ""
@@ -203,7 +206,7 @@ def test_a_stop_touched_but_not_gapped_is_not_flagged():
     assert _context(row)["exit"]["gap_through_stop"] is False
 
 
-def test_no_stop_and_no_eod_bars_is_also_unresolved():
+def test_no_stop_and_no_eod_bars_is_swept_measured_with_a_blank_close():
     """The last mid-session close is not the EOD close, and must not pose as it."""
     host = _host()
     state = _state()
@@ -212,7 +215,7 @@ def test_no_stop_and_no_eod_bars_is_also_unresolved():
         rows_after_entry=_bars([(100, 100.8, 99.6, 100.5)]),
     )
     row = _final(host, state)
-    assert row["status"] == "unresolved"
+    assert row["status"] == "swept_measured", "bars WERE measured, just not to the close"
     assert row["close_r"] == "" and row["eod_close"] == ""
     context = _context(row)
     assert context["finalization"]["basis"] == "last_measured_bar"

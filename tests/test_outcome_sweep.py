@@ -185,7 +185,11 @@ def test_it_finalizes_from_what_the_trade_already_measured(tmp_path):
     row = host.rows[-1]
     # MAJOR-3: `close_r` is the eod_hold number and there are no bars through
     # the close, so it stays blank. What was measured is kept beside it.
-    assert row["status"] == "unresolved"
+    #
+    # Packet M2: the LABEL is `swept_measured` - bars were measured, just not
+    # through the close - because `unresolved` now means UNMEASURED and nothing
+    # else. Every number on the row is unchanged.
+    assert row["status"] == "swept_measured"
     assert row["close_r"] == "" and row["eod_close"] == ""
     context = _context(row)
     assert context["finalization"]["basis"] == "last_measured_bar"
@@ -202,7 +206,9 @@ def test_a_measured_stop_out_finalizes_at_its_stop(tmp_path):
     _seed(host, {"a": state})
     host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
     row = host.rows[-1]
-    assert row["status"] == "unresolved", "no bars through the close"
+    # M2: no bars through the close, so no eod_hold number - but the stop IS a
+    # measured fact, so the row says `swept_measured` rather than `unresolved`.
+    assert row["status"] == "swept_measured"
     assert row["close_r"] == "" and row["eod_close"] == ""
     assert _context(row)["exit"]["stop_exit_r"] == -1.0
     assert row["stop_hit"] is True
@@ -487,8 +493,9 @@ def test_a_backlog_stop_out_is_recovered_from_its_own_csv_rows(tmp_path, monkeyp
     assert counts["recovered_from_csv"] == 1
     row = host.rows[-1]
     # It has evidence, and that evidence is recorded - but there is still no
-    # close-through-the-session, so `close_r` stays blank (MAJOR-3).
-    assert row["status"] == "unresolved"
+    # close-through-the-session, so `close_r` stays blank (MAJOR-3). The label
+    # says the evidence exists (M2).
+    assert row["status"] == "swept_measured"
     assert row["stop_hit"] is True and row["mae_r"] == pytest.approx(-1.5)
     assert _context(row)["exit"]["stop_exit_r"] == -1.0
     finalization = _context(row)["finalization"]
