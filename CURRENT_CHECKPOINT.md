@@ -182,7 +182,7 @@ in `scripts/ai_jobs/evidence_report.py`, which this packet was told not to touch
 not get it.
 
 Verification on the branch: `tests/test_m2_unresolved_means_unmeasured.py` 23 tests, committed
-RED at `920aebf8` and proven so on `e7b12ebe` (21 failed, 2 passed - both unchanged-behaviour
+RED at `448840c2` and proven so on `e7b12ebe` (21 failed, 2 passed - both unchanged-behaviour
 guards). Targeted band (golden / bounce / outcome / scoreboard / held / autopilot / away /
 daytrade / tracker / learning / sweep / digest / evidence) 1,491 passed, 1 skipped, 27
 subtests; `ruff` clean. Five pre-existing assertions asserting the OLD label on rows that DID
