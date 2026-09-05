@@ -33,6 +33,21 @@ sidecar padded from nowhere would be worse than a blank grade.
 Fail-open throughout. No research store configured, an unreachable share, a
 missing cache - each records its reason and moves to the next row. This runs in a
 nightly slot behind the grading it feeds, and it may never cost that grading.
+
+**THE READ IS AWARE, AND A FAILED READ NAMES ITSELF** (packet N1, 2026-09-05).
+A desk sidecar stores its bars NAIVE and DESK-LOCAL - the live SHW row's first
+bar reads `2026-09-01T06:30:00`, which is the RTH open on a Pacific desk - while
+the lake's `bar_m5.interval_start` is `timestamp[us, tz=UTC]`. Handing Arrow the
+naive pair is not a wider query, it is `ArrowInvalid`, and the blanket `except`
+called that `research_store_unreachable` every night from 2026-09-02 while the
+store answered 78 rows to the same window with aware bounds. So: a naive moment
+has :func:`ui.annotations.pass_bars.desk_zone` ATTACHED (never an aware one
+stripped), the session close is 16:00 **market-local** rather than 16:00 in
+whatever zone the bar was read in, and the two failures are separated -
+`ResearchStore.open()` refusing is the only thing that means unreachable, while a
+read that faults returns :data:`REASON_LAKE_READ_FAILED` carrying the exception
+class. `sidecar_schema_version` does not move: an offset on a stamp that already
+had to be parsed is additive.
 """
 
 from __future__ import annotations
@@ -43,11 +58,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from market_calendar import MARKET_TZ
 from project_paths import TRADER_ANNOTATIONS_FILE
 
 from ui.annotations.pass_bars import (
     SIDECAR_DIRNAME,
     SIDECAR_SCHEMA_VERSION,
+    desk_zone,
     read_pass_bars,
     sidecar_path,
 )
@@ -66,7 +83,16 @@ REASON_NO_SIDECAR = "no_sidecar_to_complete"
 REASON_ALREADY_COMPLETE = "already_reaches_the_session_close"
 REASON_ALREADY_COMPLETED = "already_completed"
 REASON_NO_STORE = "research_store_not_configured"
+#: `ResearchStore.open()` itself refused - the share is not mounted, the config
+#: points nowhere. THIS AND NOTHING ELSE MEANS UNREACHABLE (N1).
 REASON_STORE_UNREACHABLE = "research_store_unreachable"
+#: The store opened and the READ faulted. A different absence, and it had been
+#: reported as the one above every night from 2026-09-02: the bounds were naive
+#: against a tz-aware Arrow column, so the store was reachable the whole time
+#: and three days of diagnosis pointed at the share. The reason string carries
+#: the exception class (`lake_read_failed: ArrowInvalid`) so the ledger line
+#: names the fault instead of a guess about it.
+REASON_LAKE_READ_FAILED = "lake_read_failed"
 REASON_NO_BARS_ANYWHERE = "no_bars_in_the_lake_or_the_cache"
 
 SOURCE_LAKE = "research_lake"
@@ -101,21 +127,43 @@ def read_completed_bars(row: Mapping[str, Any], *, annotations_path: Any = None)
         return read_pass_bars(row, annotations_path=annotations_path)
 
 
+def _attach(moment: datetime) -> datetime:
+    """ATTACH the desk zone to a naive moment; never strip an aware one.
+
+    `desk_zone` is read through THIS module's global on purpose, so a test can
+    pin the zone and mean it. Everything downstream - the lake bounds, the
+    session close, the window filter, the strings in the completed file - is
+    aware from here on.
+    """
+    if moment.tzinfo is not None:
+        return moment
+    return moment.replace(tzinfo=desk_zone())
+
+
 def _bar_moment(bar: Mapping[str, Any]) -> datetime | None:
     raw = bar.get("dt") or bar.get("interval_start")
     if isinstance(raw, datetime):
-        return raw
+        return _attach(raw)
     text = str(raw or "").strip()
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return _attach(parsed)
 
 
 def _session_close(moment: datetime) -> datetime:
-    return moment.replace(
+    """16:00 MARKET-LOCAL on the bar's own session, aware.
+
+    It used to be `moment.replace(hour=16)` - 16:00 in whatever zone the bar
+    happened to be read in, which on this Pacific desk is 13:00 ET plus three
+    hours of nothing. The bar is converted to `America/New_York` FIRST, so the
+    close is the exchange's close whatever zone the desk writes in.
+    """
+    market = _attach(moment).astimezone(MARKET_TZ)
+    return market.replace(
         hour=_SESSION_CLOSE_HOUR, minute=_SESSION_CLOSE_MINUTE,
         second=0, microsecond=0,
     )
@@ -139,6 +187,12 @@ def _lake_bars(symbol: str, start: datetime, end: datetime) -> tuple[list[dict],
 
     Narrowed ARROW-SIDE by symbol and interval range (BD-74): a month-keyed
     partition materialised and then filtered is what put 10 GB in the desk.
+
+    THE BOUNDS MUST BE AWARE. `bar_m5.interval_start` is
+    `timestamp[us, tz=UTC]`, and Arrow refuses to compare it with a naive
+    value - it is not a wider query, it is an exception. `complete_sidecar`
+    hands aware bounds; a naive one is attached here as well, because a caller
+    that passes one is asking for a read, not for a three-night mystery.
     """
     try:
         from research_warehouse.store import ResearchStore
@@ -155,10 +209,11 @@ def _lake_bars(symbol: str, start: datetime, end: datetime) -> tuple[list[dict],
             "bar_m5",
             columns=["symbol", "interval_start", "open", "high", "low", "close", "volume"],
             symbols=[symbol],
-            interval_start_range=(start, end),
+            interval_start_range=(_attach(start), _attach(end)),
         )
-    except Exception:  # noqa: BLE001 - an unreachable share is a reason, not a crash
-        return [], REASON_STORE_UNREACHABLE
+    except Exception as exc:  # noqa: BLE001 - a read fault is a reason, not a crash
+        _log.debug("Sidecar lake read failed for %s.", symbol, exc_info=True)
+        return [], f"{REASON_LAKE_READ_FAILED}: {type(exc).__name__}"
     return [dict(row) for row in rows], ""
 
 
@@ -226,7 +281,7 @@ def complete_sidecar(
         "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
         "completes_ref": str(row.get("m5_bars_ref") or ""),
         "completed_source": source,
-        "completed_at": (now or datetime.now()).isoformat(timespec="seconds"),
+        "completed_at": (now or datetime.now().astimezone()).isoformat(timespec="seconds"),
         "bar_count": len(bars) + len(extra),
         "bars": [_normalise(bar) for bar in bars] + extra,
     }
@@ -297,6 +352,7 @@ __all__ = [
     "COMPLETED_SOURCE_FIELD",
     "REASON_ALREADY_COMPLETE",
     "REASON_ALREADY_COMPLETED",
+    "REASON_LAKE_READ_FAILED",
     "REASON_NO_BARS_ANYWHERE",
     "REASON_NO_SIDECAR",
     "REASON_NO_STORE",
@@ -306,5 +362,6 @@ __all__ = [
     "complete_sidecar",
     "complete_sidecars",
     "completed_sidecar_path",
+    "desk_zone",
     "read_completed_bars",
 ]

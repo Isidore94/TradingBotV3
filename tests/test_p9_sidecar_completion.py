@@ -15,12 +15,40 @@ import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(ROOT / "scripts"))
 
 OPEN = datetime(2026, 9, 1, 9, 30)
+
+
+@pytest.fixture(autouse=True)
+def _bars_are_market_local(monkeypatch):
+    """This module's fixture bars are written in MARKET-local wall time.
+
+    Added by packet N1 (2026-09-05), which changed nothing these tests assert
+    and one thing they had silently assumed. `OPEN` here is 09:30 and the last
+    bar of the day is 15:55 - New York wall times, chosen when a naive stamp was
+    read in no zone at all and `_session_close` was `moment.replace(hour=16)` in
+    that same nowhere. N1 attaches `desk_zone()` to a naive stamp, because the
+    LIVE sidecars are desk-local (the real SHW row opens at 06:30 Pacific), so
+    on this Pacific desk 09:30 would now mean 12:30 New York and the session
+    would close two and a half hours into the fixture.
+
+    Pinning the seam says out loud which frame these stamps are in, and makes
+    the module machine-independent besides: before this it would have passed on
+    an Eastern desk and failed on a Pacific one. Every assertion below is
+    unchanged.
+    """
+    from ui.annotations import pass_bars, sidecar_completion
+
+    new_york = ZoneInfo("America/New_York")
+    monkeypatch.setattr(pass_bars, "desk_zone", lambda: new_york)
+    monkeypatch.setattr(sidecar_completion, "desk_zone", lambda: new_york)
 
 
 def _bar(minute_offset: int, close: float = 10.0) -> dict:
