@@ -1129,11 +1129,94 @@ which is evidence and must not be loaded as context.
   `_is_band_variant_scenario` fences the shadow out of every champion aggregate and
   the B-2 parity fixture pins the champion's records byte-identical.
 
+- **The control holdout, the study namespace and the April exit framework are SHOWN**
+  (packet M5, 2026-09-05). Three exports written in the tracker's own save pass and read
+  by three Setup Tracker tabs: `master_avwap_control_discovery.csv` (401 setups the scan
+  REJECTED), `master_avwap_study_discovery.csv` (3,992 unpromoted ideas) and
+  `master_avwap_exit_framework_stats.csv` (one row per `(framework_family,
+  exit_template_id, side, priority_bucket)`, including `comparison_apr2026` - the two
+  experimental templates that wrote 91,674 of 275,022 scenario rows since April and had
+  **no reader anywhere under `scripts/`**). `build_control_discovery_rows` /
+  `build_study_discovery_rows` are unchanged and are CALLED by the new builders.
+  Win rate leads with `n` and the ONE Wilson bound (`swing_headline`), mean R beside it,
+  the window in SESSIONS, an all-history block and a `lately` block side by side, and
+  **each tab carries a population sentence** so a control is never read as a pick.
+  `experimental` is a COLUMN, so a what-if can never read as the champion's record. The
+  framework export is built from `_flatten_tracker_scenarios`, inside the band-variant
+  fence. Shadow only: no detector, score, tier, alert, watchlist, Focus, review queue or
+  `review_policy.json` is reachable, each export is guarded separately so it can never
+  cost the tracker save, and the champion aggregates are pinned byte-identical by a
+  two-directory reproduction test. Live gate #67.
+
 Neither of the first two challengers is promoted, and the band challenger's ≥ 20
 sessions of forward accrual start at its first measured row. Their remaining evidence
 gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-05 - M5: measured but never shown, written but never read
+
+Trader authorization, 2026-09-05: *"Fix all of these failures"* over the lead's
+measurement audit (finding 5) - the recorded yes for these `master_avwap_lib/legacy.py`
+edits and nothing wider. Branch `claude/m5-shown-and-read`, built on M3's tip (same
+files). No detector, score, rank, tier, alert, Focus or `review_policy.json` change, and
+no evidence deleted.
+
+**M5.1 - two populations the tracker has graded for months and shown nobody.**
+`build_control_discovery_rows` and `build_study_discovery_rows` have ranked the control
+holdout (401 records - setups the scan REJECTED) and the study namespace (3,992 records
+- ideas that touch no score) since B4. **No production caller reached either**: 4,393
+graded records whose only readers were `tests/test_control_discovery.py`,
+`tests/test_study_setups.py` and a `.txt` report the desk does not render.
+`export_setup_tracker_views` now writes `master_avwap_control_discovery.csv` and
+`master_avwap_study_discovery.csv` in the SAME pass as the other stats CSVs, from those
+two functions **unchanged** - the new builders call them and flatten what they return,
+rather than widening an output two test files already pin. Every row carries `n`, wins,
+losses, `win_rate` and its **Wilson lower bound through `swing_headline`** (the ONE z,
+1.96 - never `expected_r`'s 1.28), mean R beside it and the window in **SESSIONS**. The
+functions grade over all history, so a `lately` block (`evidence_stats.lately_window`,
+20 sessions) is a SECOND block beside the all-history one, never a replacement: a
+two-year average cannot answer "is this working now" and a 20-session window cannot say
+anything about a rare family.
+
+**M5.3 - the April comparison framework is READ.** `comparison_apr2026` (two
+experimental exit templates, `exp_full_band2_hard_stop_125r` and
+`..._no_sma50_short_nearfav`, framework version 2026-04-14) has written **91,674 of the
+275,022 rows** in `master_avwap_setup_scenarios.csv` since April. Every champion
+aggregate skips an `experimental` scenario by design - correctly, because a what-if must
+never reach a score - and the consequence nobody noticed is that the what-if was never
+read either: **no reader of `framework_family == "comparison_apr2026"` existed anywhere
+under `scripts/`.** `build_exit_framework_stats_rows` writes
+`master_avwap_exit_framework_stats.csv`, one row per `(framework_family,
+exit_template_id, side, priority_bucket)` with n, closed n, win rate + Wilson, mean R,
+stop-out rate and target-hit rate, so a baseline template and its comparison twin sit
+side by side **on the SAME setups with the same n**. A NEW FILE rather than columns on
+`master_avwap_setup_type_stats.csv`: that export's grain is the setup family and the
+offline tuner reads it into live scoring weights, so widening it would be a champion
+change wearing an evidence-only label. `experimental` is a COLUMN, never a filter, so a
+what-if can never read as the champion's own record. Built from
+`_flatten_tracker_scenarios` and never a fresh walk of `setup["scenarios"]` - that
+function already applies the band-variant fence, and a second scenario reader here would
+be the eighth unfenced reader `test_band_variant_fence_guard.py` exists to prevent.
+
+**M5.2 - three tabs on the Setup Tracker.** Controls, Studies and Exit frameworks, pure
+CSV readers like every other section on the page. Win rate leads with its `n` and its
+bound, **the sort IS the bound** (a 100% on two rejected setups is not better than a 60%
+on ninety), the Weekend Prep ten-row floor, and **ONE population sentence above each
+table** naming what the rows ARE - "N control setups the scan REJECTED, graded on their
+own scenarios - never picks". A control row and a pick look identical in a table; the
+sentence is the only thing that keeps them apart. An absent export renders the sentence,
+never a blank table.
+
+**What holds.** Every champion aggregate is byte-identical, checked by REPRODUCTION
+rather than by reading: `test_the_champion_aggregates_are_byte_identical_with_and_without_the_new_export`
+exports one payload into two directories, once with the three new builders live and once
+with them raising, and compares every champion CSV byte for byte. Each new export has
+its OWN guard - a single `try` around all three would let the first failure take two
+independent populations down with it - so a failure is logged, never aborts the tracker
+save, and never costs its siblings. An `EXPIRED_UNMEASURED` record leaves numerator and
+denominator and is COUNTED (M3.3's rule, applied in **exports only**; nothing here
+reaches a scoring path). Live gate #67.
 
 ### 2026-09-05 - M3: the tracker keeps up with its scans, says how old it is, and lets a stuck setup age out
 

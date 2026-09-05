@@ -244,6 +244,17 @@ measurement in `docs/DESK_INTERNALS.md` ("Headline statistics, long form").
   AWAY is still the only routine pusher.
 - **The Research tab is not a trader surface** (answer 7). Nothing the trader must see may live
   only there; "it is on the Research tab" is not an answer to "where does the trader see this?"
+- **The control, study and experimental-exit populations are SURFACED, LABELLED, and never mixed
+  with picks** (M5, 2026-09-05). Three Setup Tracker tabs - **Controls** (the 401 setups the scan
+  REJECTED), **Studies** (the 3,992 unpromoted ideas) and **Exit frameworks** (`comparison_apr2026`
+  beside `baseline` on the SAME setups) - read three CSVs written in the tracker's own save pass
+  from `build_control_discovery_rows` / `build_study_discovery_rows` / the scenario flattener,
+  unchanged. Win rate leads with `n` and the ONE Wilson bound, **the sort is the bound**, mean R
+  beside it, an all-history block AND a `lately` one. **Each tab carries a population sentence and
+  `experimental` is a COLUMN**: a control row and a pick look identical in a table, and a what-if
+  read as the champion's record is the failure these three exist to prevent. Shadow only - nothing
+  here scores, ranks, gates or alerts, each export is guarded so it can never cost the tracker
+  save, and the champion aggregates are pinned byte-identical.
 - **"Lately" is ONE number and it is counted in trading sessions.** `evidence_stats.LATELY_SESSIONS`
   (20); `lately_window()` walks the exchange calendar (twenty calendar days is fourteen sessions
   in a normal month and twelve across a holiday week). `review_learning.DEFAULT_WINDOW_SESSIONS`
