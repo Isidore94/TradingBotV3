@@ -1060,6 +1060,51 @@ intraday features for those months were computed from the duplicated rows.
   packet fixed the build thread; the tee thread had the identical shape and was
   found the same evening by sampling the GIL, not by reading the code.
 
+## Q4 - the overnight run protects its deterministic work (2026-09-04)
+
+Three rules `CLAUDE.md` gained. The long form of each lives in its own governing
+document rather than being retold here; this entry says which, and states the one
+thing a future editor most needs and would otherwise have to rediscover.
+
+**The slot order is decision 0018's, and the reason is a reservation, not a
+preference.** Full record:
+[`docs/decisions/0018-deterministic-stage-before-narration.md`](decisions/0018-deterministic-stage-before-narration.md).
+The thing to know before touching `default_slots()`: the runner does not queue or
+shorten a slot whose reserve no longer fits the remaining window - it records
+**SKIPPED**, and the night simply does not do that work. `ai_summary` (up to ~170 min
+in chunked mode) and `ticker_briefs` (120 min) sat ahead of every deterministic slot,
+and the 2026-09-01 run took six hours. A skipped narration is regenerable tomorrow; a
+skipped cohort grade, sidecar completion or fact pack is a hole in an append-only
+forward record for a session that is over. Verified at the code level before the move:
+**no deterministic slot reads either narration slot's output file** - `daily_digest`
+imports `ai_summary` as a LIBRARY to narrate its own pack and opens neither slot's
+published file.
+
+**The digest gate's two halves.** Full record:
+[`docs/LOCAL_AI_AUTOMATION_PLAN.md`](LOCAL_AI_AUTOMATION_PLAN.md) §7.0. Two things a
+future editor will want and would otherwise guess at:
+
+* **"Clean" reads the `unavailable` map, and that is the whole failure record the pack
+  has.** There is no `failures` key, no `errors` key and no coverage-failed flag; the
+  pack's own `summary` already renders a non-empty `unavailable` as "this pack is
+  INCOMPLETE rather than empty". A pack written with no AI store configured records
+  `ai job ledger: No AI store configured` and is therefore NOT clean - which is why two
+  existing test helpers patch that read rather than assert a dirty pack is clean.
+* **The approval file is deliberately outside every automatic path.** A nightly job that
+  could write `digest_audit_approval.json` would turn "the trader audited three packs"
+  into "the runner asserted it did", which is precisely the claim the gate exists to
+  make impossible. A test walks `runner.py`'s source and `run_daily_digest`'s AST to
+  keep it that way.
+
+**`entry_index.json` fills nothing its sources do not establish.** Two of its four
+sections - `swing_win_rates` and `journal_execution` - are empty with the reason
+printed in the file, because the daily fact pack carries champion INTRADAY outcomes and
+no journal block. The temptation is to fill them from `master_avwap_tier_outcomes.csv`
+and the journal store; that would put two grains in one index and let a reader compare
+them. A blank is right where the question cannot be asked of this record.
+
+---
+
 ## Headline statistics, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)
 
 `CLAUDE.md` keeps the rules of this block; this is the block as it stood, with every
