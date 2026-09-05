@@ -24,16 +24,20 @@ store = ResearchStore.open()
 # invents a field name measures itself. `like_links.basis_of` is the only reader,
 # and an unreadable payload stops this script with the row printed rather than
 # quietly filling a bucket.
+# TWO GRAINS, both printed, because they are different answers and an
+# unlabelled distribution silently mixes them: the dataset keeps every VERSION
+# of a link, so 84 rows stood behind 77 distinct event ids on 2026-09-04. A
+# count taken one way cannot be reconciled with a count taken the other unless
+# each says which it is.
 print("=== Like links (bronze_like_occurrence_link) ===")
-total_links = 0
-basis_counts = Counter()
+payloads = []
+latest_by_event = {}
 for part in ("month=2026-08", "month=2026-09"):
     try:
         rows = store.read_table("bronze_like_occurrence_link", part).to_pylist()
     except Exception as e:
         print(f"  {part}: {e}")
         continue
-    total_links += len(rows)
     for row in rows:
         payload = row.get("payload", "")
         if isinstance(payload, str):
@@ -44,12 +48,21 @@ for part in ("month=2026-08", "month=2026-09"):
         else:
             p = payload
         try:
-            basis_counts[like_links.basis_of(p)] += 1
+            link = like_links.LikeLink.from_payload(p)
         except ValueError as e:
             raise SystemExit(f"AUDIT ERROR: unreadable like-link payload in {part}: {row!r} ({e})")
+        payloads.append(p)
+        observed = str(row.get("observed_at") or "")
+        if link.event_id not in latest_by_event or observed >= latest_by_event[link.event_id][0]:
+            latest_by_event[link.event_id] = (observed, link.match_basis)
 
-print(f"  Total like links: {total_links}")
-print(f"  Basis distribution: {dict(basis_counts)}")
+print(f"  Link rows (every version): {len(payloads)}")
+print(f"  Basis distribution BY ROW: {like_links.count_payload_bases(payloads)}")
+print(f"  Distinct event ids: {len(latest_by_event)}")
+print(
+    "  Basis distribution BY DISTINCT EVENT ID (newest version each): "
+    f"{dict(Counter(basis for _observed, basis in latest_by_event.values()))}"
+)
 
 # 2. bar_derived completeness check
 print("\n=== bar_derived COMPLETE share ===")

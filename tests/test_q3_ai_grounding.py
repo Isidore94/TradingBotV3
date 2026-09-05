@@ -652,7 +652,7 @@ def test_the_likes_audit_names_the_grain_of_its_distribution():
         ROOT_DIR / "docs" / "analysis" / "scripts" / "lake_likes_and_details.py"
     ).read_text(encoding="utf-8")
 
-    assert "by row" in text
+    assert "by row" in text.lower()
     assert "distinct event" in text.lower()
     assert "count_payload_bases" in text
 

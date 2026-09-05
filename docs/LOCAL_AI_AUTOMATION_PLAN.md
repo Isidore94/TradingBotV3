@@ -1761,6 +1761,20 @@ document with no supported row still raises.
 but they are **not** exempt from this rule: a section that need not cite may
 still not assert a position it cannot support.
 
+**The `executive_summary` may not assert a position AT ALL** (lead ruling,
+2026-09-04, reviewer blocker 1). It carries no `evidence_refs`, so there is no
+ref to strike and no way for it to become supported; and it cannot be omitted
+the way a row can, because a blank executive summary already raises. So when
+`states_a_position` is true of it, the whole field is replaced by
+`WITHHELD_EXECUTIVE_SUMMARY` — *"Executive summary withheld: it asserted a
+position without a trade-journal source."* — and one entry is recorded in
+`dropped` (`section: "executive_summary"`, `detail: "position claim in the
+executive summary"`, `row_dropped: True`). The document still publishes on its
+surviving rows. This is the row-not-document rule applied to the one field that
+is not a row. **Measured: 480 of 1,478 published executive summaries assert a
+position**, the cited one opening "BULL is currently long...", so this is the
+common case rather than an edge.
+
 Deliberately NOT in the vocabulary: "long setup", "short candidate", "on the
 longs list". Those name a direction or a membership, and the scanner and the
 watchlists establish both.
@@ -1785,9 +1799,11 @@ first field of a row in a list-of-rows content, because
 `master_avwap_setup_type_stats.csv` is keyed by its first column; and, for TEXT
 content, a **literal case-insensitive occurrence**, because the narrative sources
 are prose with labelled figures and the label is the only handle there is. The
-walk is depth- and width-bounded. A missing source, or one whose content was
-dropped for staleness, has no keys and answers False — the conservative
-direction, since the row is then dropped rather than published.
+walk is depth- and width-bounded. A missing source has no keys and answers
+False, and so does one that is not USABLE — stale, empty, invalid or excluded —
+because a cell nobody can read is not a cell (reviewer advisory 1). The test is
+the same one `usable_source_ids` applies. This is the conservative direction,
+since the row is then dropped rather than published.
 
 The numeric rule is scoped to rows that must cite. `data_quality` and
 `risk_notes` carry no refs for a `metric_ref` to name, and the system's own
@@ -1797,9 +1813,18 @@ A bare integer is not a numeric claim. "3 setups triggered" is a count the reade
 can check against the cited source; "62%", "8 of 13", "n=37" and "1.8R" are
 derived figures whose denominator and horizon the sentence does not carry.
 
-`GROUNDING_PROMPT_LINES` states both rules to the model, in `_user_prompt` and
-therefore in `_local_user_prompt` too. A rule the model never hears costs a row
-every night for no reason.
+`GROUNDING_PROMPT_LINES` states all three rules to the model — the position
+rule, the executive-summary rule and this one — in `_user_prompt` and therefore
+in `_local_user_prompt` too. A rule the model never hears costs a row every
+night for no reason.
+
+**And the prompt CLOSES on `metric_ref`** (reviewer blocker 4). The local
+prompt's last sentence used to be *"each section is an array of objects with
+exactly the keys statement, evidence_refs, confidence"* — which contradicted the
+grounding ask three paragraphs above it, and was the last thing the model read.
+The shape sentence now names `metric_ref` as an optional fourth key and the
+prompt ends by restating when it is required, because a model that has been told
+twice believes the second telling.
 
 **One validator serves every path.** `ai_summary.validate_ai_summary` is the
 only one; `validate_published_summary` delegates to it, and the ticker briefs

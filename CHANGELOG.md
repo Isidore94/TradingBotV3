@@ -820,7 +820,9 @@ which is evidence and must not be loaded as context.
   membership. That set is `{"journal.trades_and_reviews"}` and is an EXACT LIST OF IDS
   rather than the `journal` KIND: the other four `journal.*` ids are the **Market
   Journal**, which is what the trader THOUGHT, and the two stores are deliberately
-  never merged.
+  never merged. **The `executive_summary` cites nothing, so it may not assert a
+  position at all** and is replaced wholesale by `WITHHELD_EXECUTIVE_SUMMARY` when it
+  does - 480 of 1,478 published summaries did.
   **A statement stating a percentage, an `N of M`, an `n=N` or a decimal R must carry
   a resolvable `metric_ref` `{source_id, key, horizon, denominator}`** whose source is
   one of its own refs and whose key really exists in that source
@@ -1060,7 +1062,14 @@ per-trade `status`. The other four are the **Market Journal** - what the trader
 THOUGHT, machine-measured day context, chart digests, the nightly evidence report -
 and the two stores are deliberately not merged, so a family-keyed rule let one stand
 as evidence for the other. `data_quality` and `risk_notes` stay exempt from CITATION
-and are NOT exempt from this.
+and are NOT exempt from this. **The `executive_summary` may not assert a position at
+all** (reviewer blocker 1): it carries no refs, so there is nothing to strike and no
+way for it to become supported, and it cannot be omitted because a blank one already
+raises - so it is REPLACED by `WITHHELD_EXECUTIVE_SUMMARY` and one
+`detail: "position claim in the executive summary"` entry is recorded, with the
+document still publishing on its surviving rows. Measured: **480 of 1,478 published
+executive summaries assert a position**, the cited one opening "BULL is currently
+long...".
 
 **A numeric claim names its cell.** A statement stating a percentage, an `N of M`, an
 `n=N` or a decimal R must carry a `metric_ref` `{source_id, key, horizon,
