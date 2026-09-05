@@ -41,7 +41,12 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     from store import ResearchStore  # type: ignore
 
 #: Bump when any definition below changes; old rows keep their version.
-FEATURE_SET_VERSION = "tier1_v1"
+#:
+#: ``tier1_v2`` (M4.1, 2026-09-05) added the challenger AVWAP band family
+#: (``avwap_variant_*``). No ``tier1_v1`` definition changed, and no
+#: ``tier1_v1`` row is rewritten: the dataset identity carries the version, so
+#: the two shapes coexist and a rebuild supersedes rather than editing.
+FEATURE_SET_VERSION = "tier1_v2"
 #: The frozen running-deviation sigma variant (decision 0008).
 AVWAP_FORMULA_VERSION = "running_deviation_v1"
 
@@ -202,6 +207,42 @@ def anchored_vwap_bands(bars, anchor_index: int = 0):
     if frame.empty:
         return float("nan"), float("nan"), {}
     return _master_legacy().calc_anchored_vwap_bands(frame, int(anchor_index))
+
+
+def _band_variants():
+    """The pure challenger formula, imported lazily.
+
+    ``scripts/indicators/`` is a dependency-light, offline package; importing it
+    at module scope would drag it into every headless job that only wants a
+    champion number. It is already collected by the PyInstaller spec
+    (``FIRST_PARTY_PACKAGES``) and already named in
+    ``selftest.LAZY_ENGINE_MODULES``, so this importer adds no packaging trigger.
+    """
+    _ensure_scripts_on_path()
+    try:
+        from indicators import avwap_band_variants
+    except ImportError:  # pragma: no cover - packaged import
+        from scripts.indicators import avwap_band_variants  # type: ignore
+    return avwap_band_variants
+
+
+def avwap_variant_bands(bars, anchor_index: int = 0):
+    """The CHALLENGER's ``(vwap, stdev, bands)`` on lake bars (M4.1).
+
+    ``AVWAP(HLC/3) +/- k * stdev(close, 20, population)``, the OneOption /
+    Option Stalker replication pinned in ``docs/AVWAP_BAND_VARIANT_STUDY.md``
+    section 2b. Deliberately the same three-tuple shape as
+    :func:`anchored_vwap_bands` so a caller holds both answers without adapting
+    either, and deliberately a DIFFERENT function: the champion's sigma is
+    frozen (decision 0008, plan.md sec 5) and nothing here touches it.
+
+    Unmeasurable is ``None``, never zero and never a padded window - fewer than
+    twenty completed closes up to the session leaves the sigma and every band
+    ``None`` while the centre, which IS measurable, is still reported.
+    """
+    if not bars:
+        return None, None, {}
+    return _band_variants().oneoption_avwap_bands(list(bars), int(anchor_index))
 
 
 def indicator_grid(bars):
@@ -566,6 +607,18 @@ def compute_daily_features(
         # Set only where an anchor was actually used, so "" means unanchored
         # and NULL means the row predates the column.
         "anchor_knowledge": ANCHOR_KNOWLEDGE_UNANCHORED,
+        # The CHALLENGER's bands (M4.1), from the SAME bars and the SAME anchor
+        # index as the champion's. NULL until an anchor is used; NULL bands with
+        # the formula version present mean "attempted and unmeasurable".
+        "avwap_variant_value": None,
+        "avwap_variant_stdev": None,
+        "avwap_variant_upper_1": None,
+        "avwap_variant_upper_2": None,
+        "avwap_variant_upper_3": None,
+        "avwap_variant_lower_1": None,
+        "avwap_variant_lower_2": None,
+        "avwap_variant_lower_3": None,
+        "avwap_variant_formula_version": None,
         "ema8": _grid_value(grid, "ema_8"),
         "ema15": _grid_value(grid, "ema_15"),
         "ema21": _grid_value(grid, "ema_21"),
@@ -593,6 +646,21 @@ def compute_daily_features(
                 features[f"dist_sma{period}_atr"] = (close - level) / atr_value
 
     if anchor_index is not None and 0 <= anchor_index < len(usable):
+        # The CHALLENGER, computed FIRST and independently of whether the
+        # champion produced anything (M4.1). The two formulas fail on different
+        # inputs - the champion's sigma is zero on a one-bar anchor and the
+        # challenger's is None until twenty closes exist - so gating one on the
+        # other would silently drop a measured band. The formula version is
+        # written whenever the challenger was ATTEMPTED, so a NULL band with a
+        # version beside it reads as "not measurable here" rather than as a row
+        # that predates the column.
+        variant_vwap, variant_stdev, variant_bands = avwap_variant_bands(usable, anchor_index)
+        features["avwap_variant_formula_version"] = _band_variants().FEATURE_VERSION
+        features["avwap_variant_value"] = variant_vwap
+        features["avwap_variant_stdev"] = variant_stdev
+        for band in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
+            features[f"avwap_variant_{band.lower()}"] = variant_bands.get(band)
+
         avwap, _stdev, bands = anchored_vwap_bands(usable, anchor_index)
         if bands:
             features["anchor_knowledge"] = str(anchor_knowledge or ANCHOR_KNOWLEDGE_UNANCHORED)
@@ -984,6 +1052,7 @@ __all__ = [
     "anchor_index_for",
     "anchored_vwap_bands",
     "atr",
+    "avwap_variant_bands",
     "build_anchor_instances",
     "build_daily_snapshots",
     "build_intraday_snapshots",

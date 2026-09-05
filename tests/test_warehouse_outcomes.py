@@ -399,20 +399,30 @@ def test_alternative_recipes_share_one_occurrence_and_one_episode(store):
     report = outcomes.build_outcomes(
         store, [occurrence], d1_by_symbol={"AAPL": _d1([100.0] + [101.0] * 20)}, as_of=NOW
     )
-    assert report.rows == 3  # house + two controls
+    # house + the band challenger's twin (M4.2) + two controls
+    assert report.rows == 4
     rows = store.read_table("outcome_path").to_pylist()
     assert {row["recipe_id"] for row in rows} == {
         "swing_house_v1",
+        "swing_house_variant_v1",
         "control_fixed_1r2r_v1",
         "control_time_only_v1",
     }
-    # Three recipes, ONE occurrence: correlated diagnostics, never three trades.
+    # Four recipes, ONE occurrence: correlated diagnostics, never four trades.
     assert len({row["occurrence_id"] for row in rows}) == 1
-    assert {row["outcome_definition_id"] for row in rows} == {"house_default_v1"}
+    by_recipe = {row["recipe_id"]: row for row in rows}
+    assert {
+        row["outcome_definition_id"]
+        for recipe_id, row in by_recipe.items()
+        if recipe_id != "swing_house_variant_v1"
+    } == {"house_default_v1"}
+    # The twin's own definition id is a FENCE: every reader that filters on the
+    # house default (queries.slice_readout) can never see a challenger row.
+    assert by_recipe["swing_house_variant_v1"]["outcome_definition_id"] == "band_variant_v1"
 
     again = outcomes.build_outcomes(store, [occurrence], d1_by_symbol={"AAPL": _d1([100.0])}, as_of=NOW)
-    assert again.status == "NOTHING_TO_SIMULATE" and again.skipped["ALREADY_SIMULATED"] == 3
-    assert store.read_table("outcome_path").num_rows == 3
+    assert again.status == "NOTHING_TO_SIMULATE" and again.skipped["ALREADY_SIMULATED"] == 4
+    assert store.read_table("outcome_path").num_rows == 4
 
 
 def test_an_open_outcome_is_resimulated_and_superseded(store):
@@ -509,6 +519,10 @@ def test_the_recipe_mapping_is_the_normative_one():
     assert outcomes.DIAGNOSTIC_ATR_STOP_V1.stop == "signal_bar_extreme_plus_0_25_atr_m5_14"
     assert set(outcomes.RECIPES) == {
         "swing_house_v1",
+        # M4.2: the band challenger's twin. Additive - it is in the registry so
+        # a stored row resolves back to its policy, and deliberately NOT in
+        # `PRIMARY_RECIPE_BY_SETUP`, which is asserted unchanged above.
+        "swing_house_variant_v1",
         "intraday_bounce_v1",
         "control_fixed_1r2r_v1",
         "control_time_only_v1",

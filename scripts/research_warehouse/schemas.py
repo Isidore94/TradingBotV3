@@ -294,6 +294,24 @@ FEATURE_SNAPSHOT_DAILY = _schema(
         # no anchor; NULL means the row was written before the column existed
         # and is read as `legacy`, never as observed.
         pa.field("anchor_knowledge", pa.string()),
+        # ADDITIVE (M4.1, packet M4 / study T3 step 4): the CHALLENGER's bands,
+        # computed from the same bars and the same anchor index by
+        # `indicators.avwap_band_variants.oneoption_avwap_bands` -
+        # AVWAP(HLC/3) +/- k * stdev(close, 20, population). They sit BESIDE
+        # the champion's and never inside them: the two formulas are different
+        # questions and one column that sometimes means either would be
+        # unreadable. NULL means "not measured" - never a band on the centre
+        # line - and `avwap_variant_formula_version` says which formula wrote
+        # them, so a later formula revision can never be mistaken for this one.
+        pa.field("avwap_variant_value", pa.float64()),
+        pa.field("avwap_variant_stdev", pa.float64()),
+        pa.field("avwap_variant_upper_1", pa.float64()),
+        pa.field("avwap_variant_upper_2", pa.float64()),
+        pa.field("avwap_variant_upper_3", pa.float64()),
+        pa.field("avwap_variant_lower_1", pa.float64()),
+        pa.field("avwap_variant_lower_2", pa.float64()),
+        pa.field("avwap_variant_lower_3", pa.float64()),
+        pa.field("avwap_variant_formula_version", pa.string()),
         pa.field("ema8", pa.float64()),
         pa.field("ema15", pa.float64()),
         pa.field("ema21", pa.float64()),

@@ -200,6 +200,69 @@ BACKFILL_TRIALS: tuple[Mapping[str, Any], ...] = (
         "registered_by": "P7 backfill (grid predates the ledger)",
     },
     {
+        "trial_id": "swing_house_variant_v1_twin",
+        "schema": SCHEMA,
+        # The date the trader authorized the comparison ("I want us to compare
+        # both to see what is better", plan.md Phase 0.19). Registered in the
+        # same commit as the recipe and BEFORE the first outcome row exists: the
+        # twin is simulated for the first time on the night after this lands.
+        "registered_at": "2026-09-05T00:00:00+00:00",
+        "family": "AVWAP_BAND_SIGMA",
+        "question": (
+            "Over the SAME swing occurrences and the SAME management policy, do "
+            "the challenger's levels - AVWAP(HLC/3) +/- k * stdev(close, 20, "
+            "population) - produce a better forward record than the champion's "
+            "running-deviation sigma? One walk, one difference: which band "
+            "family supplies the levels."
+        ),
+        "failure_mode": (
+            "THREE. (1) The challenger's bands are missing on a different "
+            "population than the champion's, so the two recipes are graded on "
+            "different occurrences and the difference is coverage rather than "
+            "edge - which is why `band-coverage --compare` pairs on occurrence "
+            "id and prints a `not_paired` line rather than dropping a row. (2) "
+            "The challenger's band is WIDER, so it is read as a further stop; it "
+            "is not - it is stopped out less often only when entry sits INSIDE "
+            "it, and the sibling `avwap_band_challenger_v1` row records the "
+            "fixture where the challenger's stop landed six times TIGHTER. (3) "
+            "The bands come from `feature_snapshot_daily` rows that are almost "
+            "all `reconstructed` (BD-99), so this is research evidence and never "
+            "promotion evidence."
+        ),
+        "declared_cells": {"band_family": ["champion", "variant"]},
+        "declared_cell_count": 2,
+        "recipe_ids": ["swing_house_variant_v1"],
+        "recipe_id_prefix": "",
+        "declared_floors": {
+            "min_forward_sessions": 20,
+            "min_paired_occurrences": 30,
+            "note": (
+                "plan.md Phase 0.10 T4 criterion 3: >= 20 sessions of forward "
+                "accrual, counted only from the first session that carries BOTH "
+                "band families. `evidence_stats.MIN_REPORTABLE_N` is the floor on "
+                "the paired count."
+            ),
+        },
+        "declared_window": {
+            "kind": "forward_shadow",
+            "note": (
+                "shadow only; `calc_anchored_vwap_bands` stays frozen (decision "
+                "0008), the twin's `outcome_definition_id` keeps it out of every "
+                "reader that filters on the house default, and T4's criteria - "
+                "not this row - decide"
+            ),
+        },
+        "authorization": (
+            "trader 2026-09-05 (\"I want us to compare both to see what is "
+            "better\"); plan.md Phase 0.19 item 2; docs/AVWAP_BAND_VARIANT_STUDY.md "
+            "T3 step 4"
+        ),
+        "analysis_unit": "opportunity",
+        "status": STATUS_COLLECTING,
+        "outcome": "",
+        "registered_by": "M4 registration (written before any outcome was inspected)",
+    },
+    {
         "trial_id": "setup_entry_timing_avwape_first_dev_long_v1",
         "schema": SCHEMA,
         # The paste date, which IS this grid's authorization pointer. Not

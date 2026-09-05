@@ -33,6 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 66 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
 | 65 | **The band challenger measures (M1)** - after the next persisted tracker write: `master_avwap_band_variant_stats.csv` shows `n_variant > 0` on the rows whose records have >= 20 closes before the anchor, the four `_variant` columns fill, and the Setup Tracker's Band variant view reads `Measured N of M setups` rather than `Measured 0 of M`. **T4's >= 20 sessions of forward accrual start that day**, not 2026-08-26 - nothing accrued before it | 2026-09-05 M1 entry |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
@@ -102,6 +103,69 @@ the dated entry named beside it.
 
 
 
+### 2026-09-05 - Packet M4: both AVWAP band families in the lake, and a twin swing recipe (branch, UNMERGED)
+
+**Branch `claude/m4-lake-band-variant` off `main` at `e7b12ebe`.** The warehouse
+half of the band challenger (plan.md Phase 0.19 item 2 = the study doc's T3 step
+4); M1 is the scanner half and they share no file. Trader, 2026-09-05: *"I want
+us to compare both to see what is better."*
+
+**What was true.** The challenger formula and its golden fixture had existed
+since 2026-08-26 (`scripts/indicators/avwap_band_variants.py`) and had measured
+nothing in the lake: `feature_snapshot_daily` carried the champion's bands alone,
+so there was no challenger number for any recipe to walk.
+
+**What landed.** (1) Nine additive columns on `feature_snapshot_daily` -
+`avwap_variant_value`, `_stdev`, `_upper_1..3`, `_lower_1..3`,
+`_formula_version` - computed in `compute_daily_features` from the SAME bars and
+the SAME anchor index as the champion's, through the pure indicator module, and
+**independently of whether the champion produced bands**: the two formulas fail
+on different inputs (the champion's σ is zero on a one-bar anchor; the
+challenger's is `None` until twenty closes exist), so gating one on the other
+would have dropped a measured band. A NULL band is "not measured", never a band
+on the centre line, and the formula version is written whenever the challenger
+was ATTEMPTED. `FEATURE_SET_VERSION` → `tier1_v2`; the identity carries the
+version so `tier1_v1` rows are untouched and old-shape partitions still read.
+(2) `swing_house_variant_v1`, a `dataclasses.replace` twin of `swing_house_v1`
+differing in `recipe_id`, `band_family` and `outcome_definition_id` and nothing
+else; `build_outcomes` picks the band map from the RECIPE, a variant recipe with
+no challenger bands walks `plain_no_target` rather than borrowing the champion's
+levels, and the twin's `band_variant_v1` definition id fences it out of every
+`house_default_v1` reader. Registered in the trial ledger as
+`swing_house_variant_v1_twin` before any outcome existed. (3)
+`band-coverage --compare A B`: one table, per knowledge bucket, both recipes
+adjacent, over the SAME occurrence ids, with `swing_headline`'s ONE Wilson lower
+bound - and an occurrence missing under either recipe on a `not_paired` line
+rather than dropped, because reading each recipe over whatever rows it has would
+measure coverage and report it as edge.
+
+**One thing the packet did not name and the code needed.** After the version
+bump a session can hold a `tier1_v1` row AND a `tier1_v2` row, and both snapshot
+readers (`_bands_by_occurrence`, `run_band_coverage`) took whichever landed last
+- file order. They now keep the newest `computed_at`.
+
+**One packet premise was refuted at code level.** M4 said `scripts/indicators/`
+"has no importer yet - the first one fires the packaging trigger". It is not
+true and has not been since R5 on 2026-08-17: `indicators` is in the spec's
+`FIRST_PARTY_PACKAGES` and `indicators.avwap_band_variants` is already in
+`selftest.LAZY_ENGINE_MODULES` (`chart_levels` reaches it). **No packaging
+trigger.** The stale `CLAUDE.md`/`AGENTS.md` line is corrected on this branch.
+
+**Shadow only.** `calc_anchored_vwap_bands` untouched; nothing reaches a
+detector, score, tier, alert, watchlist, Focus list or the review queue; the
+packet writes no lake row. Decision record **BD-101**; ERD updated; live gate
+**#66** owed.
+
+**Tests.** `tests/test_warehouse_band_variant_lake.py` (19), committed RED at
+`bac61c17` and run on `e7b12ebe`: 13 failed, 5 errors, 1 passed - the one that
+passes is the champion golden pin whose claim is that no number moved, so it must
+pass on both sides (Q2's `path_kind` golden works the same way). Two existing
+tests were UPDATED, not weakened, because the default recipe set genuinely grew
+from three to four: `test_alternative_recipes_share_one_occurrence_and_one_episode`
+and `test_the_recipe_mapping_is_the_normative_one`.
+
+---
+
 ### 2026-09-05 - M1 BUILT: the band challenger's hand-off, on `claude/m1-band-variant-handoff`
 
 Packet `.claude/packets/M1.md` over `main` at `e7b12ebe`, answering finding 1 of the
@@ -134,6 +198,7 @@ file-scoped ask-first rule, for these items and nothing wider. **Not merged; the
 - **No packaging trigger**: no dependency, no non-`.py` asset, no new top-level `scripts/`
   package, no dynamic import.
 - **Live gate #65** owed at merge. T4's 20-session clock starts at the first measured row.
+
 
 ### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
 
