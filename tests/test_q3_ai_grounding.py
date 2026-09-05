@@ -100,6 +100,16 @@ def _journal_source() -> dict:
     }
 
 
+def _market_journal_source() -> dict:
+    """What the trader THOUGHT. Same family, and not a position source."""
+    return {
+        "source_id": "journal.entries",
+        "label": "Market journal entries (trader free text)",
+        "status": "available",
+        "content": [{"entry_id": "e1", "text": "BULL looks strong into the close."}],
+    }
+
+
 def _stats_source() -> dict:
     return {
         "source_id": "setups.type_stats",
@@ -197,9 +207,59 @@ def test_a_position_claim_citing_only_a_watchlist_is_dropped_and_the_document_pu
 
     statements = [row["statement"] for row in normalized["what_is_working"]]
     assert statements == ["The reclaim family leads the board."]
-    assert [entry["detail"] for entry in dropped] == ["position claim without a journal source"]
+    assert [entry["detail"] for entry in dropped] == ["position claim without a position source"]
     assert dropped[0]["row_dropped"] is True
     assert dropped[0]["statement"] == "BULL is a held long."
+
+
+def test_only_the_trade_journal_supports_a_position_not_the_market_journal():
+    """The Market Journal is what the trader THOUGHT, not what they held.
+
+    Both ids are in the `journal.*` family, so a family-keyed rule let the
+    trader's own free text stand as evidence of an open position. The two
+    stores are deliberately not merged, and this is the one place that
+    distinction has to be enforced rather than described.
+    """
+    from ai_summary import POSITION_SOURCE_IDS, validate_ai_summary
+
+    assert POSITION_SOURCE_IDS == frozenset({"journal.trades_and_reviews"})
+
+    evidence = _package([_market_journal_source(), _journal_source()])
+    thought = _summary(
+        [
+            {
+                "statement": "BULL is a held long.",
+                "evidence_refs": ["journal.entries"],
+                "confidence": "high",
+            },
+            {
+                "statement": "The market journal names BULL.",
+                "evidence_refs": ["journal.entries"],
+                "confidence": "medium",
+            },
+        ]
+    )
+    dropped: list[dict] = []
+    normalized = validate_ai_summary(thought, evidence, dropped=dropped)
+
+    assert [row["statement"] for row in normalized["what_is_working"]] == [
+        "The market journal names BULL."
+    ]
+    assert [entry["detail"] for entry in dropped] == ["position claim without a position source"]
+
+    held = _summary(
+        [
+            {
+                "statement": "BULL is a held long.",
+                "evidence_refs": ["journal.trades_and_reviews"],
+                "confidence": "high",
+            }
+        ]
+    )
+    survivors: list[dict] = []
+    kept = validate_ai_summary(held, evidence, dropped=survivors)
+    assert [row["statement"] for row in kept["what_is_working"]] == ["BULL is a held long."]
+    assert survivors == []
 
 
 def test_the_same_position_claim_survives_when_it_cites_the_journal():
