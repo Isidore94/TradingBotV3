@@ -1981,3 +1981,274 @@ champions, and the supported interactive product is fully Qt.
    stable; execution remains permanently out of scope.
 
 Everything else stays in `WISHLIST.md` until explicitly promoted into this sequence.
+
+
+---
+
+# Moved 2026-09-05 (repo cleanup): Phases 0, 0.5, 0.6 and 0.7, verbatim from `plan.md` at `fa6f90b5`
+
+Each heading below left a stub in `plan.md` naming its status at the move. Nothing here is authority; an owed gate is owed because `CURRENT_CHECKPOINT.md` lists it.
+
+### Phase 0 — NOW: validate and merge the testing-week branch
+
+No new feature or threshold work belongs in Phase 0.
+
+1. **P0.1 Re-baseline the complete branch.** Run the full Windows suite after the
+   post-gate code commits, smoke 7/7, and the frozen self-test when a packaging
+   trigger applies. Record pytest's own exit code in `CURRENT_CHECKPOINT.md`.
+2. **P0.2 Run one complete single-main live session.** Follow
+   `docs/FIRST_SESSION_CHECKLIST.md`; preserve runtime, provider, shadow, review,
+   chart, alert, warehouse, and shutdown artifacts. Do not tune from this session.
+3. **P0.3 Validate Auto/Away and ntfy end to end.** Confirm the verified hourly
+   report, safety/freshness header, swing-first ordering, quiet empty-swing behavior,
+   best-swing phone push, late-opened chart freshness, and main-desk alert delivery.
+   Cover the 2026-08-11 push policy too: the swing push must carry a favorite/
+   high-conviction roster matching the Setup Tracker's rows for that hour, the D1
+   push must name only the events since the previous push, and both must be silent
+   while the desk sits in DESK or EVENING while a Research-tab price alert still
+   fires from those modes.
+   Also confirm the BounceBot scan window on a live day: Auto Pilot logs one resume
+   at 06:00 and one pause at 13:30, `trading_bot.log` shows no symbol sweep between
+   them and the close, and the session itself is unaffected — same alert count and
+   the same IB connection held across the boundary.
+4. **P0.4 Validate observability rollover.** Require real provider telemetry,
+   SPY/Greatness rotation and summaries, valid per-installation review writes, and
+   honest UNKNOWN/DEGRADED grades.
+5. **P0.5 Run the durability restart drill.** Require a healthy regime audit with a
+   nonzero backfill count, no duplicate desk, no pacing conflict, and no Tier-C
+   reconstruction.
+6. **P0.6 Start the elapsed evidence clocks.** Enable Local-AI Phase 1's five clean
+   session mornings; run the warehouse broker-marked IB check, observe its live tee
+   and six Health tiles, answer the pilot-relevant confirmation items (including the
+   fixed cohort and favorite-zone definitions), and start the 20-session pilot.
+7. **P0.7 Merge to `main`.** Only after a live-validation day passes, re-run the
+   applicable gates, merge, and update all control documents. Since the
+   2026-08-15 consolidation this is **one** merge —
+   `testing-week-2026-08-17` → `main` — followed by a full gate re-run on `main`
+   including a clean-cache frozen rebuild, and only then the disarm / switch the
+   desk / re-arm sequence. R7's and R8's own live gates follow **after** that
+   merge and are not merge blockers. Exact steps: `CURRENT_CHECKPOINT.md`,
+   "Monday sequence".
+
+Exit gate: the branch is green, one real session is documented, the application is
+operationally safe on the single-main topology, and `main` contains the validated
+build. The Local-AI, warehouse, regime, SPY, and Greatness evidence clocks may remain
+in progress; their results gate later promotions, not the merge itself.
+
+### Phase 0.5 — trader refinement packets (promoted 2026-08-15)
+
+The trader explicitly promoted the 2026-08-14 `WISHLIST.md` entries on 2026-08-15
+and ranked the build order (R1 first, then R2; R3–R6 behind them). Each packet has
+a specification under `docs/`; the file-scoped ask-first rule and the golden-fixture
+invariant bind at edit time, packet by packet. Phase 1 work may interleave only
+where a packet's own spec says the baseline item is a prerequisite (none currently
+does).
+
+**Build-order note (2026-08-15).** The original gate read "build work starts only
+after P0.7 merges". The trader redirected twice on 2026-08-15 — first for R1, then
+explicitly again for R2 — so both are built on their own branches ahead of the
+testing-week merge, and P0's live gates are unchanged and still owed. The redirect
+was packet-by-packet and does **not** carry forward: **R3 onward waits for the
+trader to say so.**
+
+On 2026-08-15 the trader added two new packets with their own explicit redirect:
+**R7 (journal reliability + UX)** and **R8 (Weekend Prep)**, specced the same day.
+Later that day the trader redirected again, in writing: **R7 code starts
+immediately on `phase05-r7-journal-reliability-ux` cut from the R2 tip**, ahead
+of the P0.7 merge — same pattern as the R1/R2 redirects. Rationale recorded:
+R7/R8 touch journal and weekend surfaces, not the scanning/alerting/Focus path
+whose live proofs Monday owes; the desk keeps running the R2 branch until the
+validation day passes. P0's live gates are unchanged and still owed; merging R7
+later brings the whole stack. The redirect does not authorize R3–R6.
+
+**Weekend redirect (2026-08-15).** The trader then explicitly authorized the
+remaining packets on the consolidated release candidate: *"integrate the rest —
+build R3 through R6 on the consolidated branch."* R3, R4, R5 and R6 therefore
+build in that order on `testing-week-2026-08-17`, one packet at a time with its
+fixtures, full deterministic gate, governance close-out and push complete before
+the next starts. This redirect does not satisfy any live gate: R3's shadow week,
+R6's watchdog week, R1/R2's eight proofs, R7's migration/backfill/reconciliation
+sequence, and R8's real-weekend run all remain owed. After R6, only the explicitly
+named R7/R8 review-deferral completions are authorized. *(True USD conversion was
+the one exception held back "pending a trader decision"; that decision arrived on
+2026-08-24 and reversed the deferral — it is BUILT as packet W3, and R7's gates
+1/3/6 are still owed.)*
+
+R2's branch is cut from R1's and carries the R1.1 repair, so merging R2 brings the
+testing week, R1, R1.1 and R2 together. The R1 and R2 live proofs are both owed and
+are listed in `CURRENT_CHECKPOINT.md`.
+
+1. **R1 Auto-mode matrix and quiet hours. — BUILT 2026-08-15, live proof owed.**
+   Spec: `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. Build record: `CHANGELOG.md`.
+   **Remaining — the spec §6 live proofs, narrowed 2026-08-18.** The quiet boot **PASSED** on 2026-08-16 22:06, and AWAY staging-without-adoption **PASSED** across the 08-17 and 08-18 sessions. Still owed: the **drain on return** (the trader never flipped back to DESK, so that half of the AWAY proof is untested); an **EVENING day** whose log shows the early block and then zero further slots; and one **SPY-alarm firing** (real or forced threshold).
+
+2. **R2 M5 Focus adoption discipline and the M5 strength board. — BUILT 2026-08-15, live proof owed.**
+   Spec: `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`. Build record: `CHANGELOG.md`.
+   **Remaining — the spec §8 live proofs, narrowed 2026-08-18.** The **eviction proof PASSED** on 2026-08-18 (four logged evictions with per-symbol reasons; lines quoted in `CURRENT_CHECKPOINT.md`). Still owed, all three needing a DESK day because AWAY never adopts: one adoption-time refusal, one clean "Not today" scoped removal that leaves the trader's other entries intact, and a board session the trader confirms matches the TC2000 scan's character (~20–40/side). RVOL-for-survivors is specified but deliberately not built; decide it on that session.
+   **Amended 2026-08-31 (trader): the board moved into the Desk's Strength window.** It is a collapsible section under `FocusStrengthBoard` in the alert column, starting closed, and the left-nav page is removed - so the board session owed above is now read from the Desk rather than from a page. Nothing about the gate, the fetch or the data changed; see the spec's 2026-08-31 addendum.
+
+3. **R3 Swing-quality demotion, pre-close honesty, and the dislike-feedback loop.**
+   Spec: `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md`. Build record: `CHANGELOG.md`.
+   **DETERMINISTIC WORK COMPLETE 2026-08-16.** **DETERMINISTIC WORK COMPLETE 2026-08-16.** The one remaining item, §4.3.5 same-slot volume normalization, was **explicitly deferred by the trader on 2026-08-16**: the D1 scoring seam has no intraday slot series, the faithful TC2000 baseline would need a 5-minute fetch across ~1,100 symbols, and the zero-fetch session-elapsed proration was offered and rejected as trading one dishonest reading for another.
+   **Owed — live gates only, none claimable from tests:** the §6 `would_demote` shadow week the Amendment requires before any row moves, the one-week 12:45-vs-close list and STABLE-vs-PREVIEW churn comparison, and the scoreboard's first real-data curation cycle producing a threshold proposal.
+
+4. **R4 Desk chart unification.**
+   Spec: `docs/DESK_CHART_UNIFICATION_PLAN.md`. Build record: `CHANGELOG.md`.
+   **BUILT 2026-08-16, live proofs owed.** **BUILT 2026-08-16, live proofs owed.** Sections 1–5 and 6.1–6.3 are green: trader-armed hits survive "Not today" (§6.1); `CaptureRail` lives in the snapshot popup and the Alert Center pane so every chart-opening host inherits capture, including the RS/RW and Industry boards which previously had none; armed price alerts and D1 level watches paint as a read-only `GROUP_ALERTS` levels family on the worker; the Yahoo forming-bar early print is suppressed for 15 minutes after the open and labeled when drawn; the reviewed-today marker renders on the snapshot, the Alert Center pane, RS/RW and Industry; the feed's star became a labeled Like→Focus verb; and one feed row per symbol/side/day folds repeats with a three-item escalation list and a 30-minute open-burst digest.
+   **Owed — the §8 exit gate, all live:** **Owed — the §8 exit gate, all live:** every entry point opening a chart with capture, watch controls and painted armed alerts; one desk morning confirming the forming-bar caveat replaced the inflated-gap rendering; a dislike recorded from the RS/RW board appearing as a badge everywhere that symbol renders that day; and §6.1's ignored-symbol armed-watch hit feeding and sounding while automatic Focus D1 interest for that same ignored symbol stays absent.
+
+5. **R5 M5 signal engines. — §2, §5 and the FIRST of §3's engines BUILT; §3.2/§3.3 and §4 remain.**
+   Spec: `docs/M5_SIGNAL_ENGINES_PLAN.md`. Build record: `CHANGELOG.md`.
+   **BUILT OUT 2026-08-18 (trader integration redirect).** **Owed, live only:** that session, for each engine, plus one observed any-bounce firing naming its level.
+
+6. **R6 Small operational wins. — (a) BUILT 2026-08-17; (b) DECIDED 2026-08-17 and narrowed to tests/docs; (c) diagnostic ACTIVE + evidence-led repair BUILT 2026-08-20.**
+   The bounded diagnostic week remains the live gate, and it **begins at the 2026-08-21 relaunch** — the desk ran the pre-fix frozen exe until then, so every earlier `ui_stalls.jsonl` row is baseline, not evidence. What it owed, for the record: **(1) the replay characterization fixture over `_load_resolved_events` is BUILT 2026-08-17** — `tests/fixtures/technical_integrity_replay_v1.json` + `tests/test_technical_integrity_replay.py`, 18 tests, every case in the specification below pinned, and **mutation-proven**: deleting the session filter fails 7 of them (including the watermark and the segmentation equivalence) and deleting the provenance strip fails 3. (c) **ACTIVE 2026-08-20 — evidence-led hang repair is BUILT; bounded live week owed.** Two Windows `AppHangB1` events (07:19 frozen exe, 14:16 source) triggered measurement rather than speculative tuning. (d) **Auto journal is a mapping, not new work**: the trader's ask resolves to the QUEUED nightly `journal_import` slot (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c — build only after the 6.4b live proof passes and the trader says go) plus the P3.5 commentary journal; **the nightly slot half was promoted into R7 on 2026-08-15** — see item 7; P3.5 is unchanged.
+
+7. **R7 Journal reliability and UX. — BUILT 2026-08-15, live gates owed.**
+   Spec: `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`. Build record: `CHANGELOG.md`.
+   **OWED:** one live paste that survives a backfill. **TRADER DECISION RESOLVED 2026-08-28** ("i can easily get us yearly reports from questrade so long as we can process these files"): the 44 pre-retention days are recovered from a **statement file**, not from `/activities`. `scripts/journal_statement_import.py` is BUILT and reachable from Journal > Health; a statement never writes into a day a richer source covers, so no new coverage status was needed. *Owed:* the trader importing their own YTD file on the desk against the live journal, then reconciling one monthly statement to the cent (spec gate 2).
+   **Owed, and none of it can start before Monday's validation day:** **Owed, and none of it can start before Monday's validation day:** the trader-present finale — the live schema v2→v3 migration (dry-run report reviewed first, automatic file backup), the full backfill, account tax-status labeling applied to the live store, and reconciliation-week sign-off — then the spec's six live gates: coverage COVERED-or-NO_SESSION for every session day since inception, trade counts and commissions reconciling to one monthly statement per broker **to the cent**, one clean reconciliation week on both brokers, zero orphaned annotations (permanent SQL test), CAD totals spot-checked against published BoC rates for three dates, and ≥5 consecutive nightly `journal_import` ledger entries with coverage advancing and at least one observed self-heal.
+   **Questrade statement import (BUILT 2026-08-28, live gate owed).**
+   `scripts/journal_statement_import.py` + Journal > Health > "Import statement
+   file...". Reads .xlsx (stdlib, no new dependency) and .csv; one commission
+   column taken as the complete cost; options resolved from the Description;
+   midnight market-local timestamps so a date-only row is never given a session;
+   day-level refusal of anything a richer source already covers. Measured drift
+   against the trader's real YTD file: -$0.16 on $4,014 realised, commission
+   exact. *Owed:* the trader importing that file on the desk.
+   **Two-lane auto-tagging + tag adjust tools (BUILT 2026-08-28, live gate owed).**
+   Trader-directed while evaluating this journal against their TradesViz
+   subscription. `scripts/journal_trade_shape.py` tags a trade from its own
+   timestamps and legs, so history imported from outside the scanner's lookback is
+   no longer blank; plus a shared-header tag filter, `distinct_tags`, `rename_tag`
+   and a Manage-tags dialog. No tag derives from the outcome. *Owed:* one desk
+   session tagging real trades, renaming one and filtering on it. Nothing in this
+   packet touches identity, migration, coverage or reconciliation, and the six
+   live gates above are unchanged.
+   **Release-candidate pre-flight fix pass (2026-08-16):** Deterministic regression coverage was added for all five findings; the live migration remains owed and untouched.
+
+8. **R8 Weekend Prep. — BUILT 2026-08-15, live gate owed.**
+   Spec: `docs/WEEKEND_PREP_PLAN.md`. Build record: `CHANGELOG.md`.
+   **MACHINERY BUILT 2026-08-24, RUN GATED (packet W5); the live gate is OWED.** **MACHINERY BUILT 2026-08-24, RUN GATED (packet W5); the live gate is OWED.** `scripts/ai_jobs/synthesis.py` rolls both graded cohorts up through `evidence_stats` and narrates at medium tier over that rollup alone. The live gate below is unchanged.
+   **OWED, not built (2026-08-20): the weekly trader-judgement synthesis.** **OWED, not built (2026-08-20): the weekly trader-judgement synthesis.** Nightly deterministic grading of the veto cohort now runs (`ai_jobs.cohorts`, slot `veto_cohort_grading`) and the `trader_judgement` evidence scope exists but is **opt-in** — deliberately absent from `DEFAULT_SCOPES`. The cadence is decided (**weekly, on the weekend surface**, which is why it is recorded here rather than under the AI plan), but it is **gated on two weeks of graded rows** and is **NOT authorized to build**. Live gate: one weekend where the graded cohort is read and the trader confirms the reasons ranked against forward returns are the ones they recognise.
+   **Every deferred join is now built**: the RRS-strength symbol join and the picks↔outcomes join landed 2026-08-18, the veto mirror cohort as AI-P1 and the LIKE cohort as R10's packet 8b on 2026-08-24, and the last three — `human_focus_performance.csv`, `pick_feedback.jsonl` and `rrs_group_strength_extremes.csv` — as packet W2 the same day, closing the spec's §6 DEFERRED block. Building a view never validates it: §10's one-real-weekend gate covers all of them and is still owed. R7's true USD conversion is no longer deferred either (packet W3, the trader's recorded 2026-08-24 reversal); the Calendar year heatmap and the additional Analytics charts landed 2026-08-18.
+   **Owed: the one-real-weekend live proof** **Owed: the one-real-weekend live proof** (spec §10) — the desk booting on a weekend with the tab present and no network activity until a button is pressed, zero IB traffic across the routine, all three boards refreshed with their per-timeframe wall clock recorded, a monthly board spot-checked for the absence of a current-month bar, one real Adopt verified in all four stores with nothing removed anywhere, one auto-tag confirm and one correction, a week-windowed walk-away, the week-ahead rendering only on its button press, progress surviving an app restart mid-routine, and the trader confirming the board character per timeframe before §5's filters count as proven.
+
+9. **Wishlist deep link into an external charting tool. — BUILT 2026-08-18 (trader-directed).**
+   **No live gate**: the trader pressing the button once on the frozen desk is the whole proof, and the frozen selftest already covers the import.
+
+10. **Trader-directed integration set. — BUILT 2026-08-21 (trader-directed).**
+   **Live gates owed:** (a) one veto committed on the desk under v3 and the pooled rollup read back; (b) one claim committed on a letter key; (c) the RS/RW half populating from a live BounceBot sweep; (d) confirmation from `bad_bars.jsonl` that the next occurrence is a malformed bar and not a well-formed aggregate row — the second case would move the fix into `bounce_bot_lib`, which is ask-first and was NOT touched here.
+
+11. **Regime-pause "holding highs" - measured and expiring. - BUILT 2026-08-21 (trader-directed).**
+   **Live gates owed:** **Live gates owed:** a session where a "holding highs" row visibly leaves the queue within 15 minutes of the name rolling over; a row that keeps making new highs visibly surviving past 15 minutes; a read of `hold_expired` rows against forward outcomes to confirm the rule is not discarding winners; and a check that the tightened detector still produces a usable number of names on a normal day rather than a handful - it now passes fewer than half the longs it used to.
+   **With-trend rows auto-join M5 Focus - BUILT 2026-08-27 (trader rule, same morning).** **Live gate owed:** one DESK session on a directional day confirming the rows land in Focus without a chart, that "Not today" from the Focus surfaces still removes them, and a count of how many charts the rule saved. **Not built, the trader's call:** eviction when a placed name stops holding, and the same treatment for the other two queue fillers measured that morning (D1 flags at 54% of charts shown, LRSI crosses at 20% - `CHANGELOG.md` 2026-08-27).
+   **Trader rule 2, same morning - BUILT 2026-08-27:** **Live gate owed:** a DESK session confirming the hidden count moves at show time, that a revealed name is badged `wrong side of VWAP`, and a before/after count of charts shown per hour against the 124-in-46-minutes baseline of 2026-08-27.
+   **Trader rule 3, same morning - BUILT 2026-08-27:** **Live gate owed:** with the other two, one DESK session. **Not built, the trader's call:** the scanner still EMITS trend-contrary D1 shorts (it has `directional_sma_stack_aligned` and does not gate on it) - a detector change with golden fixtures first; and an IB fetch path for the forming daily candle of names outside the M5 scan set, which would spend the locked pacing budget per double-click (today those previews are Yahoo rows, labelled).
+   **Trader rule 4, same morning - BUILT 2026-08-27: the M5 alert bar.** **Live gate owed:** one DESK session - the bar fills in alert order, Copy all pastes into TC2000, a click charts, clicking down the bar leaves the waiting count D1-only and unchanged. **Not built, the trader's call:** the 15-minute regime-pause expiry does not reach the bar (rows carry their time; the queue rule was "queue only"); and whether the bar should fold repeats per symbol.
+   **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision), then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`, one live gate owed.** **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision), then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`, one live gate owed.** The rebuild was authorized as an Opus build session ("make me a prompt to get Opus to do it") and built to `docs/archive/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md` packets T-1..T-4; that prompt's hard rules bound the build and all ten held (zero IB, no `legacy.py` change, completed today-only bars, UNKNOWN never invented, the RS Window tab untouched, fail-before-fix per file).
+   **The rebuild - BUILT** Optional, later, and explicitly NOT built: industry = median member return over the same bars (the `industry_intraday_rs_snapshot` contract) instead of the ETF proxy - that needs member bars, which is an IB-budget question. **Live gate owed (one DESK session):** the tape moves every five minutes (not 10-30); the 06:30-07:00 read carries no overnight gap and windows that cannot answer yet are blank rather than zero; a stale or failed read says so on the callout line; a chip click still charts the ETF. **Separate finding, still parked:** the 27-minute scan cycle that day (302 symbols through IB in `rrs_scan`) - a cycle-time question, not a tape question.
+
+12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).**
+   **Live gates owed:** **Live gates owed:** a full session compared against the same measurement - stalls per hour, median, p90, total blocked seconds, against 1843 / 238 ms / 1.16 s / 1008 s, targeting no stall over 5 s and under ~60 s blocked; the working set after three hours (8.1 GB before the GC fix); and a console with no `QFont::setPointSizeF` lines.
+   Exit gate: each packet exits through its own spec; R1 and R2 land first per the trader's ranking, then R7 before R8. **R7's code is complete**; what remains for it is live evidence, which is why it does not close the phase on its own. A packet's live gates may overlap the next packet's build only when no shared file is in flight.
+
+13. **Today's swing picks - the trader's own vetted swing list. - BUILT 2026-08-31 (trader-directed, authorized in chat 2026-08-31).**
+   *"At the end of the day I have a list of my top swing targets. I want a place to put them in so the bot knows my personal favourite picks. They will usually become focus picks too but these ones get special standing because I picked them by hand... put it at the very bottom of the M5 alerts tab, the tab is so long and I never use all of it. And the bot should scan the journal to know which ones I actually took."* Deliberately NOT the Master AVWAP like/dislike capture, which already exists.
+   Built: `scripts/swing_favorites.py` (append-only store + session replay), `ui/services/swing_favorites_service.py` (the two writes + the journal join on a worker thread), `ui/widgets/swing_favorites_bar.py` (the strip), `project_paths.SWING_FAVORITES_FILE`. The swing Focus write-through goes FIRST and must not fail; the evidence row goes second and its failure is swallowed. No auto-adoption marker is ever written, so the pick stays the trader's and every automatic removal path stays off it. A removal appends a RETRACTION. The "took" badge is a display-only join against the TRADE journal over a bounded 10-day window, silent when the journal would need preparing to answer. Nothing reaches a detector, score, alert, watchlist ranking or `review_policy.json`; no phone push.
+   Second pass the same day (trader): the strip and the alert list share a DRAGGABLE vertical split with its own settings key (`qt_m5_column_split_sizes_v1`), no collapse, and a chip area with a floor and no ceiling; Copy/Paste carry the trader's TC2000 list both ways. The Focus like-origin is `vetted`, so these grade as their own `human_focus_swing_vetted` sub-cohort in the existing 1/3/5/10-session human-focus tracker.
+   **Live gate owed:** one desk session where the trader enters their real end-of-day swing list, the names appear in swing Focus as theirs (no marker, and "Not today"/desync repair leave them alone), the split drags and the size survives a restart, Paste takes a TC2000 list, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" the next time the strip refreshes.
+   **Open product questions, not built** (each additive, each the trader's call): the strip shows the CURRENT session only, so a pick typed after the close cannot carry its "took" badge into the next session; `swing_favorites.jsonl` is not in `ai_summary`'s overnight evidence pack; and nothing joins the list to per-setup journal statistics.
+
+14. **Day-trade "passed on it" reasons in the capture window. - BUILT 2026-08-31 (trader-directed, authorized in chat 2026-08-31).**
+   *"Many times I really like this stock for a daytrade but it has this ONE issue"* and the trader passes; they asked for a tickable reason list under the existing Note area, several reasons allowed per pass, plus the free-text note, and - when the M5 data is already in memory - the bars attached so an AI can read the chart back as it was, with the explicit fallback of the timestamp alone.
+   Built: `EVENT_PASS` in `ui/annotations/store.py` with `record_pass_annotation`; a separate versioned vocabulary family (`ui/annotations/vocabularies/pass_reasons_v1.json`, `load_pass_vocabulary`); the M5 sidecar in `ui/annotations/pass_bars.py`; the "Passed - why?" block under Note in `ui/widgets/capture_rail.py` with Alt+P and digit toggles; `SymbolSnapshotWidget.cached_m5_bars` wired as the zero-fetch bar provider on all three capture hosts. A pass never retires the chart, writes no list, and reaches no detector, score, alert or `review_policy.json`.
+   **Live gate owed:** one desk session where the trader records a real pass from the Alert Center capture tab - the ticked reasons and the note land in `trader_annotations.jsonl`, the chart stays up, and a pass taken while an M5 chart is drawn carries its bars in `trader_annotation_bars/`.
+   **Both open questions are DECIDED (trader, 2026-08-31), so neither is pending work.** *"Reviewed today" stays OFF for a pass:* the trader's words - *"that flag feeds the scanner report and several badges. Making a pass count as reviewed touches scanner-side code, so it should be its own small job if you want it."* `pick_feedback._ANNOTATION_DECISIONS` therefore still lists `veto`/`like_claim`/`note` only, and a test pins that a pass does not mark a symbol reviewed. *A pass never closes the chart, and no option is needed:* *"if you pass AND want the chart gone, just hit veto after. You get both behaviors without a new rule."*
+
+### Phase 0.6 — R9: trade-review response packet (authorized 2026-08-22)
+
+Source: `docs/archive/analysis/TRADE_REVIEW_2026-08-21.md` §8–§9, its nine questions
+answered on 2026-08-22 (Opus answer + Fable verification; working copies in the
+session scratchpad). The trader answered the three decisions that needed him on
+2026-08-22 and **authorized this packet in writing the same day** ("I authorize
+you to queue a packet for opus to implement"). That authorization covers the
+file-scoped ask-first rule for the files named below; anything outside them is
+asked about again. Build order is the list order. Nothing here touches a
+detector's or scorer's output; R9.5 is shadow-only by construction.
+
+1. **R9.1 Universe write floor + `universe_rebuild` ledger event (operational P0) — BUILT 2026-08-22, GREEN; one live gate owed.**
+   *Owed: one real rebuild on the desk that writes a `universe_rebuild` row with `refused: false` and a plausible before/after, confirming the ledger row and the snapshot directory appear on the live machine.* Built as specified: `universe_write_floor()` = `max(500, 50% of the prior universe_all.txt count)` with a missing, empty or **unreadable** prior failing OPEN (returns 0); `force=True` carves out the floor but never the zero-symbol refusal; `_record_universe_rebuild()` appends a deliberately **keyless** `universe_rebuild` row to `job_ledger.jsonl` on every write attempt (keyless so `JobLedger._replay` cannot turn evidence into a phantom QUEUED job); `_snapshot_universe_lists()` keeps the outgoing lists under a run-scoped name, bounded to the last 10.
+
+2. **R9.2 The LIKE: always ask why, and stop parking the symbol — BUILT 2026-08-22, GREEN; one live gate owed.**
+   *Owed: one desk session in which a LIKE is filed and the symbol is still seen to alert afterwards (and, on an AWAY day, still reaches the hourly D1 push).* Built as specified.
+   Measured first (2026-08-22): 40 of 52 `like_claim` rows retired the chart AND put the symbol on `alert_center_ignored_symbols.txt` for the day (34 symbols on 08-20, 6 on 08-21); a parked symbol also stops emitting `d1EventRecorded`, so on an AWAY day a LIKE silently drops the name from the hourly D1 phone push; and because the like is routed through `remove_today`, which `review_learning.REJECT_ACTIONS` classifies as a rejection, **every LIKE is currently counted as a dismissal by the review-learning loop.** Build, in `scripts/ui/widgets/capture_rail.py`, `scripts/ui/widgets/alert_chart_review.py`, `scripts/ui/panels/alert_center_panel.py` (and the symbol-snapshot host, which shares the rail): (a) **Why is required.** The claim digit / double-click selects the setup and moves focus to the why field; Enter commits; an **empty why does not commit** (same mechanic as the veto vocabulary's `note_required`). **(a) is SUPERSEDED — by P9 for the quick like, 2026-09-02, and by packet T2 for the CLAIMED like, 2026-09-04 (Phase 0.16 item 6): the why is optional on every like path and the gesture commits on its own. (b), the no-parking half, still stands.** **Parked as PLANNED, not authorized:** Q1(b), a one-click hand-off *request* from the rail to the Focus surface in the `vetoDayTradeRequested` shape.
+
+3. **R9.3 Rebuild the setup scoreboard from the right stores — BUILT 2026-08-22, GREEN; no live gate (read-only analysis).**
+
+4. **R9.4 `thetalongs.txt` — BUILT 2026-08-22, GREEN; one live gate owed.**
+   *Owed: one Master AVWAP scan on the desk in which DRAM reaches the theta report (or is honestly absent for a stated rule reason — earnings buffer, no weekly chain, support stack), labelled `via thetalongs.txt`.* `THETA_LONGS_FILE = LONGS_FILE.with_name("thetalongs.txt")` and `load_theta_long_symbols()` in `master_avwap_lib/legacy.py`; the file is optional and an absent **or unreadable** one returns `[]` with a warning, so it can cost those names but never the run.
+
+5. **R9.5 `sector_cohort_divergence` — BUILT 2026-08-22, GREEN, AT SHADOW.**
+   **Status 2026-08-22: all five items BUILT and GREEN; the deterministic half of the exit gate is met.** What remains is the "on the desk" half — four live proofs, one per item, listed in `CURRENT_CHECKPOINT.md`: a real rebuild writing a `universe_rebuild` row; a LIKE whose symbol is seen to keep alerting; DRAM reaching (or being honestly absent from) the theta report labelled `via thetalongs.txt`; and R9.5's shadow log growing over real sessions toward its declared 40.
+
+### Phase 0.7 — R10: Evidence Plane program (authorized 2026-08-22)
+
+Source: the trader's 2026-08-22 evidence-quality brief (Fable synthesis v2 after
+Sol's review). A **packetized** program, not blanket permission to modify the
+named subsystems. The architectural objective is an immutable, point-in-time
+**evidence plane**: capture facts once; record provenance, completeness and
+uncertainty; derive replaceable views and reports; never let evidence collection
+influence a live decision path.
+
+**Ground rules (they bind every packet).**
+
+1. No behavior change to any detector, scorer, gate, alert, watchlist, Focus
+   store or `review_policy.json`. Golden fixtures run before and after each
+   packet and must be byte-identical. A packet that cannot be built without
+   touching such logic **stops and says so in the checkpoint**.
+2. Ask-first: authorization covers evidence / provenance / presentation edits to
+   the files each packet names — including `bounce_bot_lib/legacy.py` and
+   `master_avwap_lib/legacy.py`. Any other file, or any non-evidence edit, is
+   asked about first.
+3. Every alleged defect is classified **PROVEN / REFUTED / UNKNOWN by
+   reproduction** before its fix is designed.
+4. Every new or changed store needs a writer/reader inventory (repo **and**
+   warehouse ingestion), backward-compat plan, migration/canary, rollback,
+   growth estimate, retention/segmentation, cold-push scope, health surface.
+
+5. **Never rewrite history.**
+   Evidence maintenance is **not** gated on `auto_scanning_due` — that gate stops market activity and this is after-close recovery. It IS gated on zero IB traffic, cached/yfinance only, worker thread, idle cost. 9.
+
+12. **"Realizable R" is not a term this repo uses.**
+
+1. **R10.0 Read-only evidence audit — no code changes bar one.**
+
+2. **R10.A P0 runtime and outcome integrity**
+   *Sol's three reproduction blockers CLOSED 2026-08-23* (`137a4bf` lineage): the after-close scheduler gained two clocks and **two completion stamps** so a deferred sweep is retried rather than marked done, with a dedicated early-close seam (`scripts/market_early_close.py`) that leaves `market_calendar`/`market_session` untouched; finalization became **one transaction per trade** with a write-ahead intent, a disk re-read, a strict commit that raises, and `resolve_unfinished_finalizations()` settling interrupted attempts against the CSV; and the transaction is fenced across processes with `local_writer_lock`, with the authorized single-instance guard added to `launch_gui.py` as defence in depth.
+
+3. **R10.B Outcome semantics**
+   (D5, D6, and the EAT/CAKE ask) - **BUILT 2026-08-24, GREEN; mechanics canary OWED** (one live session: LRSI registering gradeable rows, H1 stamping the bar close).
+
+4. **R10.C Robust deterministic evidence report**
+   **CANARY OWED:** a second session read after a normal after-close sweep, confirming the policy breakdown and that no eod-hold cell absorbed a row with no EOD close.
+
+5. **R10.D D1 setup tracker: point-in-time transition ledger**
+
+6. **R10.E Focus provenance**
+   (F1–F6) - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** `focus_membership_events.jsonl` (`focus_membership_event_v1`) emitted by the one Focus writer, with a `membership_episode_id` and an owner of `trader` | `machine` | `unknown_legacy`; `expire_m5_if_new_day` emits `expired` per name it clears, so a survivor is a test failure **and** a visible gap.
+
+7. **R10.F LIKE cohort grading**
+
+8. **R10.G Market context ledger, auto-shift rows, calendar**
+   (C2, season) - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** Every auto-regime shift becomes a row. `daily_market_context.jsonl` (`daily_market_context_v1`), one row per session at close+grace, completed at next launch if missed with a `completed_late` flag and **never fabricated**. `config/market_calendar.json` multi-year capable, with a visible **degraded** state when the active year is not covered.
+
+9. **R10.H Market Journal: store and two surfaces**
+   - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** Frozen exe rebuilt, `--selftest` 68/68 (frozen). **Extended 2026-08-27 on trader instruction (BUILT, three live gates owed).** The page had no `reload()` caller and the desk tab held a second service, so a day with five entries rendered empty; both fixed (show-once load, one `shared_journal_service()`). *Owed:* (a) a Desk-tab note appearing on the left-nav page with no Refresh, with its charts; (b) one real auto-mode flip producing a `[desk]` row with SPY's tape; (c) one nightly `ai_summary` packet naming `journal.chart_digests` and `journal.entries`.
+
+10. **R10.I Scheduled report slot and opt-in AI scope**
+   Spec: `docs/archive/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md`. Build record: `CHANGELOG.md`.
+   **AWAY day recap and queue routing** - **BUILT 2026-08-24, GREEN offline; live mechanics canary OWED (not yet repeated).** The live AWAY day of 2026-08-25 correctly produced zero `shown` review impressions while the backing alert/evidence streams continued to fill, but the recap was empty because `MainWindow` never supplied either Alert Center backing list to `AwayRecapPanel.set_alerts`.
+
+11. **R10.V Daily-bar unit repair**
+   — **BUILT 2026-08-23, GREEN; one live scan day owed** (S1's mechanism; authorized by the trader's 2026-08-22 R10.0b decision as **option C-prime**). Runs **before** R10.D, because a point-in-time transition ledger built over a unit-mixed store would record the splice as history.

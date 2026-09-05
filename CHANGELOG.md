@@ -1101,7 +1101,38 @@ which is evidence and must not be loaded as context.
 
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
-## Recent changes (2026-08-26 onward)
+## Recent changes (the last two build days)
+
+### 2026-09-05 - Repo cleanup: history under `docs/archive/`, the live files cut to what a session must read
+
+Trader ask: *"What documents/files are unnecessary repo clutter? ... make it easier for a
+new AI model to read key documents ... using less tokens"*, then *"Let's implement your
+ideas and commit the codex/agent folder"*. Two commits, docs only; no runtime behaviour
+changed, no test weakened.
+
+- **Moves (commit 1, `fa6f90b5`).** 33 Markdown files (1.8 MB) that nothing in the code
+  reads moved with `git mv` into `docs/archive/` (`archive/analysis/`, `archive/prompts/`):
+  the checkpoint, changelog and roadmap archives, the July GUI plans, the retired Desk
+  Link design, the August handoffs and reviews, the built build prompts, the frozen
+  August analyses. Links in every active file rewritten; docstring mentions updated.
+  `docs/WISHLIST_OPEN_QUESTIONS.md` merged into `WISHLIST.md`. `docs/README.md` rewritten
+  to one line per file. `.codex/agents/*.toml` committed beside `.claude/agents/`.
+- **Slimming (commit 2).** `CLAUDE.md` 78.6 KB -> 41 KB: the core-loop section carries each
+  rule in one to three sentences with its seam, and the text it replaced is appended
+  VERBATIM to `docs/DESK_INTERNALS.md` ("Core loop rules, long form as of 2026-09-05").
+  `CURRENT_CHECKPOINT.md`: the glance block rewritten to one sentence per cell and one
+  line per gate, gates #2-#36 moved to a "Long-owed live gates" section under it, the
+  2026-09-01 and 09-02 dated entries moved to `docs/archive/CHECKPOINT_ARCHIVE_2026-09-01_2026-09-02.md`,
+  and the archive rule changed to "keep the last three build days". `plan.md` §12 97 KB
+  -> 46 KB: Phases 0, 0.5, 0.6, 0.7, 0.14's packet records, 0.15, 0.16, 0.17 and 0.18
+  are stubs naming their status, bodies appended unabridged to the two roadmap archives
+  (`ROADMAP_ARCHIVE_PHASES_0.8-0.13` renamed `_0.8-0.18`). `CHANGELOG.md`: the 2026-09-02
+  entries moved to the changelog archive (renamed `_2026-08-26_2026-09-02`).
+- **Size rules** now written into `CLAUDE.md`'s reconciliation list: `CLAUDE.md` under
+  ~45 KB, glance block under ~6 KB, checkpoint holds three build days, Recent changes two,
+  a BUILT phase is a stub.
+- Not done: `.test_tmp/final_01` (sandbox-owned, needs an admin prompt); relative links
+  inside archived files.
 
 ### 2026-09-04 - Q3: typed sources, a position claim needs a position source, honest brief counts, one reader for `match_basis`
 
@@ -1786,506 +1817,18 @@ dates anchor on the Monday two weeks back, and a guard test asserts them against
 CHANGELOG's Part A entry still carried the retired "six of nine" claim that fix
 round 1 superseded.
 
-### 2026-09-02 - Round R4 Part A: fix what review round 3 found
-
-**Branch `claude/r4-fixes`, off `main`.** Eighteen items (A1-A18) across P10, V1
-and V2, each with a test PROVEN to fail on the un-fixed file. Nothing here is a
-new feature: every item is a claim the docs made that the code did not keep.
-
-**P10 (A1-A6).** `after_like_block` read `summary["eligible"]` off
-`evidence_stats.summarize`, which never sets that key, so every cell of the
-after-like grid reported ineligible however large - a 60-episode, 60-symbol,
-28-session cell showed nothing. One helper, `_meets_eligibility_floors`, now owns
-the rule for both blocks. `trial_ledger.backfill` ran BELOW `_run_outcomes` in
-`cli.run_build`, so the row declaring the grid was appended one step AFTER the
-outcomes it governs; moved above, asserted on recorded call order.
-`simulate_after_like_rows` shares one `series_cache` across twenty cells that look
-at different windows, and `_entry_from_derived` keyed it without the window - so
-an offset>=1 cell was served offset 0's longer derived series and whether a cell
-was MEASURABLE depended on which sibling ran first (13 M30 bars alone, 39 after a
-sibling, against a 21-bar EMA floor). `like_links.link_rows_for_bronze` had no
-production caller while the ERD, this file and gate 42 all said
-`bronze_like_occurrence_link` is written nightly; `_run_after_like_pass` publishes
-it now, month-keyed, skipping by record hash what the partition already holds.
-`SURFACE_FOCUS_PANEL` and `SURFACE_M5_ALERT_BAR` were constants with no writer and
-now have one each; the two chart-review hosts call the `surface` override that had
-existed since P10 B1 with no caller. And both note boxes save on **Enter**
-(Shift+Enter newlines) through `ui/widgets/note_prompt.py` - the plain-text mode
-that makes them multi-line also handed Return to the editor, so the only way to
-save was the mouse.
-
-**V1 (A7-A12).** The Strength Board's relative volume is SESSION-RELATIVE, which
-is what decision 0016 answer 9 asks for; the positional stride V1 shipped reads
-1.2949 on a series whose honest answer is exactly 1.0000. The D1 SMA floors drop
-today's forming bar and read `2y` rather than `1y`. `autopilot_core._frame_rows`
-passes a missing volume through as None instead of a measured 0.0.
-`d1_setup_present` had NO caller anywhere - 346 live segments read False - and is
-fed from the scanner's own 19 MB snapshot, never the 1.1 GB tracker. The Daytrade
-Tracker's second held/ran formula is deleted and the module's own answer joined in
-its place; the M5 alert row gained the suffix `segment_index` was built for. The
-AWAY digest ranks ACROSS the buckets by the tracker's realized win rate (Wilson
-lower bound, expected R as tiebreak) with the near cap applied AFTER the ranking.
-
-**V2 (A13-A18).** The verdict card's take rate read `takes + skips + rejects` and
-the state publishes neither of the last two: "100% of 94 shown" where the truth
-was 30% of 318. `week_trades` moved off the Qt thread (775 ms of the one Refresh
-click) and `DiscoveryPage` gained the `reload` it never had, losing its six
-per-table buttons. "Confirm all shown" no longer confirms a blank - which the
-nightly tagger re-flagged every night forever - and the page gained the per-row
-"Edit tag...". The Market Journal left-nav page is one box, one Enter and a dated
-newest-first list. `session_date_for` rolls at the OPEN rather than at midnight
-in New York, and `written_after_the_session` is measured against the CLOSE. Every
-Weekend Prep table carries a ten-row floor through one constant.
-
-**Deviations from the packet, reported rather than forced.** `capture_rail`'s
-`commit_veto` already stamped `surface` and `scan_context` - V3 item 4 closed that
-seam before this packet was written. The `alert_center_panel` note dialog was
-already asynchronous; what was wrong in both comments was "MODELESS"
-(`QDialog.open()` is window-modal) and "DEFERRED" (the call is the handler's last
-statement). **FOUR of the Daytrade Tracker's nine tabs fill Held and Held x Ran -
-Bounce Types, Combos, Time of Day, Environment - and five read BLANK** (corrected
-by fix round 1, which made `held_run_score` spell its segments the aggregator's
-way; before that join was an equality, six read blank). The five split two ways in
-`UNDERIVED_DIMENSIONS`: the four `master_avwap_*` Swing tabs are dimensions
-`intraday_bounce_outcomes.csv` cannot be asked for at all, and `rrs_alignment` is
-reachable and simply not derived yet. That is the honest consequence of deleting
-the second formula, not a regression.
-
-### 2026-09-02 - Phase 0.14 packet V3: keep it honest
-
-**Branch `claude/v3-keep-it-honest`, off `main` - MERGED to `main` the same evening
-(fast-forward, trader-directed).** Live gate #50 owed. P10, V1 and V2 were merged first.
-
-Six items, all six built, and the shape of all of them is the same: a number the
-trader reads has to mean one thing on every screen, and it has to say what it
-rests on.
-
-**Win rate leads swings, MFE-after-a-held-level leads day trades**, one
-implementation each, with `n`, a Wilson lower bound and a floor flag; mean R and
-the tier statistics stay beside them and are never replaced. **"Lately" is one
-constant** counted in trading sessions. **The rail's veto seam is closed** - it
-wrote without a `surface` while its like path wrote with one. **The Research tab
-says it is the builder's surface**, and the one number the trader needs from it
-now has a line on Weekend Prep.
-
-**Measured against the packet:** it asks for exactly five annotation entry points.
-Three are wired, because those are the screens that carry a like or dislike
-gesture; the Focus panel's "Not today" IS the chart-review one and the M5 bar's
-click-away is deliberately a review event. The test records that rather than
-inventing a gesture so a count comes out at five.
-
-**Verification.** `pytest tests/ -q` **6310 passed, 72 subtests, process exit 0,
-zero failures**, lock probed FREE immediately before the run - `ruff` clean -
-smoke **7/7** - source `--selftest` **74/74**.
-
-### 2026-09-02 - Phase 0.14 packet V2: the loop closes (items 1, 4 and 5)
-
-**Branch `claude/v2-loop-closes`, off `main`.** Live gates #46-#48 owed. V1 was
-merged to `main` first, as the packet required.
-
-**Built:** the nightly auto-tagger and its review badge; the Market Journal
-capture as one box and one Enter, dated to the session it is about; and the
-default-off switch that hides the four surfaces the trader never opens without
-removing any of them.
-
-**Also built (second run): item 2's (a), (b), (c) and (e)** - one Refresh for the
-whole tab, the verdict card, the retired RS/RW prose, and the "Tag this week"
-step that completes the tagging loop item 1 started.
-
-**Not built: item 3, and part of 2's (c).** The AWAY Recap is still the
-forward-looking digest with no outcomes and no charts; Weekend Prep still shows
-its takes and watch conversion as text rather than a table. plan.md's Phase 0.14
-entry records exactly what each owes.
-
-**One defect of my own, found and fixed here.** Item 1's badge started its reader
-in `__init__`; that thread opened the journal while another test was still
-monkeypatching the journal's module globals, and it made an unrelated journal
-test fail from a hundred tests away - green alone, red in the suite. It starts
-from `showEvent` now and is joined in `closeEvent`.
-
-**Verification.** `pytest tests/ -q` **6222 passed, 72 subtests, process exit 0,
-zero failures**, lock probed FREE immediately before the run · `ruff` clean ·
-smoke **7/7** · source `--selftest` **74/74**.
-
-### 2026-09-02 - Phase 0.14 packet V1: names first (items 1 and 2)
-
-**Branch `claude/v1-names-first`, off `main`.** Live gates #44-#45 owed. Decision
-0016 landed on `main` first, as the packet required.
-
-**Item 1 is complete.** The board runs the trader's own scan now: their relative
-volume, their floors, their universe, and their filters as a DISPLAY filter - rows
-that miss are greyed and say why, behind a default-on parity toggle. The RS/RW
-board moved in above it: one window, two sections. The golden's expected values
-come from a second hand implementation, because a golden generated by the code it
-checks pins that code's mistakes.
-
-**Item 2's score is complete and none of its three surfaces are.**
-`held_run_score` is built, tested and shadow; the Daytrade Tracker column, the M5
-alert-bar suffix and the ordering switch are not wired.
-
-**Items 3 (the phone digest's near-bucket picks) and 4 (the "Working lately"
-section and the priority switch) are NOT BUILT.** plan.md's Phase 0.14 entry
-records exactly what each still owes.
-
-**Verification.** `pytest tests/ -q` **6174 passed, 72 subtests, process exit 0,
-zero failures**, lock probed FREE immediately before the run · `ruff` clean ·
-smoke **7/7** · source `--selftest` **74/74**.
-### 2026-09-02 - Phase 0.13 packet P10: what happens after I like it
-
-**Branch `claude/p10-after-the-like`, off `main`.** Live gates #41-#43 owed.
-
-Trader: *"the veto and like+claim tabs are just quicker ways to make a note for a
-stock ... sometimes I may not want to write a note but the fact I clicked like
-should be processed by the bot eventually"*, and *"anytime I like a D1 it should
-be treated with respect ... if I like a stock one day it may not be for 3-5 days
-later that the best entry is."*
-
-**What was true before, measured.** Three writers, one of them graded. The Master
-AVWAP star and X wrote a review event and reached NO graded cohort - so the most
-considered judgement the trader makes all day left no forward record, while the
-same opinion two panels away did. "Not today" wrote a `pick_feedback` verdict
-whose reason is the hardcoded string `"not today"`. Only the rail's like wrote a
-`trader_annotations` row.
-
-**Part A** gives every screen one writer, a `surface` column, an optional note as
-a superseding row, and `veto_uncoded` for a dismissal with no code. Plus a
-deterministic `note_vocabulary_audit` slot that lists recurring uncoded words and
-coins nothing.
-
-**Part B** stamps the scanner row onto the click, links each like to a warehouse
-occurrence with a stated basis, and joins an occurrence to the feature snapshot of
-its own session - point in time, refusing a later revision as firmly as a later
-day.
-
-**Part C** registers `after_like_entry_grid_v1` BEFORE any outcome exists and
-simulates it on P8's machinery, with the offset restricting where the entry
-selector may look rather than what the simulator sees. Parity with P8's control is
-pinned field-for-field. The readout is a pack block, a Weekend Prep table of
-ELIGIBLE cells only, and the eligible cells in R3's narration view.
-
-**Three differences from the packet, each measured rather than assumed:** the
-bronze namespace rather than a "new frozen schema" (the slice datasets are
-frozen); `setup_context_fields` does NOT already collect B1's six fields; and the
-unlinked bucket is a COUNT rather than graded cells, because the declared stop
-needs the occurrence's anchor.
-
-**One defect found and fixed while building.** The first note dialogs were
-`QInputDialog.getMultiLineText`, which runs a nested event loop - every existing
-test that clicks a star or a "Not today" HUNG rather than failed. They are
-modeless now, which is also what A2 asks for.
-
-**Verification.** `pytest tests/ -q` **6206 passed, 72 subtests, process exit 0,
-zero failures**, with the `ai_jobs_runner` lock probed FREE immediately before the
-run · `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. No packaging
-trigger: every new module sits inside an already-collected package.
-
-### 2026-09-02 - The merge, and the test run that started a real scan
-
-`main` takes P9 (quick like) and R3 (the narration budget). Three documentation
-conflicts, each resolved by keeping BOTH entries.
-
-**The merged tree printed 6,145 passed and then killed its own process** -
-`QThread: Destroyed while thread '' is still running`, exit `0xC0000409`. Each branch
-alone had exited 0, so it read as an interaction between them. It was not.
-
-Five test files build a real `MainWindow` with a live `AutopilotService`, and nothing
-shuts them down. A later `processEvents()` let a surviving timer tick; `_maybe_auto_arm`
-saw it was after 07:00 on a weekday, flipped Auto Pilot ON, and `_maybe_run_swing_slot`
-**started a real master scan** - a child process against the live tape, on the machine
-running the desk. A 20-minute scan outlives a 6-minute suite, so its thread was still
-running at teardown.
-
-**It depends on the wall clock.** Every clean run this week was between 04:00 and 05:00,
-before the arm hour; the first run after lunch crashed, and so did every run after it,
-including code that had passed at breakfast.
-
-The guard is a machine-local setting, not a patched method: `conftest` writes
-`qt_autopilot_auto_arm: false` into the temp LOCALAPPDATA it already isolates. Stubbing
-`_maybe_auto_arm` would have deleted the behaviour from the tests that check it; a
-setting only moves the default, and a test that wants arming turns it back on. Both new
-tests fail without the guard.
-
-Desk construction is still **not** inert under pytest - the timers still run. This
-closes the one door that leads out of the process.
-
-**Verification.** `pytest tests/ -q` **6147 passed, 72 subtests, process exit 0** ·
-`ruff` clean · smoke **7/7** · `--selftest` **74/74**.
-
-### 2026-09-02 - Review round R3: the research narration outgrew the model
-
-**Branch `claude/r3-narration-budget`, off `main`.** Live gate #40 owed.
-
-On 2026-09-01 `setup_research` ran three times - 03:55, 04:30, 05:00 - published
-three superseding packs, spent 29 minutes reading the lake and produced **no
-narration at all**. Every attempt logged the same line: *"the local server truncated
-the prompt: sent ~176827 tokens (442068 chars), server reported seeing 32771"*. Two
-independent faults behind one symptom.
-
-**The package sent the whole pack.** P3 added the ineligible block, the excluded
-families and the coverage detail; P8's grid grew it again. `narration_view` sends what
-a person reads first instead - gate, coverage, evidence shape, excluded families,
-**every eligible cell**, and **counts** of what was dropped, so the model can say "and
-71 thin cells were not shown" rather than being handed 71 thin cells. The cells are
-deduplicated too: four prose constants are interpolated into every one of them, ~900
-identical chars inside each 1,900-char cell, so they are stated **once** under
-`conventions`. **A constant two cells disagree on is never hoisted** - it stays inline
-on all of them, because stating it once would silently restate one. **437,125 ->
-38,184 chars**; headroom went from six more cells to about forty. Over budget now
-**raises before any provider call**: a sheared prompt is not a shorter answer, it is
-an untrustworthy one. The hash is over what was actually **sent**.
-
-**A missing narration is not a failed job.** `degraded_no_narrative` under
-`max_attempts=3` re-ran a **ten-minute lake pass** twice more to fail identically -
-that is where the three packs and the 29 minutes came from. It returns `ok` with
-`narration absent: <reason>`. If a narration retry is ever wanted it must read the
-pack on disk; **it must never re-enter the lake.**
-
-**Provenance.** Two packs from one night disagreed by 3,067 outcome rows - 9,372 on
-the pre-merge checkout, 12,439 on `main` after P8 landed - and neither said why.
-`built_by_commit` (once per process, fails **open**) and `recipe_ids` now travel with
-the pack and into the view.
-
-**And the synthesis counter was reading a LIST as a COUNT** (item 4, committed
-separately). `matured_horizons` is a comma-joined field like `"20,60"`; `_matured`
-compared it as a number, so a date graded at horizon 20 alone read as `"20" > 0` -
-true - while `"0,60"` read as truthy too. It now asks whether ANY listed horizon is
-non-zero. The live counter measures **4** graded dates, matching a hand count
-(2026-08-20, 08-21, 08-27, 08-31). **The prompt expected 5; the code was right and
-the expectation was stale** - and the count can legitimately FALL as evidence
-accrues, which is now pinned by a property test.
-
-**Verification.** `pytest tests/ -q` **6119 passed, 72 subtests, process exit 0, zero
-failures**, with the `ai_jobs_runner` lock FREE and re-checked immediately before the
-run · `ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix:
-**all 11** new narration tests fail against the un-fixed tree, and the two synthesis
-tests fail against theirs. No packaging trigger.
-### 2026-09-02 - Phase 0.13 packet P9: quick like
-
-**Branch `claude/p9-quick-like`, off `main` at `13cbc50`.** Live gate #39 owed.
-
-Trader: *"anytime I like and claim a setup or like a day trade setup I just want to
-let the bot and the future AI know 'something about this was good' and then we can
-figure out what about it / what's the best entry later."*
-
-**Alt+L** - unbound everywhere else in `scripts/ui`, and two live bindings for one
-sequence fire NEITHER, so a clash would have cost both verbs silently. **A BUTTON
-too**, on the chart's verb row and on the rail (trader follow-up the same day),
-opening a box for an OPTIONAL note through the same `QInputDialog` the setup
-tracker's dislike detail uses. The KEY never prompts and the BUTTON always does;
-cancel records nothing. It writes
-`like_claim` with `like_mode: "quick"`, no claim and no why, **superseding
-R9.2(a)'s why-required for that path only**. Everything a claimed like does to the
-review it does too - retire, `like_advance`, reviewed-today - and NONE of that
-needed code, because all three are keyed on the event type. Everything a like has
-never done it still does not: no Focus, no park, no watch, no alert.
-
-**The schema stays at 1 and that is proven**, not asserted: a test hands the
-loader, the like cohort, the auto-tagger's capture lane and the pass cohort a row
-carrying `like_mode` and each returns its normal answer. Absence reads as
-`claimed`, because a claim was REQUIRED until this packet.
-
-**On an M5 chart it saves the bars**, through the writer Pass already uses -
-generalised in name only, so `m5_bars_ref` and the sidecar directory are unchanged
-and no reader forks.
-
-**And the intraday grade became reachable.** `pass_cohort` returned blank on every
-live pass with `sidecar_ends_before_the_entry_bar` - the sidecar holds what the
-desk had AT the click, so the first close AFTER it was never inside. The new
-`sidecar_completion` slot appends the rest of the session after the close, into a
-NEW file and a NEW field, leaving the original snapshot byte-identical. **Gate
-34's open definition question is answered without changing the definition.**
-
-A quick like contributes a LINK to the auto-tagger, never a tag (R2's rule, since
-it names no setup); `like_mode` is a picks column so a later rollup can split the
-two without rewriting a row; Weekend Prep and the AI's judgement scope both say
-the unclaimed cohort is not a setup's edge.
-
-**Verification.** `pytest tests/ -q` **6122 passed, 72 subtests, exit 0, zero
-failures**, with the `ai_jobs_runner` lock FREE · `ruff` clean · smoke **7/7** ·
-source `--selftest` **74/74** · spec-drift **17**. Fail-before-fix: 17 of the 18
-new tests fail against `main`.
-
-### 2026-09-02 - Review round R2: two guards, then the stale sentences
-
-**1. An empty `assigned_tier` cell was about to become a tier called NAN**, and this
-landed ahead of the 07:30 scan. The live feature-history file has no such column; the
-first scan after P4 widens it, and `pd.read_csv` reads every older row's empty cell
-back as a float NaN - TRUTHY, and `str(nan)` is `"nan"`. Reproduced on `main`: a NAN
-tier reaches the outcome rows, and on the packet's measurement 40 of 42 of them.
-`tier_for_tracker_row` now accepts only the vocabulary the stamper writes (S, A, B).
-Both row shapes are tested, because "key absent" and "key present and empty" are
-different values and only the second one broke.
-
-**2. A link is not a tag at any seam.** R1 covered `auto_tag_summary`; the bulk lane,
-the bulk `max(confidence)` pick, Accept-all and `tag_confidence` each let one through.
-A link arrives at 0.90-0.95, so it beat every scanner match beneath it - TRV lost
-`avwap_retest_followthrough` at 0.91. ONE predicate now answers it, accepting both the
-in-memory flag and the `link:` prefix that survives the store. Links still render with
-their event id. A pass carries ALL its codes in vocabulary order.
-
-**3. The sweep**: seven copies of the corrected "never pooled" sentence, four stale
-`focus__not_today` spellings, a dead double assignment, an unlocked in-place CSV
-rewrite made atomic and made to REPORT its failures, a globally-capped adjustment query
-made trade-scoped, a 169 ms journal read moved off the Qt thread, four DESK_INTERNALS
-entries, and three wrong claims (the frozen selftest is not 29/29,
-`claude/gui-phase-0-9` IS contained in `main`, and a pass merges through
-`_merge_cohort_safely` too).
-
-**Verification.** `pytest tests/ -q` **6104 passed, 72 subtests, exit 0, zero failures** with the
-`ai_jobs_runner` lock free · `ruff` clean · smoke **7/7** · source `--selftest`
-**74/74**. No packaging trigger.
-
-### 2026-09-02 - Review round R1: the blockers, then the whole of Phase 0.13 onto `main`
-
-**Eleven blockers across five packets, each reproduced before it was fixed, then eight
-merges.** With Phase 0.12, P3 and P7 already in, every Phase 0.13 packet is now on
-`main`.
-
-**P4 - three values that were computed and then thrown away.** The stale-horizon
-coverage line was built onto every leaderboard row and dropped by
-`pd.DataFrame(rows, columns=...)`. The tier that actually shipped was stamped where the
-grader could never read it, so `tier_for_tracker_row` fell through to the bucket
-derivation on every row forever - and `tier_source` was dropped by one column list and
-left as a dead local in the other. And the attribute leaderboard looked its baseline up
-by POSITION in a key that `extra_group_fields` PREPENDS to, so every edge in the
-by-family and by-regime views shipped blank. A blank edge reads as "no edge".
-
-**P5 - the cohort name had to be right the first time.** Rows are never rewritten and
-`rejection_cohort_source` dropped the category, so both verdicts filed under the verdict
-alone: `not_today` is recorded on intraday picks (223 rows) and `dislike` on swing names
-(34), and a cohort called "not_today" claims a record it does not have. Fixed BEFORE the
-slot's first nightly run; nothing had been graded, and nothing was rewritten. Also: the
-"never pooled" note sat above a pooled base row, which is now LABELLED rather than
-hidden; and the capture-time PASS merge had no test at all.
-
-**P6 - a link is not a tag, and a blank R is not an R.** A chart housekeeping click was
-minting `took:<action>` on 676 of 730 review rows and, ranked first, spending a slot of
-a four-slot Tags column on it - EYPT and SMPL lost `avwape_to_1stdev` to one. The
-coverage note was computed and never rendered, and its arithmetic summed BUCKETS of a
-non-exclusive group, measuring 24 tagged trades of 156 as 40% and suppressing itself.
-And `journal_r` read a key that exists nowhere in `scripts/`, with a fixture that
-invented it.
-
-**P7 - a declaration with no date.** Every ledger row now carries `registered_at`,
-stamped by the ledger and not by the caller, with backfilled rows carrying the date
-their work was authorized.
-
-**P8 - a gate nothing could satisfy.** Gate 37 asked for a ledger row and nothing in
-production wrote one; `cli.run_build` registers them now, beside the coverage line.
-`assert ... or True` became a real assertion. And BD-88's claim that the derived series
-were memoised was false - 2.06 s per occurrence, ~0.8 s of it rebuilding - so the cache
-is real now and the entry is corrected rather than quietly made true.
-
-**The merges.** Ledger conflicts kept both sides throughout. The code conflicts were all
-ADDITIVE and were resolved by hand: P1's like-cohort half beside P5's pass-cohort half
-in `capture_rail`; P2's, P5's and P6's tables in `weekend_prep_panel`; P5's two cohort
-slots and P6's preference slot in `runner.py`, in the order the data requires; both
-journal migrations, in order; and P6a as the ONE owner of the tag-lane helpers, with
-P6's temporary copy dropped.
-
-**Two premises stopped being true when branches met, which is the point of merging them
-together.** P5 asserted the default pick key collapses a multi-code pass into one row -
-P1 had widened that key for a different reason and it no longer does. And
-`test_warehouse_restore` pins the build's step list, which P8's wiring extended.
-
-**Verification.** 6053 passed · `ruff` clean · smoke 7/7 · source `--selftest` 74/74 ·
-no exe rebuild required (no packaging trigger; P7's was already rebuilt). The 32
-`ai_jobs` tests that stand down under the writer lock are **not** counted as a baseline:
-the nightly run held it from 22:00 through this round.
-
-### 2026-09-02 - Phase 0.13 packet P8: the first setup-parameter grid
-
-**Branch `claude/p8-param-grid`, off `main` AFTER the morning's integration** - the
-packet declared Phase 0.12, P3 and P7 as preconditions and refused to be built without
-them. Live gate #37 owed. Shadow only.
-
-**One setup, one stop, four entry moments.** `AVWAPE_TO_FIRST_DEV` LONG (the
-registry's `avwape_to_first_dev@1`), 840 occurrences over 622 clusters. Twelve cells:
-`m5_first_close` (control), `m15_acceptance_close`, `m5_retest_trigger`,
-`m30_ema15_21_pullback`, each at 1R / 2R / 3R, with the stop fixed at
-`current_anchor:1` and the exit machine, time stop and checkpoints identical
-throughout. **A grid that also varied the stop could not answer the question it
-declared**, because a winning cell might have won on the stop.
-
-**The control is the code it challenges.** `m5_first_close` delegates to the existing
-`simulate_m5_close_opportunity` with the existing rank-1 selector, so its rows
-reproduce the `m5close_current_anchor1_*` rows by construction; the three challengers
-call the same function through one new optional `entry_selector`. **The golden fixture
-was pinned from `outcomes.py` as `main` had it** - imported through `git show` into a
-temp package - so it pins code that had never heard of P8.
-
-**Each confirmation entry is defined by what it refuses**: a completed M15 CLOSE
-beyond the trigger (not a wick), an M5 bar that TAGS the level and still closes
-holding it, an M30 bar with the EMAs in trend order whose extreme reaches the band and
-whose close is still beyond it. All read the warehouse's own derived bars, stubs
-excluded, eligible only STRICTLY after the trigger - a derived bar ending at the
-trigger instant is the signal bar. Unmeasurable produces NO row.
-
-**The trial-ledger row was written before any outcome was inspected**, with status
-`collecting` (new: the declared 20-session window's clock is running) and with the
-failure mode named in advance - **a waiting entry can look better purely because it
-SKIPS the episodes that went straight down**, so the control's rows-per-cluster is the
-denominator to read first.
-
-**Measured and reported:** the packet's "22 of 61 like claims" is right for the setup
-but splits **11 LONG / 11 SHORT**, and `avwap_breakout` LONG carries 15. This is the
-most-claimed SETUP, not the most-claimed long - still the right first grid, since it
-has the deepest evidence, but not for that reason.
-
-Recorded as **BD-88** and **BD-89**. **Verification.** `pytest tests/ -q` **5800
-passed**, with 32 `ai_jobs` tests standing down while the desk's nightly held the
-machine-local writer lock (the same tests fail on a pristine `main` - checked) ·
-`ruff` clean · smoke **7/7** · source `--selftest` **74/74**. Fail-before-fix: 17 of
-the 18 new tests fail with `scripts/` and the fixture stashed.
-
-### 2026-09-02 - Three branches onto `main`, so packet P8 has ground to stand on
-
-**Trader instruction: "yes do option 1".** P8 declared its own precondition - "Requires
-P3 and P7 landed" - and neither was, so P8 was not built; this merge is what unblocks
-it. Merged oldest first: **Phase 0.12 A+B** (clean), **Phase 0.13 P3** (two ledger
-conflicts), **Phase 0.13 P7** (six, all additive). Every conflict was resolved by
-keeping BOTH sides' dated entries, and the Active state block was rewritten once at the
-end from what is actually true.
-
-Done in a SCRATCH WORKTREE rather than the live checkout: the desk was mid-run on the
-nightly AI job, and a working tree carrying conflict markers inside `.py` files is the
-one state a running process must never see.
-
-**THE BD COLLISION IS RESOLVED.** Three branches off one commit each numbered their own
-decisions - 78-80, 80-84, 85-86. Phase 0.12 kept BD-80, P3 shifted to **81-85**, P7 to
-**86-87**; headings are now 77..87 with no repeats, asserted. Renumbered by targeted
-replacement, never by line range, because `(BD-80)` appears in both lines and only the
-surrounding words say which is which.
-
-**P7's owed swap is paid**: `setup_research.family_role` no longer carries its own
-two-entry role map and reads the registry instead. Output unchanged (`fact_pack_role`
-translates Appendix C's `TRADE_SETUP` back to the pack's `TRADE`); the ontology now has
-one owner. **And P7's blind declaration checked out**: the HTF LRSI trial-ledger row,
-written from another branch's constants, matches the real grid exactly - 16 declared,
-16 real, all 75 recipe ids owned by exactly one row.
-
-**Frozen exe rebuilt** (P7 edited the packaging spec - trigger 2): 420 MB,
-`selftest OK: 74/74 (frozen)`, exit 0. The new 74th check loads the registry JSON from
-inside the frozen process, because a `datas` rule proves a file was bundled and only a
-frozen run proves the process can read it.
-
-**Verification.** 5781 passed. 33 failures, none a regression: 32 are the `ai_jobs`
-tests standing down while the desk's nightly holds the machine-local writer lock (the
-same tests fail on a pristine `main` worktree - checked, not assumed), and one was a
-Windows `PermissionError` on `os.replace` inside pytest's own sandbox that did not
-recur. `ruff` clean · smoke **7/7** · source `--selftest` **74/74** · spec-drift **17**.
-
 ### Older entries
 
-Entries from **2026-09-01 back to 2026-08-26** (56 entries) moved to
-[`docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md`](docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md)
-on 2026-09-03 (F1 docs packet). Recent changes holds the last two build days.
+Entries from **2026-09-02 back to 2026-08-26** (56 + 12 entries) moved to
+[`docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-02.md`](docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-02.md)
+on 2026-09-03 (F1 docs packet) and 2026-09-05 (repo cleanup). Recent changes holds the
+last two build days.
 
 ## Revision history
 
-Entries from **2026-09-01 back to 2026-08-26** moved to
-[`docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md`](docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-01.md)
-on 2026-09-03 (56 entries); entries from **2026-08-19 back to the initial system in 2025-11** moved to
+Entries from **2026-09-02 back to 2026-08-26** moved to
+[`docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-02.md`](docs/archive/CHANGELOG_ARCHIVE_2026-08-26_2026-09-02.md)
+on 2026-09-03 and 2026-09-05 (68 entries); entries from **2026-08-19 back to the initial system in 2025-11** moved to
 [`docs/archive/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md`](docs/archive/CHANGELOG_ARCHIVE_2025-11_2026-08-19.md)
 on 2026-08-27 (36 entries). Newer revisions are dated entries at the top of
 `Current implemented inventory` above. The archive is evidence, not authority — read it

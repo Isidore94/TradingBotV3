@@ -241,7 +241,7 @@ where the phase says so; it never authorizes an early promotion.
 
 | Order | Build phase | Plain-English outcome |
 |---:|---|---|
-| **0 — NOW** | Validate and merge | Prove the testing-week build on the real desk and merge it safely |
+| **0** | Validate and merge | **P0.7 merge DONE 2026-08-26**; P0.2–P0.6 live proofs are §6 and the checkpoint gates table |
 | **0.5** | Trader refinement packets | Build the trader's 2026-08-14/15 desk requests in ranked order (R1–R8) |
 | **0.8** | GUI fluidity Wave P1 | Repair the measured Standard-mode stalls and three verified GUI defects |
 | **0.13** | Grade what the trader already said (P0-P10) | Every verdict gets a forward record; a like starts a five-session watch. **MERGED; live gates #29-#43 owed** |
@@ -256,277 +256,29 @@ where the phase says so; it never authorizes an early promotion.
 | **6** | Research payoff | Use the validated corpus to promote setups narrowly and finish the Qt product |
 | **7 — LATER** | Consolidate and ship | CI, recovery, packaging, installer, and optional read-only broker adapters |
 
-### Phase 0 — NOW: validate and merge the testing-week branch
+### Phase 0 — validate and merge the testing-week branch (P0.7 DONE 2026-08-26)
 
-No new feature or threshold work belongs in Phase 0.
-
-1. **P0.1 Re-baseline the complete branch.** Run the full Windows suite after the
-   post-gate code commits, smoke 7/7, and the frozen self-test when a packaging
-   trigger applies. Record pytest's own exit code in `CURRENT_CHECKPOINT.md`.
-2. **P0.2 Run one complete single-main live session.** Follow
-   `docs/FIRST_SESSION_CHECKLIST.md`; preserve runtime, provider, shadow, review,
-   chart, alert, warehouse, and shutdown artifacts. Do not tune from this session.
-3. **P0.3 Validate Auto/Away and ntfy end to end.** Confirm the verified hourly
-   report, safety/freshness header, swing-first ordering, quiet empty-swing behavior,
-   best-swing phone push, late-opened chart freshness, and main-desk alert delivery.
-   Cover the 2026-08-11 push policy too: the swing push must carry a favorite/
-   high-conviction roster matching the Setup Tracker's rows for that hour, the D1
-   push must name only the events since the previous push, and both must be silent
-   while the desk sits in DESK or EVENING while a Research-tab price alert still
-   fires from those modes.
-   Also confirm the BounceBot scan window on a live day: Auto Pilot logs one resume
-   at 06:00 and one pause at 13:30, `trading_bot.log` shows no symbol sweep between
-   them and the close, and the session itself is unaffected — same alert count and
-   the same IB connection held across the boundary.
-4. **P0.4 Validate observability rollover.** Require real provider telemetry,
-   SPY/Greatness rotation and summaries, valid per-installation review writes, and
-   honest UNKNOWN/DEGRADED grades.
-5. **P0.5 Run the durability restart drill.** Require a healthy regime audit with a
-   nonzero backfill count, no duplicate desk, no pacing conflict, and no Tier-C
-   reconstruction.
-6. **P0.6 Start the elapsed evidence clocks.** Enable Local-AI Phase 1's five clean
-   session mornings; run the warehouse broker-marked IB check, observe its live tee
-   and six Health tiles, answer the pilot-relevant confirmation items (including the
-   fixed cohort and favorite-zone definitions), and start the 20-session pilot.
-7. **P0.7 Merge to `main`.** Only after a live-validation day passes, re-run the
-   applicable gates, merge, and update all control documents. Since the
-   2026-08-15 consolidation this is **one** merge —
-   `testing-week-2026-08-17` → `main` — followed by a full gate re-run on `main`
-   including a clean-cache frozen rebuild, and only then the disarm / switch the
-   desk / re-arm sequence. R7's and R8's own live gates follow **after** that
-   merge and are not merge blockers. Exact steps: `CURRENT_CHECKPOINT.md`,
-   "Monday sequence".
-
-Exit gate: the branch is green, one real session is documented, the application is
-operationally safe on the single-main topology, and `main` contains the validated
-build. The Local-AI, warehouse, regime, SPY, and Greatness evidence clocks may remain
-in progress; their results gate later promotions, not the merge itself.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: **P0.7, the merge, DONE 2026-08-26** (`testing-week-2026-08-17` -> `main`); P0.1 is the standing before-every-commit rule in `CLAUDE.md`; P0.2-P0.6 are the live-validation program of Section 6. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ### Phase 0.5 — trader refinement packets (promoted 2026-08-15)
 
-The trader explicitly promoted the 2026-08-14 `WISHLIST.md` entries on 2026-08-15
-and ranked the build order (R1 first, then R2; R3–R6 behind them). Each packet has
-a specification under `docs/`; the file-scoped ask-first rule and the golden-fixture
-invariant bind at edit time, packet by packet. Phase 1 work may interleave only
-where a packet's own spec says the baseline item is a prerequisite (none currently
-does).
-
-**Build-order note (2026-08-15).** The original gate read "build work starts only
-after P0.7 merges". The trader redirected twice on 2026-08-15 — first for R1, then
-explicitly again for R2 — so both are built on their own branches ahead of the
-testing-week merge, and P0's live gates are unchanged and still owed. The redirect
-was packet-by-packet and does **not** carry forward: **R3 onward waits for the
-trader to say so.**
-
-On 2026-08-15 the trader added two new packets with their own explicit redirect:
-**R7 (journal reliability + UX)** and **R8 (Weekend Prep)**, specced the same day.
-Later that day the trader redirected again, in writing: **R7 code starts
-immediately on `phase05-r7-journal-reliability-ux` cut from the R2 tip**, ahead
-of the P0.7 merge — same pattern as the R1/R2 redirects. Rationale recorded:
-R7/R8 touch journal and weekend surfaces, not the scanning/alerting/Focus path
-whose live proofs Monday owes; the desk keeps running the R2 branch until the
-validation day passes. P0's live gates are unchanged and still owed; merging R7
-later brings the whole stack. The redirect does not authorize R3–R6.
-
-**Weekend redirect (2026-08-15).** The trader then explicitly authorized the
-remaining packets on the consolidated release candidate: *"integrate the rest —
-build R3 through R6 on the consolidated branch."* R3, R4, R5 and R6 therefore
-build in that order on `testing-week-2026-08-17`, one packet at a time with its
-fixtures, full deterministic gate, governance close-out and push complete before
-the next starts. This redirect does not satisfy any live gate: R3's shadow week,
-R6's watchdog week, R1/R2's eight proofs, R7's migration/backfill/reconciliation
-sequence, and R8's real-weekend run all remain owed. After R6, only the explicitly
-named R7/R8 review-deferral completions are authorized. *(True USD conversion was
-the one exception held back "pending a trader decision"; that decision arrived on
-2026-08-24 and reversed the deferral — it is BUILT as packet W3, and R7's gates
-1/3/6 are still owed.)*
-
-R2's branch is cut from R1's and carries the R1.1 repair, so merging R2 brings the
-testing week, R1, R1.1 and R2 together. The R1 and R2 live proofs are both owed and
-are listed in `CURRENT_CHECKPOINT.md`.
-
-1. **R1 Auto-mode matrix and quiet hours. — BUILT 2026-08-15, live proof owed.**
-   Spec: `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md`. Build record: `CHANGELOG.md`.
-   **Remaining — the spec §6 live proofs, narrowed 2026-08-18.** The quiet boot **PASSED** on 2026-08-16 22:06, and AWAY staging-without-adoption **PASSED** across the 08-17 and 08-18 sessions. Still owed: the **drain on return** (the trader never flipped back to DESK, so that half of the AWAY proof is untested); an **EVENING day** whose log shows the early block and then zero further slots; and one **SPY-alarm firing** (real or forced threshold).
-
-2. **R2 M5 Focus adoption discipline and the M5 strength board. — BUILT 2026-08-15, live proof owed.**
-   Spec: `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md`. Build record: `CHANGELOG.md`.
-   **Remaining — the spec §8 live proofs, narrowed 2026-08-18.** The **eviction proof PASSED** on 2026-08-18 (four logged evictions with per-symbol reasons; lines quoted in `CURRENT_CHECKPOINT.md`). Still owed, all three needing a DESK day because AWAY never adopts: one adoption-time refusal, one clean "Not today" scoped removal that leaves the trader's other entries intact, and a board session the trader confirms matches the TC2000 scan's character (~20–40/side). RVOL-for-survivors is specified but deliberately not built; decide it on that session.
-   **Amended 2026-08-31 (trader): the board moved into the Desk's Strength window.** It is a collapsible section under `FocusStrengthBoard` in the alert column, starting closed, and the left-nav page is removed - so the board session owed above is now read from the Desk rather than from a page. Nothing about the gate, the fetch or the data changed; see the spec's 2026-08-31 addendum.
-
-3. **R3 Swing-quality demotion, pre-close honesty, and the dislike-feedback loop.**
-   Spec: `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md`. Build record: `CHANGELOG.md`.
-   **DETERMINISTIC WORK COMPLETE 2026-08-16.** **DETERMINISTIC WORK COMPLETE 2026-08-16.** The one remaining item, §4.3.5 same-slot volume normalization, was **explicitly deferred by the trader on 2026-08-16**: the D1 scoring seam has no intraday slot series, the faithful TC2000 baseline would need a 5-minute fetch across ~1,100 symbols, and the zero-fetch session-elapsed proration was offered and rejected as trading one dishonest reading for another.
-   **Owed — live gates only, none claimable from tests:** the §6 `would_demote` shadow week the Amendment requires before any row moves, the one-week 12:45-vs-close list and STABLE-vs-PREVIEW churn comparison, and the scoreboard's first real-data curation cycle producing a threshold proposal.
-
-4. **R4 Desk chart unification.**
-   Spec: `docs/DESK_CHART_UNIFICATION_PLAN.md`. Build record: `CHANGELOG.md`.
-   **BUILT 2026-08-16, live proofs owed.** **BUILT 2026-08-16, live proofs owed.** Sections 1–5 and 6.1–6.3 are green: trader-armed hits survive "Not today" (§6.1); `CaptureRail` lives in the snapshot popup and the Alert Center pane so every chart-opening host inherits capture, including the RS/RW and Industry boards which previously had none; armed price alerts and D1 level watches paint as a read-only `GROUP_ALERTS` levels family on the worker; the Yahoo forming-bar early print is suppressed for 15 minutes after the open and labeled when drawn; the reviewed-today marker renders on the snapshot, the Alert Center pane, RS/RW and Industry; the feed's star became a labeled Like→Focus verb; and one feed row per symbol/side/day folds repeats with a three-item escalation list and a 30-minute open-burst digest.
-   **Owed — the §8 exit gate, all live:** **Owed — the §8 exit gate, all live:** every entry point opening a chart with capture, watch controls and painted armed alerts; one desk morning confirming the forming-bar caveat replaced the inflated-gap rendering; a dislike recorded from the RS/RW board appearing as a badge everywhere that symbol renders that day; and §6.1's ignored-symbol armed-watch hit feeding and sounding while automatic Focus D1 interest for that same ignored symbol stays absent.
-
-5. **R5 M5 signal engines. — §2, §5 and the FIRST of §3's engines BUILT; §3.2/§3.3 and §4 remain.**
-   Spec: `docs/M5_SIGNAL_ENGINES_PLAN.md`. Build record: `CHANGELOG.md`.
-   **BUILT OUT 2026-08-18 (trader integration redirect).** **Owed, live only:** that session, for each engine, plus one observed any-bounce firing naming its level.
-
-6. **R6 Small operational wins. — (a) BUILT 2026-08-17; (b) DECIDED 2026-08-17 and narrowed to tests/docs; (c) diagnostic ACTIVE + evidence-led repair BUILT 2026-08-20.**
-   The bounded diagnostic week remains the live gate, and it **begins at the 2026-08-21 relaunch** — the desk ran the pre-fix frozen exe until then, so every earlier `ui_stalls.jsonl` row is baseline, not evidence. What it owed, for the record: **(1) the replay characterization fixture over `_load_resolved_events` is BUILT 2026-08-17** — `tests/fixtures/technical_integrity_replay_v1.json` + `tests/test_technical_integrity_replay.py`, 18 tests, every case in the specification below pinned, and **mutation-proven**: deleting the session filter fails 7 of them (including the watermark and the segmentation equivalence) and deleting the provenance strip fails 3. (c) **ACTIVE 2026-08-20 — evidence-led hang repair is BUILT; bounded live week owed.** Two Windows `AppHangB1` events (07:19 frozen exe, 14:16 source) triggered measurement rather than speculative tuning. (d) **Auto journal is a mapping, not new work**: the trader's ask resolves to the QUEUED nightly `journal_import` slot (`docs/LOCAL_AI_AUTOMATION_PLAN.md` sec 6.4c — build only after the 6.4b live proof passes and the trader says go) plus the P3.5 commentary journal; **the nightly slot half was promoted into R7 on 2026-08-15** — see item 7; P3.5 is unchanged.
-
-7. **R7 Journal reliability and UX. — BUILT 2026-08-15, live gates owed.**
-   Spec: `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md`. Build record: `CHANGELOG.md`.
-   **OWED:** one live paste that survives a backfill. **TRADER DECISION RESOLVED 2026-08-28** ("i can easily get us yearly reports from questrade so long as we can process these files"): the 44 pre-retention days are recovered from a **statement file**, not from `/activities`. `scripts/journal_statement_import.py` is BUILT and reachable from Journal > Health; a statement never writes into a day a richer source covers, so no new coverage status was needed. *Owed:* the trader importing their own YTD file on the desk against the live journal, then reconciling one monthly statement to the cent (spec gate 2).
-   **Owed, and none of it can start before Monday's validation day:** **Owed, and none of it can start before Monday's validation day:** the trader-present finale — the live schema v2→v3 migration (dry-run report reviewed first, automatic file backup), the full backfill, account tax-status labeling applied to the live store, and reconciliation-week sign-off — then the spec's six live gates: coverage COVERED-or-NO_SESSION for every session day since inception, trade counts and commissions reconciling to one monthly statement per broker **to the cent**, one clean reconciliation week on both brokers, zero orphaned annotations (permanent SQL test), CAD totals spot-checked against published BoC rates for three dates, and ≥5 consecutive nightly `journal_import` ledger entries with coverage advancing and at least one observed self-heal.
-   **Questrade statement import (BUILT 2026-08-28, live gate owed).**
-   `scripts/journal_statement_import.py` + Journal > Health > "Import statement
-   file...". Reads .xlsx (stdlib, no new dependency) and .csv; one commission
-   column taken as the complete cost; options resolved from the Description;
-   midnight market-local timestamps so a date-only row is never given a session;
-   day-level refusal of anything a richer source already covers. Measured drift
-   against the trader's real YTD file: -$0.16 on $4,014 realised, commission
-   exact. *Owed:* the trader importing that file on the desk.
-   **Two-lane auto-tagging + tag adjust tools (BUILT 2026-08-28, live gate owed).**
-   Trader-directed while evaluating this journal against their TradesViz
-   subscription. `scripts/journal_trade_shape.py` tags a trade from its own
-   timestamps and legs, so history imported from outside the scanner's lookback is
-   no longer blank; plus a shared-header tag filter, `distinct_tags`, `rename_tag`
-   and a Manage-tags dialog. No tag derives from the outcome. *Owed:* one desk
-   session tagging real trades, renaming one and filtering on it. Nothing in this
-   packet touches identity, migration, coverage or reconciliation, and the six
-   live gates above are unchanged.
-   **Release-candidate pre-flight fix pass (2026-08-16):** Deterministic regression coverage was added for all five findings; the live migration remains owed and untouched.
-
-8. **R8 Weekend Prep. — BUILT 2026-08-15, live gate owed.**
-   Spec: `docs/WEEKEND_PREP_PLAN.md`. Build record: `CHANGELOG.md`.
-   **MACHINERY BUILT 2026-08-24, RUN GATED (packet W5); the live gate is OWED.** **MACHINERY BUILT 2026-08-24, RUN GATED (packet W5); the live gate is OWED.** `scripts/ai_jobs/synthesis.py` rolls both graded cohorts up through `evidence_stats` and narrates at medium tier over that rollup alone. The live gate below is unchanged.
-   **OWED, not built (2026-08-20): the weekly trader-judgement synthesis.** **OWED, not built (2026-08-20): the weekly trader-judgement synthesis.** Nightly deterministic grading of the veto cohort now runs (`ai_jobs.cohorts`, slot `veto_cohort_grading`) and the `trader_judgement` evidence scope exists but is **opt-in** — deliberately absent from `DEFAULT_SCOPES`. The cadence is decided (**weekly, on the weekend surface**, which is why it is recorded here rather than under the AI plan), but it is **gated on two weeks of graded rows** and is **NOT authorized to build**. Live gate: one weekend where the graded cohort is read and the trader confirms the reasons ranked against forward returns are the ones they recognise.
-   **Every deferred join is now built**: the RRS-strength symbol join and the picks↔outcomes join landed 2026-08-18, the veto mirror cohort as AI-P1 and the LIKE cohort as R10's packet 8b on 2026-08-24, and the last three — `human_focus_performance.csv`, `pick_feedback.jsonl` and `rrs_group_strength_extremes.csv` — as packet W2 the same day, closing the spec's §6 DEFERRED block. Building a view never validates it: §10's one-real-weekend gate covers all of them and is still owed. R7's true USD conversion is no longer deferred either (packet W3, the trader's recorded 2026-08-24 reversal); the Calendar year heatmap and the additional Analytics charts landed 2026-08-18.
-   **Owed: the one-real-weekend live proof** **Owed: the one-real-weekend live proof** (spec §10) — the desk booting on a weekend with the tab present and no network activity until a button is pressed, zero IB traffic across the routine, all three boards refreshed with their per-timeframe wall clock recorded, a monthly board spot-checked for the absence of a current-month bar, one real Adopt verified in all four stores with nothing removed anywhere, one auto-tag confirm and one correction, a week-windowed walk-away, the week-ahead rendering only on its button press, progress surviving an app restart mid-routine, and the trader confirming the board character per timeframe before §5's filters count as proven.
-
-9. **Wishlist deep link into an external charting tool. — BUILT 2026-08-18 (trader-directed).**
-   **No live gate**: the trader pressing the button once on the frozen desk is the whole proof, and the frozen selftest already covers the import.
-
-10. **Trader-directed integration set. — BUILT 2026-08-21 (trader-directed).**
-   **Live gates owed:** (a) one veto committed on the desk under v3 and the pooled rollup read back; (b) one claim committed on a letter key; (c) the RS/RW half populating from a live BounceBot sweep; (d) confirmation from `bad_bars.jsonl` that the next occurrence is a malformed bar and not a well-formed aggregate row — the second case would move the fix into `bounce_bot_lib`, which is ask-first and was NOT touched here.
-
-11. **Regime-pause "holding highs" - measured and expiring. - BUILT 2026-08-21 (trader-directed).**
-   **Live gates owed:** **Live gates owed:** a session where a "holding highs" row visibly leaves the queue within 15 minutes of the name rolling over; a row that keeps making new highs visibly surviving past 15 minutes; a read of `hold_expired` rows against forward outcomes to confirm the rule is not discarding winners; and a check that the tightened detector still produces a usable number of names on a normal day rather than a handful - it now passes fewer than half the longs it used to.
-   **With-trend rows auto-join M5 Focus - BUILT 2026-08-27 (trader rule, same morning).** **Live gate owed:** one DESK session on a directional day confirming the rows land in Focus without a chart, that "Not today" from the Focus surfaces still removes them, and a count of how many charts the rule saved. **Not built, the trader's call:** eviction when a placed name stops holding, and the same treatment for the other two queue fillers measured that morning (D1 flags at 54% of charts shown, LRSI crosses at 20% - `CHANGELOG.md` 2026-08-27).
-   **Trader rule 2, same morning - BUILT 2026-08-27:** **Live gate owed:** a DESK session confirming the hidden count moves at show time, that a revealed name is badged `wrong side of VWAP`, and a before/after count of charts shown per hour against the 124-in-46-minutes baseline of 2026-08-27.
-   **Trader rule 3, same morning - BUILT 2026-08-27:** **Live gate owed:** with the other two, one DESK session. **Not built, the trader's call:** the scanner still EMITS trend-contrary D1 shorts (it has `directional_sma_stack_aligned` and does not gate on it) - a detector change with golden fixtures first; and an IB fetch path for the forming daily candle of names outside the M5 scan set, which would spend the locked pacing budget per double-click (today those previews are Yahoo rows, labelled).
-   **Trader rule 4, same morning - BUILT 2026-08-27: the M5 alert bar.** **Live gate owed:** one DESK session - the bar fills in alert order, Copy all pastes into TC2000, a click charts, clicking down the bar leaves the waiting count D1-only and unchanged. **Not built, the trader's call:** the 15-minute regime-pause expiry does not reach the bar (rows carry their time; the queue rule was "queue only"); and whether the bar should fold repeats per symbol.
-   **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision), then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`, one live gate owed.** **Group RS/RW tape - REMOVED from the desk 2026-08-27 (trader decision), then REBUILT the same day - BUILT / GREEN on `claude/group-tape-rebuild`, one live gate owed.** The rebuild was authorized as an Opus build session ("make me a prompt to get Opus to do it") and built to `docs/archive/prompts/GROUP_TAPE_REBUILD_OPUS_PROMPT.md` packets T-1..T-4; that prompt's hard rules bound the build and all ten held (zero IB, no `legacy.py` change, completed today-only bars, UNKNOWN never invented, the RS Window tab untouched, fail-before-fix per file).
-   **The rebuild - BUILT** Optional, later, and explicitly NOT built: industry = median member return over the same bars (the `industry_intraday_rs_snapshot` contract) instead of the ETF proxy - that needs member bars, which is an IB-budget question. **Live gate owed (one DESK session):** the tape moves every five minutes (not 10-30); the 06:30-07:00 read carries no overnight gap and windows that cannot answer yet are blank rather than zero; a stale or failed read says so on the callout line; a chip click still charts the ETF. **Separate finding, still parked:** the 27-minute scan cycle that day (302 symbols through IB in `rrs_scan`) - a cycle-time question, not a tape question.
-
-12. **GUI fluidity pass. - BUILT 2026-08-21 (trader-directed).**
-   **Live gates owed:** **Live gates owed:** a full session compared against the same measurement - stalls per hour, median, p90, total blocked seconds, against 1843 / 238 ms / 1.16 s / 1008 s, targeting no stall over 5 s and under ~60 s blocked; the working set after three hours (8.1 GB before the GC fix); and a console with no `QFont::setPointSizeF` lines.
-   Exit gate: each packet exits through its own spec; R1 and R2 land first per the trader's ranking, then R7 before R8. **R7's code is complete**; what remains for it is live evidence, which is why it does not close the phase on its own. A packet's live gates may overlap the next packet's build only when no shared file is in flight.
-
-13. **Today's swing picks - the trader's own vetted swing list. - BUILT 2026-08-31 (trader-directed, authorized in chat 2026-08-31).**
-   *"At the end of the day I have a list of my top swing targets. I want a place to put them in so the bot knows my personal favourite picks. They will usually become focus picks too but these ones get special standing because I picked them by hand... put it at the very bottom of the M5 alerts tab, the tab is so long and I never use all of it. And the bot should scan the journal to know which ones I actually took."* Deliberately NOT the Master AVWAP like/dislike capture, which already exists.
-   Built: `scripts/swing_favorites.py` (append-only store + session replay), `ui/services/swing_favorites_service.py` (the two writes + the journal join on a worker thread), `ui/widgets/swing_favorites_bar.py` (the strip), `project_paths.SWING_FAVORITES_FILE`. The swing Focus write-through goes FIRST and must not fail; the evidence row goes second and its failure is swallowed. No auto-adoption marker is ever written, so the pick stays the trader's and every automatic removal path stays off it. A removal appends a RETRACTION. The "took" badge is a display-only join against the TRADE journal over a bounded 10-day window, silent when the journal would need preparing to answer. Nothing reaches a detector, score, alert, watchlist ranking or `review_policy.json`; no phone push.
-   Second pass the same day (trader): the strip and the alert list share a DRAGGABLE vertical split with its own settings key (`qt_m5_column_split_sizes_v1`), no collapse, and a chip area with a floor and no ceiling; Copy/Paste carry the trader's TC2000 list both ways. The Focus like-origin is `vetted`, so these grade as their own `human_focus_swing_vetted` sub-cohort in the existing 1/3/5/10-session human-focus tracker.
-   **Live gate owed:** one desk session where the trader enters their real end-of-day swing list, the names appear in swing Focus as theirs (no marker, and "Not today"/desync repair leave them alone), the split drags and the size survives a restart, Paste takes a TC2000 list, one removal retracts without disturbing the earlier row, and a name they actually trade comes back marked "took" the next time the strip refreshes.
-   **Open product questions, not built** (each additive, each the trader's call): the strip shows the CURRENT session only, so a pick typed after the close cannot carry its "took" badge into the next session; `swing_favorites.jsonl` is not in `ai_summary`'s overnight evidence pack; and nothing joins the list to per-setup journal statistics.
-
-14. **Day-trade "passed on it" reasons in the capture window. - BUILT 2026-08-31 (trader-directed, authorized in chat 2026-08-31).**
-   *"Many times I really like this stock for a daytrade but it has this ONE issue"* and the trader passes; they asked for a tickable reason list under the existing Note area, several reasons allowed per pass, plus the free-text note, and - when the M5 data is already in memory - the bars attached so an AI can read the chart back as it was, with the explicit fallback of the timestamp alone.
-   Built: `EVENT_PASS` in `ui/annotations/store.py` with `record_pass_annotation`; a separate versioned vocabulary family (`ui/annotations/vocabularies/pass_reasons_v1.json`, `load_pass_vocabulary`); the M5 sidecar in `ui/annotations/pass_bars.py`; the "Passed - why?" block under Note in `ui/widgets/capture_rail.py` with Alt+P and digit toggles; `SymbolSnapshotWidget.cached_m5_bars` wired as the zero-fetch bar provider on all three capture hosts. A pass never retires the chart, writes no list, and reaches no detector, score, alert or `review_policy.json`.
-   **Live gate owed:** one desk session where the trader records a real pass from the Alert Center capture tab - the ticked reasons and the note land in `trader_annotations.jsonl`, the chart stays up, and a pass taken while an M5 chart is drawn carries its bars in `trader_annotation_bars/`.
-   **Both open questions are DECIDED (trader, 2026-08-31), so neither is pending work.** *"Reviewed today" stays OFF for a pass:* the trader's words - *"that flag feeds the scanner report and several badges. Making a pass count as reviewed touches scanner-side code, so it should be its own small job if you want it."* `pick_feedback._ANNOTATION_DECISIONS` therefore still lists `veto`/`like_claim`/`note` only, and a test pins that a pass does not mark a symbol reviewed. *A pass never closes the chart, and no option is needed:* *"if you pass AND want the chart gone, just hit veto after. You get both behaviors without a new rule."*
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: **R1-R8 all BUILT** (R3 and R6 CLOSED; R3 §4.3.5 trader-deferred; the weekly trader-judgement synthesis OWED, not built, gated on two weeks of graded rows). Specs: `docs/AUTO_MODES_AND_QUIET_HOURS_PLAN.md` (R1), `docs/M5_FOCUS_GATING_AND_STRENGTH_BOARD_PLAN.md` (R2), `docs/SWING_QUALITY_AND_FEEDBACK_PLAN.md` (R3), `docs/DESK_CHART_UNIFICATION_PLAN.md` (R4), `docs/M5_SIGNAL_ENGINES_PLAN.md` (R5), `docs/JOURNAL_RELIABILITY_AND_UX_PLAN.md` (R7), `docs/WEEKEND_PREP_PLAN.md` (R8). The 2026-08-27 trader rules (auto-Focus with-trend rows, the VWAP-side/show-time filter, the D1 SMA leg, the M5 alert bar, the group RS/RW tape) are items under R4 in the archived text. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ### Phase 0.6 — R9: trade-review response packet (authorized 2026-08-22)
 
-Source: `docs/archive/analysis/TRADE_REVIEW_2026-08-21.md` §8–§9, its nine questions
-answered on 2026-08-22 (Opus answer + Fable verification; working copies in the
-session scratchpad). The trader answered the three decisions that needed him on
-2026-08-22 and **authorized this packet in writing the same day** ("I authorize
-you to queue a packet for opus to implement"). That authorization covers the
-file-scoped ask-first rule for the files named below; anything outside them is
-asked about again. Build order is the list order. Nothing here touches a
-detector's or scorer's output; R9.5 is shadow-only by construction.
-
-1. **R9.1 Universe write floor + `universe_rebuild` ledger event (operational P0) — BUILT 2026-08-22, GREEN; one live gate owed.**
-   *Owed: one real rebuild on the desk that writes a `universe_rebuild` row with `refused: false` and a plausible before/after, confirming the ledger row and the snapshot directory appear on the live machine.* Built as specified: `universe_write_floor()` = `max(500, 50% of the prior universe_all.txt count)` with a missing, empty or **unreadable** prior failing OPEN (returns 0); `force=True` carves out the floor but never the zero-symbol refusal; `_record_universe_rebuild()` appends a deliberately **keyless** `universe_rebuild` row to `job_ledger.jsonl` on every write attempt (keyless so `JobLedger._replay` cannot turn evidence into a phantom QUEUED job); `_snapshot_universe_lists()` keeps the outgoing lists under a run-scoped name, bounded to the last 10.
-
-2. **R9.2 The LIKE: always ask why, and stop parking the symbol — BUILT 2026-08-22, GREEN; one live gate owed.**
-   *Owed: one desk session in which a LIKE is filed and the symbol is still seen to alert afterwards (and, on an AWAY day, still reaches the hourly D1 push).* Built as specified.
-   Measured first (2026-08-22): 40 of 52 `like_claim` rows retired the chart AND put the symbol on `alert_center_ignored_symbols.txt` for the day (34 symbols on 08-20, 6 on 08-21); a parked symbol also stops emitting `d1EventRecorded`, so on an AWAY day a LIKE silently drops the name from the hourly D1 phone push; and because the like is routed through `remove_today`, which `review_learning.REJECT_ACTIONS` classifies as a rejection, **every LIKE is currently counted as a dismissal by the review-learning loop.** Build, in `scripts/ui/widgets/capture_rail.py`, `scripts/ui/widgets/alert_chart_review.py`, `scripts/ui/panels/alert_center_panel.py` (and the symbol-snapshot host, which shares the rail): (a) **Why is required.** The claim digit / double-click selects the setup and moves focus to the why field; Enter commits; an **empty why does not commit** (same mechanic as the veto vocabulary's `note_required`). **(a) is SUPERSEDED — by P9 for the quick like, 2026-09-02, and by packet T2 for the CLAIMED like, 2026-09-04 (Phase 0.16 item 6): the why is optional on every like path and the gesture commits on its own. (b), the no-parking half, still stands.** **Parked as PLANNED, not authorized:** Q1(b), a one-click hand-off *request* from the rail to the Focus surface in the `vetoDayTradeRequested` shape.
-
-3. **R9.3 Rebuild the setup scoreboard from the right stores — BUILT 2026-08-22, GREEN; no live gate (read-only analysis).**
-
-4. **R9.4 `thetalongs.txt` — BUILT 2026-08-22, GREEN; one live gate owed.**
-   *Owed: one Master AVWAP scan on the desk in which DRAM reaches the theta report (or is honestly absent for a stated rule reason — earnings buffer, no weekly chain, support stack), labelled `via thetalongs.txt`.* `THETA_LONGS_FILE = LONGS_FILE.with_name("thetalongs.txt")` and `load_theta_long_symbols()` in `master_avwap_lib/legacy.py`; the file is optional and an absent **or unreadable** one returns `[]` with a warning, so it can cost those names but never the run.
-
-5. **R9.5 `sector_cohort_divergence` — BUILT 2026-08-22, GREEN, AT SHADOW.**
-   **Status 2026-08-22: all five items BUILT and GREEN; the deterministic half of the exit gate is met.** What remains is the "on the desk" half — four live proofs, one per item, listed in `CURRENT_CHECKPOINT.md`: a real rebuild writing a `universe_rebuild` row; a LIKE whose symbol is seen to keep alerting; DRAM reaching (or being honestly absent from) the theta report labelled `via thetalongs.txt`; and R9.5's shadow log growing over real sessions toward its declared 40.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: **R9.1-R9.5 all BUILT and GREEN 2026-08-22**; the deterministic half of the exit gate is met and the on-the-desk half (R9.1 universe rebuild row, R9.2 like-and-why, R9.4 `thetalongs.txt`) is owed. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ### Phase 0.7 — R10: Evidence Plane program (authorized 2026-08-22)
 
-Source: the trader's 2026-08-22 evidence-quality brief (Fable synthesis v2 after
-Sol's review). A **packetized** program, not blanket permission to modify the
-named subsystems. The architectural objective is an immutable, point-in-time
-**evidence plane**: capture facts once; record provenance, completeness and
-uncertainty; derive replaceable views and reports; never let evidence collection
-influence a live decision path.
-
-**Ground rules (they bind every packet).**
-
-1. No behavior change to any detector, scorer, gate, alert, watchlist, Focus
-   store or `review_policy.json`. Golden fixtures run before and after each
-   packet and must be byte-identical. A packet that cannot be built without
-   touching such logic **stops and says so in the checkpoint**.
-2. Ask-first: authorization covers evidence / provenance / presentation edits to
-   the files each packet names — including `bounce_bot_lib/legacy.py` and
-   `master_avwap_lib/legacy.py`. Any other file, or any non-evidence edit, is
-   asked about first.
-3. Every alleged defect is classified **PROVEN / REFUTED / UNKNOWN by
-   reproduction** before its fix is designed.
-4. Every new or changed store needs a writer/reader inventory (repo **and**
-   warehouse ingestion), backward-compat plan, migration/canary, rollback,
-   growth estimate, retention/segmentation, cold-push scope, health surface.
-
-5. **Never rewrite history.**
-   Evidence maintenance is **not** gated on `auto_scanning_due` — that gate stops market activity and this is after-close recovery. It IS gated on zero IB traffic, cached/yfinance only, worker thread, idle cost. 9.
-
-12. **"Realizable R" is not a term this repo uses.**
-
-1. **R10.0 Read-only evidence audit — no code changes bar one.**
-
-2. **R10.A P0 runtime and outcome integrity**
-   *Sol's three reproduction blockers CLOSED 2026-08-23* (`137a4bf` lineage): the after-close scheduler gained two clocks and **two completion stamps** so a deferred sweep is retried rather than marked done, with a dedicated early-close seam (`scripts/market_early_close.py`) that leaves `market_calendar`/`market_session` untouched; finalization became **one transaction per trade** with a write-ahead intent, a disk re-read, a strict commit that raises, and `resolve_unfinished_finalizations()` settling interrupted attempts against the CSV; and the transaction is fenced across processes with `local_writer_lock`, with the authorized single-instance guard added to `launch_gui.py` as defence in depth.
-
-3. **R10.B Outcome semantics**
-   (D5, D6, and the EAT/CAKE ask) - **BUILT 2026-08-24, GREEN; mechanics canary OWED** (one live session: LRSI registering gradeable rows, H1 stamping the bar close).
-
-4. **R10.C Robust deterministic evidence report**
-   **CANARY OWED:** a second session read after a normal after-close sweep, confirming the policy breakdown and that no eod-hold cell absorbed a row with no EOD close.
-
-5. **R10.D D1 setup tracker: point-in-time transition ledger**
-
-6. **R10.E Focus provenance**
-   (F1–F6) - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** `focus_membership_events.jsonl` (`focus_membership_event_v1`) emitted by the one Focus writer, with a `membership_episode_id` and an owner of `trader` | `machine` | `unknown_legacy`; `expire_m5_if_new_day` emits `expired` per name it clears, so a survivor is a test failure **and** a visible gap.
-
-7. **R10.F LIKE cohort grading**
-
-8. **R10.G Market context ledger, auto-shift rows, calendar**
-   (C2, season) - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** Every auto-regime shift becomes a row. `daily_market_context.jsonl` (`daily_market_context_v1`), one row per session at close+grace, completed at next launch if missed with a `completed_late` flag and **never fabricated**. `config/market_calendar.json` multi-year capable, with a visible **degraded** state when the active year is not covered.
-
-9. **R10.H Market Journal: store and two surfaces**
-   - **BUILT 2026-08-24, GREEN; mechanics canary OWED.** Frozen exe rebuilt, `--selftest` 68/68 (frozen). **Extended 2026-08-27 on trader instruction (BUILT, three live gates owed).** The page had no `reload()` caller and the desk tab held a second service, so a day with five entries rendered empty; both fixed (show-once load, one `shared_journal_service()`). *Owed:* (a) a Desk-tab note appearing on the left-nav page with no Refresh, with its charts; (b) one real auto-mode flip producing a `[desk]` row with SPY's tape; (c) one nightly `ai_summary` packet naming `journal.chart_digests` and `journal.entries`.
-
-10. **R10.I Scheduled report slot and opt-in AI scope**
-   Spec: `docs/archive/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md`. Build record: `CHANGELOG.md`.
-   **AWAY day recap and queue routing** - **BUILT 2026-08-24, GREEN offline; live mechanics canary OWED (not yet repeated).** The live AWAY day of 2026-08-25 correctly produced zero `shown` review impressions while the backing alert/evidence streams continued to fill, but the recap was empty because `MainWindow` never supplied either Alert Center backing list to `AwayRecapPanel.set_alerts`.
-
-11. **R10.V Daily-bar unit repair**
-   — **BUILT 2026-08-23, GREEN; one live scan day owed** (S1's mechanism; authorized by the trader's 2026-08-22 R10.0b decision as **option C-prime**). Runs **before** R10.D, because a point-in-time transition ledger built over a unit-mixed store would record the splice as history.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.5-0.7.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: **every R10 packet (R10.A-R10.I, R10.0b option C-prime, the AWAY day recap) BUILT and GREEN by 2026-08-27**; each owes its live mechanics canary. R10.0b's daily-bar source is a PIN (`daily_bars_source: "yahoo"`), not a defect. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ### Phase 0.8 — GUI fluidity Wave P1 (authorized 2026-08-26)
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.9 — GUI follow-ons from the 2026-08-26 live session (authorized 2026-08-26)
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.10 — AVWAP band challenger (authorized 2026-08-26)
 
@@ -616,162 +368,19 @@ of forward accrual start only when the first measured row lands.
 
 ## Phase 0.18 — Process-review packets Q1-Q5 (2026-09-04) — BUILT, live gates #60-#64 owed
 
-Trader-authorized 2026-09-04 (*"please review and implement the suggested changes"*) over
-`docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md`. Five packets, disjoint files, built
-through the agent team (`.claude/packets/Q1.md`-`Q5.md`, machine-local):
-
-| Packet | Review finding | What it changes | State |
-|---|---|---|---|
-| Q1 | 1, 2, "lately" | `held_run_score`: held is MEASURED held (held / broken / pending / unmeasured, live 979 of 8,161 unmeasured read held), a break time the log cannot place is `unmeasured`, the D1 overlap keeps the SIDE (aligned / opposed / none / unknown, basis retrospective), the window is `evidence_stats.lately_window` with gaps reported, a Measured column on the Daytrade Tracker | **BUILT** (reviewer GO after one blocker round: a `registered` row's replay `logged_at` was counted as a measured hold - 728 phantom holds); gate #60 |
-| Q2 | 3 | warehouse: `anchor_knowledge` observed / reconstructed on the daily snapshot, `path_kind` on the swing outcome row, a read-only `band-coverage` report, a rebuild of PAST `feature_snapshot_daily` with anchors (dry run by default) - the missing link in gate #59's chain | **BUILT** (reviewer GO; advisory round taken); gate #61 |
-| Q3 | 4, 5 | AI grounding: typed source kinds, a position claim needs a journal source, a numeric claim names its `metric_ref`, the morning file prints analyzed / membership-only / failed; `LikeLink.from_payload` and the audit scripts read `match_basis` | **BUILT** (reviewer GO after one blocker round: the executive summary may never assert a position - 480 of 1,478 published ones did; only `journal.trades_and_reviews` supports a position claim); gate #62 |
-| Q4 | 6, 7 | overnight runner: consecutive clean exchange sessions + a RECORDED trader spot-audit (CLI) gate enrichment; decision 0018 puts the deterministic slots before narration; `entry_index.json` is the compact frontier handoff | **BUILT** (reviewer GO after one blocker round: the gate strip's number and the index's pack path); gate #63. **Behaviour change**: `journal_enrichment` refuses until the trader runs `python -m ai_jobs.digest approve-audit --pack ... x3` |
-| Q5 | performance | the daily pick scorecard streams both CSVs on ONE owned worker, writes `picks_scored_at` only on success, keeps last-good on failure (15.7 s Qt-thread stall on 2026-09-04) | **BUILT** (reviewer GO; advisories taken); gate #64 |
-
-**Deliberately NOT in these packets (ask-first, detector file):** per-alert bar-close ->
-shown latency instrumentation per engine and the H1 SPY recompute in
-`bounce_bot_lib/legacy.py`; a first-break-time column (`stop_hit_at`) on the outcome log;
-the sweep autorun default. Each needs the trader's yes for that file.
-
-**Owed at merge**: live gates #60-#64 (one per packet, text in each packet). Gate #59's
-runbook becomes Q2.4's chain: nightly build -> daily-feature rebuild `--apply` for 2026-08
-and 2026-09 -> forced `recompute-outcomes` -> `band-coverage`.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: **Q1-Q5 BUILT and MERGED at `b0db9bbe`**, live gates #60-#64 owed. Deliberately NOT built (ask-first, `bounce_bot_lib/legacy.py`): per-alert bar-close -> shown latency instrumentation, the H1 SPY recompute, a `stop_hit_at` column, the sweep autorun default. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ## Phase 0.17 — Earnings-anchor bridge (2026-09-04) — BUILT, live gate #59 owed
 
-Trader-authorized 2026-09-04 by their own packet (the swing simulator follow-up). The D1
-scan appends every symbol's cached current and previous earnings anchor to
-`earnings_avwap_anchors.csv` through `append_anchor_candidates`, so the warehouse's
-`anchor_instance` covers the scanned universe instead of 7 symbols. Shadow-only
-additive; `anchors_from_bronze` and `build_anchor_instances` untouched.
-
-**Owed**: gate #59 (next scan writes the rows; next nightly build creates ~2,200
-`anchor_instance` rows and non-null `feature_snapshot_daily` bands; then a forced
-`recompute-outcomes` re-grades `swing_house_v1`). **Not built, separate decision**: the
-investigation's recommendation 4 (the simulator returning `None` instead of a no-target
-run when bands are missing) - that changes outcome semantics and needs its own packet.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: **BUILT**; gate #59 MET 2026-09-05 (3,678 anchors bridged). NOT built, separate decision: the simulator returning `None` instead of a no-target run when bands are missing (changes outcome semantics). Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ## Phase 0.16 — Capture and board rules (packets T1 + T2, 2026-09-04) — BUILT, live gate #58 owed
 
-Trader-authorized 2026-09-04 in their own words (quoted in full in
-`docs/DESK_INTERNALS.md`, "T1 - the capture window is the why, and a look is not a
-queue"). Tester-first: 48 tests committed red on `claude/t1-capture-and-board`
-before any fix existed. **Note the name collision:** the sigma-band research
-letters T1/T3/T4 above are a DIFFERENT thing; this is the capture-and-board packet.
-
-1. **A rail veto retires with no box and one row.** `vetoRetireRequested` →
-   `_retire_after_veto`; `removeTodayRequested` is the "✕ Not today" BUTTON's
-   signal alone and that button is unchanged. Both verbs share one body
-   (`_retire_review_alert(..., write_not_today_annotation=)`). **Lead ruling
-   2026-09-04:** the day-trade veto retires through the box-free verb too, after
-   its Focus placement, in that order.
-2. **A like never advances.** `likeRecorded` → `_after_like`. The review event
-   keeps the name `like_advance` - `review_learning.TAKE_ACTIONS` keys on the
-   string. **AMENDED by packet T2 (item 6) the same day: this holds for the QUICK
-   like only.**
-3. **A board look holds no place and is never skip-counted.**
-   `_is_manual_chart_look` on `MANUAL_CHART_TAG`; the M5-bar `skip` with
-   `clicked_away_from_m5_alert` and the dequeued-D1 return-to-head rule are both
-   untouched.
-4. **The TC2000 board's parity rows auto-join M5 Focus.** DESK only, empty
-   `failed_floors` only, the one adoption gate re-run on the row's own numbers,
-   `_ignored_symbols` skipped, through the STORE (one `add_many` per side) +
-   `mark_auto_adopted` and never `FocusService.add`, never removes, idempotent,
-   one `strength_board_auto_focus` review event per refresh.
-5. **Fix round 1 (reviewer NO-GO, blocker):** the auto-join also skips any name
-   the trader took OFF a focus side today through ANY door.
-   `FocusPickStore.declined_today`, recorded by the STORE on `remove`,
-   `remove_everywhere`, `clear` and the fade under an additive `declined` key in
-   `focus_auto_picks.json`, same-session only and pruned on load.
-   `_ignored_symbols` alone let four other removal doors be undone by the next
-   fifteen-minute refresh, re-injecting the name into `longs.txt` with it.
-
-6. **Packet T2 - a claimed like is one double-click, and it advances** (trader,
-   second pass: *"for the 'like and claim' part of the capture tab, a double click
-   of any of the setups there should be sufficient. I shouldnt have to type
-   anything below that box. and then double clicking that box should advance the
-   chart."*). `commit_like` no longer refuses an empty why (`_prompt_for_why`
-   deleted, placeholder "why (optional)", whitespace stripped to nothing);
-   `_on_captured` splits on `like_mode_of` and fires the new
-   `likeAdvanceRequested` for a claimed like, `likeRecorded` for a quick one; the
-   panel's `_advance_after_like` records and calls `_advance_review_queue`. Both
-   handlers record `like_advance` through one helper (`_record_like_advance`). An
-   advance is NOT a retirement: no park, no Focus drop, no sweep, no placement.
-   This supersedes R9.2(a)'s required why for the claimed path.
-
-**Live gate (#58):** one DESK session where a double-click on a veto reason
-retires the chart with no box and `trader_annotations.jsonl` gains ONE row;
-**a double-click on a claim with nothing typed advances to the next chart and
-leaves ONE row; a quick like leaves the chart up** and the trader arms an alert on
-it before moving on;
-"✕ Not today" still opens the box and advances; five clicks across the RS/RW and
-TC2000 boards leave "queue clear" reading "queue clear"; and after the next
-15-minute Strength refresh the TC2000 parity names are on M5 Focus with markers in
-`focus_auto_picks.json`, and a "Not today" on one of them does not come back on
-the refresh after that. **Fix round 1 adds one clause:** remove one of the
-adopted names from the Focus list itself (not through "Not today") and confirm it
-is still gone after the next refresh, and that `longs.txt` did not regain it.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: **T1 + T2 BUILT**, live gate #58 owed (its clauses are in the gate row). Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ## Phase 0.15 — Desk assessment packets (2026-09-03 evening, trader-authorized)
 
-The evening assessment of 2026-09-03 (artifact "Where the Desk's Time Goes";
-record in `CURRENT_CHECKPOINT.md` and `docs/DESK_INTERNALS.md`) measured the desk
-after F1 and found the research tee thread at 101% of one core, the M5 scan cycle
-preamble at 513-535 s against a 300 s candle, and 24 live gates owed on built work.
-The trader authorized every packet in it. Status per packet:
-
-1. **S1 - the tee (BUILT 2026-09-03 evening, BD-96).** Dedupe before work,
-   persisted high-water mark, seal-side dedupe, `dedupe` CLI. Live gate #55: one
-   post-restart session where `thread_cpu.jsonl` shows `warehouse-m5-tee` under
-   5% of a core after the close and the day's spool holds one session of rows.
-2. **The duplicated lake (REPAIRED 2026-09-03 22:29-22:42 PT with the trader's
-   permission - 10,530,916 bar_m5 rows dropped, 25 + 4 derived/feature sessions
-   recomputed, BD-97; outcomes for those months still owed).** Original text: Gate #56, the
-   trader's commands in BD-97's runbook: `dedupe --dataset bar_m5 --apply`, then
-   `rebuild-month --month 2026-08 --apply` and `--month 2026-09 --apply`
-   (`retire_partition` + recompute of `bar_derived` and `feature_snapshot_intraday`,
-   BD-97). Outcomes: `recompute-outcomes` (BD-98, `force` re-simulates terminal
-   rows, one lock per bucket) RAN 2026-09-04 07:00-07:53 PT: 32/32 buckets,
-   134,502 outcome rows superseded, 3,803 unchanged, no errors. Gate #56 MET in full.
-3. **S3 - the thread gauge (BUILT 2026-09-03 evening).** Always on; verified by
-   gate #55's read of `thread_cpu.jsonl`.
-4. **S2 - the M5 cycle (INSTRUMENTED 2026-09-03 night; trim still measure-first).**
-   The preamble line now names each RRS run and each engine sweep (`rrs_scan_5m`
-   ... `engine_h1_color`); no detection change. After S1 reaches the desk, read
-   one RTH morning of "Scan cycle N preamble" lines, then trim what the line names
-   and decide on a detector process. Further edits to `bounce_bot_lib/legacy.py`
-   remain ask-first.
-5. **S4 - scan cadence (BUILT 2026-09-03 night).** DESK days run four scans
-   (open+60, 13:00 ET, the 15:45 ET preview, the close slot that writes the
-   tracker); AWAY/EVENING keep the hourly ladder for the phone digest;
-   `desk_scan_cadence: "hourly"` restores the ladder. Live check: one DESK day
-   whose run manifests show four `master_scan` runs.
-6. **E1 - validation week (TRADER DECISION).** No new packets until gates #53,
-   #54, #51, #52, #39 and #41 are closed with the trader watching.
-7. **E2 - bar source (RESOLVED 2026-09-03 evening: it is a PIN, not a defect).**
-   The desk's `local_settings.json` carries `daily_bars_source: "yahoo"`, the
-   R10.0b §1.3 interim pin (`master_avwap_lib.daily_bars_source_pin`), so every
-   D1 scan's daily bars come from Yahoo by configuration; IB serves intraday bars
-   and the champion's M5 loop. `CLAUDE.md`'s market-data line now says so.
-8. **F1 - the control documents (NEXT COMMIT).** Archive `CURRENT_CHECKPOINT.md`
-   and `CHANGELOG.md` past their 1,500-line rule, move BUILT phases out of this
-   section's work queue, cut `CLAUDE.md` to rule + pointer where
-   `docs/DESK_INTERNALS.md` holds the story.
-9. **F2 - dead weight (BUILT 2026-09-03 night, two items handed back).** The Tk
-   GUI, its shims, the Tk journal/market-prep tabs, `TickerMover.py` and `PyQt5`
-   are removed (19 files). `evidence_snapshots/` already had retention (7/4/12,
-   `snapshot_to_das.ps1`) - the assessment was wrong there. The 498 MB `.corrupt`
-   copy was deleted 2026-09-03 22:30 PT with the trader's permission.
-   `technical_integrity_events.jsonl` rotation: DECLINED 2026-08-17 (R6(b)) until
-   the warehouse's verified ingest of it passes; `bronze_technical_integrity_events`
-   now runs nightly, so the trigger has fired and the segment scheme is OWED as its
-   own packet. The six ATR implementations stay: two are in fenced formula files.
-10. **F3 - the operational storage tier (STEP 1 BUILT 2026-09-04, decision 0017).**
-    `scripts/tracker_store.py` mirrors every tracker save into a SQLite record
-    store beside the JSON (shadow, default ON, never costs the save); no reader
-    moves until gate #57 (five parity-clean live saves). Step 2 moves readers one
-    at a time, narrowest first, each fail-before-fix; the CSV stores follow as
-    their own packets after the tracker's step 2 is live.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: S1, S3, S4, F1, F2, F3 step 1 BUILT; S2 INSTRUMENTED (trim still measure-first, `legacy.py` ask-first); the lake REPAIRED and gate #56 MET; E2 resolved as a pin. **Still owed**: gate #55 (tee) and #57 (tracker parity, then 0017 step 2 moves readers one at a time); S1.3 (ONE Strength surface) needs a fresh packet; the `technical_integrity_events.jsonl` segment scheme is owed as its own packet; E1 is the trader's validation-week decision. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
 ## Phase 0.14 — Names first (decision 0016)
 
@@ -813,198 +422,75 @@ SHOWN beats the one that improves WHEN TO ENTER.**
 
 ### Phase 0.14 packet V2 — The loop closes (2026-09-02) — items 1, 4 and 5 BUILT; 2 and 3 NOT BUILT
 
-Authorized by the trader pasting the packet. Requires V1, which was merged first.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-05 (repo cleanup), unabridged. Status at the move: the Phase 0.14 table above is the current state; V1 and V2 build records are in the archive. **V4 (Working-lately + priority switch, AWAY Recap, the Weekend Prep takes table and collapsed notes, the Setup Types tab) is NOT BUILT.** Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the move closed nothing.
 
-**Item 1 — nightly auto-tagging. BUILT.** `journal_auto_tag` runs P6a's plan every
-night at the recorded 0.70 threshold, right after `journal_import` and before
-every other slot. That position is an INSERT and the second and last sanctioned
-exception to "later phases append; they never reorder" — the import puts the
-night's trades in, and every cohort slot below reads them. It never touches a
-confirmed row (the refusal lives in the STORE) and a failed write is reported
-LOUDLY, because the journal is the one store on this desk that may not fail
-quietly. The Journal nav button carries the review count, computed off-thread and
-started from `showEvent`.
+### Phase 0.14 packet V1 — Names first (2026-09-02) — BUILT; V4 owed
 
-**Item 4 — the Market Journal capture is one box and one Enter. BUILT.** The
-timeframe picker and the Save button leave the SURFACE; nothing leaves the
-SCHEMA. Plain Enter saves through an event filter (a `QShortcut` on Return would
-fire for the whole panel); Ctrl+Enter still works. The entry is dated to the
-SESSION IT IS ABOUT — today while today trades, the last session that traded on a
-weekend or holiday — and `written_after_the_session` is still COMPUTED.
-
-**Item 5 — hide the dead surfaces, keep the code. BUILT.** One setting,
-`qt_show_unused_tabs`, default OFF, hiding the Alerts / D1 Focus / Armed tabs and
-the Universe page. **Hidden is not removed**: `setTabVisible`, no index shifts,
-every timer still visibility-gated, and a test proving every rail shortcut is
-panel-scoped, bound once, and not owned inside a hidden tab.
-
-**Item 2 - Weekend Prep. (a), (b), (c) and (e) BUILT; the rest of (c) owed.**
-
-* **(a) ONE Refresh** drives every step. The click starts each page's own reader
-  and returns - measured under 50 ms - and names the steps as they start. The five
-  per-page buttons left the layout and stay as objects, because `reload()` uses
-  each one as its own single-flight guard.
-* **(b) The verdict card**, five to eight lines from a PURE builder
-  (`scripts/weekend_verdict.py`): take rate, blind spots and leaks BY NAME, the
-  best liked claim and weakest veto reason at h3, the week's net and win rate
-  (**confirmed tags only**), and the tag-review count. Every measured line carries
-  its n; a cohort under n=5 is named as thin and never ranked; a missing input
-  says so instead of printing a zero.
-* **(c) The RS/RW prose is retired** - it duplicated a live board with a Saturday
-  snapshot. The log SCANS are kept, uncalled, and say so in capitals in their own
-  docstrings so nobody "fixes" a blank page by wiring the wall of text back.
-* **(e) "Tag this week"**, a sixth step: the week's provisional and needs_review
-  trades, confirm-all-shown and confirm-selected through the store's own API, ten
-  visible rows, read on a worker, and a failed write reported LOUDLY.
-
-**Still owed by item 2:** the takes/watch-conversion table (the summary is still
-text), the ten-visible-rows pass over the OTHER tables, and the collapsed
-"how to read this" notes.
-
-**Item 3 - the AWAY Recap. NOT BUILT.** It is still the forward-looking digest
-assembly - best-swing block, classified D1 alerts, staged picks, Focus lists -
-with no outcomes, no charts, no "what moved", no "alerts that were right", no
-"your names" and no "Review these" walk-through. All four of the packet's blocks
-and the chart-on-click door remain.
-
-**Live gate (#46):** one nightly run that tags new trades, and the Journal nav
-button showing the count the next morning.
-
-**Live gate (#47):** one Market Journal entry written from the desk tab in one
-Enter, filed against the right session.
-
-**Live gate (#48):** a desk session with the four surfaces hidden and every rail
-hotkey still firing.
-
-### Phase 0.14 packet V1 — Names first (2026-09-02) — original build record; R4 advanced items 2 and 3
-
-Authorized by the trader pasting the packet.
-
-**Current state:** R4 wired the tracker and alert suffix and implemented
-cross-bucket phone ranking. Only the Working-lately surface/priority switch below
-remains V4 work. The original formula/fetch descriptions below are historical;
-the current Phase 0.14 table above includes the session-relative RVOL correction.
-The [2026-09-04 process review](docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)
-recommends measured-held, side/time-aware overlap and evidence-quality checks
-before ranking influence. These are review findings, not newly authorized work;
-existing live and promotion gates remain owed.
-
-**Item 1 — the Strength Board becomes the trader's TC2000 scan. BUILT.**
-
-1. **Relative volume**, `AVG(V / mean(V78 ... V1170), 12)`, POSITIONAL exactly as
-   TC2000 is. Blank, never zero, under sixteen sessions of history.
-2. **The fetch period grew from `5d` to `1mo`** and had to: the RVOL needs 1,182
-   bars and `5d` holds about 390, so every RVOL would have been blank.
-3. **The floors** — price over $5, above the D1 200 and 100 SMA, above the M5
-   15 EMA — each a NAMED boolean with the sentence that failed. The timeframes
-   are a stated ASSUMPTION (decision 0016 records both as open); one line
-   corrects either.
-4. **The universe** is `universe_all.txt` plus the four watchlists. The D1 SMAs
-   come from a second batched daily download; still **zero IB traffic**.
-5. **A row that misses a filter is GREYED, not dropped**, with what it missed in
-   its tooltip, behind a default-on "TC2000 parity" toggle that hides them.
-6. **One window, two sections, RS/RW first** — the RS/RW board moved out of the
-   tab stack into the strength column, in a scroll area, because hosted bare its
-   minimum took the column's floor from 190 px to 452.
-7. **Golden `tc2000_parity_v1`**: five symbols, sixteen sessions, expected values
-   computed by a SECOND naive implementation written from the trader's formula
-   lines rather than from the module under test. All five agree to four decimals.
-
-**The fence on `strength_scan.py` is NARROWED, not lifted.** It was frozen whole
-by the R8 spec ("stop and ask the trader first"); the trader asked, naming the
-file. The test now asserts the seven FORMULA functions are byte-identical to the
-R8 baseline — stronger than "no edits", which could be satisfied by not touching
-the file while the numbers moved underneath it.
-
-**Item 2 — `held_run_score`. BUILT; tracker and suffix wired by R4; switch owed.**
-
-`scripts/held_run_score.py` computes P(level held in the first 30 min) x
-trimmed-mean MFE_R of the held ones, per (bounce_type, time_bucket,
-market_environment, d1_setup_present), over a rolling 20 sessions with
-`evidence_stats` floors. Shadow only: the champion tier, the mutes and the PROVEN
-stamp are untouched, and a test asserts the champion never imports it.
-
-The Daytrade Tracker column/sort and M5 alert-bar suffix are built. The Alert
-Center ordering switch remains V4 work.
-
-**Item 3 BUILT; item 4 NOT BUILT.**
-
-3. R4 made the phone digest rank across favorite and near buckets, using family
-   Wilson bounds at one declared horizon with expected R as tiebreak.
-4. There is no "Working lately" section on the Trading Desk and no priority
-   switch. `review_learning`'s callouts, the tracker's per-family outcomes and the
-   four verdict cohorts all still require leaving the desk to read.
-
-**Live gate (#44):** one DESK session where the Strength section matches the
-trader's TC2000 list on the same minute for the top ten names, with the parity
-toggle on.
-
-**Live gate (#45):** the RS/RW section opens above the Strength section in the
-alert column and neither widens the column.
+Build record in the same archive file, unabridged.
 
 ### Phase 0.13 packet P3 — The fact pack tells the truth (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P7 — One name per setup (2026-09-01) — BUILT, no live gate
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, no live gate**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, no live gate**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 — Trader decisions of 2026-09-01 (packet P0) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P1 — Grade what you already said (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P2 — Show me (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P4 — The variables you are not looking at (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P5 — Pass and not-today get graded (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P6 — Preference to trade (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P6a — Tag the backlog (2026-09-01) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P8 / Phase 6.1 addendum — First setup-parameter grid (2026-09-02) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P9 — Quick like (2026-09-02) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 packet P10 — What happens after I like it (2026-09-02) — BUILT, live gates owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gates owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gates owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 review round R2 (2026-09-02) — TWO GUARDS, BUILT
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.13 review round R1 (2026-09-02) — BLOCKERS FIXED, ALL PACKETS MERGED
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.11 — Theta premium optimization (authorized 2026-08-31) — BUILT, live gate owed
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 0.12 — Focus de-clutter + higher-timeframe LRSI research (authorized 2026-09-01)
 
-Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.13.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
 ### Phase 1 — NEXT: remove known uncertainty from the development baseline
 
