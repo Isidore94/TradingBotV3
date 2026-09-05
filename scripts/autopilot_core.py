@@ -781,10 +781,9 @@ def read_scorecard_inputs(
     raised, so the caller can retry rather than publish "nothing alerted".
     """
     import csv
-    from pathlib import Path as _Path
 
     def _stream(path):
-        target = _Path(path)
+        target = Path(path)
         try:
             handle = target.open("r", encoding="utf-8", newline="")
         except FileNotFoundError:

@@ -213,6 +213,7 @@ class AutopilotService(QObject):
         #: Packet Q5: the daily pick scorecard has ONE owned worker. The tick
         #: only decides; the 600 MB of CSV is read on `autopilot-scorecard`.
         self._scorecard_running = False
+        self._scorecard_guard = threading.Lock()
         self._evening_prep_running = False
         self._evening_briefing_lines: list[str] = []
         self._scorecard_line = ""
@@ -1514,15 +1515,25 @@ class AutopilotService(QObject):
         """
         if not self._scorecard_due(now):
             return
-        if getattr(self, "_scorecard_running", False):
+        if not self._claim_scorecard():
             return
-        self._scorecard_running = True
         threading.Thread(
             target=self._scorecard_worker,
             args=(now,),
             name="autopilot-scorecard",
             daemon=True,
         ).start()
+
+    def _claim_scorecard(self) -> bool:
+        """Check-and-set under a lock: the tick and the wrap-up worker both reach it."""
+        guard = getattr(self, "_scorecard_guard", None)
+        if guard is None:
+            guard = self._scorecard_guard = threading.Lock()
+        with guard:
+            if getattr(self, "_scorecard_running", False):
+                return False
+            self._scorecard_running = True
+            return True
 
     def _scorecard_worker(self, now: datetime) -> None:
         try:
@@ -1532,9 +1543,8 @@ class AutopilotService(QObject):
 
     def _score_picks_inline(self, now: datetime) -> None:
         """The wrap-up worker's door: already off-thread, same guard, no nesting."""
-        if not self._scorecard_due(now) or getattr(self, "_scorecard_running", False):
+        if not self._scorecard_due(now) or not self._claim_scorecard():
             return
-        self._scorecard_running = True
         try:
             self._score_picks_now(now)
         finally:

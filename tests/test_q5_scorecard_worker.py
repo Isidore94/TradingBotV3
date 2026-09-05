@@ -77,6 +77,12 @@ def stores(tmp_path, monkeypatch):
         _outcome(TODAY, "AAA_long_20260904_09_35_00_ema_15", close_r="0.5", mfe_r="1.5"),
         _outcome(TODAY, "AAA_long_20260904_09_35_00_ema_15", close_r="0.7", mfe_r="1.9"),
         _outcome(TODAY, "BBB_long_20260904_09_40_00_ema_15"),
+        # Today's event_id on ANOTHER trade_date: the one row kind the date
+        # filter drops and the event_id-only join kept (reviewer advisory 2).
+        # The live producer writes the event's own date on every row, so this
+        # never occurs in the live file; the fixture carries it so the test can
+        # see the two readers differ where they do.
+        _outcome("2026-09-03", "BBB_long_20260904_09_40_00_ema_15", close_r="9.0"),
     ])
     monkeypatch.setattr(module, "AUTOPILOT_PICKS_FILE", picks)
     monkeypatch.setattr(module, "INTRADAY_BOUNCE_CANDIDATES_FILE", candidates)
@@ -112,7 +118,10 @@ def _old_way_lines(stores) -> list[str]:
         candidates = [row for row in csv.DictReader(handle) if row.get("trade_date") == TODAY]
     ids = {row["event_id"] for row in candidates}
     with stores["outcomes"].open("r", newline="", encoding="utf-8") as handle:
-        outcomes = [row for row in csv.DictReader(handle) if row.get("event_id") in ids]
+        outcomes = [
+            row for row in csv.DictReader(handle)
+            if row.get("event_id") in ids and row.get("trade_date") == TODAY
+        ]
     lines = []
     for group, group_picks in sorted(core.group_picks_by_source(picks).items()):
         scorecard = core.score_autopilot_picks(group_picks, candidates, outcomes)
@@ -243,11 +252,12 @@ def test_the_wrapup_path_runs_the_body_inline_and_never_nests_a_thread(stores, m
         return real_body(self, now)
 
     monkeypatch.setattr(AutopilotService, "_score_picks_now", _spy)
+    original = threading.current_thread().name
     threading.current_thread().name = "autopilot-wrapup-test"
     try:
         service._score_picks_inline(NOW)
     finally:
-        threading.current_thread().name = "MainThread"
+        threading.current_thread().name = original
 
     assert seen == ["autopilot-wrapup-test"]
     assert service._state.get("picks_scored_at")
@@ -264,7 +274,7 @@ def test_the_streamed_reader_keeps_only_todays_rows_and_matches_the_old_answer(s
     )
     assert {row["trade_date"] for row in candidates} == {TODAY}
     assert len(candidates) == 2
-    assert len(outcomes) == 3
+    assert len(outcomes) == 3, "the other-day row with today's event_id is dropped"
     assert all(row["trade_date"] == TODAY for row in outcomes)
 
     service = _service()
