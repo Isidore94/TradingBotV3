@@ -393,7 +393,7 @@ def build_episodes(
     """
     from setup_scoreboard import bounce_type_from_event_id
 
-    setups = d1_setups_by_session if d1_setups_by_session is not None else {}
+    setups = d1_setups_by_session  # None = no snapshot = UNKNOWN everywhere
     as_of_text = _as_of_text(as_of)
     episodes: dict[str, Episode] = {}
     for row in rows:
@@ -438,7 +438,14 @@ def build_episodes(
             else:
                 episode._stop_after_window = True
         else:
-            minutes = _elapsed_minutes(episode, row)
+            # Rule 2 needs a row that MEASURED bars. A `registered` row saw
+            # none (`bars_elapsed=0`, blank `minutes_elapsed`) and its
+            # `logged_at` is a replay/backfill write time - on the live log a
+            # median 1,013 minutes after the entry - so reading that gap as
+            # "the window passed with the stop intact" called 728 unmeasured
+            # episodes held (Q1 review, 2026-09-04). Rule 1 keeps its
+            # fallback: a stop we cannot place is still a stop.
+            minutes = _measured_minutes(episode, row, kind)
             if minutes is not None and minutes >= HELD_WINDOW_MINUTES:
                 episode._held_past_window = True
     for episode in episodes.values():
@@ -482,6 +489,24 @@ def _elapsed_minutes(episode: Episode, row: Mapping[str, Any]) -> float | None:
     if entry is None or stamp is None:
         return None
     return (stamp - entry) / timedelta(minutes=1)
+
+
+def _measured_minutes(episode: Episode, row: Mapping[str, Any], kind: str) -> float | None:
+    """Minutes of BARS this row measured, or None for a row that measured none.
+
+    `minutes_elapsed` when present. Without it, the `logged_at` gap counts only
+    for a non-`registered` row that reports `bars_elapsed > 0`; a registration
+    or a bar-less row is not a measurement of anything.
+    """
+    if kind == "registered":
+        return None
+    minutes = _as_float(row.get("minutes_elapsed"))
+    if minutes is not None:
+        return minutes
+    bars = _as_float(row.get("bars_elapsed"))
+    if bars is None or bars <= 0:
+        return None
+    return _elapsed_minutes(episode, row)
 
 
 def _within_hold_window(episode: Episode, row: Mapping[str, Any]) -> bool:
@@ -712,7 +737,7 @@ def d1_alignment(
 
 def d1_setups_by_session(
     rows: Iterable[Mapping[str, Any]] | None,
-) -> dict[str, dict[str, set]]:
+) -> dict[str, dict[str, set]] | None:
     """`{session: {SYMBOL: {"LONG", "SHORT"}}}` from the scanner's own tracker output.
 
     The caller supplies the rows; this only shapes them. Decision 0016 answer 4
@@ -721,9 +746,11 @@ def d1_setups_by_session(
     whether the name also had a swing setup that day has to travel with the
     episode, and it is read from files the scan already wrote rather than fetched.
     """
+    if rows is None:
+        return None  # no snapshot: UNKNOWN everywhere, never "no setup"
     wanted = {"favorite_setup", "near_favorite_zone"}
     by_session: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
-    for row in rows or ():
+    for row in rows:
         bucket = str(row.get("bucket") or row.get("priority_bucket") or "").strip()
         if bucket not in wanted:
             continue

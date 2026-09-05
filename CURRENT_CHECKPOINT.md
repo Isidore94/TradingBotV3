@@ -108,7 +108,7 @@ that never reached 30 minutes is not held; the D1 map is `{session: {SYMBOL: {si
 the alignment string; the window is `evidence_stats.lately_window` (`as_of` keyword
 everywhere, default today). Surfaces: the Daytrade Tracker's Measured column and the
 window sentence on its status line; the M5 alert suffix passes `d1_alignment`. Targeted
-files green (131), ruff clean. **Live gate #60** owed. Owed, ask-first: `stop_hit_at` and
+files green, ruff clean. **Reviewer NO-GO round 1, fixed**: rule 2 read a `registered` row's replay `logged_at` (median 1,013 min after entry, 8,931 such rows in the window) as "the window passed", calling 728 unmeasured episodes held; now a hold needs a row that MEASURED bars (`_measured_minutes`: `minutes_elapsed`, or `bars_elapsed > 0` before the `logged_at` gap counts; a `registered` row never). Live after the fix: 5,222 held / 1,960 broken / 979 unmeasured (recon's split, exactly); D1 aligned 2,638 / opposed 8 / none 4,976 / unknown 539. **Live gate #60** owed. Owed, ask-first: `stop_hit_at` and
 the sweep autorun default in `legacy.py`.
 
 ### 2026-09-04 (~14:30 PT) - Earnings-anchor bridge: the scan feeds the anchors CSV the warehouse reads

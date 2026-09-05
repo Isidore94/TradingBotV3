@@ -116,7 +116,7 @@ def test_a_missing_snapshot_is_none_and_never_an_error(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")
     assert held_run_score.d1_setup_rows(bad) is None
-    assert held_run_score.d1_setups_by_session(None) == {}
+    assert held_run_score.d1_setups_by_session(None) is None
 
 
 def test_the_build_path_reads_the_snapshot_and_not_the_gigabyte_tracker(tmp_path):

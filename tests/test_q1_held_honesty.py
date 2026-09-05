@@ -112,6 +112,41 @@ def test_a_late_stop_with_no_bracketing_row_is_break_time_unknown():
     assert episode.broke_early is False, "not broken either - unknown is unknown"
 
 
+def test_a_registered_row_with_a_distant_logged_at_is_not_a_measured_hold():
+    """Q1 review blocker 1: the live log's `registered` rows carry no
+    `minutes_elapsed`, `bars_elapsed=0` and a replay `logged_at` a median 1,013
+    minutes after the entry. Reading that gap as "the window passed" called
+    728 unmeasured episodes held. The row shape is the reviewer's live sample."""
+    import held_run_score as hrs
+
+    event = _event("A")
+    registered = _row(event, kind="registered", minutes="", mfe="")
+    registered["logged_at"] = "2026-09-01T12:48:00"  # 168 min after the 10:00 entry
+    registered["bars_elapsed"] = "0"
+    final = _row(event, kind="final", minutes="25")
+    final["bars_elapsed"] = "5"
+    episode = hrs.build_episodes([registered, final], as_of="2026-09-03")[0]
+
+    assert episode.held is False
+    assert episode.measurement == hrs.UNMEASURED
+    assert episode.measurement_reason == hrs.REASON_WINDOW_NOT_REACHED
+
+
+def test_a_bar_less_update_with_a_distant_logged_at_measures_nothing_either():
+    import held_run_score as hrs
+
+    event = _event("A")
+    row = _row(event, minutes="", mfe="")
+    row["logged_at"] = "2026-09-01T15:00:00"
+    row["bars_elapsed"] = "0"
+    episode = hrs.build_episodes([row], as_of="2026-09-03")[0]
+    assert episode.measurement == hrs.UNMEASURED
+
+    with_bars = dict(row, bars_elapsed="7")
+    episode = hrs.build_episodes([with_bars], as_of="2026-09-03")[0]
+    assert episode.measurement == hrs.MEASURED_HELD, "bars measured, logged_at may place them"
+
+
 def test_the_cell_counts_every_state_and_rates_the_measured_ones_only():
     import held_run_score as hrs
 
@@ -267,6 +302,7 @@ def test_a_missing_snapshot_reads_unknown_not_false(tmp_path):
 
     assert hrs.d1_setup_rows(tmp_path / "nope.json") is None
     setups = hrs.d1_setups_by_session(hrs.d1_setup_rows(tmp_path / "nope.json"))
+    assert setups is None, "None travels through; it is not flattened to {}"
     episode = hrs.build_episodes([_row(_event("A"))], d1_setups_by_session=setups, as_of=AS_OF)[0]
 
     assert episode.d1_alignment == hrs.D1_UNKNOWN
