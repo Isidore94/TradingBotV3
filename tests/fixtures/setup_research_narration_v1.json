@@ -1,0 +1,803 @@
+{
+ "_provenance": {
+  "built_by_commit": "7f2273d3",
+  "eligible_policy_cells_in_that_pack": 619,
+  "encoded_narration_view_chars_on_that_pack": 658292,
+  "local_evidence_budget_chars_on_this_desk": 78119,
+  "note": "Pinned by hand from the pack the OLD (pre-N3) nightly wrote, so it is evidence and not a self-portrait. Only the pack HEAD, six eligible cells and the after-like block's head plus one cell are kept; the tests synthesize the remaining cells in this exact shape.",
+  "source": "//MINI-PC/Trading Bot Data/ai_store/retros/setup_research/2026/2026-09-04.json",
+  "written": "2026-09-05 03:51 by the nightly setup_research slot"
+ },
+ "after_like_cell": {
+  "day_offset": 0,
+  "eligible": false,
+  "entry": "first_m5_close",
+  "evidence_label": "discovery",
+  "meets_n_floor": false,
+  "n": 33,
+  "n_episodes": 33,
+  "stop_rate": 0.2121,
+  "trimmed_mean_r": 1.1073,
+  "win_rate": 0.7083
+ },
+ "after_like_head": {
+  "episodes": 33,
+  "family_split": "NOT AVAILABLE from these rows. `outcome_path` has no column for the linked occurrence, so a family split needs a join against the bronze `like_occurrence_link` dataset.",
+  "not_a_control_signal": "Diagnostic rows only. Nothing here reaches a detector, score, alert, watchlist, Focus list, review queue or review_policy.json.",
+  "question": "For a D1 name the trader LIKED, which day after the like and which entry rule gives the best net R?",
+  "read_before_the_window_closes": "No cell here may be read for a verdict before the registered window closes - see the `after_like_entry_grid_v1` trial ledger row. A cell that looks good early is the reason the window was fixed at registration.",
+  "schema": "after_like_v1"
+ },
+ "eligible_cells": [
+  {
+   "family": "AVWAPE_TO_FIRST_DEV",
+   "recipe_id": "m5close_atr0.5_1r_v1",
+   "side": "LONG",
+   "stats": {
+    "bootstrap": {
+     "high": -1.5047,
+     "interval": "5-95 percentile of a session-block bootstrap on the mean",
+     "low": -1.945,
+     "measured": true,
+     "resamples": 400,
+     "sessions": 16
+    },
+    "clip": 4.0,
+    "clipped": {
+     "mean": -1.4994,
+     "median": -1.5566,
+     "p10": -3.6204,
+     "p90": 0.4679,
+     "trimmed_mean": -1.4577
+    },
+    "concentration": {
+     "by_session": {
+      "distinct": 16,
+      "measured": true,
+      "top": "2026-08-26",
+      "top_share": 0.132
+     },
+     "by_symbol": {
+      "distinct": 621,
+      "measured": true,
+      "top": "ZS",
+      "top_share": 0.0016
+     }
+    },
+    "confirmation_window": "",
+    "counts": {
+     "events": 621,
+     "sessions": 16,
+     "symbols": 621
+    },
+    "eligibility_rule": "n >= 30 OUTCOME ROWS, at least 5 symbols, and at least 5 entry sessions; still discovery, never confirmation. `n_episodes` is reported beside `n` and does NOT yet gate: rows on one episode are correlated diagnostics, so n_episodes is the honest sample size and moving the floor onto it is a separate, scoped change (BD-81).",
+    "eligible": true,
+    "evidence_label": "discovery",
+    "excluded_by_reason": {},
+    "excluded_total": 0,
+    "meets_n_floor": true,
+    "n": 621,
+    "n_episodes": 621,
+    "n_floor": 30,
+    "n_floor_note": "n >= 30 is NECESSARY, not sufficient: it clears the floor and says nothing about concentration, session coverage, or whether the window was declared in advance",
+    "profit_factor": {
+     "all_losses": false,
+     "all_wins": false,
+     "convention": "profit factor = sum(gains) / abs(sum(losses)). With no losing rows the denominator is zero and PF is reported as null with all_wins=true, never as a large finite number; with no winning rows it is 0.0 with all_losses=true.",
+     "value": 0.0546
+    },
+    "raw": {
+     "mean": -1.7102,
+     "median": -1.5566,
+     "p10": -3.6204,
+     "p90": 0.4679,
+     "trimmed_mean": -1.4577
+    },
+    "schema": "evidence_summary_v1",
+    "stop_rate": 0.6876,
+    "unresolved_by_reason": {},
+    "unresolved_total": 0,
+    "win_rate": 0.2238
+   }
+  },
+  {
+   "family": "AVWAP_RETEST",
+   "recipe_id": "m5close_current_anchor1_1r_v1",
+   "side": "LONG",
+   "stats": {
+    "bootstrap": {
+     "high": 0.164,
+     "interval": "5-95 percentile of a session-block bootstrap on the mean",
+     "low": -0.2043,
+     "measured": true,
+     "resamples": 400,
+     "sessions": 13
+    },
+    "clip": 4.0,
+    "clipped": {
+     "mean": 0.0438,
+     "median": 0.2718,
+     "p10": -1.1798,
+     "p90": 0.9836,
+     "trimmed_mean": 0.1283
+    },
+    "concentration": {
+     "by_session": {
+      "distinct": 13,
+      "measured": true,
+      "top": "2026-08-04",
+      "top_share": 0.4868
+     },
+     "by_symbol": {
+      "distinct": 301,
+      "measured": true,
+      "top": "TGB",
+      "top_share": 0.0088
+     }
+    },
+    "confirmation_window": "",
+    "counts": {
+     "events": 341,
+     "sessions": 13,
+     "symbols": 301
+    },
+    "eligibility_rule": "n >= 30 OUTCOME ROWS, at least 5 symbols, and at least 5 entry sessions; still discovery, never confirmation. `n_episodes` is reported beside `n` and does NOT yet gate: rows on one episode are correlated diagnostics, so n_episodes is the honest sample size and moving the floor onto it is a separate, scoped change (BD-81).",
+    "eligible": true,
+    "evidence_label": "discovery",
+    "excluded_by_reason": {},
+    "excluded_total": 0,
+    "meets_n_floor": true,
+    "n": 341,
+    "n_episodes": 341,
+    "n_floor": 30,
+    "n_floor_note": "n >= 30 is NECESSARY, not sufficient: it clears the floor and says nothing about concentration, session coverage, or whether the window was declared in advance",
+    "profit_factor": {
+     "all_losses": false,
+     "all_wins": false,
+     "convention": "profit factor = sum(gains) / abs(sum(losses)). With no losing rows the denominator is zero and PF is reported as null with all_wins=true, never as a large finite number; with no winning rows it is 0.0 with all_losses=true.",
+     "value": 1.1071
+    },
+    "raw": {
+     "mean": 0.0433,
+     "median": 0.2718,
+     "p10": -1.1798,
+     "p90": 0.9836,
+     "trimmed_mean": 0.1283
+    },
+    "schema": "evidence_summary_v1",
+    "stop_rate": 0.261,
+    "unresolved_by_reason": {
+     "OPEN": 12,
+     "TRUNCATED": 32
+    },
+    "unresolved_total": 44,
+    "win_rate": 0.5543
+   }
+  },
+  {
+   "family": "AVWAP_BREAKOUT",
+   "recipe_id": "htf_lrsi_m30_up20_2r_v1",
+   "side": "LONG",
+   "stats": {
+    "bootstrap": {
+     "high": -0.3204,
+     "interval": "5-95 percentile of a session-block bootstrap on the mean",
+     "low": -0.7347,
+     "measured": true,
+     "resamples": 400,
+     "sessions": 18
+    },
+    "clip": 4.0,
+    "clipped": {
+     "mean": -0.4981,
+     "median": -1.0991,
+     "p10": -1.6269,
+     "p90": 1.9089,
+     "trimmed_mean": -0.5736
+    },
+    "concentration": {
+     "by_session": {
+      "distinct": 18,
+      "measured": true,
+      "top": "2026-08-06",
+      "top_share": 0.2155
+     },
+     "by_symbol": {
+      "distinct": 263,
+      "measured": true,
+      "top": "WOLF",
+      "top_share": 0.0071
+     }
+    },
+    "confirmation_window": "",
+    "counts": {
+     "events": 283,
+     "sessions": 18,
+     "symbols": 263
+    },
+    "eligibility_rule": "n >= 30 OUTCOME ROWS, at least 5 symbols, and at least 5 entry sessions; still discovery, never confirmation. `n_episodes` is reported beside `n` and does NOT yet gate: rows on one episode are correlated diagnostics, so n_episodes is the honest sample size and moving the floor onto it is a separate, scoped change (BD-81).",
+    "eligible": true,
+    "evidence_label": "discovery",
+    "excluded_by_reason": {},
+    "excluded_total": 0,
+    "meets_n_floor": true,
+    "n": 283,
+    "n_episodes": 283,
+    "n_floor": 30,
+    "n_floor_note": "n >= 30 is NECESSARY, not sufficient: it clears the floor and says nothing about concentration, session coverage, or whether the window was declared in advance",
+    "profit_factor": {
+     "all_losses": false,
+     "all_wins": false,
+     "convention": "profit factor = sum(gains) / abs(sum(losses)). With no losing rows the denominator is zero and PF is reported as null with all_wins=true, never as a large finite number; with no winning rows it is 0.0 with all_losses=true.",
+     "value": 0.4846
+    },
+    "raw": {
+     "mean": -0.5133,
+     "median": -1.0991,
+     "p10": -1.6269,
+     "p90": 1.9089,
+     "trimmed_mean": -0.5736
+    },
+    "schema": "evidence_summary_v1",
+    "stop_rate": 0.7314,
+    "unresolved_by_reason": {
+     "OPEN": 1
+    },
+    "unresolved_total": 1,
+    "win_rate": 0.2686
+   }
+  },
+  {
+   "family": "POST_EARNINGS_AVWAP_BOUNCE",
+   "recipe_id": "htf_lrsi_h1_up50_2r_v1",
+   "side": "LONG",
+   "stats": {
+    "bootstrap": {
+     "high": -0.3691,
+     "interval": "5-95 percentile of a session-block bootstrap on the mean",
+     "low": -0.7353,
+     "measured": true,
+     "resamples": 400,
+     "sessions": 19
+    },
+    "clip": 4.0,
+    "clipped": {
+     "mean": -0.5377,
+     "median": -1.1105,
+     "p10": -1.808,
+     "p90": 1.9088,
+     "trimmed_mean": -0.5562
+    },
+    "concentration": {
+     "by_session": {
+      "distinct": 19,
+      "measured": true,
+      "top": "2026-08-18",
+      "top_share": 0.1092
+     },
+     "by_symbol": {
+      "distinct": 172,
+      "measured": true,
+      "top": "MMM",
+      "top_share": 0.0131
+     }
+    },
+    "confirmation_window": "",
+    "counts": {
+     "events": 229,
+     "sessions": 19,
+     "symbols": 172
+    },
+    "eligibility_rule": "n >= 30 OUTCOME ROWS, at least 5 symbols, and at least 5 entry sessions; still discovery, never confirmation. `n_episodes` is reported beside `n` and does NOT yet gate: rows on one episode are correlated diagnostics, so n_episodes is the honest sample size and moving the floor onto it is a separate, scoped change (BD-81).",
+    "eligible": true,
+    "evidence_label": "discovery",
+    "excluded_by_reason": {},
+    "excluded_total": 0,
+    "meets_n_floor": true,
+    "n": 229,
+    "n_episodes": 229,
+    "n_floor": 30,
+    "n_floor_note": "n >= 30 is NECESSARY, not sufficient: it clears the floor and says nothing about concentration, session coverage, or whether the window was declared in advance",
+    "profit_factor": {
+     "all_losses": false,
+     "all_wins": false,
+     "convention": "profit factor = sum(gains) / abs(sum(losses)). With no losing rows the denominator is zero and PF is reported as null with all_wins=true, never as a large finite number; with no winning rows it is 0.0 with all_losses=true.",
+     "value": 0.4644
+    },
+    "raw": {
+     "mean": -0.5657,
+     "median": -1.1105,
+     "p10": -1.808,
+     "p90": 1.9088,
+     "trimmed_mean": -0.5562
+    },
+    "schema": "evidence_summary_v1",
+    "stop_rate": 0.7074,
+    "unresolved_by_reason": {
+     "OPEN": 3
+    },
+    "unresolved_total": 3,
+    "win_rate": 0.2882
+   }
+  },
+  {
+   "family": "SMA_BREAKOUT_CONFIRMED",
+   "recipe_id": "m5close_sma2_2r_v1",
+   "side": "LONG",
+   "stats": {
+    "bootstrap": {
+     "high": 0.2765,
+     "interval": "5-95 percentile of a session-block bootstrap on the mean",
+     "low": -0.688,
+     "measured": true,
+     "resamples": 400,
+     "sessions": 6
+    },
+    "clip": 4.0,
+    "clipped": {
+     "mean": 0.0291,
+     "median": -0.0684,
+     "p10": -1.1159,
+     "p90": 1.9558,
+     "trimmed_mean": 0.0099
+    },
+    "concentration": {
+     "by_session": {
+      "distinct": 6,
+      "measured": true,
+      "top": "2026-08-04",
+      "top_share": 0.6333
+     },
+     "by_symbol": {
+      "distinct": 30,
+      "measured": true,
+      "top": "VNO",
+      "top_share": 0.0333
+     }
+    },
+    "confirmation_window": "",
+    "counts": {
+     "events": 30,
+     "sessions": 6,
+     "symbols": 30
+    },
+    "eligibility_rule": "n >= 30 OUTCOME ROWS, at least 5 symbols, and at least 5 entry sessions; still discovery, never confirmation. `n_episodes` is reported beside `n` and does NOT yet gate: rows on one episode are correlated diagnostics, so n_episodes is the honest sample size and moving the floor onto it is a separate, scoped change (BD-81).",
+    "eligible": true,
+    "evidence_label": "discovery",
+    "excluded_by_reason": {},
+    "excluded_total": 0,
+    "meets_n_floor": true,
+    "n": 30,
+    "n_episodes": 30,
+    "n_floor": 30,
+    "n_floor_note": "n >= 30 is NECESSARY, not sufficient: it clears the floor and says nothing about concentration, session coverage, or whether the window was declared in advance",
+    "profit_factor": {
+     "all_losses": false,
+     "all_wins": false,
+     "convention": "profit factor = sum(gains) / abs(sum(losses)). With no losing rows the denominator is zero and PF is reported as null with all_wins=true, never as a large finite number; with no winning rows it is 0.0 with all_losses=true.",
+     "value": 1.0725
+    },
+    "raw": {
+     "mean": 0.0291,
+     "median": -0.0684,
+     "p10": -1.1159,
+     "p90": 1.9558,
+     "trimmed_mean": 0.0099
+    },
+    "schema": "evidence_summary_v1",
+    "stop_rate": 0.2333,
+    "unresolved_by_reason": {
+     "OPEN": 8,
+     "TRUNCATED": 8
+    },
+    "unresolved_total": 16,
+    "win_rate": 0.4667
+   }
+  },
+  {
+   "family": "MID_EARNINGS_FIRST_DEV_RETEST",
+   "recipe_id": "m5close_ema1_2r_v1",
+   "side": "SHORT",
+   "stats": {
+    "bootstrap": {
+     "high": 0.5112,
+     "interval": "5-95 percentile of a session-block bootstrap on the mean",
+     "low": -0.5288,
+     "measured": true,
+     "resamples": 400,
+     "sessions": 14
+    },
+    "clip": 4.0,
+    "clipped": {
+     "mean": -0.068,
+     "median": -1.058,
+     "p10": -1.885,
+     "p90": 1.9437,
+     "trimmed_mean": -0.0323
+    },
+    "concentration": {
+     "by_session": {
+      "distinct": 14,
+      "measured": true,
+      "top": "2026-08-04",
+      "top_share": 0.2
+     },
+     "by_symbol": {
+      "distinct": 30,
+      "measured": true,
+      "top": "VICI",
+      "top_share": 0.0333
+     }
+    },
+    "confirmation_window": "",
+    "counts": {
+     "events": 30,
+     "sessions": 14,
+     "symbols": 30
+    },
+    "eligibility_rule": "n >= 30 OUTCOME ROWS, at least 5 symbols, and at least 5 entry sessions; still discovery, never confirmation. `n_episodes` is reported beside `n` and does NOT yet gate: rows on one episode are correlated diagnostics, so n_episodes is the honest sample size and moving the floor onto it is a separate, scoped change (BD-81).",
+    "eligible": true,
+    "evidence_label": "discovery",
+    "excluded_by_reason": {},
+    "excluded_total": 0,
+    "meets_n_floor": true,
+    "n": 30,
+    "n_episodes": 30,
+    "n_floor": 30,
+    "n_floor_note": "n >= 30 is NECESSARY, not sufficient: it clears the floor and says nothing about concentration, session coverage, or whether the window was declared in advance",
+    "profit_factor": {
+     "all_losses": false,
+     "all_wins": false,
+     "convention": "profit factor = sum(gains) / abs(sum(losses)). With no losing rows the denominator is zero and PF is reported as null with all_wins=true, never as a large finite number; with no winning rows it is 0.0 with all_losses=true.",
+     "value": 0.9178
+    },
+    "raw": {
+     "mean": -0.068,
+     "median": -1.058,
+     "p10": -1.885,
+     "p90": 1.9437,
+     "trimmed_mean": -0.0323
+    },
+    "schema": "evidence_summary_v1",
+    "stop_rate": 0.5667,
+    "unresolved_by_reason": {
+     "OPEN": 7,
+     "TRUNCATED": 2
+    },
+    "unresolved_total": 9,
+    "win_rate": 0.4333
+   }
+  }
+ ],
+ "pack_head": {
+  "built_by_commit": "7f2273d3",
+  "context_cells_dropped_from_pack": 3161,
+  "coverage": {
+   "bias_definition_id": "auto_market_bias_multiframe_v1",
+   "context_rows": 34485,
+   "families_with_outcomes": [
+    "AVWAPE_TO_FIRST_DEV",
+    "AVWAP_BAND_BOUNCE",
+    "AVWAP_BREAKOUT",
+    "AVWAP_RETEST",
+    "EXTREME_MOVE_RETEST",
+    "FAVORITE_ZONE_WATCH",
+    "GENERAL",
+    "MID_EARNINGS_EMA15_RETEST",
+    "MID_EARNINGS_EMA21_RETEST",
+    "MID_EARNINGS_FIRST_DEV_RETEST",
+    "MID_EARNINGS_SECOND_DEV_HOLD",
+    "POST_EARNINGS_52W_BREAK",
+    "POST_EARNINGS_AVWAP_BOUNCE",
+    "PREVIOUS_AVWAPE_BOUNCE",
+    "SMA_BREAKOUT_CONFIRMED",
+    "TOP_PATTERN_ENTRY"
+   ],
+   "families_without_outcomes": [],
+   "first_m5_session": "2026-08",
+   "m5_months_in_lake": 2,
+   "occurrences": 6897,
+   "outcome_bucket_count": 32,
+   "outcome_buckets_covered": 32,
+   "outcome_buckets_seen": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+   ],
+   "outcome_coverage_first_at": "2026-09-05T07:42:42+00:00",
+   "outcome_coverage_last_at": "2026-09-05T07:42:42+00:00",
+   "outcome_firings_considered": 32,
+   "outcomes": 141299,
+   "recipe_ids": [
+    "m5close_current_anchor1_1r_v1",
+    "m5close_current_anchor1_2r_v1",
+    "m5close_current_anchor1_3r_v1",
+    "m5close_current_anchor2_1r_v1",
+    "m5close_current_anchor2_2r_v1",
+    "m5close_current_anchor2_3r_v1",
+    "m5close_current_anchor3_1r_v1",
+    "m5close_current_anchor3_2r_v1",
+    "m5close_current_anchor3_3r_v1",
+    "m5close_sma1_1r_v1",
+    "m5close_sma1_2r_v1",
+    "m5close_sma1_3r_v1",
+    "m5close_sma2_1r_v1",
+    "m5close_sma2_2r_v1",
+    "m5close_sma2_3r_v1",
+    "m5close_sma3_1r_v1",
+    "m5close_sma3_2r_v1",
+    "m5close_sma3_3r_v1",
+    "m5close_ema1_1r_v1",
+    "m5close_ema1_2r_v1",
+    "m5close_ema1_3r_v1",
+    "m5close_ema2_1r_v1",
+    "m5close_ema2_2r_v1",
+    "m5close_ema2_3r_v1",
+    "m5close_ema3_1r_v1",
+    "m5close_ema3_2r_v1",
+    "m5close_ema3_3r_v1",
+    "m5close_post_earnings_anchor1_1r_v1",
+    "m5close_post_earnings_anchor1_2r_v1",
+    "m5close_post_earnings_anchor1_3r_v1",
+    "m5close_post_earnings_anchor2_1r_v1",
+    "m5close_post_earnings_anchor2_2r_v1",
+    "m5close_post_earnings_anchor2_3r_v1",
+    "m5close_post_earnings_anchor3_1r_v1",
+    "m5close_post_earnings_anchor3_2r_v1",
+    "m5close_post_earnings_anchor3_3r_v1",
+    "m5close_post_earnings_candle1_1r_v1",
+    "m5close_post_earnings_candle1_2r_v1",
+    "m5close_post_earnings_candle1_3r_v1",
+    "m5close_post_earnings_candle2_1r_v1",
+    "m5close_post_earnings_candle2_2r_v1",
+    "m5close_post_earnings_candle2_3r_v1",
+    "m5close_post_earnings_candle3_1r_v1",
+    "m5close_post_earnings_candle3_2r_v1",
+    "m5close_post_earnings_candle3_3r_v1",
+    "m5close_atr0.5_1r_v1",
+    "m5close_atr0.5_2r_v1",
+    "m5close_atr0.5_3r_v1",
+    "m5close_atr1_1r_v1",
+    "m5close_atr1_2r_v1",
+    "m5close_atr1_3r_v1",
+    "m5close_atr1.5_1r_v1",
+    "m5close_atr1.5_2r_v1",
+    "m5close_atr1.5_3r_v1",
+    "htf_lrsi_m30_up50_2r_v1",
+    "htf_lrsi_m30_up20_2r_v1",
+    "htf_lrsi_m30_down50_2r_v1",
+    "htf_lrsi_m30_down80_2r_v1",
+    "htf_lrsi_h1_up50_2r_v1",
+    "htf_lrsi_h1_up20_2r_v1",
+    "htf_lrsi_h1_down50_2r_v1",
+    "htf_lrsi_h1_down80_2r_v1",
+    "htf_lrsi_h2_up50_2r_v1",
+    "htf_lrsi_h2_up20_2r_v1",
+    "htf_lrsi_h2_down50_2r_v1",
+    "htf_lrsi_h2_down80_2r_v1",
+    "htf_lrsi_h4_up50_2r_v1",
+    "htf_lrsi_h4_up20_2r_v1",
+    "htf_lrsi_h4_down50_2r_v1",
+    "htf_lrsi_h4_down80_2r_v1",
+    "setupentry_m5_first_close_1r_v1",
+    "setupentry_m5_first_close_2r_v1",
+    "setupentry_m5_first_close_3r_v1",
+    "setupentry_m15_acceptance_close_1r_v1",
+    "setupentry_m15_acceptance_close_2r_v1",
+    "setupentry_m15_acceptance_close_3r_v1",
+    "setupentry_m5_retest_trigger_1r_v1",
+    "setupentry_m5_retest_trigger_2r_v1",
+    "setupentry_m5_retest_trigger_3r_v1",
+    "setupentry_m30_ema15_21_pullback_1r_v1",
+    "setupentry_m30_ema15_21_pullback_2r_v1",
+    "setupentry_m30_ema15_21_pullback_3r_v1",
+    "afterlike_d0_first_m5_close_2r_v1",
+    "afterlike_d0_m5_retest_trigger_2r_v1",
+    "afterlike_d0_m15_acceptance_2r_v1",
+    "afterlike_d0_m30_ema15_21_pullback_2r_v1",
+    "afterlike_d1_first_m5_close_2r_v1",
+    "afterlike_d1_m5_retest_trigger_2r_v1",
+    "afterlike_d1_m15_acceptance_2r_v1",
+    "afterlike_d1_m30_ema15_21_pullback_2r_v1",
+    "afterlike_d2_first_m5_close_2r_v1",
+    "afterlike_d2_m5_retest_trigger_2r_v1",
+    "afterlike_d2_m15_acceptance_2r_v1",
+    "afterlike_d2_m30_ema15_21_pullback_2r_v1",
+    "afterlike_d3_first_m5_close_2r_v1",
+    "afterlike_d3_m5_retest_trigger_2r_v1",
+    "afterlike_d3_m15_acceptance_2r_v1",
+    "afterlike_d3_m30_ema15_21_pullback_2r_v1",
+    "afterlike_d5_first_m5_close_2r_v1",
+    "afterlike_d5_m5_retest_trigger_2r_v1",
+    "afterlike_d5_m15_acceptance_2r_v1",
+    "afterlike_d5_m30_ema15_21_pullback_2r_v1"
+   ]
+  },
+  "data_contract": {
+   "bid_ask_used": false,
+   "earnings_fundamentals_used": false,
+   "m1_used": false,
+   "numbers_written_by": "deterministic code",
+   "planned_stop_or_risk_required": false,
+   "same_bar_rule": "STOP_FIRST"
+  },
+  "eligible_policy_cells_dropped": 0,
+  "entry_contract": "first completed M5 close in the next regular session",
+  "evidence_shape": {
+   "distinct_episodes": 2723,
+   "distinct_occurrences": 4627,
+   "note": "Cells are alternative recipes over the SAME occurrences. Reading two cells as independent evidence double-counts the move underneath them: the episode count is the honest denominator for anything pooled across cells. Within one cell, n and n_episodes are equal by construction.",
+   "outcome_rows": 112281,
+   "rows_per_occurrence": 24.27
+  },
+  "gate": {
+   "eligible_policy_cells": 619,
+   "met": true,
+   "note": "Every result is discovery. A met floor allows narration, not a live rule change."
+  },
+  "generated_at": "2026-09-05T06:50:43-04:00",
+  "ineligible_policy_cells_dropped": 521,
+  "market_context_timeframes": [
+   "M5",
+   "M30",
+   "H1",
+   "H4",
+   "D1"
+  ],
+  "non_trade_families": [
+   {
+    "episodes": 698,
+    "family": "FAVORITE_ZONE_WATCH",
+    "occurrences": 698,
+    "outcome_rows": 11431,
+    "reason": "Appendix C: watch state - never counted as a triggered trade setup.",
+    "role": "WATCH_STATE"
+   },
+   {
+    "episodes": 930,
+    "family": "GENERAL",
+    "occurrences": 930,
+    "outcome_rows": 17587,
+    "reason": "Appendix C: diagnostic fallback - must not become a pooled 'setup' edge.",
+    "role": "FALLBACK"
+   }
+  ],
+  "non_trade_families_note": "Excluded from every policy and context cell above, by role. Their counts are published so an absent family reads as excluded rather than as unmeasured. Packet P7's setup registry will own this map.",
+  "not_a_control_signal": "This report cannot change scanners, scores, alerts, Focus, watchlists, stops, targets, or orders.",
+  "policy_cells_dropped_from_pack": 521,
+  "recipe_ids": [
+   "m5close_current_anchor1_1r_v1",
+   "m5close_current_anchor1_2r_v1",
+   "m5close_current_anchor1_3r_v1",
+   "m5close_current_anchor2_1r_v1",
+   "m5close_current_anchor2_2r_v1",
+   "m5close_current_anchor2_3r_v1",
+   "m5close_current_anchor3_1r_v1",
+   "m5close_current_anchor3_2r_v1",
+   "m5close_current_anchor3_3r_v1",
+   "m5close_sma1_1r_v1",
+   "m5close_sma1_2r_v1",
+   "m5close_sma1_3r_v1",
+   "m5close_sma2_1r_v1",
+   "m5close_sma2_2r_v1",
+   "m5close_sma2_3r_v1",
+   "m5close_sma3_1r_v1",
+   "m5close_sma3_2r_v1",
+   "m5close_sma3_3r_v1",
+   "m5close_ema1_1r_v1",
+   "m5close_ema1_2r_v1",
+   "m5close_ema1_3r_v1",
+   "m5close_ema2_1r_v1",
+   "m5close_ema2_2r_v1",
+   "m5close_ema2_3r_v1",
+   "m5close_ema3_1r_v1",
+   "m5close_ema3_2r_v1",
+   "m5close_ema3_3r_v1",
+   "m5close_post_earnings_anchor1_1r_v1",
+   "m5close_post_earnings_anchor1_2r_v1",
+   "m5close_post_earnings_anchor1_3r_v1",
+   "m5close_post_earnings_anchor2_1r_v1",
+   "m5close_post_earnings_anchor2_2r_v1",
+   "m5close_post_earnings_anchor2_3r_v1",
+   "m5close_post_earnings_anchor3_1r_v1",
+   "m5close_post_earnings_anchor3_2r_v1",
+   "m5close_post_earnings_anchor3_3r_v1",
+   "m5close_post_earnings_candle1_1r_v1",
+   "m5close_post_earnings_candle1_2r_v1",
+   "m5close_post_earnings_candle1_3r_v1",
+   "m5close_post_earnings_candle2_1r_v1",
+   "m5close_post_earnings_candle2_2r_v1",
+   "m5close_post_earnings_candle2_3r_v1",
+   "m5close_post_earnings_candle3_1r_v1",
+   "m5close_post_earnings_candle3_2r_v1",
+   "m5close_post_earnings_candle3_3r_v1",
+   "m5close_atr0.5_1r_v1",
+   "m5close_atr0.5_2r_v1",
+   "m5close_atr0.5_3r_v1",
+   "m5close_atr1_1r_v1",
+   "m5close_atr1_2r_v1",
+   "m5close_atr1_3r_v1",
+   "m5close_atr1.5_1r_v1",
+   "m5close_atr1.5_2r_v1",
+   "m5close_atr1.5_3r_v1",
+   "htf_lrsi_m30_up50_2r_v1",
+   "htf_lrsi_m30_up20_2r_v1",
+   "htf_lrsi_m30_down50_2r_v1",
+   "htf_lrsi_m30_down80_2r_v1",
+   "htf_lrsi_h1_up50_2r_v1",
+   "htf_lrsi_h1_up20_2r_v1",
+   "htf_lrsi_h1_down50_2r_v1",
+   "htf_lrsi_h1_down80_2r_v1",
+   "htf_lrsi_h2_up50_2r_v1",
+   "htf_lrsi_h2_up20_2r_v1",
+   "htf_lrsi_h2_down50_2r_v1",
+   "htf_lrsi_h2_down80_2r_v1",
+   "htf_lrsi_h4_up50_2r_v1",
+   "htf_lrsi_h4_up20_2r_v1",
+   "htf_lrsi_h4_down50_2r_v1",
+   "htf_lrsi_h4_down80_2r_v1",
+   "setupentry_m5_first_close_1r_v1",
+   "setupentry_m5_first_close_2r_v1",
+   "setupentry_m5_first_close_3r_v1",
+   "setupentry_m15_acceptance_close_1r_v1",
+   "setupentry_m15_acceptance_close_2r_v1",
+   "setupentry_m15_acceptance_close_3r_v1",
+   "setupentry_m5_retest_trigger_1r_v1",
+   "setupentry_m5_retest_trigger_2r_v1",
+   "setupentry_m5_retest_trigger_3r_v1",
+   "setupentry_m30_ema15_21_pullback_1r_v1",
+   "setupentry_m30_ema15_21_pullback_2r_v1",
+   "setupentry_m30_ema15_21_pullback_3r_v1",
+   "afterlike_d0_first_m5_close_2r_v1",
+   "afterlike_d0_m5_retest_trigger_2r_v1",
+   "afterlike_d0_m15_acceptance_2r_v1",
+   "afterlike_d0_m30_ema15_21_pullback_2r_v1",
+   "afterlike_d1_first_m5_close_2r_v1",
+   "afterlike_d1_m5_retest_trigger_2r_v1",
+   "afterlike_d1_m15_acceptance_2r_v1",
+   "afterlike_d1_m30_ema15_21_pullback_2r_v1",
+   "afterlike_d2_first_m5_close_2r_v1",
+   "afterlike_d2_m5_retest_trigger_2r_v1",
+   "afterlike_d2_m15_acceptance_2r_v1",
+   "afterlike_d2_m30_ema15_21_pullback_2r_v1",
+   "afterlike_d3_first_m5_close_2r_v1",
+   "afterlike_d3_m5_retest_trigger_2r_v1",
+   "afterlike_d3_m15_acceptance_2r_v1",
+   "afterlike_d3_m30_ema15_21_pullback_2r_v1",
+   "afterlike_d5_first_m5_close_2r_v1",
+   "afterlike_d5_m5_retest_trigger_2r_v1",
+   "afterlike_d5_m15_acceptance_2r_v1",
+   "afterlike_d5_m30_ema15_21_pullback_2r_v1"
+  ],
+  "schema": "setup_stop_target_research_facts_v1"
+ }
+}
