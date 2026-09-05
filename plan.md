@@ -587,6 +587,33 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+## Phase 0.19 — AVWAP band challenger: make the comparison measure (QUEUED by the trader 2026-09-05)
+
+Trader, 2026-09-05 ~01:45 PT, after the lead reported the comparison is built but empty:
+*"I want us to compare both to see what is better"* ... *"Add this to the queue."*
+
+**What is true (lead, 2026-09-05):** the Phase 0.10 T3 surface exists - `master_avwap_band_variant_stats.csv`
+(40 rows, 11,292 setups) and the Setup Tracker's "Band variant" view - but `n_variant` is **0 on every
+row** since it was built on 2026-08-26: every tracker record's `current_anchor_variant` reads
+`"no band-variant block on the scan entry"` while `master_avwap_ai_state.json` carries a full block
+(`avwap_bands_oneoption_bb20_v1`, stdev present) for all 423 symbols of the last scan - e.g. AAON,
+same anchor date 2026-08-10, stdev 4.72 in the AI state and "no block" in the setup record. So no
+`band_variant` stop scenario has ever been built and the challenger has measured nothing. The lake
+has no challenger columns (T3 step 4 / B-4, NOT started).
+
+**Packet (to write): B4.** (1) Fix the hand-off so `build_tracker_setup_record` receives the block the
+scan computed - root cause named by recon first; fail-first test on a record built from a live-shaped
+`ai_state` entry; the champion's records, scores and events byte-identical (the existing parity
+fixture). (2) The warehouse: additive `avwap_variant_upper_1..3` / `lower_1..3` +
+`avwap_variant_formula_version` on `feature_snapshot_daily`, and a twin swing recipe
+(`swing_house_variant_v1`, same occurrences, same management, the challenger's bands) so
+`band-coverage` and the fact pack show the two side by side; reconstructed labelling as Q2.
+(3) A comparison line on the Setup Tracker's Band variant view that says `n_variant` and
+`n_variant_unmeasured` in words. **`master_avwap_lib/runner.py` and `legacy.py` house scanner code
+(file-scoped ask-first): the trader's "add this to the queue" is the recorded yes for the hand-off fix
+and nothing wider.** T4's criteria (docs/AVWAP_BAND_VARIANT_STUDY.md) still decide; >= 20 sessions
+of forward accrual start only when the first measured row lands.
+
 ## Phase 0.18 — Process-review packets Q1-Q5 (2026-09-04) — BUILT, live gates #60-#64 owed
 
 Trader-authorized 2026-09-04 (*"please review and implement the suggested changes"*) over

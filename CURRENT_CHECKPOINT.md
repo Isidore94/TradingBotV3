@@ -101,6 +101,42 @@ the dated entry named beside it.
 
 
 
+### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
+
+Trader: *"I want us to compare both [AVWAP bands] to see what is better ... Add this to the queue.
+Is there anything else broken about our measurement / setup tracker?"* Queued as plan.md Phase 0.19.
+Findings (recon over the live stores, file:line in the recon transcript; each is EVIDENCE, none
+is authorized work):
+
+1. **The band-variant comparison has measured nothing since 2026-08-26.** `n_variant = 0` on all
+   40 rows of `master_avwap_band_variant_stats.csv`; the four `_variant` columns are 100% blank.
+   Root cause: the live scan sets `current_anchor_variant` on every `ai_state` symbol entry
+   (`runner.py:46-85, 1781`), but the tracker staleness catch-up path
+   (`backfill_setup_tracker_from_recent_sessions`, `legacy.py:24913`, symbol entry built at
+   `:24425-24523`) never sets it, so `build_tracker_setup_record` (`:5939`) stamps "no band-variant
+   block on the scan entry" and no `band_variant` stop scenario is ever built. That path ran at
+   least twice on 2026-09-04 (38.4 s and 14.1 s catch-ups). `run_anchor_watchlist_scan` shares it.
+2. **Half of the recent M5 alerts end without a real outcome.** `intraday_bounce_outcomes.csv`,
+   last 20 sessions (8,161 events): `unresolved` 3,942 (48.3%), orphaned with no later row 427
+   (5.2%) - against 21.1% unresolved over the whole file - and `outcome_sweep_autorun` is ON in
+   `local_settings.json` (not the coded default). Unknown whether new or steady-state.
+3. **The tracker's stats files run behind its scans.** The tracker JSON and its SQLite mirror were
+   last written 07:46-07:47 on 2026-09-04 while scans ran through 13:07 (only certain slots persist
+   the tracker; the log says "final scheduled slot will refresh stored setups" and the desk died at
+   14:11 before it did). `master_avwap_setup_type_stats.csv` / `_recent_stats.csv` / the band stats
+   are therefore three cycles stale; `scan_factor_*` files are current.
+4. **Unfinalized swing setups.** 37 OPEN setups older than 20 sessions (back to 2026-05-06:
+   MU, KALV, PWR, CTRA, SNDK ...) and 41 with zero scenarios, of 11,372.
+5. **Graded but never shown / written but never read.** `control_setups` (401) and `study_setups`
+   (3,992) are graded by `build_control_discovery_rows` / `build_study_discovery_rows`
+   (`legacy.py:12391, 12320`) and no production caller reaches either; the
+   `comparison_apr2026` scenario framework (91,674 experimental rows, `legacy.py:914, 926`) has no
+   reader anywhere.
+6. Clean: `master_avwap_tier_outcomes.csv` 19,558 rows, no duplicates, no blank returns
+   (`stale_horizon` 25.6%, which the rankers already drop); `tracker_store verify` ok 15,765 =
+   15,765 (gate #57 evidence, one save); `human_focus_outcomes` 5.1% ungraded, mostly
+   `unfavorite` by rule.
+
 ### 2026-09-05 (00:27-01:26 PT) - Overnight: the desk started, the lake rebuilt, swing_house_v1 reads 376/291 where 0/257 stood
 
 Trader instruction of 2026-09-04 21:56 PT ("Restart the desk yourself then run the lake
