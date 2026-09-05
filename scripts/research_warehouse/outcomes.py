@@ -88,6 +88,62 @@ TERMINAL_RESULT_STATES = frozenset(
     {STATE_STOPPED, STATE_TARGETED, STATE_EXPIRED, STATE_AMBIGUOUS_BAR, STATE_CENSORED}
 )
 
+# --- which path a swing row walked (Q2.2) ---------------------------------
+#: Bands complete enough to manage: partial at band 2, trail band 1, run band 3.
+PATH_KIND_MANAGED = "managed"
+#: The plain walk WITH a target - an R multiple, or BD-42's band-3 fallback.
+PATH_KIND_PLAIN_TARGET = "plain_target"
+#: The plain walk with NO target at all. The row can only stop out, expire or
+#: stay open, so its win rate is not comparable with a targeted cohort's - the
+#: 942-of-947 finding of 2026-09-04 was INFERRED from missing bands because no
+#: row said this.
+PATH_KIND_PLAIN_NO_TARGET = "plain_no_target"
+#: Reader label for a row written before the column existed, and for the
+#: recipes that walk no swing path.
+PATH_KIND_UNLABELLED = "unlabelled"
+PATH_KINDS = (PATH_KIND_MANAGED, PATH_KIND_PLAIN_TARGET, PATH_KIND_PLAIN_NO_TARGET)
+
+
+def path_kind_bucket(value) -> str:
+    """The reader's bucket for a stored ``path_kind``; NULL is ``unlabelled``."""
+    text = "" if value is None else str(value).strip()
+    return text if text in PATH_KINDS else PATH_KIND_UNLABELLED
+
+
+def required_band_numbers(recipe) -> tuple[int, ...]:
+    """Which AVWAP bands this recipe NEEDS, read off the recipe itself.
+
+    A managed recipe needs bands 1 and 2 to manage and band 3 to run; a recipe
+    whose target is an R multiple needs none, and neither does a time-only
+    control. Coverage reporting reads this rather than a hard-coded list, so a
+    new recipe cannot be graded against another recipe's requirements.
+    """
+    if str(recipe.management or "").startswith("partial_at_band2"):
+        return (1, 2, 3)
+    return ()
+
+
+def swing_plan(recipe, bands, side: str) -> tuple[str, float | None]:
+    """The ONE decision ``simulate_swing`` makes about its walk.
+
+    Returns ``(path_kind, band_target)`` where ``band_target`` is BD-42's
+    declared band-3 fallback when the bands are too incomplete to manage. The
+    simulator calls this, so the label on the row and the walk that produced it
+    can never drift apart.
+    """
+    band_1 = _band(bands, side, 1)
+    band_2 = _band(bands, side, 2)
+    band_3 = _band(bands, side, 3)
+    manages = str(recipe.management or "").startswith("partial_at_band2")
+    if manages and band_1 is not None and band_2 is not None:
+        return PATH_KIND_MANAGED, None
+    if recipe.target_r is not None:
+        return PATH_KIND_PLAIN_TARGET, None
+    if manages and band_3 is not None:
+        return PATH_KIND_PLAIN_TARGET, band_3
+    return PATH_KIND_PLAIN_NO_TARGET, None
+
+
 SWING_CHECKPOINTS = (("r_at_s1", 1), ("r_at_s2", 2), ("r_at_s3", 3), ("r_at_s5", 5), ("r_at_s10", 10), ("r_at_s18", 18))
 INTRADAY_CHECKPOINTS = (("r_at_15m", 15), ("r_at_30m", 30), ("r_at_60m", 60), ("r_at_120m", 120))
 
@@ -646,6 +702,46 @@ def _band(bands, side: str, number: int):
     return None if value is None else float(value)
 
 
+def swing_band_levels(bands, side: str) -> dict:
+    """``{1: level, 2: level, 3: level}`` for this side; ``None`` where absent."""
+    return {number: _band(bands, side, number) for number in (1, 2, 3)}
+
+
+def swing_geometry(occurrence: dict, recipe: Recipe, bands=None) -> dict:
+    """What target and stop this recipe implies here, and whether they point
+    the way the side does.
+
+    A long whose target sits below its entry (or whose stop sits above it) is
+    not a walk that can win - it is a geometry defect, and a coverage report
+    that counted its bands as "present" would call the row healthy. Returns
+    ``valid=None`` where there is nothing to check (no target at all), because
+    an unanswerable question is not a failure.
+    """
+    side = str(occurrence.get("side") or "LONG").upper()
+    entry = _number(occurrence.get("entry_price_ref"))
+    stop = _number(occurrence.get("stop_price_ref"))
+    kind, band_target = swing_plan(recipe, bands, side)
+    levels = swing_band_levels(bands, side)
+    if kind == PATH_KIND_MANAGED:
+        target = levels[3] if levels[3] is not None else levels[2]
+    elif recipe.target_r is not None and entry is not None and stop is not None:
+        direction = 1.0 if side == "LONG" else -1.0
+        target = entry + direction * float(recipe.target_r) * abs(entry - stop)
+    else:
+        target = band_target
+    valid = None
+    if entry is not None and stop is not None and target is not None:
+        valid = (target > entry and stop < entry) if side == "LONG" else (target < entry and stop > entry)
+    return {
+        "path_kind": kind,
+        "entry_price": entry,
+        "stop_price": stop,
+        "target_price": target,
+        "bands": levels,
+        "valid": valid,
+    }
+
+
 def simulate_swing(
     occurrence: dict,
     bars,
@@ -706,9 +802,10 @@ def simulate_swing(
     band_1 = _band(bands, side, 1)
     band_2 = _band(bands, side, 2)
     band_3 = _band(bands, side, 3)
-    managed = (
-        recipe.management.startswith("partial_at_band2") and band_1 is not None and band_2 is not None
-    )
+    # One decision, named on the row it produces (Q2.2): the walk below and the
+    # `path_kind` column can never disagree, because both come from here.
+    path_kind, band_target = swing_plan(recipe, bands, side)
+    managed = path_kind == PATH_KIND_MANAGED
     if managed:
         walk = _walk_managed(
             horizon,
@@ -726,10 +823,10 @@ def simulate_swing(
         target_price = None
         if recipe.target_r is not None:
             target_price = entry_price + direction * recipe.target_r * stop_distance
-        elif recipe.management.startswith("partial_at_band2") and band_3 is not None:
+        elif band_target is not None:
             # Bands too incomplete to manage: fall back to the plain path with
             # band 3 as the target (BD-42's declared fallback).
-            target_price = band_3
+            target_price = band_target
         walk = _walk_plain(
             horizon,
             entry_price=entry_price,
@@ -782,6 +879,9 @@ def simulate_swing(
         ),
         "cost_model_id": OUTCOME_DEFINITION_ID,
         "result_state": result_state,
+        # Q2.2: which walk this is. A `plain_no_target` row cannot win by
+        # reaching a target, so a reader must never pool it with one that can.
+        "path_kind": path_kind,
         "maturity_at": maturity_at,
         "censor_reason": None,
         "computed_at": stamp,
@@ -2311,10 +2411,18 @@ def _computed_stamp(row) -> datetime:
     return datetime.min.replace(tzinfo=timezone.utc)
 
 
+#: Columns a re-simulation may differ on without that being NEW KNOWLEDGE.
+#: ``path_kind`` is here (Q2.2) because it arrived after the rows did: every
+#: stored row lacks it, so comparing on it would rewrite the whole lake to add
+#: a label rather than to correct a number. An existing row stays `unlabelled`
+#: until a real change (a different R, a different state) supersedes it.
+_UNCOMPARED_OUTCOME_COLUMNS = ("computed_at", "run_id", "schema_version", "path_kind")
+
+
 def _same_outcome(previous: dict, computed: dict) -> bool:
     """Would publishing ``computed`` add any knowledge over ``previous``?"""
     for key, value in computed.items():
-        if key in ("computed_at", "run_id", "schema_version"):
+        if key in _UNCOMPARED_OUTCOME_COLUMNS:
             continue
         if not _same_value(previous.get(key), value):
             return False
@@ -2499,6 +2607,11 @@ __all__ = [
     "OUTCOME_DEFINITION_ID",
     "PATH_AMBIGUOUS",
     "PATH_EXACT",
+    "PATH_KINDS",
+    "PATH_KIND_MANAGED",
+    "PATH_KIND_PLAIN_NO_TARGET",
+    "PATH_KIND_PLAIN_TARGET",
+    "PATH_KIND_UNLABELLED",
     "POST_EARNINGS_CLOSE_FAILURES",
     "PRIMARY_RECIPE_BY_SETUP",
     "RECIPES",
@@ -2513,6 +2626,11 @@ __all__ = [
     "latest_outcomes",
     "net_r",
     "outcome_key",
+    "path_kind_bucket",
+    "required_band_numbers",
+    "swing_band_levels",
+    "swing_geometry",
+    "swing_plan",
     "simulate_intraday_bounce",
     "AFTER_LIKE_ENTRIES",
     "AFTER_LIKE_OFFSETS",

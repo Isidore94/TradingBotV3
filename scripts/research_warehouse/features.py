@@ -66,6 +66,79 @@ DAILY_HISTORY_MAX_YEARS = 5
 ANCHOR_TYPE_CURRENT = "EARNINGS_CURRENT"
 ANCHOR_TYPE_PREVIOUS = "EARNINGS_PREVIOUS"
 
+# --- anchor knowledge (Q2.1, BD-99) ---------------------------------------
+#: The anchor was in the lake BEFORE the session it is used for: the desk could
+#: have known it that day.
+ANCHOR_KNOWLEDGE_OBSERVED = "observed"
+#: The anchor's ``system_from`` is AFTER the session: it was imported later and
+#: the row is research evidence, never point-in-time evidence for a promotion
+#: gate (plan.md sec 7, BD-99).
+ANCHOR_KNOWLEDGE_RECONSTRUCTED = "reconstructed"
+#: Stored on a row computed with no anchor at all. The column exists, so this
+#: is a statement, not a silence.
+ANCHOR_KNOWLEDGE_UNANCHORED = ""
+#: Reader-side buckets. A row written before the column existed reads NULL and
+#: is ``legacy`` - never assumed observed; a row that had no anchor is ``none``.
+ANCHOR_KNOWLEDGE_LEGACY = "legacy"
+ANCHOR_KNOWLEDGE_NONE = "none"
+ANCHOR_KNOWLEDGE_BUCKETS = (
+    ANCHOR_KNOWLEDGE_OBSERVED,
+    ANCHOR_KNOWLEDGE_RECONSTRUCTED,
+    ANCHOR_KNOWLEDGE_NONE,
+    ANCHOR_KNOWLEDGE_LEGACY,
+)
+
+
+@dataclass(frozen=True)
+class AnchorChoice:
+    """Which anchor a session's snapshot uses, and whether it was KNOWN then.
+
+    The bar date alone cannot answer the second question: the 2026-09-04
+    earnings-anchor bridge back-filled ~2,200 anchors whose bars are months old
+    and whose knowledge stamp is that night. A snapshot rebuilt for an August
+    session over those rows is legitimate research evidence and would be a lie
+    as point-in-time evidence, so the row says which it is.
+    """
+
+    anchor_bar_date: date
+    knowledge: str = ANCHOR_KNOWLEDGE_RECONSTRUCTED
+
+
+def anchor_knowledge_bucket(value) -> str:
+    """The reader's bucket for a stored ``anchor_knowledge`` value.
+
+    ``None`` means the row predates the column (Q2.1) and is ``legacy``:
+    uncertainty is never read as confirmation, so it never pools with
+    ``observed``.
+    """
+    if value is None:
+        return ANCHOR_KNOWLEDGE_LEGACY
+    text = str(value).strip()
+    if text in (ANCHOR_KNOWLEDGE_OBSERVED, ANCHOR_KNOWLEDGE_RECONSTRUCTED):
+        return text
+    return ANCHOR_KNOWLEDGE_NONE
+
+
+def _anchor_choice(value) -> AnchorChoice | None:
+    """Accept a bare date or an :class:`AnchorChoice`; an unstamped date is
+    ``reconstructed``, because a caller that did not state the knowledge has
+    not established it."""
+    if value is None:
+        return None
+    if isinstance(value, AnchorChoice):
+        return value
+    if isinstance(value, datetime):
+        return AnchorChoice(value.date())
+    if isinstance(value, date):
+        return AnchorChoice(value)
+    bar_date = getattr(value, "anchor_bar_date", None)
+    if bar_date is None:
+        return None
+    return AnchorChoice(
+        bar_date.date() if isinstance(bar_date, datetime) else bar_date,
+        str(getattr(value, "knowledge", "") or ANCHOR_KNOWLEDGE_RECONSTRUCTED),
+    )
+
 
 def _ensure_scripts_on_path() -> None:
     import sys
@@ -432,6 +505,7 @@ def compute_daily_features(
     *,
     session_date: date,
     anchor_index: int | None = None,
+    anchor_knowledge: str = ANCHOR_KNOWLEDGE_UNANCHORED,
     spy_regime_state: str | None = None,
     manifest_hash: str = "",
     computed_at: datetime | None = None,
@@ -481,6 +555,10 @@ def compute_daily_features(
         "first_dev_touch_order": None,
         "band1_rejection_strength": None,
         "second_band_streak": None,
+        # Was the anchor those bands come from knowable on this session (Q2.1)?
+        # Set only where an anchor was actually used, so "" means unanchored
+        # and NULL means the row predates the column.
+        "anchor_knowledge": ANCHOR_KNOWLEDGE_UNANCHORED,
         "ema8": _grid_value(grid, "ema_8"),
         "ema15": _grid_value(grid, "ema_15"),
         "ema21": _grid_value(grid, "ema_21"),
@@ -510,6 +588,7 @@ def compute_daily_features(
     if anchor_index is not None and 0 <= anchor_index < len(usable):
         avwap, _stdev, bands = anchored_vwap_bands(usable, anchor_index)
         if bands:
+            features["anchor_knowledge"] = str(anchor_knowledge or ANCHOR_KNOWLEDGE_UNANCHORED)
             features["avwape_value"] = avwap
             for band in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
                 features[f"avwape_{band.lower()}"] = bands.get(band)
@@ -628,21 +707,27 @@ def build_daily_snapshots(
             report.skip("ALREADY_COMPUTED")
             continue
         d1_rows = rows_by_symbol.get(symbol) or []
-        anchor_date = (anchors_by_symbol or {}).get(symbol)
+        # A bare date still works (every caller before Q2.1 passed one); a
+        # stamped AnchorChoice additionally says whether it was knowable.
+        choice = _anchor_choice((anchors_by_symbol or {}).get(symbol))
         anchor_index = None
-        if anchor_date is not None:
+        anchor_knowledge = ANCHOR_KNOWLEDGE_UNANCHORED
+        if choice is not None:
             ordered = sorted(
                 [row for row in d1_rows if _as_date(row.get("session_date")) <= session_date],
                 key=lambda row: row.get("session_date"),
             )
-            anchor_index = anchor_index_for(ordered, anchor_date)
+            anchor_index = anchor_index_for(ordered, choice.anchor_bar_date)
             if anchor_index is None:
                 report.skip("ANCHOR_BAR_NOT_IN_HISTORY")
+            else:
+                anchor_knowledge = choice.knowledge
         computed = compute_daily_features(
             symbol,
             d1_rows,
             session_date=session_date,
             anchor_index=anchor_index,
+            anchor_knowledge=anchor_knowledge,
             spy_regime_state=spy_regime_state,
             manifest_hash=manifest_hash,
             computed_at=stamp,

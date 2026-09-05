@@ -289,6 +289,11 @@ FEATURE_SNAPSHOT_DAILY = _schema(
         pa.field("first_dev_touch_order", pa.int32()),
         pa.field("band1_rejection_strength", pa.float64()),
         pa.field("second_band_streak", pa.int32()),
+        # ADDITIVE (Q2.1/BD-99): was the anchor those bands come from observed
+        # before this session or reconstructed after it? "" means the row used
+        # no anchor; NULL means the row was written before the column existed
+        # and is read as `legacy`, never as observed.
+        pa.field("anchor_knowledge", pa.string()),
         pa.field("ema8", pa.float64()),
         pa.field("ema15", pa.float64()),
         pa.field("ema21", pa.float64()),
@@ -429,6 +434,11 @@ OUTCOME_PATH = _schema(
         pa.field("net_r", pa.float64()),
         pa.field("cost_model_id", pa.string()),
         pa.field("result_state", pa.string()),
+        # ADDITIVE (Q2.2): which walk produced this row - `managed`,
+        # `plain_target` or `plain_no_target`. NULL on every row written before
+        # the column and on the recipes that do not walk a swing path; readers
+        # call those `unlabelled` rather than guessing.
+        pa.field("path_kind", pa.string()),
         pa.field("maturity_at", _TS),
         pa.field("censor_reason", pa.string()),
         pa.field("computed_at", _TS),
