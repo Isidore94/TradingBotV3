@@ -604,7 +604,8 @@ class DaytradeTrackerPanel(QFrame):
         self.status_label.setText(
             f"Learning state generated {generated} ({BOUNCE_LEARNING_STATE_FILE.name}); "
             f"outcome file updated {_mtime_text(INTRADAY_BOUNCE_OUTCOMES_FILE)}. "
-            f"{getattr(self, '_held_run_window_text', '')}".rstrip()
+            f"{getattr(self, '_held_run_window_text', '')} "
+            f"{getattr(self, '_outcome_coverage_text', '')}".rstrip()
         )
 
     def start_refresh(self) -> None:
@@ -654,15 +655,26 @@ class DaytradeTrackerPanel(QFrame):
 
     def _on_held_run_loaded(self, summaries) -> None:
         window_text = ""
+        coverage_text = ""
         if isinstance(summaries, dict) and "summaries" in summaries:
             window_text = held_run_window_text(summaries.get("window"))
+            coverage_text = outcome_coverage_text(summaries.get("outcome_coverage"))
             summaries = summaries.get("summaries")
         self._held_run_summaries = summaries if isinstance(summaries, dict) else {}
-        if window_text:
-            self._held_run_window_text = window_text
+        # Q1's window sentence, then M2's coverage sentence. Each is appended
+        # only once: `reload_from_disk` rebuilds the label from
+        # `_held_run_window_text`, and this guard keeps a second worker result
+        # from doubling either clause.
+        for text, attribute in (
+            (window_text, "_held_run_window_text"),
+            (coverage_text, "_outcome_coverage_text"),
+        ):
+            if not text:
+                continue
+            setattr(self, attribute, text)
             current = self.status_label.text()
-            if window_text not in current:
-                self.status_label.setText(f"{current} {window_text}".strip())
+            if text not in current:
+                self.status_label.setText(f"{current} {text}".strip())
         rows = apply_champion_tier(
             apply_held_and_ran(self._performance_rows, self._held_run_summaries),
             getattr(self, "_learning_state", {}) or {},
@@ -783,6 +795,19 @@ def measured_text(cell) -> str:
     return f"{int(measured)} / {int(total)}"
 
 
+def outcome_coverage_text(counts) -> str:
+    """The window's outcome coverage, in one sentence (packet M2.3).
+
+    `Outcomes: measured N (eod A / swept B), unmeasured C, open D over the
+    window.` Rendered by `outcome_semantics` so this line, the AWAY digest's
+    and the sweep's log all say the same thing. Blank when there is nothing to
+    say, so the status line never grows an empty clause.
+    """
+    import outcome_semantics
+
+    return outcome_semantics.format_terminal_coverage(counts)
+
+
 def held_run_window_text(report) -> str:
     """One status-line sentence for `held_run_score.window_report` (packet Q1)."""
     if not isinstance(report, dict) or not report.get("start"):
@@ -849,9 +874,10 @@ def load_held_run_summaries() -> dict:
 def load_held_run_report() -> dict:
     """`{"summaries": ..., "window": ...}` from ONE read of the outcome log.
 
-    The window report rides along so the status line can say which sessions
-    the headline is measured over and which are missing (packet Q1), without a
-    second 300 MB pass. NEVER on the Qt thread.
+    The window report and the outcome coverage ride along so the status line
+    can say which sessions the headline is measured over, which are missing
+    (packet Q1) and how many of the window's outcomes were measured at all
+    (packet M2), without a second 300 MB pass. NEVER on the Qt thread.
     """
     try:
         import held_run_score
@@ -860,6 +886,10 @@ def load_held_run_report() -> dict:
         return {
             "summaries": held_run_score.dimension_summaries(episodes),
             "window": held_run_score.window_report(episodes),
+            # Packet M2.3: coverage is shown, never hidden - and it rides THIS
+            # read. A second pass over the 308 MB file to count four kinds
+            # would be the panel's expensive read done twice.
+            "outcome_coverage": held_run_score.terminal_coverage(episodes),
         }
     except Exception:
-        return {"summaries": {}, "window": {}}
+        return {"summaries": {}, "window": {}, "outcome_coverage": {}}

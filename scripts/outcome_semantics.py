@@ -277,3 +277,205 @@ def format_coverage(counts: Mapping[str, int], unconfigured: Iterable[str]) -> s
 
 def registered_families() -> tuple[str, ...]:
     return tuple(sorted(_BY_FAMILY))
+
+
+# ---------------------------------------------------------------------------
+# What did this trade's finalization actually MEASURE? - packet M2
+# ---------------------------------------------------------------------------
+# `claim_kind` above answers "may this family be averaged as a trade at all".
+# This half answers the next question down: for a row that IS a trade, did the
+# finalizer measure anything, and under what.
+#
+# The after-close sweep (`sweep_pending_bounce_outcomes`) "needs no bars and no
+# IB": it finalizes from what each trade already measured, so it holds no bars
+# through the close and every row it writes was labelled `unresolved` by
+# construction - INCLUDING a trade whose bars were measured earlier and whose
+# stop is a recorded fact. Measured over the twenty sessions to 2026-09-05:
+# 4,251 `unresolved` rows, of which **3,607 carry a measured basis** (2,054
+# `last_measured_bar`, 1,553 `stop_hit_from_prior_measurement`) and only 644
+# measured nothing at all. `setup_scoreboard.exit_policy_r` already reads those
+# 3,607 under the policy that measured them; only the LABEL said otherwise.
+#
+# So: **`unresolved` means UNMEASURED**, and a swept trade that measured its
+# bars is `measured_swept`. History is read correctly here rather than
+# rewritten - an evidence row is never rewritten (plan.md sec 5).
+
+#: The status column's values, spelled once. `swept_measured` is ADDITIVE: the
+#: CSV header is unchanged and nothing in the tree enumerates this domain.
+STATUS_OPEN = "open"
+STATUS_EOD_COMPLETE = "eod_complete"
+STATUS_SWEPT_MEASURED = "swept_measured"
+STATUS_UNRESOLVED = "unresolved"
+
+#: `context_json.finalization.basis` - the MECHANISM the numbers came from.
+BASIS_MEASURED = "measured"
+BASIS_LAST_MEASURED_BAR = "last_measured_bar"
+BASIS_STOP_HIT_FROM_PRIOR = "stop_hit_from_prior_measurement"
+BASIS_UNRESOLVED = "unresolved"
+
+#: A basis that says bars WERE measured, just not through the close.
+SWEPT_MEASURED_BASES = frozenset({BASIS_LAST_MEASURED_BAR, BASIS_STOP_HIT_FROM_PRIOR})
+
+TERMINAL_MEASURED_EOD = "measured_eod"
+TERMINAL_MEASURED_SWEPT = "measured_swept"
+TERMINAL_UNMEASURED = "unmeasured"
+TERMINAL_OPEN = "open"
+
+#: Ordered for a report: the measured pair, then what was not measured, then
+#: what is not finished. A reader may iterate this and never invent a fifth.
+TERMINAL_KINDS = (
+    TERMINAL_MEASURED_EOD,
+    TERMINAL_MEASURED_SWEPT,
+    TERMINAL_UNMEASURED,
+    TERMINAL_OPEN,
+)
+
+#: Kinds whose R may be averaged - under the policy that measured them
+#: (`setup_scoreboard.exit_policy_r`), never blended into `eod_hold`.
+MEASURED_TERMINAL_KINDS = frozenset({TERMINAL_MEASURED_EOD, TERMINAL_MEASURED_SWEPT})
+
+#: What a NEW row's status means on its own. A row the current writer emits
+#: needs no basis lookup: `unresolved` is written only when nothing was
+#: measured. The historical `unresolved`-with-a-basis case is resolved from the
+#: basis in :func:`terminal_kind`.
+TERMINAL_KIND_BY_STATUS = {
+    STATUS_EOD_COMPLETE: TERMINAL_MEASURED_EOD,
+    STATUS_SWEPT_MEASURED: TERMINAL_MEASURED_SWEPT,
+    STATUS_UNRESOLVED: TERMINAL_UNMEASURED,
+    STATUS_OPEN: TERMINAL_OPEN,
+}
+
+
+def status_for_finalization_basis(basis: str | None) -> str:
+    """The status a finalizing row carries, from the basis it was arrived at.
+
+    The writer's one decision, spelled here so the reader and the writer cannot
+    drift. `measured` (bars through the close) is `eod_complete`; a basis that
+    used a prior measurement is `swept_measured`; anything else - including a
+    blank basis, which is what a row with a non-positive risk gets - is
+    `unresolved`, which now means UNMEASURED and nothing else.
+    """
+    key = str(basis or "").strip().lower()
+    if key == BASIS_MEASURED:
+        return STATUS_EOD_COMPLETE
+    if key in SWEPT_MEASURED_BASES:
+        return STATUS_SWEPT_MEASURED
+    return STATUS_UNRESOLVED
+
+
+def _finalization(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    """`context_json.finalization`, from a CSV string or an already-parsed dict."""
+    import json
+
+    payload: Any = row.get("context_json")
+    if payload is None:
+        payload = row.get("context")
+    if isinstance(payload, str):
+        text = payload.strip()
+        # The cheap substring test first: on the live file this function would
+        # otherwise parse ~325,000 JSON blobs to find a key most rows lack.
+        if not text or "finalization" not in text:
+            return {}
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    found = payload.get("finalization")
+    return found if isinstance(found, Mapping) else {}
+
+
+def terminal_kind(row: Mapping[str, Any] | None) -> str:
+    """What this outcome row's finalization MEASURED - one of `TERMINAL_KINDS`.
+
+    * ``measured_eod`` - bars through the close were in hand; `close_r` is the
+      `eod_hold` number.
+    * ``measured_swept`` - the after-close sweep settled it from bars measured
+      earlier. It counts under the policy that measured it
+      (`setup_scoreboard.exit_policy_r`: `stop_exit` or `last_measured`) and
+      **never under `eod_hold`**, which it has no number for.
+    * ``unmeasured`` - nothing was ever measured after the entry. Nothing about
+      this row may be averaged.
+    * ``open`` - not a final row: the trade has no terminal statement yet.
+
+    Read the STATUS first, and the basis only when the status cannot answer:
+    the historical `unresolved` label is ambiguous and the current writer's is
+    not. A final row carrying a status this registry has never seen is
+    `unmeasured` - missing data is uncertainty, never confirmation (plan.md
+    sec 5).
+    """
+    if not isinstance(row, Mapping):
+        return TERMINAL_OPEN
+    event_type = str(row.get("event_type") or "").strip().lower()
+    if event_type and event_type != "final":
+        return TERMINAL_OPEN
+    status = str(row.get("status") or "").strip().lower()
+    if status in (STATUS_EOD_COMPLETE, STATUS_SWEPT_MEASURED):
+        return TERMINAL_KIND_BY_STATUS[status]
+    if status and status != STATUS_UNRESOLVED and status != STATUS_OPEN:
+        return TERMINAL_UNMEASURED
+    basis = str(_finalization(row).get("basis") or "").strip().lower()
+    if not basis:
+        # No status the registry knows and no basis either. `open` when the
+        # row never claimed to be final; otherwise there is genuinely nothing
+        # to read, and nothing to read is not a measurement.
+        return TERMINAL_OPEN if status != STATUS_UNRESOLVED else TERMINAL_UNMEASURED
+    # A row whose STATUS is blank but which is explicitly `final` and carries a
+    # basis is answered from the basis. `setup_scoreboard.OUTCOME_COLUMNS` does
+    # not read the `status` column at all - it has always worked off
+    # `finalization.basis` - so its frames arrive here status-less and must not
+    # read as `open`.
+    if basis == BASIS_MEASURED:
+        return TERMINAL_MEASURED_EOD
+    if basis in SWEPT_MEASURED_BASES:
+        return TERMINAL_MEASURED_SWEPT
+    return TERMINAL_UNMEASURED
+
+
+def terminal_coverage(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    """Count the four kinds per EVENT, not per row.
+
+    The outcome log carries a `registered` row, a stream of `update`s, the
+    milestones and at most one `final` for each event; counting rows would
+    weight a long-running trade more heavily than a short one and would count
+    every event as `open` at least once. An event with a final row takes that
+    row's kind; an event without one is `open`.
+    """
+    kinds: dict[str, str] = {}
+    for row in rows or ():
+        if not isinstance(row, Mapping):
+            continue
+        event_id = str(row.get("event_id") or "").strip()
+        if not event_id:
+            continue
+        kind = terminal_kind(row)
+        if kind != TERMINAL_OPEN or event_id not in kinds:
+            kinds[event_id] = kind
+    counts = {kind: 0 for kind in TERMINAL_KINDS}
+    for kind in kinds.values():
+        counts[kind] += 1
+    counts["measured"] = counts[TERMINAL_MEASURED_EOD] + counts[TERMINAL_MEASURED_SWEPT]
+    counts["events"] = len(kinds)
+    return counts
+
+
+def format_terminal_coverage(
+    counts: Mapping[str, int] | None, window_text: str = "over the window"
+) -> str:
+    """One sentence a status line, a digest or a report prints verbatim.
+
+    ``Outcomes: measured 7,427 (eod 3,820 / swept 3,607), unmeasured 644,
+    open 90 over the window.`` Blank when there is nothing to say, so a caller
+    never appends an empty clause.
+    """
+    if not counts or not counts.get("events"):
+        return ""
+    eod = int(counts.get(TERMINAL_MEASURED_EOD, 0))
+    swept = int(counts.get(TERMINAL_MEASURED_SWEPT, 0))
+    tail = f" {window_text}" if window_text else ""
+    return (
+        f"Outcomes: measured {eod + swept:,} (eod {eod:,} / swept {swept:,}), "
+        f"unmeasured {int(counts.get(TERMINAL_UNMEASURED, 0)):,}, "
+        f"open {int(counts.get(TERMINAL_OPEN, 0)):,}{tail}."
+    )

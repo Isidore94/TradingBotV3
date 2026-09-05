@@ -90,6 +90,10 @@ from master_avwap_shared import (
     normalize_master_avwap_event_row,
 )
 from focus_picks import load_focus_map
+# Packet M2. The status a finalizing row carries, and the terminal kind a reader
+# gets back from it, are ONE decision - kept in a pure, import-light module so
+# the writer here and every reader of the outcome CSV cannot drift apart.
+import outcome_semantics
 from market_internals import format_internals_line, internals_context_fields
 from durability_retry import fetch_with_bounded_retry
 from vold_recorder import (
@@ -1530,6 +1534,33 @@ def _m5_bounce_delivery(quality, rvol_value, *, human_pick=False, learning_only=
     if rvol_value is not None and rvol_value < RVOL_MIN_ALERT:
         cautions.append(f"session rvol {rvol_value:.2f} < {RVOL_MIN_ALERT:.2f}")
     return True, cautions
+
+
+def outcome_sweep_log_line(counts) -> str:
+    """The after-close sweep's one log line, naming what it MEASURED (M2).
+
+    The old line said only how many trades were finalized, which is the same
+    sentence whether every one of them graded or none of them did. The split
+    comes from `counts["by_terminal_kind"]`, which the sweep accumulates from
+    the status the WRITER wrote - never re-derived here, or the log and the
+    file could disagree.
+    """
+    split = (counts or {}).get("by_terminal_kind") or {}
+    return (
+        "Outcome sweep finalized {finalized} pending trade(s): "
+        "measured_eod {eod}, swept_measured {swept}, unmeasured {unmeasured}, "
+        "expired {expired}; {existing} already final in the CSV, "
+        "{commit_failed} commit failure(s); {open} still open."
+    ).format(
+        finalized=int((counts or {}).get("finalized", 0)),
+        eod=int(split.get(outcome_semantics.TERMINAL_MEASURED_EOD, 0)),
+        swept=int(split.get(outcome_semantics.TERMINAL_MEASURED_SWEPT, 0)),
+        unmeasured=int(split.get(outcome_semantics.TERMINAL_UNMEASURED, 0)),
+        expired=int((counts or {}).get("expired", 0)),
+        existing=int((counts or {}).get("recorded_existing", 0)),
+        commit_failed=int((counts or {}).get("commit_failed", 0)),
+        open=int((counts or {}).get("pending_after", 0)),
+    )
 
 
 def _latest_bounce_outcome_rows(outcomes_df: pd.DataFrame) -> pd.DataFrame:
@@ -3347,13 +3378,22 @@ class BounceBot(EWrapper, EClient):
         return counts
 
     def finalize_outcome_once(
-        self, event_id, *, rows_after_entry=None, bars_elapsed=0, already_final=None
+        self, event_id, *, rows_after_entry=None, bars_elapsed=0, already_final=None,
+        record=None,
     ) -> str:
         """Finalize one trade, exactly once, across threads, processes and crashes.
 
         Returns what happened: `"finalized"`, `"skipped"` (somebody else did it,
         or it is no longer pending), `"recorded_existing"` (the row was already
         in the CSV from an interrupted attempt) or `"commit_failed"`.
+
+        `record`, when given, is a caller-owned dict this fills with
+        `{"status": ...}` - the status of the row it actually WROTE (packet M2).
+        A caller-owned dict rather than an attribute on `self`: the scan thread
+        and the sweep both call this, and an attribute would race between the
+        call and the read. Nothing is written for `recorded_existing`, because
+        an earlier attempt wrote that row and guessing its status would be an
+        invention.
 
         The order is the whole point:
 
@@ -3412,13 +3452,15 @@ class BounceBot(EWrapper, EClient):
                 # the duplicate this transaction exists to prevent.
                 outcome = "recorded_existing"
             else:
-                self._append_bounce_outcome_row(
+                written_status = self._append_bounce_outcome_row(
                     state, "final",
                     bars_elapsed=int(bars_elapsed or 0),
                     milestone_bar=None,
                     rows_after_entry=rows_after_entry if rows_after_entry is not None else pd.DataFrame(),
                     finalize_eod=True,
                 )
+                if record is not None:
+                    record["status"] = written_status
 
             self._remember_finalized_outcome(event_id, state.get("trade_date"))
             self.pending_bounce_outcomes.pop(event_id, None)
@@ -4694,6 +4736,11 @@ class BounceBot(EWrapper, EClient):
             "still_open": 0,
         }
         by_reason: dict[str, int] = {}
+        # Packet M2: what the sweep actually MEASURED, taken from the status the
+        # writer wrote rather than re-derived here. A sweep that reports only
+        # "finalized 321" is a sweep nobody can tell apart from one that graded
+        # nothing.
+        by_terminal_kind: dict[str, int] = {}
         counts["failed"] = 0
         counts["commit_failed"] = 0
         counts["recorded_existing"] = 0
@@ -4753,11 +4800,13 @@ class BounceBot(EWrapper, EClient):
             # adds the machine-wide one. It is held for exactly one trade -
             # never across the whole batch - and it commits that trade's own
             # checkpoint before moving on.
+            written: dict = {}
             try:
                 result = self.finalize_outcome_once(
                     event_id,
                     bars_elapsed=int(measured.get("bars") or 0),
                     already_final=already_final,
+                    record=written,
                 )
             except Exception:
                 logging.exception("Sweep could not finalize %s; it stays pending.", event_id)
@@ -4774,6 +4823,11 @@ class BounceBot(EWrapper, EClient):
             if result == "recorded_existing":
                 counts["recorded_existing"] += 1
             counts["finalized"] += 1
+            if written.get("status"):
+                kind = outcome_semantics.terminal_kind(
+                    {"event_type": "final", "status": written["status"]}
+                )
+                by_terminal_kind[kind] = by_terminal_kind.get(kind, 0) + 1
             if expired:
                 counts["expired"] += 1
             if measured:
@@ -4786,6 +4840,11 @@ class BounceBot(EWrapper, EClient):
 
         counts["pending_after"] = len(self.pending_bounce_outcomes)
         counts["by_reason"] = by_reason
+        counts["by_terminal_kind"] = {
+            kind: by_terminal_kind.get(kind, 0)
+            for kind in outcome_semantics.TERMINAL_KINDS
+            if kind != outcome_semantics.TERMINAL_OPEN
+        }
         counts["expire_after_sessions"] = expiry
         counts["swept_at"] = moment.isoformat(timespec="seconds")
         # Each finalization committed its own checkpoint inside its own
@@ -5212,9 +5271,18 @@ class BounceBot(EWrapper, EClient):
                 finalization_basis = "unresolved"
         if finalize_eod:
             # `eod_complete` means exactly one thing: bars through the close were
-            # in hand and `close_r` is the eod_hold number. Anything else is
-            # `unresolved` - with everything that WAS measured beside it.
-            status = "eod_complete" if finalization_basis == "measured" else "unresolved"
+            # in hand and `close_r` is the eod_hold number.
+            #
+            # Packet M2: everything else used to be `unresolved`, which made the
+            # sweep's output indistinguishable from a trade that measured
+            # nothing - 3,607 of the 4,251 `unresolved` rows in the twenty
+            # sessions to 2026-09-05 carry a MEASURED basis, and their R is
+            # already readable under `setup_scoreboard.exit_policy_r`. The row
+            # now says which: `swept_measured` when a prior measurement was
+            # used, `unresolved` ONLY when nothing was ever measured. The
+            # decision lives in `outcome_semantics` so the writer and every
+            # reader cannot drift; the numbers on the row are unchanged.
+            status = outcome_semantics.status_for_finalization_basis(finalization_basis)
             if minutes_elapsed == "" and entry_dt is not None:
                 session = get_market_session_window(reference=entry_dt)
                 close_naive = self._naive_market_local(session.close_local)
@@ -5642,13 +5710,7 @@ class BounceBot(EWrapper, EClient):
                             )
                         else:
                             self._outcome_sweep_date = today
-                            logging.info(
-                                "Outcome sweep finalized %d pending trade(s) (%d expired, "
-                                "%d already final in the CSV, %d commit failures); %d still open.",
-                                swept.get("finalized", 0), swept.get("expired", 0),
-                                swept.get("recorded_existing", 0), swept.get("commit_failed", 0),
-                                swept.get("pending_after", 0),
-                            )
+                            logging.info("%s", outcome_sweep_log_line(swept))
                     except Exception:
                         logging.exception("Outcome sweep failed; it will be retried.")
 

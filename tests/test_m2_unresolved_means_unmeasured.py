@@ -197,7 +197,10 @@ def _scoreboard_csv(tmp_path, status):
     }
     path = tmp_path / "outcomes.csv"
     columns = _SCOREBOARD_COLUMNS.split(",")
-    assert list(setup_scoreboard.OUTCOME_COLUMNS), "the scoreboard declares its columns"
+    # The finding this test rests on: the scoreboard is NOT a status-keyed
+    # reader. It never loads the column, and has always worked off
+    # `finalization.basis`, which is why nothing about it changes for M2.
+    assert "status" not in setup_scoreboard.OUTCOME_COLUMNS
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
@@ -343,10 +346,8 @@ def test_the_sweep_counts_the_four_way_split(tmp_path):
     assert split.get(outcome_semantics.TERMINAL_MEASURED_EOD, 0) == 0
 
 
-def test_the_sweep_log_line_names_the_split(tmp_path, caplog):
+def test_the_sweep_log_line_names_the_split(tmp_path):
     """The line the live gate reads off `trading_bot.log`."""
-    import logging
-
     import bounce_bot_lib.legacy as legacy
 
     host = _host(tmp_path)
@@ -360,9 +361,7 @@ def test_the_sweep_log_line_names_the_split(tmp_path, caplog):
     _seed(host, {"a": measured, "b": _state(event_id="b")})
     counts = host.sweep_pending_bounce_outcomes(now=AFTER_CLOSE)
 
-    with caplog.at_level(logging.INFO):
-        logging.info(*legacy.outcome_sweep_log_line(counts))
-    text = caplog.text
+    text = legacy.outcome_sweep_log_line(counts)
     assert "finalized 2" in text
     assert "measured_eod 0" in text
     assert "swept_measured 1" in text

@@ -94,6 +94,12 @@ D1_BASIS = "same_session_retrospective"
 #: each own a "lately" eventually disagree about the trader's own word.
 from evidence_stats import LATELY_SESSIONS as ROLLING_SESSIONS  # noqa: E402
 
+#: Packet M2. What a finalization MEASURED - `measured_eod`, `measured_swept`,
+#: `unmeasured`, `open`. Read through the one registry rather than restated, so
+#: this module and the writer cannot disagree about what `unresolved` means.
+import outcome_semantics  # noqa: E402
+from outcome_semantics import TERMINAL_OPEN  # noqa: E402
+
 #: Time buckets - THE CHAMPION'S OWN, read from `bounce_bot_lib.learning`
 #: rather than restated (R4 fix round 1).
 #:
@@ -236,6 +242,12 @@ class Episode:
     measurement_reason: str = REASON_NO_FOLLOW_UP
     #: The best MFE seen on any followed row for this event.
     mfe_r: float | None = None
+    #: What the FINALIZATION measured - `outcome_semantics.terminal_kind`
+    #: (packet M2). A different question from `measurement` above, which is
+    #: about the first thirty minutes: an episode can be `measured_swept` here
+    #: and `unmeasured` there, and both are true. Read from the final row; an
+    #: episode with no final row keeps `open`.
+    terminal_kind: str = TERMINAL_OPEN
     # Accumulators for the classification; `_finalize` turns them into a state.
     _broke_inside: bool = field(default=False, repr=False, compare=False)
     _held_past_window: bool = field(default=False, repr=False, compare=False)
@@ -429,6 +441,10 @@ def build_episodes(
         kind = str(row.get("event_type") or "").strip().lower()
         if kind == "final":
             episode._has_final = True
+            # Packet M2. `unresolved` used to cover both "nothing was ever
+            # measured" and "the sweep settled it from bars measured earlier",
+            # and the second is 3,607 of the last twenty sessions' 4,251.
+            episode.terminal_kind = outcome_semantics.terminal_kind(row)
         if kind != "registered":
             episode._follow_up_rows += 1
         stop_hit = _as_bool(row.get("stop_hit"))
@@ -587,6 +603,29 @@ def window_report(
         "sessions_with_data": len(with_data),
         "missing_sessions": [day for day in session_days if day not in present],
     }
+
+
+def terminal_coverage(episodes: Iterable[Episode]) -> dict[str, int]:
+    """The window's four-way outcome coverage, from episodes already built.
+
+    Packet M2.3: shown, never hidden. It rides the ONE read the caller already
+    did (`load_episodes` streams the 308 MB file once) rather than opening it a
+    second time to answer a second question.
+    """
+    counts = {kind: 0 for kind in outcome_semantics.TERMINAL_KINDS}
+    total = 0
+    for episode in episodes or ():
+        kind = getattr(episode, "terminal_kind", outcome_semantics.TERMINAL_OPEN)
+        if kind not in counts:
+            kind = outcome_semantics.TERMINAL_UNMEASURED
+        counts[kind] += 1
+        total += 1
+    counts["measured"] = (
+        counts[outcome_semantics.TERMINAL_MEASURED_EOD]
+        + counts[outcome_semantics.TERMINAL_MEASURED_SWEPT]
+    )
+    counts["events"] = total
+    return counts
 
 
 def build_segments(

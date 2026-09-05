@@ -217,6 +217,10 @@ class AutopilotService(QObject):
         self._evening_prep_running = False
         self._evening_briefing_lines: list[str] = []
         self._scorecard_line = ""
+        #: M2.3 - how many of today's outcomes were MEASURED, beside the
+        #: scorecard's average R. Filled from the rows the scorecard already
+        #: streamed; never its own read.
+        self._outcome_coverage_line = ""
         self._last_report_write: datetime | None = None
         self._last_report_attempt: datetime | None = None
         self._last_report_error = ""
@@ -582,6 +586,7 @@ class AutopilotService(QObject):
                 "autopilot_written": self._state.get("autopilot_written") or {"longs": [], "shorts": []},
             }
             self._scorecard_line = ""
+            self._outcome_coverage_line = ""
             self._save_state()
         if self._alerts_date != today:
             self._alerts_date = today
@@ -1631,6 +1636,9 @@ class AutopilotService(QObject):
         candidates, outcomes = core.read_scorecard_inputs(
             INTRADAY_BOUNCE_CANDIDATES_FILE, INTRADAY_BOUNCE_OUTCOMES_FILE, today
         )
+        # M2.3, from the rows just streamed - the digest says how many of
+        # today's outcomes were measured at all, not only what they averaged.
+        self._outcome_coverage_line = core.outcome_coverage_line(outcomes)
 
         lines: list[str] = []
         rows: list[dict] = []
@@ -1932,6 +1940,7 @@ class AutopilotService(QObject):
                 "universe_line": snapshot.get("universe_line", ""),
                 "industry_line": snapshot.get("industry_line", ""),
                 "scorecard_line": self._scorecard_line,
+                "outcome_coverage_line": self._outcome_coverage_line,
                 "auto_longs": self._read_auto_watchlist(AUTO_LONGS_FILE),
                 "auto_shorts": self._read_auto_watchlist(AUTO_SHORTS_FILE),
                 # Since R2, AWAY and EVENING STAGE their picks rather than

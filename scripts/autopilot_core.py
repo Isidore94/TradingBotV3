@@ -863,6 +863,26 @@ def score_autopilot_picks(
     }
 
 
+def outcome_coverage_line(
+    outcome_rows: Iterable[Mapping[str, Any]], *, window_text: str = "today"
+) -> str:
+    """The digest's outcome-coverage sentence (packet M2.3).
+
+    The AWAY digest already reports what today's alerts DID - the scorecard
+    line's average R - from rows `read_scorecard_inputs` has already streamed.
+    Until M2 it could not say how many of those outcomes were measured at all,
+    and `unresolved` covered both "the sweep graded it from bars it had" and
+    "nothing was ever measured". This says which, over the SAME rows: no second
+    pass over a 308 MB file, and the wording is `outcome_semantics`' so the
+    digest, the Daytrade Tracker and the sweep's log line cannot drift.
+    """
+    import outcome_semantics
+
+    return outcome_semantics.format_terminal_coverage(
+        outcome_semantics.terminal_coverage(outcome_rows), window_text=window_text
+    )
+
+
 def format_scorecard_line(scorecard: Mapping[str, Any], label: str = "Auto picks today") -> str:
     if not scorecard or not scorecard.get("picks"):
         return f"{label}: none logged."
@@ -3902,6 +3922,9 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         for key in (
             "universe_line",
             "scorecard_line",
+            # M2.3: beside the scorecard, because that is where the digest
+            # already reports what today's outcomes came to.
+            "outcome_coverage_line",
             "runtime_line",
             "operations_line",
             "last_scan_line",
