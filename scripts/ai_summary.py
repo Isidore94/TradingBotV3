@@ -2011,6 +2011,23 @@ SOURCE_KIND_FEEDBACK = "feedback"
 SOURCE_KIND_WALKAWAY = "walkaway"
 SOURCE_KIND_OPS = "ops"
 
+#: The ONLY sources that state a position -- the whole list, by exact id.
+#:
+#: Not the ``journal`` KIND, and the difference is the point (fix round,
+#: 2026-09-04). Five ids share the ``journal.`` family and only one of them says
+#: what is HELD: ``journal.trades_and_reviews`` carries a per-trade ``status``.
+#: The other four are the **Market Journal**, which is what the trader THOUGHT --
+#: ``journal.entries`` is their free text, ``journal.day_context`` is
+#: machine-measured market context, ``journal.chart_digests`` is what the charts
+#: looked like, ``journal.evidence_report`` is the nightly deterministic report.
+#: The Market Journal and the Journal are two stores, deliberately not merged,
+#: and a family-keyed rule let one stand as evidence for the other.
+#:
+#: A LIST rather than a kind because this is the narrow question: not "is this
+#: source about trading?" but "does this source state that a position exists?".
+#: Adding an id here is a deliberate act.
+POSITION_SOURCE_IDS = frozenset({"journal.trades_and_reviews"})
+
 #: Ids that are MEMBERSHIP even though their family is something else.
 #: ``market.auto_state`` is the Auto Pilot state, whose content is the current
 #: watchlists and Focus lists; ``watchlists.membership`` is the ticker brief's
@@ -2241,11 +2258,13 @@ COVERAGE_PROMPT_LINE = (
 #: every night for no reason, and the retry's fed-back error is a worse teacher
 #: than the instruction.
 GROUNDING_PROMPT_LINES = (
-    "A watchlist, a scanner file and a market snapshot say what a symbol IS or DID; only "
-    "the trade journal (source ids beginning 'journal.') says what is HELD. Do not write "
-    "'held long', 'holding', 'we are long/short', 'open position' or 'in a position' about "
-    "any symbol unless the same statement cites a 'journal.' source; a statement that does "
-    "will be discarded.\n"
+    "A watchlist, a scanner file and a market snapshot say what a symbol IS or DID, and the "
+    "market journal says what the trader THOUGHT; only the TRADE journal says what is HELD, "
+    "and its source id is exactly "
+    + ", ".join(f"'{source_id}'" for source_id in sorted(POSITION_SOURCE_IDS))
+    + ". Do not write 'held long', 'holding', 'we are long/short', 'open position' or 'in a "
+    "position' about any symbol unless the same statement cites that source; a statement "
+    "that does will be discarded.\n"
     "Any statement that states a percentage, an 'N of M', an 'n=N' or a decimal R value must "
     "also carry a metric_ref object {source_id, key, horizon, denominator}: the source_id must "
     "be one of that statement's own evidence_refs, the key must be a column, top-level field or "
@@ -2648,14 +2667,15 @@ def validate_ai_summary(
                         }
                     )
                 continue
-            # Q3.2, rule one: a POSITION claim needs a POSITION source.
+            # Q3.2, rule one: a POSITION claim needs a POSITION source, and
+            # POSITION_SOURCE_IDS is the whole list of those.
             # Applies to every section, ``data_quality`` and ``risk_notes``
             # included -- those are exempt from CITATION, not from asserting a
             # position they cannot support. The row is omitted, never softened:
             # rewriting a model's sentence into something defensible is the
             # desk deciding what the model meant.
             if states_a_position(statement) and not any(
-                _kind_or_unknown(ref) == SOURCE_KIND_JOURNAL for ref in clean_refs
+                ref in POSITION_SOURCE_IDS for ref in clean_refs
             ):
                 sink.append(
                     {
@@ -2663,7 +2683,7 @@ def validate_ai_summary(
                         "index": index,
                         "statement": statement,
                         "struck_refs": [],
-                        "detail": "position claim without a journal source",
+                        "detail": "position claim without a position source",
                         "row_dropped": True,
                     }
                 )

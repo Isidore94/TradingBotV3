@@ -1722,13 +1722,18 @@ published document and any later reader — including the frontier model — see
 type of every source. It is in `coverage` rather than the model's view because
 the model must not paraphrase provenance it cannot verify.
 
-**Known residual, for a later packet to decide:** the four Market Journal ids
-(`journal.evidence_report`, `journal.day_context`, `journal.chart_digests`,
-`journal.entries`) read as kind `journal` because the table is keyed by family,
-which is what the Q3 packet specified. Only `journal.trades_and_reviews` carries
-per-trade `status`, so only it truly STATES a position. Narrowing §9.2 to a
-`POSITION_SOURCE_IDS` set rather than the `journal` kind would close that gap; it
-is not done here because it was not authorized here.
+**The kind is not what §9.2 tests, and that is deliberate.** The table is keyed
+by family, so all five `journal.*` ids read as kind `journal` — but only
+`journal.trades_and_reviews` carries a per-trade `status`. The other four are the
+**Market Journal**, which is what the trader THOUGHT: `journal.entries` is their
+free text, `journal.day_context` is machine-measured market context,
+`journal.chart_digests` is what the charts looked like, `journal.evidence_report`
+is the nightly deterministic report. The two stores are deliberately not merged
+(`CLAUDE.md`, "Evidence, journal and statistics"), and a family-keyed position
+rule let one stand as evidence for the other. §9.2 therefore tests
+`POSITION_SOURCE_IDS`, an explicit list of ids, not the kind. The kind stays what
+it is: a description of the family, useful to a reader of the coverage block and
+to the frontier model, and not the thing the position rule rests on.
 
 ### 9.2 A position claim needs a position source
 
@@ -1736,8 +1741,16 @@ A statement matching `POSITION_CLAIM_PATTERNS` — a small listed vocabulary
 (`held long`, `held short`, `holding`, `long position`, `short position`,
 `currently long/short`, `we are long/short`, `open position`, `in a position`;
 case-insensitive, word-bounded) — is **dropped** unless its surviving refs
-include a source of kind `journal`. `detail` is
-`"position claim without a journal source"` and `row_dropped` is `True`.
+include an id in `POSITION_SOURCE_IDS`, which is
+`frozenset({"journal.trades_and_reviews"})` and nothing else. `detail` is
+`"position claim without a position source"` and `row_dropped` is `True`.
+
+**An exact list of ids, not the `journal` kind** (fix round, 2026-09-04). The
+question is narrow — not "is this source about trading?" but "does this source
+state that a position exists?" — and only the trade journal answers it, because
+only its rows carry a per-trade `status`. Adding an id here is a deliberate act.
+`GROUNDING_PROMPT_LINES` names the id to the model from this same constant, so
+the instruction and the enforcement cannot drift.
 
 The row is OMITTED, never softened: rewriting a model's sentence into something
 defensible is the desk deciding what the model meant. The 2026-08-28 rule is

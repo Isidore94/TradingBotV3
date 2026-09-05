@@ -815,8 +815,12 @@ which is evidence and must not be loaded as context.
   **raises** rather than defaulting, and `coverage.source_kinds` publishes the map.
   `market.auto_state` and `watchlists.membership` are `watchlist` despite their
   family, because their content is a list of names. **A statement that asserts a HELD
-  position is DROPPED unless a `journal` source is among its surviving refs** - the
-  2026-09-03 morning file called BULL a held long while citing watchlist membership.
+  position is DROPPED unless one of its surviving refs is in `POSITION_SOURCE_IDS`** -
+  the 2026-09-03 morning file called BULL a held long while citing watchlist
+  membership. That set is `{"journal.trades_and_reviews"}` and is an EXACT LIST OF IDS
+  rather than the `journal` KIND: the other four `journal.*` ids are the **Market
+  Journal**, which is what the trader THOUGHT, and the two stores are deliberately
+  never merged.
   **A statement stating a percentage, an `N of M`, an `n=N` or a decimal R must carry
   a resolvable `metric_ref` `{source_id, key, horizon, denominator}`** whose source is
   one of its own refs and whose key really exists in that source
@@ -1048,9 +1052,15 @@ a list of names.
 
 **A position claim needs a position source.** A statement matching
 `POSITION_CLAIM_PATTERNS` - a listed, word-bounded, case-insensitive vocabulary - is
-dropped unless a `journal`-kind source is among its surviving refs, with
-`detail: "position claim without a journal source"`. `data_quality` and `risk_notes`
-stay exempt from CITATION and are NOT exempt from this.
+dropped unless one of its surviving refs is in `POSITION_SOURCE_IDS`, with
+`detail: "position claim without a position source"`. That set is
+`{"journal.trades_and_reviews"}` and is an EXACT LIST OF IDS, not the `journal` kind
+(fix round, same day): five ids share that family and only the trade journal carries a
+per-trade `status`. The other four are the **Market Journal** - what the trader
+THOUGHT, machine-measured day context, chart digests, the nightly evidence report -
+and the two stores are deliberately not merged, so a family-keyed rule let one stand
+as evidence for the other. `data_quality` and `risk_notes` stay exempt from CITATION
+and are NOT exempt from this.
 
 **A numeric claim names its cell.** A statement stating a percentage, an `N of M`, an
 `n=N` or a decimal R must carry a `metric_ref` `{source_id, key, horizon,
