@@ -20,7 +20,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 |---|---|
 | Latest review | **2026-09-04: [project process review](docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)** over `f641421` (Codex). The trader said *"please review and implement the suggested changes"*; the lead turned it into five packets (Q1-Q5, Phase 0.18, `.claude/packets/Q*.md`), each built, reviewed by reproduction and merged the same evening. NOT built, ask-first (`bounce_bot_lib/legacy.py`): per-alert bar-close -> shown latency instrumentation, the H1 SPY recompute, a `stop_hit_at` column, the sweep autorun default. Also NOT in the review: the day's largest stall (19,922 ms at 07:03:47 in `ui/app.py:1240`). |
 | Working branch | **`main`** - **2026-09-04 evening: Phase 0.18 (Q1-Q5) MERGED at `b0db9bbe`** in a scratch worktree, packet order, every branch with a reviewer GO. Q1 `held_run_score` says what it MEASURED (5,222 held / 1,960 broken / 979 unmeasured live; D1 keeps the side, 8 opposed; the window is `lately_window`; a Measured column on the Daytrade Tracker). Q2 warehouse: `anchor_knowledge` observed/reconstructed/legacy, `path_kind`, read-only `band-coverage`, `rebuild-daily-features` (dry run by default) - gate #59's chain is now BD-100's four steps. Q3 AI grounding: typed source kinds, a position claim needs a surviving ref in `POSITION_SOURCE_IDS`, which is `journal.trades_and_reviews` only (the executive summary may never assert one; it is WITHHELD when it does), `metric_ref` on numeric claims, the morning file's three counts, `LikeLink.from_payload` and the audit scripts read `match_basis` (live 84 rows / 77 events / 41 linked / 36 none). Q4 overnight: consecutive clean exchange sessions + a RECORDED trader spot-audit gate enrichment (**enrichment refuses until `python -m ai_jobs.digest approve-audit` is run - 9 of 10 clean sessions today**), decision 0018 puts the deterministic slots before narration, `entry_index.json` is the frontier handoff. Q5: the pick scorecard runs on one owned worker with streamed reads, success-only `picks_scored_at` (15.7 s Qt stall the day before). Before it: the earnings-anchor bridge (14:30), T2 (12:40), T1 (11:30) - see the dated entries. |
-| Also in flight | **Nothing unmerged from today**: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
+| Also in flight | **`claude/n1-sidecar-aware-read` is BUILT and UNMERGED** (tip `89aec40`, tester `d7c7069` + builder `89aec40`): the nightly `sidecar_completion` slot handed Arrow naive desk-local bounds against a `tz=UTC` column, so `ArrowInvalid` was reported as `research_store_unreachable` every night from 2026-09-02 and gate #39 could not land. `pass_bars.desk_zone()` is now the ONE named seam for the zone a naive sidecar stamp is in, the session close is market-local, and a read fault is `lake_read_failed: <Exc>` rather than "unreachable". DRY read on the live SHW row: 60 rows, reason `""`. Live gate **#65**. Earlier: **Nothing unmerged from 2026-09-04**: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
 | Active roadmap items | **V4** (Working-lately + the priority switch - which now inherits Q1's rule that only an ALIGNED same-session D1 setup carries the privilege - the AWAY Recap rebuild, the Setup Types tab, P10's `after_like` split, the R4 advisories). **Gate #59's runbook** (BD-100): nightly build -> `rebuild-daily-features --from 2026-08-01 --to <today>` dry run, then `--apply` on the trader's go -> `recompute-outcomes --apply` -> `band-coverage --month 2026-08` / `2026-09`. **Trader action owed**: `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>` (from `scripts/`) after spot-auditing three packs, or enrichment stays silent. Live gates #29-#52 owed across Phases 0.13 and 0.14; #53-#64 listed below. |
 | Last verified baseline | **`main` at `b0db9bbe`, 2026-09-04 evening, run in the SCRATCH merge worktree on the merged tree as committed, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 6710 passed, 1 skipped, 72 subtests passed, ZERO failures, 5 min 34 s - run as 6709 passed + 1 failed on the merged tree BEFORE this block was refreshed (the Q3 doc-scan test demands the glance block name `POSITION_SOURCE_IDS`; the merge had kept the pre-Q3 rows), and that one test re-run green after the refresh with no other file touched.** `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7, source selftest green. No packaging trigger (no dependency, asset or new top-level package; every new module is inside an already-collected package). Previous: 6608 passed at the earnings-anchor bridge (14:30 PT). |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
@@ -33,6 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 65 | **The sidecar completion finishes a row (N1)** - the first nightly run after merge: the `sidecar_completion` line in `ai_job_ledger.jsonl` reads **`completed 1 of 1`**, or names a reason that is **not** `research_store_unreachable`; and `b9344eb372284d7f98f6083b50178e0b.completed.json` exists in `C:\TradingBotData\trader_annotation_bars\` with ~78 bars whose `dt` strings all carry an offset, the first still reading `2026-09-01T06:30:00-07:00` and the last `15:55` market-local. **A reason of `lake_read_failed: <Exc>` is a PASS of the naming half and a FAIL of the read** - it says the store opened and the query faulted, which is the distinction this packet exists to draw. Gate #39's blocker is cleared by this | packet N1, 2026-09-05 |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
 | 62 | **The AI grounding contract holds on a real night (Q3)** - the first nightly run after `claude/q3-ai-grounding` merges: `ai_morning_brief.txt` OPENS with `Analyzed A of N. Membership-only B. Failed C.` and `A + B + C == N`; every membership-only block leads with `membership only - ...` and carries NO position language; and `ai_jobs`' dropped-row log names any position or numeric drop with its detail - the three strings the code emits are **`position claim without a position source`**, **`position claim in the executive summary`** and **`numeric claim without a resolvable metric_ref`**, and those are what to grep for. **Read the executive summaries too**: 480 of 1,478 published ones asserted a position, so expect the system's `Executive summary withheld: ...` line to appear on the first night and to become rare as the model learns the rule. A night with ZERO drops is also a pass - the rule is that a drop, when it happens, is named. **Watch for over-drop**: if the analyzed count collapses versus the prior night, the numeric regex is catching prose and the packet's `NUMERIC_CLAIM_PATTERNS` is the one thing to widen or narrow. | packet Q3, 2026-09-04 |
@@ -100,6 +101,60 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+
+### 2026-09-05 - Packet N1: the sidecar completion reads the lake with AWARE bounds (branch `claude/n1-sidecar-aware-read`, UNMERGED)
+
+Trader, 2026-09-05: *"Go ahead and build these fixes out"* after the overnight assessment named
+this defect. Tester first (8 red tests on `d7c7069`), builder second; no detector, scoring or
+alert file in scope.
+
+**What was wrong, measured on the live row.** The one pending sidecar - SHW,
+`event_id b9344eb372284d7f98f6083b50178e0b` - stores its bars as `{"dt": "2026-09-01T06:30:00"}`:
+NAIVE, and 06:30 is the RTH open on a **Pacific** desk, so the stamps are DESK-local wall time
+while `created_at` on the same file carries `-07:00`. `_bar_moment` handed that back unchanged;
+`_session_close` did `moment.replace(hour=16)`, i.e. 16:00 **Pacific** - three hours past the
+13:00 PT close; and `_lake_bars` passed the naive pair to `ResearchStore.read_rows`, whose
+`bar_m5.interval_start` is `timestamp[us, tz=UTC]`. Arrow raises `ArrowInvalid`, the blanket
+`except` called it `research_store_unreachable`, and `ai_job_ledger.jsonl` had said
+"1 research_store_unreachable" every night since 2026-09-02 while the store was reachable the
+whole time. **Gate #39 could never land**, and three nights of diagnosis pointed at the share.
+
+**What landed** (`89aec40`):
+
+1. **ONE SEAM, NAMED.** `pass_bars.desk_zone()` is the zone a naive desk bar stamp is written in,
+   re-exported by `sidecar_completion` so both modules attach the same thing and a test can pin it
+   through the module global. A configured `market_local_timezone` wins; failing a real IANA zone
+   the platform is asked **per moment**, because Windows exposes no key and `market_session` falls
+   back to an offset frozen at "now" - attaching July's `-07:00` to a January bar is an hour wrong,
+   and an hour is twelve M5 bars. `_bar_moment` ATTACHES to a naive moment and never strips an
+   aware one.
+2. `_session_close` converts to `America/New_York` FIRST and then sets 16:00, so it is the
+   exchange's close whatever zone the desk writes in.
+3. The two failures are SPLIT. `ResearchStore.open()` refusing is the only thing that means
+   `research_store_unreachable`; a read that faults returns the new `REASON_LAKE_READ_FAILED`
+   carrying the exception class (`lake_read_failed: ArrowInvalid`), exported in `__all__`.
+4. `pass_bars._serialisable_bar` writes the offset from now on. **`sidecar_schema_version` stays
+   1** - an offset on a stamp that already had to be parsed is additive - and the original
+   `m5_bars_ref` file is still never rewritten.
+5. Every bar string in the completed payload carries an offset, asserted rather than assumed.
+
+**DRY read against the LIVE row, from the worktree, no write** (the nightly slot owns the write):
+bounds `2026-09-01T08:00:00-07:00` (15:00Z) to `2026-09-01T16:00:00-04:00` (20:00Z), **60 rows,
+reason `""`**. The attached `-07:00` matches the file's own `created_at` offset, which is the
+independent corroboration that the zone is the desk's and not the market's.
+
+**Fail-before-fix, proven**: the two modules were restored to `d7c7069` and all 12 new tests
+failed; the fix was restored and all 22 pass with P9's. `tests/test_p9_sidecar_completion.py`
+gained an autouse fixture pinning the seam to `America/New_York` - its `OPEN` is 09:30 and its
+last bar 15:55, New York wall times chosen when a naive stamp was read in no zone at all. **No
+assertion was weakened**; the module is now machine-independent, where before it would have
+passed on an Eastern desk and failed on a Pacific one.
+
+**One thing found and deliberately NOT changed**: `pass_cohort._after`'s docstring says the
+sidecar's bar times are "market-local by construction". They are desk-local, as this packet
+measured. Its CODE is right by luck - it attaches `passed_at`'s offset, and `created_at` is
+written on the same desk - and stays right now that the stamps arrive aware. `pass_cohort.py` is
+outside N1's scope; the comment is a trap for the next reader and is named here instead.
 
 ### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
 

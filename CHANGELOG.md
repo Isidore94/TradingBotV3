@@ -809,6 +809,27 @@ which is evidence and must not be loaded as context.
   what it always meant and is never rewritten. **This makes the intraday grade
   reachable, which answers gate 34's open definition question without changing
   the definition.**
+- **That read is TIMEZONE-AWARE, and a failed read names itself** (N1,
+  2026-09-05). A sidecar's `dt` is naive DESK-local wall time - the live SHW row
+  opens at `2026-09-01T06:30:00`, the RTH open on a Pacific desk, while
+  `created_at` on the same file carries `-07:00`. `pass_bars.desk_zone()` is the
+  ONE named seam for that zone (a configured `market_local_timezone` wins,
+  otherwise the platform is asked PER MOMENT so DST is right on both sides of a
+  transition - Windows has no IANA key and `market_session` falls back to an
+  offset frozen at "now"), re-exported by `sidecar_completion` so both modules
+  attach the same thing. A naive moment is ATTACHED and an aware one is never
+  stripped; `_session_close` is 16:00 **market-local** rather than 16:00 in
+  whatever zone the bar was read in (it was 16:00 Pacific, three hours past the
+  real close); and `_serialisable_bar` writes the offset from now on, so a new
+  sidecar needs no convention - `sidecar_schema_version` stays **1**, because an
+  offset on a stamp that already had to be parsed is additive. The two lake
+  failures are SPLIT: `ResearchStore.open()` refusing is the only thing that
+  means `research_store_unreachable`, and a read that faults returns
+  `lake_read_failed: <ExceptionClass>`. Naive bounds against
+  `bar_m5.interval_start` (`timestamp[us, tz=UTC]`) raise `ArrowInvalid`, which
+  the blanket `except` had called unreachable every night since 2026-09-02 while
+  the store answered **60 rows** to the same window with aware bounds - so gate
+  \#39's blocker was a timezone, not a share.
 - **The backlog is tagged, provisionally, and the mark is permanent** (P6a,
   2026-09-01). `trade_annotations.tag_status` carries `confirmed` (the trader's),
   `provisional` (machine-applied, awaiting review) or `needs_review` (the tagger

@@ -495,6 +495,56 @@ landed in Phase 0.13 without their entry. These are those entries.
   worse than a blank grade. The slot sits BEFORE `pass_cohort_grading` because it
   feeds it - the same night completes and grades, rather than the morning after.
 
+- **That read is TIMEZONE-AWARE, and a failed read names itself** (packet N1,
+  2026-09-05). The slot completed nothing for three nights. `ai_job_ledger.jsonl`
+  said "1 research_store_unreachable" every night from 2026-09-02, and the share
+  was mounted the whole time.
+
+  **What a sidecar's `dt` actually is.** The live SHW row
+  (`b9344eb372284d7f98f6083b50178e0b`) stores `{"dt": "2026-09-01T06:30:00"}` -
+  naive - while `created_at` on the same file carries `-07:00`. 06:30 is the RTH
+  open on a **Pacific** desk, not on an Eastern one: the bars are DESK-local wall
+  time, because the capture rail copies what the desk's own pane already drew.
+  Three things followed from nobody having written that down. `_bar_moment`
+  returned the naive value unchanged. `_session_close` did
+  `moment.replace(hour=16)` - 16:00 in the bar's own zone, i.e. 16:00 Pacific,
+  three hours past the 13:00 PT close, so the window asked for bars that do not
+  exist. And `_lake_bars` handed the naive pair to `ResearchStore.read_rows`,
+  whose `bar_m5.interval_start` is `timestamp[us, tz=UTC]`; Arrow does not widen
+  such a comparison, it raises `ArrowInvalid`, and the blanket `except` reported
+  that as an unreachable store. The same window with aware bounds returns **60
+  rows**. Gate #39 could not land, and three nights of diagnosis pointed at the
+  DAS.
+
+  **The rule.** `pass_bars.desk_zone()` is the ONE named seam for the zone a
+  naive desk bar stamp is written in, re-exported by `sidecar_completion` so both
+  modules attach the same thing, and called through the module global so a test
+  can pin it - a test that resolves the zone from the machine it runs on is only
+  a test on that machine. A configured `market_local_timezone` wins, because a
+  trader who has stated their zone has stated it. Failing a real IANA zone the
+  platform is asked **per moment**: Windows exposes no key, so
+  `market_session.get_market_local_timezone()` falls back to
+  `datetime.now().astimezone().tzinfo`, a FIXED offset frozen at the instant it
+  was asked, and attaching July's `-07:00` to a January bar is an hour wrong -
+  twelve M5 bars of the wrong window. A naive moment is ATTACHED and an aware one
+  is **never** stripped (CLAUDE.md's adoption-gate rule, applied to bar stamps).
+  `_session_close` converts to `America/New_York` FIRST and then sets 16:00, so
+  it is the exchange's close whatever zone the desk writes in.
+
+  **The two absences are different and are now named separately.**
+  `ResearchStore.open()` refusing is the ONLY thing that means
+  `research_store_unreachable`; a read that faults returns
+  `lake_read_failed: <ExceptionClass>`. That distinction is the whole cost of
+  this incident: a reason that named the wrong cause sent three days of
+  diagnosis in the wrong direction, and the ledger line now says which half
+  broke.
+
+  **The writer states the offset from now on** (`_serialisable_bar`), so a new
+  sidecar needs no convention to be read. `sidecar_schema_version` stays **1**:
+  an offset on a stamp that already had to be parsed is additive, and every old
+  naive row still reads through `desk_zone()`. The original `m5_bars_ref` file is
+  still never rewritten.
+
 
 ## Hidden is not removed (V2 item 5, 2026-09-02)
 
