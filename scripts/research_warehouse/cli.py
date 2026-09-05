@@ -486,13 +486,18 @@ def _run_outcomes(
         row for row in selected
         if str(row.get("canonical_setup_id") or "") in occurrences.SLICE_SETUPS
     ]
+    slice_known = {str(row.get("occurrence_id")): row for row in slice_rows}
     legacy_slice = outcomes.build_outcomes(
         store,
         slice_rows,
         d1_by_symbol=d1_by_symbol,
         m5_by_symbol=m5_by_symbol,
-        bands_by_occurrence=_bands_by_occurrence(
-            store, {str(row.get("occurrence_id")): row for row in slice_rows}
+        bands_by_occurrence=_bands_by_occurrence(store, slice_known),
+        # The challenger's family, for `swing_house_variant_v1` (M4.2). A second
+        # read of the same already-resolved snapshot rows; the twin walks these
+        # or, where the challenger could not be measured, nothing.
+        variant_bands_by_occurrence=_bands_by_occurrence(
+            store, slice_known, prefix=VARIANT_BAND_PREFIX
         ),
         as_of=stamp,
         now=stamp,
@@ -673,12 +678,48 @@ def _unwritten_link_rows(store, rows: list[dict]) -> list[dict]:
     return keep
 
 
-def _bands_by_occurrence(store: ResearchStore, known: dict) -> dict:
+#: The champion's band columns (decision 0008's running-deviation sigma).
+CHAMPION_BAND_PREFIX = "avwape_"
+#: The challenger's (M4.1, `indicators.avwap_band_variants`). Two prefixes, one
+#: reader: the families are never merged into one set of levels.
+VARIANT_BAND_PREFIX = "avwap_variant_"
+
+
+def _keep_newer_snapshot(current: dict | None, candidate: dict) -> dict:
+    """Which of two ``feature_snapshot_daily`` rows for one (symbol, session) wins.
+
+    The dataset identity is (symbol, session_date, feature_set_version), so
+    since the M4.1 bump to ``tier1_v2`` a session can legitimately hold a row of
+    each shape - the old one written before the bump, the new one after. A
+    reader that took whichever landed last would be reading file order. The
+    newest ``computed_at`` wins; a tie keeps what is already held, so the read
+    is stable rather than arbitrary.
+    """
+    if current is None:
+        return candidate
+    return candidate if _computed_at(candidate) > _computed_at(current) else current
+
+
+def _computed_at(row: dict) -> datetime:
+    value = row.get("computed_at")
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _bands_by_occurrence(
+    store: ResearchStore, known: dict, *, prefix: str = CHAMPION_BAND_PREFIX
+) -> dict:
     """AVWAP bands pinned to each occurrence's own trigger session.
 
     The review's point-in-time note: bands computed later than the trigger
     would be look-ahead, so they are read from the ``feature_snapshot_daily``
     row for the trigger session, never from today's.
+
+    ``prefix`` selects the band FAMILY (M4.2): the champion's ``avwape_*`` or
+    the challenger's ``avwap_variant_*``. Two calls, two maps, never one merged
+    set of levels - a row whose family could not be measured gets no bands at
+    all rather than the other formula's numbers.
     """
     wanted = {}
     for identity, row in known.items():
@@ -694,17 +735,15 @@ def _bands_by_occurrence(store: ResearchStore, known: dict) -> dict:
             session_day = row.get("session_date")
             if isinstance(session_day, datetime):
                 session_day = session_day.date()
-            snapshots[(str(row.get("symbol") or ""), session_day)] = row
+            key = (str(row.get("symbol") or ""), session_day)
+            snapshots[key] = _keep_newer_snapshot(snapshots.get(key), row)
 
     bands = {}
     for identity, key in wanted.items():
         snapshot = snapshots.get(key)
         if snapshot is None:
             continue
-        resolved = {
-            band.upper(): snapshot.get(f"avwape_{band}")
-            for band in ("upper_1", "upper_2", "upper_3", "lower_1", "lower_2", "lower_3")
-        }
+        resolved = _bands_from_snapshot(snapshot, prefix=prefix)
         if any(value is not None for value in resolved.values()):
             bands[identity] = resolved
     return bands
@@ -1107,6 +1146,9 @@ def run_dedupe(
 #: OWN required bands (``outcomes.required_band_numbers``), never a shared list.
 BAND_COVERAGE_RECIPES = (
     outcomes.SWING_HOUSE_V1,
+    # The band challenger's twin (M4.2). Asked for its OWN family's columns:
+    # the same required band NUMBERS, read from `avwap_variant_*`.
+    outcomes.SWING_HOUSE_VARIANT_V1,
     outcomes.CONTROL_FIXED_1R2R_V1,
     outcomes.CONTROL_TIME_ONLY_V1,
 )
@@ -1137,11 +1179,17 @@ def _empty_coverage_bucket() -> dict:
     }
 
 
-def _bands_from_snapshot(snapshot: dict) -> dict:
+def _bands_from_snapshot(snapshot: dict, *, prefix: str = CHAMPION_BAND_PREFIX) -> dict:
     return {
-        band.upper(): snapshot.get(f"avwape_{band}")
+        band.upper(): snapshot.get(f"{prefix}{band}")
         for band in ("upper_1", "upper_2", "upper_3", "lower_1", "lower_2", "lower_3")
     }
+
+
+def _band_prefix_for(recipe) -> str:
+    """Which snapshot columns this recipe's band family lives in (M4.2)."""
+    family = str(getattr(recipe, "band_family", outcomes.BAND_FAMILY_CHAMPION) or "")
+    return VARIANT_BAND_PREFIX if family == outcomes.BAND_FAMILY_VARIANT else CHAMPION_BAND_PREFIX
 
 
 def run_band_coverage(
@@ -1210,7 +1258,8 @@ def run_band_coverage(
                 day = row.get("session_date")
                 if isinstance(day, datetime):
                     day = day.date()
-                snapshots[(str(row.get("symbol") or ""), day)] = row
+                key = (str(row.get("symbol") or ""), day)
+                snapshots[key] = _keep_newer_snapshot(snapshots.get(key), row)
 
     report: dict = {
         "status": "OK",
@@ -1234,10 +1283,12 @@ def run_band_coverage(
                 bands = {}
             else:
                 knowledge = features.anchor_knowledge_bucket(snapshot.get("anchor_knowledge"))
-                bands = _bands_from_snapshot(snapshot)
+                bands = _bands_from_snapshot(snapshot, prefix=_band_prefix_for(recipe))
             geometry = outcomes.swing_geometry(occurrence, recipe, bands)
             levels = geometry["bands"]
-            state = stored.get((identity, recipe.recipe_id, outcomes.OUTCOME_DEFINITION_ID))
+            state = stored.get(
+                (identity, recipe.recipe_id, outcomes.outcome_definition_for(recipe))
+            )
             state_name = str(state.get("result_state")) if state else STATE_NOT_SIMULATED
 
             bucket = buckets.setdefault(knowledge, _empty_coverage_bucket())
@@ -1300,6 +1351,247 @@ def format_band_coverage(report: dict) -> str:
                 f"{present_cell:>7}{bucket['plain_no_target']:>7}"
                 f"{bucket['geometry_valid']:>7}{bucket['null_bands']:>6}  {states}"
             )
+    return "\n".join(lines)
+
+
+def _swing_headline():
+    """`swing_headline`, imported lazily - it is a `scripts/` root module.
+
+    ONE Wilson: `swing_headline.WILSON_Z` is the z for every trader-facing win
+    rate, and this table reaches for it rather than defining a second one.
+    `master_avwap_lib/expected_r.py`'s z=1.28 is a parameter inside a fenced
+    scoring file and is deliberately not used here.
+    """
+    scripts_dir = str(Path(__file__).resolve().parents[1])
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    import swing_headline  # type: ignore
+
+    return swing_headline
+
+
+def _empty_compare_cell() -> dict:
+    return {
+        "n": 0,
+        "resolved": 0,
+        "targeted": 0,
+        "stopped": 0,
+        "open": 0,
+        "other": 0,
+        "net_r_sum": 0.0,
+        "net_r_n": 0,
+    }
+
+
+def _finish_compare_cell(cell: dict) -> dict:
+    """Turn the running counts into the numbers the table prints.
+
+    ``resolved`` is TARGETED + STOPPED, and the win rate is over RESOLVED - an
+    OPEN row has not answered the question and must not sit in either the
+    numerator or the denominator. The lower bound is `swing_headline`'s Wilson,
+    which is the ONE Wilson for every trader-facing win rate.
+    """
+    wilson = _swing_headline().wilson_lower_bound
+    resolved = cell["targeted"] + cell["stopped"]
+    cell["resolved"] = resolved
+    cell["win_rate"] = (cell["targeted"] / resolved) if resolved else None
+    cell["win_rate_lb"] = wilson(cell["targeted"], resolved) if resolved else None
+    cell["mean_net_r"] = (cell["net_r_sum"] / cell["net_r_n"]) if cell["net_r_n"] else None
+    return cell
+
+
+def run_band_coverage_compare(
+    store: ResearchStore | None,
+    *,
+    month: str,
+    recipe_ids,
+) -> dict:
+    """Two recipes, ONE table, on the SAME occurrence ids (M4.3).
+
+    Built for the band challenger - `swing_house_v1` against
+    `swing_house_variant_v1` - but it is a general pairing: any two D1 recipes
+    `band-coverage` knows about can be read side by side.
+
+    **Pairing is the whole point.** An occurrence that has an outcome row under
+    one recipe and not the other is counted on a ``not_paired`` line and is in
+    NEITHER recipe's numbers. Reading each recipe over whatever rows it happens
+    to have would measure coverage and report it as edge: the challenger's bands
+    are missing on a different population than the champion's, so the recipe
+    with fewer rows can look better simply by having skipped the losses.
+
+    READ-ONLY. It resolves files, reads them Arrow-narrowed, and writes no row,
+    no manifest line and no file.
+    """
+    if store is None:
+        return {"status": "DISABLED", "message": "research_store_dir is not configured."}
+    wanted = [str(item) for item in (recipe_ids or ())]
+    if len(wanted) != 2:
+        return {"status": "ERROR", "message": "--compare takes exactly two recipe ids"}
+    known = {recipe.recipe_id: recipe for recipe in BAND_COVERAGE_RECIPES}
+    unknown = [item for item in wanted if item not in known]
+    if unknown:
+        return {
+            "status": "ERROR",
+            "message": f"unknown recipe {', '.join(repr(item) for item in unknown)}; known: "
+            + ", ".join(known),
+        }
+
+    singles = {
+        recipe_id: run_band_coverage(store, month=month, recipe_id=recipe_id)
+        for recipe_id in wanted
+    }
+    for report in singles.values():
+        if report.get("status") != "OK":
+            return report
+
+    try:
+        first, last = _month_bounds(month)
+    except ValueError:
+        return {"status": "ERROR", "message": f"--month must be YYYY-MM, got {month!r}"}
+    start = datetime(first.year, first.month, first.day, tzinfo=timezone.utc)
+    end = datetime(last.year, last.month, last.day, tzinfo=timezone.utc) + timedelta(days=1)
+
+    latest: dict[str, dict] = {}
+    for year in (first.year - 1, first.year, first.year + 1):
+        for row in store.read_rows(
+            "setup_occurrence",
+            f"year={year}",
+            interval_start_range=(start, end),
+            time_column="trigger_at",
+        ):
+            identity = str(row.get("occurrence_id") or "")
+            current = latest.get(identity)
+            if current is None or occurrences._revision_number(
+                row.get("revision_id")
+            ) > occurrences._revision_number(current.get("revision_id")):
+                latest[identity] = row
+
+    symbols = sorted({str(row.get("symbol") or "") for row in latest.values()})
+    snapshots: dict[tuple[str, date], dict] = {}
+    if symbols:
+        for year in {first.year, last.year}:
+            for row in store.read_rows(
+                "feature_snapshot_daily", f"year={year}", symbols=symbols
+            ):
+                day = row.get("session_date")
+                if isinstance(day, datetime):
+                    day = day.date()
+                key = (str(row.get("symbol") or ""), day)
+                snapshots[key] = _keep_newer_snapshot(snapshots.get(key), row)
+
+    stored = {
+        recipe_id: outcomes.latest_outcomes(
+            store, sorted(latest) or None, recipe_ids=[recipe_id]
+        )
+        for recipe_id in wanted
+    }
+
+    report: dict = {
+        "status": "OK",
+        "month": month,
+        "recipes": list(wanted),
+        "wilson_z": _swing_headline().WILSON_Z,
+        "occurrences_in_month": len(latest),
+        "paired": 0,
+        "not_paired": {
+            "total": 0,
+            "missing_both": 0,
+            **{f"missing_{recipe_id}": 0 for recipe_id in wanted},
+        },
+        "by_knowledge": {},
+        "totals": {"n": 0, "recipes": {item: _empty_compare_cell() for item in wanted}},
+    }
+
+    for identity, occurrence in sorted(latest.items()):
+        rows = {}
+        for recipe_id in wanted:
+            recipe = known[recipe_id]
+            rows[recipe_id] = stored[recipe_id].get(
+                (identity, recipe_id, outcomes.outcome_definition_for(recipe))
+            )
+        missing = [recipe_id for recipe_id in wanted if rows[recipe_id] is None]
+        if missing:
+            report["not_paired"]["total"] += 1
+            if len(missing) == len(wanted):
+                report["not_paired"]["missing_both"] += 1
+            for recipe_id in missing:
+                report["not_paired"][f"missing_{recipe_id}"] += 1
+            continue
+
+        trigger = occurrence.get("trigger_at")
+        trigger_day = trigger.date() if isinstance(trigger, datetime) else trigger
+        snapshot = snapshots.get((str(occurrence.get("symbol") or ""), trigger_day))
+        knowledge = (
+            KNOWLEDGE_NO_SNAPSHOT
+            if snapshot is None
+            else features.anchor_knowledge_bucket(snapshot.get("anchor_knowledge"))
+        )
+        bucket = report["by_knowledge"].setdefault(
+            knowledge,
+            {"n": 0, "recipes": {item: _empty_compare_cell() for item in wanted}},
+        )
+        report["paired"] += 1
+        bucket["n"] += 1
+        report["totals"]["n"] += 1
+        for recipe_id in wanted:
+            state = str(rows[recipe_id].get("result_state") or "")
+            net = rows[recipe_id].get("net_r")
+            for cell in (bucket["recipes"][recipe_id], report["totals"]["recipes"][recipe_id]):
+                cell["n"] += 1
+                if state == outcomes.STATE_TARGETED:
+                    cell["targeted"] += 1
+                elif state == outcomes.STATE_STOPPED:
+                    cell["stopped"] += 1
+                elif state == outcomes.STATE_OPEN:
+                    cell["open"] += 1
+                else:
+                    cell["other"] += 1
+                if net is not None:
+                    cell["net_r_sum"] += float(net)
+                    cell["net_r_n"] += 1
+
+    for block in (report["totals"], *report["by_knowledge"].values()):
+        for cell in block["recipes"].values():
+            _finish_compare_cell(cell)
+    return report
+
+
+def _compare_cell_text(cell: dict) -> str:
+    rate = "-" if cell["win_rate"] is None else f"{cell['win_rate'] * 100:.0f}%"
+    bound = "" if cell["win_rate_lb"] is None else f" (>={cell['win_rate_lb'] * 100:.0f}%)"
+    mean = "-" if cell["mean_net_r"] is None else f"{cell['mean_net_r']:+.2f}R"
+    return (
+        f"{cell['n']:>4}{cell['resolved']:>5}{cell['targeted']:>5}{cell['stopped']:>5}"
+        f"{rate + bound:>13}{mean:>8}"
+    )
+
+
+def format_band_coverage_compare(report: dict) -> str:
+    """The two recipes as adjacent column groups, one row per knowledge bucket."""
+    if report.get("status") != "OK":
+        return f"{report.get('status')}: {report.get('message', '')}".strip()
+    left, right = report["recipes"]
+    header_group = f"{'n':>4}{'resl':>5}{'TGT':>5}{'STOP':>5}{'win (lower)':>13}{'meanR':>8}"
+    lines = [
+        f"band compare {report['month']} - {report['occurrences_in_month']} occurrence(s), "
+        f"{report['paired']} paired",
+        f"win rate is over RESOLVED (TARGETED + STOPPED); lower bound is Wilson z="
+        f"{report['wilson_z']:.4f}",
+        f"{'knowledge':<14}{left:^40}|{right:^40}",
+        f"{'':<14}{header_group:<40}|{header_group:<40}",
+    ]
+    rows = list(sorted(report["by_knowledge"].items())) + [("TOTAL", report["totals"])]
+    for knowledge, block in rows:
+        lines.append(
+            f"{knowledge:<14}{_compare_cell_text(block['recipes'][left]):<40}"
+            f"|{_compare_cell_text(block['recipes'][right]):<40}"
+        )
+    missing = report["not_paired"]
+    lines.append(
+        f"not_paired {missing['total']}  (missing {left}: {missing[f'missing_{left}']}, "
+        f"missing {right}: {missing[f'missing_{right}']}, missing both: {missing['missing_both']})"
+        "  - counted here, never in either recipe's numbers"
+    )
     return "\n".join(lines)
 
 
@@ -1644,6 +1936,16 @@ def main(argv=None) -> int:
     )
     coverage.add_argument("--month", required=True, help="YYYY-MM")
     coverage.add_argument("--recipe", default="", help="one recipe id; default every D1 recipe")
+    coverage.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("RECIPE_A", "RECIPE_B"),
+        default=None,
+        help=(
+            "two recipe ids side by side on the SAME occurrence ids (M4.3), "
+            "e.g. --compare swing_house_v1 swing_house_variant_v1"
+        ),
+    )
     coverage.add_argument("--json", action="store_true", help="print the report object instead of the table")
     recompute = sub.add_parser(
         "recompute-outcomes",
@@ -1677,12 +1979,15 @@ def main(argv=None) -> int:
         print(json.dumps(report, indent=2, default=str))
         return 0 if report.get("status") in {"OK", "DISABLED"} else 1
     if args.command == "band-coverage":
-        report = run_band_coverage(store, month=args.month, recipe_id=args.recipe or None)
-        print(
-            json.dumps(report, indent=2, default=str)
-            if args.json
-            else format_band_coverage(report)
-        )
+        if args.compare:
+            report = run_band_coverage_compare(
+                store, month=args.month, recipe_ids=tuple(args.compare)
+            )
+            formatted = format_band_coverage_compare(report)
+        else:
+            report = run_band_coverage(store, month=args.month, recipe_id=args.recipe or None)
+            formatted = format_band_coverage(report)
+        print(json.dumps(report, indent=2, default=str) if args.json else formatted)
         return 0 if report.get("status") in {"OK", "DISABLED"} else 1
     if args.command == "recompute-outcomes":
         buckets = None

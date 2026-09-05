@@ -42,7 +42,7 @@ question whose answer changes with the asking time.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 
 try:  # package import
@@ -108,6 +108,30 @@ def path_kind_bucket(value) -> str:
     """The reader's bucket for a stored ``path_kind``; NULL is ``unlabelled``."""
     text = "" if value is None else str(value).strip()
     return text if text in PATH_KINDS else PATH_KIND_UNLABELLED
+
+
+# --- which AVWAP band family supplies a recipe's levels (M4.2) --------------
+#: The frozen running-deviation sigma (decision 0008); the ``avwape_*`` columns.
+BAND_FAMILY_CHAMPION = "champion"
+#: The OneOption replication (``avwap_variant_*``), shadow only. A recipe names
+#: its family DECLARATIVELY for the same reason the LRSI recipes name their
+#: timeframe: the recipe id and the levels that produced a row can never drift
+#: apart, and no caller has to remember which map to hand which recipe.
+BAND_FAMILY_VARIANT = "variant"
+BAND_FAMILIES = (BAND_FAMILY_CHAMPION, BAND_FAMILY_VARIANT)
+
+
+def outcome_definition_for(recipe) -> str:
+    """The ``outcome_definition_id`` a recipe's rows carry.
+
+    Defaults to :data:`OUTCOME_DEFINITION_ID`, so every recipe that existed
+    before M4 writes exactly the id it always wrote. The twin declares its own
+    (``band_variant_v1``) and that is a FENCE as much as a label: every existing
+    reader filters on ``house_default_v1`` (`queries.slice_readout`), so a
+    challenger row can never wander into an aggregate that was computed over the
+    champion's levels.
+    """
+    return str(getattr(recipe, "outcome_definition_id", "") or "") or OUTCOME_DEFINITION_ID
 
 
 def required_band_numbers(recipe) -> tuple[int, ...]:
@@ -180,6 +204,14 @@ class Recipe:
     #: the same reason the LRSI fields are: the recipe id and the rule that
     #: produced a row can never drift apart.
     entry_variant: str = ""
+    #: M4.2, the AVWAP band challenger. Which band family supplies this recipe's
+    #: levels - `champion` (the frozen running-deviation sigma) or `variant`
+    #: (the OneOption replication). Declarative, so `build_outcomes` chooses the
+    #: map from the recipe rather than from the caller's memory.
+    band_family: str = BAND_FAMILY_CHAMPION
+    #: Overrides `OUTCOME_DEFINITION_ID` on this recipe's rows. Empty means the
+    #: house default, which is what every pre-M4 recipe writes.
+    outcome_definition_id: str = ""
     note: str = ""
 
 
@@ -196,6 +228,29 @@ SWING_HOUSE_V1 = Recipe(
     time_stop_sessions=SWING_TIME_STOP_SESSIONS,
     close_failures=2,
     note="1 close for post-earnings families (see POST_EARNINGS_CLOSE_FAILURES)",
+)
+
+#: The TWIN (M4.2, packet M4; study T3 step 4). Identical to
+#: :data:`SWING_HOUSE_V1` in entry, stop model, management, targets and expiry -
+#: the same occurrences, the same `analysis_unit`, the same
+#: `required_band_numbers` - and differing in ONE thing: the band family that
+#: supplies its levels. That is what makes the comparison a measurement of the
+#: bands rather than of two policies. Built with `dataclasses.replace` so the
+#: two can never drift: a change to the champion's management is inherited, and
+#: only the three declared fields differ.
+#:
+#: Shadow only. It reaches no detector, score, tier, alert, watchlist, Focus
+#: list or review queue, and its `outcome_definition_id` keeps it out of every
+#: reader that filters on the house default.
+SWING_HOUSE_VARIANT_V1 = replace(
+    SWING_HOUSE_V1,
+    recipe_id="swing_house_variant_v1",
+    band_family=BAND_FAMILY_VARIANT,
+    outcome_definition_id="band_variant_v1",
+    note=(
+        "the AVWAP band challenger's twin of swing_house_v1: same walk, "
+        "levels from avwap_variant_* (indicators.avwap_band_variants)"
+    ),
 )
 
 INTRADAY_BOUNCE_V1 = Recipe(
@@ -402,6 +457,11 @@ RECIPES = {
     recipe.recipe_id: recipe
     for recipe in (
         SWING_HOUSE_V1,
+        # The band challenger's twin (M4.2). In the registry so a stored row's
+        # recipe id resolves back to the policy that wrote it; NOT in
+        # `PRIMARY_RECIPE_BY_SETUP`, because no setup's primary recipe is the
+        # challenger and nothing here promotes it.
+        SWING_HOUSE_VARIANT_V1,
         INTRADAY_BOUNCE_V1,
         CONTROL_FIXED_1R2R_V1,
         CONTROL_TIME_ONLY_V1,
@@ -853,7 +913,10 @@ def simulate_swing(
     row = {
         "occurrence_id": occurrence.get("occurrence_id"),
         "recipe_id": recipe.recipe_id,
-        "outcome_definition_id": OUTCOME_DEFINITION_ID,
+        # The recipe's own definition (M4.2). `outcome_definition_for` returns
+        # OUTCOME_DEFINITION_ID for every recipe that predates the twin, so this
+        # is a no-op for all of them.
+        "outcome_definition_id": outcome_definition_for(recipe),
         "analysis_unit": recipe.analysis_unit,
         "entry_at": entry_at,
         "entry_price": entry_price,
@@ -2441,6 +2504,19 @@ def _same_value(left, right) -> bool:
     return left == right
 
 
+def _bands_for(recipe, identity, champion_map, variant_map):
+    """The band levels THIS recipe's family supplies for this occurrence (M4.2).
+
+    A variant recipe never falls back to the champion's levels when the
+    challenger map is empty: the answer to "the challenger could not be measured
+    here" is no bands - which grades `plain_no_target` and says so - and not the
+    other formula's numbers wearing the challenger's recipe id.
+    """
+    family = str(getattr(recipe, "band_family", BAND_FAMILY_CHAMPION) or BAND_FAMILY_CHAMPION)
+    source = variant_map if family == BAND_FAMILY_VARIANT else champion_map
+    return (source or {}).get(identity)
+
+
 def build_outcomes(
     store: ResearchStore | None,
     occurrence_rows,
@@ -2448,6 +2524,7 @@ def build_outcomes(
     d1_by_symbol=None,
     m5_by_symbol=None,
     bands_by_occurrence=None,
+    variant_bands_by_occurrence=None,
     bounce_by_occurrence=None,
     recipes=None,
     as_of: datetime | None = None,
@@ -2468,6 +2545,13 @@ def build_outcomes(
     rows computed over inputs later found to be wrong (the duplicated M5 bars
     of 2026-08/09). A re-simulation that reproduces the stored result still
     writes nothing; only a changed result supersedes.
+
+    ``variant_bands_by_occurrence`` (M4.2) carries the CHALLENGER's levels. A
+    recipe's own ``band_family`` chooses between the two maps, so a caller that
+    passes only the champion's map leaves every variant recipe with no bands -
+    which grades as ``plain_no_target`` and is the honest answer, never a silent
+    fall back to the champion's levels. The two families are never mixed inside
+    one row.
     """
     report = OutcomeReport()
     if store is None:
@@ -2475,7 +2559,10 @@ def build_outcomes(
         return report
     stamp = now or utc_now()
     cutoff = as_of or stamp
-    selected = list(recipes or (SWING_HOUSE_V1, CONTROL_FIXED_1R2R_V1, CONTROL_TIME_ONLY_V1))
+    selected = list(
+        recipes
+        or (SWING_HOUSE_V1, SWING_HOUSE_VARIANT_V1, CONTROL_FIXED_1R2R_V1, CONTROL_TIME_ONLY_V1)
+    )
     occurrence_list = list(occurrence_rows or [])
     identities = [str(row.get("occurrence_id") or "") for row in occurrence_list]
     existing = latest_outcomes(store, identities)
@@ -2486,7 +2573,11 @@ def build_outcomes(
         # Scoped to this occurrence and dropped with it (B3 derived series).
         htf_series_cache: dict = {}
         for recipe in selected:
-            key = (str(occurrence.get("occurrence_id")), recipe.recipe_id, OUTCOME_DEFINITION_ID)
+            key = (
+                str(occurrence.get("occurrence_id")),
+                recipe.recipe_id,
+                outcome_definition_for(recipe),
+            )
             previous = existing.get(key)
             if (
                 not force
@@ -2500,7 +2591,12 @@ def build_outcomes(
                     occurrence,
                     (d1_by_symbol or {}).get(symbol) or [],
                     recipe,
-                    bands=(bands_by_occurrence or {}).get(occurrence.get("occurrence_id")),
+                    bands=_bands_for(
+                        recipe,
+                        occurrence.get("occurrence_id"),
+                        bands_by_occurrence,
+                        variant_bands_by_occurrence,
+                    ),
                     as_of=cutoff,
                     computed_at=stamp,
                     intraday_bars=(m5_by_symbol or {}).get(symbol),
@@ -2604,6 +2700,9 @@ __all__ = [
     "M5_CLOSE_STOP_SOURCES",
     "M5_CLOSE_TARGETS_R",
     "MIN_HALF_SPREAD",
+    "BAND_FAMILIES",
+    "BAND_FAMILY_CHAMPION",
+    "BAND_FAMILY_VARIANT",
     "OUTCOME_DEFINITION_ID",
     "PATH_AMBIGUOUS",
     "PATH_EXACT",
@@ -2616,6 +2715,7 @@ __all__ = [
     "PRIMARY_RECIPE_BY_SETUP",
     "RECIPES",
     "SWING_HOUSE_V1",
+    "SWING_HOUSE_VARIANT_V1",
     "SWING_TIME_STOP_SESSIONS",
     "TERMINAL_RESULT_STATES",
     "OutcomeReport",
@@ -2625,6 +2725,7 @@ __all__ = [
     "is_matured",
     "latest_outcomes",
     "net_r",
+    "outcome_definition_for",
     "outcome_key",
     "path_kind_bucket",
     "required_band_numbers",
