@@ -139,10 +139,20 @@ def evaluate_setup_tracker_purity(
 
     n_ib = 0
     n_pinned = 0
+    no_frame: list[str] = []
     impure: list[str] = []
     impure_sources: set[str] = set()
     for symbol in symbols:
-        frame_sources = _tracker_purity_frame_sources(daily_frames_by_symbol.get(symbol))
+        frame = daily_frames_by_symbol.get(symbol)
+        if pin and (frame is None or not isinstance(frame, pd.DataFrame) or frame.empty):
+            # NO BARS AT ALL is not "bars from the declared source". Counting it
+            # as pinned would report a symbol the scan never saw as evidence
+            # that the pin is working. It is reported on its own and left out
+            # of the fraction entirely - it is neither pure nor a fallback, and
+            # a symbol with no data cannot vote on whether the SOURCE is clean.
+            no_frame.append(symbol)
+            continue
+        frame_sources = _tracker_purity_frame_sources(frame)
         if frame_sources == {DAILY_BAR_SOURCE_IBKR}:
             n_ib += 1
             continue
@@ -154,16 +164,18 @@ def evaluate_setup_tracker_purity(
         impure.append(symbol)
         impure_sources |= {value or DAILY_BAR_SOURCE_UNKNOWN for value in frame_sources}
 
-    fraction = (len(impure) / float(len(symbols))) if symbols else 0.0
+    judged = len(symbols) - len(no_frame)
+    fraction = (len(impure) / float(judged)) if judged else 0.0
     refused = bool(impure) and fraction > float(max_quarantine_fraction)
     logging.info(
         "Setup tracker purity: pin=%s n_symbols=%d n_ib=%d n_pinned=%d n_other=%d "
-        "refused=%s%s",
+        "n_no_frame=%d refused=%s%s",
         pin or "none",
         len(symbols),
         n_ib,
         n_pinned,
         len(impure),
+        len(no_frame),
         refused,
         f" sources={', '.join(sorted(impure_sources))}" if impure_sources else "",
     )
@@ -2400,6 +2412,7 @@ def _run_master_impl(
             control_rows=control_rows,
             study_rows=study_rows,
             tracker_payload=tracker_payload,
+            saved_by=saved_by,
         )
         run_result["setup_tracker_updated"] = True
         run_result["control_setups_tracked"] = len(control_rows)
@@ -2992,12 +3005,20 @@ def main():
         logging.info("Starting hourly Master AVWAP loop (once per hour)...")
         while True:
             start = time.time()
-            run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
+            run_master(
+                update_setup_tracker=True if args.force_setup_tracker_update else None,
+                saved_by=TRACKER_SAVED_BY_MANUAL,
+            )
             elapsed = time.time() - start
             sleep_seconds = max(0, 3600 - elapsed)
             logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run...")
             time.sleep(sleep_seconds)
-    run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
+    # The CLI is a person at a keyboard, so its tracker write says `manual`
+    # rather than claiming to be the desk's close slot (M3.2).
+    run_master(
+        update_setup_tracker=True if args.force_setup_tracker_update else None,
+        saved_by=TRACKER_SAVED_BY_MANUAL,
+    )
 
 
 def run_master(
@@ -3005,6 +3026,7 @@ def run_master(
     shorts_path: Path | None = None,
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
+    saved_by: str = TRACKER_SAVED_BY_CLOSE_SLOT,
 ):
     """Manifest-wrapped Master scan (plan.md Phase 1): every run writes one
     structured run manifest - success or failure - with phase timings."""

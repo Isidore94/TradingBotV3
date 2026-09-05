@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -360,12 +360,14 @@ class SetupTrackerPanel(QFrame):
         self.band_variant_status_label.setObjectName("MutedLabel")
         self.band_variant_status_label.setWordWrap(True)
 
-        # M3.3: the two tabs the trader reads for "what is working" each say how
-        # many records aged out UNMEASURED and were left out of their numbers.
-        # An exclusion nobody can see is a second version of the defect it fixes.
-        self.current_pick_status_label = QLabel("")
-        self.current_pick_status_label.setObjectName("MutedLabel")
-        self.current_pick_status_label.setWordWrap(True)
+        # M3.3: the Setup Types tab says how many records aged out UNMEASURED
+        # and were left out of its numbers - an exclusion nobody can see is a
+        # second version of the defect it fixes.
+        #
+        # ONLY that tab. Current Picks renders `master_avwap_tier_list.csv`,
+        # a different population entirely, and a count taken from the
+        # setup-type export would have been describing rows that tab does not
+        # show (reviewer, 2026-09-05).
         self.setup_type_status_label = QLabel("")
         self.setup_type_status_label.setObjectName("MutedLabel")
         self.setup_type_status_label.setWordWrap(True)
@@ -385,14 +387,7 @@ class SetupTrackerPanel(QFrame):
             ATTRIBUTE_LEADERBOARD_COLUMNS
         )
 
-        self.tabs.addTab(
-            self._make_explained_tab(
-                "Today's tier picks from the scanner's own tier list.",
-                self.current_table,
-                status=self.current_pick_status_label,
-            ),
-            "Current Picks",
-        )
+        self.tabs.addTab(self.current_table, "Current Picks")
         self.tabs.addTab(
             self._make_explained_tab(
                 "Which setup families follow through in the FIRST 1-2 SESSIONS after entry (mark-to-market R, "
@@ -706,9 +701,9 @@ class SetupTrackerPanel(QFrame):
         # M3.2: two clocks, named. The tracker snapshot's own `saved_at` /
         # `saved_by` come off the export the tracker pass stamped them onto -
         # never off the 1.1 GB JSON, which this panel must never open.
-        expired_sentence = expired_unmeasured_sentence(all_setup_type_rows)
-        self.setup_type_status_label.setText(expired_sentence)
-        self.current_pick_status_label.setText(expired_sentence)
+        self.setup_type_status_label.setText(
+            expired_unmeasured_sentence(all_setup_type_rows)
+        )
         status = tracker_clock_sentence(
             _first_non_empty(all_setup_type_rows, "tracker_saved_at"),
             _first_non_empty(all_setup_type_rows, "tracker_saved_by"),
@@ -1355,11 +1350,26 @@ def expired_unmeasured_sentence(rows: list[dict[str, Any]]) -> str:
 
 
 def _latest_mtime_text(paths: list[Path]) -> str:
+    """The newest mtime among ``paths``, rendered MARKET-LOCAL with its offset.
+
+    It is shown beside the tracker's own `saved_at`, which is market-local with
+    an offset. Rendering this one machine-local and unlabelled put the two
+    clocks in two zones on one line: on this desk (PT) the pair read three
+    hours apart when they were the same instant, which is worse than showing
+    one clock. One zone, and the offset is printed so it cannot be mistaken.
+    """
     existing = [path for path in paths if path.exists()]
     if not existing:
         return "never"
     latest = max(path.stat().st_mtime for path in existing)
-    return datetime.fromtimestamp(latest).strftime("%Y-%m-%d %H:%M:%S")
+    from market_calendar import MARKET_TZ
+
+    return (
+        datetime.fromtimestamp(latest, tz=timezone.utc)
+        .astimezone(MARKET_TZ)
+        .replace(microsecond=0)
+        .isoformat()
+    )
 
 
 def _tier_rank(value: Any) -> int:

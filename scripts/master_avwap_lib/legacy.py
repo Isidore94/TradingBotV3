@@ -657,6 +657,22 @@ TRACKER_SEALED_SETUP_MIN_AGE_DAYS = 21
 # which is how the catch-up backfill - a synthetic replay from stored daily bars
 # - became the tracker's effective writer for weeks without anybody being able
 # to see it on the page. `manual` is the GUI backfill the trader asks for.
+def _evidence_lately_sessions() -> int:
+    """`evidence_stats.LATELY_SESSIONS`, read at import.
+
+    A function rather than a top-level import because this module is imported
+    very early and `evidence_stats` is not one of its existing dependencies;
+    the fallback keeps a partial environment from breaking the scanner, and the
+    equality is pinned by a test so the fallback can never drift silently.
+    """
+    try:
+        from evidence_stats import LATELY_SESSIONS
+
+        return int(LATELY_SESSIONS)
+    except Exception:  # pragma: no cover - defensive, pinned by a test
+        return 20
+
+
 TRACKER_SAVED_BY_CLOSE_SLOT = "close_slot"
 TRACKER_SAVED_BY_CATCH_UP = "catch_up_backfill"
 TRACKER_SAVED_BY_MANUAL = "manual"
@@ -669,10 +685,12 @@ TRACKER_SAVED_BY_VALUES = (
 # A setup whose scenarios have not been replayed against a bar for this many
 # EXCHANGE SESSIONS has stopped being measured. Counted with
 # `market_calendar.trading_days_between` and never with weekday arithmetic:
-# twenty weekdays counts Thanksgiving as a session. Matches
-# `evidence_stats.LATELY_SESSIONS` in length by intent - "lately" is one number
-# in this codebase and it is counted in sessions.
-TRACKER_STALE_SESSIONS = 20
+# twenty weekdays counts Thanksgiving as a session.
+#
+# It IS `evidence_stats.LATELY_SESSIONS`, imported rather than repeated:
+# "lately" is ONE number in this codebase (CLAUDE.md) and a second literal 20
+# beside it is a copy waiting to drift.
+TRACKER_STALE_SESSIONS = _evidence_lately_sessions()
 
 #: A terminal status that is NEITHER a win nor a loss. 37 OPEN setups were older
 #: than 20 sessions on 2026-09-04, several with scenarios still reading
@@ -685,7 +703,11 @@ TRACKER_STALE_SESSIONS = 20
 #: exclusion is visible rather than silent. Rows are never deleted, and the
 #: status is reversible - a later replay re-runs the closure rule first.
 SETUP_STATUS_EXPIRED_UNMEASURED = "EXPIRED_UNMEASURED"
-TRACKER_EXPIRY_REASON_NO_REPLAY = "no_replay_20_sessions"
+#: The threshold is a FIELD on the record (`stale_sessions`), never baked
+#: into the reason string. A reason that spells its own number becomes a
+#: lie the day the number changes, and every row already written keeps
+#: claiming the old one.
+TRACKER_EXPIRY_REASON_NO_REPLAY = "no_replay_stale_sessions"
 TRACKER_EXPIRY_REASON_NO_BASELINE = "no_baseline_scenarios"
 TRACKER_EXPIRY_REASONS = (
     TRACKER_EXPIRY_REASON_NO_REPLAY,
@@ -5089,7 +5111,10 @@ def tracker_save_timestamp(now: datetime | None = None) -> str:
 
     moment = now or datetime.now(tz=MARKET_TZ)
     if moment.tzinfo is None:
-        moment = moment.astimezone(MARKET_TZ)
+        # ATTACH, never convert. CLAUDE.md's `_gate_moment` rule: a naive
+        # moment in this codebase is already market-local, and `astimezone`
+        # would read it as machine-local and shift it three hours on this desk.
+        moment = moment.replace(tzinfo=MARKET_TZ)
     else:
         moment = moment.astimezone(MARKET_TZ)
     return moment.replace(microsecond=0).isoformat()
@@ -5186,6 +5211,10 @@ def apply_tracker_setup_expiry(setup: dict, as_of_session) -> bool:
     if reason:
         setup["setup_status"] = SETUP_STATUS_EXPIRED_UNMEASURED
         setup["expiry_reason"] = reason
+        if reason == TRACKER_EXPIRY_REASON_NO_REPLAY:
+            # The threshold this record was judged against, recorded beside the
+            # reason so a row stays readable after the constant moves.
+            setup["stale_sessions"] = int(TRACKER_STALE_SESSIONS)
         return True
     if _tracker_setup_is_expired_unmeasured(setup):
         # Only the closure rule un-expires a record, and every caller runs it
@@ -5223,6 +5252,23 @@ def apply_tracker_expiry_sweep(tracker: dict, as_of_session) -> int:
             if apply_tracker_setup_expiry(setup, as_of_session):
                 expired += 1
     return expired
+
+
+def log_tracker_expiry_summary(expired_records: int) -> None:
+    """One line per tracker pass, carrying a token the live gate can grep.
+
+    The count is written as the literal `n_expired_unmeasured=N` because gate
+    #69 is verified by grepping `trading_bot.log`, and a sentence that spells
+    the number in prose is not something a gate can check without a human
+    reading it.
+    """
+    logging.info(
+        "Setup tracker expiry: n_expired_unmeasured=%d record(s) carry %s "
+        "(excluded from every trader-facing aggregate, numerator and denominator; "
+        "the champion's scoring population is unchanged).",
+        int(expired_records or 0),
+        SETUP_STATUS_EXPIRED_UNMEASURED,
+    )
 
 
 def _default_setup_tracker_payload() -> dict:
@@ -9053,8 +9099,13 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
 
     grouped = {}
     expired_by_group: dict[str, set] = {}
+    #: One row per group for its IDENTITY fields (stop label, exit template,
+    #: framework). Taken from whatever row appeared first, expired or not,
+    #: because a group whose every record aged out still has to name itself.
+    representative_by_group: dict[str, dict] = {}
     for row in scenario_rows:
         key = f"{row.get('stop_reference_label')}__{row.get('exit_template_id')}"
+        representative_by_group.setdefault(key, row)
         # M3.3: an EXPIRED_UNMEASURED record is uncertainty, not an outcome. It
         # leaves the numerator AND the denominator, and is counted beside them
         # so the exclusion is visible rather than silent.
@@ -9062,13 +9113,16 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
             expired_by_group.setdefault(key, set()).add(str(row.get("setup_id") or ""))
             continue
         grouped.setdefault(key, []).append(row)
+    # A group with nothing but expired rows keeps its place. Dropping it here
+    # was the same defect as the `continue` in `build_tracker_setup_type_rows`:
+    # the count vanished with the group, so the total under-reported by exactly
+    # the worst groups.
     for key in expired_by_group:
         grouped.setdefault(key, [])
 
     stats_rows = []
     for key, rows in grouped.items():
-        if not rows:
-            continue
+        identity = rows[0] if rows else representative_by_group.get(key, {})
         tradeable = [row for row in rows if bool(row.get("tradeable", int(row.get("shares", 0) or 0) > 0))]
         closed = [row for row in tradeable if _scenario_is_closed(row.get("status"))]
         open_rows = [row for row in tradeable if _scenario_is_open(row.get("status", ""))]
@@ -9089,13 +9143,13 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
         stats_rows.append(
             {
                 "scenario_group": key,
-                "stop_reference_label": rows[0].get("stop_reference_label"),
-                "exit_template_id": rows[0].get("exit_template_id"),
-                "exit_template_label": rows[0].get("exit_template_label"),
-                "framework_family": rows[0].get("framework_family", ""),
-                "framework_version": rows[0].get("framework_version", ""),
-                "experimental": bool(rows[0].get("experimental")),
-                "hard_stop_r_multiple": _coerce_float(rows[0].get("hard_stop_r_multiple")),
+                "stop_reference_label": identity.get("stop_reference_label"),
+                "exit_template_id": identity.get("exit_template_id"),
+                "exit_template_label": identity.get("exit_template_label"),
+                "framework_family": identity.get("framework_family", ""),
+                "framework_version": identity.get("framework_version", ""),
+                "experimental": bool(identity.get("experimental")),
+                "hard_stop_r_multiple": _coerce_float(identity.get("hard_stop_r_multiple")),
                 "tracked_setups": len(rows),
                 "n_expired_unmeasured": len(expired_by_group.get(key, ())),
                 "tradeable_setups": len(tradeable),
@@ -9850,8 +9904,14 @@ def build_tracker_setup_type_rows(
             if exclude_expired_unmeasured
             else all_rows_for_group
         )
-        if not rows_for_group:
-            continue
+        # NO `continue` when the group empties out. A group whose every record
+        # aged out still has to report its own count, or the page's sentence
+        # under-reports by exactly the groups that were WORST - on the live
+        # 2026-09-04 mirror the sentence said 16 where 45 records had expired.
+        # The row it writes carries zero measured setups and blank measures,
+        # which is the honest shape: "three setups here, none of them
+        # measurable". Unreachable when `exclude_expired_unmeasured` is False,
+        # so the scoring population never sees a zero row.
         tradeable_rows = [row for row in rows_for_group if row.get("tradeable")]
         closed_rows = [row for row in rows_for_group if row.get("closed")]
         open_rows = [row for row in rows_for_group if str(row.get("setup_status") or "").upper() == "OPEN"]
@@ -12543,14 +12603,9 @@ def update_setup_tracker_from_scan(
     # The records this rule exists for are precisely the ones it could NOT -
     # a symbol whose frame came back empty is `continue`d before the recompute
     # runs - so the sweep runs over the stored records too. Idempotent.
-    expired_records = apply_tracker_expiry_sweep(tracker, target_scan_date)
-    if expired_records:
-        logging.info(
-            "Setup tracker expiry: %d record(s) carry %s (excluded from every "
-            "champion aggregate, numerator and denominator).",
-            expired_records,
-            SETUP_STATUS_EXPIRED_UNMEASURED,
-        )
+    # Logged unconditionally, including a zero: the live gate greps for the
+    # token, and an absent line and a count of nought are different facts.
+    log_tracker_expiry_summary(apply_tracker_expiry_sweep(tracker, target_scan_date))
 
     # One instant for the CSVs and the JSON: the export runs BEFORE the save, so
     # reading `saved_at` off the payload here would stamp the CSVs with the

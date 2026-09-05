@@ -56,6 +56,11 @@ def parse_payload(payload: str | Mapping[str, Any] | None) -> dict[str, Any]:
             None if spec.get("update_setup_tracker") is None
             else bool(spec.get("update_setup_tracker"))
         ),
+        # Who is writing the tracker (M3.2). ABSENT READS AS `manual`, which is
+        # the safe direction: a hand-run `--run-scan` carries no such key and
+        # must never forge `close_slot` onto a payload the scheduler did not
+        # produce. The desk states it explicitly for its scheduled slots.
+        "saved_by": str(spec.get("saved_by") or "manual").strip().lower() or "manual",
     }
 
 
@@ -69,11 +74,12 @@ def run(payload: str | Mapping[str, Any] | None) -> int:
     from master_avwap_lib.runner import run_master
 
     if spec["update_setup_tracker"] is None:
-        run_master()
+        run_master(saved_by=spec["saved_by"])
     else:
         run_master(
             update_setup_tracker=spec["update_setup_tracker"],
             require_ib_for_setup_tracker=True,
+            saved_by=spec["saved_by"],
         )
     print(SCAN_OK_MARKER, flush=True)
     return 0
