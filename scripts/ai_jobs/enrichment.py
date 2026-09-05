@@ -4,12 +4,17 @@ Authorized 2026-08-24 (`docs/analysis/OFFLINE_BUILD_AUTHORIZATION_2026-08-24.md`
 §2) ahead of its phase gate, on the R10.I scaffolding pattern: built now, and
 refusing to run until the gate it exists behind has passed.
 
-**The gate is Phase 2's**: ten clean digest sessions. It is read from
+**The gate is Phase 2's**, and since packet Q4 (2026-09-04) it is BOTH of that
+gate's halves: ten CONSECUTIVE clean digest sessions **and** a recorded trader
+spot-audit of at least three packs. It is read from
 `ai_jobs.digest.digest_gate_state` rather than restated, so there is one
-definition of "ten clean digest sessions" in the repo. Enriching a journal from
-a layer whose own facts have never been audited would be building on unverified
-ground, and the phase order exists to stop exactly that. **Below the gate, no
-model is called and nothing is written.**
+definition of it in the repo. Enriching a journal from a layer whose own facts
+have never been audited would be building on unverified ground, and the phase
+order exists to stop exactly that - which is why "audited" is now a FILE a human
+writes (`digest_audit_approval.json`, through `python -m ai_jobs.digest
+approve-audit`) rather than a sentence in a docstring. **Below the gate, no
+model is called and nothing is written**, and the ledger row says which half is
+missing.
 
 **Advisory fields only, and structurally so.** R7's invariant I7 names what
 belongs to the trader — tags, notes, reviews, planned stop/risk, tax status —
@@ -41,6 +46,11 @@ _log = logging.getLogger(__name__)
 ENRICHMENT_SCHEMA = "ai_trade_enrichment_v1"
 
 GATE_NOT_MET_PREFIX = "ENRICHMENT GATE NOT MET."
+
+#: The exact words the ledger row carries when the collection window is met and
+#: the trader has not yet recorded the spot-audit (Q4.2). A constant because it
+#: is the sentence the lead reads out of the ledger on the morning after.
+AUDIT_REFUSAL = "refused: audit not recorded"
 
 #: Trades enriched in one night. A cap rather than the whole journal, because
 #: this is a nightly pass over what is NEW and a backfill is a separate,
@@ -153,18 +163,36 @@ def run_journal_enrichment(
     moment = _now(now)
     day = str(session_date or moment.date().isoformat())
     state = gate_state(digest_root)
-    if not state["window_met"]:
-        # No model, no write, and a reason that says why in words. A pass that
-        # ran anyway would produce advisory rows nobody could later separate
-        # from ones written on audited ground.
+    if not state.get("gate_met"):
+        # No model, no write, and a reason that names WHICH HALF is missing. A
+        # pass that ran anyway would produce advisory rows nobody could later
+        # separate from ones written on audited ground.
+        #
+        # Q4.2 made the second half real: the window being met is no longer
+        # enough, because "audited" was prose until the approval file existed.
+        if not state.get("window_met"):
+            half = (
+                f"{state['sessions_consecutive_clean']} of "
+                f"{state['sessions_required']} consecutive clean digest session(s)"
+                + (
+                    f"; the run stops at {state['first_gap_session']}"
+                    if state.get("first_gap_session") else ""
+                )
+            )
+        else:
+            half = (
+                "the collection window is met but "
+                f"{AUDIT_REFUSAL} - the trader has not recorded a spot-audit of "
+                f"at least {state.get('audit_packs_required', 3)} packs against "
+                "raw evidence"
+            )
         return {
             "status": job_ledger.STATUS_OK,
             "model": "",
             "reason": (
-                f"{GATE_NOT_MET_PREFIX} {state['sessions_collected']} of "
-                f"{state['sessions_required']} clean digest session(s); no model was "
-                "called and nothing was written. Phase 3 waits for Phase 2's evidence "
-                "to be audited, which is what the phase order is for."
+                f"{GATE_NOT_MET_PREFIX} {half}; no model was called and nothing "
+                "was written. Phase 3 waits for Phase 2's evidence to be audited, "
+                "which is what the phase order is for."
             ),
             "outputs": [],
         }

@@ -292,36 +292,55 @@ def test_force_overrides_the_window_and_the_completed_check(tmp_path):
     assert len(ran) == 2, "--force is the manual override for exactly this"
 
 
-def test_default_slate_registers_the_journal_pull_before_the_phase_1_jobs():
+#: The nightly slate, pinned. **Decision 0018**
+#: (`docs/decisions/0018-deterministic-stage-before-narration.md`, 2026-09-04):
+#: three stages - every deterministic slot, then the narration pair, then the
+#: model-gated slots. A later phase appends INSIDE its stage and never reorders
+#: across stages, so this tuple is the one place the order is written down in a
+#: test and the only place a future packet edits.
+EXPECTED_SLOT_ORDER = (
+    # stage 1 - deterministic, no model, minutes not hours
+    "journal_import",
+    "journal_auto_tag",
+    "veto_cohort_grading",
+    "like_cohort_grading",
+    "sidecar_completion",
+    "pass_cohort_grading",
+    "rejection_cohort_grading",
+    "note_vocabulary_audit",
+    "preference_trade_outcomes",
+    "evidence_report",
+    "daily_digest",
+    # stage 2 - narration, moved here as a unit by decision 0018
+    "ai_summary",
+    "ticker_briefs",
+    # stage 3 - the model-gated slots, unchanged
+    "journal_enrichment",
+    "review_policy_draft",
+    "setup_research",
+)
+
+
+def test_default_slate_runs_the_deterministic_stage_before_narration():
     """R7 §9 step 10 put `journal_import` at the front, and it belongs there.
 
-    This asserted exactly ["ai_summary", "ticker_briefs"] until then. The
-    ordering rule in `default_slots` is "later phases append; they never
-    reorder these", and this is its one sanctioned exception
-    (`docs/LOCAL_AI_AUTOMATION_PLAN.md` §6.4c, promoted into R7 §6): both AI
-    jobs *read* the journal, so running them first means they read yesterday's.
-    The pull costs seconds against the briefs' hours, so going first spends
-    nothing.
+    This asserted exactly ["ai_summary", "ticker_briefs"] until then, then
+    "later phases append; they never reorder these" with `journal_import` and
+    `journal_auto_tag` as its two sanctioned exceptions
+    (`docs/LOCAL_AI_AUTOMATION_PLAN.md` §6.4c, promoted into R7 §6).
+
+    **Decision 0018 replaced that rule**: the two narration slots held up to
+    two and a half hours of reserve ahead of every deterministic slot, and on
+    2026-09-01 the night ran six hours - so the cheap deterministic work that
+    nothing narrated feeds was the work most likely to be skipped for want of
+    window. The order is now three stages, and this tuple is where it is
+    written down.
     """
     from ai_jobs import runner
 
     slots = runner.default_slots()
-    names = [slot.name for slot in slots]
-    # The ORDERING is what this test is for, not the length. Asserting the
-    # exact list made it fail the moment `veto_cohort_grading` was appended -
-    # which is the sanctioned way to add a slot, so the assertion was
-    # forbidding the rule it exists to describe.
-    # V2 inserted `journal_auto_tag` SECOND - an insert, not an append, and
-    # the second and last sanctioned exception to "later phases append".
-    # `default_slots`' docstring argues for both positions.
-    assert names[:4] == [
-        "journal_import",
-        "journal_auto_tag",
-        "ai_summary",
-        "ticker_briefs",
-    ]
-    assert names[0] == "journal_import", "the one sanctioned reordering"
-    assert "veto_cohort_grading" in names[3:], "later phases append"
+    names = tuple(slot.name for slot in slots)
+    assert names == EXPECTED_SLOT_ORDER
     assert all(slot.enabled for slot in slots)
     by_name = {slot.name: slot for slot in slots}
     # The long slot is capped; the cheap one keeps retrying all window.

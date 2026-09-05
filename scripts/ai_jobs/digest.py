@@ -55,6 +55,28 @@ two files.
 session days of digests, with the trader spot-auditing at least three against
 raw evidence and finding no fabricated fact. `clean_digest_sessions` counts;
 counting is not passing.
+
+**Both halves of that gate are now MEASURED** (packet Q4, 2026-09-04).
+
+* The window half counts a RUN of consecutive exchange sessions ending at the
+  newest pack, walked through `market_calendar` and never by weekday
+  arithmetic, where every session in the run has a pack whose own failure
+  record (`unavailable`) is empty. It counted DISTINCT session packs until
+  then, so ten packs scattered across a month read as a met window and a pack
+  that named a source it could not read counted as clean. A non-session pack
+  neither counts nor breaks a run, and `first_gap_session` says where the run
+  stopped.
+* The audit half is a FILE - `digest_audit_approval.json` beside the packs -
+  written only by `python -m ai_jobs.digest approve-audit`, which the trader
+  runs. Nothing automatic writes it; the runner cannot approve its own
+  evidence. `journal_enrichment` refuses until both halves are true.
+
+**`entry_index.json` is the compact handoff** (Q4.4): one deterministic,
+superseding-written index of what the packs in the `LATELY_SESSIONS` window
+hold - their versions, their failures, four never-merged evidence sections,
+what crossed the evidence FLOOR since the prior equal-length window, and the
+registered experiments that are still collecting. No model, no ranking of
+immature cells, and a failure to write it never fails the digest.
 """
 
 from __future__ import annotations
@@ -918,6 +940,14 @@ def run_daily_digest(
                 "reason": f"fact pack could not be published: {exc}", "outputs": []}
     outputs = [str(written)]
 
+    # Q4.4. The pack is on disk; the index is a convenience over it. A failure
+    # here is logged and never fails the digest, and the last good index
+    # survives because the write is temp-and-rename.
+    try:
+        outputs.append(str(write_entry_index(target_root, as_of=day)))
+    except Exception as exc:  # noqa: BLE001 - never costs the record it describes
+        _log.info("Daily digest: entry index not refreshed (%s); the packs stand.", exc)
+
     over_target = f" (over the {FACT_PACK_TARGET_BYTES}-byte target)" if size > FACT_PACK_TARGET_BYTES else ""
     facts_reason = (
         f"facts for {day}: {size} bytes{over_target}, "
@@ -1153,39 +1183,751 @@ def rollup(root: Path, *, since: str = "", until: str = "") -> dict[str, Any]:
     }
 
 
-def clean_digest_sessions(root: Path) -> int:
-    """How many SESSION fact packs exist. Counting is not passing.
+def pack_failures(pack: Mapping[str, Any]) -> dict[str, str]:
+    """The pack's OWN failure record: the sources it could not read.
 
-    Phase 2's exit gate is ten consecutive session days of digests plus the
-    trader spot-auditing at least three against raw evidence. This answers only
-    the first half, and only the counting part of it: a number here never marks
-    a live gate met.
+    `unavailable` is the field the pack carries and the field its own summary
+    calls INCOMPLETE. There is no separate `failures`/`errors` key, and none is
+    invented here - a gate reads what the record says, not what a reader wishes
+    it said.
+    """
+    return {str(name): str(reason) for name, reason in (pack.get("unavailable") or {}).items()}
 
-    An empty non-session pack does not count. It exists to make a gap visible,
-    which is the opposite of evidence that the digest ran over a real day.
+
+def latest_packs_by_session(root: Path) -> dict[str, dict[str, Any]]:
+    """Newest pack per session date. A superseding sibling wins (D6).
+
+    `read_fact_packs` already sorts by `(session_date, generated_at)`, so the
+    last pack seen for a day is the one that corrects the ones before it.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    for pack in read_fact_packs(root):
+        day = str(pack.get("session_date") or "")
+        if day:
+            latest[day] = pack
+    return latest
+
+
+def collected_digest_sessions(root: Path) -> int:
+    """How many DISTINCT session fact packs exist. The pre-Q4 count.
+
+    Kept because every surface that reports "N of 10 collected" is reporting
+    this, and because a run that broke last night did not un-collect the packs
+    it already had. It is no longer what the gate turns on.
     """
     return len({
-        str(pack.get("session_date"))
-        for pack in read_fact_packs(root)
-        if pack.get("is_session") and pack.get("session_date")
+        day for day, pack in latest_packs_by_session(root).items()
+        if pack.get("is_session")
     })
 
 
-def digest_gate_state(root: Path) -> dict[str, Any]:
-    """The R10.I-shaped statement for any surface that reports on this phase."""
-    collected = clean_digest_sessions(root)
-    met = collected >= REQUIRED_CLEAN_SESSIONS
-    return {
-        "sessions_collected": collected,
-        "sessions_required": REQUIRED_CLEAN_SESSIONS,
-        "window_met": met,
-        "statement": (
-            "Digest collection window met by count. The trader spot-audit of at "
-            "least three packs against raw evidence is a separate half of the "
-            "gate and is not answered here."
-            if met else
-            f"DIGEST GATE NOT MET: {collected} of {REQUIRED_CLEAN_SESSIONS} session "
-            "fact packs exist. Phase 3 and anything downstream of it must not run "
-            "on this evidence."
+#: The walk back through the calendar is bounded so a calendar defect can never
+#: become an unbounded loop. Four times the required run plus a margin is far
+#: more history than the gate can ever need.
+_MAX_GATE_WALK_SESSIONS = 400
+
+
+def consecutive_clean_state(root: Path, *, as_of: str | date | None = None) -> dict[str, Any]:
+    """The RUN of consecutive clean exchange sessions ending at the newest pack.
+
+    Q4.1. Ten packs are not ten consecutive sessions: the pre-Q4 count was
+    `len(distinct session dates)`, so a month with a hole in the middle read as
+    a met window, and a pack that recorded an unreadable source counted as
+    clean. Both are now false.
+
+    * the run walks `market_calendar.previous_session`, **never weekday
+      arithmetic** - a weekend or a holiday is not a gap because it is not a
+      session;
+    * a session in the run is CLEAN when its newest pack is `is_session` and
+      `pack_failures` is empty;
+    * a pack the digest wrote as a NON-session on a day the calendar calls one
+      (an unscheduled closure the calendar cannot know about) neither counts
+      nor breaks - it is skipped;
+    * `first_gap_session` is the newest session that stopped the run, so the
+      statement can say WHERE rather than only how many.
+    """
+    packs = latest_packs_by_session(root)
+    limit = ""
+    if as_of is not None:
+        limit = as_of.isoformat() if isinstance(as_of, date) else str(as_of)[:10]
+    sessions = {
+        day: pack for day, pack in packs.items()
+        if pack.get("is_session") and (not limit or day <= limit)
+    }
+    state: dict[str, Any] = {
+        "sessions_consecutive_clean": 0,
+        "first_gap_session": None,
+        "newest_session": None,
+        "gap_reason": "",
+    }
+    if not sessions:
+        state["gap_reason"] = "no session fact pack exists"
+        return state
+
+    newest = max(sessions)
+    state["newest_session"] = newest
+    try:
+        from market_calendar import previous_session
+
+        cursor = date.fromisoformat(newest)
+    except Exception as exc:  # noqa: BLE001 - an unreadable calendar is recorded
+        state["gap_reason"] = f"exchange calendar unavailable: {exc}"
+        return state
+
+    count = 0
+    for _ in range(_MAX_GATE_WALK_SESSIONS):
+        day = cursor.isoformat()
+        pack = packs.get(day)
+        if pack is None:
+            state["first_gap_session"] = day
+            state["gap_reason"] = f"no fact pack for the session {day}"
+            break
+        if not pack.get("is_session"):
+            # Recorded as not a trading session. Neither counts nor breaks.
+            pass
+        else:
+            failures = pack_failures(pack)
+            if failures:
+                state["first_gap_session"] = day
+                state["gap_reason"] = (
+                    f"the pack for {day} is INCOMPLETE: "
+                    + ", ".join(f"{name} ({why})" for name, why in sorted(failures.items()))
+                )
+                break
+            count += 1
+        try:
+            cursor = previous_session(cursor)
+        except Exception as exc:  # noqa: BLE001
+            state["gap_reason"] = f"exchange calendar refused a date: {exc}"
+            break
+    state["sessions_consecutive_clean"] = count
+    return state
+
+
+def clean_digest_sessions(root: Path, *, as_of: str | date | None = None) -> int:
+    """The length of the run of consecutive CLEAN sessions. Counting is not passing.
+
+    Phase 2's exit gate is ten consecutive session days of digests plus the
+    trader spot-auditing at least three against raw evidence. This answers the
+    first half only; :func:`audit_approval_recorded` answers the second, and a
+    number here never marks a live gate met.
+    """
+    return int(consecutive_clean_state(root, as_of=as_of)["sessions_consecutive_clean"])
+
+
+# ---------------------------------------------------------------------------
+# the audit half of the gate (Q4.2)
+# ---------------------------------------------------------------------------
+
+#: Beside the packs, one level above `facts/`, so it travels with the store it
+#: describes rather than with a year directory.
+AUDIT_APPROVAL_FILENAME = "digest_audit_approval.json"
+AUDIT_APPROVAL_SCHEMA = "digest_audit_approval_v1"
+
+#: The plan's own number: "the trader spot-auditing at least three".
+REQUIRED_AUDITED_PACKS = 3
+
+
+def audit_approval_path(root: Path) -> Path:
+    return Path(root) / AUDIT_APPROVAL_FILENAME
+
+
+def read_audit_approval(root: Path) -> dict[str, Any]:
+    """The recorded spot-audit, or `{}`. Unreadable reads as absent.
+
+    Conservative in the only direction that matters: an approval nobody can
+    parse must not let Phase 3 through.
+    """
+    try:
+        payload = json.loads(audit_approval_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def record_audit_approval(
+    root: Path,
+    *,
+    packs: Sequence[str],
+    note: str = "",
+    approved_by: str = "trader",
+    now: datetime | None = None,
+) -> Path:
+    """Record that a human read these packs against raw evidence.
+
+    **Only the CLI calls this.** No nightly slot may: a runner that can approve
+    its own evidence has not been audited, it has been asserted. Refuses fewer
+    than :data:`REQUIRED_AUDITED_PACKS` packs, and refuses any date that has no
+    pack on disk - an approval naming a session that was never written is the
+    exact false record the gate exists to prevent.
+    """
+    days = []
+    for entry in packs or ():
+        day = str(entry)[:10].strip()
+        if day and day not in days:
+            days.append(day)
+    if len(days) < REQUIRED_AUDITED_PACKS:
+        raise ValueError(
+            f"the digest audit needs at least {REQUIRED_AUDITED_PACKS} packs; "
+            f"{len(days)} named. Phase 2's gate is ten consecutive clean sessions "
+            "PLUS a spot-audit of at least three of them."
+        )
+    on_disk = latest_packs_by_session(root)
+    missing = [day for day in days if day not in on_disk]
+    if missing:
+        raise ValueError(
+            "no fact pack exists for " + ", ".join(missing) +
+            "; an approval must name packs that were actually read"
+        )
+    payload = {
+        "schema": AUDIT_APPROVAL_SCHEMA,
+        "approved_at": _now(now).isoformat(timespec="seconds"),
+        "approved_by": str(approved_by or "trader"),
+        "packs": sorted(days),
+        "note": str(note or ""),
+        "how": (
+            "Written by `python -m ai_jobs.digest approve-audit`, which a human "
+            "runs. No nightly job writes this file."
         ),
     }
+    return _publish(
+        audit_approval_path(root),
+        json.dumps(payload, indent=1, sort_keys=True, default=str) + "\n",
+    )
+
+
+def audit_approval_recorded(root: Path) -> tuple[bool, list[str]]:
+    """`(recorded, packs)`. An approval under the floor does not count."""
+    payload = read_audit_approval(root)
+    packs = [str(day)[:10] for day in (payload.get("packs") or []) if str(day).strip()]
+    return (len(packs) >= REQUIRED_AUDITED_PACKS and bool(payload.get("approved_at")), packs)
+
+
+def digest_gate_state(root: Path, *, as_of: str | date | None = None) -> dict[str, Any]:
+    """The R10.I-shaped statement for any surface that reports on this phase.
+
+    Two halves, both measured (Q4). `sessions_collected` keeps its pre-Q4
+    meaning - the distinct count - so every existing reader still reads what it
+    always read; `window_met` now turns on the CONSECUTIVE run, and `gate_met`
+    additionally requires the recorded spot-audit.
+    """
+    run = consecutive_clean_state(root, as_of=as_of)
+    consecutive = int(run["sessions_consecutive_clean"])
+    collected = collected_digest_sessions(root)
+    met = consecutive >= REQUIRED_CLEAN_SESSIONS
+    recorded, audit_packs = audit_approval_recorded(root)
+    if met:
+        window_words = (
+            f"Digest collection window met: {consecutive} consecutive clean "
+            "session(s)."
+        )
+    else:
+        where = run["first_gap_session"]
+        window_words = (
+            f"DIGEST GATE NOT MET: {consecutive} of {REQUIRED_CLEAN_SESSIONS} "
+            "consecutive clean session fact pack(s)"
+            + (f"; the run stops at {where}" if where else "")
+            + (f" ({run['gap_reason']})" if run["gap_reason"] else "")
+            + ". Phase 3 and anything downstream of it must not run on this evidence."
+        )
+    if recorded:
+        audit_words = (
+            f"Trader spot-audit recorded for {len(audit_packs)} pack(s): "
+            + ", ".join(audit_packs) + "."
+        )
+    else:
+        audit_words = (
+            f"Trader spot-audit NOT recorded: {AUDIT_APPROVAL_FILENAME} is absent "
+            f"or names fewer than {REQUIRED_AUDITED_PACKS} packs. Run "
+            "`python -m ai_jobs.digest approve-audit --pack <date> ...` after "
+            "reading the packs against raw evidence."
+        )
+    return {
+        "sessions_collected": collected,
+        "sessions_consecutive_clean": consecutive,
+        "first_gap_session": run["first_gap_session"],
+        "sessions_required": REQUIRED_CLEAN_SESSIONS,
+        "window_met": met,
+        "audit_recorded": recorded,
+        "audit_packs": audit_packs,
+        "audit_packs_required": REQUIRED_AUDITED_PACKS,
+        "gate_met": bool(met and recorded),
+        "statement": f"{window_words} {audit_words}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# entry_index.json - the compact, auditable handoff (Q4.4)
+# ---------------------------------------------------------------------------
+
+ENTRY_INDEX_FILENAME = "entry_index.json"
+ENTRY_INDEX_SCHEMA = "digest_entry_index_v1"
+
+#: FOUR sections, never merged. Each answers a different question on a
+#: different population, and a reader who sums them has invented a number
+#: nobody measured. The order is the order they are written in.
+ENTRY_INDEX_SECTIONS = (
+    "intraday_held_run",
+    "swing_win_rates",
+    "preference_observations",
+    "journal_execution",
+)
+
+#: The one statistics contract (ground rule 10). A cell under it is UNMEASURED,
+#: never a weak edge - which is why `changes_vs_prior_window` reports FLOOR
+#: STATUS and never a ranking of immature cells. "Lately" is counted in trading
+#: SESSIONS. Both are re-exports; the contract lives in `evidence_stats`.
+ENTRY_INDEX_FLOOR = 30
+ENTRY_INDEX_WINDOW_SESSIONS = 20
+
+try:
+    from evidence_stats import LATELY_SESSIONS as _LATELY_SESSIONS, MIN_REPORTABLE_N as _MIN_N
+
+    ENTRY_INDEX_FLOOR = int(_MIN_N)
+    ENTRY_INDEX_WINDOW_SESSIONS = int(_LATELY_SESSIONS)
+except Exception:  # noqa: BLE001 - a headless import path must not lose the module
+    _log.debug("evidence_stats unavailable; the entry index uses its written-down constants")
+
+
+def entry_index_path(root: Path) -> Path:
+    return Path(root) / ENTRY_INDEX_FILENAME
+
+
+def read_entry_index(root: Path) -> dict[str, Any]:
+    """The last good index, or `{}`. For the System Health / Research readers.
+
+    Nothing in this packet consumes it; it exists so the next reader does not
+    have to walk ninety packs to answer "what is here, and what changed?".
+    """
+    try:
+        payload = json.loads(entry_index_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _cell_n(cell: Any) -> int:
+    if isinstance(cell, Mapping):
+        try:
+            return int(cell.get("n") or 0)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+def _cell_value(cell: Any) -> Any:
+    return cell.get("value") if isinstance(cell, Mapping) else None
+
+
+def _held_run_cells(pack: Mapping[str, Any]) -> list[tuple[str, Any, int]]:
+    """MFE/MAE cells only - the OPPORTUNITY half.
+
+    `close_r` is the RESULT and is deliberately absent: the day-trade headline
+    is "did the level hold, and how far did it run", and ground rule 12 forbids
+    blending the two. This section indexes what that headline is computed from.
+    """
+    out: list[tuple[str, Any, int]] = []
+    overall = ((pack.get("outcomes") or {}).get("overall")) or {}
+    for metric in ("mfe_r", "mae_r"):
+        cell = overall.get(metric)
+        if isinstance(cell, Mapping):
+            out.append((f"outcomes.overall.{metric}", _cell_value(cell), _cell_n(cell)))
+    for row in ((pack.get("outcomes") or {}).get("slices")) or []:
+        if not isinstance(row, Mapping):
+            continue
+        env = str(row.get("env_key") or "")
+        side = str(row.get("side") or "")
+        for metric in ("mfe_r", "mae_r"):
+            cell = row.get(metric)
+            if isinstance(cell, Mapping):
+                out.append((
+                    f"outcomes.slices[{env}|{side}].{metric}",
+                    _cell_value(cell), _cell_n(cell),
+                ))
+    return out
+
+
+def _preference_cells(pack: Mapping[str, Any]) -> list[tuple[str, Any, int, str]]:
+    """The trader's own verdicts, classified by the ONE classifier.
+
+    `review_learning.TAKE_ACTIONS` / `REJECT_ACTIONS` decide which action is a
+    take and which is a reject; restating that here would be a second list to
+    drift. Machine events, `*_fired`, `*_expired` and every `disarm_*` are in
+    neither set and so are not indexed.
+    """
+    try:
+        from review_learning import REJECT_ACTIONS, TAKE_ACTIONS
+    except Exception:  # noqa: BLE001
+        return []
+    counts = ((pack.get("behaviour") or {}).get("by_action")) or {}
+    out: list[tuple[str, Any, int, str]] = []
+    for action, count in sorted(counts.items()):
+        if action in TAKE_ACTIONS:
+            lane = "take"
+        elif action in REJECT_ACTIONS:
+            lane = "reject"
+        else:
+            continue
+        try:
+            value = int(count)
+        except (TypeError, ValueError):
+            continue
+        out.append((f"behaviour.by_action.{action}", value, value, lane))
+    return out
+
+
+def _section_cells(pack: Mapping[str, Any], pack_path: str) -> dict[str, list[dict[str, Any]]]:
+    sections: dict[str, list[dict[str, Any]]] = {name: [] for name in ENTRY_INDEX_SECTIONS}
+    for key, value, n in _held_run_cells(pack):
+        sections["intraday_held_run"].append({
+            "pack_path": pack_path, "cell_key": key, "value": value, "n": n,
+            "meets_floor": n >= ENTRY_INDEX_FLOOR,
+        })
+    for key, value, n, lane in _preference_cells(pack):
+        sections["preference_observations"].append({
+            "pack_path": pack_path, "cell_key": key, "value": value, "n": n,
+            "lane": lane, "meets_floor": n >= ENTRY_INDEX_FLOOR,
+        })
+    return sections
+
+
+#: Why two of the four sections are empty. A blank is right where the question
+#: cannot be asked of this record, and an honest empty beats a number lifted
+#: off a different grain.
+_SECTION_NOTES = {
+    "intraday_held_run": (
+        "MFE/MAE cells - the OPPORTUNITY half of the day-trade headline. "
+        "close_r is the RESULT and is never blended with these, so it is not "
+        "indexed here."
+    ),
+    "swing_win_rates": (
+        "EMPTY BY CONSTRUCTION: the daily fact pack carries CHAMPION INTRADAY "
+        "outcomes only (answer 3), so no swing win rate is derivable from it. "
+        "The swing record lives in master_avwap_tier_outcomes.csv and is read "
+        "through swing_headline; it is not restated here from a different grain."
+    ),
+    "preference_observations": (
+        "The trader's own verdicts, classified by review_learning's TAKE/REJECT "
+        "sets. Cohort GRADES are not here - they are the cohort slots' own "
+        "files; this is what was decided on the day."
+    ),
+    "journal_execution": (
+        "EMPTY BY CONSTRUCTION: the fact pack carries no journal or execution "
+        "block. journal_import, journal_auto_tag and preference_trade_outcomes "
+        "own that evidence and this index does not restate it from another store."
+    ),
+}
+
+
+def _pending_experiments() -> dict[str, Any]:
+    """Registered trials with their FROZEN windows, listed and UNRANKED.
+
+    A ranked list of open experiments is a recommendation, and a trial that has
+    not concluded has nothing to recommend. Unavailable is a NOTE, never zero.
+    """
+    try:
+        from research_warehouse.config import get_research_store_dir
+        from research_warehouse.trial_ledger import (
+            STATUS_ABANDONED,
+            STATUS_CONCLUDED,
+            load,
+        )
+
+        store_root = get_research_store_dir()
+        if store_root is None:
+            return {
+                "entries": [],
+                "note": "research_store_dir is unset; the trial ledger was not read.",
+            }
+        rows = load(store_root)
+    except Exception as exc:  # noqa: BLE001 - the ledger is evidence, not a gate
+        return {"entries": [], "note": f"the trial ledger could not be read: {exc}"}
+    entries = [
+        {
+            "trial_id": str(row.get("trial_id") or ""),
+            "family": str(row.get("family") or ""),
+            "question": str(row.get("question") or ""),
+            "status": str(row.get("status") or ""),
+            "registered_at": str(row.get("registered_at") or ""),
+            "declared_window": dict(row.get("declared_window") or {}),
+            "declared_floors": dict(row.get("declared_floors") or {}),
+            "declared_cell_count": row.get("declared_cell_count"),
+        }
+        for row in rows
+        if str(row.get("status") or "") not in (STATUS_ABANDONED, STATUS_CONCLUDED)
+    ]
+    entries.sort(key=lambda row: (row["registered_at"], row["trial_id"]))
+    return {
+        "entries": entries,
+        "note": (
+            "Registered before any outcome was inspected, listed in registration "
+            "order and NEVER ranked. A frozen window is what makes a trial "
+            "readable later; it is printed, not re-cut."
+        ),
+    }
+
+
+def _window_cell_totals(
+    packs: Mapping[str, Mapping[str, Any]],
+    paths: Mapping[str, str],
+    days: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    """Total n per (section, cell_key) across a window; the newest path is kept."""
+    totals: dict[str, dict[str, Any]] = {}
+    for day in sorted(days):
+        pack = packs.get(day)
+        if not pack:
+            continue
+        for section, rows in _section_cells(pack, paths.get(day, "")).items():
+            for row in rows:
+                key = f"{section}|{row['cell_key']}"
+                bucket = totals.setdefault(key, {
+                    "section": section, "cell_key": row["cell_key"],
+                    "n": 0, "pack_path": "",
+                })
+                bucket["n"] += int(row["n"])
+                if row["pack_path"]:
+                    bucket["pack_path"] = row["pack_path"]  # newest wins
+    return totals
+
+
+def _window_days(end: str, sessions: int) -> list[str]:
+    """The `sessions`-session window ending at `end`, inclusive, by the calendar."""
+    try:
+        from market_calendar import is_session, previous_session
+
+        cursor = date.fromisoformat(end)
+        if not is_session(cursor):
+            cursor = previous_session(cursor)
+        days = [cursor.isoformat()]
+        for _ in range(max(0, int(sessions) - 1)):
+            cursor = previous_session(cursor)
+            days.append(cursor.isoformat())
+        return sorted(days)
+    except Exception:  # noqa: BLE001 - a window is never worth a blank index
+        return []
+
+
+def build_entry_index(root: Path, *, as_of: str | date | None = None) -> dict[str, Any]:
+    """The whole index, computed. Deterministic; no model is called from here."""
+    root = Path(root)
+    packs = latest_packs_by_session(root)
+    versions: dict[str, int] = {}
+    for pack in read_fact_packs(root):
+        day = str(pack.get("session_date") or "")
+        if day:
+            versions[day] = versions.get(day, 0) + 1
+    sessions = {day: pack for day, pack in packs.items() if pack.get("is_session")}
+
+    limit = ""
+    if as_of is not None:
+        limit = as_of.isoformat() if isinstance(as_of, date) else str(as_of)[:10]
+    in_scope = [day for day in sorted(sessions) if not limit or day <= limit]
+    latest_session = in_scope[-1] if in_scope else ""
+
+    paths = {day: str(facts_path(root, day)) for day in sessions}
+
+    window = _window_days(latest_session, ENTRY_INDEX_WINDOW_SESSIONS) if latest_session else []
+    prior_end = ""
+    if window:
+        try:
+            from market_calendar import previous_session
+
+            prior_end = previous_session(date.fromisoformat(window[0])).isoformat()
+        except Exception:  # noqa: BLE001
+            prior_end = ""
+    prior = _window_days(prior_end, ENTRY_INDEX_WINDOW_SESSIONS) if prior_end else []
+    in_window = [day for day in (window or in_scope) if day in sessions]
+
+    rows = []
+    for day in in_window:
+        pack = sessions[day]
+        failures = pack_failures(pack)
+        rows.append({
+            "session_date": day,
+            "pack_path": paths.get(day, ""),
+            "versions": int(versions.get(day, 1)),
+            "superseded": int(versions.get(day, 1)) > 1,
+            "clean": not failures,
+            "failures": failures,
+            "coverage": dict(pack.get("coverage") or {}),
+        })
+
+    aggregated: dict[str, list[dict[str, Any]]] = {name: [] for name in ENTRY_INDEX_SECTIONS}
+    for day in in_window:
+        for name, entries in _section_cells(sessions[day], paths.get(day, "")).items():
+            aggregated[name].extend(entries)
+    section_payload = {
+        name: {"entries": aggregated[name], "note": _SECTION_NOTES[name]}
+        for name in ENTRY_INDEX_SECTIONS
+    }
+
+    this_totals = _window_cell_totals(sessions, paths, window or in_scope)
+    prior_totals = _window_cell_totals(sessions, paths, prior)
+    cleared: list[dict[str, Any]] = []
+    fell: list[dict[str, Any]] = []
+    for key in sorted(set(this_totals) | set(prior_totals)):
+        section, _, cell_key = key.partition("|")
+        now_row = this_totals.get(key) or {"n": 0, "pack_path": ""}
+        was_row = prior_totals.get(key) or {"n": 0, "pack_path": ""}
+        now_met = int(now_row["n"]) >= ENTRY_INDEX_FLOOR
+        was_met = int(was_row["n"]) >= ENTRY_INDEX_FLOOR
+        if now_met == was_met:
+            continue
+        change = {
+            "section": section,
+            "cell_key": cell_key,
+            "pack_path": now_row.get("pack_path") or was_row.get("pack_path", ""),
+            "this_window": {"n": int(now_row["n"]), "meets_floor": now_met},
+            "prior_window": {"n": int(was_row["n"]), "meets_floor": was_met},
+        }
+        (cleared if now_met else fell).append(change)
+
+    newest_pack = sessions.get(latest_session) or {}
+    statistics = ((newest_pack.get("outcomes") or {}).get("overall") or {}).get("statistics") or {}
+    try:
+        from research_warehouse.manifest import definitions_git_commit
+
+        commit = definitions_git_commit()
+    except Exception:  # noqa: BLE001 - provenance is evidence, not a gate
+        commit = ""
+
+    return {
+        "schema_version": ENTRY_INDEX_SCHEMA,
+        "generated_at": _now().isoformat(timespec="seconds"),
+        "git_commit": commit,
+        "latest_complete_session": latest_session,
+        "versions": {
+            # Read off a pack. Nothing invented: the pack carries no recipe id
+            # and no vocabulary version, so neither is listed.
+            "facts_schema": FACTS_SCHEMA,
+            "narration_schema": NARRATION_SCHEMA,
+            "statistics_schema": str(statistics.get("schema") or ""),
+            "evidence_label": str(newest_pack.get("evidence_label") or ""),
+            "n_floor": int(statistics.get("n_floor") or ENTRY_INDEX_FLOOR),
+            "note": (
+                "The identifiers the packs themselves carry. A fact pack records "
+                "no recipe id and no vocabulary version, so none is printed here "
+                "rather than one being invented."
+            ),
+        },
+        "window": {
+            "sessions": ENTRY_INDEX_WINDOW_SESSIONS,
+            "since": window[0] if window else "",
+            "until": window[-1] if window else "",
+            "prior_since": prior[0] if prior else "",
+            "prior_until": prior[-1] if prior else "",
+            "note": "Counted in TRADING SESSIONS through the exchange calendar.",
+        },
+        "sessions": rows,
+        "changes_vs_prior_window": {
+            "cleared_the_floor": cleared,
+            "fell_below_the_floor": fell,
+            "floor": ENTRY_INDEX_FLOOR,
+            "note": (
+                "By FLOOR STATUS only. A cell that crossed the evidence floor "
+                "since the prior equal-length window is worth a look; an "
+                "immature cell is never ranked and no value is compared."
+            ),
+        },
+        **section_payload,
+        "pending_experiments": _pending_experiments(),
+        # A frontier model opens a ticker brief only for a STATED question.
+        # This list is deliberately empty: nothing here may invent one.
+        "open_questions_for_a_ticker_brief": [],
+        "note": (
+            "Deterministic. Every number was computed by code from the fact "
+            "packs; no model was called, and nothing here ranks, scores, gates "
+            "or alerts."
+        ),
+    }
+
+
+def write_entry_index(root: Path, *, as_of: str | date | None = None) -> Path:
+    """Publish the index with a temp-and-rename write. Raises on a write failure.
+
+    The caller (`run_daily_digest`) logs and swallows: the index is a
+    convenience over a record that is already on disk, and it must never cost
+    the pack that was just published.
+    """
+    index = build_entry_index(root, as_of=as_of)
+    return _publish(
+        entry_index_path(root),
+        json.dumps(index, indent=1, sort_keys=True, default=str) + "\n",
+    )
+
+
+# ---------------------------------------------------------------------------
+# the CLI (Q4.2) - the only writer of the audit approval
+# ---------------------------------------------------------------------------
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """`python -m ai_jobs.digest ...`, run from `scripts/`.
+
+    Three commands. `approve-audit` writes the file the trader - and nothing
+    automatic - writes; the other two only read.
+    """
+    import argparse
+
+    # `--root` on BOTH the top parser and every subparser, so it may be typed
+    # on either side of the command name. A flag that only works in one
+    # position is a flag the trader gets wrong once and then stops using.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--root", default="", help="digest store root (defaults to the AI store)")
+
+    parser = argparse.ArgumentParser(
+        prog="ai_jobs.digest",
+        parents=[common],
+        description="Daily digest gate and entry index (no model is called).",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    approve = sub.add_parser(
+        "approve-audit",
+        parents=[common],
+        help="record that the trader read these fact packs against raw evidence",
+    )
+    approve.add_argument("--pack", action="append", default=[], metavar="YYYY-MM-DD")
+    approve.add_argument("--note", default="")
+
+    sub.add_parser("gate", parents=[common], help="print the two halves of the Phase 2 gate")
+    sub.add_parser(
+        "entry-index", parents=[common],
+        help="rebuild entry_index.json from the packs on disk",
+    )
+
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    try:
+        root = Path(args.root) if args.root else _default_root()
+    except Exception as exc:  # noqa: BLE001
+        print(f"AI store unavailable: {exc}")
+        return 2
+
+    if args.command == "approve-audit":
+        try:
+            written = record_audit_approval(root, packs=args.pack, note=args.note)
+        except ValueError as exc:
+            print(f"refused: {exc}")
+            return 2
+        except OSError as exc:
+            print(f"could not write the approval: {exc}")
+            return 2
+        print(f"recorded {written}")
+        return 0
+
+    if args.command == "entry-index":
+        try:
+            print(f"wrote {write_entry_index(root)}")
+        except OSError as exc:
+            print(f"could not write the index: {exc}")
+            return 2
+        return 0
+
+    state = digest_gate_state(root)
+    print(json.dumps(state, indent=1, sort_keys=True, default=str))
+    return 0 if state["gate_met"] else 1
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
+    raise SystemExit(main())
