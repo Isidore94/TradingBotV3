@@ -1785,3 +1785,171 @@ narration beside it.** Three siblings, or a `narration absent` line, means the
 view is still too large — and the refusal message names the size, the budget and
 the eligible-cell count, so it says which.
 
+## 9. Addendum, 2026-09-04 (Q3) — the grounding contract
+
+Trader, 2026-09-04, over the process review's findings 4 and 5: *"please review
+and implement the suggested changes."*
+
+**The validator used to ask only whether a cited id EXISTS.** It checked shape,
+resolved every `evidence_refs` entry against `usable_source_ids`, struck the bad
+ones and dropped a row left citing nothing — and it never asked whether the
+source it accepted could support the KIND of claim the sentence made. On
+2026-09-03 the morning file called BULL "a held long" while citing watchlist
+membership: a real source, cited correctly, for a claim it cannot make.
+
+Four rules now stand between the model and the file. All four are advisory-only
+and none of them reaches a detector, score, watchlist, alert or bot state.
+
+### 9.1 Every source carries a KIND
+
+`ai_summary.SOURCE_KINDS_BY_FAMILY` maps an id's family to one of `journal`,
+`watchlist`, `scanner`, `market`, `narrative`, `feedback`, `walkaway`, `ops`.
+`kind_for_source_id` **raises** on an unknown family rather than defaulting —
+a default is the guess the table exists to remove — and `source_kinds(evidence)`
+returns the map for a package's own `sources`. `usable_source_ids` is unchanged.
+
+Two ids are `watchlist` despite their family, because their CONTENT is a list of
+names: `market.auto_state` (the Auto Pilot state) and `watchlists.membership`
+(the ticker brief's own membership source). They are named in
+`MEMBERSHIP_SOURCE_IDS`.
+
+The package's machine-owned `coverage` block gains `source_kinds`, so the
+published document and any later reader — including the frontier model — see the
+type of every source. It is in `coverage` rather than the model's view because
+the model must not paraphrase provenance it cannot verify.
+
+**The kind is not what §9.2 tests, and that is deliberate.** The table is keyed
+by family, so all five `journal.*` ids read as kind `journal` — but only
+`journal.trades_and_reviews` carries a per-trade `status`. The other four are the
+**Market Journal**, which is what the trader THOUGHT: `journal.entries` is their
+free text, `journal.day_context` is machine-measured market context,
+`journal.chart_digests` is what the charts looked like, `journal.evidence_report`
+is the nightly deterministic report. The two stores are deliberately not merged
+(`CLAUDE.md`, "Evidence, journal and statistics"), and a family-keyed position
+rule let one stand as evidence for the other. §9.2 therefore tests
+`POSITION_SOURCE_IDS`, an explicit list of ids, not the kind. The kind stays what
+it is: a description of the family, useful to a reader of the coverage block and
+to the frontier model, and not the thing the position rule rests on.
+
+### 9.2 A position claim needs a position source
+
+A statement matching `POSITION_CLAIM_PATTERNS` — a small listed vocabulary
+(`held long`, `held short`, `holding`, `long position`, `short position`,
+`currently long/short`, `we are long/short`, `open position`, `in a position`;
+case-insensitive, word-bounded) — is **dropped** unless its surviving refs
+include an id in `POSITION_SOURCE_IDS`, which is
+`frozenset({"journal.trades_and_reviews"})` and nothing else. `detail` is
+`"position claim without a position source"` and `row_dropped` is `True`.
+
+**An exact list of ids, not the `journal` kind** (fix round, 2026-09-04). The
+question is narrow — not "is this source about trading?" but "does this source
+state that a position exists?" — and only the trade journal answers it, because
+only its rows carry a per-trade `status`. Adding an id here is a deliberate act.
+`GROUNDING_PROMPT_LINES` names the id to the model from this same constant, so
+the instruction and the enforcement cannot drift.
+
+The row is OMITTED, never softened: rewriting a model's sentence into something
+defensible is the desk deciding what the model meant. The 2026-08-28 rule is
+untouched — a bad row costs its ROW, the document still publishes, and a
+document with no supported row still raises.
+
+`data_quality` and `risk_notes` stay exempt from CITATION, as they always were,
+but they are **not** exempt from this rule: a section that need not cite may
+still not assert a position it cannot support.
+
+**The `executive_summary` may not assert a position AT ALL** (lead ruling,
+2026-09-04, reviewer blocker 1). It carries no `evidence_refs`, so there is no
+ref to strike and no way for it to become supported; and it cannot be omitted
+the way a row can, because a blank executive summary already raises. So when
+`states_a_position` is true of it, the whole field is replaced by
+`WITHHELD_EXECUTIVE_SUMMARY` — *"Executive summary withheld: it asserted a
+position without a trade-journal source."* — and one entry is recorded in
+`dropped` (`section: "executive_summary"`, `detail: "position claim in the
+executive summary"`, `row_dropped: True`). The document still publishes on its
+surviving rows. This is the row-not-document rule applied to the one field that
+is not a row. **Measured: 480 of 1,478 published executive summaries assert a
+position**, the cited one opening "BULL is currently long...", so this is the
+common case rather than an edge.
+
+Deliberately NOT in the vocabulary: "long setup", "short candidate", "on the
+longs list". Those name a direction or a membership, and the scanner and the
+watchlists establish both.
+
+### 9.3 A numeric claim names its cell
+
+A row may carry an OPTIONAL `metric_ref` object
+`{source_id, key, horizon, denominator}` — optional in `AI_SUMMARY_JSON_SCHEMA`
+and in the row shape, because most statements state no figure and a schema that
+demanded one would make the model invent them.
+
+A statement matching `NUMERIC_CLAIM_PATTERNS` — a percentage, an `N of M`, an
+`n=N`, or a decimal R value — **must** carry one, and it must resolve: the
+`source_id` is one of that row's surviving refs, `horizon` and `denominator` are
+non-empty, and `metric_key_exists(evidence, source_id, key)` is true. Otherwise
+the row is dropped with `detail: "numeric claim without a resolvable metric_ref"`.
+
+`metric_key_exists` accepts three things and nothing else: a **mapping key at
+any depth** (a top-level JSON field, or a CSV/JSONL column name — every row is a
+mapping, so a column name is a mapping key); a **row key**, the value of the
+first field of a row in a list-of-rows content, because
+`master_avwap_setup_type_stats.csv` is keyed by its first column; and, for TEXT
+content, a **literal case-insensitive occurrence**, because the narrative sources
+are prose with labelled figures and the label is the only handle there is. The
+walk is depth- and width-bounded. A missing source has no keys and answers
+False, and so does one that is not USABLE — stale, empty, invalid or excluded —
+because a cell nobody can read is not a cell (reviewer advisory 1). The test is
+the same one `usable_source_ids` applies. This is the conservative direction,
+since the row is then dropped rather than published.
+
+The numeric rule is scoped to rows that must cite. `data_quality` and
+`risk_notes` carry no refs for a `metric_ref` to name, and the system's own
+`[system] Evidence coverage: 3 of 3` row is exactly that shape.
+
+A bare integer is not a numeric claim. "3 setups triggered" is a count the reader
+can check against the cited source; "62%", "8 of 13", "n=37" and "1.8R" are
+derived figures whose denominator and horizon the sentence does not carry.
+
+`GROUNDING_PROMPT_LINES` states all three rules to the model — the position
+rule, the executive-summary rule and this one — in `_user_prompt` and therefore
+in `_local_user_prompt` too. A rule the model never hears costs a row every
+night for no reason.
+
+**And the prompt CLOSES on `metric_ref`** (reviewer blocker 4). The local
+prompt's last sentence used to be *"each section is an array of objects with
+exactly the keys statement, evidence_refs, confidence"* — which contradicted the
+grounding ask three paragraphs above it, and was the last thing the model read.
+The shape sentence now names `metric_ref` as an optional fourth key and the
+prompt ends by restating when it is required, because a model that has been told
+twice believes the second telling.
+
+**One validator serves every path.** `ai_summary.validate_ai_summary` is the
+only one; `validate_published_summary` delegates to it, and the ticker briefs
+reach it through `ai_summary.request_ai_summary`. There is no sibling validator
+in `ai_jobs/briefs.py`, so the position rule binds the briefs without a second
+implementation.
+
+### 9.4 The morning file publishes three counts, never one total
+
+`render_morning_file` prints
+`Analyzed A of N. Membership-only B. Failed C.` — A is the `briefed` count, B
+the `membership_only` count, C the failures, and at the end of a run
+`A + B + C == N`. The 2026-09-03 file said "Briefed 152 of 152" while 40 of
+those symbols had never reached a model at all: they had no evidence beyond a
+list they were on, and the deterministic membership-only path answered them
+without a model call. One number cannot say that.
+
+Each membership-only block leads with `membership only - <reason>` above
+anything else. Such a block carries no prose to confuse with a brief — a
+membership-only entry never reaches a model, so it has no `result` — and a
+position claim is impossible there twice over: structurally, and because
+`watchlists.membership` is kind `watchlist`, so §9.2 would drop one.
+
+The existing `Failed: SYM (reason)` clause is unchanged. The three counts are
+partial DURING a run (the interim publish is what the trader finds if the
+process is killed) and carry `INCOMPLETE_RUN_NOTE` exactly as before.
+
+**Live gate #62**, owed at merge: the first nightly run after merge opens
+`ai_morning_brief.txt` with the three-count line, no membership-only section
+carries position language, and the dropped-row log names any position or numeric
+drop with its detail.
+

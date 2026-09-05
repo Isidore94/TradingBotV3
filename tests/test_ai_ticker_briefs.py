@@ -646,7 +646,7 @@ def test_one_failing_ticker_costs_its_own_brief_and_nothing_else(tmp_path, monke
 
     text = morning.read_text(encoding="utf-8")
     header, _, body = text.partition("## ")
-    assert "Briefed 1 of 2." in header
+    assert "Analyzed 1 of 2. Membership-only 0. Failed 1." in header
     assert "Failed: MSFT (summary cited evidence that does not exist)" in header
     assert "NVDA" in body and "## MSFT" not in text
 
@@ -679,7 +679,7 @@ def test_a_window_closing_mid_batch_publishes_what_completed(tmp_path, monkeypat
     assert calls == ["NVDA"], "no further inference after the window closed"
     assert outcome["status"] == "degraded_no_narrative"
     text = morning.read_text(encoding="utf-8")
-    assert "Briefed 1 of 2." in text
+    assert "Analyzed 1 of 2. Membership-only 0. Failed 0." in text
     assert "Stopped early" in text and "off-hours window closed" in text
     assert "## NVDA" in text
 
@@ -750,7 +750,10 @@ def test_a_symbol_with_no_evidence_is_answered_without_a_model_call(tmp_path, mo
     assert outcome["status"] == "ok"
     assert outcome["tokens"]["ticker_calls"] == 1
     text = morning.read_text(encoding="utf-8")
-    assert "Briefed 2 of 2." in text
+    # Q3.3: TSLA was never analysed - it got no model call and no evidence
+    # beyond a list it is on. One total counted it as a brief; three counts
+    # cannot.
+    assert "Analyzed 1 of 2. Membership-only 1. Failed 0." in text
     assert "## TSLA  [swing_longs]" in text
     assert "no session evidence beyond membership in swing_longs" in text
     # No artifact set for a symbol nothing was said about.
@@ -802,7 +805,7 @@ def test_a_retry_regenerates_only_what_changed(tmp_path, monkeypatch):
         "tickers_failed": 0,
     }
     text = morning.read_text(encoding="utf-8")
-    assert "Briefed 2 of 2." in text and "Failed:" not in text
+    assert "Analyzed 2 of 2. Membership-only 0. Failed 0." in text and "Failed:" not in text
     # One artifact set per symbol, not one per attempt.
     assert len(list((root / SESSION[:4] / SESSION / "tickers" / "NVDA").glob("*_manifest.json"))) == 1
 
@@ -1011,7 +1014,7 @@ def test_a_hard_kill_mid_batch_still_leaves_the_finished_briefs_published(
 
     text = morning.read_text(encoding="utf-8")
     assert "## NVDA" in text, "the brief that finished before the kill is published"
-    assert "Briefed 1 of 2." in text
+    assert "Analyzed 1 of 2. Membership-only 0. Failed 0." in text
     assert briefs.INCOMPLETE_RUN_NOTE in text, "and it says it was still running"
 
 
@@ -1034,7 +1037,7 @@ def test_a_completed_run_does_not_claim_to_be_still_running(tmp_path, monkeypatc
         morning_path=morning,
     )
     text = morning.read_text(encoding="utf-8")
-    assert "Briefed 1 of 1." in text
+    assert "Analyzed 1 of 1. Membership-only 0. Failed 0." in text
     assert briefs.INCOMPLETE_RUN_NOTE not in text
 
 

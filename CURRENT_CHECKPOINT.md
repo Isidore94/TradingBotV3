@@ -34,6 +34,7 @@ the dated entry named beside it.
 | # | Gate | Owed by |
 |---|---|---|
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
+| 62 | **The AI grounding contract holds on a real night (Q3)** - the first nightly run after `claude/q3-ai-grounding` merges: `ai_morning_brief.txt` OPENS with `Analyzed A of N. Membership-only B. Failed C.` and `A + B + C == N`; every membership-only block leads with `membership only - ...` and carries NO position language; and `ai_jobs`' dropped-row log names any position or numeric drop with its detail - the three strings the code emits are **`position claim without a position source`**, **`position claim in the executive summary`** and **`numeric claim without a resolvable metric_ref`**, and those are what to grep for. **Read the executive summaries too**: 480 of 1,478 published ones asserted a position, so expect the system's `Executive summary withheld: ...` line to appear on the first night and to become rare as the model learns the rule. A night with ZERO drops is also a pass - the rule is that a drop, when it happens, is named. **Watch for over-drop**: if the analyzed count collapses versus the prior night, the numeric regex is catching prose and the packet's `NUMERIC_CLAIM_PATTERNS` is the one thing to widen or narrow. | packet Q3, 2026-09-04 |
 | 61 | **The band repair chain (packet Q2)** - after the next nightly build, on the trader's go: `rebuild-daily-features --from 2026-08-01 --to <today>` DRY RUN lists the August and September sessions; `--apply` then `recompute-outcomes --apply` then `band-coverage --month 2026-08` / `--month 2026-09` shows `swing_house_v1`'s required-band coverage above 90% for September with the observed / reconstructed / legacy split PRINTED, and `path_kind` populated on the recomputed rows. **The gate is the split being printed, not `observed` being non-zero**: the anchor choice keeps the NEWEST bar on or before the session regardless of knowledge, so once the bridge lands anchors with newer bars they displace the 14 hand-imported ones and `observed` can legitimately read 0. Rides with gate #59 and is measured by the same nightly | 2026-09-04 (~16:00 PT) Q2 entry |
 | 59 | **The anchors CSV feeds the warehouse (earnings-anchor bridge)** - after the next scan, `trading_bot.log` carries `Earnings-anchor bridge: N cached anchor(s) ...` and `earnings_avwap_anchors.csv` holds a row per scanned symbol (~1,100+ tickers, ~2,200 rows, `source=scanner_earnings_cache`); after the next nightly build, `anchor_instance` holds ~2,200 rows (current + previous per symbol) and `feature_snapshot_daily` carries non-null `avwape_*` bands for those symbols' sessions; then `recompute-outcomes` (BD-98, `force`) re-grades `swing_house_v1` and the 0/257 reads as a real rate | 2026-09-04 14:30 entry |
 | 58 | **Capture and board rules (T1)** - one DESK session where: a double-click on a veto reason retires the chart with no box and `trader_annotations.jsonl` gains ONE row; a double-click on a claim with NOTHING typed writes ONE row and advances to the next chart; a quick like (Alt+L or ♥) leaves the chart up so an alert can be armed on it; "✕ Not today" still opens the box and advances; five clicks across the RS/RW and TC2000 boards leave "queue clear" reading "queue clear"; after the next 15-minute Strength refresh the TC2000 parity names are on M5 Focus with markers in `focus_auto_picks.json`; a "Not today" on one of them, AND a removal from the Focus list itself, each stay gone on the refresh after; and `longs.txt` did not regain the removed name | 2026-09-04 11:30 entry |
@@ -97,6 +98,127 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+
+### 2026-09-04 (evening) - Packet Q3: the local AI cannot change a fact's meaning
+
+Branch `claude/q3-ai-grounding` off `main` at `6b74165`, builder-built, NOT merged.
+Trader authorization: *"please review and implement the suggested changes"* over
+`docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md` findings 4 and 5. Advisory only -
+no detector, score, watchlist, alert, Focus, review queue or `review_policy.json` is
+touched, and no test calls a model. Contract:
+`docs/LOCAL_AI_AUTOMATION_PLAN.md` §9.
+
+**The defect.** `validate_ai_summary` asked whether a cited source EXISTS and never
+whether it could support the KIND of claim the sentence made. The 2026-09-03 morning
+file called BULL "a held long" while citing watchlist membership - a real source, cited
+correctly, for a claim it cannot make - and the same file's header said
+"Briefed 152 of 152" while 40 of those symbols had never reached a model at all.
+
+**Q3.1** `SOURCE_KINDS_BY_FAMILY` + `kind_for_source_id` + `source_kinds` beside
+`usable_source_ids` (unchanged): `journal` / `watchlist` / `scanner` / `market` /
+`narrative` / `feedback` / `walkaway` / `ops`, keyed by id family, with
+`market.auto_state` and `watchlists.membership` forced to `watchlist` because their
+content is a list of names. An unknown family RAISES rather than defaulting.
+`coverage.source_kinds` is additive and machine-owned, so it reaches the published
+document without the model paraphrasing it.
+
+**Q3.2** A statement matching `POSITION_CLAIM_PATTERNS` is DROPPED unless one of its
+surviving refs is in `POSITION_SOURCE_IDS`
+(`detail: "position claim without a position source"`); a statement stating a
+percentage / `N of M` / `n=N` / decimal R must carry a resolvable `metric_ref`
+`{source_id, key, horizon, denominator}` or it is dropped
+(`detail: "numeric claim without a resolvable metric_ref"`). The row is OMITTED, never
+softened. The 2026-08-28 rule is intact: the document still publishes, and one
+supported by nothing still raises. `metric_ref` is the one optional key admitted by the
+row shape and by `AI_SUMMARY_JSON_SCHEMA`. The numeric rule is scoped to rows that must
+cite - `data_quality` and `risk_notes` carry no refs for a `metric_ref` to name, and
+the system's own `[system] Evidence coverage: 3 of 3` is exactly that shape - but the
+POSITION rule binds them too. **`validate_ai_summary` is the only validator the briefs
+use** (through `request_ai_summary`); `validate_published_summary` delegates to it.
+
+**Q3.3** `render_morning_file` prints `Analyzed A of N. Membership-only B. Failed C.`
+Each membership-only block leads with `membership only - <reason>`; such a block has no
+prose (no model call, so no `result`) and could not carry a position claim anyway,
+because its one source is kind `watchlist`. Six `Briefed N of M.` assertions in
+`tests/test_ai_ticker_briefs.py` were updated - one of them, `Briefed 2 of 2` with one
+membership-only symbol, IS the defect.
+
+**Q3.4** `LikeLink.from_payload` (strict both ways - a missing key and an unknown key
+each raise, naming it), `basis_of`, `count_payload_bases`. Both lake audit scripts read
+`match_basis` through them; an unreadable payload stops the script with the offending
+row printed, never an `unknown` bucket. `lake_assessment.py` was additionally reading
+the UNPREFIXED dataset name, so its like block counted zero.
+**Live re-read (read-only, the packet's one authorized live read): 84 link versions
+over 77 distinct event ids; by version 48 `any_family` + 36 `none`, by distinct event
+id 41 `any_family` + 36 `none`, zero `exact_family` either way** - which reconciles
+exactly with the review's 84 / 77 / 41 / 36, confirming the review's numbers were right
+and only the two committed scripts were wrong.
+`docs/analysis/LAKE_ASSESSMENT_2026-09-04.md` and its saved JSON were NOT edited.
+
+**Fail-before-fix, three times.** `tests/test_q3_ai_grounding.py` is 29 tests.
+(a) The first 21 were committed RED at `1f1f5d1`, 19 failing on `6b74165`; the two
+that passed are deliberate controls (a trade-journal-cited position claim must still
+survive; an all-valid payload must still validate unchanged). Proven again by restoring
+all five source files to `6b74165` - the same 19 failed.
+(b) The lead fix round's test committed red at `fa28d7b` (2 failing on `e944c0d`,
+where a held-long claim citing only `journal.entries` SURVIVED), proven again by
+stashing the fix.
+(c) The reviewer fix round's seven committed red at `e238090` (6 failing on `d56d666`;
+the seventh, an executive summary stating no position, is a control), proven again by
+stashing.
+
+**Verification** (builder worktree, nightly AI lock probed FREE first): full
+`pytest tests/ -q` with nothing deselected - **6637 passed, 1 skipped, 72 subtests,
+exit 0, 6 min 24 s** (re-run after the reviewer fix round), which is +29 on the 6608
+baseline and exactly the 29 new tests.
+`ruff check .` clean, `scripts/smoke_check.py` 7/7, `launch_gui.py --selftest` 74/74,
+CLAUDE.md == AGENTS.md. **No packaging trigger**: no new dependency, no new non-`.py`
+asset, no new top-level `scripts/` package, no new dynamic import.
+
+**Fix round (same evening, lead-decided).** The builder's handoff flagged that a
+family-keyed rule let the MARKET journal support a position claim; the lead decided it
+and it is now closed. `POSITION_SOURCE_IDS = frozenset({"journal.trades_and_reviews"})`
+is an EXACT LIST OF IDS and the position rule tests membership in it, not the `journal`
+kind. The other four `journal.*` ids are the Market Journal - `journal.entries` is what
+the trader THOUGHT, `journal.day_context` is machine context, `journal.chart_digests`
+is what the charts looked like, `journal.evidence_report` is the nightly deterministic
+report - and those two stores are deliberately never merged. The detail string is now
+`"position claim without a position source"`, and `GROUNDING_PROMPT_LINES` names the id
+to the model FROM the same constant, so instruction and enforcement cannot drift. The
+KIND table is unchanged and still family-keyed: it describes a source for a reader of
+the coverage block, and it is no longer what the position rule rests on.
+Red-first proof: `test_only_the_trade_journal_supports_a_position_not_the_market_journal`
+plus the changed detail string, committed red at `fa28d7b` (2 failing on `e944c0d`,
+where `journal.entries` SURVIVED).
+
+**Reviewer fix round (NO-GO at `d56d666`, four blockers, all closed).**
+**(1)** The `executive_summary` carries no refs, so it may not assert a position AT
+ALL - there is no ref to strike and it cannot be omitted, because a blank one already
+raises. It is now REPLACED by `WITHHELD_EXECUTIVE_SUMMARY` ("Executive summary
+withheld: it asserted a position without a trade-journal source.") with one `dropped`
+entry (`section: "executive_summary"`, `detail: "position claim in the executive
+summary"`, `row_dropped: True`), and the document still publishes on its surviving
+rows. **Measured live: 480 of 1,478 published executive summaries assert a position**,
+the one the packet cites opening "BULL is currently long..." - the common case, not an
+edge. `GROUNDING_PROMPT_LINES` carries the rule.
+**(2)** Gate #62's row still quoted the PRE-fix-round detail string, which the code
+stopped emitting when the position rule moved off the kind - a gate the trader reads by
+grepping the log is worth nothing if it quotes a string the log cannot contain. The row
+now names all THREE strings the code actually emits, and a test asserts that no active
+document quotes the retired one.
+**(3)** The glance block still stated the overturned kind-based rule; corrected to
+`POSITION_SOURCE_IDS`, and the same test pins it.
+**(4)** `_local_user_prompt` CLOSED on "exactly the keys statement, evidence_refs,
+confidence", contradicting the grounding ask three paragraphs above and being the last
+thing the model read. The shape sentence now names `metric_ref` as an optional fourth
+key and the prompt ends by restating when it is required; a test asserts `metric_ref`
+appears after the previously-final instruction.
+Advisories taken: `metric_key_exists` now requires a USABLE source (stale, empty,
+excluded -> False, the same test `usable_source_ids` applies), and the likes audit
+script labels its distribution **BY ROW** and prints the **distinct event id** grain
+beside it, because 84 rows stood behind 77 events and an unlabelled count mixes them.
+
+**Live gate #62** owed at merge. `plan.md` is the lead's to file, per the packet.
 
 ### 2026-09-04 (~16:00 PT) - Packet Q4: the overnight run protects its deterministic work
 

@@ -36,9 +36,9 @@ its own bronze artifact.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 #: Sessions before and after the like that an occurrence may trigger in.
 WINDOW_SESSIONS_BEFORE = 1
@@ -89,6 +89,79 @@ class LikeLink:
             "match_basis": self.match_basis,
             "candidates_in_window": self.candidates_in_window,
         }
+
+    @classmethod
+    def from_payload(cls, payload: Any) -> "LikeLink":
+        """The inverse of :meth:`as_payload`, and STRICT about every field.
+
+        Q3.4, 2026-09-04. There was no inverse, so every reader of this dataset
+        wrote its own field names -- and both lake audit scripts reached for
+        ``payload["basis"]`` with a default of ``"unknown"``. The field is
+        ``match_basis``. The scripts therefore reported 84 of 84 links as
+        ``unknown``, and the 2026-09-04 process review printed that as a
+        finding about the LAKE rather than about the reader.
+
+        Strict in both directions on purpose: a MISSING key and an UNKNOWN key
+        both raise, naming the key. A tolerant reader is what made a rename
+        invisible; a default is what turned it into a number somebody believed.
+        """
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"like link payload must be a mapping, got {type(payload).__name__}")
+        expected = set(_PAYLOAD_FIELDS)
+        missing = sorted(expected - set(payload))
+        unknown = sorted(set(payload) - expected)
+        if missing or unknown:
+            parts = []
+            if missing:
+                parts.append(f"missing {', '.join(missing)}")
+            if unknown:
+                parts.append(f"unknown {', '.join(unknown)}")
+            raise ValueError(
+                "like link payload does not match LikeLink.as_payload: "
+                + "; ".join(parts)
+                + f" (payload keys: {', '.join(sorted(map(str, payload)))})"
+            )
+        return cls(
+            event_id=str(payload["event_id"]),
+            symbol=str(payload["symbol"]),
+            side=str(payload["side"]),
+            like_date=str(payload["like_date"]),
+            occurrence_id=str(payload["occurrence_id"]),
+            canonical_setup_id=str(payload["canonical_setup_id"]),
+            trigger_at=str(payload["trigger_at"]),
+            match_basis=str(payload["match_basis"]),
+            candidates_in_window=int(payload["candidates_in_window"]),
+        )
+
+
+#: Every key :meth:`LikeLink.as_payload` writes, derived from the dataclass so
+#: a new field cannot be added to one side only.
+_PAYLOAD_FIELDS = tuple(f.name for f in fields(LikeLink))
+
+
+def basis_of(payload: Any) -> str:
+    """``match_basis`` from a stored payload, read through the strict reader."""
+    return LikeLink.from_payload(payload).match_basis
+
+
+def count_payload_bases(payloads: Iterable[Any]) -> dict[str, int]:
+    """``{basis: n}`` over stored payloads -- the audit counter (Q3.4).
+
+    Only the bases actually present, because this counts what a PARTITION
+    holds and an absent basis is visible against :data:`MATCH_BASES`. That is
+    the opposite of :func:`basis_counts`, which reports one night's join and
+    keeps every key at zero because "no exact-family matches tonight" and "the
+    exact-family count was never computed" are different facts.
+
+    An unreadable payload RAISES, naming the key, and the caller prints the
+    offending row. There is no ``unknown`` bucket: the last one silently
+    absorbed a field rename for two months.
+    """
+    counts: dict[str, int] = {}
+    for payload in payloads:
+        basis = basis_of(payload)
+        counts[basis] = counts.get(basis, 0) + 1
+    return counts
 
 
 def _as_date(value: Any) -> date | None:
