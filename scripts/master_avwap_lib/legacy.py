@@ -9724,7 +9724,33 @@ def build_tracker_short_horizon_rows(
     return short_rows
 
 
-def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
+def build_tracker_setup_type_rows(
+    setups: dict[str, dict],
+    *,
+    exclude_expired_unmeasured: bool = False,
+) -> list[dict]:
+    """Per (side, bucket, family, zone, retest, compression) rows over ``setups``.
+
+    **This function is read by TWO callers with different rights** (lead ruling,
+    2026-09-05). `export_setup_tracker_views` renders it for the trader; but
+    `_load_ranked_tracker_setup_type_rows` -> `rank_tracker_setup_type_rows` ->
+    `apply_tracker_setup_type_adjustments` turns it into `row["score"]`, where
+    `tracked_setups` is a sort tiebreak and `avg_total_r` feeds the ranking
+    metric. plan.md sec 5 forbids changing a scoring input without golden
+    fixtures first.
+
+    So M3.3's exclusion is OPT-IN. ``exclude_expired_unmeasured=True`` is the
+    DISPLAY reading: an `EXPIRED_UNMEASURED` record leaves every measure and
+    every denominator. The default is the CHAMPION'S POPULATION and is
+    unchanged from before the status existed - flipping a record's status must
+    not move a single number the scorer sees. Counting the expired out of the
+    champion's own inputs is a future golden-fixture decision, not this
+    packet's.
+
+    ``n_expired_unmeasured`` is emitted EITHER WAY, because the count is
+    evidence in both readings: "5 setups, 2 of them unmeasured" is a fact the
+    scoring row is entitled to carry even while it still counts all five.
+    """
     if not isinstance(setups, dict) or not setups:
         return []
 
@@ -9770,7 +9796,7 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
             ),
         }
         setup_rows.append(row)
-        if not row["expired_unmeasured"]:
+        if not (exclude_expired_unmeasured and row["expired_unmeasured"]):
             baseline_groups.setdefault((str(context["side"]), str(context["priority_bucket"])), []).append(row)
 
     baseline_map: dict[tuple[str, str], dict[str, float | None]] = {}
@@ -9816,10 +9842,14 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
 
     setup_type_rows = []
     for group_key, all_rows_for_group in grouped.items():
-        # M3.3: the expired are counted here and used nowhere below. Numerator
-        # and denominator both.
+        # M3.3: counted always, excluded only when the caller asked for the
+        # display reading. Numerator and denominator both, when excluded.
         expired_rows = [row for row in all_rows_for_group if row.get("expired_unmeasured")]
-        rows_for_group = [row for row in all_rows_for_group if not row.get("expired_unmeasured")]
+        rows_for_group = (
+            [row for row in all_rows_for_group if not row.get("expired_unmeasured")]
+            if exclude_expired_unmeasured
+            else all_rows_for_group
+        )
         if not rows_for_group:
             continue
         tradeable_rows = [row for row in rows_for_group if row.get("tradeable")]
@@ -12023,14 +12053,23 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
     attribute_rows = _flatten_tracker_attributes(setups, attribute_registry)
     attribute_leaderboard_rows = _build_tracker_attribute_leaderboard_rows(attribute_rows)
     stats_rows = build_tracker_stats_rows(scenario_rows)
-    setup_type_rows = _stamp_tracker_clock(build_tracker_setup_type_rows(setups), saved_at, saved_by)
+    # TWO readings of one tracker (lead ruling, 2026-09-05). The CSV and the
+    # panel drop the expired; `payload["setup_type_stats"]` below is the
+    # CHAMPION'S SCORING POPULATION - `_load_ranked_tracker_setup_type_rows`
+    # falls back to it - so it keeps every record it has always kept.
+    scoring_setup_type_rows = build_tracker_setup_type_rows(setups)
+    setup_type_rows = _stamp_tracker_clock(
+        build_tracker_setup_type_rows(setups, exclude_expired_unmeasured=True),
+        saved_at,
+        saved_by,
+    )
     recent_setup_type_rows = _stamp_tracker_clock(
         build_recent_setup_type_stat_rows(payload), saved_at, saved_by
     )
     playbook_rows = build_tracker_playbook_rows(setups)
     short_horizon_rows = build_tracker_short_horizon_rows(setups)
     payload["stats"] = stats_rows
-    payload["setup_type_stats"] = setup_type_rows
+    payload["setup_type_stats"] = scoring_setup_type_rows
 
     SETUP_SCENARIOS_FILE.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(scenario_rows).to_csv(SETUP_SCENARIOS_FILE, index=False)

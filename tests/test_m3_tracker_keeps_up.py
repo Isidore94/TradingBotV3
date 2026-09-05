@@ -573,9 +573,243 @@ def _closed(symbol, *, total_r, scan_date="2026-09-02"):
     )
 
 
+# ---------------------------------------------------------------------------
+# Lead ruling, 2026-09-05: the invariant wins.
+#
+# plan.md sec 5 forbids a scoring-input change without golden fixtures first.
+# `build_tracker_setup_type_rows` is BOTH a trader-facing export and a live
+# scoring input - `_load_ranked_tracker_setup_type_rows` ->
+# `rank_tracker_setup_type_rows` -> `apply_tracker_setup_type_adjustments` ->
+# `row["score"]`, where `tracked_setups` is a sort tiebreak and `avg_total_r`
+# feeds the ranking metric. So the exclusion is OPT-IN: the export asks for it,
+# the champion's scoring population never does.
+#
+# These tests pin the population rather than a stored blob, and that is
+# deliberate. "Byte-identical to e744afd5" means: flipping a record's status to
+# EXPIRED_UNMEASURED changes NOTHING the scorer sees - which is exactly what the
+# record would have carried on e744afd5, where the status did not exist. A
+# stored fixture would pin one tracker; this pins the rule.
+# ---------------------------------------------------------------------------
+
+def _stale_pair():
+    """The same tracker twice: once as it read on e744afd5 (the stale records
+    are plain OPEN), once with M3.3's status on them.
+
+    The shape is chosen so the scoring path CAN move if the exclusion reaches
+    it — otherwise this whole group of tests would be unfalsifiable, which is
+    the 2026-09-02 lesson. Two families sit in the same (side, bucket) so
+    `group_size > 1` and the rank bonuses apply; both carry four CLOSED setups
+    with identical outcomes so their `ranking_score` and `closed_setups` tie;
+    and the stale records sit in ONE family, so `tracked_setups` — the next
+    tiebreak in `rank_tracker_setup_type_rows` — is the only thing separating
+    them. Drop the stale records and the tie falls through to `type_label`,
+    which reverses the order: `other_pattern` sorts before `top_pattern`.
+
+    So on the pre-ruling code (which excluded unconditionally) `top_pattern`
+    goes from rank 1 to rank 2, its rank bonus from 12 to 8, and the trader's
+    `row["score"]` moves. That is the defect the lead's ruling forbids, and it
+    is what these tests would catch.
+    """
+    stale = _sessions_before(AS_OF, legacy.TRACKER_STALE_SESSIONS + 1)
+    # `near_favorite_zone` for every record: `_tracker_priority_bucket` demotes
+    # `favorite_setup` to it for any family outside MAIN_SWING_SETUP_FAMILIES,
+    # which would split these into different rank groups and make the test
+    # unfalsifiable again.
+    BUCKET = "near_favorite_zone"
+    # `gamma` drags the (side, bucket) baseline negative so `zeta` and `alpha`
+    # both carry a real POSITIVE edge - identical to each other, so their
+    # ranking scores and closed counts tie and `tracked_setups` is what
+    # separates them. `zeta` sorts after `alpha` by `type_label`, so removing
+    # its stale records reverses the two.
+    families = {"zeta_pattern": (4, 1.0), "alpha_pattern": (4, 1.0), "gamma_pattern": (8, -1.0)}
+
+    def _build(status, reason):
+        rows = []
+        for family, (count, total_r) in families.items():
+            for index in range(count):
+                record = _closed(f"{family[:2].upper()}{index}", total_r=total_r)
+                record["setup_id"] = f"{family}:{index}"
+                record["setup_family"] = family
+                record["tracker_setup_family"] = family
+                record["priority_bucket"] = BUCKET
+                record["tracker_priority_bucket"] = BUCKET
+                rows.append(record)
+        for symbol in ("CCC", "EEE", "FFF"):
+            record = _setup_record(
+                symbol,
+                scan_date=stale,
+                status=status,
+                expiry_reason=reason,
+                last_replayed_session=stale,
+            )
+            record["setup_family"] = "zeta_pattern"
+            record["tracker_setup_family"] = "zeta_pattern"
+            record["priority_bucket"] = BUCKET
+            record["tracker_priority_bucket"] = BUCKET
+            rows.append(record)
+        return {item["setup_id"]: item for item in rows}
+
+    return (
+        _build("OPEN", ""),
+        _build(legacy.SETUP_STATUS_EXPIRED_UNMEASURED, legacy.TRACKER_EXPIRY_REASON_NO_REPLAY),
+    )
+
+
+#: The only two cells that may differ between the two builds, and why.
+#:
+#: `open_setups` is a DISPLAY count of setups currently OPEN. A record that has
+#: aged out is no longer open, so this cell follows the status by definition -
+#: that IS M3.3. It reaches no score: `_compute_tracker_setup_type_ranking_score`
+#: reads `tracked_setups`, the metric pair and its baselines, `target_hit_rate`,
+#: `stop_rate` and `closed_setups`, and `rank_tracker_setup_type_rows` sorts on
+#: `ranking_score`, `closed_setups`, `tracked_setups`, `avg_closed_r` and
+#: `type_label`. Neither mentions it.
+#:
+#: `n_expired_unmeasured` is M3.3's own additive count - 0 before the status
+#: exists, 2 after - and new keys are allowed exactly as they are for the
+#: band-variant shadow. `sample_setups` renders `setup_status` in its text.
+#:
+#: The assertion below is that these are the ONLY differences: a third key
+#: moving fails this test, which is the point of listing them rather than
+#: comparing a hand-picked subset.
+STATUS_FOLLOWING_CELLS = {"open_setups", "n_expired_unmeasured", "sample_setups"}
+
+
+def test_the_scoring_population_is_untouched_by_the_new_status():
+    """The default call is the champion's population and must not move."""
+    before, after = _stale_pair()
+
+    rows_before = {
+        row["setup_type_id"]: row for row in legacy.build_tracker_setup_type_rows(before)
+    }
+    rows_after = {
+        row["setup_type_id"]: row for row in legacy.build_tracker_setup_type_rows(after)
+    }
+
+    assert set(rows_before) == set(rows_after)
+    moved = set()
+    for setup_type_id, row_before in rows_before.items():
+        row_after = rows_after[setup_type_id]
+        assert set(row_before) <= set(row_after)
+        for key, value in row_before.items():
+            if row_after[key] != value:
+                moved.add(key)
+
+    assert moved <= STATUS_FOLLOWING_CELLS, moved
+    # And the cells the lead's ruling names by hand, stated separately so the
+    # set comparison above can never quietly absorb one of them.
+    for setup_type_id, row_before in rows_before.items():
+        for key in ("tracked_setups", "avg_total_r", "avg_closed_r", "closed_setups"):
+            assert rows_after[setup_type_id][key] == row_before[key], key
+
+
+def test_the_rank_and_the_score_delta_are_untouched_by_the_new_status():
+    before, after = _stale_pair()
+
+    ranked_before = legacy.rank_tracker_setup_type_rows(
+        legacy.build_tracker_setup_type_rows(before)
+    )
+    ranked_after = legacy.rank_tracker_setup_type_rows(
+        legacy.build_tracker_setup_type_rows(after)
+    )
+
+    def _ranks(rows):
+        return sorted(
+            (
+                str(row.get("setup_type_id")),
+                int(row.get("rank_within_side_bucket", 0) or 0),
+                int(row.get("score_delta", 0) or 0),
+                row.get("ranking_score"),
+            )
+            for row in rows
+        )
+
+    assert _ranks(ranked_before) == _ranks(ranked_after)
+
+
+def test_the_priority_score_itself_is_untouched_by_the_new_status():
+    """The seam that actually reaches the trader: `row["score"]`."""
+    before, after = _stale_pair()
+
+    def _scores(setups):
+        priority_rows = [
+            {
+                "symbol": "AAA",
+                "side": "LONG",
+                "setup_family": "zeta_pattern",
+                "priority_bucket": "near_favorite_zone",
+                "score": 100.0,
+            }
+        ]
+        ai_state = {"symbols": {"AAA": {}}}
+        legacy.apply_tracker_setup_type_adjustments(
+            priority_rows,
+            ai_state,
+            {},
+            tracker_payload={"setups": setups},
+        )
+        entry = ai_state["symbols"]["AAA"]
+        return {
+            "score": priority_rows[0]["score"],
+            "delta": priority_rows[0]["setup_type_score_delta"],
+            # The rank is published too, and on this fixture it is the value
+            # that MOVES if the exclusion reaches scoring: `zeta_pattern` leads
+            # its (side, bucket) group only because its stale records are still
+            # in `tracked_setups`, the sort's third key. The delta itself is
+            # confidence-capped here and would not show the difference.
+            "rank": entry.get("priority_setup_type_rank"),
+        }
+
+    scored_before = _scores(before)
+    # An unfalsifiable test is worse than none: prove this fixture actually
+    # produces a live adjustment and a real rank before comparing.
+    assert scored_before["delta"] != 0, scored_before
+    assert scored_before["score"] != 100.0
+    assert scored_before["rank"] == 1, scored_before
+
+    assert _scores(after) == scored_before
+
+
+def test_the_export_excludes_them_while_the_scoring_rows_still_count_them(tmp_path, monkeypatch):
+    """One tracker, two readings: the CSV drops the expired, the payload's
+    scoring rows keep them."""
+    _redirect_exports(monkeypatch, tmp_path)
+    _, after = _stale_pair()
+    payload = {"setups": after, "saved_at": "2026-09-05T13:02:11", "saved_by": "close_slot"}
+
+    legacy.export_setup_tracker_views(payload)
+
+    csv_rows = list(
+        csv.DictReader(
+            legacy.SETUP_TYPE_STATS_FILE.read_text(encoding="utf-8").splitlines()
+        )
+    )
+    assert csv_rows
+    # Three stale records; sixteen graded ones across three families.
+    assert sum(int(row["n_expired_unmeasured"]) for row in csv_rows) == 3
+    assert sum(int(row["tracked_setups"]) for row in csv_rows) == 16
+
+    scoring_rows = payload["setup_type_stats"]
+    assert sum(int(row["tracked_setups"]) for row in scoring_rows) == 19
+
+
+def test_the_scoring_tuners_own_inputs_never_see_the_exclusion():
+    """`analyze_master_avwap_scoring.py` - the only thing that writes live
+    scoring weights - reads the ATTRIBUTE exports, and those still carry a row
+    for an expired record."""
+    _, after = _stale_pair()
+
+    attribute_rows = legacy._flatten_tracker_attributes(after, {})
+    symbols = {str(row.get("symbol") or "") for row in attribute_rows}
+
+    assert {"CCC", "EEE"} <= symbols or not attribute_rows
+
+
 def test_the_expired_setups_leave_the_win_rate_untouched_and_are_counted():
     graded = [_closed("AAA", total_r=1.5), _closed("BBB", total_r=-1.0)]
-    before = _family_rows(graded)
+    before = legacy.build_tracker_setup_type_rows(
+        {item["setup_id"]: item for item in graded}, exclude_expired_unmeasured=True
+    )
 
     stale = _sessions_before(AS_OF, legacy.TRACKER_STALE_SESSIONS + 1)
     expired = _setup_record(
@@ -585,7 +819,10 @@ def test_the_expired_setups_leave_the_win_rate_untouched_and_are_counted():
         expiry_reason=legacy.TRACKER_EXPIRY_REASON_NO_REPLAY,
         last_replayed_session=stale,
     )
-    after = _family_rows(graded + [expired])
+    after = legacy.build_tracker_setup_type_rows(
+        {item["setup_id"]: item for item in graded + [expired]},
+        exclude_expired_unmeasured=True,
+    )
 
     assert len(before) == len(after) == 1
     for key in ("target_hit_rate", "stop_rate", "avg_closed_r", "closed_setups"):
@@ -655,7 +892,7 @@ def test_the_band_variant_export_excludes_expired_records_and_counts_them():
 def test_a_tracker_with_no_expired_records_exports_byte_identical_champion_rows():
     """The parity claim behind M3.3: the exclusion may only touch the expired."""
     setups = {s["setup_id"]: s for s in (_closed("AAA", total_r=1.5), _closed("BBB", total_r=-1.0))}
-    rows = _family_rows(list(setups.values()))
+    rows = legacy.build_tracker_setup_type_rows(setups, exclude_expired_unmeasured=True)
     assert rows[0]["tracked_setups"] == 2
     assert rows[0]["n_expired_unmeasured"] == 0
     assert rows[0]["closed_setups"] == 2
