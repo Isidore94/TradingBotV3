@@ -21,7 +21,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 | Latest review | **2026-09-04: [project process review](docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)** over `f641421` (Codex). The trader said *"please review and implement the suggested changes"*; the lead turned it into five packets (Q1-Q5, Phase 0.18, `.claude/packets/Q*.md`), each built, reviewed by reproduction and merged the same evening. NOT built, ask-first (`bounce_bot_lib/legacy.py`): per-alert bar-close -> shown latency instrumentation, the H1 SPY recompute, a `stop_hit_at` column, the sweep autorun default. Also NOT in the review: the day's largest stall (19,922 ms at 07:03:47 in `ui/app.py:1240`). |
 | Working branch | **`main`** - **2026-09-04 evening: Phase 0.18 (Q1-Q5) MERGED at `b0db9bbe`** in a scratch worktree, packet order, every branch with a reviewer GO. Q1 `held_run_score` says what it MEASURED (5,222 held / 1,960 broken / 979 unmeasured live; D1 keeps the side, 8 opposed; the window is `lately_window`; a Measured column on the Daytrade Tracker). Q2 warehouse: `anchor_knowledge` observed/reconstructed/legacy, `path_kind`, read-only `band-coverage`, `rebuild-daily-features` (dry run by default) - gate #59's chain is now BD-100's four steps. Q3 AI grounding: typed source kinds, a position claim needs a surviving ref in `POSITION_SOURCE_IDS`, which is `journal.trades_and_reviews` only (the executive summary may never assert one; it is WITHHELD when it does), `metric_ref` on numeric claims, the morning file's three counts, `LikeLink.from_payload` and the audit scripts read `match_basis` (live 84 rows / 77 events / 41 linked / 36 none). Q4 overnight: consecutive clean exchange sessions + a RECORDED trader spot-audit gate enrichment (**enrichment refuses until `python -m ai_jobs.digest approve-audit` is run - 9 of 10 clean sessions today**), decision 0018 puts the deterministic slots before narration, `entry_index.json` is the frontier handoff. Q5: the pick scorecard runs on one owned worker with streamed reads, success-only `picks_scored_at` (15.7 s Qt stall the day before). Before it: the earnings-anchor bridge (14:30), T2 (12:40), T1 (11:30) - see the dated entries. **UNMERGED, awaiting the lead: `claude/m1-band-variant-handoff` (packet M1, Phase 0.19) - the AVWAP band challenger's hand-off into the tracker catch-up path, so the comparison finally measures; live gate #65 owed at merge.** |
 | Also in flight | **Nothing unmerged from today**: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
-| Active roadmap items | **V4** (Working-lately + the priority switch - which now inherits Q1's rule that only an ALIGNED same-session D1 setup carries the privilege - the AWAY Recap rebuild, the Setup Types tab, P10's `after_like` split, the R4 advisories). **Gate #59's runbook** (BD-100): nightly build -> `rebuild-daily-features --from 2026-08-01 --to <today>` dry run, then `--apply` on the trader's go -> `recompute-outcomes --apply` -> `band-coverage --month 2026-08` / `2026-09`. **Trader action owed**: `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>` (from `scripts/`) after spot-auditing three packs, or enrichment stays silent. Live gates #29-#52 owed across Phases 0.13 and 0.14; #53-#65 listed below. Also **Phase 0.19** (the AVWAP band challenger's comparison): packet M1 is BUILT on `claude/m1-band-variant-handoff` and unmerged; the warehouse half of B4 (`avwap_variant_*` columns, the `swing_house_variant_v1` twin recipe) is NOT started. |
+| Active roadmap items | **V4** (Working-lately + the priority switch - which now inherits Q1's rule that only an ALIGNED same-session D1 setup carries the privilege - the AWAY Recap rebuild, the Setup Types tab, P10's `after_like` split, the R4 advisories). **Gate #59's runbook** (BD-100): nightly build -> `rebuild-daily-features --from 2026-08-01 --to <today>` dry run, then `--apply` on the trader's go -> `recompute-outcomes --apply` -> `band-coverage --month 2026-08` / `2026-09`. **Trader action owed**: `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>` (from `scripts/`) after spot-auditing three packs, or enrichment stays silent. Live gates #29-#52 owed across Phases 0.13 and 0.14; #53-#69 listed below. Also **Phase 0.19** (the AVWAP band challenger's comparison): packet M1 is BUILT on `claude/m1-band-variant-handoff` and unmerged; the warehouse half of B4 (`avwap_variant_*` columns, the `swing_house_variant_v1` twin recipe) is NOT started. **Packet M3 is BUILT on `claude/m3-tracker-keeps-up`** (branched off M1's tip - same files - so it merges AFTER M1): the purity gate honours the daily-bar pin, every tracker save stamps `saved_at` / `saved_by`, and a setup nobody has replayed for 20 sessions ages out as `EXPIRED_UNMEASURED` instead of sitting in a denominator. Gate #69. |
 | Last verified baseline | **`main` at `b0db9bbe`, 2026-09-04 evening, run in the SCRATCH merge worktree on the merged tree as committed, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 6710 passed, 1 skipped, 72 subtests passed, ZERO failures, 5 min 34 s - run as 6709 passed + 1 failed on the merged tree BEFORE this block was refreshed (the Q3 doc-scan test demands the glance block name `POSITION_SOURCE_IDS`; the merge had kept the pre-Q3 rows), and that one test re-run green after the refresh with no other file touched.** `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7, source selftest green. No packaging trigger (no dependency, asset or new top-level package; every new module is inside an already-collected package). Previous: 6608 passed at the earnings-anchor bridge (14:30 PT). |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
 | Desk restart | **STARTED 00:27 PT 2026-09-05 on the trader's instruction ("Restart the desk yourself"), on `main` at `a6fb1a8d` (Phase 0.18)**: no desk was running - the heartbeat had last been written 14:11 PT 2026-09-04 (pid 600) and no `launch_gui.py` process existed at 21:56, so the desk had been down since mid-afternoon. `trading_desk.cmd` started pid 29260 (trampoline 25900), 896 MB at 75 s, `trading_bot.log` writing by 00:28 ("Weekend - Auto Pilot idle until the next session"). Before it: DONE AGAIN 11:24 PT 2026-09-04 for T2 (pid 600). |
@@ -33,6 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 69 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot: `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE (no "refresh skipped" line); the payload's `saved_by` reads `close_slot`; the three stats CSVs carry that same `tracker_saved_at`; the Setup Tracker's status line shows BOTH clocks (`Tracker as of ... (close_slot); scan factors as of ...`); the recompute logs `n_expired_unmeasured` >= 37 + 41 and the Current Picks / Setup Types tabs say `N expired unmeasured, excluded`; and the family win rates are unchanged to the cent where those setups contributed only a denominator. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation | 2026-09-05 M3 entry |
 | 65 | **The band challenger measures (M1)** - after the next persisted tracker write: `master_avwap_band_variant_stats.csv` shows `n_variant > 0` on the rows whose records have >= 20 closes before the anchor, the four `_variant` columns fill, and the Setup Tracker's Band variant view reads `Measured N of M setups` rather than `Measured 0 of M`. **T4's >= 20 sessions of forward accrual start that day**, not 2026-08-26 - nothing accrued before it | 2026-09-05 M1 entry |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
@@ -101,6 +102,52 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+
+### 2026-09-05 - M3 BUILT: the tracker keeps up, says how old it is, and lets a stuck setup age out (`claude/m3-tracker-keeps-up`)
+
+Packet `.claude/packets/M3.md`, built on M1's tip `e744afd5` (same files), answering
+findings 3 and 4 of the measurement audit below. Trader authorization: *"Fix all of
+these failures"* - the recorded yes for `legacy.py` and `runner.py` under the
+file-scoped ask-first rule, for these items and nothing wider. **Not merged; the lead
+merges.** Tip `cb7dded7` + docs.
+
+- **M3.1 done.** `evaluate_setup_tracker_purity` resolves `daily_bars_source_pin()` at
+  run time and treats the PINNED source as the declared source of record rather than a
+  fallback. `cache` / `unknown` are accepted only under a pin and only as the absence of
+  contrary evidence; where a frame carries per-row provenance in the `source` column
+  that is what is read, so a mixed store is judged on what it says. A third source still
+  vetoes at the same 20% quarantine fraction, and **with no pin the gate is byte-for-byte
+  the July one** (pinned by two tests that were green before the fix and still are). One
+  log line per run: `pin=… n_symbols=… n_ib=… n_pinned=… n_other=… refused=…`.
+- **M3.2 done.** `saved_at` (market-local) + `saved_by` (`close_slot` /
+  `catch_up_backfill` / `manual`) on every save, named explicitly in
+  `load_setup_tracker_payload` (which rebuilds field by field - the `data_session`
+  lesson), `last_replayed_session` per record, `tracker_saved_at` /
+  `tracker_saved_by` on the three stats CSVs stamped from the same instant the save
+  uses, and the panel's two-clock status line. `tracker_store.HEADER_FIELDS` gained the
+  two keys so the mirror keeps following the JSON (decision 0017).
+- **M3.3 done.** `EXPIRED_UNMEASURED` + `expiry_reason` (`no_replay_20_sessions` over
+  `TRACKER_STALE_SESSIONS` = 20 exchange sessions via
+  `market_calendar.trading_days_between`; `no_baseline_scenarios`), applied AFTER the
+  closure rule in the recompute AND as a sweep over the stored records - a setup whose
+  daily frame comes back empty is skipped before the recompute is reached, and those are
+  the 37. A calendar that refuses expires nothing. Excluded from numerator and
+  denominator of `build_tracker_setup_type_rows`, `build_tracker_stats_rows` and
+  `build_band_variant_stats_rows`, each carrying `n_expired_unmeasured`; the two tabs say
+  `N expired unmeasured, excluded`. Rows are never deleted and only the closure rule
+  un-expires one.
+- **Deliberately NOT done:** `build_recent_tracker_setup_family_rows` is untouched. It
+  feeds `apply_recent_tracker_setup_family_adjustments` and therefore LIVE SCORING; the
+  packet did not name it, and the `no_baseline` class is already invisible to it. **What
+  the lead should look at:** `build_tracker_setup_type_rows` IS reachable by
+  `apply_tracker_setup_type_adjustments`' `score_delta` - `tracked_setups` is a sort
+  tiebreak and `avg_total_r` feeds the ranking metric - so M3.3's exclusion can move a
+  setup-type rank where a group contains expired records. That is the packet's own item,
+  not a side effect, but it is the one line where "no score change" and "exclude the
+  expired from every denominator" pull against each other.
+- **Verification:** `tests/test_m3_tracker_keeps_up.py` (31 tests), 26 of the first 30
+  proven RED on `e744afd5` before any fix existed and committed red as `60161275`. Ruff
+  clean. No packaging trigger.
 
 ### 2026-09-05 - M1 BUILT: the band challenger's hand-off, on `claude/m1-band-variant-handoff`
 

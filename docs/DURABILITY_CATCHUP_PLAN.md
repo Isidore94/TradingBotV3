@@ -57,6 +57,28 @@ given dataset produces — same scoring path, same data vintage discipline.
 A characterization test pins that: catch-up refresh from session N-1 bars ==
 the after-close refresh from session N-1 bars, byte-identical tracker.
 
+**Amended 2026-09-05 (packet M3).** Two facts this section could not have known.
+
+*(a) The catch-up became the tracker's EFFECTIVE writer, and now says so.* The
+purity gate (`runner.evaluate_setup_tracker_purity`) refused the scheduled
+close-slot write on every day the trader's `daily_bars_source: "yahoo"` pin was
+in force — 2026-09-04 13:03:59, 139 symbols, `sources=cache` — so this recovery
+path, designed for a missed close, was doing the routine write. M3.1 taught the
+gate that the pinned source is the declared source of record, which restores the
+close slot as the writer. M3.2 makes the difference visible either way: every
+payload carries `saved_by`, and this path passes **`catch_up_backfill`** while
+the scan's own pass passes `close_slot` and the GUI backfill `manual`. The
+byte-identical characterization above is unaffected — `saved_by` and `saved_at`
+describe the WRITE, not the data, and the test compares vintages.
+
+*(b) A record this replay cannot reach now ages out rather than staying OPEN
+forever.* A setup whose daily frame comes back empty is skipped before the
+recompute is reached; after `TRACKER_STALE_SESSIONS` (20) exchange sessions with
+no replay it becomes `EXPIRED_UNMEASURED` and leaves every champion aggregate's
+numerator AND denominator. That is a statement about measurement, not about the
+setup: it is never a win and never a loss, the row is never deleted, and a later
+replay un-expires it through the normal closure rule.
+
 **Amended 2026-08-08 (checkpoint review second review — retraction).** The
 "timing-only" claim above was true of the *replay* and false of the *call*.
 Two defects, both now repaired on this branch:
