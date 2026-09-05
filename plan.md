@@ -587,6 +587,42 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+## Phase 0.20 — N3: the research narration is bounded (2026-09-05) — BUILT, live gate #65 owed
+
+Trader-authorized 2026-09-05 (*"Go ahead and build these fixes out"*) after the overnight
+assessment. Packet `.claude/packets/N3.md`, branch `claude/n3-research-narration-bounded`.
+
+**What was wrong.** The `setup_research` ledger read `narration absent` four nights
+running: 09-02 273,622 chars / 47 cells, 09-03 82,192 / 69, 09-04 143,636 / 128, 09-05
+**658,292 vs a 78,119-char budget / 619 cells** — gate #59's lake recompute landed
+141,299 recipe outcomes overnight. R3 (2026-09-02) had already cut the view down from
+the pack and stated the repeated prose once; what remained is that the view carried
+EVERY eligible cell, and the grid grows. No budget a 64k-context model can read fits
+658k chars, so raising the budget is not a fix.
+
+**What was built.** `narration_view` is a thin caller of `_bounded_narration_view`:
+encode the fixed head (11,084 chars live), then add eligible policy cells in order
+until the next would cross the budget, then the after-like ELIGIBLE cells (P10 C3,
+unchanged) under the same rule. The order is `stats.n` descending, then `recipe_id`,
+`family`, `side`. **The selection may never be a ranking by result** — gate #43 is a
+refusal, so no `mean_r`, `win_rate`, `profit_factor`, `expectancy` or any other R
+statistic is in the sort key, and the key's docstring says why. Coverage is stated as
+`narrated` {K, of, `selected_by`, after-like K, of} in the view and in the narration
+json, as one line under a `## Narration` heading in the pack markdown, and as
+`narrated K of N eligible cell(s)` on the ledger reason. The refusal narrows to "head
+plus the FIRST cell does not fit" and names the head's size. The evidence hash is
+still over the bounded view — what was sent. Recorded as **BD-101**. Live dry run:
+658,292 → 77,791 chars, **64 of 619 narrated**.
+
+**Gate #65 (live), which REPLACES gate #40's narration clause**: the next overnight
+`setup_research` row reads `narrated K of N eligible cell(s)` with a `.narration.json`
+beside ONE pack for the date, and the pack markdown carries the coverage line. Gate
+#40's other halves — one pack per date, a non-empty `recipe_ids`, `built_by_commit` —
+are unchanged and were already met on 2026-09-05 (`built_by_commit 7f2273d3`, 102
+recipe ids). **What this does NOT do**: it does not raise a budget, does not touch the
+deterministic pack (same schema, same rows, same `built_by_commit`, same file), and
+reaches no detector, score, alert, watchlist, Focus, review queue or `review_policy.json`.
+
 ## Phase 0.19 — AVWAP band challenger: make the comparison measure (QUEUED by the trader 2026-09-05)
 
 Trader, 2026-09-05 ~01:45 PT, after the lead reported the comparison is built but empty:

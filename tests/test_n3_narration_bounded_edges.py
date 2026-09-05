@@ -41,6 +41,26 @@ def _encoded(view) -> bytes:
     return json.dumps(view, sort_keys=True, default=str).encode("utf-8")
 
 
+def test_the_fixture_contract_and_the_test_constants_are_the_same_numbers():
+    """The Milestone 3 contract on the fixture is load-bearing, not decorative.
+
+    `tests/test_fixture_contract.py` proves the block is PRESENT and that the
+    raw-input hash still covers the pinned sections. This proves the numbers it
+    declares are the ones the tests actually assert against, so the fixture and
+    the test file cannot drift apart while both keep passing.
+    """
+    from conftest import load_fixture_contract
+    from test_n3_narration_bounded import BUDGET, LIVE_ELIGIBLE_CELLS
+
+    contract = load_fixture_contract("setup_research_narration_v1")
+    expected = contract["expected"]
+    assert expected["eligible_policy_cells"] == LIVE_ELIGIBLE_CELLS
+    assert expected["local_evidence_budget_chars"] == BUDGET
+    assert expected["built_by_commit"] == contract["pack_head"]["built_by_commit"]
+    # The whole point of the packet: the pack could not be sent whole.
+    assert expected["unbounded_narration_view_chars"] > BUDGET
+
+
 def test_the_refusal_also_fires_when_the_head_fits_and_the_first_cell_does_not(
     monkeypatch,
 ):

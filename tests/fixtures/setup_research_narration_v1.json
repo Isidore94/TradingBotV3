@@ -8,6 +8,7 @@
   "source": "//MINI-PC/Trading Bot Data/ai_store/retros/setup_research/2026/2026-09-04.json",
   "written": "2026-09-05 03:51 by the nightly setup_research slot"
  },
+ "acquired_at": "2026-09-05T03:51:00-04:00",
  "after_like_cell": {
   "day_offset": 0,
   "eligible": false,
@@ -28,6 +29,7 @@
   "read_before_the_window_closes": "No cell here may be read for a verdict before the registered window closes - see the `after_like_entry_grid_v1` trial ledger row. A cell that looks good early is the reason the window was fixed at registration.",
   "schema": "after_like_v1"
  },
+ "as_of": "2026-09-04T00:00:00-04:00",
  "eligible_cells": [
   {
    "family": "AVWAPE_TO_FIRST_DEV",
@@ -469,6 +471,18 @@
    }
   }
  ],
+ "expected": {
+  "built_by_commit": "7f2273d3",
+  "eligible_policy_cells": 619,
+  "local_evidence_budget_chars": 78119,
+  "unbounded_narration_view_chars": 658292
+ },
+ "expected_keys": [
+  "expected"
+ ],
+ "feature_version": "setup_stop_target_research_facts_v1",
+ "intentional_difference": "",
+ "numeric_tolerance": 0.0,
  "pack_head": {
   "built_by_commit": "7f2273d3",
   "context_cells_dropped_from_pack": 3161,
@@ -799,5 +813,15 @@
    "afterlike_d5_m30_ema15_21_pullback_2r_v1"
   ],
   "schema": "setup_stop_target_research_facts_v1"
- }
+ },
+ "provider_assumptions": "No provider. Every section is copied verbatim from the pack the pre-N3 nightly wrote at commit 7f2273d3; no model was called and no number here was computed by the code under test.",
+ "raw_input_keys": [
+  "pack_head",
+  "eligible_cells",
+  "after_like_head",
+  "after_like_cell"
+ ],
+ "raw_input_sha256": "0f43967ec92eeebbfe2ab8ea6252cb0c34b4fc79fbaad60cc8e274f44be84a2b",
+ "schema": "setup_research_narration_fixture_v1",
+ "universe_version": "the 2026-09-04 research lake after gate #59's recompute: 141,299 recipe outcomes, 619 eligible policy cells, 102 recipe ids"
 }

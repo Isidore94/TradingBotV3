@@ -972,6 +972,28 @@ which is evidence and must not be loaded as context.
   retryable status: this job is a ten-minute lake pass, and re-reading the lake cannot
   shorten a prompt. Every pack carries `built_by_commit` (fails open to `"unknown"`)
   and the `recipe_ids` its rows came from, **never re-derived from the module**.
+- **That view is BOUNDED, and the selection is a size rule that may never be a ranking
+  by result** (N3, 2026-09-05). Sending every eligible cell stopped working when gate
+  #59's lake recompute took the grid to 141,299 recipe outcomes: 619 eligible cells,
+  **658,292 chars against 78,119**, and `narration absent` on the ledger four nights
+  running. No budget a 64k-context model can read fits 658k chars, so the view SELECTS.
+  **Select, then fill**: the fixed head is encoded first (11,084 chars on the live
+  2026-09-04 pack - gate, coverage, evidence shape, excluded families, hoisted
+  conventions), then eligible policy cells are added in order until the next would
+  cross the budget, then the after-like ELIGIBLE cells (P10 C3) under the same rule
+  from their own top-level `n_episodes`. The order is **`stats.n` descending, then
+  `recipe_id`, `family`, `side`** - `stats.n` is the outcome-row count the eligibility
+  floor itself gates on, and the tie-breaks are identifiers, so it is total and
+  deterministic. **No `mean_r`, `win_rate`, `profit_factor`, `expectancy`, bootstrap
+  bound or trimmed mean is in that key** (gate #43, BD-101): a cell that looks good
+  early is exactly what the frozen research window protects. Coverage is stated in
+  THREE places - `narrated` {K, of, selected_by, after-like K, of} in the view and in
+  the narration json, one line under a `## Narration` heading in the pack markdown, and
+  `narrated K of N eligible cell(s)` on the ledger reason. The markdown's line is
+  computed BEFORE the file is written (the cut needs no model), so one pack and one
+  `.md` per date still holds; a pack that is not narrated prints NO line rather than
+  "0 of 0". The refusal narrows to **head + FIRST cell does not fit** and names the
+  head's size beside the size, budget and cell count. Live: 619 -> **64 narrated**.
 - **The nightly fact pack states its own evidence shape** (2026-09-01, BD-81…85).
   Every cell reports `n_episodes` beside `n`, and the pack reports `evidence_shape` -
   rows, occurrences, episodes and rows-per-occurrence - because the correlation the ERD
@@ -1102,6 +1124,79 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-05 - Packet N3: the research narration is bounded, and says what it left out
+
+**Branch `claude/n3-research-narration-bounded`, off `main` (`e7b12ebe`).** Trader:
+*"Go ahead and build these fixes out"* after the overnight assessment. Live gate below
+replaces gate #40's narration clause.
+
+**Four nights with no narration, and the fifth would have been worse.** The
+`setup_research` ledger: 09-02 273,622 chars (47 cells, the server sheared at 32k);
+09-03 82,192 vs 78,119 (69); 09-04 143,636 vs 78,119 (128); 09-05 **658,292 vs 78,119
+(619 cells)** - gate #59's lake recompute had landed 141,299 recipe outcomes overnight,
+up from 23,802. R3 had already cut the view from the pack and deduplicated the prose;
+what remained is that the view carried EVERY eligible cell, and the grid grows. No
+budget a 64k-context model can read fits 658k chars, so "raise the budget" is not a
+fix.
+
+**Select, then fill.** `_bounded_narration_view` encodes the fixed head first -
+everything that is not a cell, 11,084 chars on the live 09-04 pack - then adds eligible
+policy cells in order until the next would cross the budget, then the after-like
+ELIGIBLE cells (P10 C3, unchanged) under the same rule from their own top-level
+`n_episodes`. Sizes are measured per cell rather than by re-encoding the whole view
+619 times. The head is priced with `narrated` holding the TOTALS, so the placeholder
+can only be longer than the truth and the finished view is never over what was
+budgeted for.
+
+**The key is a SIZE rule, and gate #43 is why.** `_policy_cell_order_key` is
+`stats.n` descending, then `recipe_id`, `family`, `side`. `stats.n` is the outcome-row
+count the eligibility floor itself gates on (`n >= 30 OUTCOME ROWS`); the tie-breaks
+are identifiers, so the order is total and the same list comes back every run. **No
+`mean_r`, `win_rate`, `profit_factor`, `expectancy`, bootstrap bound or trimmed mean
+is in it**, and the docstring on the key says so: gate #43 is a refusal, not a check,
+and a cell that looks good early is exactly what the frozen research window protects.
+All 619 live cells carry BOTH `stats.n` and `stats.n_episodes` and they are equal on
+every one; the after-like grid is FLAT and its count is a top-level `n_episodes`, so
+reading `stats` there would have ordered every cell as zero. Recorded as **BD-101**.
+
+**Three places say what was left out.** The view gains `narrated`
+{`eligible_policy_cells`, `of`, `selected_by`, `after_like_cells`, `of_after_like`};
+the pack markdown gains a `## Narration` heading with *"Narration covers K of N
+eligible cells, selected by evidence count descending, then recipe_id/family/side;
+N-K omitted for size"*; the ledger reason gains `narrated K of N eligible cell(s)`.
+The narration json beside the pack carries the same block, so a reader who opens only
+the narration knows its basis. **The markdown's coverage is decided before the file is
+written**, not by re-rendering after the model answers: the cut is deterministic from
+the pack and the budget alone, so one pack and one `.md` per date (gate #40) stays
+true and no published file is rewritten. A pack that is NOT narrated - below the
+evidence floor, or `narrate=False` - prints no line at all rather than "0 of 0".
+
+**The refusal narrows to its real case.** `NarrationTooLarge` now fires only when the
+head plus the FIRST cell does not fit, in either of its two ways (the head is over
+budget, or it fits and no cell does), and the message adds the **head's size** beside
+the size, the budget and the eligible-cell count - so the ledger line says which part
+is too big. The hash is still over the bounded view: what was actually sent.
+
+**Dry run over a copy of the live 2026-09-04 pack** (no model call; the DAS is
+read-only to an agent): 658,292 chars unbounded -> **77,791 bounded**, head 11,084,
+**narrated 64 of 619**, first five `m5close_atr0.5_1r/2r/3r_v1` and
+`m5close_atr1.5_1r/2r_v1`, all `AVWAPE_TO_FIRST_DEV` LONG at n=621.
+
+**Tests.** `tests/test_n3_narration_bounded.py` (seven, written RED by the tester
+against a fixture pinned from the pre-N3 nightly at `7f2273d3`, so it is not a
+self-portrait) plus `tests/test_n3_narration_bounded_edges.py` (six added by the
+builder: the refusal's second way of firing, the absent coverage line, and the cut
+being a PREFIX of the same order at four budgets). **Fail-before-fix proven**: with
+`setup_research.py` stashed, 12 of the 13 fail; the one that passes asserts an
+ABSENCE. `test_r3_narration_budget.test_the_view_carries_the_finding_and_omits_the_input`
+now opens the budget explicitly - its question is what KIND of thing may be in the
+view, and left alone it would have measured whichever budget the running machine
+resolves (11,066 under the harness' isolated settings, 78,119 on the desk).
+
+**Live gate (#65).** The next overnight `setup_research` row reads `narrated K of N
+eligible cell(s)` with a `.narration.json` beside ONE pack for the date, and the pack
+markdown carries the coverage line.
 
 ### 2026-09-04 - Q3: typed sources, a position claim needs a position source, honest brief counts, one reader for `match_basis`
 

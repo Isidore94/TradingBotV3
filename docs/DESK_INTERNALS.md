@@ -1128,6 +1128,86 @@ a gate.
 
 ---
 
+## N3 - the research narration outgrew every possible budget (2026-09-05)
+
+### What was measured
+
+The `setup_research` reason lines in `ai_job_ledger.jsonl`, four nights running, each
+one an `ok` whose reason ends `narration absent`:
+
+| night | encoded view | budget | eligible cells |
+|---|---:|---:|---:|
+| 2026-09-02 | 273,622 | (server sheared at 32k) | 47 |
+| 2026-09-03 | 82,192 | 78,119 | 69 |
+| 2026-09-04 | 143,636 | 78,119 | 128 |
+| 2026-09-05 | **658,292** | 78,119 | **619** |
+
+The jump on the last line is gate #59's lake recompute, which landed overnight and took
+the grid from 23,802 recipe outcomes to **141,299**. R3 (2026-09-02) had already cut the
+view down from the whole pack and hoisted the prose every cell repeats; what was left is
+that the view carried EVERY eligible cell, and the grid grows every night.
+
+Measured on a copy of the live 2026-09-04 pack: the fixed head - everything that is not
+a cell - is **11,084 chars**, and a hoisted cell is **1,008 to 1,079 chars**. So a
+78,119-char budget holds the head and about **64** cells. Every one of the 619 live
+cells carries BOTH `stats.n` and `stats.n_episodes`, and they are **equal on all 619**.
+The after-like grid had 20 cells and **zero** eligible.
+
+### The rules this produced
+
+**"Raise the budget" was never the fix.** 658,292 chars is 8.4x a 78,119-char budget,
+which is itself a 64k context window minus the generation cap at the safe
+chars-per-token. There is no local model on this desk, and no setting on it, that reads
+658k chars - and the number grows with every night's outcomes. A view that can only be
+sent whole is a view that will be absent forever.
+
+**Select, then fill, and the head goes first.** The head is what makes the cells
+readable: without the gate, the coverage, the evidence shape, the excluded families and
+the hoisted conventions, the cells are numbers with no stated basis. It is encoded
+first, priced with `narrated` holding the TOTALS rather than the kept counts (K <= N, so
+the placeholder can only be longer than the truth and the finished view can never exceed
+what was budgeted for), and then cells are added until the next would cross the line.
+Sizes are per cell - a JSON list contributes each element's own encoding plus the
+two-char separator - because re-encoding a 78,000-char view 619 times is 48 MB of work
+inside a nightly job for the same answer.
+
+**The order may never be a ranking by result, and this is gate #43, not a preference.**
+Gate #43 is a REFUSAL: no cell of a frozen research grid may be read for a verdict
+before its declared 20-session window closes, *including by the agent that built it and
+including if an early cell looks good*. A narration whose input was sorted by `mean_r`
+would be that read, performed by code, with the model's words laid over the flattering
+half of the grid. So the key is `stats.n` descending, then `recipe_id`, then `family`,
+then `side`. `stats.n` is not a result - it is the outcome-row count the eligibility
+floor itself gates on (`n >= 30 OUTCOME ROWS`) - and the tie-breaks are identifiers, so
+the order is total and reproducible without the model. The after-like grid is FLAT: its
+count is a top-level `n_episodes` and reading `stats` there would have ordered every
+cell as zero.
+
+**A bounded view that does not say it is bounded is worse than a refusal.** 64 cells
+handed to a model with no coverage statement read as "these were the findings". So
+`narrated` {`eligible_policy_cells`, `of`, `selected_by`, `after_like_cells`,
+`of_after_like`} is in the view, in the `.narration.json` beside the pack (a reader who
+opens only the narration must still know its basis), as a sentence under a `## Narration`
+heading in the pack markdown, and as `narrated K of N eligible cell(s)` on the ledger
+reason - which had read the same word, "narrated", on the 47-cell night and would have
+on the 619-cell one.
+
+**The coverage line is decided before the markdown is written.** `run_setup_research`
+publishes the `.md` before it narrates, and gate #40 wants ONE pack and one `.md` for the
+date, so re-rendering after the model answered would either write a second file or
+rewrite a published one. The cut is deterministic from the pack and the budget alone -
+no model is involved in deciding it - so the coverage is known early and costs nothing.
+A pack that is NOT narrated prints no line rather than "0 of 0": "no narration was
+attempted" and "the narration covered nothing" are different facts.
+
+**The refusal survives, narrowed to the case a cut cannot answer.** `NarrationTooLarge`
+now fires only when the head plus the FIRST cell does not fit - either the head is over
+budget, or it fits and no cell does - and the message names the head's size beside the
+size, the budget and the eligible-cell count. That is a fact about the head or the
+model's window and never about the grid being large, and the ledger line now says which.
+
+---
+
 ## Headline statistics, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)
 
 `CLAUDE.md` keeps the rules of this block; this is the block as it stood, with every
