@@ -2276,8 +2276,12 @@ class AlertCenterPanel(QFrame):
                 bounce_type=bounce_type,
                 entry_time=entry_time,
                 market_environment=environment,
-                d1_setup_present=alert.symbol
-                in (self._held_run_d1_symbols.get(trade_date) or set()),
+                # Packet Q1: the SIDE travels with the join. A SHORT swing setup
+                # on a long M5 alert is OPPOSED, not "a D1 setup"; no snapshot
+                # is UNKNOWN, not False.
+                d1_alignment=held_run_score.d1_alignment(
+                    self._held_run_d1_symbols, trade_date, alert.symbol, alert.side
+                ),
             )
             alert.held_run_suffix = held_run_score.alert_suffix(cell)
         except Exception:  # noqa: BLE001 - a row suffix never costs an alert

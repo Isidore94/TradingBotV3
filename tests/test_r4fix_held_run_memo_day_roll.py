@@ -141,18 +141,20 @@ def test_day_two_reads_todays_d1_symbols_on_a_real_alert(panel, monkeypatch):
 
     monkeypatch.setattr(panel, "_held_run_day", lambda: "2026-09-02")
     panel._on_held_run_index_loaded(
-        {"index": {}, "d1": {"2026-09-02": {"NVDA"}}, "built_for": "2026-09-02"}
+        {"index": {}, "d1": {"2026-09-02": {"NVDA": {"LONG"}}}, "built_for": "2026-09-02"}
     )
 
     seen: list[bool] = []
     real = held_run_score.alert_cell
 
     def _spy(index, **kwargs):
-        seen.append(bool(kwargs.get("d1_setup_present")))
+        seen.append(kwargs.get("d1_alignment") == held_run_score.D1_ALIGNED)
         return real(index, **kwargs)
 
     monkeypatch.setattr(held_run_score, "alert_cell", _spy)
-    panel._held_run_index = {("ema_15", "opening_drive", "trend_up", True): {}}
+    panel._held_run_index = {
+        ("ema_15", "opening_drive", "trend_up", held_run_score.D1_ALIGNED): {}
+    }
 
     panel._attach_held_run_suffix(_alert(trade_date="2026-09-02"))
 

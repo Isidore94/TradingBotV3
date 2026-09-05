@@ -45,6 +45,10 @@ PERFORMANCE_COLUMNS = (
     ("segment", "Segment"),
     ("held_rate", "Held 30m"),
     ("held_run_score", "Held x Ran"),
+    # Packet Q1: coverage BESIDE the headline - n_measured / n. A hold rate over
+    # 35 measured of 41 alerts is a different fact from one over 41 of 41, and
+    # until 2026-09-04 the unmeasured ones were silently counted as held.
+    ("measured", "Measured"),
     # R4 B4: the champion tier the header comment above has promised since V3 and
     # the table never carried. PROVEN / MUTED / active from the bounce learning
     # state, joined on the SAME (dimension, direction, segment) key the headline
@@ -127,6 +131,7 @@ DECISION_COLUMNS = (
     # dimension.
     ("held_rate", "Held 30m"),
     ("held_run_score", "Held x Ran"),
+    ("measured", "Measured"),
     ("taken_r", "Taken R"),
     ("taken_n", "(n)"),
     ("passed_r", "Passed R"),
@@ -598,7 +603,8 @@ class DaytradeTrackerPanel(QFrame):
         generated = str(state.get("generated_at") or "never")
         self.status_label.setText(
             f"Learning state generated {generated} ({BOUNCE_LEARNING_STATE_FILE.name}); "
-            f"outcome file updated {_mtime_text(INTRADAY_BOUNCE_OUTCOMES_FILE)}."
+            f"outcome file updated {_mtime_text(INTRADAY_BOUNCE_OUTCOMES_FILE)}. "
+            f"{getattr(self, '_held_run_window_text', '')}".rstrip()
         )
 
     def start_refresh(self) -> None:
@@ -639,7 +645,7 @@ class DaytradeTrackerPanel(QFrame):
         self._held_run_thread.start()
 
     def _held_run_worker(self) -> None:
-        summaries = load_held_run_summaries()
+        summaries = load_held_run_report()
         try:
             self._heldRunLoaded.emit(summaries)
         except RuntimeError:
@@ -647,7 +653,16 @@ class DaytradeTrackerPanel(QFrame):
             pass
 
     def _on_held_run_loaded(self, summaries) -> None:
+        window_text = ""
+        if isinstance(summaries, dict) and "summaries" in summaries:
+            window_text = held_run_window_text(summaries.get("window"))
+            summaries = summaries.get("summaries")
         self._held_run_summaries = summaries if isinstance(summaries, dict) else {}
+        if window_text:
+            self._held_run_window_text = window_text
+            current = self.status_label.text()
+            if window_text not in current:
+                self.status_label.setText(f"{current} {window_text}".strip())
         rows = apply_champion_tier(
             apply_held_and_ran(self._performance_rows, self._held_run_summaries),
             getattr(self, "_learning_state", {}) or {},
@@ -752,8 +767,32 @@ def apply_held_and_ran(rows, summaries) -> list[dict]:
         cell = lookup.get((dimension, direction, segment))
         row["held_rate"] = (cell or {}).get("hold_rate")
         row["held_run_score"] = (cell or {}).get("held_run_score")
+        row["measured"] = measured_text(cell)
         out.append(row)
     return out
+
+
+def measured_text(cell) -> str:
+    """`"35 / 41"` - measured episodes over all episodes - or blank (packet Q1)."""
+    if not isinstance(cell, dict):
+        return ""
+    total = cell.get("n")
+    measured = cell.get("n_measured")
+    if total is None or measured is None:
+        return ""
+    return f"{int(measured)} / {int(total)}"
+
+
+def held_run_window_text(report) -> str:
+    """One status-line sentence for `held_run_score.window_report` (packet Q1)."""
+    if not isinstance(report, dict) or not report.get("start"):
+        return ""
+    missing = len(report.get("missing_sessions") or ())
+    return (
+        f"Held/ran window: {report.get('sessions', 0)} sessions "
+        f"({report.get('start')} to {report.get('end')}), "
+        f"{report.get('sessions_with_data', 0)} with data, {missing} missing."
+    )
 
 
 def apply_champion_tier(rows, state) -> list[dict]:
@@ -804,9 +843,23 @@ def load_held_run_summaries() -> dict:
     A failure yields an empty mapping, which shows blanks - the panel still
     opens, and a blank is what an unmeasured cell should look like anyway.
     """
+    return load_held_run_report().get("summaries") or {}
+
+
+def load_held_run_report() -> dict:
+    """`{"summaries": ..., "window": ...}` from ONE read of the outcome log.
+
+    The window report rides along so the status line can say which sessions
+    the headline is measured over and which are missing (packet Q1), without a
+    second 300 MB pass. NEVER on the Qt thread.
+    """
     try:
         import held_run_score
 
-        return held_run_score.dimension_summaries(held_run_score.load_episodes())
+        episodes = held_run_score.load_episodes()
+        return {
+            "summaries": held_run_score.dimension_summaries(episodes),
+            "window": held_run_score.window_report(episodes),
+        }
     except Exception:
-        return {}
+        return {"summaries": {}, "window": {}}

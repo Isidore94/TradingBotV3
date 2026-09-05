@@ -96,6 +96,21 @@ the dated entry named beside it.
 
 
 
+### 2026-09-04 (evening) - Packet Q1: `held_run_score` says what it measured (lead-built, `claude/q1-held-honesty`)
+
+Process review findings 1 and 2, built by the lead after the Opus tester hit the session
+rate limit. Red first (17 tests, `tests/test_q1_held_honesty.py`), then the fix. Live counts
+that drove it: 979 of 8,161 recent episodes read held with the question never answered; 8
+of 2,646 D1-present episodes were the opposite side. Contract changes (tests rewritten,
+named in the commit): a lone late stop is `break_time_unknown`, not held; a `final` row
+that never reached 30 minutes is not held; the D1 map is `{session: {SYMBOL: {sides}}}`;
+`d1_setup_rows` returns None for a missing snapshot; the segment key's fourth element is
+the alignment string; the window is `evidence_stats.lately_window` (`as_of` keyword
+everywhere, default today). Surfaces: the Daytrade Tracker's Measured column and the
+window sentence on its status line; the M5 alert suffix passes `d1_alignment`. Targeted
+files green (131), ruff clean. **Live gate #60** owed. Owed, ask-first: `stop_hit_at` and
+the sweep autorun default in `legacy.py`.
+
 ### 2026-09-04 (~14:30 PT) - Earnings-anchor bridge: the scan feeds the anchors CSV the warehouse reads
 
 Follow-up to the swing simulator investigation (`docs/SWING_SIMULATOR_INVESTIGATION_2026-09-04.md`).

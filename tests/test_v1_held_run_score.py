@@ -77,10 +77,17 @@ def test_a_stop_after_the_window_is_an_exit_and_not_a_broken_level():
     """A level that gives way an hour later gave the trade its chance first."""
     import held_run_score as hrs
 
-    late = hrs.build_episodes([_row(_event("A"), stop_hit=True, minutes="45")])
+    # Packet Q1: `stop_hit` is a boolean over ALL bars and the log carries no
+    # first-break time, so a late stop is an exit only when an EARLIER row
+    # already saw the window pass with the stop intact. Alone it is unknown.
+    late = hrs.build_episodes(
+        [_row(_event("A"), minutes="35"), _row(_event("A"), stop_hit=True, minutes="45")]
+    )
+    alone = hrs.build_episodes([_row(_event("C"), stop_hit=True, minutes="45")])
     early = hrs.build_episodes([_row(_event("B"), stop_hit=True, minutes="20")])
 
     assert late[0].held is True
+    assert alone[0].held is False and alone[0].measurement == hrs.UNMEASURED
     assert early[0].held is False
 
 
@@ -123,7 +130,9 @@ def test_a_name_that_also_carries_a_d1_setup_is_its_own_segment():
         _row(_event("WITH"), symbol="WITH"),
         _row(_event("WITHOUT"), symbol="WITHOUT"),
     ]
-    episodes = hrs.build_episodes(rows, d1_setups_by_session={"2026-09-01": {"WITH"}})
+    episodes = hrs.build_episodes(
+        rows, d1_setups_by_session={"2026-09-01": {"WITH": {"LONG"}}}
+    )
 
     by_symbol = {episode.symbol: episode for episode in episodes}
     assert by_symbol["WITH"].d1_setup_present is True
@@ -167,14 +176,14 @@ def test_the_d1_setups_come_from_the_scan_output_and_only_the_two_buckets():
 
     mapping = hrs.d1_setups_by_session(
         [
-            {"symbol": "AAA", "bucket": "favorite_setup", "scan_date": "2026-09-01"},
-            {"symbol": "BBB", "bucket": "near_favorite_zone", "scan_date": "2026-09-01"},
-            {"symbol": "CCC", "bucket": "watch", "scan_date": "2026-09-01"},
-            {"symbol": "DDD", "bucket": "favorite_setup", "scan_date": ""},
+            {"symbol": "AAA", "bucket": "favorite_setup", "scan_date": "2026-09-01", "side": "LONG"},
+            {"symbol": "BBB", "bucket": "near_favorite_zone", "scan_date": "2026-09-01", "side": "SHORT"},
+            {"symbol": "CCC", "bucket": "watch", "scan_date": "2026-09-01", "side": "LONG"},
+            {"symbol": "DDD", "bucket": "favorite_setup", "scan_date": "", "side": "LONG"},
         ]
     )
 
-    assert mapping == {"2026-09-01": {"AAA", "BBB"}}
+    assert mapping == {"2026-09-01": {"AAA": {"LONG"}, "BBB": {"SHORT"}}}
 
 
 def test_nothing_in_this_module_fetches():
@@ -211,19 +220,26 @@ def test_the_suffix_reads_the_way_the_packet_asked():
     assert hrs.alert_suffix({"meets_floor": True, "hold_rate": None}) == ""
 
 
-def test_the_window_is_the_last_twenty_sessions_and_carries_no_regime_label():
-    """Decision 0016 answer 6: "lately" is a rolling window and nothing else."""
+def test_the_window_is_the_shared_lately_window_and_carries_no_regime_label():
+    """Decision 0016 answer 6: "lately" is a rolling window and nothing else.
+
+    Packet Q1: the window is `evidence_stats.lately_window` (exchange sessions),
+    the same one the swing path uses - never "the last N dates in the file".
+    """
+    import evidence_stats
     import held_run_score as hrs
 
     rows = []
     for day in range(1, 26):
         date = f"2026-08-{day:02d}"
         rows.append(_row(_event("A", date=date.replace("-", "")), date=date))
-    episodes = hrs.build_episodes(rows)
+    episodes = hrs.build_episodes(rows, as_of="2026-08-25")
 
-    kept = hrs.recent_sessions(episodes)
-    assert len(kept) == hrs.ROLLING_SESSIONS
-    assert "2026-08-25" in kept and "2026-08-01" not in kept
+    kept = hrs.recent_sessions(episodes, as_of="2026-08-25")
+    start, end = evidence_stats.lately_window(end="2026-08-25")
+    assert kept == {day for day in (row["trade_date"] for row in rows) if start <= day <= end}
+    assert "2026-08-25" in kept
+    assert hrs.window_bounds(as_of="2026-08-25") == (start, end)
 
 
 # ---------------------------------------------------------------------------

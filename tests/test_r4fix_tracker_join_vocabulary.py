@@ -139,7 +139,7 @@ def _rows(symbol, *, trade_date, bounce, held=True, mfe=2.0, n=1, entry="09:35:0
                 "event_type": "final",
                 "mfe_r": f"{mfe}",
                 "stop_hit": "False" if held else "True",
-                "minutes_elapsed": "5",
+                "minutes_elapsed": "60" if held else "5",
             }
         )
     return out

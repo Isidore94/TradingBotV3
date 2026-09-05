@@ -163,7 +163,7 @@ def test_the_window_is_the_shared_lately_window_and_not_the_last_n_dates():
     from datetime import date, timedelta
 
     rows = []
-    cursor = date(2026, 3, 1)
+    cursor = date(2026, 3, 2)  # a Monday; every 7th day stays a weekday
     while cursor <= date(2026, 9, 1):
         stamp = cursor.isoformat()
         rows.append(_row(_event("A", date=stamp.replace("-", "")), date=stamp))
@@ -179,7 +179,11 @@ def test_the_window_is_the_shared_lately_window_and_not_the_last_n_dates():
     report = hrs.window_report(episodes, as_of=AS_OF)
     assert report["start"] == start and report["end"] == end
     assert report["sessions"] == evidence_stats.LATELY_SESSIONS
-    assert report["sessions_with_data"] == len(kept)
+    from market_calendar import is_session
+
+    assert report["sessions_with_data"] == len(
+        [day for day in kept if is_session(date.fromisoformat(day))]
+    )
     assert len(report["missing_sessions"]) == report["sessions"] - report["sessions_with_data"]
     assert report["missing_sessions"] == sorted(report["missing_sessions"])
 

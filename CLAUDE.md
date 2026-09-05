@@ -216,7 +216,16 @@ measurement in `docs/DESK_INTERNALS.md` ("Headline statistics, long form").
   **"Verdict (edge score)"** because it is computed from average R. **The My Decisions tabs
   carry the headline too** through `apply_held_and_ran`; those rows name no side, so
   `held_run_score.ALL_DIRECTIONS` gives them a pooled cell accumulated FROM THE EPISODES - never an
-  average of the long cell and the short one.
+  average of the long cell and the short one. **Held is MEASURED held** (packet Q1, 2026-09-04:
+  979 of 8,161 recent episodes read held with the question never answered): an episode is
+  `measured_held` / `measured_broken` / `pending` / `unmeasured`, `hold_rate` is held / MEASURED,
+  the unmeasured are COUNTED and SHOWN (the tracker's Measured column, `coverage`) and never
+  assumed, and a stop first seen past the window with no earlier row bracketing it is
+  `break_time_unknown` - the log carries no first-break time, and adding one is a `legacy.py`
+  ask. **The D1 dimension is the ALIGNED same-session setup**: the join keeps the snapshot's
+  `side` (`aligned` / `opposed` / `none` / `unknown`), only ALIGNED carries the privilege, a
+  missing snapshot is UNKNOWN never False, and the basis is retrospective because the snapshot
+  carries no time of day. The window is `evidence_stats.lately_window`, gaps reported.
 - **The AWAY digest ranks swing picks by the tracker's record, not by the bucket** (answer 8:
   *"the cream is not being sent"*). Order is the **Wilson lower bound** on the family's realized
   win rate from `master_avwap_tier_outcomes.csv` inside `lately_window()` at ONE DECLARED HORIZON
