@@ -212,6 +212,37 @@ def test_an_expired_unmeasured_record_leaves_both_sides_of_the_fraction():
         assert row["n_expired_unmeasured"] == 1
 
 
+def test_an_all_expired_group_still_emits_its_row_and_keeps_its_count():
+    """M3's reviewer blocker 2, in this export: a dropped group loses its count.
+
+    `build_tracker_setup_type_rows` and `build_tracker_stats_rows` both had
+    `if not rows: continue` after collecting the expired ones, so a group where
+    EVERY record aged out took its own `n_expired_unmeasured` with it - on the
+    live 2026-09-04 mirror the sentence read 16 where 45 had expired, under-
+    reporting by exactly the groups that were worst. This export must not repeat
+    it: the row is emitted with zero measured setups, blank measures, and the
+    real count. The identity fields survive because the group is created BEFORE
+    the expired check, which is this builder's `representative_by_group`.
+    """
+    expired = _paired_setup("EXP", baseline=("OPEN", 0.0), comparison=("OPEN", 0.0))
+    expired["setup_status"] = legacy.SETUP_STATUS_EXPIRED_UNMEASURED
+    rows = legacy.build_exit_framework_stats_rows(_setups(expired))
+
+    assert len(rows) == 2, "a group whose every record expired was dropped"
+    for row in rows:
+        assert row["n"] == 0
+        assert row["n_closed"] == 0
+        assert row["n_expired_unmeasured"] == 1
+        assert row["win_rate"] is None
+        assert row["avg_closed_r"] is None
+        # The identity is still there to render - a row that cannot say which
+        # template it describes is as useless as no row.
+        assert row["exit_template_id"] in {BASELINE_TEMPLATE, COMPARISON_TEMPLATE}
+        assert row["side"] == "LONG"
+        assert row["priority_bucket"] == "favorite_setup"
+    assert {row["framework_family"] for row in rows} == {"baseline", "comparison_apr2026"}
+
+
 def test_an_empty_tracker_exports_no_framework_rows():
     assert legacy.build_exit_framework_stats_rows({}) == []
 
