@@ -1347,6 +1347,11 @@ Additionally:
   action, every run in the ledger.
 - **Phase 2:** 10 consecutive session-day digests; trader spot-audit of ≥3
   finds zero fabricated facts (every number traceable to `extract.py`).
+  **Both halves are MEASURED since packet Q4 (2026-09-04, §7.0):** the count is
+  a run of consecutive CLEAN sessions off the exchange calendar, and the audit
+  is `digest_audit_approval.json`, written only by
+  `python -m ai_jobs.digest approve-audit`. `gate_met` is the AND of the two,
+  and `journal_enrichment` refuses below it.
 - **Phase 3:** LLM tags land only in advisory fields via the `JournalStore`
   API; trader-entered data provably untouched (test: enrichment run leaves
   all non-advisory columns bit-identical).
@@ -1470,6 +1475,97 @@ Still open: the tracker file itself is 762 MB.
 
 
 ---
+
+## 7.0 Amended 2026-09-04 (packet Q4) — the gate has two measured halves, the
+## deterministic stage runs first, and there is an entry index
+
+Three amendments to this section, all trader-authorized over
+`docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md` findings 6 and 7. They
+change the rule 7.1 states below (*"later phases append; they never reorder
+these"*) and the Phase 2 exit gate in §6.5; read them before either.
+
+**The Phase 2 exit gate is two halves and BOTH are now measured.**
+
+1. *Ten CONSECUTIVE clean session digests.* `digest.clean_digest_sessions`
+   returns the length of the run of consecutive exchange sessions ending at the
+   NEWEST session pack, walked through `market_calendar.previous_session` and
+   **never by weekday arithmetic**. A session in the run is clean when its
+   newest pack is `is_session` **and** its own failure record — the
+   `unavailable` map, the field the pack actually carries, and the one its own
+   `summary` already calls INCOMPLETE — is empty. A non-session pack (a weekend
+   or an unscheduled closure) **neither counts nor breaks**.
+   `digest_gate_state` reports `sessions_consecutive_clean` and
+   `first_gap_session` (the newest session that stopped the run), and keeps
+   `sessions_collected` at its pre-Q4 meaning — the distinct count — so every
+   existing reader still reads what it always read. It counted DISTINCT packs
+   until now, so ten packs scattered across a month read as a met window.
+2. *The trader spot-auditing at least three packs.* This was prose. It is now a
+   FILE: `digest_audit_approval.json` beside the packs —
+   `{"approved_at", "approved_by", "packs", "note"}` — written **only** by
+
+       cd scripts
+       python -m ai_jobs.digest approve-audit --pack 2026-09-01 --pack … --note "…"
+
+   which refuses fewer than three packs and refuses any date that has no pack
+   on disk. **No nightly job writes it, and a test walks the runner's source to
+   keep that true**: a runner that can approve its own evidence has asserted,
+   not audited. `python -m ai_jobs.digest gate` prints both halves.
+
+`gate_met = window_met and audit_recorded`. **`journal_enrichment` refuses
+unless `gate_met`** — until the trader records the audit that slot calls no
+model, writes nothing, and its ledger row reads
+`ENRICHMENT GATE NOT MET. … refused: audit not recorded`. `review_policy_draft`
+(two weeks of side-by-side drafts) and `setup_research` (its own evidence
+floor) have their OWN gates and are unchanged.
+
+**The nightly slate runs in three stages — decision 0018**
+([`docs/decisions/0018-deterministic-stage-before-narration.md`](decisions/0018-deterministic-stage-before-narration.md)):
+every deterministic slot, then `ai_summary` and `ticker_briefs` as a unit, then
+the model-gated slots. The two narration slots held up to two and a half hours
+of reserve ahead of every deterministic slot; a slot whose reserve does not fit
+the remaining window records SKIPPED; the 2026-09-01 run took six hours; and
+**no deterministic slot reads either narration slot's output** (`daily_digest`
+imports `ai_summary` as a library to narrate its own pack and reads no file
+from either). The relative order inside each stage, and every reserve and retry
+budget, are unchanged. §7.1's rule becomes: **a later phase appends inside its
+stage and never reorders across stages.**
+
+**`entry_index.json`** is written beside the packs at the end of
+`run_daily_digest`, with a temp-and-rename publish and a failure that is logged
+and **never fails the digest**. It is deterministic — no model — and holds:
+`latest_complete_session`, `generated_at`, `git_commit` (the manifest's own
+`definitions_git_commit`), the version identifiers the packs actually carry
+(and it says that a pack carries no recipe id and no vocabulary version rather
+than inventing one); one row per session in the `LATELY_SESSIONS` window with
+its pack path, version count, `superseded`, clean flag, failures and coverage;
+`changes_vs_prior_window` **by FLOOR STATUS only, never by ranking immature
+cells**; four sections that are **never merged** — `intraday_held_run`
+(MFE/MAE, because `close_r` is the RESULT and the two are never blended),
+`swing_win_rates` and `journal_execution` (both EMPTY BY CONSTRUCTION, each
+saying why: the fact pack carries champion INTRADAY outcomes and no journal
+block, and neither is restated here from a different grain), and
+`preference_observations` (classified by `review_learning`'s TAKE/REJECT sets,
+not by a second list); `pending_experiments` from
+`research_warehouse.trial_ledger` with their frozen windows, listed and
+**unranked**, skipped with a note when the ledger is unavailable; and an
+`open_questions_for_a_ticker_brief` that stays empty, because a frontier model
+opens a brief only for a STATED question. `digest.read_entry_index` is there
+for the System Health / Research readers to come; **nothing consumes it yet**.
+
+Every `pack_path` the index prints is the file its numbers were READ from - the newest
+superseding sibling, never `facts_path`'s version 1 - because three of the nine live
+sessions are superseded and a citation to a corrected pack is a citation to the wrong
+record. `changes_vs_prior_window` also carries `this_window_packs` and
+`prior_window_packs`, so "46 cleared, 0 fell" reads as "there was no prior window"
+when that is what it is. The System Health gate strip shows
+`sessions_consecutive_clean`, the number the gate turns on, on both the Digest and the
+Enrichment counter.
+
+Owed live gate **#63**, the first nightly run after merge: the ledger shows the
+deterministic rows completed before `ai_summary` started; `entry_index.json`
+exists beside the packs and names the session; `digest_gate_state` prints the
+consecutive count and `audit_recorded: false` until the trader runs the
+approval CLI.
 
 ## 7. Addendum, 2026-08-20 — a deterministic slot, and an opt-in scope
 

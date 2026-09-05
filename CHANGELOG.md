@@ -434,6 +434,45 @@ which is evidence and must not be loaded as context.
   membership in `M5_SIGNAL_TYPE_DEFAULTS - BOUNCE_TYPE_DEFAULTS`. Read on a
   daemon thread; the button also calls `refresh_review_learning_if_stale` exactly
   as `app.py` does, while construction only READS.
+- **The digest gate has TWO measured halves, and enrichment waits for both**
+  (packet Q4, 2026-09-04). `clean_digest_sessions` returns the length of the run
+  of CONSECUTIVE clean exchange sessions ending at the newest pack - walked
+  through `market_calendar.previous_session`, never weekday arithmetic - where
+  clean is `is_session` plus an EMPTY `unavailable`, the pack's own failure
+  record, which its own summary already calls INCOMPLETE. A non-session pack
+  neither counts nor breaks, and `first_gap_session` names where the run stopped;
+  `sessions_collected` keeps the pre-Q4 distinct count for existing readers. It
+  counted DISTINCT packs until now, so ten scattered across a month read as a met
+  window. The second half is a FILE - `digest_audit_approval.json` beside the
+  packs, written ONLY by `python -m ai_jobs.digest approve-audit --pack <date> …`,
+  which refuses fewer than three packs and any date with no pack. **No nightly
+  job may write it** (a test walks the runner's source): a runner that approves
+  its own evidence has asserted, not audited. `gate_met = window_met and
+  audit_recorded`, and **`journal_enrichment` now refuses until both are true** -
+  no model, nothing written, ledger row `refused: audit not recorded`.
+  `review_policy_draft` and `setup_research` keep their own separate gates.
+- **The nightly slate runs in three stages** (decision 0018, 2026-09-04):
+  every deterministic slot, then `ai_summary` + `ticker_briefs` as a unit, then
+  the model-gated slots. The narration pair held up to 2½ h of reserve ahead of
+  every deterministic slot, a slot that cannot fit its reserve records SKIPPED,
+  the 2026-09-01 run took six hours - and no deterministic slot reads either
+  narration slot's OUTPUT. Relative order inside each stage, every reserve and
+  every retry budget unchanged. The rule is now "a later phase appends inside its
+  stage and never reorders across stages", and the order is pinned once as
+  `EXPECTED_SLOT_ORDER` in `tests/test_ai_jobs_runner.py`.
+- **`entry_index.json` is the compact, deterministic handoff** (Q4.4). Written
+  beside the packs at the end of `run_daily_digest` with a temp-and-rename; a
+  failure is logged and NEVER fails the digest. Sessions in the `LATELY_SESSIONS`
+  window with pack path, version count, `superseded`, clean flag, failures and
+  coverage; `changes_vs_prior_window` by FLOOR STATUS only, never by ranking an
+  immature cell; FOUR sections never merged - `intraday_held_run` (MFE/MAE only,
+  because `close_r` is the RESULT), `swing_win_rates` and `journal_execution`
+  both EMPTY BY CONSTRUCTION with the reason stated, `preference_observations`
+  classified by `review_learning`'s own TAKE/REJECT sets; `pending_experiments`
+  from the trial ledger with their frozen windows, listed and UNRANKED; and an
+  `open_questions_for_a_ticker_brief` that stays empty because a brief opens only
+  for a STATED question. `read_entry_index` exists for the readers to come and
+  **nothing consumes it yet**.
 - **The five AI phase gates have a surface** (`ai_jobs/gate_counters.py`,
   2026-09-01): digest, enrichment, weekly synthesis, policy draft and evidence
   window, on one strip on the A.I. Summary page with each gate's own statement as
@@ -1034,6 +1073,62 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-04 - Q4: the overnight run protects its deterministic work
+
+Packet Q4 on `claude/q4-overnight-gates`, authorized by the trader over
+`docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md` findings 6 and 7.
+
+- **Q4.1** `digest.clean_digest_sessions(root, *, as_of=None)` counts the RUN of
+  consecutive clean exchange sessions ending at the newest session pack, through
+  `market_calendar.previous_session`. Clean = `is_session` and an EMPTY
+  `unavailable` (the failure record the pack carries; there is no separate
+  `failures`/`errors` field and none was invented). A non-session pack neither
+  counts nor breaks. `digest_gate_state` adds `sessions_consecutive_clean` and
+  `first_gap_session` and keeps `sessions_collected` at the old distinct count.
+- **Q4.2 - BEHAVIOUR CHANGE.** `digest_audit_approval.json` records the trader's
+  spot-audit; `record_audit_approval` refuses under three packs and refuses any
+  date with no pack; `python -m ai_jobs.digest approve-audit|gate|entry-index`
+  is the CLI and the only writer. `gate_met = window_met and audit_recorded`.
+  **`journal_enrichment` refuses until the trader records the audit** - no
+  model, no write, ledger row `refused: audit not recorded`.
+  `review_policy_draft` (side-by-side days) and `setup_research` (evidence
+  floor) have their own gates and did NOT change.
+- **Q4.3** `docs/decisions/0018-deterministic-stage-before-narration.md` and the
+  three-stage `default_slots()`. Reserves and retry budgets unchanged; the
+  narration pair moved as a unit to after `daily_digest`. `CLAUDE.md`/`AGENTS.md`
+  carry the replacement rule.
+- **Q4.4** `entry_index.json` beside the packs, written at the end of
+  `run_daily_digest` (temp-and-rename; a failure is logged and never fails the
+  digest), plus `build_entry_index` / `read_entry_index`.
+- Tests: `tests/test_q4_overnight_gates.py` (21), proven 19-failed/2-passed
+  against the un-fixed tree first. Six existing slot-order tests moved to the
+  new order and the two digest-gate helpers now patch the job-ledger read - with
+  no AI store configured a test pack records a real failure and is no longer
+  clean, which is environment noise rather than the thing under test. No
+  assertion was weakened.
+- Two changes outside the packet's file list, disclosed: `gate_counters._enrichment_counter`
+  now reports `gate_met` (fallback `window_met`), so the System Health strip cannot say
+  "Enrichment met" on a night the slot refuses; and the trial ledger's one-importer guard
+  names each importer's ROLE and asserts the writer property directly on the readers, since
+  `entry_index.json` is the ledger's first reader.
+- Measured read-only against the live store at build time: **9 of 10 consecutive clean
+  sessions** (2026-08-24..2026-09-03), the run stopping at 2026-08-21, `audit_recorded:
+  false`. The old count was also 9, so the live number does not move.
+- **Reviewer NO-GO fixed on the branch, red-first** (2026-09-04, two blockers). (1) Both
+  gate counters showed `sessions_collected` beside a `met` that turns on the consecutive
+  run, so the strip could read "Digest 11/10" at a two-session run - `_digest_have` now
+  answers both, and the test asserts the TEXT. (2) The index cited `facts_path` (always
+  version 1) beside values read from the newest sibling; **three of the nine live sessions
+  are superseded**, so a third of the store pointed the reader at the corrected pack.
+  `read_fact_pack_files` / `latest_pack_files_by_session` carry the path, and a
+  same-`generated_at` tie breaks on the SUPERSESSION INDEX rather than the file name
+  (`.1.json` sorts before `.json`). Advisories taken: `repo_commit()` resolves HEAD through
+  the `gitdir:` pointer so a git WORKTREE no longer yields `""`; `_publish` removes its
+  temp on a failed rename; `evidence_stats` constants are imported hard with no literal
+  fallback; `changes_vs_prior_window` carries `this_window_packs` / `prior_window_packs`;
+  and the narration-failure test asserts the ORDERING it was renamed for.
+- Live gate **#63** owed at merge.
 
 ### 2026-09-04 - Packet Q2: the band repair chain is verifiable (branch `claude/q2-warehouse-eligibility`)
 

@@ -450,24 +450,43 @@ def _failure_reason(job: str, status: str, outcome: Mapping[str, Any]) -> str:
 
 
 def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobSlot]:
-    """The Phase 1 slate, plus R7's journal pull at the front.
+    """The nightly slate, in THREE STAGES (decision 0018, 2026-09-04).
 
-    ``journal_import`` is deliberately **first**, and ``journal_auto_tag``
-    deliberately **second**. Those two are the only sanctioned exceptions to
-    "later phases append; they never reorder these"
-    (``docs/LOCAL_AI_AUTOMATION_PLAN.md`` §6.4c, promoted into R7 §6). The
-    summary and the ticker briefs read the journal; running them before the
-    night's trades are in it means they read yesterday's. It also costs seconds
-    rather than the briefs' hours, so putting it first spends nothing.
+    ``docs/decisions/0018-deterministic-stage-before-narration.md``. The order
+    used to be "later phases append; they never reorder", and under that rule
+    the two narration slots - ``ai_summary`` and ``ticker_briefs``, up to two
+    and a half hours of reserve between them - sat ahead of every deterministic
+    slot for no reason other than having been written first. On 2026-09-01 the
+    run took six hours, and a reservation that cannot fit inside what is left
+    of the window records SKIPPED. That put the cheap, deterministic, no-model
+    work - the cohort grades, the vocabulary audit, the preference join, the
+    evidence report, the fact pack - behind the two jobs most likely to spend
+    the night. **No deterministic slot reads either narration slot's output**,
+    so the dependency that would have justified the old position does not
+    exist.
 
-    ``journal_auto_tag`` (V2, decision 0016 answer 10) is the second exception
-    and for the same reason read from the other end: the import is what puts the
-    night's trades in the journal, so tagging ahead of it would tag yesterday's,
-    and every cohort slot below reads the journal, so tagging after them would
-    hand them a journal one night stale. It is deterministic and costs seconds.
+    So the slate is:
 
-    **Every other slot still appends.** Two positions are argued for and written
-    down here; a third would mean this list has an ordering nobody can state.
+    1. **the deterministic stage** - ``journal_import``, ``journal_auto_tag``,
+       the cohort grades, ``note_vocabulary_audit``,
+       ``preference_trade_outcomes``, ``evidence_report``, ``daily_digest``.
+       Their RELATIVE order is unchanged; it is the appended-only order this
+       docstring used to describe and the comments below still argue for each
+       position;
+    2. **narration** - ``ai_summary`` then ``ticker_briefs``, moved as a UNIT
+       to after ``daily_digest``. The digest's own narration is unaffected: it
+       is that slot's second artifact and it reads only the fact pack;
+    3. **the model-gated slots** - ``journal_enrichment``,
+       ``review_policy_draft``, ``setup_research``, unchanged and still last.
+
+    ``journal_import`` is still **first** and ``journal_auto_tag`` still
+    **second** (``docs/LOCAL_AI_AUTOMATION_PLAN.md`` §6.4c, promoted into R7
+    §6; V2 / decision 0016 answer 10): the import is what puts the night's
+    trades in the journal, so anything that reads the journal - which is every
+    slot below - would otherwise read yesterday's.
+
+    **A later phase appends inside its stage and never reorders across
+    stages.** Every slot's reserve and retry budget is exactly what it was.
     """
     from ai_jobs import (
         briefs,
@@ -484,6 +503,10 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
     from preference_trade_outcomes import run_preference_trade_outcomes
 
     return [
+        # ------------------------------------------------------------------
+        # STAGE 1: the deterministic slots. No model, minutes not hours, and
+        # every one of them writes evidence some later night depends on.
+        # ------------------------------------------------------------------
         JobSlot(
             name="journal_import",
             run=lambda **kwargs: run_nightly_journal_import(trigger="nightly"),
@@ -510,33 +533,6 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
                 "(deterministic, no model; never overwrites a confirmed tag)"
             ),
             max_attempts=3,
-        ),
-        JobSlot(
-            name="ai_summary",
-            # ``summary_scopes`` is an OPERATOR override for a manual run, not
-            # a configuration knob: the nightly path passes nothing and gets
-            # briefs.DEFAULT_SCOPES, so an opt-in scope stays opt-in and
-            # cannot leak into the unattended slate by being set once.
-            run=(
-                briefs.run_daily_summary
-                if summary_scopes is None
-                else (
-                    lambda scopes=tuple(summary_scopes), **kwargs: briefs.run_daily_summary(
-                        scopes=scopes, **kwargs
-                    )
-                )
-            ),
-            # Resolved at slot-build time from the mode the summary is in:
-            # a chunked run is a ~170-minute job, not a 20-minute one.
-            reserve_minutes=briefs.summary_reserve_minutes(),
-            description="Advisory evidence summary over the day's artifacts",
-        ),
-        JobSlot(
-            name="ticker_briefs",
-            run=briefs.run_ticker_briefs,
-            reserve_minutes=120.0,
-            description="Medium-tier advisory briefs for Focus/watchlist tickers",
-            max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
         ),
         # APPENDED, per this function's own rule: "later phases append; they
         # never reorder these". A fourth slot rather than a step bolted onto
@@ -666,11 +662,57 @@ def default_slots(*, summary_scopes: tuple[str, ...] | None = None) -> list[JobS
             description="Deterministic daily fact pack, plus medium-tier narration",
             max_attempts=3,
         ),
+        # ------------------------------------------------------------------
+        # STAGE 2: narration (decision 0018, 2026-09-04)
+        #
+        # These two were the FIRST two AI slots ever written and sat at the
+        # front for that reason alone. They hold up to two and a half hours of
+        # reserve between them; on 2026-09-01 the night ran six hours, and a
+        # slot whose reserve no longer fits the window records SKIPPED. Nothing
+        # deterministic reads either one's OUTPUT files, so nothing downstream
+        # of them lost anything by their moving - and everything deterministic
+        # gained a night that finishes.
+        #
+        # They move as a UNIT and keep their order: `ticker_briefs` reads what
+        # the summary already established about the day, and the briefs' own
+        # resumable design is untouched.
+        # ------------------------------------------------------------------
+        JobSlot(
+            name="ai_summary",
+            # ``summary_scopes`` is an OPERATOR override for a manual run, not
+            # a configuration knob: the nightly path passes nothing and gets
+            # briefs.DEFAULT_SCOPES, so an opt-in scope stays opt-in and
+            # cannot leak into the unattended slate by being set once.
+            run=(
+                briefs.run_daily_summary
+                if summary_scopes is None
+                else (
+                    lambda scopes=tuple(summary_scopes), **kwargs: briefs.run_daily_summary(
+                        scopes=scopes, **kwargs
+                    )
+                )
+            ),
+            # Resolved at slot-build time from the mode the summary is in:
+            # a chunked run is a ~170-minute job, not a 20-minute one.
+            reserve_minutes=briefs.summary_reserve_minutes(),
+            description="Advisory evidence summary over the day's artifacts",
+        ),
+        JobSlot(
+            name="ticker_briefs",
+            run=briefs.run_ticker_briefs,
+            reserve_minutes=120.0,
+            description="Medium-tier advisory briefs for Focus/watchlist tickers",
+            max_attempts=briefs.TICKER_BRIEFS_MAX_ATTEMPTS,
+        ),
+        # ------------------------------------------------------------------
+        # STAGE 3: the model-gated slots. Unchanged, and still last.
+        # ------------------------------------------------------------------
         # LOCAL-AI Phase 3, APPENDED. Later phases append; they never reorder.
         #
-        # It runs after the digest because its GATE is the digest's counter -
-        # ten clean fact packs - and below that gate it calls no model and
-        # writes nothing, so an ungated night costs a ledger row and a second.
+        # It runs after the digest because its GATE is the digest's - ten
+        # CONSECUTIVE clean fact packs plus the trader's recorded spot-audit
+        # (Q4) - and below that gate it calls no model and writes nothing, so
+        # an ungated night costs a ledger row and a second.
         # Advisory fields only: R7's I7 keeps tags, notes and planned risk with
         # the trader, and this pass writes its own table instead.
         JobSlot(

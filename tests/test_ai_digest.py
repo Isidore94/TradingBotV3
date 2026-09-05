@@ -349,9 +349,16 @@ def test_a_rollup_reads_the_fact_packs_and_writes_nothing(tmp_path):
     assert sorted(path.name for path in tmp_path.rglob("*.json")) == before
 
 
-def test_the_gate_counts_clean_sessions_and_ten_are_required(tmp_path):
+def test_the_gate_counts_clean_sessions_and_ten_are_required(tmp_path, monkeypatch):
     """Phase 2's exit gate is ten consecutive session days of digests plus a
-    trader spot-audit. Counting them is code's job; passing them is not."""
+    trader spot-audit. Counting them is code's job; passing them is not.
+
+    Since Q4 the count is a RUN of consecutive clean sessions, so a pack that
+    recorded an unreadable source breaks it. No AI store is configured inside a
+    test, so the job-ledger read is patched out rather than ten deliberately
+    INCOMPLETE packs being written and then asserted to be clean.
+    """
+    monkeypatch.setattr(digest, "_read_job_rows", lambda: [])
     assert digest.clean_digest_sessions(tmp_path) == 0
     # Two trading weeks, weekends excluded by the calendar rather than by this
     # test - a run keyed to a Saturday is the defect the runner's own session
@@ -384,7 +391,7 @@ def test_a_non_session_pack_does_not_count_towards_the_gate(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_the_digest_slot_is_appended_and_never_reorders_the_slate():
+def test_the_digest_slot_runs_last_in_the_deterministic_stage():
     from ai_jobs.runner import default_slots
 
     names = [slot.name for slot in default_slots()]
@@ -400,16 +407,25 @@ def test_the_digest_slot_is_appended_and_never_reorders_the_slate():
     # existing PAIR, so the assertion is pairwise. That is the real invariant
     # and it does not need editing the next time a slot is added - which is the
     # third time in three packets that it would have.
+    #
+    # DECISION 0018 (2026-09-04) moved the narration pair out of this list and
+    # to AFTER `daily_digest`: the deterministic stage runs first now. The
+    # pairwise order WITHIN the deterministic stage is untouched, which is what
+    # this test is for.
     ORDERED = [
-        "journal_import", "ai_summary", "ticker_briefs",
+        "journal_import",
         "veto_cohort_grading", "like_cohort_grading",
         "pass_cohort_grading", "rejection_cohort_grading",
         "preference_trade_outcomes", "evidence_report",
     ]
     positions = [names.index(item) for item in ORDERED]
-    assert positions == sorted(positions), "later phases append; they never reorder these"
+    assert positions == sorted(positions), "a later phase appends inside its stage"
     assert "daily_digest" in names
     assert names.index("daily_digest") > names.index("evidence_report")
+    # ...and the digest closes the deterministic stage: it reads what the night
+    # produced, and nothing deterministic runs after it.
+    assert names.index("daily_digest") < names.index("ai_summary")
+    assert names.index("ai_summary") < names.index("ticker_briefs")
 
 
 def test_coverage_names_a_source_it_could_not_read_rather_than_omitting_it():

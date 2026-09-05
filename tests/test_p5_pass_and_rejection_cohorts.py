@@ -480,14 +480,15 @@ def test_both_slots_are_appended_and_nothing_was_reordered():
     from ai_jobs.runner import default_slots
 
     names = [slot.name for slot in default_slots()]
-    assert names[:6] == [
+    assert names[:4] == [
         "journal_import",
         # V2 inserted this SECOND - an insert, not an append, and the second and
         # last sanctioned exception to "later phases append; they never reorder".
         # `default_slots`' docstring argues for both positions.
         "journal_auto_tag",
-        "ai_summary",
-        "ticker_briefs",
+        # DECISION 0018 (2026-09-04) moved `ai_summary` and `ticker_briefs` out
+        # from between the journal pair and the cohort slots, to after
+        # `daily_digest`. The cohorts did not move; the narration did.
         "veto_cohort_grading",
         "like_cohort_grading",
     ]

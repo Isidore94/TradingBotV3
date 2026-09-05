@@ -279,15 +279,13 @@ def test_the_grading_slot_is_registered_last_and_is_cheap():
     # V2 inserted `journal_auto_tag` SECOND - an insert, not an append, and the
     # second and last sanctioned exception, argued for in `default_slots`'
     # docstring. The three that were there first still lead.
-    assert names[:4] == [
-        "journal_import",
-        "journal_auto_tag",
-        "ai_summary",
-        "ticker_briefs",
-    ]
-    # PAIRWISE rather than an index: five packets have now edited this number,
-    # and what the test means is "after the three that were there first".
-    assert names.index("veto_cohort_grading") > names.index("ticker_briefs")
+    # DECISION 0018 (2026-09-04) moved the narration pair to AFTER
+    # `daily_digest`, so "after the three that were there first" is now "after
+    # the journal pair, and before the narration it never fed".
+    assert names[:2] == ["journal_import", "journal_auto_tag"]
+    # PAIRWISE rather than an index: six packets have now edited this number.
+    assert names.index("veto_cohort_grading") > names.index("journal_auto_tag")
+    assert names.index("veto_cohort_grading") < names.index("ai_summary")
     slot = slots[names.index("veto_cohort_grading")]
     assert slot.reserve_minutes == 5.0
     assert slot.max_attempts == 3
@@ -552,12 +550,15 @@ def test_the_scope_can_be_selected_on_demand():
         # last sanctioned exception to "later phases append; they never reorder".
         # `default_slots`' docstring argues for both positions.
         "journal_auto_tag",
-        "ai_summary",
-        "ticker_briefs",
+        # DECISION 0018 (2026-09-04): the deterministic stage runs FIRST, then
+        # the narration pair, then the model-gated slots. `ai_summary` and
+        # `ticker_briefs` used to sit here; nothing deterministic read their
+        # output, and they held up to two and a half hours of the window ahead
+        # of every slot that did the cheap work.
         "veto_cohort_grading",
         # R10.F appended the LIKE mirror after the veto slot, R10.I the evidence
-        # report after that, and LOCAL-AI Phase 2 the daily digest last. Later
-        # phases append; they never reorder the ones above.
+        # report after that, and LOCAL-AI Phase 2 the daily digest last. A later
+        # phase appends inside its stage; it never reorders the ones above.
         "like_cohort_grading",
         # P9's, before the pass slot it FEEDS: it puts the rest of the session
         # on disk so the intraday grade has an entry bar to find.
@@ -574,16 +575,21 @@ def test_the_scope_can_be_selected_on_demand():
         "preference_trade_outcomes",
         "evidence_report",
         "daily_digest",
-        # LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run gated:
-        # the enrichment pass refuses below the digest's ten-session counter,
-        # and the policy draft writes only `review_policy_draft.json`.
+        # Stage 2: the narration pair, moved here as a unit by decision 0018.
+        "ai_summary",
+        "ticker_briefs",
+        # Stage 3. LOCAL-AI Phase 3 and Phase 4, appended 2026-08-24. Both run
+        # gated: the enrichment pass refuses below the digest's gate - both
+        # halves of it since Q4 - and the policy draft writes only
+        # `review_policy_draft.json`.
         "journal_enrichment",
         "review_policy_draft",
         "setup_research",
     ]
     # And the override is per-call: building again without it is untouched.
-    # Index 2 now: `journal_auto_tag` sits at 1 (V2).
-    assert default_slots()[2].run.__name__ == "run_daily_summary"
+    # BY NAME rather than by index - decision 0018 moved the slot.
+    summary = next(slot for slot in default_slots() if slot.name == "ai_summary")
+    assert summary.run.__name__ == "run_daily_summary"
 
 
 def test_an_unknown_scope_is_rejected_at_the_cli():

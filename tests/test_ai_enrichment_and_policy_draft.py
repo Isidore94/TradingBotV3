@@ -42,17 +42,27 @@ NOW = datetime(2026, 9, 5, 6, 0, tzinfo=timezone.utc)
 
 
 def _digest_sessions(root: Path, count: int) -> None:
+    """`count` CONSECUTIVE clean session packs (Q4.1 counts a run, not a set).
+
+    No AI store is configured inside a test, so every pack would otherwise
+    record "ai job ledger: No AI store configured" - a real failure record that
+    makes the pack INCOMPLETE and breaks the run for a reason that has nothing
+    to do with what these tests are about.
+    """
+    from unittest import mock
+
     from ai_jobs import digest
 
     days = [f"2026-08-{day:02d}" for day in (10, 11, 12, 13, 14, 17, 18, 19, 20, 21)]
-    for day in days[:count]:
-        digest.run_daily_digest(
-            session_date=day, now=NOW, root=root, narrate=False,
-            finals=[{
-                "symbol": "AAPL", "direction": "long", "trade_date": day,
-                "env_key": "bullish_weak|midday", "close_r": 1.0, "mfe_r": 2.0, "mae_r": -0.5,
-            }],
-        )
+    with mock.patch.object(digest, "_read_job_rows", return_value=[]):
+        for day in days[:count]:
+            digest.run_daily_digest(
+                session_date=day, now=NOW, root=root, narrate=False,
+                finals=[{
+                    "symbol": "AAPL", "direction": "long", "trade_date": day,
+                    "env_key": "bullish_weak|midday", "close_r": 1.0, "mfe_r": 2.0, "mae_r": -0.5,
+                }],
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -404,16 +414,23 @@ def test_both_slots_are_appended_and_never_reorder_the_slate():
     # existing PAIR, so the assertion is pairwise. That is the real invariant
     # and it does not need editing the next time a slot is added - which is the
     # third time in three packets that it would have.
+    #
+    # DECISION 0018 (2026-09-04) moved the narration pair to after
+    # `daily_digest`, so it is no longer in this list; the deterministic
+    # stage's own pairwise order is unchanged, which is what this asserts.
     ORDERED = [
-        "journal_import", "ai_summary", "ticker_briefs",
+        "journal_import",
         "veto_cohort_grading", "like_cohort_grading",
         "pass_cohort_grading", "rejection_cohort_grading",
         "preference_trade_outcomes", "evidence_report",
     ]
     positions = [names.index(item) for item in ORDERED]
-    assert positions == sorted(positions), "later phases append; they never reorder these"
+    assert positions == sorted(positions), "a later phase appends inside its stage"
     assert names.index("journal_enrichment") > names.index("daily_digest")
     assert names.index("review_policy_draft") > names.index("daily_digest")
+    # Both gated slots still sit after the narration pair, in stage 3.
+    assert names.index("journal_enrichment") > names.index("ticker_briefs")
+    assert names.index("review_policy_draft") > names.index("ticker_briefs")
 
 
 def test_neither_module_reaches_into_live_decision_code():
