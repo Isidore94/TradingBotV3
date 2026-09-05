@@ -2358,7 +2358,7 @@ class AlertCenterPanel(QFrame):
         if not isinstance(payload, dict):
             return
         self._held_run_index = payload.get("index") or {}
-        self._held_run_d1_symbols = payload.get("d1") or {}
+        self._held_run_d1_symbols = payload.get("d1")  # None = no snapshot = UNKNOWN (packet Q1); never flattened to {}
         # Stamped LAST, so a payload that arrived for a day that has already
         # rolled leaves this panel asking for a fresh one rather than settling.
         self._held_run_built_for = str(payload.get("built_for") or "")
