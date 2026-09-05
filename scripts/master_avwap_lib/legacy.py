@@ -13229,8 +13229,12 @@ DISCOVERY_STATS_COLUMNS = (
 #: is the only window with enough closed episodes to say anything about a rare
 #: family; `lately` is kept beside it because a two-year average cannot answer
 #: "is this working now". Replacing either with the other loses a real question.
-DISCOVERY_WINDOW_ALL = "all"
-DISCOVERY_WINDOW_LATELY = "lately"
+DISCOVERY_WINDOW_ALL_HISTORY = "all"
+#: NOT named `*LATELY*`: `test_r4b_one_lately_window.py` reserves that spelling
+#: for `evidence_stats`, so no module can grow a second definition of the 20.
+#: This is the VALUE the column carries - the trader's own word - and the
+#: session count behind it is imported, never restated.
+DISCOVERY_WINDOW_ROLLING = "lately"
 
 
 def _discovery_headline_fields(win_rate, n) -> dict:
@@ -13394,7 +13398,7 @@ def _build_discovery_stats_rows(
     namespace = tracker.get(namespace_key, {}) or {}
     rows = _discovery_rows_for_window(
         builder(tracker),
-        window=DISCOVERY_WINDOW_ALL,
+        window=DISCOVERY_WINDOW_ALL_HISTORY,
         sessions=None,
         first="",
         last="",
@@ -13408,7 +13412,7 @@ def _build_discovery_stats_rows(
     rows.extend(
         _discovery_rows_for_window(
             builder(lately_tracker),
-            window=DISCOVERY_WINDOW_LATELY,
+            window=DISCOVERY_WINDOW_ROLLING,
             sessions=int(LATELY_SESSIONS),
             first=first,
             last=last,
