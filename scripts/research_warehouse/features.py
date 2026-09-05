@@ -78,14 +78,18 @@ ANCHOR_KNOWLEDGE_RECONSTRUCTED = "reconstructed"
 #: is a statement, not a silence.
 ANCHOR_KNOWLEDGE_UNANCHORED = ""
 #: Reader-side buckets. A row written before the column existed reads NULL and
-#: is ``legacy`` - never assumed observed; a row that had no anchor is ``none``.
+#: is ``legacy`` - never assumed observed; a row that had no anchor is ``none``;
+#: a value this vocabulary does not recognise is ``unknown`` and borrows no
+#: other bucket's meaning.
 ANCHOR_KNOWLEDGE_LEGACY = "legacy"
 ANCHOR_KNOWLEDGE_NONE = "none"
+ANCHOR_KNOWLEDGE_UNKNOWN = "unknown"
 ANCHOR_KNOWLEDGE_BUCKETS = (
     ANCHOR_KNOWLEDGE_OBSERVED,
     ANCHOR_KNOWLEDGE_RECONSTRUCTED,
     ANCHOR_KNOWLEDGE_NONE,
     ANCHOR_KNOWLEDGE_LEGACY,
+    ANCHOR_KNOWLEDGE_UNKNOWN,
 )
 
 
@@ -109,14 +113,17 @@ def anchor_knowledge_bucket(value) -> str:
 
     ``None`` means the row predates the column (Q2.1) and is ``legacy``:
     uncertainty is never read as confirmation, so it never pools with
-    ``observed``.
+    ``observed``. ``""`` is ``none`` - the POSITIVE statement "this row used no
+    anchor" - and a value the vocabulary does not recognise is ``unknown``,
+    never ``none``: a future writer's label must not silently be counted as
+    "had no anchor".
     """
     if value is None:
         return ANCHOR_KNOWLEDGE_LEGACY
     text = str(value).strip()
     if text in (ANCHOR_KNOWLEDGE_OBSERVED, ANCHOR_KNOWLEDGE_RECONSTRUCTED):
         return text
-    return ANCHOR_KNOWLEDGE_NONE
+    return ANCHOR_KNOWLEDGE_NONE if text == ANCHOR_KNOWLEDGE_UNANCHORED else ANCHOR_KNOWLEDGE_UNKNOWN
 
 
 def _anchor_choice(value) -> AnchorChoice | None:

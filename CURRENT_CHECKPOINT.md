@@ -33,7 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 61 | **The band repair chain (packet Q2)** - after the next nightly build, on the trader's go: `rebuild-daily-features --from 2026-08-01 --to <today>` DRY RUN lists the August and September sessions; `--apply` then `recompute-outcomes --apply` then `band-coverage --month 2026-08` / `--month 2026-09` shows `swing_house_v1`'s required-band coverage above 90% for September with the observed / reconstructed / legacy split printed, and `path_kind` populated on the recomputed rows. Rides with gate #59 and is measured by the same nightly | 2026-09-04 (~16:00 PT) Q2 entry |
+| 61 | **The band repair chain (packet Q2)** - after the next nightly build, on the trader's go: `rebuild-daily-features --from 2026-08-01 --to <today>` DRY RUN lists the August and September sessions; `--apply` then `recompute-outcomes --apply` then `band-coverage --month 2026-08` / `--month 2026-09` shows `swing_house_v1`'s required-band coverage above 90% for September with the observed / reconstructed / legacy split PRINTED, and `path_kind` populated on the recomputed rows. **The gate is the split being printed, not `observed` being non-zero**: the anchor choice keeps the NEWEST bar on or before the session regardless of knowledge, so once the bridge lands anchors with newer bars they displace the 14 hand-imported ones and `observed` can legitimately read 0. Rides with gate #59 and is measured by the same nightly | 2026-09-04 (~16:00 PT) Q2 entry |
 | 59 | **The anchors CSV feeds the warehouse (earnings-anchor bridge)** - after the next scan, `trading_bot.log` carries `Earnings-anchor bridge: N cached anchor(s) ...` and `earnings_avwap_anchors.csv` holds a row per scanned symbol (~1,100+ tickers, ~2,200 rows, `source=scanner_earnings_cache`); after the next nightly build, `anchor_instance` holds ~2,200 rows (current + previous per symbol) and `feature_snapshot_daily` carries non-null `avwape_*` bands for those symbols' sessions; then `recompute-outcomes` (BD-98, `force`) re-grades `swing_house_v1` and the 0/257 reads as a real rate | 2026-09-04 14:30 entry |
 | 58 | **Capture and board rules (T1)** - one DESK session where: a double-click on a veto reason retires the chart with no box and `trader_annotations.jsonl` gains ONE row; a double-click on a claim with NOTHING typed writes ONE row and advances to the next chart; a quick like (Alt+L or ♥) leaves the chart up so an alert can be armed on it; "✕ Not today" still opens the box and advances; five clicks across the RS/RW and TC2000 boards leave "queue clear" reading "queue clear"; after the next 15-minute Strength refresh the TC2000 parity names are on M5 Focus with markers in `focus_auto_picks.json`; a "Not today" on one of them, AND a removal from the Focus list itself, each stay gone on the refresh after; and `longs.txt` did not regain the removed name | 2026-09-04 11:30 entry |
 | 57 | **The tracker mirror agrees with the JSON (F3 step 1, decision 0017)** - five consecutive live tracker saves (the 13:00 PT close slot) where `python scripts/tracker_store.py verify` prints `"ok": true` and `trading_bot.log` carries the `Setup tracker mirrored to ...` line with a small `written` count after the first; then 0017 step 2 may move the first reader | 2026-09-04 06:00-07:10 entry |
@@ -152,13 +152,36 @@ partition beside a new one and reads both.
 **Not built here:** the fact pack / digest labelling of fallback cells - that is
 Q4's owner files.
 
-**Proof.** `tests/test_warehouse_band_eligibility.py` (15 new), each proven to
-fail on `6b74165` by reverting the four source files and re-running.
-Targeted run: 441 passed (`-k "warehouse or research or setup_research"`),
-`ruff` clean. The full suite and the lock probe are the lead's at merge; the
-recorded baseline is unchanged and was not re-run here. **No packaging
-trigger**: no dependency, no non-`.py` asset, no new top-level `scripts/`
-package, no dynamic import.
+**Proof.** `tests/test_warehouse_band_eligibility.py`, 19 tests.
+**14 of the first 15 were proven RED on `6b74165`** by `git checkout 6b74165 --`
+on the four source files and re-running (11 failed, 3 errored at fixture setup,
+1 passed). The 15th, `test_labelling_the_path_changes_no_outcome_number`, passes
+on BOTH sides **by design and must**: it is the golden pin whose five expected
+rows (`result_state`, `gross_r`, `net_r`, `mfe_r` across the managed, band-3
+fallback, no-band, fixed-target and time-only recipes) were READ off the
+un-labelled code, and its whole claim is that adding `path_kind` moved no
+number. A red-first version of it would have been a test of something else.
+The four tests added for the reviewer's advisories were likewise red before
+their fixes.
+Targeted run after the advisories: 465 passed
+(`-k "warehouse or research or setup_research or packaging or module_globals"`),
+`ruff` clean, smoke 7/7, source `--selftest` 74/74. The full suite and the lock
+probe are the lead's at merge; the recorded baseline is unchanged and was not
+re-run here. **No packaging trigger**: no dependency, no non-`.py` asset, no new
+top-level `scripts/` package, no dynamic import.
+
+**Reviewer round (GO with six advisories), all addressed on the branch.**
+`band-coverage` now prints each recipe's required-band list and reports **`n/a`**
+rather than a full house for a recipe that requires no band (the live
+`control_fixed_1r2r_v1 n=2437 bands=2437 null=2431` read as a contradiction);
+the rebuild's docstring, BD-100 and gate #61 no longer imply the 14 hand
+anchors will produce `observed` rows - **the newest anchor bar wins regardless
+of knowledge, so `observed` may legitimately read 0 and the gate is the split
+being PRINTED**; the carry is now CHECKED and raises `LakeIntegrityError` if the
+republish is short or quarantines anything; BD-100 states what a mid-loop raise
+leaves behind (nothing destroyed, re-run idempotent);
+`features.anchor_knowledge_bucket` returns **`unknown`** for an unrecognised
+non-null value instead of borrowing `none`.
 
 **Live gate #61**, which rides the same nightly as #59.
 

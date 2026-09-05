@@ -242,6 +242,10 @@ behind one is only reachable through this dataset.
 | `feature_snapshot_daily` | `anchor_knowledge` | `observed` / `reconstructed` / `""` (no anchor used) | the row was written before the column existed; readers call it **`legacy`** (`features.anchor_knowledge_bucket`) and never `observed` |
 | `outcome_path` | `path_kind` | `managed` / `plain_target` / `plain_no_target` | the row predates the column, or its recipe walks no swing path; readers call it **`unlabelled`** (`outcomes.path_kind_bucket`) |
 
+Reader buckets are `observed`, `reconstructed`, `none` (the row used no anchor),
+`legacy` (NULL) and `unknown` — a value the vocabulary does not recognise takes
+the last of those and borrows no other bucket's meaning.
+
 `anchor_knowledge` is the anchor's knowledge interval (Section 6.2) folded onto
 the snapshot that used it: `observed` when the `anchor_instance` row's own
 `system_from` lands on or before the session, market-local. A `reconstructed`

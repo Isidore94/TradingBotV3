@@ -1071,8 +1071,16 @@ detector, score, alert, watchlist, Focus list, review queue or
   step 2 measures nothing new.
 - **Not built here:** the fact pack / digest labelling of fallback cells, which
   belongs to Q4's owner files.
-- `tests/test_warehouse_band_eligibility.py` (15), each proven to fail on
-  `6b74165`. Live gate **#61**.
+- **Reviewer advisories, same branch:** `band-coverage` prints each recipe's
+  required-band list and reports `n/a` rather than a full house where a recipe
+  requires no band; the carry raises `LakeIntegrityError` if the republish is
+  short or quarantines anything; `anchor_knowledge_bucket` returns `unknown`
+  for an unrecognised value instead of `none`; BD-100 and gate #61 no longer
+  imply the 14 hand anchors will yield `observed` rows - the newest anchor bar
+  wins regardless of knowledge, so the gate is the SPLIT being printed.
+- `tests/test_warehouse_band_eligibility.py` (19). 14 of the first 15 proven
+  red on `6b74165`; the 15th is the golden pin that must pass on both sides,
+  because its claim is that no number moved. Live gate **#61**.
 
 ### 2026-09-04 - Project process review and evidence-note corrections
 

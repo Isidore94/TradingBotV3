@@ -571,3 +571,60 @@ def test_the_rebuild_keeps_the_rows_outside_its_range(rebuild_lake):
     assert len(kept) == 1
     assert kept[0]["session_date"] == date(2026, 1, 5)
     assert kept[0]["avwape_upper_2"] == pytest.approx(108.0)
+
+
+# --- reviewer advisories, 2026-09-04 ----------------------------------------
+def test_a_recipe_that_needs_no_band_reports_n_a_rather_than_a_full_house(coverage_lake):
+    """`control_fixed_1r2r_v1 n=2437 bands=2437 null=2431` read as a
+    contradiction on the live lake. A recipe whose target is an R multiple has
+    no band requirement, so "all of them present" is not a fact about it."""
+    report = cli.run_band_coverage(coverage_lake, month="2026-08", recipe_id="control_fixed_1r2r_v1")
+    recipe = report["recipes"]["control_fixed_1r2r_v1"]
+    assert recipe["required_bands"] == []
+    assert recipe["totals"]["required_bands_present"] is None
+    assert all(
+        bucket["required_bands_present"] is None for bucket in recipe["by_knowledge"].values()
+    )
+    assert recipe["totals"]["null_bands"] == 1, "the band counts themselves are unchanged"
+
+    table = cli.format_band_coverage(report)
+    assert "required bands: none" in table
+    assert "n/a" in table, "the table must not print a number it cannot mean"
+
+
+def test_the_table_names_each_recipes_required_bands(coverage_lake):
+    table = cli.format_band_coverage(
+        cli.run_band_coverage(coverage_lake, month="2026-08", recipe_id="swing_house_v1")
+    )
+    assert "required bands: 1,2,3" in table
+
+
+def test_an_unrecognised_knowledge_value_is_unknown_not_none():
+    """`none` means "this row used no anchor" - a positive statement. A value
+    nobody wrote must never borrow it."""
+    assert features.anchor_knowledge_bucket("banana") == features.ANCHOR_KNOWLEDGE_UNKNOWN
+    assert features.anchor_knowledge_bucket("") == features.ANCHOR_KNOWLEDGE_NONE
+    assert features.anchor_knowledge_bucket(None) == features.ANCHOR_KNOWLEDGE_LEGACY
+    assert features.anchor_knowledge_bucket("observed") == features.ANCHOR_KNOWLEDGE_OBSERVED
+
+
+def test_the_rebuild_refuses_to_report_a_carry_it_did_not_make(rebuild_lake, monkeypatch):
+    """A carried row is data that was live a moment ago. If the republish drops
+    or quarantines any of it, the run RAISES - a count that cannot fail is not
+    evidence."""
+    survivor = _daily_row("ZZZ", date(2026, 1, 5), features.ANCHOR_KNOWLEDGE_OBSERVED, BANDS_FULL)
+    rebuild_lake.publish("feature_snapshot_daily", [survivor])
+
+    real_publish = rebuild_lake.publish
+
+    def _lossy(dataset, rows, **kwargs):
+        result = real_publish(dataset, rows, **kwargs)
+        if dataset == "feature_snapshot_daily" and result.rows_published:
+            result.rows_published -= 1  # one row silently short
+        return result
+
+    monkeypatch.setattr(rebuild_lake, "publish", _lossy)
+    with pytest.raises(Exception, match="carr"):
+        cli.run_rebuild_daily_features(
+            rebuild_lake, start=REBUILD_FIRST, end=REBUILD_LAST, apply=True, now=NOW
+        )

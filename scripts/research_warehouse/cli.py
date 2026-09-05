@@ -47,7 +47,7 @@ try:  # package import
     from .ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots
     from .manifest import utc_now
     from .spool import seal_spool
-    from .store import ResearchStore
+    from .store import LakeIntegrityError, ResearchStore
 except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     import backup as backup_mod  # type: ignore
     import config  # type: ignore
@@ -63,7 +63,7 @@ except ImportError:  # pragma: no cover - scripts/ directly on sys.path
     from ingest_existing import ingest_daily_bars, run_bronze_ingest, run_daily_snapshots  # type: ignore
     from manifest import utc_now  # type: ignore
     from spool import seal_spool  # type: ignore
-    from store import ResearchStore  # type: ignore
+    from store import LakeIntegrityError, ResearchStore  # type: ignore
     import outcome_coverage  # type: ignore
     import trial_ledger  # type: ignore
     import after_like  # type: ignore
@@ -1245,8 +1245,6 @@ def run_band_coverage(
                 target["occurrences"] += 1
                 if required and all(levels.get(number) is not None for number in required):
                     target["required_bands_present"] += 1
-                elif not required:
-                    target["required_bands_present"] += 1
                 if geometry["path_kind"] == outcomes.PATH_KIND_PLAIN_NO_TARGET:
                     target["plain_no_target"] += 1
                 if geometry["valid"] is not None:
@@ -1258,6 +1256,15 @@ def run_band_coverage(
                 target["by_result_state"][state_name] = (
                     target["by_result_state"].get(state_name, 0) + 1
                 )
+        if not required:
+            # A recipe whose target is an R multiple needs no band, so "every
+            # required band present" is not a fact about it. Counting every
+            # occurrence made the live table read
+            # `control_fixed_1r2r_v1 n=2437 bands=2437 null=2431`, which is a
+            # contradiction rather than a measurement; the honest value is "not
+            # applicable", and `null_bands` still says what the lake holds.
+            for block in (totals, *buckets.values()):
+                block["required_bands_present"] = None
         report["recipes"][recipe.recipe_id] = {
             "required_bands": required,
             "by_knowledge": buckets,
@@ -1276,14 +1283,21 @@ def format_band_coverage(report: dict) -> str:
         f"{'recipe':<24}{'knowledge':<14}{'n':>6}{'bands':>7}{'noTgt':>7}{'geom':>7}{'null':>6}  states",
     ]
     for recipe_id, block in sorted(report["recipes"].items()):
+        required = block["required_bands"]
+        lines.append(
+            f"  {recipe_id} - required bands: "
+            + (",".join(str(number) for number in required) if required else "none")
+        )
         rows = list(sorted(block["by_knowledge"].items())) + [("TOTAL", block["totals"])]
         for knowledge, bucket in rows:
             states = ", ".join(
                 f"{name}={count}" for name, count in sorted(bucket["by_result_state"].items())
             )
+            present = bucket["required_bands_present"]
+            present_cell = "n/a" if present is None else str(present)
             lines.append(
                 f"{recipe_id:<24}{knowledge:<14}{bucket['occurrences']:>6}"
-                f"{bucket['required_bands_present']:>7}{bucket['plain_no_target']:>7}"
+                f"{present_cell:>7}{bucket['plain_no_target']:>7}"
                 f"{bucket['geometry_valid']:>7}{bucket['null_bands']:>6}  {states}"
             )
     return "\n".join(lines)
@@ -1395,9 +1409,14 @@ def run_rebuild_daily_features(
     and no amount of re-simulating outcomes can fix that: ``_bands_by_occurrence``
     reads the trigger session's own feature row and correctly finds nothing.
     This walks the exchange sessions in ``[start, end]`` and rebuilds them with
-    ``anchor_dates_by_symbol``'s stamped choice, so a rebuilt August row is
-    labelled ``reconstructed`` for tonight's anchors and ``observed`` for the
-    ones the lake already held (Q2.1/BD-99).
+    ``anchor_dates_by_symbol``'s stamped choice, so every rebuilt row SAYS
+    whether its anchor was knowable then (Q2.1/BD-99). Expect ``reconstructed``
+    to dominate, and expect it to dominate completely once the bridge has run:
+    the choice keeps the NEWEST anchor bar on or before the session **regardless
+    of knowledge**, so a bridged anchor with a newer bar displaces the 14
+    hand-imported ones rather than losing to them. `observed` rows appear only
+    for a symbol whose newest qualifying anchor bar was already in the lake
+    before that session. The report is the SPLIT, not a target for one bucket.
 
     A dry run by default: it lists the sessions and writes nothing. With
     ``apply`` it takes the build's single-flight lock and, per affected YEAR
@@ -1461,6 +1480,22 @@ def run_rebuild_daily_features(
                     # values, including a NULL `anchor_knowledge` where it
                     # predates the column. The rebuild never relabels history.
                     published = store.publish(REBUILD_DAILY_DATASET, survivors, job_id=job_id)
+                    # A carried row was LIVE a moment ago and its old file is
+                    # already retired. If the republish is short by even one row
+                    # or quarantines any, that data is out of the live set and
+                    # the run must say so loudly - a count that cannot fail is
+                    # not evidence. The retired files are still on disk, so the
+                    # repair is repointing the manifest.
+                    if (
+                        published.rows_published != survivors.num_rows
+                        or published.rows_quarantined
+                    ):
+                        raise LakeIntegrityError(
+                            f"{REBUILD_DAILY_DATASET}/{partition}: carried "
+                            f"{published.rows_published} of {survivors.num_rows} out-of-range "
+                            f"row(s), {published.rows_quarantined} quarantined; the retired "
+                            "files are still on disk - repoint the manifest before re-running."
+                        )
                     report["carried_rows"] += published.rows_published
             for day in sessions:
                 report["steps"][day.isoformat()] = vars(

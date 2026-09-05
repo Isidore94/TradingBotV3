@@ -2582,6 +2582,11 @@ session's own feature row. A row rebuilt over an anchor imported after that
 session is labelled `reconstructed` and is **research evidence only** — Section
 7's promotion ladder requires a declared evidence window frozen before
 inspection, which a knowledge stamp from after the session cannot satisfy.
+Expect `reconstructed` to dominate the split, and to dominate completely once
+the bridge has run: the anchor choice keeps the newest bar on or before the
+session regardless of knowledge, so a bridged anchor with a newer bar displaces
+a hand-imported one. Step 4's job is to PRINT the split, not to reach a number
+in any one bucket.
 
 ## 24. Definition of done
 

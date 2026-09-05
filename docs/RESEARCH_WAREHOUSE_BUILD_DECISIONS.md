@@ -2861,7 +2861,26 @@ every row outside the requested range, then a per-session
 `features.build_daily_snapshots` with the Q2.1 stamped anchors. A second
 `--apply` therefore supersedes rather than duplicating, and the carried rows
 keep their own values, including a NULL `anchor_knowledge` where they predate
-the column: the rebuild never relabels history.
+the column: the rebuild never relabels history. The carry is CHECKED, not
+reported: a republish short by even one row, or with anything quarantined,
+raises `LakeIntegrityError` naming the partition — that data was live a moment
+earlier and its old file is already retired, so a count that cannot fail would
+be no evidence at all. **If a session's `build_daily_snapshots` raises
+mid-loop, the partition is already retired and the surviving rows are already
+republished: nothing is destroyed (retired files stay on disk until GC and are
+restorable by repointing the manifest), the sessions written so far stand, and
+re-running the same range is idempotent — it retires what the partial run
+wrote, carries the rest, and recomputes the whole range again.**
+
+**What `observed` will actually look like.** The choice keeps the NEWEST anchor
+bar on or before the session **regardless of knowledge** — that ordering is
+deliberate and unchanged from before Q2 — so a bridged anchor whose bar is newer
+DISPLACES a hand-imported one rather than losing to it. Once the bridge has run,
+expect `reconstructed` to dominate and expect `observed` to be rare or zero; an
+`observed` row appears only where a symbol's newest qualifying anchor bar was
+already in the lake before that session. The label is there so a reader knows
+which kind of evidence they are holding, and the coverage report's job is to
+PRINT the split — not to reach a target in one bucket.
 
 **Why.** The nightly build writes daily features for ONE day
 (`day = session_date or stamp.date()`), so every August and early-September
