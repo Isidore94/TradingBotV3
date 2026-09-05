@@ -1014,3 +1014,198 @@ def test_the_panel_renders_the_two_clocks_from_the_exports(panel_module, tmp_pat
         assert "3 expired unmeasured, excluded" in panel.setup_type_status_label.text()
     finally:
         panel.deleteLater()
+
+
+# ===========================================================================
+# Reviewer round, 2026-09-05: three blockers and five advisories.
+# ===========================================================================
+
+# --- BLOCKER 1: the two clocks were in two different zones -----------------
+
+def test_the_two_clocks_are_rendered_in_the_same_zone(panel_module, tmp_path):
+    """`saved_at` was market-local with an offset and the scan-factor mtime was
+    machine-local PT with none, so the line read a three-hour gap that was not
+    there. Same instant in, same time out."""
+    from datetime import timezone
+
+    factors = tmp_path / "scan_factors.csv"
+    factors.write_text("factor\n", encoding="utf-8")
+    moment = datetime.fromtimestamp(factors.stat().st_mtime, tz=timezone.utc)
+    saved_at = legacy.tracker_save_timestamp(moment)
+
+    sentence = panel_module.tracker_clock_sentence(
+        saved_at, "close_slot", panel_module._latest_mtime_text([factors])
+    )
+
+    rendered = sentence.split("scan factors as of ", 1)[1].strip()
+    assert rendered == saved_at, sentence
+
+
+# --- BLOCKER 2: an all-expired group took its own count with it ------------
+
+def _expired(symbol, family, *, scan_date="2026-08-03"):
+    record = _setup_record(
+        symbol,
+        scan_date=scan_date,
+        status=legacy.SETUP_STATUS_EXPIRED_UNMEASURED,
+        expiry_reason=legacy.TRACKER_EXPIRY_REASON_NO_REPLAY,
+    )
+    record["setup_id"] = f"{family}:{symbol}"
+    record["setup_family"] = family
+    record["tracker_setup_family"] = family
+    return record
+
+
+def _mixed_and_all_expired():
+    """FA: two live and one expired. FB: three expired and nothing else."""
+    rows = []
+    for index, total_r in enumerate((1.5, -1.0)):
+        record = _closed(f"LIVE{index}", total_r=total_r)
+        record["setup_id"] = f"FA:LIVE{index}"
+        record["setup_family"] = "fa_family"
+        record["tracker_setup_family"] = "fa_family"
+        rows.append(record)
+    rows.append(_expired("EXP0", "fa_family"))
+    for index in range(3):
+        rows.append(_expired(f"GONE{index}", "fb_family"))
+    return {item["setup_id"]: item for item in rows}
+
+
+def test_an_all_expired_group_still_reports_its_expired_count():
+    rows = legacy.build_tracker_setup_type_rows(
+        _mixed_and_all_expired(), exclude_expired_unmeasured=True
+    )
+
+    assert sum(int(row["n_expired_unmeasured"]) for row in rows) == 4
+    # The group that lost every record is still SHOWN, carrying zero measured
+    # setups rather than vanishing with its own count.
+    empty = [row for row in rows if int(row["tracked_setups"]) == 0]
+    assert len(empty) == 1
+    assert int(empty[0]["n_expired_unmeasured"]) == 3
+
+
+def test_the_scenario_stats_export_keeps_an_all_expired_groups_count():
+    """`build_tracker_stats_rows` groups by stop label + exit template, so the
+    all-expired group has to be built on a stop label nothing live uses -
+    otherwise the live rows keep the group alive and the bug hides."""
+    setups = _mixed_and_all_expired()
+    for setup in setups.values():
+        if _tracker_expired(setup) and setup["setup_family"] == "fb_family":
+            for scenario in setup["scenarios"].values():
+                scenario["stop_reference_label"] = "SMA_50"
+
+    rows = legacy.build_tracker_stats_rows(legacy._flatten_tracker_scenarios(setups))
+
+    assert sum(int(row["n_expired_unmeasured"]) for row in rows) == 4
+    orphan = [row for row in rows if row["stop_reference_label"] == "SMA_50"]
+    assert len(orphan) == 1
+    assert int(orphan[0]["tracked_setups"]) == 0
+    assert int(orphan[0]["n_expired_unmeasured"]) == 3
+
+
+def _tracker_expired(setup) -> bool:
+    return str(setup.get("setup_status") or "") == legacy.SETUP_STATUS_EXPIRED_UNMEASURED
+
+
+def test_the_panel_sentence_counts_every_expired_record(panel_module):
+    rows = legacy.build_tracker_setup_type_rows(
+        _mixed_and_all_expired(), exclude_expired_unmeasured=True
+    )
+
+    assert panel_module.expired_unmeasured_sentence(rows) == "4 expired unmeasured, excluded"
+
+
+# --- BLOCKER 3: the gate needs a token it can grep -------------------------
+
+def test_the_expiry_log_line_carries_a_greppable_count(caplog):
+    tracker = {"setups": _mixed_and_all_expired(), "control_setups": {}, "study_setups": {}}
+    with caplog.at_level(logging.INFO):
+        legacy.log_tracker_expiry_summary(legacy.apply_tracker_expiry_sweep(tracker, AS_OF))
+
+    assert any("n_expired_unmeasured=4" in record.getMessage() for record in caplog.records), [
+        record.getMessage() for record in caplog.records
+    ]
+
+
+# --- ADVISORY 1: a naive moment is ATTACHED, never converted ---------------
+
+def test_a_naive_timestamp_is_attached_to_market_local_not_converted():
+    """CLAUDE.md's `_gate_moment` rule: normalize by ATTACHING market-local to
+    the naive side, never by stripping or converting the aware one."""
+    naive = datetime(2026, 9, 5, 13, 2, 11)
+
+    stamped = legacy.tracker_save_timestamp(naive)
+
+    assert stamped.startswith("2026-09-05T13:02:11"), stamped
+
+
+# --- ADVISORY 2: no frame is not "bars from the pinned source" -------------
+
+def test_a_symbol_with_no_frame_is_reported_separately_and_never_as_pinned(pin, caplog):
+    pin("yahoo")
+    frames = _cached_yahoo_frames(4)
+    frames["NOBARS"] = None
+
+    with caplog.at_level(logging.INFO):
+        allowed, quarantined, reason = runner.evaluate_setup_tracker_purity(
+            list(frames), frames
+        )
+
+    line = next(m for m in (r.getMessage() for r in caplog.records) if "purity" in m.lower())
+    assert "n_no_frame=1" in line, line
+    # It saw no bars, so it is neither pinned nor a third source, and it is out
+    # of the fraction entirely.
+    assert "n_pinned=4" in line, line
+    assert allowed is True
+    assert "NOBARS" not in quarantined
+    assert reason == ""
+
+
+# --- ADVISORY 3: the reason does not bake the number -----------------------
+
+def test_the_stored_reason_carries_the_threshold_as_a_field_not_in_its_name():
+    stale = _sessions_before(AS_OF, legacy.TRACKER_STALE_SESSIONS + 1)
+    setup = _setup_record("CTRA", scan_date=stale, last_replayed_session=stale)
+
+    legacy.apply_tracker_setup_expiry(setup, as_of_session=AS_OF)
+
+    assert setup["expiry_reason"] == "no_replay_stale_sessions"
+    assert "20" not in setup["expiry_reason"]
+    assert setup["stale_sessions"] == legacy.TRACKER_STALE_SESSIONS
+
+
+def test_lately_is_one_number_in_this_codebase():
+    import evidence_stats
+
+    assert legacy.TRACKER_STALE_SESSIONS == evidence_stats.LATELY_SESSIONS
+
+
+# --- ADVISORY 4: the Current Picks tab reads a different population --------
+
+def test_the_current_picks_tab_carries_no_expired_sentence(panel_module):
+    """`master_avwap_tier_list.csv` is not the setup-type export; the count
+    would be describing a population that tab does not show."""
+    panel = panel_module.SetupTrackerPanel()
+    try:
+        assert not hasattr(panel, "current_pick_status_label")
+    finally:
+        panel.deleteLater()
+
+
+# --- ADVISORY 6: a hand-run scan never claims to be the close slot ---------
+
+def test_a_scan_payload_without_a_writer_reads_as_manual():
+    from scan_worker import parse_payload
+
+    assert parse_payload({"update_setup_tracker": True})["saved_by"] == "manual"
+    assert (
+        parse_payload({"update_setup_tracker": True, "saved_by": "close_slot"})["saved_by"]
+        == "close_slot"
+    )
+
+
+def test_the_scanner_cli_declares_itself_manual():
+    import inspect
+
+    source = inspect.getsource(runner.main)
+    assert "TRACKER_SAVED_BY_MANUAL" in source
