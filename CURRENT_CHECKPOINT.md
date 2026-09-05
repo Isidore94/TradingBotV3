@@ -96,6 +96,17 @@ the dated entry named beside it.
 
 
 
+### 2026-09-04 (evening) - Packet Q5: the pick scorecard leaves the Qt thread (lead-built, `claude/q5-scorecard-worker`)
+
+Process review performance item. Red first (8 tests, `tests/test_q5_scorecard_worker.py`),
+then the fix: one owned worker, streamed today-only reads, success-only `picks_scored_at`,
+last-good on failure, three attempts then `picks_scoring_failed_at`. The 13:00:44 PT stall
+was 15,739 ms at `autopilot_service.py:1552`; recon's full-read timing was 8.24 s and the
+lead's 5.66 s old / 5.40 s streamed (parse-bound - the thread is the fix). The day's LARGEST
+stall, 19,922 ms at 07:03:47 in `ui/app.py:1240`, is NOT in the review and NOT in this
+packet; it is named here so it is not lost. Targeted files green (78), ruff clean. **Live
+gate #64** owed.
+
 ### 2026-09-04 (~14:30 PT) - Earnings-anchor bridge: the scan feeds the anchors CSV the warehouse reads
 
 Follow-up to the swing simulator investigation (`docs/SWING_SIMULATOR_INVESTIGATION_2026-09-04.md`).

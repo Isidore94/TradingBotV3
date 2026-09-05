@@ -210,6 +210,9 @@ class AutopilotService(QObject):
         self._universe_rebuild_running = False
         self._universe_last_attempt: datetime | None = None
         self._wrapup_running = False
+        #: Packet Q5: the daily pick scorecard has ONE owned worker. The tick
+        #: only decides; the 600 MB of CSV is read on `autopilot-scorecard`.
+        self._scorecard_running = False
         self._evening_prep_running = False
         self._evening_briefing_lines: list[str] = []
         self._scorecard_line = ""
@@ -1468,9 +1471,11 @@ class AutopilotService(QObject):
                     logging.exception("Technical Integrity replay failed")
 
                 # 4) Scorecard: did the self-built lists produce anything?
-                #    (idempotent - the always-on tick path may have run it)
+                #    (idempotent - the always-on tick path may have run it).
+                #    Already off-thread here, so the body runs INLINE through
+                #    the same guard - never a nested worker (packet Q5).
                 try:
-                    self._maybe_score_picks_daily(datetime.now())
+                    self._score_picks_inline(datetime.now())
                 except Exception as exc:
                     self._log(f"Pick scorecard failed: {exc}")
                     logging.exception("Auto Pilot pick scorecard failed")
@@ -1484,26 +1489,85 @@ class AutopilotService(QObject):
 
         threading.Thread(target=worker, name="autopilot-wrapup", daemon=True).start()
 
-    def _maybe_score_picks_daily(self, now: datetime) -> None:
-        """Once per day after the close: snapshot the trader's manual watchlist
-        names as picks, then score every pick group (bot / suggested / yours)
-        against the day-trade candidate + outcome logs."""
-        if self._state.get("picks_scored_at"):
-            return
+    #: Packet Q5: how many failed scoring runs a day may see before it stops
+    #: trying - a permanently unreadable file must not spin a worker per tick.
+    SCORECARD_MAX_ATTEMPTS = 3
+
+    def _scorecard_due(self, now: datetime) -> bool:
+        if self._state.get("picks_scored_at") or self._state.get("picks_scoring_failed_at"):
+            return False
         last_close = core.last_completed_session_close(now)
         if last_close is None or last_close.date() != now.date():
-            return  # today's session has not closed yet
-        self._state["picks_scored_at"] = now.strftime("%H:%M:%S")
-        self._save_state()
+            return False  # today's session has not closed yet
+        return True
+
+    def _maybe_score_picks_daily(self, now: datetime) -> None:
+        """Once per day after the close: DECIDE here, read on ONE owned worker.
+
+        Packet Q5. Until 2026-09-04 this ran `_score_todays_picks` on whichever
+        thread called it - the 30-second tick is the Qt thread - and that read
+        materialised two ~300 MB CSVs: `ui_stalls.jsonl` logged 15,739 ms at
+        13:00:44 PT. It also wrote `picks_scored_at` BEFORE scoring, so one
+        failure was never retried. Now: a second trigger while the worker runs
+        is a no-op, `picks_scored_at` is written only on success, a failure
+        keeps the last-good line and counts toward `SCORECARD_MAX_ATTEMPTS`.
+        """
+        if not self._scorecard_due(now):
+            return
+        if getattr(self, "_scorecard_running", False):
+            return
+        self._scorecard_running = True
+        threading.Thread(
+            target=self._scorecard_worker,
+            args=(now,),
+            name="autopilot-scorecard",
+            daemon=True,
+        ).start()
+
+    def _scorecard_worker(self, now: datetime) -> None:
+        try:
+            self._score_picks_now(now)
+        finally:
+            self._scorecard_running = False
+
+    def _score_picks_inline(self, now: datetime) -> None:
+        """The wrap-up worker's door: already off-thread, same guard, no nesting."""
+        if not self._scorecard_due(now) or getattr(self, "_scorecard_running", False):
+            return
+        self._scorecard_running = True
+        try:
+            self._score_picks_now(now)
+        finally:
+            self._scorecard_running = False
+
+    def _score_picks_now(self, now: datetime) -> list[str]:
+        """The body: snapshot, score, append - and only THEN mark the day done."""
+        today = now.date().isoformat()
         try:
             self._snapshot_manual_picks(now)
-            lines = self._score_todays_picks()
-            if lines:
-                self._scorecard_line = " | ".join(lines)
-                for line in lines:
-                    self._log(line)
+            lines = self._score_todays_picks(today)
         except Exception:
             logging.exception("Auto Pilot daily pick scoring failed")
+            attempts = self._state.get("scorecard_attempts_today") or {}
+            count = int(attempts.get("count") or 0) if attempts.get("date") == today else 0
+            count += 1
+            self._state["scorecard_attempts_today"] = {"date": today, "count": count}
+            if count >= self.SCORECARD_MAX_ATTEMPTS:
+                self._state["picks_scoring_failed_at"] = now.strftime("%H:%M:%S")
+                self._log(
+                    f"Pick scorecard gave up after {count} failed attempts today; "
+                    "the last good line stays."
+                )
+            self._save_state()
+            return []
+        self._state["picks_scored_at"] = now.strftime("%H:%M:%S")
+        self._state.pop("scorecard_attempts_today", None)
+        self._save_state()
+        if lines:
+            self._scorecard_line = " | ".join(lines)
+            for line in lines:
+                self._log(line)
+        return lines
 
     def _snapshot_manual_picks(self, now: datetime) -> None:
         """Log the trader's own watchlist names (source=manual) so the daily
@@ -1533,61 +1597,62 @@ class AutopilotService(QObject):
             self._append_pick_rows(rows)
             self._log(f"Snapshotted {len(rows)} of your watchlist names for the daily scorecard.")
 
-    def _score_todays_picks(self) -> list[str]:
+    def _score_todays_picks(self, today: str | None = None) -> list[str]:
+        """Score today's picks. NEVER on the Qt thread - see `_maybe_score_picks_daily`.
+
+        Packet Q5: the reads are STREAMED through `core.read_scorecard_inputs`
+        (today's rows only, never a materialised year), every group is scored
+        BEFORE any row is appended so a failure leaves no partial scorecard,
+        and a failure RAISES so the caller can retry instead of publishing a
+        quietly empty answer. A missing picks file is the one empty answer.
+        """
         import csv
 
-        today = datetime.now().date().isoformat()
+        today = today or datetime.now().date().isoformat()
         picks: list[dict] = []
         try:
             with AUTOPILOT_PICKS_FILE.open("r", encoding="utf-8", newline="") as handle:
                 picks = [row for row in csv.DictReader(handle) if row.get("date") == today]
-        except OSError:
+        except FileNotFoundError:
             pass
         if not picks:
             return ["Picks scorecard: nothing logged today."]
 
-        def _rows(path: Path) -> list[dict]:
-            try:
-                with Path(path).open("r", encoding="utf-8", newline="") as handle:
-                    return list(csv.DictReader(handle))
-            except OSError:
-                return []
-
-        candidates = [row for row in _rows(INTRADAY_BOUNCE_CANDIDATES_FILE) if row.get("trade_date") == today]
-        candidate_ids = {str(row.get("event_id") or "") for row in candidates}
-        outcomes = [row for row in _rows(INTRADAY_BOUNCE_OUTCOMES_FILE) if str(row.get("event_id") or "") in candidate_ids]
+        candidates, outcomes = core.read_scorecard_inputs(
+            INTRADAY_BOUNCE_CANDIDATES_FILE, INTRADAY_BOUNCE_OUTCOMES_FILE, today
+        )
 
         lines: list[str] = []
-        try:
-            AUTOPILOT_SCORECARD_FILE.parent.mkdir(parents=True, exist_ok=True)
-            fieldnames = [
-                "date", "source_group", "picks", "longs", "shorts",
-                "alerted", "alerted_symbols", "avg_close_r", "avg_mfe_r",
-            ]
-            write_header = not AUTOPILOT_SCORECARD_FILE.exists() or AUTOPILOT_SCORECARD_FILE.stat().st_size == 0
-            with AUTOPILOT_SCORECARD_FILE.open("a", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=fieldnames)
-                if write_header:
-                    writer.writeheader()
-                for group, group_picks in sorted(core.group_picks_by_source(picks).items()):
-                    scorecard = core.score_autopilot_picks(group_picks, candidates, outcomes)
-                    label = core.PICK_GROUP_LABELS.get(group, group)
-                    lines.append(core.format_scorecard_line(scorecard, label=label))
-                    writer.writerow(
-                        {
-                            "date": today,
-                            "source_group": group,
-                            "picks": scorecard["picks"],
-                            "longs": scorecard["longs"],
-                            "shorts": scorecard["shorts"],
-                            "alerted": scorecard["alerted"],
-                            "alerted_symbols": ";".join(scorecard["alerted_symbols"]),
-                            "avg_close_r": f"{scorecard['avg_close_r']:.3f}" if scorecard["avg_close_r"] is not None else "",
-                            "avg_mfe_r": f"{scorecard['avg_mfe_r']:.3f}" if scorecard["avg_mfe_r"] is not None else "",
-                        }
-                    )
-        except Exception:
-            logging.exception("Auto Pilot scorecard write failed")
+        rows: list[dict] = []
+        for group, group_picks in sorted(core.group_picks_by_source(picks).items()):
+            scorecard = core.score_autopilot_picks(group_picks, candidates, outcomes)
+            label = core.PICK_GROUP_LABELS.get(group, group)
+            lines.append(core.format_scorecard_line(scorecard, label=label))
+            rows.append(
+                {
+                    "date": today,
+                    "source_group": group,
+                    "picks": scorecard["picks"],
+                    "longs": scorecard["longs"],
+                    "shorts": scorecard["shorts"],
+                    "alerted": scorecard["alerted"],
+                    "alerted_symbols": ";".join(scorecard["alerted_symbols"]),
+                    "avg_close_r": f"{scorecard['avg_close_r']:.3f}" if scorecard["avg_close_r"] is not None else "",
+                    "avg_mfe_r": f"{scorecard['avg_mfe_r']:.3f}" if scorecard["avg_mfe_r"] is not None else "",
+                }
+            )
+
+        AUTOPILOT_SCORECARD_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = [
+            "date", "source_group", "picks", "longs", "shorts",
+            "alerted", "alerted_symbols", "avg_close_r", "avg_mfe_r",
+        ]
+        write_header = not AUTOPILOT_SCORECARD_FILE.exists() or AUTOPILOT_SCORECARD_FILE.stat().st_size == 0
+        with AUTOPILOT_SCORECARD_FILE.open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            if write_header:
+                writer.writeheader()
+            writer.writerows(rows)
         return lines
 
     # ------------------------------------------------------------------

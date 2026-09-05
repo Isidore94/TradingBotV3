@@ -472,6 +472,13 @@ which is evidence and must not be loaded as context.
 - Auto modes OFF/DESK/AWAY/EVENING, honest global status, EVENING early scan and
   briefing, and one verified `autopilot_today.txt` with safety/freshness first,
   numbered best swings, intraday candidates, and condensed operations.
+- **The daily pick scorecard runs on ONE owned worker** (`autopilot-scorecard`, packet
+  Q5, 2026-09-04): the tick and the wrap-up decide, the read streams today's rows through
+  `autopilot_core.read_scorecard_inputs` (never a materialised year), every group is scored
+  before any row is appended, `picks_scored_at` is written only on SUCCESS, a failure keeps
+  the last-good line and counts toward `SCORECARD_MAX_ATTEMPTS` (3, then
+  `picks_scoring_failed_at` for the day), and a missing file is the one empty answer while
+  any other `OSError` raises for retry.
 - The double-click symbol snapshot popup opens at desk height (2026-08-11): its size
   is taken from the hosting window's frame, or the screen's available area when the
   window is not yet measurable, never smaller than the former fixed 1180x760, and is
@@ -1002,6 +1009,19 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-04 - Q5: the pick scorecard leaves the Qt thread
+
+Process review, performance: `ui_stalls.jsonl` recorded 15,739 ms at 13:00:44 PT in
+`_score_todays_picks`, which materialised both runtime CSVs (335 MB + 308 MB) on the
+calling thread and wrote `picks_scored_at` before scoring. Now one owned daemon worker
+(`autopilot-scorecard`; the wrap-up worker calls the body inline through the same guard),
+streamed today-only reads (`autopilot_core.read_scorecard_inputs`), append after every
+group scored, success-only `picks_scored_at`, last-good line kept on failure, three
+attempts then `picks_scoring_failed_at`. Measured read-only on the live files: the old
+materialise 5.66 s, the streamed pass 5.40 s (the parse dominates; the win is the thread,
+not the seconds) - 7,933 candidates and 12,030 outcome rows for the day kept out of
+324,605 + 100,506. Live gate #64.
 
 ### 2026-09-04 - Project process review and evidence-note corrections
 

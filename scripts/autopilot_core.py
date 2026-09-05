@@ -763,6 +763,48 @@ def merge_autopilot_watchlist(
     return {"symbols": merged, "manual_kept": manual_kept}
 
 
+def read_scorecard_inputs(
+    candidates_path, outcomes_path, today: str
+) -> tuple[list[dict], list[dict]]:
+    """Today's candidate rows and their outcome rows, STREAMED (packet Q5).
+
+    The two runtime CSVs are ~335 MB and ~308 MB; `list(csv.DictReader(...))`
+    over both held the Qt thread for 15.7 s on 2026-09-04. One pass per file,
+    keeping only rows whose `trade_date` is `today` - the cheap string compare
+    comes first - and, for outcomes, whose `event_id` is one of today's
+    candidates. Every outcome row carries the event's `trade_date`
+    (`BOUNCE_OUTCOME_COLUMNS`), so the date filter loses nothing the event_id
+    join would have kept.
+
+    A MISSING file is an empty answer (no alerts is a real answer); any other
+    `OSError` - a lock, a permission, a directory where a file should be - is
+    raised, so the caller can retry rather than publish "nothing alerted".
+    """
+    import csv
+    from pathlib import Path as _Path
+
+    def _stream(path):
+        target = _Path(path)
+        try:
+            handle = target.open("r", encoding="utf-8", newline="")
+        except FileNotFoundError:
+            return
+        with handle:
+            yield from csv.DictReader(handle)
+
+    candidates = [
+        dict(row) for row in _stream(candidates_path)
+        if str(row.get("trade_date") or "") == today
+    ]
+    wanted = {str(row.get("event_id") or "") for row in candidates}
+    outcomes = [
+        dict(row) for row in _stream(outcomes_path)
+        if str(row.get("trade_date") or "") == today
+        and str(row.get("event_id") or "") in wanted
+    ]
+    return candidates, outcomes
+
+
 def score_autopilot_picks(
     picks: Iterable[Mapping[str, Any]],
     candidate_rows: Iterable[Mapping[str, Any]],
