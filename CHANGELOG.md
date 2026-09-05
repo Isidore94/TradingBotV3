@@ -1166,6 +1166,11 @@ row. Decision record **BD-101**; live gate **#66** owed.
   either recipe lands on a `not_paired` line and is in NEITHER recipe's
   numbers**: reading each recipe over whatever rows it happens to have would
   measure coverage and report it as edge. READ-ONLY, manifest byte-identical.
+  **Every average names its own denominator**: `mR n` is a printed column, not an
+  inference - a row carries a `net_r` when its walk finished (TARGETED, STOPPED,
+  EXPIRED, AMBIGUOUS_BAR) and none when it did not (OPEN, TRUNCATED), so it is
+  NOT the win rate's n. `--compare` and `--recipe` are mutually exclusive at
+  argparse rather than one silently overriding the other.
 - **Also:** the snapshot readers (`_bands_by_occurrence`, `run_band_coverage`)
   now keep the newest `computed_at` per (symbol, session). Two feature-set
   versions can coexist for one session after the bump and the old readers took

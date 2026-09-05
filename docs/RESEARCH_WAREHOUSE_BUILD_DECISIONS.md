@@ -2988,6 +2988,18 @@ and is in NEITHER recipe's numbers. Win rate is over RESOLVED
 `swing_headline`'s Wilson lower bound, the ONE Wilson for every trader-facing win
 rate.
 
+**Every average on that table names its own denominator** (reviewer advisory,
+2026-09-05). Mean net R and the win rate do NOT share an n: a row carries a
+`net_r` when its walk finished — TARGETED, STOPPED, EXPIRED, AMBIGUOUS_BAR — and
+carries none when it did not (OPEN, TRUNCATED), while the win rate counts only
+TARGETED + STOPPED. So `mR n` is a printed COLUMN rather than something a reader
+infers, and the header says which rows each number is over. On the packet's own
+fixture the twin's mean of −1.61R rests on ONE row of three, which is exactly the
+case a single shared n would have misrepresented. For the same reason `--compare`
+and `--recipe` are **mutually exclusive at argparse** rather than one silently
+overriding the other: a run that accepted both would print a table the operator
+did not ask for and give no sign of it.
+
 **Still shadow.** Nothing here promotes anything. The bands are almost all
 `reconstructed` (BD-99), which is research evidence and never promotion evidence,
 and `docs/AVWAP_BAND_VARIANT_STUDY.md` T4's three criteria — not this report —

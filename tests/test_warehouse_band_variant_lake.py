@@ -680,6 +680,58 @@ def test_the_twins_rows_are_invisible_to_the_house_default_readers(compare_lake)
     )
 
 
+def test_every_average_in_the_compare_table_names_its_own_denominator(compare_lake):
+    """`mR n` is NOT the win rate's n, and the table must say so on the row.
+
+    A row carries a `net_r` when its walk finished - TARGETED, STOPPED, EXPIRED,
+    AMBIGUOUS_BAR - and none when it did not (OPEN, TRUNCATED); the win rate
+    counts only TARGETED + STOPPED. On this fixture the twin has three rows, ONE
+    of which resolved and one of which carries a net_r, so a mean printed beside
+    the win rate's n would be reporting the wrong sample size.
+    """
+    report = cli.run_band_coverage_compare(
+        compare_lake, month="2026-08", recipe_ids=("swing_house_v1", "swing_house_variant_v1")
+    )
+    twin = report["totals"]["recipes"]["swing_house_variant_v1"]
+    assert twin["n"] == 3
+    assert twin["net_r_n"] < twin["n"], "the truncated rows carry no net_r"
+
+    table = cli.format_band_coverage_compare(report)
+    assert "mR n" in table, "the mean-R denominator is a COLUMN, not an inference"
+    assert "TRUNCATED" in table or "never OPEN or TRUNCATED" in table
+    assert "mean R is over the rows carrying a net_r" in table
+    header, total = None, None
+    for line in table.splitlines():
+        if line.startswith("knowledge") or line.strip().startswith("n "):
+            header = header or line
+        if line.startswith("TOTAL"):
+            total = line
+    assert total is not None
+    # The twin's group is the right-hand half; its mean-R count is printed there.
+    assert total.split("|")[1].split()[-1] == str(twin["net_r_n"])
+
+
+def test_compare_and_recipe_together_are_an_argparse_error(compare_lake, monkeypatch):
+    """Not a silent override: `--recipe` restricts the per-recipe table and
+    `--compare` names both recipes, so a run that accepted both would print a
+    table nobody asked for and say nothing about it."""
+    monkeypatch.setattr(cli.ResearchStore, "open", classmethod(lambda cls, root=None: compare_lake))
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(
+            [
+                "band-coverage",
+                "--month",
+                "2026-08",
+                "--recipe",
+                "swing_house_v1",
+                "--compare",
+                "swing_house_v1",
+                "swing_house_variant_v1",
+            ]
+        )
+    assert excinfo.value.code == 2, "argparse's own usage error, not a quiet 0"
+
+
 def test_the_compare_writes_nothing(compare_lake):
     ledger = compare_lake.manifest.path.read_bytes()
     cli.run_band_coverage_compare(
@@ -715,7 +767,29 @@ def test_the_cli_exposes_compare(compare_lake, monkeypatch, capsys):
 # --- the reader picks one snapshot row per session --------------------------
 def test_the_band_read_prefers_the_newest_snapshot_row_for_a_session(store):
     """Two feature-set versions can now coexist for one (symbol, session); a
-    reader that took whichever landed last would be reading a coin flip."""
+    reader that took whichever landed last would be reading a coin flip.
+
+    **The NEWEST row is published FIRST, in its own file.** The layout matters
+    more than the assertion here: written the other way round - old row first,
+    or both in one `publish` with the new one second - the last-wins reader this
+    test exists to catch would pass it on file order alone. So the `tier1_v2`
+    row goes down first and the stale `tier1_v1` row lands after it, and only a
+    reader that compares `computed_at` can answer with the new bands.
+    """
+    store.publish(
+        "feature_snapshot_daily",
+        [
+            _daily_row(
+                "AAA",
+                COVERAGE_DAY,
+                features.ANCHOR_KNOWLEDGE_OBSERVED,
+                CHAMPION_BANDS,
+                VARIANT_BANDS,
+                computed_at=NOW,
+                feature_set_version="tier1_v2",
+            )
+        ],
+    )
     store.publish(
         "feature_snapshot_daily",
         [
@@ -727,18 +801,14 @@ def test_the_band_read_prefers_the_newest_snapshot_row_for_a_session(store):
                 None,
                 computed_at=NOW - timedelta(days=2),
                 feature_set_version="tier1_v1",
-            ),
-            _daily_row(
-                "AAA",
-                COVERAGE_DAY,
-                features.ANCHOR_KNOWLEDGE_OBSERVED,
-                CHAMPION_BANDS,
-                VARIANT_BANDS,
-                computed_at=NOW,
-                feature_set_version="tier1_v2",
-            ),
+            )
         ],
     )
+    rows = store.read_rows("feature_snapshot_daily", "year=2026")
+    assert [row["feature_set_version"] for row in rows] == ["tier1_v2", "tier1_v1"], (
+        "the stale row must be read LAST, or this test cannot fail"
+    )
+
     known = {"occ-a": _occurrence_row("occ-a", "AAA", COVERAGE_DAY)}
     champion = cli._bands_by_occurrence(store, known)
     variant = cli._bands_by_occurrence(store, known, prefix=cli.VARIANT_BAND_PREFIX)

@@ -1548,13 +1548,25 @@ def run_band_coverage_compare(
     return report
 
 
+#: Width of one recipe's column group in the compare table.
+_COMPARE_GROUP_WIDTH = 46
+
+
 def _compare_cell_text(cell: dict) -> str:
+    """One recipe's numbers for one bucket. **Every average names its own n.**
+
+    `mR n` is the mean-R denominator and it is NOT the win rate's: a row carries
+    a `net_r` when its walk finished (TARGETED, STOPPED, EXPIRED, AMBIGUOUS_BAR)
+    and carries none when it did not (OPEN, TRUNCATED), while the win rate counts
+    only TARGETED + STOPPED. Printing one mean beside one n invites the reader to
+    assume they belong together, and on a month with open positions they do not.
+    """
     rate = "-" if cell["win_rate"] is None else f"{cell['win_rate'] * 100:.0f}%"
     bound = "" if cell["win_rate_lb"] is None else f" (>={cell['win_rate_lb'] * 100:.0f}%)"
     mean = "-" if cell["mean_net_r"] is None else f"{cell['mean_net_r']:+.2f}R"
     return (
         f"{cell['n']:>4}{cell['resolved']:>5}{cell['targeted']:>5}{cell['stopped']:>5}"
-        f"{rate + bound:>13}{mean:>8}"
+        f"{rate + bound:>13}{mean:>8}{cell['net_r_n']:>6}"
     )
 
 
@@ -1563,20 +1575,26 @@ def format_band_coverage_compare(report: dict) -> str:
     if report.get("status") != "OK":
         return f"{report.get('status')}: {report.get('message', '')}".strip()
     left, right = report["recipes"]
-    header_group = f"{'n':>4}{'resl':>5}{'TGT':>5}{'STOP':>5}{'win (lower)':>13}{'meanR':>8}"
+    width = _COMPARE_GROUP_WIDTH
+    header_group = (
+        f"{'n':>4}{'resl':>5}{'TGT':>5}{'STOP':>5}{'win (lower)':>13}{'meanR':>8}{'mR n':>6}"
+    )
     lines = [
         f"band compare {report['month']} - {report['occurrences_in_month']} occurrence(s), "
         f"{report['paired']} paired",
         f"win rate is over RESOLVED (TARGETED + STOPPED); lower bound is Wilson z="
         f"{report['wilson_z']:.4f}",
-        f"{'knowledge':<14}{left:^40}|{right:^40}",
-        f"{'':<14}{header_group:<40}|{header_group:<40}",
+        "mean R is over the rows carrying a net_r - TARGETED, STOPPED, EXPIRED and "
+        "AMBIGUOUS_BAR, never OPEN or TRUNCATED",
+        "`mR n` is that count and is NOT the win rate's denominator",
+        f"{'knowledge':<14}{left:^{width}}|{right:^{width}}",
+        f"{'':<14}{header_group:<{width}}|{header_group:<{width}}",
     ]
     rows = list(sorted(report["by_knowledge"].items())) + [("TOTAL", report["totals"])]
     for knowledge, block in rows:
         lines.append(
-            f"{knowledge:<14}{_compare_cell_text(block['recipes'][left]):<40}"
-            f"|{_compare_cell_text(block['recipes'][right]):<40}"
+            f"{knowledge:<14}{_compare_cell_text(block['recipes'][left]):<{width}}"
+            f"|{_compare_cell_text(block['recipes'][right]):<{width}}"
         )
     missing = report["not_paired"]
     lines.append(
@@ -1971,6 +1989,12 @@ def main(argv=None) -> int:
         print(json.dumps(report, indent=2, default=str))
         return 0 if report.get("status") in {"OK", "DISABLED"} else 1
     if args.command == "band-coverage":
+        if args.compare and args.recipe:
+            # An argparse ERROR, not a silent override. `--recipe` restricts the
+            # per-recipe table and `--compare` names two recipes; a run that
+            # accepted both would print a table the operator did not ask for and
+            # give no sign of it.
+            coverage.error("--compare and --recipe are mutually exclusive; --compare names both recipes")
         if args.compare:
             report = run_band_coverage_compare(
                 store, month=args.month, recipe_ids=tuple(args.compare)
