@@ -52,6 +52,33 @@ RECENT_SETUP_TYPE_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_a
 # alerts or gates - `calc_anchored_vwap_bands` is frozen (decision 0008) and the
 # challenger is a candidate ADDITIONAL level family, never a swap.
 BAND_VARIANT_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_band_variant_stats.csv")
+# Packet M5 (2026-09-05). Three populations the tracker has graded for months
+# and shown nobody.
+#
+# CONTROLS are setups the scan REJECTED - the holdout that says whether the gate
+# is throwing away edge. STUDIES are ideas that have never been promoted and
+# touch no score. EXIT FRAMEWORKS puts the April `comparison_apr2026` templates
+# beside the baseline ones on the same setups, which is the comparison those
+# 91,674 scenario rows were written for and never read back.
+#
+# Read-only, like every other export on this page. Nothing here scores, ranks,
+# gates or alerts, and a row from any of the three must never be read as a pick
+# - which is why each tab carries a POPULATION SENTENCE above its table.
+CONTROL_DISCOVERY_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
+    "master_avwap_control_discovery.csv"
+)
+STUDY_DISCOVERY_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
+    "master_avwap_study_discovery.csv"
+)
+EXIT_FRAMEWORK_STATS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name(
+    "master_avwap_exit_framework_stats.csv"
+)
+
+#: The ten-row floor Weekend Prep's tables use (R4 A18), applied to the three
+#: tabs this packet adds. 260 px is ten rows plus a header. A separate constant
+#: rather than an import from that panel: one number is cheaper than a
+#: cross-panel dependency, and the reason is recorded in both places.
+TABLE_TEN_ROWS_PX = 260
 SETUP_PLAYBOOKS_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_playbooks.csv")
 SHORT_HORIZON_FILE = MASTER_AVWAP_SETUP_STATS_FILE.with_name("master_avwap_setup_short_horizon.csv")
 SHORT_TERM_MIN_SAMPLES = 6
@@ -212,6 +239,46 @@ BAND_VARIANT_COLUMNS = (
     ("exit_template_id", "Exit Template"),
 )
 
+#: Packet M5.2. Win rate FIRST with its lower bound and its n beside it, then
+#: mean R - `CLAUDE.md`'s headline rule for every trader-facing swing surface.
+#: The window is a column because the export carries two blocks (all history and
+#: `lately`), and a table that mixed them without saying so would double-count
+#: every family.
+DISCOVERY_COLUMNS = (
+    ("window", "Window"),
+    ("row_kind", "Kind"),
+    ("cohort", "Cohort"),
+    ("side", "Side"),
+    ("setup_family", "Family"),
+    ("win_rate", "Win %"),
+    ("win_rate_lb", "Win % (low)"),
+    ("n", "n"),
+    ("wins", "Wins"),
+    ("losses", "Losses"),
+    ("avg_closed_r", "Avg R"),
+    ("n_expired_unmeasured", "Expired"),
+    ("flag", "Flag"),
+)
+
+#: Packet M5.3. `framework_family` and `experimental` lead, because the first
+#: question about a row here is which framework it belongs to and whether it
+#: ever happened.
+EXIT_FRAMEWORK_COLUMNS = (
+    ("framework_family", "Framework"),
+    ("experimental", "Experimental"),
+    ("exit_template_id", "Exit Template"),
+    ("side", "Side"),
+    ("priority_bucket", "Bucket"),
+    ("win_rate", "Win %"),
+    ("win_rate_lb", "Win % (low)"),
+    ("n", "n"),
+    ("n_closed", "n Closed"),
+    ("avg_closed_r", "Avg R"),
+    ("stop_out_rate", "Stop%"),
+    ("target_hit_rate", "Target%"),
+    ("n_expired_unmeasured", "Expired"),
+)
+
 ATTRIBUTE_LEADERBOARD_COLUMNS = (
     ("attribute_label", "Attribute"),
     ("value_label", "Value"),
@@ -266,6 +333,10 @@ PERCENT_KEYS = {
     "stop_out_rate_variant",
     "target_hit_rate_champion",
     "target_hit_rate_variant",
+    # M5: the Controls / Studies / Exit frameworks tabs. `win_rate` is already
+    # here and covers all three.
+    "win_rate_lb",
+    "stop_out_rate",
 }
 SIGNED_KEYS = {
     "avg_total_r_champion",
@@ -372,6 +443,19 @@ class SetupTrackerPanel(QFrame):
         self.setup_type_status_label.setObjectName("MutedLabel")
         self.setup_type_status_label.setWordWrap(True)
 
+        # M5.2 / M5.3: one population sentence per new tab, ABOVE its table. A
+        # control row and a pick look identical in a table; the sentence is the
+        # only thing that keeps them apart.
+        self.control_discovery_status_label = QLabel(CONTROL_DISCOVERY_NO_EXPORT_SENTENCE)
+        self.control_discovery_status_label.setObjectName("MutedLabel")
+        self.control_discovery_status_label.setWordWrap(True)
+        self.study_discovery_status_label = QLabel(STUDY_DISCOVERY_NO_EXPORT_SENTENCE)
+        self.study_discovery_status_label.setObjectName("MutedLabel")
+        self.study_discovery_status_label.setWordWrap(True)
+        self.exit_framework_status_label = QLabel(EXIT_FRAMEWORK_NO_EXPORT_SENTENCE)
+        self.exit_framework_status_label.setObjectName("MutedLabel")
+        self.exit_framework_status_label.setWordWrap(True)
+
         self.tabs = QTabWidget()
         self.current_table, self.current_model = self._make_table(CURRENT_PICK_COLUMNS)
         self.setup_type_table, self.setup_type_model = self._make_table(SETUP_TYPE_COLUMNS)
@@ -383,6 +467,21 @@ class SetupTrackerPanel(QFrame):
         self.catch_rate_table, self.catch_rate_model = self._make_table(CATCH_RATE_COLUMNS)
         self.human_pick_table, self.human_pick_model = self._make_table(HUMAN_PICK_COLUMNS)
         self.band_variant_table, self.band_variant_model = self._make_table(BAND_VARIANT_COLUMNS)
+        self.control_discovery_table, self.control_discovery_model = self._make_table(
+            DISCOVERY_COLUMNS
+        )
+        self.study_discovery_table, self.study_discovery_model = self._make_table(
+            DISCOVERY_COLUMNS
+        )
+        self.exit_framework_table, self.exit_framework_model = self._make_table(
+            EXIT_FRAMEWORK_COLUMNS
+        )
+        for table in (
+            self.control_discovery_table,
+            self.study_discovery_table,
+            self.exit_framework_table,
+        ):
+            table.setMinimumHeight(TABLE_TEN_ROWS_PX)
         self.attribute_table, self.attribute_model = self._make_table(
             ATTRIBUTE_LEADERBOARD_COLUMNS
         )
@@ -456,6 +555,43 @@ class SetupTrackerPanel(QFrame):
                 status=self.band_variant_status_label,
             ),
             "Band Variant",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "SHADOW EVIDENCE, packet M5. The control / holdout sample: setups the scan "
+                "REJECTED, graded on their own scenarios beside the promoted ones, so a "
+                "family the gate keeps throwing away can be seen. A row here is NEVER a pick "
+                "and nothing on this tab scores, ranks, gates or alerts. Win rate leads with "
+                "its n and its Wilson lower bound, and the sort is the BOUND - a 100% on two "
+                "setups is not better than a 60% on ninety.",
+                self.control_discovery_table,
+                status=self.control_discovery_status_label,
+            ),
+            "Controls",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "SHADOW EVIDENCE, packet M5. The study namespace (docs/SETUPS_TEST.md): setup "
+                "ideas measured for edge BEFORE they touch scoring - isolated from Expected-R, "
+                "calibration and live ranking. Episode-deduped, representative-stop, "
+                "net-of-cost closed R. Win rate leads, sorted by its Wilson lower bound.",
+                self.study_discovery_table,
+                status=self.study_discovery_status_label,
+            ),
+            "Studies",
+        )
+        self.tabs.addTab(
+            self._make_explained_tab(
+                "SHADOW EVIDENCE, packet M5. Exit templates compared on the SAME setups, one "
+                "row per framework / template / side / bucket. The `comparison_apr2026` rows "
+                "are EXPERIMENTAL: a 1.25R hard stop and an SMA_50 short-near-favorite skip, "
+                "simulated since April and never taken. They are excluded from every champion "
+                "aggregate by design and this is the first surface that reads them. Nothing "
+                "here scores, ranks, gates or alerts, and nothing here retires evidence.",
+                self.exit_framework_table,
+                status=self.exit_framework_status_label,
+            ),
+            "Exit frameworks",
         )
         self.tabs.addTab(
             self._make_explained_tab(
@@ -661,6 +797,25 @@ class SetupTrackerPanel(QFrame):
         self.band_variant_status_label.setText(
             band_variant_coverage_sentence(band_variant_export_rows)
         )
+        # M5.2 / M5.3, same inline read and the same reason. These three are
+        # small: the control export is one row per (side, family) x two windows
+        # and the framework export one per template group, so tens of rows each
+        # against the attribute leaderboard's 38,617.
+        control_discovery_export_rows = _load_csv_rows_cached(CONTROL_DISCOVERY_STATS_FILE)
+        study_discovery_export_rows = _load_csv_rows_cached(STUDY_DISCOVERY_STATS_FILE)
+        exit_framework_export_rows = _load_csv_rows_cached(EXIT_FRAMEWORK_STATS_FILE)
+        self.control_discovery_rows = _rank_discovery_rows(control_discovery_export_rows)
+        self.study_discovery_rows = _rank_discovery_rows(study_discovery_export_rows)
+        self.exit_framework_rows = _rank_exit_frameworks(exit_framework_export_rows)
+        self.control_discovery_status_label.setText(
+            discovery_population_sentence(control_discovery_export_rows, kind="control")
+        )
+        self.study_discovery_status_label.setText(
+            discovery_population_sentence(study_discovery_export_rows, kind="study")
+        )
+        self.exit_framework_status_label.setText(
+            exit_framework_population_sentence(exit_framework_export_rows)
+        )
 
         self.current_model.set_rows(self.current_pick_rows[:300])
         self.human_pick_model.set_rows(self.human_pick_rows)
@@ -672,6 +827,9 @@ class SetupTrackerPanel(QFrame):
         self.tier_performance_model.set_rows(self.tier_performance_rows)
         self.catch_rate_model.set_rows(self.catch_rate_rows)
         self.band_variant_model.set_rows(self.band_variant_rows[:300])
+        self.control_discovery_model.set_rows(self.control_discovery_rows[:300])
+        self.study_discovery_model.set_rows(self.study_discovery_rows[:300])
+        self.exit_framework_model.set_rows(self.exit_framework_rows[:300])
         # The attribute leaderboard is read on a worker (19.7 MB live); the
         # table fills when it arrives.
         self.start_attribute_refresh()
@@ -686,6 +844,9 @@ class SetupTrackerPanel(QFrame):
             self.tier_performance_table,
             self.catch_rate_table,
             self.band_variant_table,
+            self.control_discovery_table,
+            self.study_discovery_table,
+            self.exit_framework_table,
         ):
             table.fit_columns()
 
@@ -752,8 +913,8 @@ class SetupTrackerPanel(QFrame):
 
 
 #: Parsed export rows, keyed by path, with the (mtime_ns, size) they came from.
-#: Bounded to one entry per export file - there are ten, and they are rewritten
-#: by the scan, not by this page.
+#: Bounded to one entry per export file - fourteen since packet M5, and they are
+#: rewritten by the scan, not by this page.
 _CSV_ROW_CACHE: dict[str, tuple[tuple[int, int], list[dict]]] = {}
 
 
@@ -949,6 +1110,157 @@ def _rank_band_variants(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(row.get("setup_family") or ""),
             str(row.get("side") or ""),
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Packet M5.2 / M5.3 - the Controls, Studies and Exit frameworks tabs.
+#
+# Three pure readers. Each sorts by the WILSON LOWER BOUND and each says what
+# its population is, because these three are the easiest rows on the desk to
+# misread as recommendations.
+# ---------------------------------------------------------------------------
+
+CONTROL_DISCOVERY_NO_EXPORT_SENTENCE = (
+    "No control comparison has been written yet. The control sample is setups the "
+    "scan REJECTED, graded on their own scenarios; nothing here is a pick."
+)
+STUDY_DISCOVERY_NO_EXPORT_SENTENCE = (
+    "No study comparison has been written yet. Study setups are ideas that have "
+    "never been promoted and touch no score; nothing here is a pick."
+)
+EXIT_FRAMEWORK_NO_EXPORT_SENTENCE = (
+    "No exit-framework comparison has been written yet. Rows marked EXPERIMENTAL "
+    "are what-if exits simulated on the same setups; nothing here is a pick."
+)
+
+
+def _lower_bound(row: dict[str, Any]) -> float | None:
+    """The Wilson lower bound off an export row, or None when it has none.
+
+    A blank is not a zero. A cell nothing graded has no bound to rank on and
+    must sort LAST rather than below every graded cell as though it had lost.
+    """
+    text = str(row.get("win_rate_lb") or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _rank_discovery_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """All-history block first, then best Wilson lower bound, then biggest n.
+
+    Sorting by the LOWER BOUND rather than the raw rate is the headline rule and
+    the whole reason the bound is computed: a 100% on two rejected setups would
+    otherwise sit above a 60% on ninety and read as the strongest finding on the
+    page. Presentation only - this never re-reads a file and never writes one.
+    """
+    return sorted(
+        rows,
+        key=lambda row: (
+            0 if str(row.get("window") or "") == "all" else 1,
+            0 if str(row.get("row_kind") or "") == "cohort" else 1,
+            _lower_bound(row) is None,
+            -(_lower_bound(row) or 0.0),
+            -_float(row.get("n"), 0.0),
+            str(row.get("cohort") or ""),
+            str(row.get("setup_family") or ""),
+            str(row.get("side") or ""),
+        ),
+    )
+
+
+def _rank_exit_frameworks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Same bound, same reason. Ties keep the framework/template order stable."""
+    return sorted(
+        rows,
+        key=lambda row: (
+            _lower_bound(row) is None,
+            -(_lower_bound(row) or 0.0),
+            -_float(row.get("n_closed"), 0.0),
+            str(row.get("framework_family") or ""),
+            str(row.get("exit_template_id") or ""),
+            str(row.get("side") or ""),
+            str(row.get("priority_bucket") or ""),
+        ),
+    )
+
+
+def _graded_episodes(rows: list[dict[str, Any]]) -> int:
+    """Total n across the all-history FAMILY rows - the population's real size.
+
+    Family rows only: the control export's cohort rows partition the same
+    episodes a second way, and adding the two together would double-count every
+    one of them.
+    """
+    return sum(
+        int(_float(row.get("n"), 0.0))
+        for row in rows
+        if str(row.get("window") or "") == "all" and str(row.get("row_kind") or "") == "family"
+    )
+
+
+def discovery_population_sentence(rows: list[dict[str, Any]], *, kind: str) -> str:
+    """One sentence naming the population, so a control is never read as a pick.
+
+    Pure, and built from the export's OWN counts - it never re-reads the file
+    and never opens the 1.1 GB tracker JSON.
+    """
+    if kind == "control":
+        if not rows:
+            return CONTROL_DISCOVERY_NO_EXPORT_SENTENCE
+        head = (
+            f"{_graded_episodes(rows)} control setups the scan REJECTED, graded on their "
+            "own scenarios - never picks, and nothing here scores, ranks or alerts."
+        )
+    else:
+        if not rows:
+            return STUDY_DISCOVERY_NO_EXPORT_SENTENCE
+        head = (
+            f"{_graded_episodes(rows)} study setups - ideas that have never been promoted "
+            "and touch no score. Measured here BEFORE any of them could."
+        )
+    return f"{head} {_discovery_window_suffix(rows)}".strip()
+
+
+def _discovery_window_suffix(rows: list[dict[str, Any]]) -> str:
+    sessions = ""
+    for row in rows:
+        if str(row.get("window") or "") == "lately":
+            sessions = str(row.get("window_sessions") or "").strip()
+            if sessions:
+                break
+    if not sessions:
+        return "Win rate leads, sorted by its Wilson lower bound."
+    return (
+        f"Two blocks: all history, and the last {sessions} SESSIONS. "
+        "Win rate leads, sorted by its Wilson lower bound."
+    )
+
+
+def exit_framework_population_sentence(rows: list[dict[str, Any]]) -> str:
+    """What the Exit frameworks table is, in one line.
+
+    Names the EXPERIMENTAL rows explicitly: they are exits that were simulated,
+    never taken, on the same setups as the baseline. A reader who takes one for
+    the champion's record has read a what-if as a result.
+    """
+    if not rows:
+        return EXIT_FRAMEWORK_NO_EXPORT_SENTENCE
+    experimental = sum(
+        1 for row in rows if str(row.get("experimental") or "").strip().lower() in {"true", "1"}
+    )
+    families = sorted(
+        {str(row.get("framework_family") or "").strip() for row in rows} - {""}
+    )
+    return (
+        f"{len(rows)} exit-template groups across {len(families)} framework(s): "
+        f"{', '.join(families)}. {experimental} row(s) are EXPERIMENTAL - what-if exits "
+        "simulated on the SAME setups as the baseline, never taken, and excluded from "
+        "every champion aggregate. Nothing here scores, ranks or alerts."
     )
 
 
@@ -1291,6 +1603,9 @@ def _export_files() -> list[Path]:
         SETUP_TYPE_STATS_FILE,
         RECENT_SETUP_TYPE_STATS_FILE,
         BAND_VARIANT_STATS_FILE,
+        CONTROL_DISCOVERY_STATS_FILE,
+        STUDY_DISCOVERY_STATS_FILE,
+        EXIT_FRAMEWORK_STATS_FILE,
         SETUP_PLAYBOOKS_FILE,
         SHORT_HORIZON_FILE,
         MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
