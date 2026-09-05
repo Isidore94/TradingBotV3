@@ -368,6 +368,23 @@ SETUP_SHORT_HORIZON_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_short_
 # Phase 0.10 shadow evidence. Written in the same pass as the other stats CSVs
 # and read by nothing that scores, ranks, alerts or gates.
 SETUP_BAND_VARIANT_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_band_variant_stats.csv")
+# Packet M5 (2026-09-05). Three exports for evidence the tracker has been
+# computing for months and showing nobody.
+#
+# The control namespace is 401 setups the scan REJECTED and the study namespace
+# is 3,992 unpromoted ideas; `build_control_discovery_rows` and
+# `build_study_discovery_rows` have graded both since B4 and their only readers
+# were two test files and a `.txt` report the desk does not render. The exit
+# framework file is the reader `comparison_apr2026` has lacked since April -
+# 91,674 of 275,022 scenario rows written by two experimental exit templates
+# that no code anywhere under `scripts/` ever read back.
+#
+# All three are SHADOW: written in the same pass as the other stats CSVs, read
+# only by the Setup Tracker page, and reaching no detector, score, tier, alert,
+# watchlist, Focus, review queue or `review_policy.json`.
+CONTROL_DISCOVERY_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.csv")
+STUDY_DISCOVERY_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_study_discovery.csv")
+EXIT_FRAMEWORK_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_exit_framework_stats.csv")
 CONTROL_DISCOVERY_FILE = SETUP_STATS_FILE.with_name("master_avwap_control_discovery.txt")
 # Study namespace (B4): new setup ideas (1h/4h trend, HV-level break, compression
 # break, ...) are measured here for hit-rate / realized R BEFORE they touch scoring.
@@ -12079,6 +12096,131 @@ def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
     return rows
 
 
+#: Packet M5.3. One row per (framework family, exit template, side, bucket) -
+#: the grain at which a baseline template and its comparison twin sit side by
+#: side on the SAME setups, so the two differ at one variable.
+EXIT_FRAMEWORK_STATS_COLUMNS = (
+    "framework_family",
+    "exit_template_id",
+    "exit_template_label",
+    "side",
+    "priority_bucket",
+    "experimental",
+    "framework_version",
+    "n",
+    "n_closed",
+    "wins",
+    "losses",
+    "win_rate",
+    "win_rate_lb",
+    "meets_n_floor",
+    "avg_closed_r",
+    "stop_out_rate",
+    "target_hit_rate",
+    "n_expired_unmeasured",
+)
+
+
+def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
+    """The reader `comparison_apr2026` has lacked since April.
+
+    Two experimental exit templates (`exp_full_band2_hard_stop_125r` and
+    `..._no_sma50_short_nearfav`) have been simulated on the same setups as the
+    four baseline templates since 2026-04-14, writing 91,674 of the 275,022 rows
+    in `master_avwap_setup_scenarios.csv`. Every champion aggregate skips an
+    `experimental` scenario by design - correctly, because a what-if must never
+    reach a score - and the consequence nobody noticed is that the what-if was
+    never read either. This builds the comparison the framework was created for.
+
+    Built from `_flatten_tracker_scenarios`, NOT from a fresh walk of
+    `setup["scenarios"]`: that function already applies the band-variant fence,
+    and a second scenario reader written here would be exactly the eighth
+    unfenced reader `test_band_variant_fence_guard.py` exists to prevent.
+
+    `experimental` is a COLUMN rather than a filter, so a comparison row can be
+    read beside its baseline and can never be mistaken for the champion's own
+    record. Nothing here scores, ranks, gates or alerts, and nothing here
+    deletes evidence: if the trader reads this and retires the framework, that
+    is a later decision with a number behind it.
+    """
+
+    groups: dict[tuple[str, str, str, str], dict] = {}
+    for row in _flatten_tracker_scenarios(setups or {}):
+        key = (
+            str(row.get("framework_family") or ""),
+            str(row.get("exit_template_id") or ""),
+            str(row.get("side") or ""),
+            str(row.get("priority_bucket") or ""),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "exit_template_label": row.get("exit_template_label") or "",
+                "experimental": bool(row.get("experimental")),
+                "framework_version": row.get("framework_version") or "",
+                "rows": [],
+                "n_expired_unmeasured": 0,
+            },
+        )
+        # M3.3's rule, in an export: an EXPIRED_UNMEASURED record is
+        # uncertainty, not an outcome. It leaves the numerator AND the
+        # denominator and is counted beside them.
+        if _tracker_setup_is_expired_unmeasured(row):
+            group["n_expired_unmeasured"] += 1
+            continue
+        if not bool(row.get("tradeable")):
+            continue
+        group["rows"].append(row)
+
+    stats_rows: list[dict] = []
+    for (family, template, side, bucket), group in sorted(groups.items()):
+        tradeable = group["rows"]
+        closed = [row for row in tradeable if _scenario_is_closed(row.get("status"))]
+        closed_rs = [
+            clipped
+            for clipped in (
+                _clip_tracker_r_value(row.get("total_r"), TRACKER_SCORING_R_CLIP)
+                for row in closed
+            )
+            if clipped is not None
+        ]
+        wins = sum(1 for row in closed if (_coerce_float(row.get("total_r")) or 0.0) > 0)
+        stopped = sum(
+            1 for row in closed if str(row.get("status") or "").upper() == "STOPPED"
+        )
+        targeted = sum(
+            1 for row in closed if str(row.get("status") or "").upper() == "TARGET_HIT"
+        )
+        row = {
+            "framework_family": family,
+            "exit_template_id": template,
+            "exit_template_label": group["exit_template_label"],
+            "side": side,
+            "priority_bucket": bucket,
+            "experimental": group["experimental"],
+            "framework_version": group["framework_version"],
+            "n": len(tradeable),
+            "n_closed": len(closed),
+            "avg_closed_r": (mean(closed_rs) if closed_rs else None),
+            # Blank, never 0.0: "nothing stopped out" and "nothing closed" are
+            # different claims and a zero cannot say which.
+            "stop_out_rate": (stopped / len(closed)) if closed else None,
+            "target_hit_rate": (targeted / len(closed)) if closed else None,
+            "n_expired_unmeasured": group["n_expired_unmeasured"],
+        }
+        row.update(
+            _discovery_headline_fields(
+                (wins / len(closed)) if closed else None, len(closed)
+            )
+        )
+        # `_discovery_headline_fields` owns the win/loss pair and the ONE
+        # Wilson, but its `n` is the denominator of the RATE - here that is the
+        # closed count, while this row's `n` is the tracked count.
+        row["n"] = len(tradeable)
+        stats_rows.append({column: row[column] for column in EXIT_FRAMEWORK_STATS_COLUMNS})
+    return stats_rows
+
+
 #: The stats exports that carry the tracker's own clock (M3.2). These three are
 #: what the Setup Tracker page reads to answer "as of when?"; they are stamped
 #: rather than left to a file mtime because the CSV is rewritten by every pass,
@@ -12178,6 +12320,43 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
         ).to_csv(SETUP_BAND_VARIANT_STATS_FILE, index=False)
     except Exception as exc:
         logging.warning("Could not write the band variant stats export (%s).", exc)
+    # Packet M5: three more shadow exports, each with its OWN guard for the same
+    # reason and one more - a single `try` around all three would let the first
+    # failure take the other two down with it, and they are independent readings
+    # of independent populations.
+    #
+    # `saved_at` / `saved_by` are stamped on all three so the page can answer
+    # "as of when?" from the export rather than from a file mtime (M3.2).
+    for label, builder, argument, columns, path in (
+        (
+            "control discovery",
+            build_control_discovery_stats_rows,
+            payload,
+            DISCOVERY_STATS_COLUMNS,
+            CONTROL_DISCOVERY_STATS_FILE,
+        ),
+        (
+            "study discovery",
+            build_study_discovery_stats_rows,
+            payload,
+            DISCOVERY_STATS_COLUMNS,
+            STUDY_DISCOVERY_STATS_FILE,
+        ),
+        (
+            "exit framework",
+            build_exit_framework_stats_rows,
+            setups,
+            EXIT_FRAMEWORK_STATS_COLUMNS,
+            EXIT_FRAMEWORK_STATS_FILE,
+        ),
+    ):
+        try:
+            pd.DataFrame(
+                _stamp_tracker_clock(builder(argument), saved_at, saved_by),
+                columns=[*columns, TRACKER_SAVED_AT_COLUMN, TRACKER_SAVED_BY_COLUMN],
+            ).to_csv(path, index=False)
+        except Exception as exc:
+            logging.warning("Could not write the %s stats export (%s).", label, exc)
 
 
 def _infer_tracker_scan_date(
@@ -13005,6 +13184,268 @@ def write_control_discovery_report(path: Path, tracker: dict | None = None) -> N
 
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Packet M5.1 - the control and study populations, as rows a surface can read.
+#
+# `build_control_discovery_rows` / `build_study_discovery_rows` already grade
+# both namespaces and are not touched here: these builders CALL them and flatten
+# what they return. Doing it the other way - teaching the existing functions to
+# emit a wider dict - would move an output two test files already pin, for no
+# gain.
+#
+# What is added on the way out is the headline contract (`CLAUDE.md`): win rate
+# FIRST with its n, the ONE Wilson lower bound from `swing_headline` (z = 1.96,
+# never `expected_r`'s 1.28), mean R BESIDE it rather than instead of it, and
+# the window named in SESSIONS.
+# ---------------------------------------------------------------------------
+
+#: One shape for both discovery exports. `row_kind` separates the control
+#: file's three cohort rows (promoted / near_miss / random) from the family
+#: rows; the study file has families only, because it is one population and a
+#: cohort column on it would invent a split that does not exist.
+DISCOVERY_STATS_COLUMNS = (
+    "window",
+    "window_sessions",
+    "window_start",
+    "window_end",
+    "row_kind",
+    "cohort",
+    "side",
+    "setup_family",
+    "n",
+    "wins",
+    "losses",
+    "win_rate",
+    "win_rate_lb",
+    "meets_n_floor",
+    "avg_closed_r",
+    "n_expired_unmeasured",
+    "flag",
+)
+
+#: The two blocks every discovery export carries. All-history is kept because it
+#: is the only window with enough closed episodes to say anything about a rare
+#: family; `lately` is kept beside it because a two-year average cannot answer
+#: "is this working now". Replacing either with the other loses a real question.
+DISCOVERY_WINDOW_ALL = "all"
+DISCOVERY_WINDOW_LATELY = "lately"
+
+
+def _discovery_headline_fields(win_rate, n) -> dict:
+    """`wins` / `losses` / `win_rate` / `win_rate_lb` / `meets_n_floor` for one cell.
+
+    The summaries upstream keep the RATE and the count rather than the graded
+    rows, which is exactly what `swing_headline.headline_from_rate` exists for:
+    the integer pair is recovered exactly whenever the stored rate was computed
+    as `wins / n`, and `_summarize_control_observation_group` computes it that
+    way.
+
+    An n of 0 gives blanks, never zeros - "nothing graded" and "graded and lost
+    everything" are different facts and a 0.0 cannot say which.
+    """
+    from swing_headline import headline_from_rate
+
+    total = int(n or 0)
+    if total <= 0 or win_rate is None:
+        return {
+            "n": total,
+            "wins": 0,
+            "losses": 0,
+            "win_rate": None,
+            "win_rate_lb": None,
+            "meets_n_floor": False,
+        }
+    headline = headline_from_rate("", win_rate=win_rate, n=total)
+    return {
+        "n": headline.n,
+        "wins": headline.wins,
+        "losses": headline.losses,
+        "win_rate": headline.win_rate,
+        "win_rate_lb": headline.win_rate_lb,
+        "meets_n_floor": headline.meets_floor,
+    }
+
+
+def _discovery_expired_counts(namespace: dict) -> dict[tuple[str, str], int]:
+    """Records that aged out UNMEASURED, per (side, family).
+
+    M3.3's rule applied to a new export: uncertainty leaves the numerator AND
+    the denominator, and is counted beside them so the exclusion is visible.
+    These records never reached the numbers in the first place - an expired
+    record has no closed scenario, so `_collect_control_episode_observations`
+    drops it - but a reader has no way to know that without the count.
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for setup in (namespace or {}).values():
+        if not isinstance(setup, dict) or not _tracker_setup_is_expired_unmeasured(setup):
+            continue
+        key = (normalize_side(setup.get("side")), _canonical_tracker_setup_family(setup))
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _discovery_window_slice(namespace: dict, first: str, last: str) -> dict:
+    """The records of one namespace whose `scan_date` falls inside the window.
+
+    A shallow selection - the record dicts themselves are shared, never copied
+    and never mutated - so the `lately` block costs a dict comprehension rather
+    than a second pass over the tracker.
+    """
+    selected = {}
+    for setup_id, setup in (namespace or {}).items():
+        if not isinstance(setup, dict):
+            continue
+        scan_date = str(setup.get("scan_date") or "").strip()[:10]
+        if scan_date and first <= scan_date <= last:
+            selected[setup_id] = setup
+    return selected
+
+
+def _discovery_rows_for_window(
+    discovery: dict,
+    *,
+    window: str,
+    sessions,
+    first: str,
+    last: str,
+    expired: dict[tuple[str, str], int],
+    flag_key: str,
+) -> list[dict]:
+    header = {
+        "window": window,
+        "window_sessions": sessions if sessions is not None else "",
+        "window_start": first,
+        "window_end": last,
+    }
+    rows: list[dict] = []
+    for cohort in discovery.get("cohorts", ()) or ():
+        row = dict(header)
+        row.update(
+            {
+                "row_kind": "cohort",
+                "cohort": cohort.get("cohort", ""),
+                "side": "",
+                "setup_family": "",
+                "avg_closed_r": cohort.get("avg_closed_r"),
+                "n_expired_unmeasured": "",
+                "flag": "",
+            }
+        )
+        row.update(
+            _discovery_headline_fields(cohort.get("win_rate"), cohort.get("closed_episodes"))
+        )
+        rows.append({column: row.get(column, "") for column in DISCOVERY_STATS_COLUMNS})
+
+    seen: set[tuple[str, str]] = set()
+    for family in discovery.get("families", ()) or ():
+        key = (str(family.get("side") or ""), str(family.get("setup_family") or ""))
+        seen.add(key)
+        row = dict(header)
+        row.update(
+            {
+                "row_kind": "family",
+                "cohort": "",
+                "side": key[0],
+                "setup_family": key[1],
+                "avg_closed_r": family.get("avg_closed_r"),
+                "n_expired_unmeasured": expired.get(key, 0),
+                "flag": flag_key if family.get(flag_key) else "",
+            }
+        )
+        row.update(
+            _discovery_headline_fields(family.get("win_rate"), family.get("closed_episodes"))
+        )
+        rows.append({column: row.get(column, "") for column in DISCOVERY_STATS_COLUMNS})
+
+    # A family whose every record aged out unmeasured still gets a row, at n=0
+    # with blank rates. Leaving it out would hide the one fact about it.
+    for key, count in sorted(expired.items()):
+        if key in seen:
+            continue
+        row = dict(header)
+        row.update(
+            {
+                "row_kind": "family",
+                "cohort": "",
+                "side": key[0],
+                "setup_family": key[1],
+                "avg_closed_r": None,
+                "n_expired_unmeasured": count,
+                "flag": "",
+            }
+        )
+        row.update(_discovery_headline_fields(None, 0))
+        rows.append({column: row.get(column, "") for column in DISCOVERY_STATS_COLUMNS})
+    return rows
+
+
+def _build_discovery_stats_rows(
+    tracker: dict | None,
+    *,
+    namespace_key: str,
+    builder,
+    flag_key: str,
+) -> list[dict]:
+    from evidence_stats import LATELY_SESSIONS, lately_window
+
+    tracker = tracker if isinstance(tracker, dict) else load_setup_tracker_payload()
+    namespace = tracker.get(namespace_key, {}) or {}
+    rows = _discovery_rows_for_window(
+        builder(tracker),
+        window=DISCOVERY_WINDOW_ALL,
+        sessions=None,
+        first="",
+        last="",
+        expired=_discovery_expired_counts(namespace),
+        flag_key=flag_key,
+    )
+    first, last = lately_window()
+    lately_tracker = dict(tracker)
+    for key in ("setups", "control_setups", "study_setups"):
+        lately_tracker[key] = _discovery_window_slice(tracker.get(key, {}), first, last)
+    rows.extend(
+        _discovery_rows_for_window(
+            builder(lately_tracker),
+            window=DISCOVERY_WINDOW_LATELY,
+            sessions=int(LATELY_SESSIONS),
+            first=first,
+            last=last,
+            expired=_discovery_expired_counts(lately_tracker[namespace_key]),
+            flag_key=flag_key,
+        )
+    )
+    return rows
+
+
+def build_control_discovery_stats_rows(tracker: dict | None = None) -> list[dict]:
+    """The control / holdout comparison, flattened for a CSV and a table.
+
+    Read-only over the tracker payload. It writes nothing, scores nothing and
+    ranks nothing live: the control namespace is what the scan REJECTED, and a
+    row here is evidence about the gate, never a pick.
+    """
+    return _build_discovery_stats_rows(
+        tracker,
+        namespace_key="control_setups",
+        builder=build_control_discovery_rows,
+        flag_key="outperforming",
+    )
+
+
+def build_study_discovery_stats_rows(tracker: dict | None = None) -> list[dict]:
+    """The study namespace, flattened the same way.
+
+    Study ideas have never been promoted and touch no score; this is the surface
+    that measures them BEFORE any of them could.
+    """
+    return _build_discovery_stats_rows(
+        tracker,
+        namespace_key="study_setups",
+        builder=build_study_discovery_rows,
+        flag_key="promising",
+    )
 
 
 def get_last_daily_row_for_date(daily_rows, last_trade_date):

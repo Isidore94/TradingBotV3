@@ -314,13 +314,26 @@ def test_a_raising_discovery_export_never_costs_the_other_files(
     ), [record.getMessage() for record in caplog.records]
 
 
-def test_an_empty_tracker_writes_a_header_only_file(tmp_path, monkeypatch):
+def test_an_empty_tracker_writes_a_header_and_no_invented_numbers(tmp_path, monkeypatch):
     """An absent population is an empty table, never a crash and never a lie."""
     _redirect_exports(monkeypatch, tmp_path)
     legacy.export_setup_tracker_views({"setups": {}, "control_setups": {}, "study_setups": {}})
 
     for path in (legacy.CONTROL_DISCOVERY_STATS_FILE, legacy.STUDY_DISCOVERY_STATS_FILE):
         assert path.exists()
-        assert _read_rows(path) == []
         header = path.read_text(encoding="utf-8").splitlines()[0]
         assert "win_rate_lb" in header
+
+    # The study namespace is one population, so an empty one has no rows at all.
+    assert _read_rows(legacy.STUDY_DISCOVERY_STATS_FILE) == []
+    # The control comparison always names its three cohorts - that is
+    # `build_control_discovery_rows`' own shape and it is the honest one:
+    # "promoted: nothing graded" is a fact, and an absent row would leave a
+    # reader to guess whether the cohort exists. Every cell is BLANK, never 0.
+    rows = _read_rows(legacy.CONTROL_DISCOVERY_STATS_FILE)
+    assert {row["cohort"] for row in rows} == {"promoted", "near_miss", "random"}
+    assert all(row["row_kind"] == "cohort" for row in rows)
+    for row in rows:
+        assert int(row["n"]) == 0
+        assert row["win_rate"] == ""
+        assert row["win_rate_lb"] == ""
