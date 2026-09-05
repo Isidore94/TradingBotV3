@@ -20,7 +20,7 @@ with the newest dated entry, the dated entry wins and this block is stale.**
 |---|---|
 | Latest review | **2026-09-04: [project process review](docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)** over `f641421` (Codex). The trader said *"please review and implement the suggested changes"*; the lead turned it into five packets (Q1-Q5, Phase 0.18, `.claude/packets/Q*.md`), each built, reviewed by reproduction and merged the same evening. NOT built, ask-first (`bounce_bot_lib/legacy.py`): per-alert bar-close -> shown latency instrumentation, the H1 SPY recompute, a `stop_hit_at` column, the sweep autorun default. Also NOT in the review: the day's largest stall (19,922 ms at 07:03:47 in `ui/app.py:1240`). |
 | Working branch | **`main`** - **2026-09-04 evening: Phase 0.18 (Q1-Q5) MERGED at `b0db9bbe`** in a scratch worktree, packet order, every branch with a reviewer GO. Q1 `held_run_score` says what it MEASURED (5,222 held / 1,960 broken / 979 unmeasured live; D1 keeps the side, 8 opposed; the window is `lately_window`; a Measured column on the Daytrade Tracker). Q2 warehouse: `anchor_knowledge` observed/reconstructed/legacy, `path_kind`, read-only `band-coverage`, `rebuild-daily-features` (dry run by default) - gate #59's chain is now BD-100's four steps. Q3 AI grounding: typed source kinds, a position claim needs a surviving ref in `POSITION_SOURCE_IDS`, which is `journal.trades_and_reviews` only (the executive summary may never assert one; it is WITHHELD when it does), `metric_ref` on numeric claims, the morning file's three counts, `LikeLink.from_payload` and the audit scripts read `match_basis` (live 84 rows / 77 events / 41 linked / 36 none). Q4 overnight: consecutive clean exchange sessions + a RECORDED trader spot-audit gate enrichment (**enrichment refuses until `python -m ai_jobs.digest approve-audit` is run - 9 of 10 clean sessions today**), decision 0018 puts the deterministic slots before narration, `entry_index.json` is the frontier handoff. Q5: the pick scorecard runs on one owned worker with streamed reads, success-only `picks_scored_at` (15.7 s Qt stall the day before). Before it: the earnings-anchor bridge (14:30), T2 (12:40), T1 (11:30) - see the dated entries. |
-| Also in flight | **Nothing unmerged from today**: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
+| Also in flight | **`claude/m4-lake-band-variant` is UNMERGED (packet M4, 2026-09-05, off `e7b12ebe`)**: `feature_snapshot_daily` carries the CHALLENGER's bands beside the champion's (`avwap_variant_*`, `FEATURE_SET_VERSION` → `tier1_v2`, `tier1_v1` rows never rewritten), `swing_house_variant_v1` is a `dataclasses.replace` twin of `swing_house_v1` differing ONLY in `band_family`, and `band-coverage --compare A B` reads the two on the SAME occurrence ids with `swing_headline`'s ONE Wilson and a `not_paired` line. Shadow only, no lake write, BD-101, **live gate #66 owed**. Its packet's "`scripts/indicators/` has no importer yet" premise was REFUTED at code level (true since R5, 2026-08-17) - **no packaging trigger** - and the stale `CLAUDE.md` line is corrected on the branch. `claude/m1-band-variant-handoff` is the scanner half and shares no file. **Nothing unmerged from 2026-09-04**: `claude/q1-held-honesty`, `q2-warehouse-eligibility`, `q3-ai-grounding`, `q4-overnight-gates`, `q5-scorecard-worker` are CONTAINED in `main`. **`claude/s1-quick-verbs` IS UNMERGED** (8 commits, tip `0d51053`): its S1.1/S1.2 are SUPERSEDED by T1, S1.4 was rebuilt as `f903ca4`, and S1.3 (ONE Strength surface) is the only part still owed a decision - a fresh packet, never a merge of that branch. **Open incident, 2026-09-03 09:37-09:43 PT**: the F1 reviewer's probe wrote 13 PUBLISH rows (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`) into the live lake; whether to retire them is the trader's call. Every warehouse manifest written from an agent WORKTREE also carries `git_commit: ""` (`definitions_git_commit` reads `.git/HEAD` and `.git` is a file there) - noted by the Q4 reviewer, not fixed. R4's review advisories stay batched for V4. |
 | Active roadmap items | **V4** (Working-lately + the priority switch - which now inherits Q1's rule that only an ALIGNED same-session D1 setup carries the privilege - the AWAY Recap rebuild, the Setup Types tab, P10's `after_like` split, the R4 advisories). **Gate #59's runbook** (BD-100): nightly build -> `rebuild-daily-features --from 2026-08-01 --to <today>` dry run, then `--apply` on the trader's go -> `recompute-outcomes --apply` -> `band-coverage --month 2026-08` / `2026-09`. **Trader action owed**: `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>` (from `scripts/`) after spot-auditing three packs, or enrichment stays silent. Live gates #29-#52 owed across Phases 0.13 and 0.14; #53-#64 listed below. |
 | Last verified baseline | **`main` at `b0db9bbe`, 2026-09-04 evening, run in the SCRATCH merge worktree on the merged tree as committed, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 6710 passed, 1 skipped, 72 subtests passed, ZERO failures, 5 min 34 s - run as 6709 passed + 1 failed on the merged tree BEFORE this block was refreshed (the Q3 doc-scan test demands the glance block name `POSITION_SOURCE_IDS`; the merge had kept the pre-Q3 rows), and that one test re-run green after the refresh with no other file touched.** `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7, source selftest green. No packaging trigger (no dependency, asset or new top-level package; every new module is inside an already-collected package). Previous: 6608 passed at the earnings-anchor bridge (14:30 PT). |
 | Frozen exe | **NO REBUILD REQUIRED BY R1, and this is a measured statement rather than an omission.** P0-P6a and P8 add no dependency, no non-`.py` asset and no spec change; every new module is inside an already-collected package (`scripts/` root, `ui.annotations`, `research_warehouse`, `ai_jobs`). P7's asset was the one packaging trigger and its exe was already rebuilt on 2026-09-02: 420 MB, `selftest OK: 74/74 checks passed (frozen)`, exit 0, with the 74th check LOADING `setup_registry_v1.json` from inside the frozen process. Still a verification artifact: the desk runs from SOURCE |
@@ -33,6 +33,7 @@ the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 66 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
 | 64 | **The pick scorecard off the Qt thread (Q5)** - one desk session past the 13:00 PT close where `ui_stalls.jsonl` shows no row attributed to `autopilot_service.py` above 1,000 ms, `trading_bot.log` carries the scorecard lines, `autopilot_scorecard.csv` gained one row per pick group, and `autopilot_state.json` carries `picks_scored_at` (never `picks_scoring_failed_at`) | 2026-09-04 evening Q5 entry |
 | 63 | **The overnight run's stages and the digest gate (Q4)** - the first nightly run after merge: `ai_job_ledger.jsonl` shows every deterministic row (`journal_import` ... `daily_digest`) completed BEFORE `ai_summary` started; `entry_index.json` exists beside the packs and names the session; `python -m ai_jobs.digest gate` (from `scripts/`) prints `sessions_consecutive_clean` and `audit_recorded: false`, and the `journal_enrichment` row reads `refused: audit not recorded` until the trader runs `approve-audit` | 2026-09-04 Q4 entry |
 | 62 | **The AI grounding contract holds on a real night (Q3)** - the first nightly run after `claude/q3-ai-grounding` merges: `ai_morning_brief.txt` OPENS with `Analyzed A of N. Membership-only B. Failed C.` and `A + B + C == N`; every membership-only block leads with `membership only - ...` and carries NO position language; and `ai_jobs`' dropped-row log names any position or numeric drop with its detail - the three strings the code emits are **`position claim without a position source`**, **`position claim in the executive summary`** and **`numeric claim without a resolvable metric_ref`**, and those are what to grep for. **Read the executive summaries too**: 480 of 1,478 published ones asserted a position, so expect the system's `Executive summary withheld: ...` line to appear on the first night and to become rare as the model learns the rule. A night with ZERO drops is also a pass - the rule is that a drop, when it happens, is named. **Watch for over-drop**: if the analyzed count collapses versus the prior night, the numeric regex is catching prose and the packet's `NUMERIC_CLAIM_PATTERNS` is the one thing to widen or narrow. | packet Q3, 2026-09-04 |
@@ -100,6 +101,69 @@ the dated entry named beside it.
 | 19 | **Desk lockup fix** — one DESK session on a directional morning where the drain stages a large batch: the desk stays responsive, every staged pick reaches M5 Focus across successive ticks, and `ui_stalls.jsonl` charges no seconds to `focus_picks_panel.py` or `setup_delegate.py` | 2026-08-31 lockup entry |
 
 
+
+### 2026-09-05 - Packet M4: both AVWAP band families in the lake, and a twin swing recipe (branch, UNMERGED)
+
+**Branch `claude/m4-lake-band-variant` off `main` at `e7b12ebe`.** The warehouse
+half of the band challenger (plan.md Phase 0.19 item 2 = the study doc's T3 step
+4); M1 is the scanner half and they share no file. Trader, 2026-09-05: *"I want
+us to compare both to see what is better."*
+
+**What was true.** The challenger formula and its golden fixture had existed
+since 2026-08-26 (`scripts/indicators/avwap_band_variants.py`) and had measured
+nothing in the lake: `feature_snapshot_daily` carried the champion's bands alone,
+so there was no challenger number for any recipe to walk.
+
+**What landed.** (1) Nine additive columns on `feature_snapshot_daily` -
+`avwap_variant_value`, `_stdev`, `_upper_1..3`, `_lower_1..3`,
+`_formula_version` - computed in `compute_daily_features` from the SAME bars and
+the SAME anchor index as the champion's, through the pure indicator module, and
+**independently of whether the champion produced bands**: the two formulas fail
+on different inputs (the champion's σ is zero on a one-bar anchor; the
+challenger's is `None` until twenty closes exist), so gating one on the other
+would have dropped a measured band. A NULL band is "not measured", never a band
+on the centre line, and the formula version is written whenever the challenger
+was ATTEMPTED. `FEATURE_SET_VERSION` → `tier1_v2`; the identity carries the
+version so `tier1_v1` rows are untouched and old-shape partitions still read.
+(2) `swing_house_variant_v1`, a `dataclasses.replace` twin of `swing_house_v1`
+differing in `recipe_id`, `band_family` and `outcome_definition_id` and nothing
+else; `build_outcomes` picks the band map from the RECIPE, a variant recipe with
+no challenger bands walks `plain_no_target` rather than borrowing the champion's
+levels, and the twin's `band_variant_v1` definition id fences it out of every
+`house_default_v1` reader. Registered in the trial ledger as
+`swing_house_variant_v1_twin` before any outcome existed. (3)
+`band-coverage --compare A B`: one table, per knowledge bucket, both recipes
+adjacent, over the SAME occurrence ids, with `swing_headline`'s ONE Wilson lower
+bound - and an occurrence missing under either recipe on a `not_paired` line
+rather than dropped, because reading each recipe over whatever rows it has would
+measure coverage and report it as edge.
+
+**One thing the packet did not name and the code needed.** After the version
+bump a session can hold a `tier1_v1` row AND a `tier1_v2` row, and both snapshot
+readers (`_bands_by_occurrence`, `run_band_coverage`) took whichever landed last
+- file order. They now keep the newest `computed_at`.
+
+**One packet premise was refuted at code level.** M4 said `scripts/indicators/`
+"has no importer yet - the first one fires the packaging trigger". It is not
+true and has not been since R5 on 2026-08-17: `indicators` is in the spec's
+`FIRST_PARTY_PACKAGES` and `indicators.avwap_band_variants` is already in
+`selftest.LAZY_ENGINE_MODULES` (`chart_levels` reaches it). **No packaging
+trigger.** The stale `CLAUDE.md`/`AGENTS.md` line is corrected on this branch.
+
+**Shadow only.** `calc_anchored_vwap_bands` untouched; nothing reaches a
+detector, score, tier, alert, watchlist, Focus list or the review queue; the
+packet writes no lake row. Decision record **BD-101**; ERD updated; live gate
+**#66** owed.
+
+**Tests.** `tests/test_warehouse_band_variant_lake.py` (19), committed RED at
+`bac61c17` and run on `e7b12ebe`: 13 failed, 5 errors, 1 passed - the one that
+passes is the champion golden pin whose claim is that no number moved, so it must
+pass on both sides (Q2's `path_kind` golden works the same way). Two existing
+tests were UPDATED, not weakened, because the default recipe set genuinely grew
+from three to four: `test_alternative_recipes_share_one_occurrence_and_one_episode`
+and `test_the_recipe_mapping_is_the_normative_one`.
+
+---
 
 ### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
 

@@ -2904,3 +2904,96 @@ maintenance command under the lock and never a step in the nightly build.
 
 **Reopen if** the daily-feature partition is ever re-keyed by month, which
 would let `rebuild-month` own it directly and delete the carry.
+
+## BD-101 — The challenger's bands are a SECOND family beside the champion's, and its recipe is a twin
+
+**Decision (2026-09-05, packet M4; trader: *"I want us to compare both to see
+what is better"*, plan.md Phase 0.19 item 2, `docs/AVWAP_BAND_VARIANT_STUDY.md`
+T3 step 4).**
+
+**Nine additive columns, never a shared one.** `feature_snapshot_daily` gains
+`avwap_variant_value`, `avwap_variant_stdev`, `avwap_variant_upper_1..3`,
+`avwap_variant_lower_1..3` and `avwap_variant_formula_version`. The two families
+never share a column and never will. `avwape_*` means *the champion's*
+running-deviation sigma (decision 0008, frozen); `avwap_variant_*` means
+*AVWAP(HLC/3) ± k · stdev(close, 20, population)*. One column that sometimes
+meant either would make every stored row ambiguous the moment anybody changed a
+default, and the whole point of the study is a PAIRED comparison — which needs
+both numbers on one row, not one number and a flag.
+
+**Computed independently of the champion, from the same bars and anchor index.**
+`compute_daily_features` calls `features.avwap_variant_bands` → the pure
+`indicators.avwap_band_variants.oneoption_avwap_bands`, and does so whether or
+not the champion produced bands. The two formulas fail on DIFFERENT inputs: the
+champion's sigma is zero by construction on a one-bar anchor (where OneOption
+read 10.28), and the challenger's is `None` until twenty completed closes exist.
+Gating the challenger on the champion's `if bands:` would have silently dropped a
+measured band on exactly the rows the study is about.
+
+**A NULL band is "not measured", and the formula version says which.**
+`avwap_variant_formula_version` is written whenever the challenger was
+ATTEMPTED — that is, whenever an anchor was used — so a row with a version and
+NULL bands reads as "the sigma was unmeasurable here", while a row with neither
+predates the column. The centre (`avwap_variant_value`) is reported even when the
+sigma is not, because it IS measurable; what is never done is padding a band onto
+the centre line.
+
+**`FEATURE_SET_VERSION` → `tier1_v2`, and nothing is rewritten.** The dataset
+identity is `(symbol, session_date, feature_set_version)`, so a `tier1_v1` row
+and a `tier1_v2` row for one session are two rows and not a duplicate.
+`rebuild-daily-features` (BD-100) supersedes; the nightly simply adds the new
+shape. **Consequence, and it is the part that needed a fix**: a reader keyed on
+`(symbol, session)` could now hold two candidates, and `_bands_by_occurrence` and
+`run_band_coverage` took whichever landed last — file order. Both now keep the
+newest `computed_at`, a tie keeping what is already held.
+
+**The twin recipe is a `dataclasses.replace`, not a copy.**
+`swing_house_variant_v1` is built FROM `SWING_HOUSE_V1`, so a later change to the
+champion's management is inherited rather than forgotten: entry, stop model,
+management, targets, expiry, `analysis_unit` and `required_band_numbers` are the
+same object's values, and exactly three fields differ — `recipe_id`,
+`band_family` and `outcome_definition_id`. That is what makes the comparison a
+measurement of the BANDS rather than of two policies.
+
+**The recipe names its family; the caller does not choose.** `Recipe.band_family`
+is declarative for the same reason the LRSI recipes declare their timeframe: the
+recipe id and the levels that produced a row can never drift apart.
+`build_outcomes` takes `variant_bands_by_occurrence` and picks the map from the
+recipe. **A variant recipe with no challenger bands gets NO bands** — it walks
+`plain_no_target` and the row says so — rather than falling back to the
+champion's levels, which would file the champion's answer under the challenger's
+name.
+
+**Its own `outcome_definition_id` is a fence.** The twin writes
+`band_variant_v1`. Every existing reader filters on `house_default_v1`
+(`queries.slice_readout`), so a challenger row cannot wander into an aggregate
+computed over champion levels. Row identity is
+`(occurrence_id, recipe_id, outcome_definition_id)` and the recipe id already
+differs, so the second id buys ISOLATION rather than uniqueness — that is the
+reason for it.
+
+**Registered before any outcome.** `trial_ledger` gains
+`swing_house_variant_v1_twin`, status `collecting`, with the trader's
+authorization, the declared floors (≥ 20 forward sessions counted from the first
+session carrying BOTH families) and three failure modes — the first of which is
+the one that will actually happen: the two families are missing on different
+populations, so an unpaired comparison would measure coverage and report it as
+edge.
+
+**Which is why `band-coverage --compare` pairs.** One table, per knowledge
+bucket, both recipes as adjacent columns, over the occurrence ids that have a row
+under BOTH. An occurrence missing under either is counted on a `not_paired` line
+and is in NEITHER recipe's numbers. Win rate is over RESOLVED
+(TARGETED + STOPPED — an OPEN row has not answered the question) with
+`swing_headline`'s Wilson lower bound, the ONE Wilson for every trader-facing win
+rate.
+
+**Still shadow.** Nothing here promotes anything. The bands are almost all
+`reconstructed` (BD-99), which is research evidence and never promotion evidence,
+and `docs/AVWAP_BAND_VARIANT_STUDY.md` T4's three criteria — not this report —
+decide.
+
+**Reopen if** the champion's σ is ever promoted or replaced (which decision 0008
+and plan.md sec 5 forbid without a sec 7 decision), or if a THIRD band family
+appears — at which point `band_family` should become a lookup of column prefixes
+rather than a two-way branch.

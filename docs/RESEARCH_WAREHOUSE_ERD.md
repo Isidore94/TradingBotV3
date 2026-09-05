@@ -257,6 +257,22 @@ targeted one (BD-42's fallback, Q2.2). Neither column changes any stored value,
 and `path_kind` is excluded from the BD-98 unchanged-comparison so an existing
 row is not rewritten merely to gain a label.
 
+## Two AVWAP band families on one row (packet M4, 2026-09-05, BD-101)
+
+| Dataset | Columns | Formula | What NULL means |
+|---|---|---|---|
+| `feature_snapshot_daily` | `avwape_value`, `avwape_upper_1..3`, `avwape_lower_1..3` | the CHAMPION: `calc_anchored_vwap_bands`, OHLC/4 centre, running-deviation σ (decision 0008, frozen) | no anchor was used for this row |
+| `feature_snapshot_daily` | `avwap_variant_value`, `avwap_variant_stdev`, `avwap_variant_upper_1..3`, `avwap_variant_lower_1..3`, `avwap_variant_formula_version` | the CHALLENGER: `indicators.avwap_band_variants.oneoption_avwap_bands`, AVWAP(HLC/3) ± k·stdev(close, 20, population) | with a formula version present: the σ was unmeasurable here (fewer than 20 completed closes). With the version also NULL: the row predates the columns |
+| `outcome_path` | `recipe_id` = `swing_house_variant_v1`, `outcome_definition_id` = `band_variant_v1` | the twin of `swing_house_v1`: identical walk, levels from the challenger's family | — |
+
+**The two families never share a column**, and a variant recipe never borrows the
+champion's levels: where the challenger could not be measured, the twin walks
+`plain_no_target` and the row says so. `FEATURE_SET_VERSION` is `tier1_v2` since
+this packet; the identity carries the version, so a `tier1_v1` row and a
+`tier1_v2` row for one session coexist and readers keep the newest `computed_at`.
+The challenger is shadow only and its `outcome_definition_id` fences it out of
+every reader that filters on `house_default_v1`.
+
 ## Point-in-time columns
 
 `event_at` (market fact), `observed_at` (when this installation received it),

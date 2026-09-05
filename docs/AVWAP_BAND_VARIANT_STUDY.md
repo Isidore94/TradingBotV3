@@ -364,6 +364,24 @@ Shadow block, additive, no scoring change:
 4. Warehouse: additive columns `avwap_variant_upper_1..3` / `lower_1..3` and a
    `avwap_variant_formula_version` column; `FEATURE_SET_VERSION` bumps to
    `tier1_v2`, old rows keep `tier1_v1`, nothing rewritten.
+   **BUILT 2026-09-05, packet M4, BD-101** — and wider than this line asked for,
+   because bands with nothing walking them measure nothing. What landed:
+   nine additive columns (`avwap_variant_value`, `_stdev`, `_upper_1..3`,
+   `_lower_1..3`, `_formula_version`), computed in `compute_daily_features` from
+   the SAME bars and the SAME anchor index as the champion's and INDEPENDENTLY
+   of whether the champion produced bands; a twin swing recipe
+   `swing_house_variant_v1` (a `dataclasses.replace` of `SWING_HOUSE_V1` that
+   differs in `recipe_id`, `band_family` and `outcome_definition_id` and in
+   nothing else), registered in the trial ledger as
+   `swing_house_variant_v1_twin` before any outcome existed; and
+   `band-coverage --compare swing_house_v1 swing_house_variant_v1`, which reads
+   the two on the SAME occurrence ids per knowledge bucket with the ONE Wilson
+   lower bound and counts an unpaired occurrence rather than dropping it.
+   Shadow only, `calc_anchored_vwap_bands` untouched, no lake write by the
+   packet. **Live gate #66** is owed: the first nightly build plus a forced
+   `recompute-outcomes --apply` on the trader's go. T4's criteria below still
+   decide, and ≥ 20 sessions of forward accrual start from the first session
+   carrying BOTH families.
 
 Fences that apply to T3 and nowhere else in this plan:
 

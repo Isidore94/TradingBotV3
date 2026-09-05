@@ -951,6 +951,23 @@ which is evidence and must not be loaded as context.
   anchors (dry run by default; a year-partition RETIRE plus a verbatim carry of every row
   outside the range, because the partition is year-keyed). Runbook order:
   build -> rebuild-daily-features -> recompute-outcomes -> band-coverage.
+- **Both AVWAP band families sit on the daily snapshot, and a twin recipe walks
+  the challenger's** (packet M4, 2026-09-05, BD-101; branch
+  `claude/m4-lake-band-variant`, gate #66 owed). `feature_snapshot_daily` carries
+  `avwap_variant_value` / `_stdev` / `_upper_1..3` / `_lower_1..3` /
+  `_formula_version` beside `avwape_*`, computed from the SAME bars and anchor
+  index by `indicators.avwap_band_variants.oneoption_avwap_bands` and never
+  merged into one column; `FEATURE_SET_VERSION` is `tier1_v2` and `tier1_v1` rows
+  are never rewritten. `outcomes.SWING_HOUSE_VARIANT_V1` is a
+  `dataclasses.replace` of `SWING_HOUSE_V1` differing ONLY in `band_family`
+  (plus its id and `outcome_definition_id` = `band_variant_v1`, which fences it
+  out of every `house_default_v1` reader); `build_outcomes` picks the band map
+  from the RECIPE and a variant recipe with no challenger bands walks
+  `plain_no_target` rather than borrowing the champion's levels.
+  `cli band-coverage --compare A B` reads two recipes on the SAME occurrence ids
+  with `swing_headline`'s Wilson lower bound and counts an unpaired occurrence on
+  a `not_paired` line. Shadow only; T4's criteria decide and nothing here
+  promotes.
 - Phase 7: manifest-resolved read path and read-only Research panel; DuckDB remains
   optional and pyarrow can answer every slice.
 - Phase 8: three-class backups, restore check, single-flight build/status CLI, job
@@ -1102,6 +1119,65 @@ which is evidence and must not be loaded as context.
 Neither challenger is promoted. Their remaining evidence gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
+
+### 2026-09-05 - M4: both AVWAP band families in the lake, and a twin swing recipe (branch `claude/m4-lake-band-variant`)
+
+Trader, 2026-09-05: *"I want us to compare both to see what is better."* plan.md
+Phase 0.19 item 2 = `docs/AVWAP_BAND_VARIANT_STUDY.md` T3 step 4. The challenger
+formula and its golden fixture had existed since 2026-08-26 and had measured
+nothing, because the lake held only the champion's bands. **Shadow only**:
+`calc_anchored_vwap_bands` untouched, nothing reaches a detector, score, tier,
+alert, watchlist, Focus list or the review queue, and the packet writes no lake
+row. Decision record **BD-101**; live gate **#66** owed.
+
+- **The daily snapshot carries the challenger beside the champion (M4.1).**
+  `feature_snapshot_daily` gains nine additive columns -
+  `avwap_variant_value`, `avwap_variant_stdev`, `avwap_variant_upper_1..3`,
+  `avwap_variant_lower_1..3`, `avwap_variant_formula_version` - computed in
+  `compute_daily_features` from the SAME bars and the SAME anchor index as the
+  champion's, through the pure
+  `indicators.avwap_band_variants.oneoption_avwap_bands`
+  (AVWAP(HLC/3) ± k·stdev(close, 20, population)). The challenger is computed
+  **independently of whether the champion produced bands**: the two formulas fail
+  on different inputs, and gating one on the other would drop a measured band.
+  **A NULL band is "not measured", never a band on the centre line**, and the
+  formula version is written whenever the challenger was ATTEMPTED, so a
+  NULL-with-version row is distinguishable from one that predates the columns.
+  `FEATURE_SET_VERSION` is **`tier1_v2`**; the identity carries the version, so
+  `tier1_v1` rows coexist untouched and old-shape partitions still read.
+  `rebuild-daily-features` (Q2.4) recomputes both families with no change to its
+  contract.
+- **`swing_house_variant_v1`, the twin recipe (M4.2).** A `dataclasses.replace`
+  of `SWING_HOUSE_V1` so the two can never drift: same entry, stop model,
+  management, targets, expiry, `analysis_unit` and `required_band_numbers`,
+  differing in `recipe_id`, `band_family` and `outcome_definition_id` and nothing
+  else. `Recipe.band_family` is DECLARATIVE and `build_outcomes` picks the band
+  map from the recipe (`variant_bands_by_occurrence`), never from the caller; a
+  variant recipe with no challenger bands walks `plain_no_target` rather than
+  falling back to the champion's levels. Its own `outcome_definition_id`
+  (`band_variant_v1`) is a **fence**: every reader that filters on
+  `house_default_v1` can never see a challenger row. Registered in
+  `research_warehouse/trial_ledger.py` as `swing_house_variant_v1_twin` BEFORE
+  any outcome was inspected.
+- **`band-coverage --compare A B` (M4.3).** One table, per knowledge bucket, both
+  recipes as adjacent columns: n, resolved, TARGETED, STOPPED, win rate over
+  RESOLVED with `swing_headline`'s Wilson lower bound (**ONE Wilson**) and mean
+  net R - computed on the SAME occurrence ids. **An occurrence missing under
+  either recipe lands on a `not_paired` line and is in NEITHER recipe's
+  numbers**: reading each recipe over whatever rows it happens to have would
+  measure coverage and report it as edge. READ-ONLY, manifest byte-identical.
+- **Also:** the snapshot readers (`_bands_by_occurrence`, `run_band_coverage`)
+  now keep the newest `computed_at` per (symbol, session). Two feature-set
+  versions can coexist for one session after the bump and the old readers took
+  whichever row landed last.
+- **Not here, and named as owed:** the daily fact pack (`ai_jobs/digest.py`) is
+  Q4's file and is untouched; the comparison reaches the trader through the CLI
+  and, later, a Setup Tracker line. The scanner half of the challenger (the
+  hand-off fix and the `n_variant` line) is packet M1 and shares no file.
+- `tests/test_warehouse_band_variant_lake.py` (19), proven red on `e7b12ebe`
+  (13 failed, 5 errors) before the fix; the 19th is the champion golden pin whose
+  claim is that no number moved, so it passes on both sides. Two existing tests
+  UPDATED - not weakened - because the default recipe set genuinely grew.
 
 ### 2026-09-04 - Q3: typed sources, a position claim needs a position source, honest brief counts, one reader for `match_basis`
 
