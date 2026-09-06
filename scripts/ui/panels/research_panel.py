@@ -44,6 +44,11 @@ class ResearchPanel(QFrame):
         tabs.addTab(self.ticker_lookup_panel, "Ticker Lookup")
         tabs.addTab(self.price_alerts_panel, "Price Alerts")
         tabs.addTab(self.warehouse_readout_panel, "Research Warehouse")
+        # Held so the Working-lately strip's click-through can raise the one
+        # tab it points at (ST6.4). A named reference rather than a walk over
+        # `findChildren`, which would find the first QTabWidget on the page and
+        # break the day a second one appears.
+        self.tabs = tabs
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -66,6 +71,12 @@ class ResearchPanel(QFrame):
         layout.addWidget(pointer)
 
         layout.addWidget(tabs, 1)
+
+    def show_setup_tracker(self) -> None:
+        """Raise the Setup Tracker tab. The strip on the desk clicks through here."""
+        index = self.tabs.indexOf(self.setup_tracker_panel)
+        if index >= 0:
+            self.tabs.setCurrentIndex(index)
 
     def shutdown(self) -> None:
         # Named children, so this list has to be kept complete by hand - and it

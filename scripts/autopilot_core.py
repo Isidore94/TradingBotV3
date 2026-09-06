@@ -4002,6 +4002,19 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     if briefing_lines:
         briefing_sections = ["== MORNING BRIEFING (EVENING MODE) ==", _lines(briefing_lines), ""]
 
+    # ST6.6. The desk's own Working-lately line, in the EXISTING body of the
+    # existing AWAY-only digest. **No new push**: this file is the one verified
+    # home-folder digest AWAY already writes and the phone already reads, so the
+    # line rides output that is already inside the rule (`AWAY is the only Auto
+    # mode that pushes routine output`). Absent snapshot, absent section - the
+    # desk builds it on a desk session, and a phone report that invented a
+    # sentence about evidence it had not read would be the worst possible place
+    # to guess.
+    working_lately_sections: list[str] = []
+    working_lately_line = str(payload.get("working_lately_line") or "").strip()
+    if working_lately_line:
+        working_lately_sections = ["== WORKING LATELY ==", working_lately_line, ""]
+
     sections = [
         "TRADINGBOT AUTO PILOT - TODAY",
         f"Updated: {payload.get('generated_at', '')}",
@@ -4010,6 +4023,7 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         *header_bits,
         "",
         *briefing_sections,
+        *working_lately_sections,
         "== BEST SWING TRADES ==",
         _lines(swing_lines),
         "",

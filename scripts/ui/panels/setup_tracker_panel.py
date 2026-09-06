@@ -1776,7 +1776,6 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
     counted out loud; and when nothing is eligible the banner says which gate
     closed instead of crowning whoever was left.
     """
-    import working_lately
     from working_lately import select_leader, short_term_evidence_rows
 
     muted = theme.color("text_secondary")

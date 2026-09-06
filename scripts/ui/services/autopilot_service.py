@@ -42,6 +42,26 @@ _TICK_INTERVAL_MS = 30_000
 _HOURLY_REPORT_RETRY_MINUTES = 5
 _MAX_LOG_LINES = 400
 _MAX_REPORT_ALERTS = 15
+
+
+def _working_lately_report_line() -> str:
+    """The desk's Working-lately line for the AWAY digest, or "" (ST6.6).
+
+    READ from the snapshot the Working-lately service already published, with
+    its `snapshot_id`, so the phone report and the desk print the same reading.
+    An absent snapshot is an ABSENT SECTION, never a sentence about evidence
+    nobody read: a phone report is the worst possible place to guess.
+    """
+    try:
+        import working_lately
+        from ui.services.working_lately_service import read_persisted_snapshot
+
+        payload = read_persisted_snapshot()
+        if not payload:
+            return ""
+        return f"{working_lately.snapshot_line(payload)} [{working_lately.snapshot_stamp(payload)}]"
+    except Exception:  # noqa: BLE001 - a digest line never costs the digest
+        return ""
 # Machine-local kill switch for the swing-picks push, defaulting ON: only the
 # machine actually publishing the Away report should be phoning its picks.
 PUSH_SWINGS_SETTING = "push_away_swings"
@@ -1969,6 +1989,11 @@ class AutopilotService(QObject):
                     else []
                 ),
                 "runtime_line": f"Runtime: {socket.gethostname()} pid={os.getpid()}",
+                # ST6.6. The desk's own Working-lately line, READ from the
+                # snapshot the service already published - never rebuilt here,
+                # so the phone digest and the strip cannot be two readings. No
+                # new push: this is the existing AWAY-only digest body.
+                "working_lately_line": _working_lately_report_line(),
             }
             try:
                 from operations_audit import build_operations_audit

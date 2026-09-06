@@ -119,6 +119,20 @@ class _RecapWorker(QThread):
         except Exception as exc:  # noqa: BLE001
             unavailable["Focus lists"] = str(exc)
 
+        # ST6.6. The desk's own snapshot and this session's leader changes, read
+        # off the files the Working-lately service wrote - never rebuilt here.
+        # A recap that built its own reading would be a fifth answer to the
+        # question the snapshot exists to have one answer to.
+        snapshot: dict[str, Any] = {}
+        events: list[dict[str, Any]] = []
+        try:
+            from ui.services import working_lately_service as wl_service
+
+            snapshot = wl_service.read_persisted_snapshot()
+            events = wl_service.read_persisted_events(self._session)
+        except Exception as exc:  # noqa: BLE001
+            unavailable["working lately snapshot"] = str(exc)
+
         self.loaded.emit(
             away_recap.build_recap(
                 session_date=self._session,
@@ -127,6 +141,8 @@ class _RecapWorker(QThread):
                 digest_swings=swings,
                 focus_picks=focus,
                 unavailable=unavailable,
+                working_lately=snapshot,
+                leader_events=events,
             )
         )
 
@@ -177,9 +193,15 @@ class AwayRecapPanel(QFrame):
         # never drew them, so a whole AWAY day's alerts left one trace: the word
         # "alert(s)" in the summary line. A recap that drops the thing it was
         # opened for is not a recap.
-        self.alerts = QTableWidget(0, 7)
+        # ST6.6: an eighth column, INSERTED BEFORE the chart affordance so the
+        # chart stays the last column every reader here already addresses as
+        # `columnCount() - 1`. It carries the (bounce_type, side) CELL and the
+        # held x ran suffix the M5 row already showed - travelling, never
+        # recomputed, so the recap and the bar cannot disagree about which cell
+        # a row belonged to.
+        self.alerts = QTableWidget(0, 8)
         self.alerts.setHorizontalHeaderLabels(
-            ["Time", "Symbol", "Side", "Tier", "", "Trigger", ""]
+            ["Time", "Symbol", "Side", "Tier", "", "Trigger", "Cell / held x ran", ""]
         )
         self.alerts.setEditTriggers(QTableWidget.NoEditTriggers)
         self.alerts.itemActivated.connect(self._activate_alert)
@@ -383,12 +405,20 @@ class AwayRecapPanel(QFrame):
                     # page has to be able to tell the two apart.
                     "D1" if row.get("is_d1") else "",
                     str(row.get("trigger") or ""),
+                    " ".join(
+                        part
+                        for part in (
+                            str(row.get("cell") or ""),
+                            str(row.get("held_run_suffix") or ""),
+                        )
+                        if part
+                    ),
                     "",
                 )
                 for row in shown
             ],
-            text_columns=(5,),
-            chart_column=6,
+            text_columns=(5, 6),
+            chart_column=7,
             symbol_column=1,
         )
         self._update_status_toggle()

@@ -128,6 +128,47 @@ def read_held_run_summaries() -> Any:
         return None
 
 
+def read_persisted_snapshot(store_dir: Any = None) -> dict[str, Any]:
+    """The last published snapshot, straight off the file. `{}` when absent.
+
+    A module function on purpose: the AWAY Recap builds on a worker thread and
+    needs the reading, not the service. Constructing a `QObject` with a QTimer
+    child off the GUI thread to read two files would be a Qt object with no
+    owner and no event loop, which is a crash waiting for a slow day.
+    """
+    path = Path(store_dir) if store_dir is not None else default_store_dir()
+    try:
+        payload = json.loads((path / "snapshot_latest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def read_persisted_events(session: str = "", store_dir: Any = None) -> list[dict[str, Any]]:
+    """The leader-change events, optionally narrowed to ONE session's `as_of`."""
+    path = Path(store_dir) if store_dir is not None else default_store_dir()
+    wanted = str(session or "")[:10]
+    out: list[dict[str, Any]] = []
+    try:
+        text = (path / "leader_change_events.jsonl").read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        if wanted and str(row.get("as_of") or "")[:10] != wanted:
+            continue
+        out.append(row)
+    return out
+
+
 def _last_completed_session() -> date:
     """The session the snapshot is ABOUT. Today when the calendar refuses.
 
@@ -273,10 +314,7 @@ class WorkingLatelyService(QObject):
     # -- persistence -------------------------------------------------------
 
     def load_snapshot(self) -> dict[str, Any] | None:
-        try:
-            return json.loads(self.snapshot_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
+        return read_persisted_snapshot(self._dir) or None
 
     def previous_verdicts(self) -> dict[str, Any]:
         """`{kind: LeaderVerdict}` from the persisted snapshot, `{}` when none."""
@@ -284,27 +322,11 @@ class WorkingLatelyService(QObject):
 
     def events(self) -> list[dict[str, Any]]:
         """Every leader-change event ever written here, in file order."""
-        out: list[dict[str, Any]] = []
-        try:
-            text = self.events_path.read_text(encoding="utf-8")
-        except OSError:
-            return out
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(row, dict):
-                out.append(row)
-        return out
+        return read_persisted_events(store_dir=self._dir)
 
     def events_for_session(self, session: str) -> list[dict[str, Any]]:
         """That session's events only - what the AWAY Recap prints."""
-        wanted = str(session or "")[:10]
-        return [row for row in self.events() if str(row.get("as_of") or "")[:10] == wanted]
+        return read_persisted_events(session, store_dir=self._dir)
 
     def publish(self, snapshot: EvidenceSnapshot) -> list[dict[str, Any]]:
         """Persist the snapshot and append the events THIS call produced.
