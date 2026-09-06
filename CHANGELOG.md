@@ -1368,6 +1368,18 @@ having high R."*
   they carry no exit date until ST4 adds `representative_exit_date`. The
   short-horizon export's identity: `n_wins + n_losses + n_flats == samples_2d`,
   and `samples_2d + n_unmeasured == tracked_setups`.
+- **A renderer that has a verdict renders the verdict** (re-check). The banner's
+  short-term block was guarded on "a discovery row OR a leader" and otherwise
+  printed a hardcoded "not enough 2-session samples yet", so `no_clear_leader` -
+  the live state for that horizon, 12 eligible families with the top two 0.001
+  of bound apart - rendered as "no samples" under a card saying "no clear
+  leader". `_verdict_block_html` now renders all four states unconditionally.
+  **The freshness clause is per kind** (`freshness_sentence(kind)`,
+  `DATING_BASIS_BY_KIND`): the 2-session line says *measured*, the swing line
+  says *entry-dated*, and an unknown kind takes the conservative reading - one
+  sentence for both made whichever surface it did not describe say something
+  false. `discovery_note` moved beside `discovery_basis_phrase` so the sentence
+  and the gate it belongs to cannot drift.
 - **The 2-session export counts its own wins** (the ask, answered 2026-09-06).
   `build_tracker_short_horizon_rows` gained additive `n_wins` / `n_losses` / `n_flats` /
   `n_unmeasured` / `outcome_kind` / `horizon_basis` / `latest_measured_session` at the end of its

@@ -1656,6 +1656,27 @@ measurement and the reasoning behind each rule.
   defect: `n_wins + n_losses + n_flats == samples_2d`, and
   `samples_2d + n_unmeasured == tracked_setups`.
 
+  *And once more: a renderer that has a verdict must render it.* The re-check
+  found the banner's short-term block still guarded on "a discovery row OR a
+  leader", falling through to a hardcoded *"not enough 2-session samples yet
+  (accrues automatically each scan)"*. `no_clear_leader` matches neither
+  condition, and it is the LIVE state for that horizon - twelve eligible
+  families with the top two 0.001 of bound apart - so the banner said "no
+  samples" three lines under a card saying "no clear leader". Both statements
+  were on one screen and one of them was false. The conditional is gone. The
+  general rule: a special case written beside a state machine will eventually
+  contradict it, and a hardcoded sentence is a state the machine does not know
+  about.
+
+  *One clock per surface, named.* `FRESHNESS_SENTENCE` was a single constant
+  saying "measured inside 2 sessions" while only the 2-session rows are
+  measured-dated - so the swing line claimed a clock it does not have.
+  `freshness_sentence(kind)` reads `DATING_BASIS_BY_KIND` and says
+  **entry-dated** on the swing line, **measured** on the 2-session one, and
+  entry-dated for any kind it does not know, which is the conservative reading
+  rather than the flattering one. When ST4's `representative_exit_date` lands
+  the swing entry flips to `"measured"` and the sentence follows on its own.
+
   *The floor is judged BEFORE the clock.* A family with three samples is under
   the floor whatever the clock says, and answering "not fresh" to three samples
   answers a question the reader did not ask. So `select_leader` splits
