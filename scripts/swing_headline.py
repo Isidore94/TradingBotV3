@@ -159,9 +159,18 @@ def headline_from_counts(
     *,
     wins: Any,
     losses: Any,
+    flats: Any = 0,
     avg_r: Any = None,
     sessions: int = LATELY_SESSIONS,
 ) -> Headline:
+    """A headline from the integer counts a store actually observed.
+
+    ``flats`` is optional and additive (ST2 fix round): a store that counts an
+    exactly-flat outcome separately - the tracker's exports do since ST2.1 -
+    passes it, and `Headline` keeps it out of `n` while leaving it a MEASURED
+    outcome. A caller that has no flat count keeps today's behaviour exactly.
+    """
+
     def _int(value: Any) -> int:
         try:
             return max(0, int(float(value)))
@@ -179,6 +188,7 @@ def headline_from_counts(
         name=str(name or ""),
         wins=_int(wins),
         losses=_int(losses),
+        flats=_int(flats),
         avg_r=_float(avg_r),
         sessions=int(sessions),
     )
