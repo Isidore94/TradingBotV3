@@ -435,7 +435,7 @@ nobody has to reconstruct it from four entries:
 | V2 | 3 AWAY Recap | **NOT BUILT** - this is V4 |
 | V2 | 4 Market Journal one box | **BUILT** (gate #47). The Desk tab landed with V2; the LEFT-NAV PAGE landed with R4 A16, and R4 A17 moved the session roll to the open |
 | V2 | 5 hide the dead tabs | **BUILT** (gate #48) |
-| V3 | 1 win rate leads | **PARTIAL** (R4 B3 wired five surfaces). WIRED: the AWAY digest ranking (A11), `setup_docs.family_record_sentence` and its two renderers (B2), the Master AVWAP setups table's **Family Win %** column, the Setup Tracker's **Last 30 Days** tab, and all four Weekend Prep cohort tables (veto, like, pass, rejection), each sorting by the Wilson lower bound. ONE Wilson: `swing_headline.WILSON_Z`. STILL OWED: **the Setup Tracker's Setup Types tab** - and the reason is measured, not scheduling. `master_avwap_setup_type_stats.csv` carries no win column (only `target_hit_rate` / `stop_rate`, different questions), and `master_avwap_tier_outcomes.csv` cannot be joined at that table's grain: its 184 rows collapse to 71 (side, bucket, family, zone) groups, so one joined rate would repeat across up to six rows and read as each row's own. Giving it an honest win rate needs the tracker export to carry one |
+| V3 | 1 win rate leads | **BUILT AND COMPLETE** (R4 B3 wired five surfaces; ST2 closed the sixth, 2026-09-06). WIRED: the AWAY digest ranking (A11), `setup_docs.family_record_sentence` and its two renderers (B2), the Master AVWAP setups table's **Family Win %** column, the Setup Tracker's **Last 30 Days** tab, all four Weekend Prep cohort tables, and - since ST2.2 - the Setup Tracker's **Setup Types** tab, each sorting by the Wilson lower bound. ONE Wilson: `swing_headline.WILSON_Z`. The Setup Types seam was blocked on evidence, not scheduling: `master_avwap_setup_type_stats.csv` carried no win column (only `target_hit_rate` / `stop_rate`, different questions) and `master_avwap_tier_outcomes.csv` cannot be joined at that table's grain - its 184 rows collapse to 71 (side, bucket, family, zone) groups, so one joined rate would repeat across up to six rows and read as each row's own. ST2.2 gave the export its OWN `n_wins`/`n_losses` at its own grain, so nothing is joined. ST2.1 also fixed the recent-types cell, which was rebuilding `round(rate * n)` from a RECENCY-WEIGHTED rate and printing a count nobody observed |
 | V3 | 2 day-trade headline | **BUILT** - surfaces real since R4 A10, and since R4 B4 every number on the Daytrade Tracker names its own basis: the champion tier is a COLUMN (PROVEN / MUTED / active from the learning state, blank for a segment it never saw - live 4 / 2 / 185 / 104 of 295 rows), the aggregator's verdict is headed **Verdict (edge score)**, and the My Decisions tabs carry Held 30m / Held x Ran through the same helper on `held_run_score.ALL_DIRECTIONS`, a pooled cell accumulated from the EPISODES and never an average of the two sided cells |
 | V3 | 3 one `LATELY_SESSIONS` | **BUILT AND COMPLETE** (R4 B6). `review_learning.DEFAULT_WINDOW_SESSIONS` IS `LATELY_SESSIONS` and its cutoff walks the exchange calendar; Weekend Prep's week is `evidence_stats.WEEK_SESSIONS` (5). The state key, the report header, the CLI flag, the System Health audit and the Daytrade Tracker status line all say **sessions**, and a literal scan test fails if a `window_days` comes back |
 | V3 | 4 one annotation writer | **BUILT** - all five surfaces have a writer since R4 A5, and since R4 B5 every VERB stamps the screen: `commit_pass` bypassed `_record` entirely, so a day-trade pass was the one row that could not say where it came from. The guard is now behavioural (one test per real click handler, reading the written row) rather than a scan of `_record`'s source text, which a verb that never calls it satisfied |
@@ -449,6 +449,14 @@ the headline statistics are `swing_headline` and `held_run_score` - so what is
 missing is the surface, not the decision. **The priority switch is not built, and
 CLAUDE.md no longer claims a test for it** (R4 B3): the
 identical-visible-rows test is owed WITH the switch.
+
+**V4's "one leader" landed early, as packet ST2 (2026-09-06).** The existing
+"BEST PERFORMING RIGHT NOW" banner now consumes `working_lately.select_leader` -
+one declared decision with a declared margin (`LEADER_MARGIN_LB` 0.05) and a
+declared freshness window (`LEADER_FRESHNESS_SESSIONS` 2), four verdict states,
+and a study that never leads. `scripts/working_lately.py` is deliberately pure
+(no Qt, no file I/O) because the rest of V4's Working-lately surface builds on
+it. **The priority switch and the AWAY Recap are still NOT BUILT.**
 
 
 Decision `docs/decisions/0016-trader-vision-and-priorities.md` is the tie-breaker

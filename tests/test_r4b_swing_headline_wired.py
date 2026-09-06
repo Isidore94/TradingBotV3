@@ -167,11 +167,19 @@ def test_the_recent_types_tab_leads_with_the_win_rate_and_ranks_by_the_bound():
         "win rate leads; mean R stays beside it, never in front of it"
     )
 
+    # ST2.1 (2026-09-06) changed WHERE the pair comes from, not what this test
+    # asserts: `win_rate_closed` is a RECENCY-WEIGHTED mean and can no longer be
+    # turned back into a count, so these rows now carry the export's own
+    # `n_wins` / `n_losses` - which is what the desk writes since ST2.1. The
+    # weighted rate rides along under its own column heading. Every assertion
+    # below is R4 B3's, unchanged.
     rows = _recent_type_headline_rows(
         [
             {"setup_family": "thin", "status": "NEW", "closed_setups": "3",
+             "n_wins": "3", "n_losses": "0",
              "win_rate_closed": "1.0", "avg_closed_r": "2.0", "tracked_setups": "3"},
             {"setup_family": "thick", "status": "NEW", "closed_setups": "90",
+             "n_wins": "56", "n_losses": "34",
              "win_rate_closed": "0.62", "avg_closed_r": "0.4", "tracked_setups": "90"},
         ]
     )
