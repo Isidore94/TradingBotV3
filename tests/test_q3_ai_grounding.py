@@ -289,10 +289,18 @@ def test_the_position_vocabulary_is_word_bounded_and_case_insensitive():
     assert states_a_position("We are long BULL into the close")
     assert states_a_position("holding BULL from yesterday")
     assert states_a_position("an open position in BULL")
+    # Packet N2 item 4, 2026-09-05: the past participle. The alternation is
+    # wrapped in `\b(?:...)\b`, so "currently short" inside "currently shorted"
+    # had no trailing word boundary and the whole pattern missed - and "APPS is
+    # currently shorted" reached `ai_morning_brief.txt` that morning.
+    assert states_a_position("APPS is currently shorted")
+    assert states_a_position("APPS is currently longed")
     # A word that merely CONTAINS one of the tokens is not a position claim.
     assert not states_a_position("Prolonged consolidation above the band")
     assert not states_a_position("The longshot setups all failed")
     assert not states_a_position("BULL is on the longs watchlist")
+    # Still a verb about the market rather than a claim about an account.
+    assert not states_a_position("APPS is currently shorting sellers of volatility")
 
 
 def test_an_executive_summary_that_asserts_a_position_is_withheld():

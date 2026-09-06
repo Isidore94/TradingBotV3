@@ -18,7 +18,7 @@ references and never override plan.md Sections 5–7 or the Section 12 order.
 `CURRENT_CHECKPOINT.md` is a small active-work/branch/test stamp and must not duplicate either
 root truth file. `WISHLIST.md` is non-authoritative and cannot initiate work; only a
 trader-directed promotion into `plan.md` changes the build sequence.
-`GUI_LEARNING_PROGRESS.md` is retained only as a historical pointer.
+`docs/archive/GUI_LEARNING_PROGRESS.md` is retained only as a historical pointer.
 
 ## Rationale
 The former arrangement still duplicated implemented status across `plan.md`,

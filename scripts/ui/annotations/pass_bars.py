@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -48,6 +48,94 @@ SIDECAR_DIRNAME = "trader_annotation_bars"
 MAX_SIDECAR_BARS = 500
 
 _BAR_FIELDS = ("open", "high", "low", "close", "volume")
+
+
+# ---------------------------------------------------------------------------
+# The zone a naive desk bar is written in (N1, 2026-09-05)
+# ---------------------------------------------------------------------------
+class _PlatformLocalZone(tzinfo):
+    """The process's own local zone, resolved AT the moment being converted.
+
+    Windows exposes no IANA key, so `market_session.get_market_local_timezone()`
+    falls back to `datetime.now().astimezone().tzinfo` - a FIXED offset frozen
+    at the instant it was asked. Attaching that to a January bar in July is an
+    hour wrong, and an hour is three M5 bars. `datetime.astimezone()` on a naive
+    value asks the platform about THAT wall time, which is the only DST-correct
+    answer available without a new dependency, so this asks it per moment.
+    """
+
+    __slots__ = ()
+
+    @staticmethod
+    def _resolved(moment: datetime) -> datetime:
+        # `moment` carries this zone; strip it to ask the platform, which never
+        # re-enters here because a naive datetime has no tzinfo to consult.
+        return moment.replace(tzinfo=None).astimezone()
+
+    def utcoffset(self, dt):  # noqa: D102 - tzinfo protocol
+        return None if dt is None else self._resolved(dt).utcoffset()
+
+    def dst(self, dt):  # noqa: D102 - tzinfo protocol
+        return None if dt is None else self._resolved(dt).dst()
+
+    def tzname(self, dt):  # noqa: D102 - tzinfo protocol
+        return None if dt is None else self._resolved(dt).tzname()
+
+    def fromutc(self, dt):  # noqa: D102 - tzinfo protocol
+        # `dt` arrives as UTC wall time carrying this zone. Convert through the
+        # platform rather than the base class's dst() dance.
+        return dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=self)
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return "<desk local zone>"
+
+
+_PLATFORM_LOCAL = _PlatformLocalZone()
+
+
+def desk_zone() -> tzinfo:
+    """The zone a NAIVE bar stamp in a sidecar is written in.
+
+    THE ONE SEAM, NAMED (N1, 2026-09-05). The desk hands the capture rail bars
+    whose `dt` is naive DESK-LOCAL wall time: the live SHW sidecar's first bar
+    reads `2026-09-01T06:30:00`, and 06:30 is the RTH open on a Pacific desk,
+    not on an Eastern one. Every reader that has to compare such a bar with an
+    aware timestamp needs to know which zone that is, and guessing produced the
+    defect this seam exists to close - naive bounds handed to a tz-aware Arrow
+    column, reported for three nights as `research_store_unreachable`.
+
+    The configured desk zone wins (`market_local_timezone` in
+    `local_settings.json`, or `TRADINGBOT_MARKET_TIMEZONE`) because a trader who
+    has stated their zone has stated it. Failing a real IANA zone, the platform
+    is asked per moment so DST is right on both sides of a transition.
+
+    Callers reach this THROUGH THE MODULE GLOBAL so a test can pin it; a test
+    that resolves the zone from the machine it runs on is only a test on that
+    machine.
+    """
+    try:
+        from market_session import get_market_local_timezone
+
+        zone, _name = get_market_local_timezone()
+    except Exception:  # noqa: BLE001 - a settings read never costs a bar stamp
+        zone = None
+    # A ZoneInfo carries the DST rules; a bare fixed offset resolved from "now"
+    # does not, and is exactly what Windows hands back.
+    if zone is not None and getattr(zone, "key", None):
+        return zone
+    return _PLATFORM_LOCAL
+
+
+def attach_desk_zone(moment: datetime) -> datetime:
+    """ATTACH the desk zone to a naive moment; never strip an aware one.
+
+    CLAUDE.md's adoption-gate rule for this seam, applied to bar stamps:
+    dropping an offset silently reinterprets an instant, and here it would
+    reinterpret it by whole hours.
+    """
+    if moment.tzinfo is not None:
+        return moment
+    return moment.replace(tzinfo=desk_zone())
 
 
 def sidecar_dir(annotations_path: Any = None) -> Path:
@@ -104,7 +192,13 @@ def one_session(bars: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
 
 def _serialisable_bar(bar: Mapping[str, Any]) -> dict[str, Any]:
     stamp = bar.get("dt")
-    if isinstance(stamp, (datetime, date)):
+    if isinstance(stamp, datetime):
+        # N1: a new sidecar states its offset, so tomorrow's reader needs no
+        # convention to know what 06:30 meant. `datetime` is checked BEFORE
+        # `date` because it is a subclass of it, and a plain date has no zone
+        # to attach - it is a day, not an instant.
+        stamp_text = attach_desk_zone(stamp).isoformat()
+    elif isinstance(stamp, date):
         stamp_text = stamp.isoformat()
     else:
         stamp_text = str(stamp or "")

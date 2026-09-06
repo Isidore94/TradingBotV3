@@ -30,7 +30,7 @@ units re-weights every level computed across it: measured at a median ×0.0088
 step on 2026-07-29 in 1,179 of 1,236 rewritten files, which froze pre-splice
 anchored VWAPs near their 07-28 value and moved replayed targets on 49.6% of
 mark-days. Stops did not move (stored at scan time, never replayed). Full
-measurement: `docs/analysis/DAILY_BAR_VOLUME_CLIFF_2026-08-22.md`.
+measurement: `docs/archive/analysis/DAILY_BAR_VOLUME_CLIFF_2026-08-22.md`.
 
 **How the tag is derived.** From the run manifests' own
 `provider.daily_bars.success.<provider>` counters — evidence the scans already

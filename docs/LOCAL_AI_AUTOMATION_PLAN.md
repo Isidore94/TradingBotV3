@@ -1471,6 +1471,31 @@ local branch to its context window, and a truncation tripwire fails loudly when
 the server reports having seen materially less prompt than was sent. 80,000
 remains the cloud ceiling, so metered models are not penalised by a local limit.
 
+**Amended 2026-09-05 (packet N2): the INPUT budget and the OUTPUT cap are two
+different numbers, and the evidence-slicing map-reduce needs two of the second.**
+`scripts/ai_jobs/map_reduce.py` reads the pile in slices and then hands the model
+back only its own findings to synthesize (`ai_summary.request_ai_summary` twice
+over, first with a one-source `chunk_package` and then with a
+`findings_package`). Both calls shared one hard-coded `max_tokens` of 3,500, and
+the reduce answer is the long one: on the runs of 2026-09-03 and 2026-09-05 it
+stopped mid-string at 14,501 and 14,708 characters - 3,500 tokens of dense JSON
+at ~4.2 chars/token - and the night published UNSYNTHESIZED. There are now two
+caps. `LOCAL_MAP_GENERATION_TOKENS` (3,500) is what a single-shot summary or one
+slice sends and is what `local_evidence_budget_ceiling_chars` subtracts from the
+context; `LOCAL_SYNTHESIS_GENERATION_TOKENS` (8,000) is what the reduce call
+sends, chosen by `local_generation_tokens(evidence)` from the
+`map_reduce_synthesis` scope that `findings_package` already stamps.
+**The evidence budget keeps subtracting the MAP cap**: the reduce prompt is
+findings rather than evidence, so widening what the synthesis may WRITE must
+never narrow what a slice is allowed to READ. Separately, a **length stop**
+(`choices[0].finish_reason`, or Ollama's top-level `done_reason`) is now read
+BEFORE the text is parsed and earns one retry asking for at most 8 findings per
+section - never the identical request with the validator's rejection appended,
+which is more prompt against the same ceiling and is what burned ~14 minutes of
+generation on each of those two nights. A second cut raises
+`LocalOutputLengthError` and the `map_reduce` block records
+`synthesis_stop_reason`, `synthesis_retry` and `slices_retried`.
+
 Still open: the tracker file itself is 762 MB.
 
 

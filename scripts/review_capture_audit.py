@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Phase 0 capture-readiness evidence for the trade-discovery learning program.
 
-`GUI_TRADE_DISCOVERY_LEARNING_PLAN.md` Phase 0 will not let any of the later
+`docs/archive/GUI_TRADE_DISCOVERY_LEARNING_PLAN.md` Phase 0 will not let any of the later
 phases start until the desk can prove four things about its own learning
 inputs:
 

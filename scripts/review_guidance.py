@@ -16,7 +16,7 @@ decided by the ordering mode below. Nothing here can suppress an alert - the
 ceiling of this module's power is choosing what the trader sees FIRST, in
 keeping with the house rule that muted means CAUTION, not silence.
 
-Ordering gate (GUI_TRADE_DISCOVERY_LEARNING_PLAN.md sec 4.6 / 14, Phase 0
+Ordering gate (docs/archive/GUI_TRADE_DISCOVERY_LEARNING_PLAN.md sec 4.6 / 14, Phase 0
 task 6): the scoreboard folds episodes by (trade_date, symbol), so a Swing
 and an M5 thesis for the same ticker - or a long and a short - currently
 collapse into one segment sample. Until the Phase 3 identity/parity gate

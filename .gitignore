@@ -2,17 +2,16 @@
 .venv-mac/
 .tmp.driveupload/
 .pytest_cache/
-# PyInstaller output (packaging/tradingbotv3.spec): ~400MB bundle + work dir.
-dist/
-build/
+.ruff_cache/
 .vscode/
 .claude/*
 !.claude/agents/
+.codex/*
+!.codex/agents/
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-scripts/__pycache__/
 scripts/bounce_bot_backup_before_chop_filters_20260306.py
 data/avwap_signals.csv
 data/d1_features.csv
@@ -27,9 +26,6 @@ data/runtime/
 data/**/*.parquet
 data/**/*.sqlite3
 logs/
-logs/*.log
-logs/*.txt
-logs/*.csv
 /trading_bot.log
 /trading_bot.log.*
 /bouncers.txt
@@ -40,10 +36,13 @@ output/*
 run_python_script.ps1
 run_master_avwap_mini_pc.cmd
 
-# PyInstaller output. CLAUDE.md states these are gitignored; they were not,
-# and a git add -A swept 3,440 dist/ files into a commit (2026-08-08).
+# PyInstaller output (packaging/tradingbotv3.spec): ~400MB bundle + work dir.
+# A git add -A once swept 3,440 dist/ files into a commit (2026-08-08).
 /build/
 /dist/
 
 # Generated desk test output (P1.5). It is a run artifact, never a source file.
 desk_report.xml
+# Left behind by a sandboxed test run; its subfolder is owned by another account
+# and cannot be deleted without an admin prompt.
+.test_tmp/

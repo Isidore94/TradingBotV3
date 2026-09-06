@@ -2637,9 +2637,9 @@ This program is complete when:
 | `docs/decisions/0013-plan-md-authority-hierarchy.md` | Root `plan.md` remains authoritative |
 | `docs/EVENING_MODE_RUNBOOK.md` | Same discovery semantics across modes; preserve open+30/+45/+60 persistence and zero-recommendation truth |
 | `docs/FIRST_SESSION_CHECKLIST.md` | Session validation, artifacts, clock discipline, multi-machine drills, and the writer-role wording to clean up (Phase 0) |
-| `docs/FOCUS_PRICE_ALERTS_PROPOSAL.md` | Versioned user levels, one-fire-per-arm lifecycle, sticky delivery, last-price crossing separate from detector confirmation |
+| `docs/archive/FOCUS_PRICE_ALERTS_PROPOSAL.md` | Versioned user levels, one-fire-per-arm lifecycle, sticky delivery, last-price crossing separate from detector confirmation |
 | `docs/MACOS_SETUP.md` | Configurable cross-platform paths, per-machine local state, no Windows-only path assumptions in core storage |
-| `docs/MULTI_MACHINE_DESK_PROPOSAL.md` | Engine/data ownership remains on main; satellites consume relay snapshots and send acknowledged intents only |
+| `docs/archive/MULTI_MACHINE_DESK_PROPOSAL.md` | Engine/data ownership remains on main; satellites consume relay snapshots and send acknowledged intents only |
 | `docs/REGIME_INFRASTRUCTURE_PHASE1_RUNBOOK.md` | Scheduled point-in-time regime snapshots, explicit proxies/missing snapshots, no retroactive reconstruction |
 | `docs/REVIEW_LEARNING_LOOP.md` | Impression/action/outcome loop, shrinkage, annotation-only preference policy, and known identity limitations |
 | `docs/SETUPS_MAJOR.md` | Current swing/intraday ontology, house exits, favorite-zone doctrine, major levels, and production semantics |

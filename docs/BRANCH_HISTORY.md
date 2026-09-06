@@ -21,7 +21,7 @@ Commit counts below are measured against the pre-consolidation `main`
 
 Between 2026-08-04 and 2026-08-25 the Phase 0.5 work ran on a chain of branches
 rather than on `main`, because the trader was running unmerged branch code in
-production through a scheduled task (`docs/CHECKPOINT_REVIEW_2026-08-08.md`). Each
+production through a scheduled task (`docs/archive/CHECKPOINT_REVIEW_2026-08-08.md`). Each
 branch was cut from the previous one and merged forward, so the chain is nested
 rather than parallel: **`testing-week-2026-08-24` contained every commit of its
 predecessors.**
@@ -38,7 +38,7 @@ fast-forward. No conflict was possible and no merge resolution was performed.
 | `testing-week-2026-08-17` | 262 | 2026-08-04 → 2026-08-20 | `170172b` | The previous week's release candidate. All but one commit contained in `testing-week-2026-08-24`; the exception is a doc-reconciliation note superseded by the 2026-08-25 reconciliation. Branch retained for now |
 | `phase05-r2-focus-gating-strength-board` | 150 | 2026-08-04 → 2026-08-18 | `a8c696a` | R2 Focus gating and the M5 strength board. Contained in `main`. **Cleared for deletion 2026-08-26; deletion still owed** (see below) |
 | `claude/ticker-briefs-hardening-imcm8r` | 94 | 2026-08-04 → 2026-08-11 | `9e0df9e` | Ticker-brief hardening and the first night's measurements. Contained in `main`. **Cleared for deletion 2026-08-26; deletion still owed** (see below) |
-| `claude/trade-analysis-opus-prompt-vgg1n8` | 1 | 2026-08-22 | `6c1398f` | One additive document, merged into `main` on 2026-08-26 as `docs/prompts/TRADE_ANALYSIS_OPUS_ULTRACODE_PROMPT.md` |
+| `claude/trade-analysis-opus-prompt-vgg1n8` | 1 | 2026-08-22 | `6c1398f` | One additive document, merged into `main` on 2026-08-26 as `docs/archive/prompts/TRADE_ANALYSIS_OPUS_ULTRACODE_PROMPT.md` |
 
 ### The deletion itself is owed, and why
 
@@ -88,7 +88,7 @@ Two things must be settled before it can be merged:
    behavior, so the CLAUDE.md file-scoped ask-first rule governs the merge itself, not
    only any later edit.
 2. **It carries a filename collision.** The branch adds its own
-   `docs/ALERT_CENTER_QUALITY_PACKET.md` — a live spec for the packet it builds —
+   `docs/archive/ALERT_CENTER_QUALITY_PACKET.md` — a live spec for the packet it builds —
    while `main` already carries a *different* file at that exact path: the historical
    P1.6 packet recovered byte-for-byte from `671ee57` and classified as historical
    evidence in `docs/README.md`. Merging without renaming one of them would conflict,

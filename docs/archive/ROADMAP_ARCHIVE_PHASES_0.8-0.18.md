@@ -831,3 +831,300 @@ alert, Focus list or review queue, and promotion remains sec 7's job.
 
 Gate: one overnight `setup_research` run producing HTF rows inside the existing
 reserve, then a first read of whether any cell clears the evidence floor.
+
+
+---
+
+# Moved 2026-09-05 (repo cleanup): Phases 0.14 (V1/V2 build records), 0.15, 0.16, 0.17 and 0.18, verbatim from `plan.md` at `fa6f90b5`
+
+Each heading below left a stub in `plan.md` naming its status at the move. Nothing here is authority; an owed gate is owed because `CURRENT_CHECKPOINT.md` lists it.
+
+## Phase 0.18 — Process-review packets Q1-Q5 (2026-09-04) — BUILT, live gates #60-#64 owed
+
+Trader-authorized 2026-09-04 (*"please review and implement the suggested changes"*) over
+`docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md`. Five packets, disjoint files, built
+through the agent team (`.claude/packets/Q1.md`-`Q5.md`, machine-local):
+
+| Packet | Review finding | What it changes | State |
+|---|---|---|---|
+| Q1 | 1, 2, "lately" | `held_run_score`: held is MEASURED held (held / broken / pending / unmeasured, live 979 of 8,161 unmeasured read held), a break time the log cannot place is `unmeasured`, the D1 overlap keeps the SIDE (aligned / opposed / none / unknown, basis retrospective), the window is `evidence_stats.lately_window` with gaps reported, a Measured column on the Daytrade Tracker | **BUILT** (reviewer GO after one blocker round: a `registered` row's replay `logged_at` was counted as a measured hold - 728 phantom holds); gate #60 |
+| Q2 | 3 | warehouse: `anchor_knowledge` observed / reconstructed on the daily snapshot, `path_kind` on the swing outcome row, a read-only `band-coverage` report, a rebuild of PAST `feature_snapshot_daily` with anchors (dry run by default) - the missing link in gate #59's chain | **BUILT** (reviewer GO; advisory round taken); gate #61 |
+| Q3 | 4, 5 | AI grounding: typed source kinds, a position claim needs a journal source, a numeric claim names its `metric_ref`, the morning file prints analyzed / membership-only / failed; `LikeLink.from_payload` and the audit scripts read `match_basis` | **BUILT** (reviewer GO after one blocker round: the executive summary may never assert a position - 480 of 1,478 published ones did; only `journal.trades_and_reviews` supports a position claim); gate #62 |
+| Q4 | 6, 7 | overnight runner: consecutive clean exchange sessions + a RECORDED trader spot-audit (CLI) gate enrichment; decision 0018 puts the deterministic slots before narration; `entry_index.json` is the compact frontier handoff | **BUILT** (reviewer GO after one blocker round: the gate strip's number and the index's pack path); gate #63. **Behaviour change**: `journal_enrichment` refuses until the trader runs `python -m ai_jobs.digest approve-audit --pack ... x3` |
+| Q5 | performance | the daily pick scorecard streams both CSVs on ONE owned worker, writes `picks_scored_at` only on success, keeps last-good on failure (15.7 s Qt-thread stall on 2026-09-04) | **BUILT** (reviewer GO; advisories taken); gate #64 |
+
+**Deliberately NOT in these packets (ask-first, detector file):** per-alert bar-close ->
+shown latency instrumentation per engine and the H1 SPY recompute in
+`bounce_bot_lib/legacy.py`; a first-break-time column (`stop_hit_at`) on the outcome log;
+the sweep autorun default. Each needs the trader's yes for that file.
+
+**Owed at merge**: live gates #60-#64 (one per packet, text in each packet). Gate #59's
+runbook becomes Q2.4's chain: nightly build -> daily-feature rebuild `--apply` for 2026-08
+and 2026-09 -> forced `recompute-outcomes` -> `band-coverage`.
+
+## Phase 0.17 — Earnings-anchor bridge (2026-09-04) — BUILT, live gate #59 owed
+
+Trader-authorized 2026-09-04 by their own packet (the swing simulator follow-up). The D1
+scan appends every symbol's cached current and previous earnings anchor to
+`earnings_avwap_anchors.csv` through `append_anchor_candidates`, so the warehouse's
+`anchor_instance` covers the scanned universe instead of 7 symbols. Shadow-only
+additive; `anchors_from_bronze` and `build_anchor_instances` untouched.
+
+**Owed**: gate #59 (next scan writes the rows; next nightly build creates ~2,200
+`anchor_instance` rows and non-null `feature_snapshot_daily` bands; then a forced
+`recompute-outcomes` re-grades `swing_house_v1`). **Not built, separate decision**: the
+investigation's recommendation 4 (the simulator returning `None` instead of a no-target
+run when bands are missing) - that changes outcome semantics and needs its own packet.
+
+## Phase 0.16 — Capture and board rules (packets T1 + T2, 2026-09-04) — BUILT, live gate #58 owed
+
+Trader-authorized 2026-09-04 in their own words (quoted in full in
+`docs/DESK_INTERNALS.md`, "T1 - the capture window is the why, and a look is not a
+queue"). Tester-first: 48 tests committed red on `claude/t1-capture-and-board`
+before any fix existed. **Note the name collision:** the sigma-band research
+letters T1/T3/T4 above are a DIFFERENT thing; this is the capture-and-board packet.
+
+1. **A rail veto retires with no box and one row.** `vetoRetireRequested` →
+   `_retire_after_veto`; `removeTodayRequested` is the "✕ Not today" BUTTON's
+   signal alone and that button is unchanged. Both verbs share one body
+   (`_retire_review_alert(..., write_not_today_annotation=)`). **Lead ruling
+   2026-09-04:** the day-trade veto retires through the box-free verb too, after
+   its Focus placement, in that order.
+2. **A like never advances.** `likeRecorded` → `_after_like`. The review event
+   keeps the name `like_advance` - `review_learning.TAKE_ACTIONS` keys on the
+   string. **AMENDED by packet T2 (item 6) the same day: this holds for the QUICK
+   like only.**
+3. **A board look holds no place and is never skip-counted.**
+   `_is_manual_chart_look` on `MANUAL_CHART_TAG`; the M5-bar `skip` with
+   `clicked_away_from_m5_alert` and the dequeued-D1 return-to-head rule are both
+   untouched.
+4. **The TC2000 board's parity rows auto-join M5 Focus.** DESK only, empty
+   `failed_floors` only, the one adoption gate re-run on the row's own numbers,
+   `_ignored_symbols` skipped, through the STORE (one `add_many` per side) +
+   `mark_auto_adopted` and never `FocusService.add`, never removes, idempotent,
+   one `strength_board_auto_focus` review event per refresh.
+5. **Fix round 1 (reviewer NO-GO, blocker):** the auto-join also skips any name
+   the trader took OFF a focus side today through ANY door.
+   `FocusPickStore.declined_today`, recorded by the STORE on `remove`,
+   `remove_everywhere`, `clear` and the fade under an additive `declined` key in
+   `focus_auto_picks.json`, same-session only and pruned on load.
+   `_ignored_symbols` alone let four other removal doors be undone by the next
+   fifteen-minute refresh, re-injecting the name into `longs.txt` with it.
+
+6. **Packet T2 - a claimed like is one double-click, and it advances** (trader,
+   second pass: *"for the 'like and claim' part of the capture tab, a double click
+   of any of the setups there should be sufficient. I shouldnt have to type
+   anything below that box. and then double clicking that box should advance the
+   chart."*). `commit_like` no longer refuses an empty why (`_prompt_for_why`
+   deleted, placeholder "why (optional)", whitespace stripped to nothing);
+   `_on_captured` splits on `like_mode_of` and fires the new
+   `likeAdvanceRequested` for a claimed like, `likeRecorded` for a quick one; the
+   panel's `_advance_after_like` records and calls `_advance_review_queue`. Both
+   handlers record `like_advance` through one helper (`_record_like_advance`). An
+   advance is NOT a retirement: no park, no Focus drop, no sweep, no placement.
+   This supersedes R9.2(a)'s required why for the claimed path.
+
+**Live gate (#58):** one DESK session where a double-click on a veto reason
+retires the chart with no box and `trader_annotations.jsonl` gains ONE row;
+**a double-click on a claim with nothing typed advances to the next chart and
+leaves ONE row; a quick like leaves the chart up** and the trader arms an alert on
+it before moving on;
+"✕ Not today" still opens the box and advances; five clicks across the RS/RW and
+TC2000 boards leave "queue clear" reading "queue clear"; and after the next
+15-minute Strength refresh the TC2000 parity names are on M5 Focus with markers in
+`focus_auto_picks.json`, and a "Not today" on one of them does not come back on
+the refresh after that. **Fix round 1 adds one clause:** remove one of the
+adopted names from the Focus list itself (not through "Not today") and confirm it
+is still gone after the next refresh, and that `longs.txt` did not regain it.
+
+## Phase 0.15 — Desk assessment packets (2026-09-03 evening, trader-authorized)
+
+The evening assessment of 2026-09-03 (artifact "Where the Desk's Time Goes";
+record in `CURRENT_CHECKPOINT.md` and `docs/DESK_INTERNALS.md`) measured the desk
+after F1 and found the research tee thread at 101% of one core, the M5 scan cycle
+preamble at 513-535 s against a 300 s candle, and 24 live gates owed on built work.
+The trader authorized every packet in it. Status per packet:
+
+1. **S1 - the tee (BUILT 2026-09-03 evening, BD-96).** Dedupe before work,
+   persisted high-water mark, seal-side dedupe, `dedupe` CLI. Live gate #55: one
+   post-restart session where `thread_cpu.jsonl` shows `warehouse-m5-tee` under
+   5% of a core after the close and the day's spool holds one session of rows.
+2. **The duplicated lake (REPAIRED 2026-09-03 22:29-22:42 PT with the trader's
+   permission - 10,530,916 bar_m5 rows dropped, 25 + 4 derived/feature sessions
+   recomputed, BD-97; outcomes for those months still owed).** Original text: Gate #56, the
+   trader's commands in BD-97's runbook: `dedupe --dataset bar_m5 --apply`, then
+   `rebuild-month --month 2026-08 --apply` and `--month 2026-09 --apply`
+   (`retire_partition` + recompute of `bar_derived` and `feature_snapshot_intraday`,
+   BD-97). Outcomes: `recompute-outcomes` (BD-98, `force` re-simulates terminal
+   rows, one lock per bucket) RAN 2026-09-04 07:00-07:53 PT: 32/32 buckets,
+   134,502 outcome rows superseded, 3,803 unchanged, no errors. Gate #56 MET in full.
+3. **S3 - the thread gauge (BUILT 2026-09-03 evening).** Always on; verified by
+   gate #55's read of `thread_cpu.jsonl`.
+4. **S2 - the M5 cycle (INSTRUMENTED 2026-09-03 night; trim still measure-first).**
+   The preamble line now names each RRS run and each engine sweep (`rrs_scan_5m`
+   ... `engine_h1_color`); no detection change. After S1 reaches the desk, read
+   one RTH morning of "Scan cycle N preamble" lines, then trim what the line names
+   and decide on a detector process. Further edits to `bounce_bot_lib/legacy.py`
+   remain ask-first.
+5. **S4 - scan cadence (BUILT 2026-09-03 night).** DESK days run four scans
+   (open+60, 13:00 ET, the 15:45 ET preview, the close slot that writes the
+   tracker); AWAY/EVENING keep the hourly ladder for the phone digest;
+   `desk_scan_cadence: "hourly"` restores the ladder. Live check: one DESK day
+   whose run manifests show four `master_scan` runs.
+6. **E1 - validation week (TRADER DECISION).** No new packets until gates #53,
+   #54, #51, #52, #39 and #41 are closed with the trader watching.
+7. **E2 - bar source (RESOLVED 2026-09-03 evening: it is a PIN, not a defect).**
+   The desk's `local_settings.json` carries `daily_bars_source: "yahoo"`, the
+   R10.0b §1.3 interim pin (`master_avwap_lib.daily_bars_source_pin`), so every
+   D1 scan's daily bars come from Yahoo by configuration; IB serves intraday bars
+   and the champion's M5 loop. `CLAUDE.md`'s market-data line now says so.
+8. **F1 - the control documents (NEXT COMMIT).** Archive `CURRENT_CHECKPOINT.md`
+   and `CHANGELOG.md` past their 1,500-line rule, move BUILT phases out of this
+   section's work queue, cut `CLAUDE.md` to rule + pointer where
+   `docs/DESK_INTERNALS.md` holds the story.
+9. **F2 - dead weight (BUILT 2026-09-03 night, two items handed back).** The Tk
+   GUI, its shims, the Tk journal/market-prep tabs, `TickerMover.py` and `PyQt5`
+   are removed (19 files). `evidence_snapshots/` already had retention (7/4/12,
+   `snapshot_to_das.ps1`) - the assessment was wrong there. The 498 MB `.corrupt`
+   copy was deleted 2026-09-03 22:30 PT with the trader's permission.
+   `technical_integrity_events.jsonl` rotation: DECLINED 2026-08-17 (R6(b)) until
+   the warehouse's verified ingest of it passes; `bronze_technical_integrity_events`
+   now runs nightly, so the trigger has fired and the segment scheme is OWED as its
+   own packet. The six ATR implementations stay: two are in fenced formula files.
+10. **F3 - the operational storage tier (STEP 1 BUILT 2026-09-04, decision 0017).**
+    `scripts/tracker_store.py` mirrors every tracker save into a SQLite record
+    store beside the JSON (shadow, default ON, never costs the save); no reader
+    moves until gate #57 (five parity-clean live saves). Step 2 moves readers one
+    at a time, narrowest first, each fail-before-fix; the CSV stores follow as
+    their own packets after the tracker's step 2 is live.
+
+### Phase 0.14 packet V2 — The loop closes (2026-09-02) — items 1, 4 and 5 BUILT; 2 and 3 NOT BUILT
+
+Authorized by the trader pasting the packet. Requires V1, which was merged first.
+
+**Item 1 — nightly auto-tagging. BUILT.** `journal_auto_tag` runs P6a's plan every
+night at the recorded 0.70 threshold, right after `journal_import` and before
+every other slot. That position is an INSERT and the second and last sanctioned
+exception to "later phases append; they never reorder" — the import puts the
+night's trades in, and every cohort slot below reads them. It never touches a
+confirmed row (the refusal lives in the STORE) and a failed write is reported
+LOUDLY, because the journal is the one store on this desk that may not fail
+quietly. The Journal nav button carries the review count, computed off-thread and
+started from `showEvent`.
+
+**Item 4 — the Market Journal capture is one box and one Enter. BUILT.** The
+timeframe picker and the Save button leave the SURFACE; nothing leaves the
+SCHEMA. Plain Enter saves through an event filter (a `QShortcut` on Return would
+fire for the whole panel); Ctrl+Enter still works. The entry is dated to the
+SESSION IT IS ABOUT — today while today trades, the last session that traded on a
+weekend or holiday — and `written_after_the_session` is still COMPUTED.
+
+**Item 5 — hide the dead surfaces, keep the code. BUILT.** One setting,
+`qt_show_unused_tabs`, default OFF, hiding the Alerts / D1 Focus / Armed tabs and
+the Universe page. **Hidden is not removed**: `setTabVisible`, no index shifts,
+every timer still visibility-gated, and a test proving every rail shortcut is
+panel-scoped, bound once, and not owned inside a hidden tab.
+
+**Item 2 - Weekend Prep. (a), (b), (c) and (e) BUILT; the rest of (c) owed.**
+
+* **(a) ONE Refresh** drives every step. The click starts each page's own reader
+  and returns - measured under 50 ms - and names the steps as they start. The five
+  per-page buttons left the layout and stay as objects, because `reload()` uses
+  each one as its own single-flight guard.
+* **(b) The verdict card**, five to eight lines from a PURE builder
+  (`scripts/weekend_verdict.py`): take rate, blind spots and leaks BY NAME, the
+  best liked claim and weakest veto reason at h3, the week's net and win rate
+  (**confirmed tags only**), and the tag-review count. Every measured line carries
+  its n; a cohort under n=5 is named as thin and never ranked; a missing input
+  says so instead of printing a zero.
+* **(c) The RS/RW prose is retired** - it duplicated a live board with a Saturday
+  snapshot. The log SCANS are kept, uncalled, and say so in capitals in their own
+  docstrings so nobody "fixes" a blank page by wiring the wall of text back.
+* **(e) "Tag this week"**, a sixth step: the week's provisional and needs_review
+  trades, confirm-all-shown and confirm-selected through the store's own API, ten
+  visible rows, read on a worker, and a failed write reported LOUDLY.
+
+**Still owed by item 2:** the takes/watch-conversion table (the summary is still
+text), the ten-visible-rows pass over the OTHER tables, and the collapsed
+"how to read this" notes.
+
+**Item 3 - the AWAY Recap. NOT BUILT.** It is still the forward-looking digest
+assembly - best-swing block, classified D1 alerts, staged picks, Focus lists -
+with no outcomes, no charts, no "what moved", no "alerts that were right", no
+"your names" and no "Review these" walk-through. All four of the packet's blocks
+and the chart-on-click door remain.
+
+**Live gate (#46):** one nightly run that tags new trades, and the Journal nav
+button showing the count the next morning.
+
+**Live gate (#47):** one Market Journal entry written from the desk tab in one
+Enter, filed against the right session.
+
+**Live gate (#48):** a desk session with the four surfaces hidden and every rail
+hotkey still firing.
+
+### Phase 0.14 packet V1 — Names first (2026-09-02) — original build record; R4 advanced items 2 and 3
+
+Authorized by the trader pasting the packet.
+
+**Current state:** R4 wired the tracker and alert suffix and implemented
+cross-bucket phone ranking. Only the Working-lately surface/priority switch below
+remains V4 work. The original formula/fetch descriptions below are historical;
+the current Phase 0.14 table above includes the session-relative RVOL correction.
+The [2026-09-04 process review](docs/analysis/PROJECT_PROCESS_REVIEW_2026-09-04.md)
+recommends measured-held, side/time-aware overlap and evidence-quality checks
+before ranking influence. These are review findings, not newly authorized work;
+existing live and promotion gates remain owed.
+
+**Item 1 — the Strength Board becomes the trader's TC2000 scan. BUILT.**
+
+1. **Relative volume**, `AVG(V / mean(V78 ... V1170), 12)`, POSITIONAL exactly as
+   TC2000 is. Blank, never zero, under sixteen sessions of history.
+2. **The fetch period grew from `5d` to `1mo`** and had to: the RVOL needs 1,182
+   bars and `5d` holds about 390, so every RVOL would have been blank.
+3. **The floors** — price over $5, above the D1 200 and 100 SMA, above the M5
+   15 EMA — each a NAMED boolean with the sentence that failed. The timeframes
+   are a stated ASSUMPTION (decision 0016 records both as open); one line
+   corrects either.
+4. **The universe** is `universe_all.txt` plus the four watchlists. The D1 SMAs
+   come from a second batched daily download; still **zero IB traffic**.
+5. **A row that misses a filter is GREYED, not dropped**, with what it missed in
+   its tooltip, behind a default-on "TC2000 parity" toggle that hides them.
+6. **One window, two sections, RS/RW first** — the RS/RW board moved out of the
+   tab stack into the strength column, in a scroll area, because hosted bare its
+   minimum took the column's floor from 190 px to 452.
+7. **Golden `tc2000_parity_v1`**: five symbols, sixteen sessions, expected values
+   computed by a SECOND naive implementation written from the trader's formula
+   lines rather than from the module under test. All five agree to four decimals.
+
+**The fence on `strength_scan.py` is NARROWED, not lifted.** It was frozen whole
+by the R8 spec ("stop and ask the trader first"); the trader asked, naming the
+file. The test now asserts the seven FORMULA functions are byte-identical to the
+R8 baseline — stronger than "no edits", which could be satisfied by not touching
+the file while the numbers moved underneath it.
+
+**Item 2 — `held_run_score`. BUILT; tracker and suffix wired by R4; switch owed.**
+
+`scripts/held_run_score.py` computes P(level held in the first 30 min) x
+trimmed-mean MFE_R of the held ones, per (bounce_type, time_bucket,
+market_environment, d1_setup_present), over a rolling 20 sessions with
+`evidence_stats` floors. Shadow only: the champion tier, the mutes and the PROVEN
+stamp are untouched, and a test asserts the champion never imports it.
+
+The Daytrade Tracker column/sort and M5 alert-bar suffix are built. The Alert
+Center ordering switch remains V4 work.
+
+**Item 3 BUILT; item 4 NOT BUILT.**
+
+3. R4 made the phone digest rank across favorite and near buckets, using family
+   Wilson bounds at one declared horizon with expected R as tiebreak.
+4. There is no "Working lately" section on the Trading Desk and no priority
+   switch. `review_learning`'s callouts, the tracker's per-family outcomes and the
+   four verdict cohorts all still require leaving the desk to read.
+
+**Live gate (#44):** one DESK session where the Strength section matches the
+trader's TC2000 list on the same minute for the top ten names, with the parity
+toggle on.
+
+**Live gate (#45):** the RS/RW section opens above the Strength section in the
+alert column and neither widens the column.

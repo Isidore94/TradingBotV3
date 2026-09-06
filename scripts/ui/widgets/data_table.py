@@ -1,6 +1,6 @@
 """The shared table shell, and the one implementation of the §12 width rule.
 
-The rule, verbatim from `docs/GUI_REDESIGN_PLAN_2026-08-25.md` §12:
+The rule, verbatim from `docs/archive/GUI_REDESIGN_PLAN_2026-08-25.md` §12:
 
     Tables stretch to the available width. A table never hugs the left edge of
     an otherwise empty page: the widest TEXT column takes the slack, numeric and

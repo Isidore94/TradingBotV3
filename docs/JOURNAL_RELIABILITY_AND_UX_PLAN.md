@@ -496,7 +496,7 @@ touches the store, the migration or the reconciliation path.
 
 ## Nightly-slot honesty and the Questrade chain surface — BUILT 2026-08-24
 
-Two packets from `docs/analysis/AI_LAYER_REVIEW_2026-08-24.md` §5 landed on
+Two packets from `docs/archive/analysis/AI_LAYER_REVIEW_2026-08-24.md` §5 landed on
 `testing-week-2026-08-24` (`5350361`, `40d7d3a`); neither touches the store,
 the migration, or reconciliation itself.
 

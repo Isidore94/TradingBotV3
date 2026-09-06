@@ -445,6 +445,11 @@ def run_map_reduce(
 
     collected: list[Mapping[str, Any]] = []
     failed: list[str] = []
+    #: Which slices answered only after a length stop forced a shorter ask
+    #: (packet N2). One entry per slice, never a bare flag: a night where six
+    #: slices had to shrink is a different night from one where a single tail
+    #: chunk did, and the ledger can say which.
+    retried: list[dict[str, str]] = []
     for position, chunk in enumerate(chunks, start=1):
         if on_progress:
             on_progress(position, planned, chunk.name)
@@ -463,6 +468,8 @@ def run_map_reduce(
         summary = result.get("summary") if isinstance(result, Mapping) else None
         if isinstance(summary, Mapping):
             collected.append(summary)
+        if isinstance(result, Mapping) and str(result.get("length_retry") or ""):
+            retried.append({"slice": chunk.name, "retry": str(result["length_retry"])})
 
     read = len(collected)
     findings = _merge_findings(collected)
@@ -475,6 +482,8 @@ def run_map_reduce(
 
     package = findings_package(findings, evidence, read=read, planned=planned, failed=failed)
     synthesis_error = ""
+    synthesis_stop_reason = ""
+    synthesis_retry = ""
     try:
         reduced = call(
             provider="local",
@@ -486,8 +495,14 @@ def run_map_reduce(
         summary = reduced.get("summary") or {}
         usage = reduced.get("usage") or {}
         drops = list(reduced.get("citation_drops") or [])
+        synthesis_retry = str(reduced.get("length_retry") or "")
     except Exception as exc:
         synthesis_error = f"{type(exc).__name__}: {exc}"
+        # The stop reason travels on the exception rather than being parsed back
+        # out of its text (`ai_summary.LocalOutputLengthError`); anything else
+        # leaves it "", which is "not a stop" and NOT "not measured" -- the key
+        # is always present, which is what makes the two readable apart.
+        synthesis_stop_reason = str(getattr(exc, "stop_reason", "") or "")
         _log.warning("synthesis pass failed (%s); publishing the findings unsynthesized", exc)
         summary = unsynthesized_summary(findings, read=read, planned=planned)
         usage = {}
@@ -515,6 +530,28 @@ def run_map_reduce(
             "chunk_chars": size,
             "synthesized": not synthesis_error,
             "synthesis_error": synthesis_error,
+            # Packet N2, 2026-09-05. THREE keys, all always present, and they
+            # answer three different questions a reader of a published document
+            # has:
+            #
+            #   synthesis_stop_reason  why the model stopped on the LAST reduce
+            #                          attempt. "length" means the answer was
+            #                          cut by the output cap; "" means it was
+            #                          not a stop. Never absent, so "" cannot be
+            #                          confused with "this build did not look".
+            #   synthesis_retry        "shorter" when the published synthesis is
+            #                          the second, smaller answer; "" when the
+            #                          first answer stood.
+            #   slices_retried        one {slice, retry} row per MAP slice that
+            #                          had to shrink. Empty on a clean night, so
+            #                          the word "shorter" appears in this block
+            #                          only when something actually did.
+            #
+            # An older manifest carries none of the three and still loads: every
+            # reader added since reaches for them with .get().
+            "synthesis_stop_reason": synthesis_stop_reason,
+            "synthesis_retry": synthesis_retry,
+            "slices_retried": retried,
             "coverage_statement": coverage_statement(
                 planned=planned, read=read, failed=failed, sources=sources
             ),
