@@ -1536,6 +1536,20 @@ these"*) and the Phase 2 exit gate in §6.5; read them before either.
    keep that true**: a runner that can approve its own evidence has asserted,
    not audited. `python -m ai_jobs.digest gate` prints both halves.
 
+   **Recorded 2026-09-06** over 2026-08-27, 2026-09-02, 2026-09-03 and 2026-09-04,
+   audited against the raw stores by the lead on the trader's delegation. The
+   audit found two packs (2026-08-28, 2026-09-02) that had read the outcome
+   store BEFORE the after-close sweep of a frozen desk wrote the day (`in_window`
+   0 over 78 and 447 finals), so the repair is now a command:
+
+       cd scripts
+       python -m ai_jobs.digest rebuild --pack 2026-09-02
+
+   writes a SUPERSEDING sibling from the live sources (D6: the early pack is
+   never edited), refreshes `entry_index.json`, calls no model, and like
+   `approve-audit` is human-run only - a runner that rebuilds its own evidence
+   on a schedule can quietly rewrite the record.
+
 `gate_met = window_met and audit_recorded`. **`journal_enrichment` refuses
 unless `gate_met`** — until the trader records the audit that slot calls no
 model, writes nothing, and its ledger row reads

@@ -19,12 +19,12 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-05 evening: Phases 0.19 and 0.21 (M1-M5) MERGED at `918445f3`** - the five measurement repairs from the trader's *"Fix all of these failures including the one we just queued"*: M1 the band challenger measures (the catch-up path carries the block; 0 of 11,292 measured since 08-26), M2 `unresolved` means UNMEASURED (3,607 swept trades that measured their bars were labelled unresolved), M3 the tracker keeps up (the purity gate honours the Yahoo pin that was refusing the only writer slot; two clocks; `EXPIRED_UNMEASURED`), M4 both band families in the lake with a twin swing recipe, M5 the control/study populations and the April exit framework reach the Setup Tracker. Every branch reviewed by reproduction (M1 GO, M2 GO, M3 GO after three blocker rounds incl. a NameError on the tracker-write path, M4 GO, M5 GO after one). Same evening: **INCIDENT** - two reviewer scratch scripts overwrote the live tracker and the leaderboard CSVs; restored byte-exact from the mirror copy and re-exported (see the 19:56 entry); the scratch-script rule is in CLAUDE.md. |
+| Latest work | **2026-09-06 morning (Sunday): the Q4 spot-audit done against the raw stores and RECORDED (`gate_met: true`), two stale packs (2026-08-28, 2026-09-02, both read before the frozen desk's sweep wrote the day) rebuilt through the new human-run `python -m ai_jobs.digest rebuild --pack <date>`, and the three open scoring questions DECIDED on the trader's *"go ahead and do this yourself"*: (a) swept-measured trades stay OUT of the eod-hold tier cells (golden characterization added), (b) `EXPIRED_UNMEASURED` stays IN the scoring population, (c) M3's 28 are `UNTRADEABLE` and already outside every count - see the 2026-09-06 entry. Before that, 2026-09-05 evening: Phases 0.19 and 0.21 (M1-M5) MERGED at `918445f3`** - the five measurement repairs from the trader's *"Fix all of these failures including the one we just queued"*: M1 the band challenger measures (the catch-up path carries the block; 0 of 11,292 measured since 08-26), M2 `unresolved` means UNMEASURED (3,607 swept trades that measured their bars were labelled unresolved), M3 the tracker keeps up (the purity gate honours the Yahoo pin that was refusing the only writer slot; two clocks; `EXPIRED_UNMEASURED`), M4 both band families in the lake with a twin swing recipe, M5 the control/study populations and the April exit framework reach the Setup Tracker. Every branch reviewed by reproduction (M1 GO, M2 GO, M3 GO after three blocker rounds incl. a NameError on the tracker-write path, M4 GO, M5 GO after one). Same evening: **INCIDENT** - two reviewer scratch scripts overwrote the live tracker and the leaderboard CSVs; restored byte-exact from the mirror copy and re-exported (see the 19:56 entry); the scratch-script rule is in CLAUDE.md. |
 | Working branch | `main` at `918445f3`. Phase 0.20 (N1-N3, the other session, afternoon) and Phases 0.19/0.21 (M1-M5, this session, evening) both merged through scratch worktrees; the M merge took main's cleaned-up control files as the base and re-inserted the M bullets, renumbered the M gates to #70-#74 (Phase 0.20 had taken #65-#67) and M4's decision to BD-102 (N3 took BD-101). |
 | Unmerged / open | **Repo cleaned 2026-09-05 ~21:30 PT** (trader: *"clean up the repo as needed"*): 42 merged branches deleted on `origin` and locally, 100 throwaway `worktree-agent-*` refs and 42 registered worktrees removed, every one proven contained in `main` first; the record is `docs/BRANCH_HISTORY.md` ("The 2026-09-05 cleanup"). Left: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree LOCKED by the other session), two local-only pre-consolidation branches. `claude/m1-band-variant-handoff`, `m2-unresolved-means-unmeasured`, `m3-tracker-keeps-up`, `m4-lake-band-variant`, `m5-shown-and-read`, the five Q branches and the three N branches are all CONTAINED in `main`. `claude/s1-quick-verbs` stays UNMERGED (S1.3 owed a decision). Open incident 2026-09-03 (13 reviewer PUBLISH rows in the lake) is the trader's call. `local_writer_lock` never unlinks its lock files - 89,406 stale ones removed by hand tonight; a sweep-on-release packet is owed. |
-| Next action | **Live gates #70-#74 at the next close slot (Monday 13:00 PT)**: the tracker writes (`saved_by: close_slot`, the purity line with `pin=yahoo`), the band-variant stats fill, the Controls / Studies / Exit frameworks tabs render, and the after-close sweep logs the four-way split. Then two scoring decisions the packets deliberately left on the table, each needing a golden fixture first: (a) should the champion aggregator count the 3,607 `swept_measured` trades, (b) should `EXPIRED_UNMEASURED` records leave the champion's scoring population. Then V4. |
-| Trader actions owed | **Run `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>`** after spot-auditing three packs, or enrichment stays silent (Q4). **Decide** the two scoring questions under Next action, and the 28-of-41 third population M3 named (baseline scenarios neither open nor closed). |
-| Last verified baseline | **`main` at `918445f3`, 2026-09-05 late evening, in the SCRATCH merge worktree on the merged tree as committed, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 6924 passed, 1 skipped, 72 subtests passed, ZERO failures, exit 0, 5 min 42 s.** `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7, source selftest green. No packaging trigger (`indicators` was already collected; every new module sits in an already-collected package). |
+| Next action | **Live gates #70-#74 at the next close slot - Tuesday 2026-09-08 13:00 PT; Monday 2026-09-07 is Labor Day, not a session (`market_calendar.is_session` checked 2026-09-06)**: the tracker writes (`saved_by: close_slot`, the purity line with `pin=yahoo`), the band-variant stats fill, the Controls / Studies / Exit frameworks tabs render, and the after-close sweep logs the four-way split. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63's audit half was met 2026-09-06).** The two scoring questions and M3's third population are DECIDED (2026-09-06 entry: (a) NO, (b) NO, (c) `UNTRADEABLE`), so nothing there is owed. Then V4. |
+| Trader actions owed | None from 2026-09-06: the spot-audit is recorded and the three decisions are taken (the trader may overrule any of them; each is one sentence in the 2026-09-06 entry and the CHANGELOG). Still owed from earlier: the 2026-09-03 lake incident call (13 reviewer PUBLISH rows), the lock-file sweep packet, restart the desk only when a code change lands (today's `rebuild` subcommand is CLI-only; the desk needs no restart for it). |
+| Last verified baseline | **`main` working tree of 2026-09-06 ~07:40 PT (the digest `rebuild` subcommand + four tests + docs), on the desk's checkout: `pytest tests/ -q` with NOTHING DESELECTED: 6928 passed, 1 skipped, 72 subtests passed, ZERO failures, exit 0, 5 min 20 s.** The first full run that morning had ONE failure that predates this work: `test_no_active_document_quotes_a_detail_string_the_code_no_longer_emits` guards the glance block for the `POSITION_SOURCE_IDS` sentence, which the 2026-09-05 cleanup commits (`ee325704`/`db58beeb`) dropped when they rewrote the Working-branch cell; restored in gate #62's row, re-run green. `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7. No packaging trigger (a subcommand inside an already-collected package). Previous: `918445f3`, 6924 passed. |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
 | Desk | **RESTARTED 21:18 PT 2026-09-05 on `main` at `e1a2de15` (pid 9036, trampoline 25260) on the trader's "You restart the desk"**: the old desk (pid 29260, `a6fb1a8d`) closed cleanly through `CloseMainWindow` (both writer leases released in the log), and two launches through `trading_desk.cmd` from a hidden `cmd /c` left no process, so the lead started `.venv\Scripts\python.exe launch_gui.py` directly with stdout/stderr captured under the session scratchpad (`desk_stdout.log`: "desk slot held"); `trading_bot.log` shows Auto Pilot ON from saved state, weekend quiet hours, IB 502 (TWS off on a Saturday, expected), 668 MB at 60 s. N1-N3 and M1-M5 are LIVE on this desk. The heartbeat file is not refreshed on a weekend (still pid 600 / 09-04 14:11), as on the previous restart. |
 
@@ -41,8 +41,8 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | 66 | **The nightly synthesis completes (N2)** - that night's `ai_summary_*.json` has `map_reduce.synthesized: true` (or `synthesis_retry: "shorter"` and a WEIGHED document, not the 12-row pile), `synthesis_stop_reason` present and `""`, and the ledger reason no longer ends "NOT synthesized"; two consecutive synthesized nights close it. Watch `trading_bot.log` for a new prompt-truncation refusal (the reduce call now asks for 8,000 output tokens against 65,536); an EMPTY `slices_retried` is expected | 2026-09-05 N1-N3 entry |
 | 65 | **The sidecar completion finishes a row (N1)** - the first nightly run after merge: the `sidecar_completion` ledger line reads `completed 1 of 1` (or names a reason that is NOT `research_store_unreachable`), and `b9344eb372284d7f98f6083b50178e0b.completed.json` exists under `C:\TradingBotData\trader_annotation_bars\` with ~78 bars whose `dt` strings all carry an offset. `lake_read_failed: <Exc>` is a PASS of the naming half and a FAIL of the read. Clears gate #39's blocker | 2026-09-05 N1-N3 entry |
 | 64 | Q5 scorecard off the Qt thread: one session past the close with no `autopilot_service.py` stall over 1,000 ms, the scorecard lines in the log, one CSV row per pick group, `picks_scored_at` set and never `picks_scoring_failed_at` | 2026-09-04 Q5 entry |
-| 63 | Q4 overnight stages: the first nightly run shows every deterministic ledger row completed before `ai_summary`, `entry_index.json` beside the packs, `python -m ai_jobs.digest gate` printing `sessions_consecutive_clean` and `audit_recorded: false`, and `journal_enrichment` reading `refused: audit not recorded` | 2026-09-04 Q4 entry |
-| 62 | Q3 grounding on a real night: `ai_morning_brief.txt` opens `Analyzed A of N. Membership-only B. Failed C.` with A + B + C == N, every membership-only block leads with `membership only`, every drop named by one of the three detail strings (`position claim without a position source`, `position claim in the executive summary`, `numeric claim without a resolvable metric_ref`); a collapse in the analyzed count means over-drop | 2026-09-04 Q3 entry |
+| 63 | Q4 overnight stages: stage half MET 2026-09-05 (every deterministic row before `ai_summary`, `entry_index.json` beside the packs, `refused: audit not recorded`); **audit half MET 2026-09-06** (`audit_recorded: true`, `gate_met: true` over four verified packs). Remaining: the first `journal_enrichment` ledger row that is not `refused`, on the next session night (Tuesday 2026-09-08; Monday is Labor Day - read Wednesday morning) | 2026-09-04 Q4 entry; 2026-09-06 entry |
+| 62 | Q3 grounding on a real night: `ai_morning_brief.txt` opens `Analyzed A of N. Membership-only B. Failed C.` with A + B + C == N, every membership-only block leads with `membership only`, every drop named by one of the three detail strings (`position claim without a position source`, `position claim in the executive summary`, `numeric claim without a resolvable metric_ref`); a collapse in the analyzed count means over-drop. The position rule the code enforces is `ai_summary.POSITION_SOURCE_IDS = {"journal.trades_and_reviews"}` - a position claim stands only on the journal, never on a watchlist or Focus membership (the fix-round ruling; `tests/test_q3_ai_grounding.py` pins this sentence). Met 2026-09-05 (`Analyzed 53 of 108. Membership-only 55. Failed 0.`) | 2026-09-04 Q3 entry |
 | 61 | **MET 01:26 PT 2026-09-05**: `band-coverage` 105 of 105 September occurrences with all three bands, the observed / reconstructed / legacy split PRINTED, `path_kind` populated | 2026-09-05 overnight entry |
 | 60 | Q1 measured held: the Daytrade Tracker's Measured column populated, the status line naming the window and its missing sessions, `held_run_score.load_episodes()` reporting the four counts on the live file | 2026-09-04 Q1 entry |
 | 59 | **MET 01:24 PT 2026-09-05**: 3,678 anchors bridged, `anchor_instance` 3,681 rows, `swing_house_v1` graded 376 / 291 where 0 / 257 stood | 2026-09-05 overnight entry |
@@ -113,6 +113,83 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-06 (Sunday, ~06:00-07:30 PT) - The digest spot-audit done and recorded, two stale packs rebuilt, the three open scoring questions decided
+
+**Trader:** *"go ahead and do this yourself"* over the three actions the 2026-09-05 handoff had
+left them: the Q4 spot-audit and its `approve-audit` command, and the two scoring questions plus
+M3's third population. Nothing here is a scan, score, alert or detector change; the one code
+change is a human-run CLI subcommand and the one test added to scoring code is a characterization.
+
+**The spot-audit, against the raw stores.** Finals in window, `close_r` / `mfe_r` / `mae_r` n and
+means, distinct symbols, the exclusion accounting, review-event counts by action and dwell were
+re-derived from `intraday_bounce_outcomes.csv` (324,605 rows, 19,921 finals) and the three
+`alert_review_events` files with pandas only - no `scripts/` import, so the scratch-script rule
+was never in play. 2026-08-27 (813/813) and 2026-09-04 (539 in window, 392 review rows, dwell
+7,598) verify exactly; 2026-09-03 within four late finals (364 vs 368). **Two packs did not
+verify:** 2026-08-28 read `in_window` 0 over 78 finals and 2026-09-02 read 0 over 447 (442 of
+them `eod_complete`). Both were generated (05:03 / 06:40) before the after-close sweep of the
+frozen desk wrote those days, so the pack was faithful to its moment and wrong about the
+session, and the nightly summary of 2026-09-02 was told `n=0`. A first attempt to rebuild them
+from a scratch script against the live store was refused by the harness, which is the right
+refusal; the repair became a command instead.
+
+**Built:** `python -m ai_jobs.digest rebuild --pack <date> ...` (from `scripts/`), calling the
+digest's own `run_daily_digest(narrate=False)` so the correction is a SUPERSEDING sibling (D6),
+`entry_index.json` refreshed, no model, and - like `approve-audit` - unreachable from any nightly
+job. `tests/test_q4_overnight_gates.py` gained three tests, two red before the subcommand existed
+(argparse rejected `rebuild`). Run on the live store: `2026-08-28.1.json` (78 in window, 1
+usable) and `2026-09-02.1.json` (447 in window; 168 usable + 251 annotation + 5 information + 12
+below floor + 11 unresolved = 447; 165 `close_r` at mean -0.0858, win 46%, 91 symbols; 57 review
+rows), each re-audited against the same raw read. The pack's `median_dwell_ms` is the upper-median
+element rather than pandas' two-middle average, which explains the only even-n disagreement.
+
+**Recorded:** `digest_audit_approval.json` over 2026-08-27, 2026-09-02 (the rebuilt sibling),
+2026-09-03 and 2026-09-04, note naming who audited and how and which packs were rebuilt;
+`python -m ai_jobs.digest gate` prints `gate_met: true` (10 consecutive clean, audit recorded).
+**Gate #63's audit half is met; `journal_enrichment` runs on the next session night** - Tuesday
+2026-09-08 (Monday is Labor Day), so that is the thing to read Wednesday morning.
+
+**Decided (a) - swept-measured trades stay OUT of the eod-hold tier cells.** Recon (read-only):
+the tier / family / Setup Types cells all summarise `r_eod_hold` (`setup_scoreboard.py` lines
+762-764, 1041-1064); the live file holds 3,657 swept-measured finals (basis `last_measured_bar`
+2,079 + `stop_hit_from_prior_measurement` 1,578), NONE with a `close_r`, ALL with a
+`last_measured_close`, and 3,620 of them (99%) in 2026-08/09 - the freeze window. The eod-hold
+cell records one exit policy; a swept trade was measured under another; and folding them in would
+move the champion on a sample of days the desk was down. They stay readable under
+`sweep_exit_policy_rows`, never blended. Pinned by a golden characterization added to
+`tests/test_setup_scoreboard.py` (3 eod rows + 2 swept: family cell n=3 mean 0.5, `stop_exit`
+n=1 at -1.0, `last_measured` n=2, `policy_measured {eod_hold: 3, stop_exit: 1, last_measured: 2}`).
+No scoring file edited, so the ask-first rule was not triggered.
+
+**Decided (b) - `EXPIRED_UNMEASURED` stays IN the champion's scoring population.** The SQLite
+mirror holds ZERO records with the stamp today (setups 11,372 = CLOSED 6,404 + OPEN 4,605 +
+UNTRADEABLE 363; the first stamping is Tuesday 2026-09-08's 13:00 write - Monday is Labor Day - and gate #72 expects ~52); the exports
+already exclude and label them (`exclude_expired_unmeasured=True` on the export path only); and
+a scoring population that shrank with replay staleness would let a stale week re-rank the setup
+types. `tests/test_m3_tracker_keeps_up.py`'s fixture (flipping a record to expired moves nothing
+the scorer sees) is the pin. No code.
+
+**Decided (c) - the 28 are `UNTRADEABLE`.** All 486 baseline scenarios on the 28 records read
+`status == UNTRADEABLE` (risk per share under the tracker's floor or zero shares; no position was
+ever sized), and the `tradeable` filter at the head of `build_tracker_stats_rows` already keeps
+them out of every n, numerator and denominator. Evidence about the setup's shape, never about win
+or loss; correctly not expired. The other 13 are `no_baseline_scenarios`. M3's third population
+is closed (`docs/DESK_INTERNALS.md`, `plan.md` Phase 0.21).
+
+**Also seen:** the nightly ledger's newest rows are Saturday 04:00 skips; the Saturday 22:00 slot
+wrote nothing (as on the previous weekend), so there is no 2026-09-05 pack - expected for a
+non-session under the runner's own session rule. `CLAUDE.md` measures 48.3 KB against its ~45 KB
+rule; nothing was cut today.
+
+**Docs:** `CHANGELOG.md` (2026-09-06 entry, Q4.2 inventory line), `plan.md` Phase 0.21 M3 row,
+`docs/DESK_INTERNALS.md` (third population answered), `docs/LOCAL_AI_AUTOMATION_PLAN.md`
+(`rebuild`), `CLAUDE.md` == `AGENTS.md` (the M2 sentence), this file.
+
+**Verification:** full suite 6928 passed, 1 skipped, 72 subtests, exit 0, 5 min 20 s; `ruff` clean;
+smoke 7/7; CLAUDE.md == AGENTS.md. The first run had one PRE-EXISTING failure - the Q3 doc guard
+that wants the `POSITION_SOURCE_IDS` rule in the glance block, dropped by the 2026-09-05 cleanup
+commits - restored in gate #62's row.
 
 ### 2026-09-05 (07:00-19:47 PT) - Phase 0.20: the overnight-run assessment and its three fixes (N1-N3), MERGED
 

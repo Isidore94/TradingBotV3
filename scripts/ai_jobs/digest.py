@@ -1968,8 +1968,12 @@ def write_entry_index(root: Path, *, as_of: str | date | None = None) -> Path:
 def main(argv: Sequence[str] | None = None) -> int:
     """`python -m ai_jobs.digest ...`, run from `scripts/`.
 
-    Three commands. `approve-audit` writes the file the trader - and nothing
-    automatic - writes; the other two only read.
+    Four commands. `approve-audit` writes the file the trader - and nothing
+    automatic - writes; `rebuild` writes a SUPERSEDING sibling pack for a day
+    whose pack read the sources too early (the 2026-09-06 audit found two
+    packs at `in_window` 0 over 78 and 447 finals, both generated before the
+    after-close sweep of a frozen desk wrote the day) - facts only, no model,
+    and like `approve-audit` a human runs it; the other two only read.
     """
     import argparse
 
@@ -1993,6 +1997,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     approve.add_argument("--pack", action="append", default=[], metavar="YYYY-MM-DD")
     approve.add_argument("--note", default="")
+
+    rebuild = sub.add_parser(
+        "rebuild",
+        parents=[common],
+        help="rebuild a day's fact pack from the live sources as a superseding "
+             "sibling (D6: the early pack is never edited); no model is called",
+    )
+    rebuild.add_argument("--pack", action="append", default=[], metavar="YYYY-MM-DD")
 
     sub.add_parser("gate", parents=[common], help="print the two halves of the Phase 2 gate")
     sub.add_parser(
@@ -2018,6 +2030,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         print(f"recorded {written}")
         return 0
+
+    if args.command == "rebuild":
+        days = []
+        for entry in args.pack:
+            day = str(entry)[:10].strip()
+            if day and day not in days:
+                days.append(day)
+        if not days:
+            print("refused: name at least one --pack YYYY-MM-DD to rebuild")
+            return 2
+        failed = 0
+        for day in days:
+            result = run_daily_digest(session_date=day, root=root, narrate=False)
+            status = str(result.get("status") or "")
+            if status == STATUS_OK:
+                print(f"rebuilt {day}: {result.get('reason')}")
+                for output in result.get("outputs") or ():
+                    print(f"  {output}")
+            else:
+                failed += 1
+                print(f"failed {day}: {result.get('reason')}")
+        return 2 if failed else 0
 
     if args.command == "entry-index":
         try:

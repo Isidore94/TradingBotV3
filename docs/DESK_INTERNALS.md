@@ -1464,6 +1464,21 @@ whether such a record is evidence, is a trader-and-lead question. It is written
 down here so the next reader meets it as a known open question rather than as a
 fresh defect.
 
+**Answered 2026-09-06** (lead, on the trader's *"go ahead and do this yourself"*,
+from the SQLite mirror read-only): all 486 baseline scenarios on the 28 records
+read `status == UNTRADEABLE` - the tracker sized no position because the risk
+per share was under its floor or the share count came to zero (`legacy.py`, the
+`UNTRADEABLE` stamp near line 1444, the setup-level rollup near 6888). The
+`tradeable` filter at the head of `build_tracker_stats_rows` already keeps them
+out of every n, numerator and denominator, so nothing had to change. They are
+evidence about the setup's SHAPE (a stop too tight for the standardized risk),
+never about win or loss, and they are correctly not expired; 363 of the 11,372
+setups carry the status. The other 13 of the 41 are `no_baseline_scenarios` and
+expire as designed. The same day ruled that `EXPIRED_UNMEASURED` stays IN the
+scoring population: the trader-facing exports already exclude and label it, and
+a scoring population that shrank with replay staleness would let a stale week
+re-rank the setup types.
+
 ### The exclusion is opt-in, because one function serves two masters
 
 The builder shipped M3.3 excluding the expired everywhere and reported the

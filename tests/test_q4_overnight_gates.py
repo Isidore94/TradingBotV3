@@ -661,3 +661,70 @@ def test_pending_experiments_are_listed_unranked_or_skipped_with_a_note(tmp_path
     for row in pending["entries"]:
         assert "trial_id" in row and "declared_window" in row
         assert "rank" not in row
+
+
+# ---------------------------------------------------------------------------
+# `rebuild`: the human-run repair for a pack that read the day too early
+# ---------------------------------------------------------------------------
+#
+# The 2026-09-06 spot-audit found two packs (2026-08-28 and 2026-09-02) whose
+# `in_window` was 0 while the outcome store held 78 and 447 finals for those
+# sessions: the digest ran at ~06:40 before the after-close sweep of the frozen
+# desk wrote the day. D6 says a pack is never edited and a correction is a
+# superseding sibling - `run_daily_digest` already does exactly that - but no
+# CLI reached it, so the repair was a scratch script against the live store.
+# `python -m ai_jobs.digest rebuild --pack <date>` is that path, and like
+# `approve-audit` a human runs it; no nightly job calls it.
+
+
+def test_the_cli_rebuilds_a_pack_as_a_superseding_sibling(tmp_path, monkeypatch):
+    root = tmp_path / "digests"
+    _write_sessions(root, TEN_SESSIONS)
+    original = digest.facts_path(root, "2026-08-21")
+    before = original.read_text(encoding="utf-8")
+
+    # The rebuild reads the LIVE sources; in a test they are the patched ones,
+    # and the finals now hold the two rows the early pack never saw.
+    monkeypatch.setattr(
+        digest, "_read_champion_finals",
+        lambda day, unavailable: ([_final("AAPL", day), _final("MSFT", day)], {"in_window": 2}),
+    )
+    monkeypatch.setattr(digest, "_read_review_events", lambda: [])
+    monkeypatch.setattr(digest, "_read_job_rows", lambda: [])
+    monkeypatch.setattr(digest, "_is_session", lambda day, unavailable: True)
+
+    code = digest.main(["rebuild", "--root", str(root), "--pack", "2026-08-21"])
+
+    assert code == 0
+    assert original.read_text(encoding="utf-8") == before, "a pack is never edited (D6)"
+    sibling = root / "facts" / "2026" / "2026-08-21.1.json"
+    assert sibling.is_file(), "the correction is a superseding sibling"
+    pack = json.loads(sibling.read_text(encoding="utf-8"))
+    assert pack["supersedes"] == "2026-08-21.json"
+    assert pack["outcomes"]["overall"]["close_r"]["n"] == 2
+    # And the gate reads the sibling, not the early pack.
+    assert digest.latest_packs_by_session(root)["2026-08-21"]["supersedes"] == "2026-08-21.json"
+    # No narration was attempted: a rebuild is facts only, no model.
+    assert not digest.narration_path(root, "2026-08-21").exists()
+
+
+def test_the_cli_rebuild_refuses_with_no_pack_named(tmp_path):
+    root = tmp_path / "digests"
+    _write_sessions(root, TEN_SESSIONS)
+    before = sorted(path.name for path in root.rglob("*.json"))
+
+    code = digest.main(["rebuild", "--root", str(root)])
+
+    assert code != 0
+    assert sorted(path.name for path in root.rglob("*.json")) == before
+
+
+def test_no_nightly_job_can_call_rebuild():
+    """Like `approve-audit`: a runner that rebuilds its own evidence on a
+    schedule is a runner that can quietly rewrite the record. The ONLY path is
+    the CLI a human types."""
+    from ai_jobs import runner
+
+    source = Path(runner.__file__).read_text(encoding="utf-8")
+    assert "rebuild" not in source.split("def default_slots")[-1].split("\n\n\n")[0]
+    assert "run_daily_digest(session_date" not in source

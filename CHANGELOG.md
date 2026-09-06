@@ -1255,6 +1255,62 @@ gates are in `plan.md`.
 
 ## Recent changes (the last two build days)
 
+### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
+
+Trader: *"go ahead and do this yourself"* over the three actions the 2026-09-05 handoff left
+them - the Q4 spot-audit, and the two scoring questions plus M3's third population.
+
+- **The spot-audit was done against the raw stores, and it found two stale packs.** Finals
+  in window, `close_r` / `mfe_r` / `mae_r` n and means, distinct symbols, the exclusion
+  accounting and the review-event counts by action were re-derived from
+  `intraday_bounce_outcomes.csv` and `alert_review_events` with pandas only (no
+  `scripts/` import). 2026-08-27 and 2026-09-04 verify exactly, 2026-09-03 within four
+  late finals. **2026-08-28 and 2026-09-02 did not verify**: both packs read `in_window`
+  0 while the store holds 78 and 447 finals for those sessions - the digest ran at ~05:00
+  / ~06:40 before the after-close sweep of the frozen desk (the 2026-09-02/03 GIL-hog
+  days) wrote the day, so the pack was faithful to the moment and wrong about the
+  session. The nightly summary for 2026-09-02 was told `n=0`. The pack's `median_dwell_ms`
+  is the upper-median element, not the two-middle average, which is why an even-n day
+  reads differently from pandas; not a defect.
+- **`python -m ai_jobs.digest rebuild --pack <date> ...` (from `scripts/`) is the repair.**
+  It calls the digest's own `run_daily_digest(narrate=False)` for the day, which writes a
+  SUPERSEDING sibling (D6: the early pack is never edited) and refreshes
+  `entry_index.json`; no model is called and, like `approve-audit`, no nightly job may
+  reach it (`tests/test_q4_overnight_gates.py`, three tests, two red before the command
+  existed). Run on the live store: `2026-08-28.1.json` (78 in window, 1 usable) and
+  `2026-09-02.1.json` (447 in window; 168 usable + 251 annotation + 5 information + 12
+  below floor + 11 unresolved = 447; 165 `close_r`, mean -0.0858, win 46%).
+- **`digest_audit_approval.json` is written** over 2026-08-27, 2026-09-02 (its rebuilt
+  sibling), 2026-09-03 and 2026-09-04, `approved_by: trader`, the note naming who audited
+  and how; `python -m ai_jobs.digest gate` prints `gate_met: true` (10 consecutive clean
+  sessions and the audit). **`journal_enrichment` runs on the next session night.**
+- **Decision (a): swept-measured trades stay OUT of the eod-hold tier cells.** The
+  eod-hold cell is the record of ONE exit policy; a swept trade was measured under
+  `stop_exit` / `last_measured`; and 3,620 of the 3,657 swept-measured finals on the live
+  file (99%) sit in 2026-08/09 - the freeze window - so folding them in would move the
+  champion's numbers on a sample of days the desk was down. They remain readable under
+  their own policy tables (`sweep_exit_policy_rows`), never blended. Pinned by a golden
+  characterization in `tests/test_setup_scoreboard.py` (a swept row absent from the
+  eod-hold family cell, present under its policy, `policy_measured` split
+  `{eod_hold: 3, stop_exit: 1, last_measured: 2}`). No scoring code touched.
+- **Decision (b): `EXPIRED_UNMEASURED` records stay IN the champion's scoring population.**
+  Zero live records carry the stamp today (the first stamping is the next close slot's
+  write - Tuesday 2026-09-08, Monday being Labor Day - and gate #72 expects ~52); the trader-facing exports already exclude and label them; and
+  excluding them from the SCORING population would make the champion's ranking depend on
+  the tracker's own replay staleness - a stale week silently re-ranking setup types. The
+  existing fixture in `tests/test_m3_tracker_keeps_up.py` (flipping a record to expired
+  moves nothing the scorer sees) is the pin. No code.
+- **Decision (c): the 28 "neither open nor closed" setups are `UNTRADEABLE`.** All 486
+  baseline scenarios on the 28 records read `status == UNTRADEABLE` (`legacy.py`: risk
+  per share under the tracker's floor or zero shares - no position was ever sized), and
+  the `tradeable` filter in `build_tracker_stats_rows` already keeps them out of every
+  n, numerator and denominator. They are evidence about the setup's SHAPE (a stop too
+  tight for the standardized risk), never about win or loss, and they are correctly not
+  expired: M3's third population is named and closed. The other 13 are
+  `no_baseline_scenarios` and expire as designed.
+- Not run last night: the ledger's newest rows are Saturday 04:00 skips (*"2026-09-05 is
+  a weekend"*); the Saturday 22:00 slot wrote nothing, as on the previous weekend.
+
 ### 2026-09-05 - Repo cleanup: history under `docs/archive/`, the live files cut to what a session must read
 
 Trader ask: *"What documents/files are unnecessary repo clutter? ... make it easier for a
@@ -1945,8 +2001,10 @@ Packet Q4 on `claude/q4-overnight-gates`, authorized by the trader over
   `first_gap_session` and keeps `sessions_collected` at the old distinct count.
 - **Q4.2 - BEHAVIOUR CHANGE.** `digest_audit_approval.json` records the trader's
   spot-audit; `record_audit_approval` refuses under three packs and refuses any
-  date with no pack; `python -m ai_jobs.digest approve-audit|gate|entry-index`
-  is the CLI and the only writer. `gate_met = window_met and audit_recorded`.
+  date with no pack; `python -m ai_jobs.digest approve-audit|rebuild|gate|entry-index`
+  is the CLI and the only writer (`rebuild --pack <date>` writes a SUPERSEDING sibling
+  pack from the live sources for a day the nightly read too early - 2026-09-06, no
+  model, human-run only). `gate_met = window_met and audit_recorded`.
   **`journal_enrichment` refuses until the trader records the audit** - no
   model, no write, ledger row `refused: audit not recorded`.
   `review_policy_draft` (side-by-side days) and `setup_research` (evidence

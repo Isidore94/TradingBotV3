@@ -598,3 +598,56 @@ def test_the_eod_hold_tables_never_absorb_a_row_with_no_eod_close(tmp_path):
     table = sb.summarise(usable, "bounce_type", r_column="r_eod_hold")
     row = next(item for item in table.to_dict("records") if item["cell"] == "vwap")
     assert row["n"] == 1 and row["mean_r"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Decision 2026-09-06: swept-measured trades stay OUT of the eod-hold tier table
+# ---------------------------------------------------------------------------
+#
+# Packet M2 (2026-09-05) left one question on the table: should the champion's
+# tier / family / Setup Types cells count the 3,607 sweep-finalized trades that
+# DID measure their bars (`swept_measured`)? The lead decided NO on the trader's
+# delegation (`CURRENT_CHECKPOINT.md`, 2026-09-06 entry): the eod-hold cell is
+# the record of ONE exit policy, a swept trade was measured under another, and
+# 99% of the swept rows sit in the 2026-08/09 freeze window - folding them in
+# would move the champion's numbers on a sample of days the desk was down. They
+# stay readable under their OWN policy tables (`sweep_exit_policy_rows`), never
+# blended. This fixture is the golden characterization plan.md sec 5 asks for
+# BEFORE that decision could ever be revisited: a swept row is absent from the
+# eod-hold family cell and present in its policy's table.
+
+
+def test_a_swept_measured_trade_is_absent_from_the_eod_hold_family_cell_and_present_under_its_policy(tmp_path):
+    rows = [
+        _final(f"AAA_long_20260825_06_{minute:02d}_00_vwap", 0.5)
+        for minute in range(35, 35 + 3)
+    ]
+    rows.append(
+        _sweep_final(
+            "BBB_long_20260825_07_05_00_vwap", symbol="BBB",
+            stop_hit=True, stop_exit_r=-1.0, last_measured_close=99.0,
+        )
+    )
+    rows.append(
+        _sweep_final(
+            "CCC_long_20260825_07_10_00_vwap", symbol="CCC",
+            last_measured_close=102.0, risk=1.0,
+        )
+    )
+    frame, coverage = _load(tmp_path, rows)
+    usable = frame[frame["usable"]]
+    assert coverage.usable == 5, "every row is usable - the split is by POLICY, not by usability"
+
+    families = sb.summarise(usable, "bounce_type", r_column="r_eod_hold", min_n=1)
+    assert families["n"].tolist() == [3], "the eod-hold cell counts the eod-complete rows only"
+    assert families["mean_r"].tolist() == [0.5]
+
+    policies = sb.sweep_exit_policy_rows(usable)
+    stop_exit = {row["cell"]: row for row in policies["stop_exit"]}
+    last_measured = {row["cell"]: row for row in policies["last_measured"]}
+    assert stop_exit and list(stop_exit.values())[0]["n"] == 1
+    assert list(stop_exit.values())[0]["mean_r"] == -1.0
+    assert last_measured and list(last_measured.values())[0]["n"] == 2
+    # And the coverage says which policy measured what: a stop-hit swept row is
+    # measured under BOTH sweep policies, and never under eod_hold.
+    assert coverage.policy_measured == {"eod_hold": 3, "stop_exit": 1, "last_measured": 2}
