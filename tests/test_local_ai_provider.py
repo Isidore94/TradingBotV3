@@ -353,6 +353,100 @@ class LocalRequestTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 2, "one retry, not an unbounded loop")
 
+    def test_a_validation_retry_still_carries_the_rejection_and_not_the_length_note(self):
+        """Packet N2 guard: the two retries stay different failures.
+
+        A length stop earns a SHORTER question; malformed output earns the
+        validator's exact complaint. Folding the length note into the ordinary
+        retry would quietly shrink every recovered document, and folding the
+        rejection into the length retry is the loop N2 removed.
+        """
+        import ai_summary
+
+        responses = [_chat_response("not json at all"), _chat_response(self.summary_text)]
+        prompts = []
+
+        def fake_post(url, **kwargs):
+            prompts.append(str(kwargs["json"]["messages"][1]["content"]))
+            return responses[len(prompts) - 1]
+
+        with _settings(ai_local_endpoint_url=ENDPOINT):
+            result = ai_summary.request_ai_summary(
+                provider="local",
+                model="gemma3:12b",
+                api_key="",
+                evidence=self.evidence,
+                post=fake_post,
+            )
+
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("YOUR PREVIOUS ANSWER WAS REJECTED BY LOCAL VALIDATION", prompts[1])
+        self.assertNotIn("CUT OFF", prompts[1])
+        self.assertEqual(
+            result["length_retry"], "", "no answer was cut, so nothing retried shorter"
+        )
+
+    def test_a_clean_local_answer_reports_no_length_retry(self):
+        """The key is always present on the local envelope, "" when unused."""
+        import ai_summary
+
+        with _settings(ai_local_endpoint_url=ENDPOINT):
+            result = ai_summary.request_ai_summary(
+                provider="local",
+                model="gemma3:12b",
+                api_key="",
+                evidence=self.evidence,
+                post=lambda url, **kwargs: _chat_response(self.summary_text),
+            )
+
+        self.assertIn("length_retry", result)
+        self.assertEqual(result["length_retry"], "")
+
+    def test_the_single_shot_local_call_keeps_the_map_cap(self):
+        """Only the map-reduce REDUCE package earns the larger output cap.
+
+        The nightly single-shot summary shares its window with the evidence
+        budget, which is sized against the map cap; raising it here would spend
+        4,500 tokens of context the budget already promised to sources.
+        """
+        import ai_summary
+
+        sent = []
+
+        def fake_post(url, **kwargs):
+            sent.append(kwargs["json"])
+            return _chat_response(self.summary_text)
+
+        with _settings(ai_local_endpoint_url=ENDPOINT):
+            ai_summary.request_ai_summary(
+                provider="local",
+                model="gemma3:12b",
+                api_key="",
+                evidence=self.evidence,
+                post=fake_post,
+            )
+
+        self.assertEqual(sent[0]["max_tokens"], ai_summary.LOCAL_MAP_GENERATION_TOKENS)
+        self.assertEqual(
+            ai_summary.local_generation_tokens(self.evidence),
+            ai_summary.LOCAL_MAP_GENERATION_TOKENS,
+        )
+        self.assertEqual(
+            ai_summary.local_generation_tokens(
+                {"selected_scopes": [ai_summary.LOCAL_SYNTHESIS_SCOPE]}
+            ),
+            ai_summary.LOCAL_SYNTHESIS_GENERATION_TOKENS,
+        )
+        # No package at all, and a package whose scopes are junk, both read as
+        # the map cap: a bigger cap is never the fail-open answer.
+        self.assertEqual(
+            ai_summary.local_generation_tokens(None), ai_summary.LOCAL_MAP_GENERATION_TOKENS
+        )
+        self.assertEqual(
+            ai_summary.local_generation_tokens({"selected_scopes": "map_reduce_synthesis"}),
+            ai_summary.LOCAL_MAP_GENERATION_TOKENS,
+        )
+
     def test_local_provider_without_an_endpoint_is_a_clean_error(self):
         import ai_summary
 
