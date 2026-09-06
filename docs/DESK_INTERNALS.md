@@ -1599,13 +1599,48 @@ measurement and the reasoning behind each rule.
   it, and never beside a real one.** A NEW/RISING pin stays a NOVELTY badge on
   the table and is not an input to the leader.
 
+  *The same defect, three more times.* The reviewer's NO-GO found it surviving
+  wherever the packet had not looked, which is the lesson worth keeping: fixing
+  the surface a defect was REPORTED on does not fix the defect. The Summary
+  card's plain-English block (`research_explanations`) sat THREE LINES ABOVE the
+  repaired banner still crowning `max(avg_closed_r)` on three closes across both
+  namespaces - live it read *"LONG top_pattern leads at +0.99R ... 3 closes"*
+  under a banner saying *"SHORT general"*, with 10 of its 17 candidates studies.
+  The **Best Type Edge** tile read `setup_type_rows[0]`, so ST2.2's new
+  bound-first sort silently moved it from `SHORT +23` to `LONG +14` - a tile
+  that borrows another surface's ordering has no meaning of its own, and it now
+  picks max `score_delta` explicitly. The Summary's **Setup types working**
+  block took `rows[:8]` of that same side-first list and so showed eight LONG
+  rows and no SHORT one (the first SHORT row sat at index 68 of 117); the CARD
+  now picks its eight by the bound across BOTH books, with the side shown, while
+  the TAB keeps side-first - a table you scroll and a card that shows eight are
+  different questions asked of the same rows.
+
+  *The floor is judged BEFORE the clock.* A family with three samples is under
+  the floor whatever the clock says, and answering "not fresh" to three samples
+  answers a question the reader did not ask. So `select_leader` splits
+  `at_floor` / `under_floor` first and only dates the at-floor rows; the
+  discovery pools and the reason branches run in the same order (stale, undated,
+  thin), so the sentence a verdict prints always names the gate that kept out the
+  row it is showing, and a row that CLEARS the floor and is merely old outranks a
+  current row with three samples. `min_n` therefore binds the stale and undated
+  pools by construction. **Freshness is measured on the ENTRY session** - these
+  rows carry no exit date, so `latest_measured_session` is the newest scan_date
+  among the episodes that produced a readable R, which is the conservative
+  reading - and `FRESHNESS_SENTENCE` says so on every surface, because "fresh"
+  without its clock is not a fact.
+
   *What was NOT changed.* `ranking_score`, `score_delta`, the Expected-R
-  calibration and every pre-existing column of both exports, pinned byte-identical
-  by two goldens taken from `main` at `84ee24d6`. The two-session block's export,
-  `build_tracker_short_horizon_rows`, is outside the three functions the trader's
-  ST2 decision names, so it was not touched - it carries no integer counts and no
-  session column, which is why `select_leader` can never call one of its rows
-  fresh and that block is labelled `2-session, discovery` by construction.
+  calibration and every pre-existing column of all THREE exports, pinned
+  byte-identical by goldens taken from `main` at `84ee24d6`: the two row goldens,
+  a shipped-header golden (the count columns belong at the END of the header the
+  trader opens, not at the end of the inner builder - they had landed at index 26
+  of 31 and 31 of 39), and `st2_short_horizon_golden.csv`. The two-session
+  export gained the same additive counts plus its own `latest_measured_session`
+  on the trader's answered ask, so that block is freshness-checked rather than
+  discovery by construction; `win_rate_2d` keeps its value, including its
+  treatment of an exactly-flat close as a zero flag, because moving it would be a
+  scoring change and this packet may not make one.
 - **The priority switch reorders and never withholds** - and it is **NOT BUILT
   YET** (V4 owns it; R4 B3 removed the sentence that cited a test for it). When
   it is built: "prioritise what is working" is display-only (decision 0016
