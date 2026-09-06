@@ -334,6 +334,80 @@ def session_block_bootstrap(
     }
 
 
+def session_block_statistic_bootstrap(
+    blocks: Mapping[str, Any],
+    statistic,
+    *,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+    seed_payload: str = "",
+) -> dict[str, Any]:
+    """The same session-block resampling, for a statistic that is not a mean.
+
+    `session_block_bootstrap` above resamples VALUES and averages them, which is
+    the right interval for a mean and the wrong one for anything else. ST6's
+    day-trade headline is `hold_rate x trimmed-mean MFE_R` - a PRODUCT of two
+    quantities measured over different denominators - so an interval on the mean
+    of the MFEs is an interval about a different number, and the reviewer found
+    it printed as `held x ran 1.21 (>= 2.070)`: a lower bound ABOVE the statistic
+    it was standing next to.
+
+    `blocks` is `{session: payload}` and `statistic(list_of_payloads) -> float |
+    None` recomputes the whole formula on each resample, so whatever the caller
+    computes on the real data is what is resampled. The resampling machinery
+    stays here - it is the desk's ONE statistics contract - and the FORMULA stays
+    with the thing that owns it.
+
+    Unmeasurable, and says so, below two blocks: an interval over one block is a
+    statement about one day wearing the clothes of a range.
+    """
+    keys = sorted(str(key) for key in (blocks or {}) if str(key).strip())
+    if not keys:
+        return {"measured": False, "reason": "no session identity on these rows"}
+    if len(keys) < 2:
+        return {
+            "measured": False,
+            "reason": f"only {len(keys)} session in the sample; an interval would "
+                      "describe one day as though it were a range",
+            "sessions": len(keys),
+        }
+    rng = random.Random(
+        int(
+            hashlib.sha256(
+                ("|".join(keys) + "||" + str(seed_payload)).encode("utf-8")
+            ).hexdigest()[:16],
+            16,
+        )
+    )
+    drawn_values: list[float] = []
+    for _ in range(max(1, int(resamples))):
+        payloads = [blocks[keys[rng.randrange(len(keys))]] for _ in range(len(keys))]
+        value = statistic(payloads)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if number == number:
+            drawn_values.append(number)
+    if not drawn_values:
+        return {
+            "measured": False,
+            "reason": "no resample produced a value",
+            "sessions": len(keys),
+        }
+    drawn_values.sort()
+    return {
+        "measured": True,
+        "sessions": len(keys),
+        "resamples": len(drawn_values),
+        "low": round(_quantile(drawn_values, BOOTSTRAP_LOW / 100.0), 4),
+        "high": round(_quantile(drawn_values, BOOTSTRAP_HIGH / 100.0), 4),
+        "interval": f"{BOOTSTRAP_LOW:.0f}-{BOOTSTRAP_HIGH:.0f} percentile of a "
+                    "session-block bootstrap on the statistic itself",
+    }
+
+
 def _moments(values: Sequence[float]) -> dict[str, Any]:
     if not values:
         return {"mean": None, "median": None, "trimmed_mean": None, "p10": None, "p90": None}

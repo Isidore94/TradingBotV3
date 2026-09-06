@@ -1516,6 +1516,27 @@ having high R."*
   policy line, because the tracker's rows carry no exit date and the ENTRY session is what is
   actually measured. The panel remembers its last FRESH leader per horizon so
   `last_reliable_reading` is reachable (in-memory; ST6 persists it).
+- **The re-review round found the same shape twice more**: a surface computing
+  for itself what the page had already decided. The plain-English card called
+  `select_leader` without the banner's `previous`, so on a stale refresh it
+  printed *"no clear leader ... discovery only"* three lines above the banner's
+  *"last reliable reading"* for the SAME family; `panel_verdicts` now computes
+  each horizon ONCE in `_summary_html` and both renderers are handed the same
+  objects. And the 2-session label hardcoded "2-session discovery" over a real
+  `leader` while printing "the export carries no session" beside "58 sessions
+  behind"; the label is the horizon plus `verdict_label_suffix(verdict)`, and
+  the no-session sentence renders only for a row that truly has none.
+  `discovery_basis_phrase` says **"older evidence"** for a stale row, "undated"
+  for one with no session, and "thin" only for the floor.
+- **`latest_measured_session` means the MEASURED bar on the 2-session rows**
+  (`legacy._short_horizon_measured_session`, the trade date of
+  `post_marks[horizon - 1]`): entry dating made a family entered eight weeks ago
+  and measured two sessions later read as 58 sessions stale on a file written
+  that morning. Unknown stays EMPTY and reads as not fresh, never back-filled.
+  The recent FAMILY rows still date by the entry and the constant says why -
+  they carry no exit date until ST4 adds `representative_exit_date`. The
+  short-horizon export's identity: `n_wins + n_losses + n_flats == samples_2d`,
+  and `samples_2d + n_unmeasured == tracked_setups`.
 - **The 2-session export counts its own wins** (the ask, answered 2026-09-06).
   `build_tracker_short_horizon_rows` gained additive `n_wins` / `n_losses` / `n_flats` /
   `n_unmeasured` / `outcome_kind` / `horizon_basis` / `latest_measured_session` at the end of its

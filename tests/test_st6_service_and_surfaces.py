@@ -447,12 +447,26 @@ def test_the_summary_card_and_the_banner_render_one_verdict_not_two(tmp_path):
     import working_lately
 
     payload = _snapshot_payload(tmp_path)
-    verdict = working_lately.verdicts_from_payload(payload)["swing_trade_r"]
-    assert verdict.state == "leader" and verdict.leader is not None
+    shared = working_lately.verdicts_from_payload(payload)["swing_trade_r"]
+    assert shared.state == "leader" and shared.leader is not None
+
+    panel = setup_tracker_panel.SetupTrackerPanel()
+    try:
+        panel.set_working_lately_snapshot(payload)
+        # ONE computation per page, and the snapshot IS it.
+        verdicts = setup_tracker_panel.panel_verdicts(panel)
+        assert verdicts["swing"].reason == shared.reason
+        assert verdicts["swing"].leader["setup_family"] == "alpha"
+        assert verdicts["snapshot"]["snapshot_id"] == payload["snapshot_id"]
+        html = setup_tracker_panel._best_now_banner_html(panel, verdicts)
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+    assert "alpha" in html
 
     card = research_explanations.build_plain_english_whats_working(
         recent_rows=[],  # deliberately EMPTY: the card must not re-decide
-        working_lately=payload,
+        verdicts=verdicts,
     )
     swing_bullets = [
         line for line in card["bullets"] if line.startswith("Among recently closed swings")
@@ -460,14 +474,6 @@ def test_the_summary_card_and_the_banner_render_one_verdict_not_two(tmp_path):
     assert len(swing_bullets) == 1, card["bullets"]
     assert "alpha" in swing_bullets[0], swing_bullets[0]
 
-    panel = setup_tracker_panel.SetupTrackerPanel()
-    try:
-        panel.set_working_lately_snapshot(payload)
-        html = setup_tracker_panel._best_now_banner_html(panel)
-    finally:
-        panel.shutdown()
-        panel.deleteLater()
-    assert "alpha" in html
     # The panel read alone, with no rows, could never have named a family.
     empty = research_explanations.build_plain_english_whats_working(recent_rows=[])
     assert not any(

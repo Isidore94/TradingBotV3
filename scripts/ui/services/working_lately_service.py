@@ -389,7 +389,8 @@ class WorkingLatelyService(QObject):
         the desk simply stopped being able to read it. The first-ever build,
         where both names are empty, is not news and writes nothing.
         """
-        stamp = datetime.now().isoformat(timespec="seconds")
+        # Advisory 6: MARKET-local and AWARE, the same clock `as_of` is on.
+        stamp = working_lately.market_local_now()
         prior_id = str((prior or {}).get("snapshot_id") or "")
         events: list[dict[str, Any]] = []
         for kind in sorted(snapshot.verdicts):

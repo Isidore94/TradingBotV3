@@ -9859,6 +9859,31 @@ def build_tracker_playbook_recommendation_rows(playbook_rows: list[dict]) -> lis
     return recommendations
 
 
+def _short_horizon_measured_session(setup: dict, horizon: int) -> str:
+    """The trade date of the BAR the ``r_close_{horizon}d`` mark was read from.
+
+    ST2 re-review, advisory 4. Freshness for the 2-session block was being read
+    off the ENTRY session, which makes a family that entered eight weeks ago and
+    was MEASURED two sessions later look permanently stale ("58 sessions
+    behind") on a file written this morning. Entry is the conservative answer
+    only when nothing better is reachable; here it is, because
+    ``daily_marks`` carry ``trade_date`` and the mark this R was computed from
+    is exactly ``post_marks[horizon - 1]`` - the same index
+    ``_build_tracker_short_horizon_summary`` reads the close from.
+
+    Returns "" when the marks cannot answer. Empty means UNDATED, which
+    ``working_lately.select_leader`` treats as not fresh - never a guess.
+    """
+    marks = [mark for mark in (setup.get("daily_marks") or []) if isinstance(mark, dict)]
+    if not marks:
+        return ""
+    entry_pos = next((idx for idx, mark in enumerate(marks) if bool(mark.get("is_entry_day"))), 0)
+    post_marks = marks[entry_pos + 1 :]
+    if len(post_marks) < horizon:
+        return ""
+    return str(post_marks[horizon - 1].get("trade_date") or "")
+
+
 def build_tracker_short_horizon_rows(
     setups: dict[str, dict],
     *,
@@ -9893,6 +9918,10 @@ def build_tracker_short_horizon_rows(
             "r_close_2d": _coerce_float(short_horizon.get("r_close_2d")),
             "mfe_r_2d": _coerce_float(short_horizon.get("mfe_r_2d")),
             "mae_r_2d": _coerce_float(short_horizon.get("mae_r_2d")),
+            # ST2 re-review: the session this episode was MEASURED on, not the
+            # one it was entered on. Internal to this function; the export
+            # carries the max of these as `latest_measured_session`.
+            "measured_session_2d": _short_horizon_measured_session(setup, 2),
         }
 
     reference_day = reference_date or datetime.now().date()
@@ -9934,17 +9963,24 @@ def build_tracker_short_horizon_rows(
         # column and moving it would be a scoring change. The counts below hold
         # a flat apart, because a scratch is not a loss.
         #
-        # `latest_measured_session` is the newest ENTRY session among the
-        # episodes that produced a readable 2-session close. Without it
-        # `working_lately.select_leader` could never call this block fresh, and
-        # the banner could only ever label it discovery.
+        # **The identity these four hold**, and the reason they are exported
+        # rather than derived by a reader: `n_wins + n_losses + n_flats ==
+        # samples_2d`, and `samples_2d + n_unmeasured == tracked_setups`. An
+        # episode with no readable 2-session close is UNMEASURED, never a loss.
+        #
+        # `latest_measured_session` is the newest session an episode in this
+        # group was MEASURED on - the trade date of the bar the 2-session R was
+        # read from, not the entry (ST2 re-review, advisory 4: entry dating made
+        # a family measured two sessions after an old entry read as 58 sessions
+        # stale on a file written this morning). Empty when the marks cannot
+        # say, which reads as UNDATED and never as fresh.
         n_wins_2d = sum(1 for value in r2_values if value > 0)
         n_losses_2d = sum(1 for value in r2_values if value < 0)
         n_flats_2d = sum(1 for value in r2_values if value == 0)
         n_unmeasured_2d = len(rows_for_group) - len(r2_rows)
         latest_measured_session = ""
         for measured_row in r2_rows:
-            session = str(measured_row.get("scan_date") or "")
+            session = str(measured_row.get("measured_session_2d") or "")
             if session > latest_measured_session:
                 latest_measured_session = session
         short_term_score = None

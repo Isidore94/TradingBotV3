@@ -331,8 +331,16 @@ def test_the_count_columns_land_at_the_end_of_both_shipped_headers():
 # ===========================================================================
 
 
-def _short_horizon_setups() -> dict:
-    def with_bars(record, r1, r2, mfe, mae):
+def _short_horizon_setups(*, with_marks: bool = True) -> dict:
+    """The golden's five episodes.
+
+    ``daily_marks`` carry the trade date of every bar, and the 2-session R is
+    read from ``post_marks[1]`` - so the MEASURED session is that bar's date,
+    not the entry (re-review advisory 4). They are additive to the fixture: no
+    old column of this export reads them, which the golden test proves.
+    """
+
+    def with_bars(record, r1, r2, mfe, mae, marks):
         record["short_horizon"] = {
             "r_close_1d": r1,
             "r_close_2d": r2,
@@ -340,14 +348,35 @@ def _short_horizon_setups() -> dict:
             "mae_r_2d": mae,
             "complete": True,
         }
+        if with_marks:
+            record["daily_marks"] = [
+                {"trade_date": marks[0], "is_entry_day": True, "close": 10.0},
+                {"trade_date": marks[1], "is_entry_day": False, "close": 10.5},
+                {"trade_date": marks[2], "is_entry_day": False, "close": 11.0},
+            ]
         return record
 
     return {
-        "h1": with_bars(_setup("AAA", "2026-04-21", 1.8), 0.6, 1.2, 1.5, -0.3),
-        "h2": with_bars(_setup("BBB", "2026-04-20", -1.0, scenario_status="STOPPED"), -0.4, -0.9, 0.2, -1.1),
-        "h3": with_bars(_setup("CCC", "2026-04-18", 0.0), 0.1, 0.0, 0.4, -0.2),
-        "h4": with_bars(_setup("DDD", "2026-04-15", 2.2, side="SHORT"), 0.9, 1.7, 2.0, -0.1),
-        "h5": with_bars(_setup("EEE", "2026-04-10", -0.5, side="SHORT", scenario_status="STOPPED"), -0.2, -0.6, 0.1, -0.8),
+        "h1": with_bars(
+            _setup("AAA", "2026-04-21", 1.8), 0.6, 1.2, 1.5, -0.3,
+            ("2026-04-21", "2026-04-22", "2026-04-23"),
+        ),
+        "h2": with_bars(
+            _setup("BBB", "2026-04-20", -1.0, scenario_status="STOPPED"), -0.4, -0.9, 0.2, -1.1,
+            ("2026-04-20", "2026-04-21", "2026-04-22"),
+        ),
+        "h3": with_bars(
+            _setup("CCC", "2026-04-18", 0.0), 0.1, 0.0, 0.4, -0.2,
+            ("2026-04-18", "2026-04-21", "2026-04-22"),
+        ),
+        "h4": with_bars(
+            _setup("DDD", "2026-04-15", 2.2, side="SHORT"), 0.9, 1.7, 2.0, -0.1,
+            ("2026-04-15", "2026-04-16", "2026-04-17"),
+        ),
+        "h5": with_bars(
+            _setup("EEE", "2026-04-10", -0.5, side="SHORT", scenario_status="STOPPED"), -0.2, -0.6, 0.1, -0.8,
+            ("2026-04-10", "2026-04-13", "2026-04-14"),
+        ),
     }
 
 
@@ -388,43 +417,119 @@ def test_the_short_horizon_export_counts_its_own_wins_and_dates_them():
     # unchanged - it is an existing column and moving it would be a scoring
     # change this packet is not allowed to make.
     assert long_row["win_rate_2d"] == pytest.approx(1 / 3, abs=1e-9)
-    assert long_row["latest_measured_session"] == "2026-04-21"
+    # The session it was MEASURED on - the second bar after AAA's 2026-04-21
+    # entry - not the entry itself (advisory 4).
+    assert long_row["latest_measured_session"] == "2026-04-23"
 
     short_row = by_side["SHORT"]
     assert (short_row["n_wins"], short_row["n_losses"], short_row["n_flats"]) == (1, 1, 0)
-    assert short_row["latest_measured_session"] == "2026-04-15"
+    assert short_row["latest_measured_session"] == "2026-04-17"
     assert short_row["outcome_kind"] == "trade_r_close_2d"
 
+    # The identity the export holds, stated so a reader never sums it wrong
+    # (advisory 5): wins + losses + flats == samples_2d, and
+    # samples_2d + unmeasured == tracked_setups.
+    for row in rows:
+        assert row["n_wins"] + row["n_losses"] + row["n_flats"] == row["samples_2d"]
+        assert row["samples_2d"] + row["n_unmeasured"] == row["tracked_setups"]
 
-def test_a_dated_two_session_row_can_now_be_read_for_freshness():
-    """With the session exported, the 2-session block is no longer discovery by
-    construction: a fresh one leads at its own floor, a stale one does not."""
+
+def test_a_two_session_row_whose_marks_cannot_date_it_is_undated_not_guessed():
+    """No `daily_marks`, so the measured session is unknown. It is EMPTY -
+    which `select_leader` reads as not fresh - never back-filled from the entry
+    date, which is what made a current file read as 58 sessions stale."""
+    legacy = _legacy()
+    rows = legacy.build_tracker_short_horizon_rows(
+        _short_horizon_setups(with_marks=False), reference_date=SHORT_REFERENCE_DATE
+    )
+    assert rows
+    for row in rows:
+        assert row["latest_measured_session"] == "", row
+
+
+def _current_short_horizon_setups() -> dict:
+    """Seven episodes MEASURED on the last completed session.
+
+    Entered eight weeks ago and measured two sessions later would still read as
+    stale under entry dating; these are entered long ago and measured NOW, which
+    is the case advisory 4 exists for.
+    """
+    import market_calendar
+
+    measured = _last_completed_session()
+    day_before = market_calendar.previous_session(measured)
+    entry = day_before
+    for _ in range(40):
+        entry = market_calendar.previous_session(entry)
+
+    setups = {}
+    for index, (r2, status) in enumerate(
+        [(1.2, "TARGET_HIT"), (0.9, "TARGET_HIT"), (1.4, "TARGET_HIT"), (0.7, "TARGET_HIT"),
+         (1.1, "TARGET_HIT"), (-0.8, "STOPPED"), (-0.5, "STOPPED")]
+    ):
+        record = _setup(f"S{index:02d}", entry.isoformat(), r2, scenario_status=status)
+        record["short_horizon"] = {
+            "r_close_1d": r2 / 2.0,
+            "r_close_2d": r2,
+            "mfe_r_2d": abs(r2),
+            "mae_r_2d": -abs(r2) / 3.0,
+            "complete": True,
+        }
+        record["daily_marks"] = [
+            {"trade_date": entry.isoformat(), "is_entry_day": True, "close": 10.0},
+            {"trade_date": day_before.isoformat(), "is_entry_day": False, "close": 10.5},
+            {"trade_date": measured.isoformat(), "is_entry_day": False, "close": 11.0},
+        ]
+        setups[f"s{index}"] = record
+    return setups
+
+
+def test_a_current_two_session_export_renders_a_leader_and_never_says_discovery(
+    panel_module, tmp_path, monkeypatch
+):
+    """The whole chain, from the real export to the rendered banner.
+
+    Blocker 2 and advisory 4 together: a file measured on the last completed
+    session must render a LEADER, its label must say so, and the words
+    "discovery" and the no-session sentence must be absent. Before the fix the
+    export dated itself by the ENTRY (here 41 sessions back), so this block
+    could only ever be discovery, and its label hardcoded the word.
+    """
+    import pandas as pd
+
     from working_lately import select_leader, short_term_evidence_rows
 
+    legacy = _legacy()
     last_session = _last_completed_session()
-    fresh = {
-        "side": "LONG",
-        "setup_family": "fast_follow",
-        "samples_2d": "12",
-        "win_rate_2d": "0.75",
-        "avg_r_2d": "0.6",
-        "n_wins": 9,
-        "n_losses": 3,
-        "n_flats": 0,
-        "n_unmeasured": 0,
-        "outcome_kind": "trade_r_close_2d",
-        "horizon_basis": "2 sessions after entry, close to close",
-        "latest_measured_session": last_session.isoformat(),
-    }
+    rows = legacy.build_tracker_short_horizon_rows(
+        _current_short_horizon_setups(), reference_date=last_session
+    )
+    assert rows and rows[0]["latest_measured_session"] == last_session.isoformat(), rows
+
     verdict = select_leader(
-        short_term_evidence_rows([fresh]),
+        short_term_evidence_rows(rows),
         kind="swing_short_term",
         last_completed_session=last_session,
         min_n=6,
     )
-    assert verdict.state == "leader"
-    assert verdict.leader["setup_family"] == "fast_follow"
+    assert verdict.state == "leader", verdict.reason
     assert "trade_r_close_2d" in verdict.policy_line
+
+    short_path = tmp_path / "short.csv"
+    pd.DataFrame(rows).to_csv(short_path, index=False)
+    monkeypatch.setattr(panel_module, "SHORT_HORIZON_FILE", short_path)
+    monkeypatch.setattr(
+        panel_module, "RECENT_SETUP_TYPE_STATS_FILE", tmp_path / "absent_recent.csv"
+    )
+    panel = panel_module.SetupTrackerPanel()
+    try:
+        html = panel_module._best_now_banner_html(panel)
+    finally:
+        panel.deleteLater()
+
+    assert "Short-term (1-2d), leader" in html, html
+    assert "discovery" not in html.lower(), html
+    assert "carries no session" not in html, html
 
 
 # ===========================================================================
@@ -476,6 +581,57 @@ def test_the_panel_carries_its_last_fresh_verdict_into_a_stale_refresh(
     assert "post_earnings_52w_break" in second, second
 
 
+def test_the_card_and_the_banner_agree_on_the_stale_path_too(
+    panel_module, tmp_path, monkeypatch
+):
+    """Re-review blocker 1, the fresh-then-stale sequence on BOTH surfaces.
+
+    The card computed its own verdict with no `previous`, so after a stale
+    refresh it printed "no clear leader ... discovery only" three lines above
+    the banner's "last reliable reading" for the SAME family. The page now
+    computes each horizon ONCE and hands the same objects to both renderers.
+    """
+    import market_calendar
+
+    last_session = _last_completed_session()
+    stale_day = last_session
+    for _ in range(5):
+        stale_day = market_calendar.previous_session(stale_day)
+
+    fresh_rows = [_evidence_row("post_earnings_52w_break", wins=24, losses=16)]
+    stale_rows = [
+        _evidence_row(
+            "post_earnings_52w_break", wins=24, losses=16, session=stale_day.isoformat()
+        )
+    ]
+    fresh_path = tmp_path / "fresh.csv"
+    stale_path = tmp_path / "stale.csv"
+    for path, rows in ((fresh_path, fresh_rows), (stale_path, stale_rows)):
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
+    monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", fresh_path)
+    panel = panel_module.SetupTrackerPanel()
+    try:
+        first = panel_module._summary_html(panel)
+        assert "post_earnings_52w_break" in first
+
+        panel_module.clear_setup_tracker_csv_cache()
+        monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", stale_path)
+        panel.refresh()
+        summary = panel_module._summary_html(panel)
+    finally:
+        panel.deleteLater()
+
+    # ONE page, ONE verdict: the card cannot say "discovery only" while the
+    # banner says "last reliable reading" about the same family.
+    assert "last reliable reading" in summary.lower(), summary
+    assert "discovery only" not in summary, summary
+    assert summary.count("post_earnings_52w_break") >= 2, summary
+
+
 # ===========================================================================
 # Advisory 3 - min_n binds the stale and undated discovery pools too
 # ===========================================================================
@@ -512,10 +668,16 @@ def test_min_n_binds_the_stale_pool_so_a_thin_row_is_never_a_stale_discovery():
 def test_the_floor_is_judged_before_the_clock():
     """A family with three samples is under the floor whether or not its
     evidence is fresh. Telling the reader "not fresh" about three samples
-    answers a question they did not ask."""
+    answers a question they did not ask.
+
+    The row is built EXPLICITLY undated rather than through `_evidence_row`,
+    whose `session or <last completed>` default silently dated it and made this
+    test unable to fail on the old code (re-review advisory 2).
+    """
     from working_lately import select_leader
 
-    rows = [_evidence_row("three_samples", wins=2, losses=1, session="")]
+    rows = [dict(_evidence_row("three_samples", wins=2, losses=1), latest_measured_session="")]
+    assert rows[0]["latest_measured_session"] == "", "the fixture must be genuinely undated"
     verdict = select_leader(
         rows, kind="swing_short_term", last_completed_session=_last_completed_session(), min_n=6
     )
@@ -575,7 +737,9 @@ def test_the_banner_states_the_freshness_rule_in_words(panel_module, tmp_path, m
     finally:
         panel.deleteLater()
 
-    assert "fresh = an entry inside" in FRESHNESS_SENTENCE
+    # It says MEASURED, not entered: the 2-session rows date themselves by the
+    # bar the R was read from since the re-review (advisory 4).
+    assert "fresh = measured inside" in FRESHNESS_SENTENCE
     assert FRESHNESS_SENTENCE in html, html
 
 
@@ -610,6 +774,52 @@ def test_an_exported_zero_count_is_a_count_and_not_a_missing_column(panel_module
 # ===========================================================================
 # Advisory 7 - a flat is measured, and it is not in n
 # ===========================================================================
+
+
+def test_an_old_discovery_row_is_called_old_and_not_thin(panel_module, tmp_path, monkeypatch):
+    """Advisory 1. A row kept out for being OLD has the evidence - it is simply
+    not current - and "thin" names the wrong gate. Both renderers say it the
+    same way, from the same helper."""
+    import market_calendar
+
+    from working_lately import discovery_basis_phrase
+    from research_explanations import build_plain_english_whats_working
+
+    assert discovery_basis_phrase("not_fresh") == "leading on older evidence"
+    assert discovery_basis_phrase("no_session") == "leading on undated evidence"
+    assert discovery_basis_phrase("floor") == "leading on thin evidence"
+
+    last_session = _last_completed_session()
+    stale_day = last_session
+    for _ in range(5):
+        stale_day = market_calendar.previous_session(stale_day)
+    rows = [
+        _evidence_row("old_but_measured", wins=24, losses=16, session=stale_day.isoformat())
+    ]
+
+    # The card (no previous verdict to carry, so it shows the discovery row).
+    plain = build_plain_english_whats_working(recent_rows=rows)
+    bullet = next(text for text in plain["bullets"] if "recently closed swings" in text)
+    assert "older evidence" in bullet, bullet
+    assert "thin evidence" not in bullet, bullet
+
+    # ...and the banner.
+    csv_path = tmp_path / "recent.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    monkeypatch.setattr(panel_module, "RECENT_SETUP_TYPE_STATS_FILE", csv_path)
+    panel = panel_module.SetupTrackerPanel()
+    try:
+        html = panel_module._best_now_banner_html(panel)
+    finally:
+        panel.deleteLater()
+    assert "older evidence" in html, html
+    assert "thin evidence" not in html, html
+    # The no-session sentence belongs only to a row that has no session.
+    assert "carries no session" not in html, html
+    assert "Swing (30d realized), discovery" in html, html
 
 
 def test_a_flat_reaches_the_headline_record_and_stays_out_of_n(panel_module):

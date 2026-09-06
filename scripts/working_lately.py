@@ -78,22 +78,62 @@ LEADER_MARGIN_LB = 0.05
 #: about the desk and not about the family. Counted on the exchange calendar
 #: (``market_calendar``), never in calendar days.
 #:
-#: **What is measured is the ENTRY session**, not the exit. The tracker's family
-#: rows carry no exit date, so ``latest_measured_session`` is the newest
-#: scan_date among the episodes that produced a readable R. That is the
-#: conservative reading - a family whose newest ENTRY is old cannot have a newer
-#: measured close than its own scan - and every surface that shows a verdict
-#: says so in words, because "fresh" without its clock is not a fact.
+#: **``latest_measured_session`` means what its name says, wherever the export
+#: can answer.** The 2-session rows date themselves by the BAR the R was read
+#: from (``legacy._short_horizon_measured_session``), because entry dating made
+#: a family entered eight weeks ago and measured two sessions later read as 58
+#: sessions stale on a file written that morning. The recent FAMILY rows still
+#: date by the entry session, and only because they have nothing better: those
+#: rows carry no exit date (ST4 adds ``representative_exit_date``; until it
+#: lands this is the conservative reading, since a family whose newest ENTRY is
+#: old cannot have a newer measured close than its own scan). Every surface that
+#: shows a verdict states the rule in words - "fresh" without its clock is not a
+#: fact - and an export that cannot date a row leaves it EMPTY, which reads as
+#: not fresh and never as a guess.
 LEADER_FRESHNESS_SESSIONS = 2
 
 #: How the freshness rule reads in a sentence, for every surface that shows one.
 FRESHNESS_SENTENCE = (
-    f"fresh = an entry inside {LEADER_FRESHNESS_SESSIONS} exchange sessions of "
+    f"fresh = measured inside {LEADER_FRESHNESS_SESSIONS} exchange sessions of "
     f"the last completed one"
 )
 
 #: The states ``select_leader`` can return.
 LEADER_STATES = ("leader", "no_clear_leader", "last_reliable_reading", "no_evidence")
+
+#: The one spelling of each state, for a label that must follow the verdict.
+#:
+#: Re-review blocker 2: a caller hardcoded "2-session discovery" into its label
+#: and then printed it over a real `leader` verdict. A label that does not come
+#: from the verdict will eventually contradict it.
+_STATE_WORDS = {
+    "leader": "leader",
+    "no_clear_leader": "no clear leader",
+    "last_reliable_reading": "last reliable reading",
+    "no_evidence": "no evidence",
+}
+
+
+def verdict_label_suffix(verdict: "LeaderVerdict") -> str:
+    """What this verdict IS, in two or three words, for a surface's label."""
+    if verdict.state == "no_evidence" and verdict.coverage.get("discovery_leader") is not None:
+        return "discovery"
+    return _STATE_WORDS.get(verdict.state, "no verdict")
+
+
+def discovery_basis_phrase(discovery_reason: Any) -> str:
+    """How to describe the evidence behind a discovery row, by the gate it failed.
+
+    Re-review advisory 1: a row kept out for being OLD is not thin. It has the
+    evidence - it is simply not current - and calling it thin names the wrong
+    gate, which is the same class of error as calling a weighted rate a count.
+    """
+    reason = _text(discovery_reason)
+    if reason == "not_fresh":
+        return "leading on older evidence"
+    if reason == "no_session":
+        return "leading on undated evidence"
+    return "leading on thin evidence"
 
 
 @dataclass(frozen=True)
@@ -626,6 +666,17 @@ from dataclasses import asdict, fields as dataclass_fields
 #: sentence about the evidence rather than a hedge.
 LEADER_PERSISTENCE_SNAPSHOTS = 2
 
+#: How far the top day-trade cell's bound must clear the runner-up's, in SCORE
+#: units (`held_run_score` = P(held 30m) x trimmed-mean MFE_R, so R).
+#:
+#: **Declared 2026-09-06, before any forward evaluation, and NOT tuned.** It
+#: exists because `LEADER_MARGIN_LB` (0.05) is a margin on a WIN RATE - a
+#: quantity bounded in [0, 1] - and applying it to an R-scale bound would make
+#: two day-trade cells 0.06R apart read as a clear leader. A tenth of an R of
+#: held-run separation is the smallest gap this desk would act on: below it the
+#: two names are the same name as far as the next trade is concerned.
+LEADER_MARGIN_HELD_RUN_R = 0.10
+
 #: The largest share of a cell's own sample ONE symbol or ONE session may
 #: supply and still be eligible to lead.
 #:
@@ -654,7 +705,24 @@ HELD_RUN_STATISTIC_NAME = "held_run_score (P(held 30m) x trimmed MFE_R)"
 
 #: The one sentence that says the leader is observational. Printed, never
 #: corrected away: K cells were looked at and the best of K was named.
+#:
+#: **K is that KIND's own cell count** (re-review advisory 1). A caveat summed
+#: across kinds would overstate the search for the kind it is standing beside -
+#: the swing leader was not chosen against the day-trade cells; they were never
+#: comparable and `pool_cells` refuses to make them so.
 OBSERVATIONAL_CAVEAT = "observational leader among {k} cells"
+
+#: Which column carries the session a favorable-direction row was MEASURED on,
+#: in the order they are tried.
+#:
+#: **Re-review blocker 4.** `swing_favorable` was dated by `scan_date`, which is
+#: the ENTRY, while the outcome is measured `horizon_sessions` later - so a file
+#: whose newest entry is exactly 5 sessions back (the live one on 2026-09-04:
+#: newest `scan_date` 2026-08-28, horizon 5) could never be fresh and the kind
+#: could never produce a leader at all. The freshness rule asks "when was this
+#: last MEASURED", and for a v1 row that is `future_scan_date`, for a v2 row
+#: `target_session`.
+FAVORABLE_MEASURED_FIELDS = ("future_scan_date", "target_session")
 
 
 @dataclass(frozen=True)
@@ -751,8 +819,16 @@ class EvidenceCell:
             f"n={self.n_eligible} ({self.n_graded} graded, {self.n_pending} pending, "
             f"{self.n_excluded} excluded)",
             f"{self.n_symbols} symbol(s) / {self.n_sessions} session(s)",
-            f"top symbol {_share_text(self.top_symbol_share)}, "
-            f"top session {_share_text(self.top_session_share)}",
+            (
+                # Re-review advisory 3: a cell whose export states coverage as
+                # COUNTS carries no shares, and "top symbol unmeasured" reads
+                # like a measurement that came back empty. It was never taken.
+                "concentration unmeasured (this export states coverage as counts, "
+                "not shares, so no cell of this kind can be refused as concentrated)"
+                if self.top_symbol_share is None and self.top_session_share is None
+                else f"top symbol {_share_text(self.top_symbol_share)}, "
+                f"top session {_share_text(self.top_session_share)}"
+            ),
             f"outcome {self.outcome_kind} ({self.outcome_version})",
             f"basis {self.knowledge_basis}",
             f"horizon {self.horizon}",
@@ -920,6 +996,21 @@ _FAVORABLE_POLICY_VERSIONS = {
 }
 
 
+def _measured_stamp(row: Mapping[str, Any], policy: Any) -> str:
+    """The session this favorable-direction row was MEASURED on.
+
+    `future_scan_date` (v1) or `target_session` (v2). Falls back to the entry
+    clock only when the row carries neither, and a fallback is NOT a measurement
+    date - it dates the cell earlier than the truth, which can only ever make
+    the freshness test stricter, never looser.
+    """
+    for field in FAVORABLE_MEASURED_FIELDS:
+        stamp = str(row.get(field) or "")[:10]
+        if stamp:
+            return stamp
+    return str(row.get(policy.clock_field) or "")[:10]
+
+
 def swing_favorable_cells(read: Any) -> list[EvidenceCell]:
     """ST1's eligible rows, grouped by (side, family) - a FAVORABLE rate.
 
@@ -969,6 +1060,12 @@ def swing_favorable_cells(read: Any) -> list[EvidenceCell]:
         )
         sessions = [str(row.get(policy.clock_field) or "")[:10] for row in rows]
         distinct_sessions, session_share = _shares(sessions, len(rows))
+        # The WINDOW is measured on the policy's own clock (`scan_date` for v1 -
+        # "lately" asks which entries are recent). FRESHNESS is a different
+        # question - "when was this last measured" - and for a horizon-5 row the
+        # answer is five sessions after the entry. Dating the cell by the entry
+        # made this kind permanently stale (re-review blocker 4).
+        measured = [_measured_stamp(row, policy) for row in rows]
         cells.append(
             EvidenceCell(
                 kind="swing_favorable",
@@ -979,7 +1076,7 @@ def swing_favorable_cells(read: Any) -> list[EvidenceCell]:
                 knowledge_basis=policy.knowledge_basis,
                 horizon=horizon,
                 window_sessions=int(policy.window_sessions),
-                latest_measured_session=max((stamp for stamp in sessions if stamp), default=""),
+                latest_measured_session=max((stamp for stamp in measured if stamp), default=""),
                 n_eligible=len(rows),
                 n_pending=pending.get((side, family), 0),
                 # The GROUP's own exclusion. The policy's file-level exclusions
@@ -1035,7 +1132,14 @@ def daytrade_held_run_cells(summaries: Mapping[Any, Mapping[str, Any]] | None) -
         concentration = summary.get("concentration") or {}
         by_symbol = concentration.get("by_symbol") or {}
         by_session = concentration.get("by_session") or {}
-        bootstrap = summary.get("bootstrap") or {}
+        # **`score_bootstrap`, never `bootstrap`** (re-review blocker 3). The
+        # second one is an interval on the MFEs of the held episodes - a real
+        # answer to "how far did the held ones run" and the WRONG number to put
+        # beside `held_run_score`, which is a product measured over two
+        # denominators. Live, it printed `held x ran 1.21 (>= 2.070)`: a lower
+        # bound above the statistic, and the cell it crowned was not the cell
+        # with the best held x ran.
+        bootstrap = summary.get("score_bootstrap") or {}
         measured_interval = bool(bootstrap.get("measured"))
         cells.append(
             EvidenceCell(
@@ -1062,9 +1166,9 @@ def daytrade_held_run_cells(summaries: Mapping[Any, Mapping[str, Any]] | None) -
                 statistic_name=HELD_RUN_STATISTIC_NAME,
                 uncertainty_low=bootstrap.get("low") if measured_interval else None,
                 uncertainty_kind=(
-                    "session_block_bootstrap_low"
+                    "held_run_score_session_block_low"
                     if measured_interval
-                    else f"session_block_bootstrap_unmeasured ({bootstrap.get('reason') or 'no reason given'})"
+                    else f"held_run_score_session_block_unmeasured ({bootstrap.get('reason') or 'no reason given'})"
                 ),
                 namespace="live",
                 n_graded=int(summary.get("n_held") or 0),
@@ -1098,21 +1202,53 @@ def _sessions_behind(stamp: Any, last_completed_session: date) -> int | None:
         return None
 
 
-def _cell_order(cells: Sequence[EvidenceCell]) -> list[EvidenceCell]:
-    """Best first: the declared lower bound, then the statistic, then n, then name.
+#: What each kind RANKS on, and the margin the top must clear, in that kind's
+#: own units. Two entries rather than one rule because the desk has two
+#: headlines and decision 0016 named them separately.
+#:
+#: The swing kinds rank on the WILSON LOWER BOUND, as everywhere else: two
+#: rates can differ by a mile and still be one sample apart when one is thin,
+#: and the bound is the number that already knows that.
+#:
+#: **The day-trade kind ranks on `held_run_score` itself** (re-review blocker 3,
+#: lead decision 2026-09-06). It is THE day-trade headline - decision 0016
+#: answer 4 - and ranking on its interval's lower edge instead named a different
+#: cell from the one the whole desk calls best: live, the bound crowned
+#: `LONG regime_pause_rs` while the headline's own leader was
+#: `LONG lrsi_cross_50`. The interval is still REQUIRED (a cell whose score
+#: cannot be bounded is not eligible) and is still printed - it just is not the
+#: sort key.
+RANK_BASIS = {
+    "swing_trade_r": ("uncertainty_low", LEADER_MARGIN_LB),
+    "swing_favorable": ("uncertainty_low", LEADER_MARGIN_LB),
+    "daytrade_held_run": ("statistic", LEADER_MARGIN_HELD_RUN_R),
+}
 
-    The BOUND leads, as everywhere else on the desk (decision 0016): two
-    statistics can differ by a mile and still be one sample apart when one of
-    them is thin, and the bound is the number that already knows that.
+
+def rank_basis(kind: str) -> tuple[str, float]:
+    """`(field, margin)` for one kind - the ONE place either is decided."""
+    return RANK_BASIS.get(kind, ("uncertainty_low", LEADER_MARGIN_LB))
+
+
+def _rank_value(cell: EvidenceCell) -> float | None:
+    field, _margin = rank_basis(cell.kind)
+    value = getattr(cell, field, None)
+    return None if value is None else float(value)
+
+
+def _cell_order(cells: Sequence[EvidenceCell]) -> list[EvidenceCell]:
+    """Best first, on that kind's OWN basis, then n, then name.
+
+    A cell with no rank value sorts last: it is not ranked at all, and a
+    fallback to another quantity would be a second basis wearing the first's
+    name.
     """
 
     def key(cell: EvidenceCell):
-        low = cell.uncertainty_low
-        statistic = cell.statistic
+        value = _rank_value(cell)
         return (
-            low is None,
-            -(float(low) if low is not None else 0.0),
-            -(float(statistic) if statistic is not None else 0.0),
+            value is None,
+            -(value if value is not None else 0.0),
             -int(cell.n_eligible or 0),
             cell.name,
         )
@@ -1225,7 +1361,19 @@ def select_cell_leader(
     studies = [cell for cell in mine if cell.namespace == "study"]
     live = [cell for cell in mine if cell.namespace != "study"]
     coverage["studies_excluded"] = len(studies)
-    readable = [cell for cell in live if cell.statistic is not None]
+    rank_field, margin = rank_basis(kind)
+    coverage["rank_basis"] = rank_field
+    coverage["margin"] = margin
+    # A cell needs BOTH: a statistic to be read and an interval to be bounded by.
+    # The day-trade kind ranks on the statistic, but a score nobody could put an
+    # interval around is a number without a claim, and the trader's own words
+    # were that ordinary bounds alone do not solve dependence - the answer to
+    # which is to require the session-block one, not to drop it.
+    readable = [
+        cell
+        for cell in live
+        if cell.statistic is not None and cell.uncertainty_low is not None
+    ]
     coverage["unreadable"] = len(live) - len(readable)
 
     fresh: list[EvidenceCell] = []
@@ -1260,31 +1408,33 @@ def select_cell_leader(
     if eligible:
         top = eligible[0]
         runner_up = eligible[1] if len(eligible) > 1 else None
-        top_low = float(top.uncertainty_low or 0.0)
+        top_rank = _rank_value(top) or 0.0
+        basis_words = (
+            "Wilson lower bound" if rank_field == "uncertainty_low" else top.statistic_name
+        )
         if runner_up is not None:
-            gap = top_low - float(runner_up.uncertainty_low or 0.0)
-            if gap <= LEADER_MARGIN_LB:
+            gap = top_rank - (_rank_value(runner_up) or 0.0)
+            if gap <= margin:
                 return _verdict(
                     "no_clear_leader",
                     None,
                     runner_up.as_row(),
-                    f"{top.name} ({top_low:.3f}) and {runner_up.name} "
-                    f"({float(runner_up.uncertainty_low or 0.0):.3f}) are {gap:.3f} apart, "
-                    f"inside the declared {LEADER_MARGIN_LB:.2f} margin - no clear "
+                    f"{top.name} ({top_rank:.3f}) and {runner_up.name} "
+                    f"({_rank_value(runner_up) or 0.0:.3f}) are {gap:.3f} apart on "
+                    f"{basis_words}, inside the declared {margin:.2f} margin - no clear "
                     f"leader.{withheld}",
                     as_of=top.latest_measured_session,
                     policy_line=top.line(),
                 )
             lead_sentence = (
-                f"{top.name} leads {runner_up.name} by {gap:.3f} of "
-                f"{top.uncertainty_kind} ({top_low:.3f} vs "
-                f"{float(runner_up.uncertainty_low or 0.0):.3f}), clear of the declared "
-                f"{LEADER_MARGIN_LB:.2f} margin."
+                f"{top.name} leads {runner_up.name} by {gap:.3f} of {basis_words} "
+                f"({top_rank:.3f} vs {_rank_value(runner_up) or 0.0:.3f}), clear of the "
+                f"declared {margin:.2f} margin."
             )
         else:
             lead_sentence = (
                 f"{top.name} is the only eligible cell at the n>={top.n_floor} floor "
-                f"({top.uncertainty_kind} {top_low:.3f})."
+                f"({basis_words} {top_rank:.3f})."
             )
         prior_name = str(coverage["prior_leader"])
         if top.name == prior_name:
@@ -1402,6 +1552,22 @@ def select_cell_leader(
 #: The declared policy, hashed into every `snapshot_id`. Changing one of these
 #: numbers changes the identity of every snapshot after it, which is the point:
 #: two snapshots with the same id were measured under the same rules.
+def market_local_now() -> str:
+    """An ISO stamp WITH ITS OFFSET, market-local (advisory 6).
+
+    Every other clock in this chain is an exchange session, so the wall clock
+    beside it has to be in the same calendar or the two cannot be compared. The
+    desk runs on PT and market-local is a different DAY for three hours every
+    evening - which is when the overnight run reads these files.
+    """
+    try:
+        import market_calendar
+
+        return datetime.now(market_calendar.MARKET_TZ).isoformat(timespec="seconds")
+    except Exception:  # noqa: BLE001 - never worth the build
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
 def _policy_lines() -> tuple[str, ...]:
     return (
         f"leader_margin_lb={LEADER_MARGIN_LB}",
@@ -1411,6 +1577,81 @@ def _policy_lines() -> tuple[str, ...]:
         f"min_reportable_n={int(MIN_REPORTABLE_N)}",
         f"kinds={','.join(SNAPSHOT_KINDS)}",
     )
+
+
+#: The persisted shape's name. A later shape gets a later name; nothing reads a
+#: payload whose schema it does not recognise as this one.
+SNAPSHOT_SCHEMA = "working_lately_snapshot_v2"
+
+#: The fields that are a property of the KIND rather than of the cell. Written
+#: once per kind in the payload and put back by `cells_from_payload`.
+KIND_POLICY_FIELDS = (
+    "outcome_kind",
+    "outcome_version",
+    "knowledge_basis",
+    "horizon",
+    "window_sessions",
+    "statistic_name",
+    "uncertainty_kind",
+    "n_floor",
+)
+
+
+def _kind_policy(cells: Sequence[EvidenceCell]) -> dict[str, dict[str, Any]]:
+    """`{kind: {field: value}}` for the fields every cell of a kind shares.
+
+    Taken from the FIRST cell of each kind. A kind whose cells disagreed on one
+    of these would be a kind that is really two, and `pool_cells` already refuses
+    to combine those - so a disagreement here is a defect upstream, not something
+    to average away. The per-cell value still wins on read.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for cell in cells:
+        if cell.kind in out:
+            continue
+        out[cell.kind] = {field: getattr(cell, field) for field in KIND_POLICY_FIELDS}
+    return out
+
+
+def _compact_cell(cell: EvidenceCell) -> dict[str, Any]:
+    """One cell's own facts - everything except what the kind already said."""
+    row = asdict(cell)
+    shared = {field: getattr(cell, field) for field in KIND_POLICY_FIELDS}
+    return {
+        key: value
+        for key, value in row.items()
+        if key not in shared or value != shared[key] or key == "kind"
+    }
+
+
+def cells_from_payload(payload: Mapping[str, Any] | None) -> list[EvidenceCell]:
+    """Rebuild the cells, kind policy folded back in. `[]` when absent."""
+    policy = dict((payload or {}).get("kind_policy") or {})
+    names = {spec.name for spec in dataclass_fields(EvidenceCell)}
+    out: list[EvidenceCell] = []
+    for raw in (payload or {}).get("cells") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        merged = dict(policy.get(str(raw.get("kind")), {}))
+        merged.update(raw)
+        try:
+            out.append(EvidenceCell(**{k: v for k, v in merged.items() if k in names}))
+        except TypeError:
+            continue
+    return out
+
+
+def payload_cells(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """The cells as MAPPINGS with the kind policy folded in - what sorts read."""
+    policy = dict((payload or {}).get("kind_policy") or {})
+    out: list[dict[str, Any]] = []
+    for raw in (payload or {}).get("cells") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        merged = dict(policy.get(str(raw.get("kind")), {}))
+        merged.update(raw)
+        out.append(merged)
+    return out
 
 
 @dataclass(frozen=True)
@@ -1433,14 +1674,25 @@ class EvidenceSnapshot:
     sources: dict[str, dict[str, Any]]
 
     def to_payload(self) -> dict[str, Any]:
-        """The JSON the service persists and every surface renders. Small."""
+        """The JSON the service persists and every surface renders. Small.
+
+        **Small is a requirement, not a hope** (re-review advisory 2): on live
+        data the first version was 133 KB, because seven of a cell's fields are
+        the SAME STRING on every cell of its kind - the outcome kind, the outcome
+        version, the knowledge basis, the horizon, the window, the statistic's
+        name and the uncertainty's kind are properties of the KIND, not of the
+        family. They are written ONCE per kind in `kind_policy` and rehydrated by
+        `cells_from_payload`, so nothing the trader's requirement asks the
+        snapshot to identify is lost and the file is roughly a third of the size.
+        """
         return {
-            "schema": "working_lately_snapshot_v1",
+            "schema": SNAPSHOT_SCHEMA,
             "snapshot_id": self.snapshot_id,
             "as_of": self.as_of,
             "built_at": self.built_at,
             "policy": list(_policy_lines()),
-            "cells": [asdict(cell) for cell in self.cells],
+            "kind_policy": _kind_policy(self.cells),
+            "cells": [_compact_cell(cell) for cell in self.cells],
             "verdicts": {
                 kind: {
                     "state": verdict.state,
@@ -1573,6 +1825,10 @@ def build_snapshot(
     digest.update(as_of.encode("utf-8"))
 
     previous = dict(previous_verdicts or {})
+    # Advisory 6: MARKET-local and AWARE. A naive stamp on this desk (PT) is a
+    # different day from market-local for three hours every evening, which is
+    # exactly when the overnight run reads these files; and `as_of` beside it is
+    # an exchange session, so the two would have been in different calendars.
     verdicts = {
         kind: select_cell_leader(
             cells,
@@ -1586,7 +1842,7 @@ def build_snapshot(
     return EvidenceSnapshot(
         snapshot_id=digest.hexdigest(),
         as_of=as_of,
-        built_at=datetime.now().isoformat(timespec="seconds"),
+        built_at=market_local_now(),
         cells=tuple(cells),
         verdicts=verdicts,
         sources=merged,
@@ -1644,19 +1900,15 @@ def _ordered_cells(payload: Mapping[str, Any] | None, kind: str) -> list[Mapping
     Off the PAYLOAD rather than off live objects, so the desk sorts by exactly
     the reading it is displaying and cannot drift from the strip above it.
     """
-    cells = [
-        cell
-        for cell in ((payload or {}).get("cells") or [])
-        if isinstance(cell, Mapping) and str(cell.get("kind")) == kind
-    ]
+    cells = [cell for cell in payload_cells(payload) if str(cell.get("kind")) == kind]
+
+    field, _margin = rank_basis(kind)
 
     def key(cell: Mapping[str, Any]):
-        low = cell.get("uncertainty_low")
-        statistic = cell.get("statistic")
+        value = cell.get(field)
         return (
-            low is None,
-            -(float(low) if low is not None else 0.0),
-            -(float(statistic) if statistic is not None else 0.0),
+            value is None,
+            -(float(value) if value is not None else 0.0),
             -int(cell.get("n_eligible") or 0),
             str(cell.get("family") or ""),
         )
@@ -1721,6 +1973,29 @@ def _cell_for(payload: Mapping[str, Any] | None, verdict: Mapping[str, Any]) -> 
     return leader if isinstance(leader, Mapping) else {}
 
 
+def observational_caveat(payload: Mapping[str, Any] | None, kind: str) -> str:
+    """`observational leader among K cells` for ONE kind (advisory 1).
+
+    K is that kind's own `cells_considered`, never a total across kinds: the
+    swing leader was not chosen against the day-trade cells, they were never
+    comparable, and `pool_cells` refuses to make them so. A summed K would
+    overstate the search behind whichever leader it stood beside.
+    """
+    entry = _verdict_entries(payload).get(kind) or {}
+    coverage = entry.get("coverage") or {}
+    considered = coverage.get("cells_considered")
+    if considered is None:
+        considered = sum(
+            1 for cell in payload_cells(payload) if str(cell.get("kind")) == kind
+        )
+    return f"{kind}: " + OBSERVATIONAL_CAVEAT.format(k=int(considered or 0))
+
+
+def kind_phrase(payload: Mapping[str, Any] | None, kind: str, label: str) -> str:
+    """One kind's sentence. PUBLIC - the banner prints the two the strip elides."""
+    return _kind_phrase(payload, kind, label)
+
+
 def _kind_phrase(payload: Mapping[str, Any] | None, kind: str, label: str) -> str:
     entry = _verdict_entries(payload).get(kind)
     if entry is None:
@@ -1749,7 +2024,11 @@ def _kind_phrase(payload: Mapping[str, Any] | None, kind: str, label: str) -> st
         return f"{label} - {name}, {body}"
     if state == "last_reliable_reading":
         return f"{label} - Last reliable reading: {entry.get('as_of') or 'an unstated session'}"
-    return f"{label} - No clear leader: {str(entry.get('reason') or 'no reason given')}"
+    # The STATE's own word, not one word for every state that is not a leader.
+    # "no clear leader" and "no evidence" are different facts: the first says two
+    # cells were too close, the second says nothing could be read at all.
+    headline = "no evidence" if state == "no_evidence" else "no clear leader"
+    return f"{label} - {headline} - {str(entry.get('reason') or 'no reason given')}"
 
 
 def snapshot_line(payload: Mapping[str, Any] | None) -> str:
@@ -1763,7 +2042,7 @@ def snapshot_line(payload: Mapping[str, Any] | None) -> str:
 
     if not payload:
         return f"Working lately ({int(LATELY_SESSIONS)} sessions): no snapshot yet."
-    cells = [cell for cell in (payload.get("cells") or []) if isinstance(cell, Mapping)]
+    cells = payload_cells(payload)
     window = int(
         next(
             (cell.get("window_sessions") for cell in cells if cell.get("kind") == "swing_trade_r"),
@@ -1771,15 +2050,20 @@ def snapshot_line(payload: Mapping[str, Any] | None) -> str:
         )
         or LATELY_SESSIONS
     )
+    # **EVERY kind, always** (re-review blocker 4b). The favorable line used to
+    # be printed only when it named a leader, so a kind that was withheld left
+    # no trace at all and the strip read as though the desk had two questions
+    # instead of three. A withheld kind says WHY it is withheld; silence is the
+    # one thing it may not say.
     parts = [
         _kind_phrase(payload, "swing_trade_r", "Swing"),
+        _kind_phrase(payload, "swing_favorable", "Swing (favorable)"),
         _kind_phrase(payload, "daytrade_held_run", "Day"),
     ]
-    favorable = _verdict_entries(payload).get("swing_favorable") or {}
-    if str(favorable.get("state")) in {"leader", "last_reliable_reading"} and favorable.get("leader"):
-        parts.append(_kind_phrase(payload, "swing_favorable", "Favorable"))
     parts.append(f"as of {payload.get('as_of') or 'an unstated session'}")
-    parts.append(OBSERVATIONAL_CAVEAT.format(k=len(cells)))
+    parts.append(
+        " / ".join(observational_caveat(payload, kind) for kind in SNAPSHOT_KINDS)
+    )
     return f"Working lately ({window} sessions): " + " · ".join(parts)
 
 
@@ -1792,15 +2076,16 @@ def snapshot_sentence(payload: Mapping[str, Any] | None) -> str:
 
 def snapshot_cell_lines(payload: Mapping[str, Any] | None) -> list[str]:
     """Every cell, one line each - the strip's tooltip and the recap's detail."""
+    names = {spec.name for spec in dataclass_fields(EvidenceCell)}
     lines: list[str] = []
     for kind in SNAPSHOT_KINDS:
         for cell in _ordered_cells(payload, kind):
             try:
-                lines.append(EvidenceCell(**{
-                    key: value
-                    for key, value in cell.items()
-                    if key in {spec.name for spec in dataclass_fields(EvidenceCell)}
-                }).line())
+                lines.append(
+                    EvidenceCell(
+                        **{key: value for key, value in cell.items() if key in names}
+                    ).line()
+                )
             except TypeError:
                 # A payload written by an older build is still worth showing;
                 # it is simply shown as the mapping it is.

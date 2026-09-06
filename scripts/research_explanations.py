@@ -238,6 +238,7 @@ def _verdict_bullet(
     label: str,
     min_n: int,
     last_completed_session=None,
+    verdict=None,
 ) -> str:
     """One plain-English line straight off `working_lately.select_leader`.
 
@@ -251,8 +252,14 @@ def _verdict_bullet(
 
     It now reads the SAME verdict as the banner, so the two cannot disagree, and
     a state that is not `leader` is printed as the state - never as a crown.
+
+    **``verdict`` is passed in by the Setup Tracker**, which computes both
+    horizons once per page (re-review blocker 1). Computing it here instead
+    dropped the caller's ``previous``, so on a stale refresh this card printed
+    "no clear leader ... discovery only" three lines above the banner's "last
+    reliable reading". Only a caller with no verdict of its own makes one here.
     """
-    from working_lately import select_leader
+    from working_lately import discovery_basis_phrase, select_leader
 
     if last_completed_session is None:
         from datetime import datetime
@@ -264,26 +271,15 @@ def _verdict_bullet(
                 datetime.now(market_calendar.MARKET_TZ)
             )
         except Exception:
-            from datetime import date
+            # MARKET-local, the same fallback the panel uses. `date.today()` is
+            # machine-local, and on this desk (PT) that is a different day from
+            # market-local for three hours every evening (advisory 3).
+            last_completed_session = datetime.now(market_calendar.MARKET_TZ).date()
 
-            last_completed_session = date.today()
-
-    verdict = select_leader(
-        rows, kind=kind, last_completed_session=last_completed_session, min_n=min_n
-    )
-    return verdict_sentence(verdict, label=label, min_n=min_n)
-
-
-def verdict_sentence(verdict, *, label: str, min_n: int) -> str:
-    """One plain-English line for a verdict that has ALREADY been decided.
-
-    Split out of `_verdict_bullet` by ST6 so the desk's SHARED Working-lately
-    snapshot can be printed by the same words. `_verdict_bullet` still decides
-    when nobody handed this card a verdict; when one is handed over, the card
-    and the banner beneath it are rendering the same object and cannot come to
-    name different families - which is the whole of what ST2's fix round and
-    ST6.4 are both about.
-    """
+    if verdict is None:
+        verdict = select_leader(
+            rows, kind=kind, last_completed_session=last_completed_session, min_n=min_n
+        )
 
     def _mean_r(row) -> str:
         """Mean R beside the win rate, never instead of it (decision 0016)."""
@@ -310,8 +306,11 @@ def verdict_sentence(verdict, *, label: str, min_n: int) -> str:
     if discovery is not None:
         wins = _int(discovery.get("n_wins"))
         losses = _int(discovery.get("n_losses"))
+        # The SAME phrase the banner uses, from the same helper, so the two
+        # never name the gate differently (advisory 1).
+        basis = discovery_basis_phrase(verdict.coverage.get("discovery_reason"))
         return (
-            f"{label}: no clear leader. Leading on thin evidence, "
+            f"{label}: no clear leader. {basis.capitalize()}, "
             f"{_text(discovery.get('side')).upper()} "
             f"{_text(discovery.get('setup_family'))} on n={wins + losses} - "
             f"discovery only.{floor_note}{_mean_r(discovery)}"
@@ -327,7 +326,7 @@ def build_plain_english_whats_working(
     playbook_rows: Sequence[Mapping[str, Any]] = (),
     short_term_min_samples: int = 6,
     last_completed_session=None,
-    working_lately: Mapping[str, Any] | None = None,
+    verdicts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Summarize qualified measured leaders without filling empty slots.
 
@@ -335,13 +334,6 @@ def build_plain_english_whats_working(
     `working_lately.select_leader`, the one decision the Setup Tracker's banner
     also reads, so this card and the banner beneath it can never name different
     families or crown a study (ST2 fix round, 2026-09-06).
-
-    **And when the desk hands over its SHARED snapshot, the swing bullet is that
-    snapshot's verdict** (ST6.4). Without this the card would re-decide from the
-    same rows while the banner three lines below rendered the shared reading, and
-    the two would disagree the first time the snapshot's persistence rule held a
-    new leader back - which is the same defect ST2's fix round removed, arriving
-    by a different door.
     """
 
     bullets: list[str] = []
@@ -354,6 +346,7 @@ def build_plain_english_whats_working(
 
     from working_lately import short_term_evidence_rows
 
+    supplied = verdicts or {}
     bullets.append(
         _verdict_bullet(
             short_term_evidence_rows(short_term_rows),
@@ -361,29 +354,19 @@ def build_plain_english_whats_working(
             label="For the first two sessions",
             min_n=short_term_min_samples,
             last_completed_session=last_completed_session,
+            verdict=supplied.get("swing_short_term"),
         )
     )
-    shared = None
-    if working_lately:
-        import working_lately as _wl
-
-        shared = _wl.verdicts_from_payload(working_lately).get("swing_trade_r")
-    if shared is not None:
-        bullets.append(
-            verdict_sentence(
-                shared, label="Among recently closed swings", min_n=MIN_REPORTABLE_N
-            )
+    bullets.append(
+        _verdict_bullet(
+            recent_rows,
+            kind="swing",
+            label="Among recently closed swings",
+            min_n=MIN_REPORTABLE_N,
+            last_completed_session=last_completed_session,
+            verdict=supplied.get("swing"),
         )
-    else:
-        bullets.append(
-            _verdict_bullet(
-                recent_rows,
-                kind="swing",
-                label="Among recently closed swings",
-                min_n=MIN_REPORTABLE_N,
-                last_completed_session=last_completed_session,
-            )
-        )
+    )
 
     play_candidates = [
         row
