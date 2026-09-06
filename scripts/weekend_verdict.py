@@ -83,6 +83,25 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+def working_lately_line(payload: Mapping[str, Any] | None) -> VerdictLine | None:
+    """The desk's shared Working-lately reading, with its identity - ST6.4.
+
+    `None` when there is no snapshot, and the caller then prints NO line: the
+    desk builds the snapshot on a desk session, so a weekend before the first
+    build has nothing to report and an empty sentence in a capped card would
+    cost a line that does.
+    """
+    import working_lately as wl
+
+    if not payload:
+        return None
+    return VerdictLine(
+        key="working_lately",
+        text=f"{wl.snapshot_line(payload)} [{wl.snapshot_stamp(payload)}]",
+        measured=True,
+    )
+
+
 def take_rate_line(state: Mapping[str, Any] | None) -> VerdictLine:
     """How much of what the desk showed, the trader acted on.
 
@@ -307,13 +326,26 @@ def build_verdict(
     awaiting_review: int = 0,
     research_pack: Mapping[str, Any] | None = None,
     horizon: str = CARD_HORIZON,
+    working_lately: Mapping[str, Any] | None = None,
 ) -> Verdict:
     """The whole card. Pure: every input is passed in, nothing is read here.
 
     Pure on purpose - the panel reads the stores on its worker and hands the
     rows over, so this is testable without a journal, a lake or a Qt event loop.
+
+    `working_lately` is the desk's SHARED evidence snapshot (ST6.4). The card
+    prints the same line and the same `snapshot_id` as the strip above the M5
+    list and as the Setup Tracker banner, so the weekend read and the weekday
+    read can be reconciled instead of compared from memory.
     """
     verdict = Verdict()
+    # The head line, and ONLY when there is a snapshot to print. The card is
+    # capped at eight lines by the trader ("a card, not a second wall of text")
+    # and a weekend before the desk has ever built a snapshot has nothing to say
+    # here - an absent reading is not a line, it is silence.
+    shared = working_lately_line(working_lately)
+    if shared is not None:
+        verdict.lines.append(shared)
     verdict.lines.append(take_rate_line(learning_state))
     verdict.lines.append(
         _callout_line(learning_state, "blind_spots", "Blind spots", "shown, passed on, then worked")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -407,6 +408,11 @@ class SetupTrackerPanel(QFrame):
         self.catch_rate_rows: list[dict[str, Any]] = []
         self.human_pick_rows: list[dict[str, Any]] = []
         self.band_variant_rows: list[dict[str, Any]] = []
+        # ST6.4. The SHARED Working-lately snapshot, handed over by the desk's
+        # service. Empty means this page renders its own read and LABELS it
+        # `panel read`, which is the difference between "the desk's answer" and
+        # "this tab's answer" being visible instead of guessed at.
+        self._working_lately_snapshot: dict[str, Any] = {}
 
         self.min_closed_input = QSpinBox()
         self.min_closed_input.setRange(1, 100)
@@ -790,6 +796,20 @@ class SetupTrackerPanel(QFrame):
             f"closed-R edge. {under:,} are UNDER the reportable-n floor "
             f"(n < {_attribute_floor()}), greyed and sorted last."
         )
+
+    def set_working_lately_snapshot(self, payload: Any) -> None:
+        """Take the desk's shared reading (ST6.4). Formatting only, no read.
+
+        The banner then renders THIS snapshot rather than its own CSV pass, so
+        the tracker and the strip above the M5 list print the same
+        `snapshot_id`. Handing over an empty payload puts the page back on its
+        own labelled `panel read`.
+        """
+        self._working_lately_snapshot = dict(payload or {})
+        try:
+            self.summary_view.setHtml(_summary_html(self))
+        except Exception:  # noqa: BLE001 - a banner is never worth a traceback
+            logging.debug("Setup Tracker summary re-render skipped", exc_info=True)
 
     def refresh(self) -> None:
         min_closed = int(self.min_closed_input.value())
@@ -1756,6 +1776,7 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
     counted out loud; and when nothing is eligible the banner says which gate
     closed instead of crowning whoever was left.
     """
+    import working_lately
     from working_lately import select_leader, short_term_evidence_rows
 
     muted = theme.color("text_secondary")
@@ -1765,6 +1786,17 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
 
     def _side_color(side: Any) -> str:
         return long_c if str(side or "").upper() == "LONG" else short_c
+
+    # ST6.4. When the desk's Working-lately service has handed this page its
+    # snapshot, the banner renders THAT - the same `snapshot_id` the strip above
+    # the M5 list prints - so two screens read a minute apart can be reconciled.
+    # The panel's own CSV read is the FALLBACK and says so out loud: an
+    # unlabelled fallback is how the desk grew two answers to one question.
+    payload = getattr(panel, "_working_lately_snapshot", None) or {}
+    if payload:
+        return _snapshot_banner_html(
+            payload, muted=muted, favorite_c=favorite_c, side_color=_side_color
+        )
 
     last_session = _last_completed_session_or_today()
     swing_verdict = select_leader(
@@ -1835,6 +1867,49 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
                 f"<span style='color:{muted}'>({_esc(row.get('status'))}, closed {_int(row.get('closed_setups'))})</span>"
             )
         parts.append(f"<div><b>New &amp; rising (not favorites yet):</b> {' &middot; '.join(chips)}</div>")
+    parts.append(
+        f"<div style='color:{muted}'>Source: <b>panel read</b> - this page read the "
+        f"exports itself because the desk's Working-lately service has not handed "
+        f"it a snapshot. A desk session shows the shared reading and its id.</div>"
+    )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _snapshot_banner_html(payload, *, muted: str, favorite_c: str, side_color) -> str:
+    """The banner rendered from the SHARED snapshot - ST6.4.
+
+    The same `snapshot_id` the strip above the M5 list prints, so the trader can
+    reconcile the two by eye instead of wondering which is older. One block per
+    kind, each through the SAME `_verdict_block_html` the panel read uses, so
+    the two paths cannot come to say things differently.
+    """
+    import working_lately
+
+    verdicts = working_lately.verdicts_from_payload(payload)
+    parts = [
+        f"<div style='border:1px solid {favorite_c}; padding:6px; margin-bottom:6px'>",
+        f"<b style='color:{favorite_c}; font-size:10pt'>BEST PERFORMING RIGHT NOW</b>",
+    ]
+    for kind, label in (
+        ("swing_trade_r", "Swing (30d realized)"),
+        ("swing_favorable", "Swing (favorable direction, percent move)"),
+        ("daytrade_held_run", "Day trade (held x ran)"),
+    ):
+        verdict = verdicts.get(kind)
+        if verdict is None:
+            continue
+        parts.append(
+            _verdict_block_html(
+                verdict, label=label, muted=muted, side_color=side_color
+            )
+        )
+    cells = [cell for cell in (payload.get("cells") or []) if isinstance(cell, dict)]
+    parts.append(
+        f"<div style='color:{muted}'>"
+        f"{_esc(working_lately.OBSERVATIONAL_CAVEAT.format(k=len(cells)))} - nothing "
+        f"here is proven. {_esc(working_lately.snapshot_stamp(payload))}.</div>"
+    )
     parts.append("</div>")
     return "".join(parts)
 

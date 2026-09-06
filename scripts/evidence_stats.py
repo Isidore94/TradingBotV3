@@ -258,7 +258,14 @@ def _concentration(labels: Sequence[str]) -> dict[str, Any]:
     return {
         "distinct": len(counts),
         "top": top,
-        "top_share": round(top_count / len(cleaned), 4),
+        # Ten places, not four (ST6, 2026-09-06). Four made a share of 2/6 read
+        # 0.3333, and the Working-lately snapshot compares a share against a
+        # DECLARED threshold (`CONCENTRATION_LIMIT`, 0.5) and hashes it into a
+        # snapshot id - a display rounding inside a decision input is how a cell
+        # sitting exactly on a limit lands on the wrong side of it. Ten places
+        # is far below anything any surface prints and far above float noise;
+        # every renderer formats this itself.
+        "top_share": round(top_count / len(cleaned), 10),
         "measured": True,
     }
 

@@ -145,6 +145,12 @@ class M5AlertBar(QWidget):
         # stream, which is what the desk passes; the seam exists so a test can
         # exercise the real handler without touching the trader's file.
         self._annotations_path = annotations_path
+        # ST6.5. `[(bounce_type, SIDE)]`, best first, off the desk's shared
+        # Working-lately snapshot. Read AT SORT TIME and only when the switch is
+        # ON: this REORDERS and never withholds - every row that was here is
+        # still here, the repeat fold is computed before any sort, and turning
+        # the switch off brings today's arrival order back exactly.
+        self._working_lately_order: list[tuple[str, str]] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -211,6 +217,7 @@ class M5AlertBar(QWidget):
             self.list.takeItem(row)
             self._write_item(item, alert, repeats)
             self.list.insertItem(0, item)
+            self._apply_priority_order()
             self._refresh_title()
             return
         item = QListWidgetItem()
@@ -218,7 +225,59 @@ class M5AlertBar(QWidget):
         self.list.insertItem(0, item)
         while self.list.count() > MAX_ROWS:
             self.list.takeItem(self.list.count() - 1)
+        self._apply_priority_order()
         self._refresh_title()
+
+    def mount_top_strip(self, widget) -> None:
+        """Put one widget above the header - the Working-lately strip (ST6.4).
+
+        A mounting point rather than a constructor argument: the strip is owned
+        by the desk (it is fed by the desk's service and opens a desk page), and
+        the bar simply gives it the top of the M5 column. Nothing about the bar
+        changes; the splitter above it keeps its two children, so the M5 alerts
+        widget is still `m5_column.widget(0)`.
+        """
+        self.layout().insertWidget(0, widget)
+
+    def set_working_lately_order(self, order) -> None:
+        """`[(bounce_type, SIDE)]`, best first. Presentation only (ST6.5)."""
+        self._working_lately_order = [
+            (str(cell), str(side)) for cell, side in (order or ())
+        ]
+        self._apply_priority_order()
+
+    def _apply_priority_order(self) -> None:
+        """Stably re-sort the visible rows. Nothing is added, dropped or folded.
+
+        The fold has ALREADY happened by the time this runs - `post` writes the
+        backing item and its ×N badge first - so the set of rows and every
+        repeat count are identical whether the switch is on or off. Ties keep
+        arrival order, which is what makes turning the switch off restore
+        today's list exactly.
+        """
+        import working_lately
+
+        if not self._working_lately_order or not working_lately.prioritise_enabled():
+            return
+        count = self.list.count()
+        if count < 2:
+            return
+        items = [self.list.item(index) for index in range(count)]
+        ranked = sorted(
+            range(count),
+            key=lambda index: (
+                working_lately.priority_rank(
+                    self._working_lately_order,
+                    working_lately.alert_priority_key(items[index].data(_ALERT_ROLE)),
+                ),
+                index,
+            ),
+        )
+        if ranked == list(range(count)):
+            return
+        taken = [self.list.takeItem(0) for _ in range(count)]
+        for index in ranked:
+            self.list.addItem(taken[index])
 
     def _row_for(self, symbol: str, side: str):
         """The existing row for this symbol+side, or None. Linear over <=400.

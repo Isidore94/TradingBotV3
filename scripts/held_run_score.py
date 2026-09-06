@@ -313,6 +313,16 @@ class Segment:
     pending: int = 0
     unmeasured: int = 0
     mfe_of_held: list[float] = field(default_factory=list)
+    #: The symbol and the session behind EACH value in `mfe_of_held`, in the
+    #: same order (packet ST6.2). Parallel is the whole contract:
+    #: `evidence_stats.session_block_bootstrap` refuses when the label list and
+    #: the value list differ in length, so appending them anywhere but beside
+    #: the value would turn a measured interval into an unmeasured one.
+    symbols_of_held: list[str] = field(default_factory=list)
+    sessions_of_held: list[str] = field(default_factory=list)
+    #: Every session this cell saw, held or not - the cell's COVERAGE, which is
+    #: a different question from the sessions the statistic was measured over.
+    sessions_seen: set[str] = field(default_factory=set)
 
     @property
     def measured(self) -> int:
@@ -329,10 +339,17 @@ class Segment:
 
     def add(self, episode: "Episode") -> None:
         self.episodes += 1
+        session = str(getattr(episode, "trade_date", "") or "")
+        if session:
+            self.sessions_seen.add(session)
         if episode.measurement == MEASURED_HELD:
             self.held += 1
             if episode.mfe_r is not None:
                 self.mfe_of_held.append(episode.mfe_r)
+                # Appended in the SAME breath as the value, never in a second
+                # pass - that is what keeps the three lists parallel.
+                self.symbols_of_held.append(str(getattr(episode, "symbol", "") or ""))
+                self.sessions_of_held.append(session)
         elif episode.measurement == MEASURED_BROKEN:
             self.broken += 1
         elif episode.measurement == PENDING:
@@ -349,8 +366,17 @@ class Segment:
         """
         import evidence_stats
 
+        # Packet ST6.2, and the whole of it: this used to call `summarize` with
+        # the VALUES ALONE, so `concentration.by_symbol`, `concentration
+        # .by_session` and the session-block `bootstrap` came back unmeasured
+        # for every held x ran cell the desk has ever shown - the day-trade
+        # headline had no way to say it was one name six times. The episodes
+        # have carried `symbol` and `trade_date` since V1; nothing had to be
+        # measured again, only handed over.
         stats = evidence_stats.summarize(
             self.mfe_of_held,
+            symbols=self.symbols_of_held,
+            sessions=self.sessions_of_held,
             min_n=evidence_stats.MIN_REPORTABLE_N if min_n is None else min_n,
         )
         trimmed = (stats.get("clipped") or {}).get("trimmed_mean")
@@ -380,7 +406,20 @@ class Segment:
             # score is measured only over those - a cell with 40 alerts of which
             # 3 held has three readings of the run, not forty.
             "meets_floor": bool(stats.get("meets_n_floor")),
+            "n_floor": int(stats.get("n_floor") or 0),
             "evidence_label": stats.get("evidence_label", "discovery"),
+            # ST6.2. Surfaced on the summary rather than left inside `stats`,
+            # because the Working-lately snapshot refuses leadership to a
+            # concentrated cell and it cannot refuse what it cannot see.
+            "concentration": stats.get("concentration"),
+            "bootstrap": stats.get("bootstrap"),
+            "n_symbols": int(((stats.get("concentration") or {}).get("by_symbol") or {}).get("distinct") or 0),
+            "n_sessions": int(((stats.get("concentration") or {}).get("by_session") or {}).get("distinct") or 0),
+            # The newest session this cell SAW - its coverage clock, which is
+            # what a freshness rule asks about. Not the newest session it
+            # measured a hold on: a cell that fired yesterday and has not been
+            # measured yet is fresh evidence with an unmeasured tail.
+            "latest_session": max(self.sessions_seen) if self.sessions_seen else "",
         }
 
 

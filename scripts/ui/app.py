@@ -667,6 +667,7 @@ class MainWindow(QMainWindow):
         cost the page switch that asked for it.
         """
         try:
+            import working_lately
             from ui.panels.alert_center_panel import extract_alert_tier
 
             center = self.trading_panel.alert_center
@@ -685,6 +686,13 @@ class MainWindow(QMainWindow):
                         "trigger": str(getattr(alert, "trigger", "") or ""),
                         "time_text": str(getattr(alert, "time_text", "") or ""),
                         "is_d1": bool(getattr(alert, "is_d1", False)),
+                        # ST6.6. The cell the M5 row already carries and the
+                        # held x ran suffix already attached to it - travelling,
+                        # never recomputed. The recap classifies nothing.
+                        "cell": " ".join(working_lately.alert_priority_key(alert)).strip(),
+                        "held_run_suffix": str(
+                            getattr(alert, "held_run_suffix", "") or ""
+                        ),
                     }
                     for alert in ordered
                 ]
