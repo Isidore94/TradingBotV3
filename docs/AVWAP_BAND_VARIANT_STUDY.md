@@ -364,7 +364,7 @@ Shadow block, additive, no scoring change:
 4. Warehouse: additive columns `avwap_variant_upper_1..3` / `lower_1..3` and a
    `avwap_variant_formula_version` column; `FEATURE_SET_VERSION` bumps to
    `tier1_v2`, old rows keep `tier1_v1`, nothing rewritten.
-   **BUILT 2026-09-05, packet M4, BD-101** — and wider than this line asked for,
+   **BUILT 2026-09-05, packet M4, BD-102** — and wider than this line asked for,
    because bands with nothing walking them measure nothing. What landed:
    nine additive columns (`avwap_variant_value`, `_stdev`, `_upper_1..3`,
    `_lower_1..3`, `_formula_version`), computed in `compute_daily_features` from

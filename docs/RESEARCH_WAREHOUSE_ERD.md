@@ -257,7 +257,7 @@ targeted one (BD-42's fallback, Q2.2). Neither column changes any stored value,
 and `path_kind` is excluded from the BD-98 unchanged-comparison so an existing
 row is not rewritten merely to gain a label.
 
-## Two AVWAP band families on one row (packet M4, 2026-09-05, BD-101)
+## Two AVWAP band families on one row (packet M4, 2026-09-05, BD-102)
 
 | Dataset | Columns | Formula | What NULL means |
 |---|---|---|---|

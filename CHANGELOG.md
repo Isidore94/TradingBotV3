@@ -1493,7 +1493,7 @@ its OWN guard - a single `try` around all three would let the first failure take
 independent populations down with it - so a failure is logged, never aborts the tracker
 save, and never costs its siblings. An `EXPIRED_UNMEASURED` record leaves numerator and
 denominator and is COUNTED (M3.3's rule, applied in **exports only**; nothing here
-reaches a scoring path). Live gate #67.
+reaches a scoring path). Live gate #74.
 
 ### 2026-09-05 - M3: the tracker keeps up with its scans, says how old it is, and lets a stuck setup age out
 
@@ -1594,7 +1594,7 @@ continue` dropped the count along with the group, and `build_tracker_stats_rows`
 same dead shape, so the live sentence said 16 where 45 records had expired -
 under-reporting by exactly the worst groups. Both builders now emit the row with zero
 measured setups and blank measures, which needed a `representative_by_group` for identity
-because `rows[0]` does not exist when every row was expired. (3) Gate #69 was
+because `rows[0]` does not exist when every row was expired. (3) Gate #72 was
 unsatisfiable as written and is restated to reproducible counts (2026-09-04 mirror: setups
 32 + 13 = 45, study 7, control 0, 52 total). Five advisories taken: the naive timestamp is
 ATTACHED rather than converted (CLAUDE.md's `_gate_moment` rule); a symbol with NO frame
@@ -1651,7 +1651,7 @@ trader-and-lead decision, recorded here so it is not rediscovered as a defect.
 `tests/test_scan_worker_spawn.py` (both fixtures now model the current payload; neither
 assertion weakened).
 
-**Live gate #69** is owed at merge: see `CURRENT_CHECKPOINT.md`.
+**Live gate #72** is owed at merge: see `CURRENT_CHECKPOINT.md`.
 
 ### 2026-09-05 - M2: a swept trade that measured its bars is not unresolved
 
@@ -1730,7 +1730,7 @@ follow-up and is recorded in the checkpoint entry.
 Tests: `tests/test_m2_unresolved_means_unmeasured.py` (40), committed RED first and
 proven so on `e7b12ebe`. Five pre-existing assertions in `tests/test_outcome_sweep.py`
 and `tests/test_outcome_no_fabrication.py` asserted the OLD label on rows that DID
-measure and were updated with every numeric assertion kept. Live gate #68.
+measure and were updated with every numeric assertion kept. Live gate #71.
 
 ### 2026-09-05 - M4: both AVWAP band families in the lake, and a twin swing recipe (branch `claude/m4-lake-band-variant`)
 
@@ -1740,7 +1740,7 @@ formula and its golden fixture had existed since 2026-08-26 and had measured
 nothing, because the lake held only the champion's bands. **Shadow only**:
 `calc_anchored_vwap_bands` untouched, nothing reaches a detector, score, tier,
 alert, watchlist, Focus list or the review queue, and the packet writes no lake
-row. Decision record **BD-101**; live gate **#66** owed.
+row. Decision record **BD-102**; live gate **#73** owed.
 
 - **The daily snapshot carries the challenger beside the champion (M4.1).**
   `feature_snapshot_daily` gains nine additive columns -
@@ -1851,7 +1851,7 @@ fixture - two anchor blocks plus four challenger scenarios on the four baseline 
 templates - roughly 1 MB per session at ~186 setups per scan date, on records written
 from now on. The study's "a few hundred bytes" estimate stays an order of magnitude low.
 
-**T4's clock starts at the first measured row**, not at 2026-08-26. Live gate #65.
+**T4's clock starts at the first measured row**, not at 2026-08-26. Live gate #70.
 
 
 ### 2026-09-04 - Q3: typed sources, a position claim needs a position source, honest brief counts, one reader for `match_basis`

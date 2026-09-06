@@ -356,7 +356,7 @@ near_favorite_zone read n=585 against the baseline's 683 with nothing explaining
 `n_filtered_by_experiment` is a column now, counted BEFORE the tradeable skip and kept
 separate from the expired count (two different exclusions, two questions). The tab
 sentence no longer says "the SAME setups" - it says the same setups MINUS the template's
-own filter, and gate #67 is restated so it can pass. BLOCKER 2: the sentences printed
+own filter, and gate #74 is restated so it can pass. BLOCKER 2: the sentences printed
 graded EPISODES (308 / 2,600) under the noun SETUPS (401 / 3,992), claiming every record
 was graded. The export carries `population_setups` - the panel must never open the 1.1 GB
 JSON to count a namespace - and the sentence names both. Advisories taken: the
@@ -382,7 +382,7 @@ Verification on the branch tip: the targeted set (`-k "tracker or setup_tracker 
 discovery or study or control or band_variant or m1_ or m3_ or m5_ or swing_headline or
 evidence_stats or packaging"`) 608 passed, `ruff` clean, spec-drift green. No packaging
 trigger: no dependency, no non-`.py` asset, no new top-level `scripts/` package, no
-dynamic import - both changed modules are already collected. **Live gate #67 owed at
+dynamic import - both changed modules are already collected. **Live gate #74 owed at
 merge.** The lead runs the full suite with the nightly AI lock free.
 
 ### 2026-09-05 - M3 BUILT: the tracker keeps up, says how old it is, and lets a stuck setup age out (`claude/m3-tracker-keeps-up`)
@@ -440,7 +440,7 @@ merges.** Tip `cb7dded7` + docs.
   clocks were rendered in two ZONES (market-local with an offset beside a machine-local
   mtime with none, reading a three-hour gap that did not exist); an all-expired group
   took its own `n_expired_unmeasured` with it when `if not rows_for_group: continue`
-  dropped the group, so the live sentence said 16 where 45 had expired; and gate #69 was
+  dropped the group, so the live sentence said 16 where 45 had expired; and gate #72 was
   unsatisfiable as written. Five advisories taken: the naive timestamp is ATTACHED not
   converted, a symbol with NO frame is `n_no_frame` and out of the purity fraction rather
   than counted as pinned, the reason is `no_replay_stale_sessions` with `stale_sessions`
@@ -650,8 +650,8 @@ trigger.** The stale `CLAUDE.md`/`AGENTS.md` line is corrected on this branch.
 
 **Shadow only.** `calc_anchored_vwap_bands` untouched; nothing reaches a
 detector, score, tier, alert, watchlist, Focus list or the review queue; the
-packet writes no lake row. Decision record **BD-101**; ERD updated; live gate
-**#66** owed.
+packet writes no lake row. Decision record **BD-102**; ERD updated; live gate
+**#73** owed.
 
 **Tests.** `tests/test_warehouse_band_variant_lake.py` (19), committed RED at
 `bac61c17` and run on `e7b12ebe`: 13 failed, 5 errors, 1 passed - the one that
@@ -695,7 +695,7 @@ file-scoped ask-first rule, for these items and nothing wider. **Not merged; the
   new tests were PROVEN red on `e7b12ebe` and committed red first (`05296076`).
 - **No packaging trigger**: no dependency, no non-`.py` asset, no new top-level `scripts/`
   package, no dynamic import.
-- **Live gate #65** owed at merge. T4's 20-session clock starts at the first measured row.
+- **Live gate #70** owed at merge. T4's 20-session clock starts at the first measured row.
 
 
 ### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
