@@ -97,7 +97,8 @@ compression_label)``. Every existing column keeps its value.
   - ``reason`` is lower-case-searchable and names the cause: it contains
     ``"study"`` when studies were the only candidates, ``"floor"`` when every
     live row was under ``MIN_REPORTABLE_N``, and ``"not fresh"`` when the
-    evidence is stale and there is no previous verdict.
+    evidence is stale and there is no previous verdict. For
+    ``no_clear_leader`` it names BOTH families and ``runner_up`` is set.
   - ``policy_line`` is a non-empty sentence containing the leader's side and
     its ``outcome_kind``.
 * ``_best_now_banner_html`` consumes ``select_leader(panel.recent_type_rows,
@@ -643,6 +644,33 @@ def test_nothing_eligible_reports_no_evidence_and_says_why():
     assert verdict.state == "no_evidence"
     assert verdict.leader is None
     assert "floor" in verdict.reason.lower(), verdict.reason
+
+
+# ===========================================================================
+# 5b - two families inside the margin is NOT a leader
+# ===========================================================================
+
+
+def test_two_families_inside_the_declared_margin_are_not_crowned():
+    """24-16 (bound 0.446) against 33-22 (bound 0.468): a gap of 0.022, under
+    ``LEADER_MARGIN_LB`` = 0.05. Both clear the n floor and both are fresh, and
+    the honest answer is still that there is no clear leader - so the reason has
+    to name BOTH families, not just print the winner of a coin flip."""
+    from working_lately import LEADER_MARGIN_LB, select_leader
+
+    last_session = _last_completed_session()
+    session = last_session.isoformat()
+    rows = [
+        _evidence_row("narrow_a", namespace="live", wins=24, losses=16, avg_closed_r=0.5, session=session),
+        _evidence_row("narrow_b", namespace="live", wins=33, losses=22, avg_closed_r=0.6, session=session),
+    ]
+    verdict = select_leader(rows, kind="swing", last_completed_session=last_session)
+
+    assert 0.4681 - 0.4460 < LEADER_MARGIN_LB, "the fixture must sit inside the margin"
+    assert verdict.state == "no_clear_leader"
+    assert "narrow_a" in verdict.reason, verdict.reason
+    assert "narrow_b" in verdict.reason, verdict.reason
+    assert verdict.runner_up is not None
 
 
 # ===========================================================================
