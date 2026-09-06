@@ -21,7 +21,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 |---|---|
 | Latest work | **2026-09-06 morning (Sunday): the Q4 spot-audit done against the raw stores and RECORDED (`gate_met: true`), two stale packs (2026-08-28, 2026-09-02, both read before the frozen desk's sweep wrote the day) rebuilt through the new human-run `python -m ai_jobs.digest rebuild --pack <date>`, and the three open scoring questions DECIDED on the trader's *"go ahead and do this yourself"*: (a) swept-measured trades stay OUT of the eod-hold tier cells (golden characterization added), (b) `EXPIRED_UNMEASURED` stays IN the scoring population, (c) M3's 28 are `UNTRADEABLE` and already outside every count - see the 2026-09-06 entry. Before that, 2026-09-05 evening: Phases 0.19 and 0.21 (M1-M5) MERGED at `918445f3`** - the five measurement repairs from the trader's *"Fix all of these failures including the one we just queued"*: M1 the band challenger measures (the catch-up path carries the block; 0 of 11,292 measured since 08-26), M2 `unresolved` means UNMEASURED (3,607 swept trades that measured their bars were labelled unresolved), M3 the tracker keeps up (the purity gate honours the Yahoo pin that was refusing the only writer slot; two clocks; `EXPIRED_UNMEASURED`), M4 both band families in the lake with a twin swing recipe, M5 the control/study populations and the April exit framework reach the Setup Tracker. Every branch reviewed by reproduction (M1 GO, M2 GO, M3 GO after three blocker rounds incl. a NameError on the tracker-write path, M4 GO, M5 GO after one). Same evening: **INCIDENT** - two reviewer scratch scripts overwrote the live tracker and the leaderboard CSVs; restored byte-exact from the mirror copy and re-exported (see the 19:56 entry); the scratch-script rule is in CLAUDE.md. |
 | Working branch | `main` at `918445f3`. Phase 0.20 (N1-N3, the other session, afternoon) and Phases 0.19/0.21 (M1-M5, this session, evening) both merged through scratch worktrees; the M merge took main's cleaned-up control files as the base and re-inserted the M bullets, renumbered the M gates to #70-#74 (Phase 0.20 had taken #65-#67) and M4's decision to BD-102 (N3 took BD-101). |
-| Unmerged / open | **Repo cleaned 2026-09-05 ~21:30 PT** (trader: *"clean up the repo as needed"*): 42 merged branches deleted on `origin` and locally, 100 throwaway `worktree-agent-*` refs and 42 registered worktrees removed, every one proven contained in `main` first; the record is `docs/BRANCH_HISTORY.md` ("The 2026-09-05 cleanup"). Left: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree LOCKED by the other session), two local-only pre-consolidation branches. `claude/m1-band-variant-handoff`, `m2-unresolved-means-unmeasured`, `m3-tracker-keeps-up`, `m4-lake-band-variant`, `m5-shown-and-read`, the five Q branches and the three N branches are all CONTAINED in `main`. `claude/s1-quick-verbs` stays UNMERGED (S1.3 owed a decision). Open incident 2026-09-03 (13 reviewer PUBLISH rows in the lake) is the trader's call. `local_writer_lock` never unlinks its lock files - 89,406 stale ones removed by hand tonight; a sweep-on-release packet is owed. |
+| Unmerged / open | **Repo cleaned 2026-09-05 ~21:30 PT** (trader: *"clean up the repo as needed"*): 42 merged branches deleted on `origin` and locally, 100 throwaway `worktree-agent-*` refs and 42 registered worktrees removed, every one proven contained in `main` first; the record is `docs/BRANCH_HISTORY.md` ("The 2026-09-05 cleanup"). Left: `claude/s1-quick-verbs` (open by decision), `claude/m3-tracker-keeps-up` (contained, worktree LOCKED by the other session), two local-only pre-consolidation branches. **UNMERGED and ready: `claude/st5-personal-evidence-build`** (ST5, built 2026-09-06 on the tester's `claude/st5-personal-evidence` tip `f6a28138`; live gate #79 owed) - see the 2026-09-06 ST5 entry. `claude/m1-band-variant-handoff`, `m2-unresolved-means-unmeasured`, `m3-tracker-keeps-up`, `m4-lake-band-variant`, `m5-shown-and-read`, the five Q branches and the three N branches are all CONTAINED in `main`. `claude/s1-quick-verbs` stays UNMERGED (S1.3 owed a decision). Open incident 2026-09-03 (13 reviewer PUBLISH rows in the lake) is the trader's call. `local_writer_lock` never unlinks its lock files - 89,406 stale ones removed by hand tonight; a sweep-on-release packet is owed. |
 | Next action | **Live gates #70-#74 at the next close slot - Tuesday 2026-09-08 13:00 PT; Monday 2026-09-07 is Labor Day, not a session (`market_calendar.is_session` checked 2026-09-06)**: the tracker writes (`saved_by: close_slot`, the purity line with `pin=yahoo`), the band-variant stats fill, the Controls / Studies / Exit frameworks tabs render, and the after-close sweep logs the four-way split. **Tuesday morning: the first `journal_enrichment` row that is not `refused` (gate #63's audit half was met 2026-09-06).** The two scoring questions and M3's third population are DECIDED (2026-09-06 entry: (a) NO, (b) NO, (c) `UNTRADEABLE`), so nothing there is owed. Then V4. |
 | Trader actions owed | None from 2026-09-06: the spot-audit is recorded and the three decisions are taken (the trader may overrule any of them; each is one sentence in the 2026-09-06 entry and the CHANGELOG). Still owed from earlier: the 2026-09-03 lake incident call (13 reviewer PUBLISH rows), the lock-file sweep packet, restart the desk only when a code change lands (today's `rebuild` subcommand is CLI-only; the desk needs no restart for it). |
 | Last verified baseline | **`main` working tree of 2026-09-06 ~07:40 PT (the digest `rebuild` subcommand + four tests + docs), on the desk's checkout: `pytest tests/ -q` with NOTHING DESELECTED: 6928 passed, 1 skipped, 72 subtests passed, ZERO failures, exit 0, 5 min 20 s.** The first full run that morning had ONE failure that predates this work: `test_no_active_document_quotes_a_detail_string_the_code_no_longer_emits` guards the glance block for the `POSITION_SOURCE_IDS` sentence, which the 2026-09-05 cleanup commits (`ee325704`/`db58beeb`) dropped when they rewrote the Working-branch cell; restored in gate #62's row, re-run green. `ruff` clean, CLAUDE.md == AGENTS.md, smoke 7/7. No packaging trigger (a subcommand inside an already-collected package). Previous: `918445f3`, 6924 passed. |
@@ -32,6 +32,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 79 | **Personal evidence counts once and refuses to name a best setup (ST5)** - the next nightly `preference_trade_outcomes` slot writes a report whose ledger reason carries `n_trades_matched` beside `n_statements_matched` and names the window as `10 sessions`; on the current store expect **10 trades behind 13 matched statements** over a 45-day read (the pair is what makes the duplicate visible - equal numbers on a quiet window are not a failure, a MISSING `n_trades_matched` is). Then on the desk: Weekend Prep's "Tag this week" lists the **26 provisional rows** with `Week` reading `backlog` on the ones older than the current week, the "Missing planned risk" table lists closed trades with no plan (expect ~165, newest first) and one row opens that trade in the Journal's Trades tab; the coverage line under the verdict card reads `Confirmed tags: 1 of 165 closed trades. Provisional awaiting review: 26. Planned risk recorded: 0 of 165.` and the Analytics tab shows the same sentence with `No confirmed setup tags`-class refusal beside it. **Nothing here is a scoring change**: the champion's scoring population, every detector and every alert are untouched by construction | 2026-09-06 ST5 entry |
 | 74 | **The control and study populations are shown, and the April framework is read (M5)** - restated after the reviewer round so it can PASS (the first wording demanded an equal `n` the framework does not produce). After the next persisted tracker write: (1) `master_avwap_control_discovery.csv` and `master_avwap_study_discovery.csv` exist, the control file carrying its three cohort rows plus one family row per (side, family), in an `all` block AND a `lately` block, every row stamped `population_setups`. (2) The **Controls** tab's sentence reads `N graded episodes from the M control setups the scan REJECTED` with **N < M** and M near 401 (Studies likewise, M near 3,992) - the two numbers are different things and a tab printing one of them twice is the defect this clause replaces. (3) Both tables sort by the Wilson lower bound, not the raw rate. (4) The **Exit frameworks** tab shows `comparison_apr2026` rows beside `baseline` ones, grouped by side and bucket with the baseline above its twin, Experimental reading True. (5) **The denominators reconcile, which is the real check**: on a (side, bucket) where the template has no `blocked_stop_rules`, the comparison's `n` EQUALS the baseline's and `Filtered` is 0; on SHORT / near_favorite_zone for `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav`, `n + Filtered` equals the baseline's `n` (the reviewer measured 585 + 98 = 683 on the live tracker). A smaller `n` with a matching `Filtered` is the experiment working; a smaller `n` with `Filtered` 0 is a defect | 2026-09-05 M5 entry |
 | 73 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
 | 72 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot, checked against REPRODUCIBLE numbers rather than the audit's prose (reviewer, 2026-09-05: the first wording was unsatisfiable). (1) `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE, with no "refresh skipped" line. (2) The payload's `saved_by` reads `close_slot` and its `saved_at` is market-local with an offset. (3) The three stats CSVs carry that same `tracker_saved_at`, and the Setup Tracker's status line shows BOTH clocks in ONE zone - `Tracker as of ... (close_slot); scan factors as of ...`, the two offsets equal. (4) `trading_bot.log` carries the literal token **`n_expired_unmeasured=`**; on the 2026-09-04 mirror the reproducible counts are **setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7, control 0, 52 total**, so expect ~52 on a tracker of that vintage - not the audit's "37 + 41", which counted a different thing. (5) The Setup Types tab says `N expired unmeasured, excluded` with N matching the summed CSV column (Current Picks deliberately says nothing - different population). (6) Family win rates unchanged to the cent where those setups contributed only a denominator, and the champion's scoring population unchanged by construction. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation, and **the FIRST save after merge rewrites every record's content hash** (`saved_at`/`saved_by` join the header, and `last_replayed_session` / `expiry_reason` / `stale_sessions` join the records), so a large `written` count on that one save is expected and is not a parity failure | 2026-09-05 M3 entry |
@@ -113,6 +114,86 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-06 - ST5 BUILT: personal evidence usable without inventing it (branch `claude/st5-personal-evidence-build`)
+
+**Branch note:** the tester's branch `claude/st5-personal-evidence` (tip `f6a28138`, base
+`main` at `84ee24d6`) was still held by the tester's worktree, so the build went on
+`claude/st5-personal-evidence-build` branched from that tip - the same convention ST3 used.
+The lead merges; both branches carry the same history and the build branch is ahead by two
+commits (`7a8c2ca0`, `6e06d5c2`) plus this documentation commit.
+
+**Baseline:** `pytest tests/ -q` with nothing deselected, nightly AI lock probed FREE:
+**6948 passed, 1 skipped, 72 subtests passed, 0 failed, exit 0**, ~6 min 50 s. `ruff check .`
+clean. `scripts/smoke_check.py` 7/7. `launch_gui.py --selftest` 74/74. No packaging trigger:
+`scripts/journal_exposure.py` is a new MODULE inside the already-collected top-level
+`scripts/` tree, not a new package, not a new dependency, not a non-`.py` asset, and nothing
+imports it by string name.
+
+The first full run had ONE failure and it was mine, not pre-existing:
+`test_one_unreadable_store_still_leaves_a_card` asserts the Weekend Prep verdict card is
+5-8 lines, and the packet's coverage sentence made it 9. Fixed by placing the sentence in
+its own label under the card (see the deviation below), and re-run green.
+
+**What was built.** Every item of the packet:
+
+- **ST5.1** `preference_trade_outcomes.TRADE_WINDOW_SESSIONS` = 10, walked through
+  `market_calendar` by the new `statement_window_end`. The constant said DAYS and every
+  docstring in the module said SESSIONS; over Labor Day that is five real sessions
+  discarded - a statement on 2026-09-04 reached 2026-09-14 instead of 2026-09-21, so a
+  trade opened on the 18th read as "never taken". `TRADE_WINDOW_DAYS` stays one release as
+  an alias (grep: nothing in `scripts/` imported it). A calendar that refuses falls back to
+  the OLD, strictly NARROWER arithmetic - uncertainty may never widen a window into a match
+  nobody made. Confidence labels untouched.
+- **ST5.2** `trade_level_summary(rows)` and `summary_note(rows)`. The file stays one row per
+  STATEMENT; the money is summed ONCE per `trade_id`. Live: 538 rows, 13 `traded=yes`, **10
+  distinct trade ids**, so the statement-grain total was three trades' P&L too large.
+  `run_preference_trade_outcomes` now returns `n_statements_matched` / `n_trades_matched`
+  (live gate #79), and Weekend Prep's note prints both.
+- **ST5.3** new pure `scripts/journal_exposure.py`. `classify_exposure(trade)` ->
+  `Exposure(instrument, ownership_direction, market_bias, structure, certainty)`. A LONG
+  option is never a bullish setup; a bought put is `bearish`, a sold put
+  `bullish_or_neutral`, a sold call `bearish_or_neutral`; `UNKNOWN`, `BAG` and `CASH` are
+  `unknown` and uncertain. `multi_leg` = more than one distinct option CONTRACT among the
+  legs, because a `trade_legs` row is a FILL (39 live option trades carry exactly two).
+  `JournalStore.list_trade_legs` gained ONE column, `e.raw_json`, because the contract is
+  recorded nowhere else - there are no right/strike/expiry columns on `trades`.
+- **ST5.4** `journal_analytics.personal_evidence_summary(trades)`, four never-pooled
+  populations that partition the input, plus `coverage`, `headline` and `best_setup`. It
+  rides on `build_analytics_summary` as the additive `personal_evidence` key, so the
+  Analytics tab renders it from rows it already loaded - no second query on the Qt thread.
+- **ST5.5** the whole provisional backlog reaches Weekend Prep's tag list (26 waiting
+  against a page scoped to one week - gate #36's obstacle), `needs_review` stays
+  week-scoped, and a "Missing planned risk" table refers a trade to the Journal's Trades tab
+  through `openTradeRequested` -> `JournalPanel.show_trade` -> `TradesTab.select_trade`.
+
+**`partial_of_spread` could not be derived, and is labelled rather than invented.** The
+packet allowed either a sibling seam or a report that it does not exist. It does not: two
+legs of a spread are two `trades` rows keyed by their own OCC symbols and nothing links
+them. What is OBSERVABLE is a second option trade on the same underlying and expiry opened
+in the same session on a different contract - which is also what two independent ideas on
+one name look like. So the label is `partial_of_spread_candidate`, it puts the row in the
+UNCERTAIN population, and no claim is made that it is half a spread.
+
+**DEVIATION from the packet.** The coverage line was asked for "on Weekend Prep's verdict
+card". The card is five to eight lines by the trader's own request (V2 item 2b) and
+`test_the_card_is_five_to_eight_lines` + `test_one_unreadable_store_still_leaves_a_card` pin
+it. The sentence sits in its own label directly UNDER the card, filled from the tag page's
+existing worker through a new `coverageChanged` signal - same screen, same worker seam, no
+second read of the journal, card contract intact. A test records the choice.
+
+**Tests.** The tester's seven were re-proven red at `f6a28138` and are green. The builder
+added twelve in `tests/test_st5_review_flow.py`; ten of them were proven red by checking the
+branch base's `scripts/` over the working tree, and the two that passed there only exercise
+the already-committed `journal_exposure` module. Nothing in the tester's file was weakened.
+
+**Read-only, verified.** No broker call, no auto-confirm, nothing reconstructs a
+`planned_risk`. Two tests spy `JournalStore.save_risk_fields` into a raise and assert every
+read path on both surfaces leaves it uncalled, and check the `trade_annotations` table
+afterwards. `journal_feed.suggest_planned_risk` was inspected in passing and is clean: it
+prefills from an ARMED ALERT's entry and stop - the trader's own plan at decision time - and
+returns `None` on anything but a unique match. Nothing new reaches a detector, score, gate,
+alert, watchlist, Focus, review queue or `review_policy.json`.
 
 ### 2026-09-06 (Sunday, ~06:00-07:30 PT) - The digest spot-audit done and recorded, two stale packs rebuilt, the three open scoring questions decided
 

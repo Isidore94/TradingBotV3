@@ -495,9 +495,21 @@ Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/arch
 
 Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
 
+**ST5 follow-up (2026-09-06, branch `claude/st5-personal-evidence-build`):** P6's report now
+matches inside **10 SESSIONS** (`TRADE_WINDOW_SESSIONS`, walked on `market_calendar`) instead
+of 10 calendar days, counts BY TRADE (`trade_level_summary`: live 13 matched statements over
+10 trades, P&L summed once), and reads a trade's market bias from its legs rather than its
+ownership (`scripts/journal_exposure.py`). Live gate **#79**.
+
 ### Phase 0.13 packet P6a — Tag the backlog (2026-09-01) — BUILT, live gate owed
 
 Long form moved to [`docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md`](docs/archive/ROADMAP_ARCHIVE_PHASES_0.8-0.18.md) on 2026-09-03 (F1 docs packet). Status at the move: **BUILT, live gate owed**. Every live gate this phase still owes is a numbered row in `CURRENT_CHECKPOINT.md`'s open-gates table; the archived text carries the item list and gate clauses verbatim.
+
+**ST5.5 follow-up (2026-09-06):** Weekend Prep's tag-review list is widened from the current
+week to the WHOLE provisional backlog (26 waiting on 2026-09-06), which is what gate #36 - "the
+trader confirms or edits at least ten of the 24 provisional tags" - needed to be reachable. A
+"Missing planned risk" table sits beside it and REFERS a trade to the Journal's Trades tab; no
+new writer, and no risk is ever computed from an outcome. Live gate **#79**.
 
 ### Phase 0.13 packet P8 / Phase 6.1 addendum — First setup-parameter grid (2026-09-02) — BUILT, live gate owed
 

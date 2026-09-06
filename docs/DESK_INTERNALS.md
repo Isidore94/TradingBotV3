@@ -1937,3 +1937,99 @@ n=621.
 **Live gate #67** replaces gate #40's narration clause: the next overnight `setup_research`
 row reads `narrated K of N eligible cell(s)` with a `.narration.json` beside ONE pack for the
 date, and the pack markdown carries the coverage line.
+
+## ST5 - a window called sessions that counted days, and a bearish trader with a bullish record (2026-09-06)
+
+Four defects, one theme: the personal-evidence chain named things it was not measuring.
+
+**The window said SESSIONS and the arithmetic said DAYS.** `preference_trade_outcomes` had
+`TRADE_WINDOW_DAYS = 10` and `window_end = said_on + timedelta(days=TRADE_WINDOW_DAYS)`, under
+a docstring that read *"a trade opened on or within TRADE_WINDOW_DAYS SESSIONS after the
+statement"*. The two disagree by more than a rounding: `market_calendar.trading_days_between`
+puts ten sessions after Friday 2026-09-04 at **2026-09-21**, because 2026-09-07 is Labor Day,
+while ten calendar days is 2026-09-14. Five sessions on the floor, and with them every trade
+the trader took in the second week after saying something. `TRADE_WINDOW_SESSIONS` and
+`statement_window_end` replace it; the old name stays one release as an alias because nothing
+in `scripts/` imported it (grep, 2026-09-06). The FALLBACK matters: outside the calendar's
+validated 2000-2032 range `market_calendar` raises rather than extrapolate, and the fallback
+is the OLD, strictly NARROWER calendar-day arithmetic. A window that GREW on a refusal would
+manufacture a link the trader never made; a narrower one only loses a link, which is the
+direction uncertainty is allowed to fail in.
+
+**One row per statement is right; one P&L per statement is not.** The live export on
+2026-09-06 held 538 rows, **13 with `traded=yes`, over 10 distinct `trade_id`s**. Every row
+is worth keeping - a statement with no trade is the skip, which is the most interesting row
+in the file - but a summary summing `journal_net_pnl` across statements counted three trades'
+money twice. `trade_level_summary` sums once per `trade_id` and publishes both denominators
+plus `duplicate_statement_rows`, so the gap between the two grains is a number a reader can
+see rather than a discrepancy they have to find.
+
+**`trades.direction` is ownership and was being read as a market view.** The live journal:
+**53 of the 89 option trades are SHORT and 39 of those 53 were winners.** Read "short =
+bearish" and the desk describes a bearish trader with a bullish record. They are sold puts,
+and a sold put is bullish-to-neutral. `scripts/journal_exposure.py` splits the question four
+ways - instrument, ownership direction, market bias, structure - and answers each only as far
+as the store allows. **A LONG option is never a bullish setup**: LONG CALL `bullish`, LONG PUT
+`bearish`, SHORT PUT `bullish_or_neutral`, SHORT CALL `bearish_or_neutral`, stock follows
+`direction`, and `UNKNOWN` (86 rows), `BAG` (1) and `CASH` (1) stay `unknown` and uncertain.
+
+**A `trade_legs` row is a FILL, not a contract leg.** Every closed option trade in the live
+journal carries at least two of them and 39 carry exactly two, so "more than one option leg"
+would have called almost every ordinary option trade a spread. `multi_leg` means more than one
+distinct option CONTRACT among the legs. The contract itself is not a column: `trades` has no
+right, strike or expiry, so it is read from the OCC `trades.symbol` (`AA260522P00062000`) and
+from `raw_executions.raw_json["option"]`, which `journal_statement_import._execution_from_row`
+writes. `JournalStore.list_trade_legs` gained exactly ONE column, `e.raw_json`, to make the
+second source reachable.
+
+**`partial_of_spread` could not be derived and is therefore not claimed.** Two legs of a
+spread arrive as two separate `trades` rows keyed by their own OCC symbols; nothing links
+them, and this packet may not mint an identifier (plan.md P5.3/P5.4 own the canonical one).
+What is observable is a second option trade on the same underlying and expiry opened in the
+same session on a different contract - which is equally what two independent ideas on one name
+look like. The label is `partial_of_spread_candidate`, it puts the row in the UNCERTAIN
+population so its P&L never lands in a clean total, and it asserts nothing further.
+
+**Four populations, because pooling them is how an open position's unrealized number gets
+read as a result.** `journal_analytics.personal_evidence_summary` partitions every trade into
+`complete` / `partly_closed` / `open_exposure` / `uncertain`. **Uncertainty is checked
+FIRST**: 55 of the 165 live CLOSED trades carry `security_type = 'UNKNOWN'`, and counting them
+as complete puts a quarter of the journal's P&L behind a noun the data does not support. An
+open position's `net_pnl` is `None`, not zero - none, not nothing - and its size travels as
+`notional`.
+
+**No personal setup is called best without confirmed tags at the floor.** Live: **1 confirmed
+tag, 26 provisional, 145 needs_review, `planned_risk` non-null on 0 of 204.** Below
+`evidence_stats.MIN_REPORTABLE_N` (30) `best_setup` is `None` and the headline says why with
+the provisional count beside it; above it the winner ranks on `swing_headline`'s Wilson lower
+bound, which is the same rule every other trader-facing swing surface uses. The coverage line
+- `Confirmed tags: C of T closed trades. Provisional awaiting review: P. Planned risk
+recorded: R of T.` - reaches the Journal's Analytics tab and Weekend Prep through that one
+helper.
+
+**A missing plan is a worklist, never a calculation.** `journal_r` is blank on all 538 report
+rows because `planned_risk` is null on all 204 trades. An R worked backwards from what the
+trade did is a statement about the outcome wearing the plan's clothes, so nothing in this
+chain fills it: Weekend Prep lists the closed trades with no plan, newest first, and a row
+only REFERS the trade to the Journal's Trades tab where `JournalStore.save_risk_fields` sits
+behind the trader's own hand. Two tests spy that method into a raise and assert every reader
+leaves it uncalled. `journal_feed.suggest_planned_risk`, the only prefill in the chain, was
+checked in passing and is clean: it reads an ARMED ALERT's entry and stop - the trader's own
+plan at decision time - and returns `None` on anything but a unique match.
+
+**The tag backlog is wider than the week.** Weekend Prep's review list was scoped to the
+current week while 26 provisional tags waited, most of them older - which is why gate #36
+("confirm or edit at least ten of the 24") could not be worked from the screen built for it.
+The provisional half is now the whole backlog; `needs_review` stays week-scoped, because those
+145 rows carry no proposal and would bury the 26 that do. The week's rows sort first and a
+`Week` column names which population each row came from.
+
+**One deviation from the packet, and the reason.** The coverage line was asked for on Weekend
+Prep's verdict card. That card is five to eight lines by the trader's own request (V2 item 2b)
+and two tests pin it; a ninth line failed
+`tests/test_v2_weekend_verdict_and_refresh.py::test_one_unreadable_store_still_leaves_a_card`
+on the first full run. The sentence sits in its own label directly UNDER the card, filled from
+the tag page's existing worker through `TagWeekPage.coverageChanged` - same screen, same
+worker seam, no second read of the journal.
+
+**Live gate #79.**
