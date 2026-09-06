@@ -737,7 +737,9 @@ def test_the_banner_states_the_freshness_rule_in_words(panel_module, tmp_path, m
     finally:
         panel.deleteLater()
 
-    assert "fresh = an entry inside" in FRESHNESS_SENTENCE
+    # It says MEASURED, not entered: the 2-session rows date themselves by the
+    # bar the R was read from since the re-review (advisory 4).
+    assert "fresh = measured inside" in FRESHNESS_SENTENCE
     assert FRESHNESS_SENTENCE in html, html
 
 

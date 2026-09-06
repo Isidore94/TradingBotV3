@@ -78,17 +78,23 @@ LEADER_MARGIN_LB = 0.05
 #: about the desk and not about the family. Counted on the exchange calendar
 #: (``market_calendar``), never in calendar days.
 #:
-#: **What is measured is the ENTRY session**, not the exit. The tracker's family
-#: rows carry no exit date, so ``latest_measured_session`` is the newest
-#: scan_date among the episodes that produced a readable R. That is the
-#: conservative reading - a family whose newest ENTRY is old cannot have a newer
-#: measured close than its own scan - and every surface that shows a verdict
-#: says so in words, because "fresh" without its clock is not a fact.
+#: **``latest_measured_session`` means what its name says, wherever the export
+#: can answer.** The 2-session rows date themselves by the BAR the R was read
+#: from (``legacy._short_horizon_measured_session``), because entry dating made
+#: a family entered eight weeks ago and measured two sessions later read as 58
+#: sessions stale on a file written that morning. The recent FAMILY rows still
+#: date by the entry session, and only because they have nothing better: those
+#: rows carry no exit date (ST4 adds ``representative_exit_date``; until it
+#: lands this is the conservative reading, since a family whose newest ENTRY is
+#: old cannot have a newer measured close than its own scan). Every surface that
+#: shows a verdict states the rule in words - "fresh" without its clock is not a
+#: fact - and an export that cannot date a row leaves it EMPTY, which reads as
+#: not fresh and never as a guess.
 LEADER_FRESHNESS_SESSIONS = 2
 
 #: How the freshness rule reads in a sentence, for every surface that shows one.
 FRESHNESS_SENTENCE = (
-    f"fresh = an entry inside {LEADER_FRESHNESS_SESSIONS} exchange sessions of "
+    f"fresh = measured inside {LEADER_FRESHNESS_SESSIONS} exchange sessions of "
     f"the last completed one"
 )
 

@@ -1616,6 +1616,46 @@ measurement and the reasoning behind each rule.
   the TAB keeps side-first - a table you scroll and a card that shows eight are
   different questions asked of the same rows.
 
+  *And twice more, in the re-review.* Both were the same shape as the three
+  above: a surface computing for itself what the page had already decided. The
+  plain-English card called `select_leader` directly while the banner went
+  through `_remembered_verdict`, which carries a `previous` - so on a STALE
+  refresh the card printed *"no clear leader. Leading on thin evidence, SHORT
+  general on n=88 - discovery only"* three lines above the banner's *"SHORT
+  general [last reliable reading, as of 2026-09-04]"*. Two renderers computing
+  the same thing will disagree the moment one of them gains an argument, so
+  `panel_verdicts(panel)` computes each horizon ONCE in `_summary_html` and both
+  renderers are handed the same objects; `build_plain_english_whats_working`
+  takes `verdicts=` and only computes its own when a caller has none. The second
+  was a LABEL that did not come from its verdict: the 2-session block hardcoded
+  "2-session discovery", which then sat over a real `leader`, and printed "the
+  export carries no session, so its freshness is unstated" beside "its newest
+  measured session is 58 sessions behind" - two contradictory facts in one line.
+  The label is now the horizon plus `verdict_label_suffix(verdict)`, and the
+  no-session sentence renders only when the gate was `no_session`.
+
+  *"Old" is not "thin".* `discovery_basis_phrase` gives one phrase per gate -
+  **leading on older evidence** for a stale row, **undated** for one with no
+  session, **thin** only under the floor - used by both renderers. A row kept
+  out for being old HAS the evidence; calling it thin names the wrong gate,
+  which is the same class of error as calling a weighted rate a count.
+
+  *A measured date, where the export can answer it.* Freshness was being read
+  off the ENTRY session everywhere, which is right for the recent family rows -
+  they carry no exit date, and a family whose newest entry is old cannot have a
+  newer measured close - but wrong for the 2-session block, where it made a
+  family entered eight weeks ago and MEASURED two sessions later read as 58
+  sessions stale on a file written that morning.
+  `legacy._short_horizon_measured_session` reads the trade date of
+  `post_marks[horizon - 1]`, the same mark the R itself was computed from, and
+  an episode whose marks cannot answer leaves the field EMPTY - undated, which
+  reads as not fresh, never a guess. The recent rows keep entry dating until ST4
+  lands `representative_exit_date`, and `LEADER_FRESHNESS_SESSIONS`' comment
+  says so rather than leaving the difference to be discovered. The short-horizon
+  export's identity, stated because a reader summing it wrong is the next
+  defect: `n_wins + n_losses + n_flats == samples_2d`, and
+  `samples_2d + n_unmeasured == tracked_setups`.
+
   *The floor is judged BEFORE the clock.* A family with three samples is under
   the floor whatever the clock says, and answering "not fresh" to three samples
   answers a question the reader did not ask. So `select_leader` splits
