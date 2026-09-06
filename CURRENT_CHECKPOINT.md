@@ -226,6 +226,17 @@ unchanged. **Lost for good: the `.bak` (2026-09-03 vintage) and the 1-setup save
 rows** (append-only evidence; recorded, not rewritten). **This is decision 0017's gate #57 in
 practice: the mirror restored the JSON byte-exact.**
 
+**Second write, same evening (M5 reviewer, 19:56-19:58 PT):** its scratch export patched the
+`SETUP_ATTRIBUTE_LEADERBOARD_FILE` alias while `attribute_leaderboard_view_path()` reads
+`MASTER_AVWAP_SETUP_ATTRIBUTE_LEADERBOARD_FILE`, so the live `_by_family.csv` / `_by_regime.csv`
+were overwritten from a 516-setup slice and `master_avwap_setup_attribute_leaderboard.csv` was
+left at 2 bytes - the file the offline tuner reads into live scoring weights. Repaired 20:05-20:10
+PT by `scratchpad/reexport_tracker_views.py`: the restored JSON loaded with the production loader
+(11,372 setups, `data_session` 2026-09-03) and `export_setup_tracker_views` re-run on production
+code (283.7 s): the three leaderboard files are 20.8 MB each again and every stats CSV
+(`setup_type_stats`, `_recent_stats`, `setup_stats`, `band_variant_stats`) now carries the
+restored vintage.
+
 **Rule added** (CLAUDE.md / AGENTS.md working agreement, `docs/AGENT_TEAM.md`): a scratch
 script that imports anything under `scripts/` sets `TRADINGBOTV3_DATA_DIR` to scratch BEFORE
 the import and aborts if `project_paths.DATA_DIR` resolves under `C:\TradingBotData`; test
