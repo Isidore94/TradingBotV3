@@ -1,6 +1,6 @@
 # Branch history and the consolidation to `main`
 
-Last reconciled: **2026-08-31**
+Last reconciled: **2026-09-05**
 
 This file records what each development branch was, and where its work ended up, so
 that deleting a merged branch never destroys the only account of what it contained.
@@ -149,6 +149,47 @@ which was cut from it. Two documents called it unmerged for weeks. What is open
 is **gate 7 (SOAK 1)**, which is owed by work that HAS landed; a gate and a
 branch are different things, and conflating them left a branch on the deletion
 list's wrong side.
+
+## The 2026-09-05 cleanup (trader: *"clean up the repo as needed"*)
+
+The rule at the bottom of this file was finally applied. Every branch below passed
+`git merge-base --is-ancestor <branch> main` against `main` at `ee325704` on
+2026-09-05 ~21:30 PT, and was then deleted on `origin` and locally; 42 registered
+worktrees whose HEAD was likewise contained (agent worktrees under `.claude/worktrees/`
+and other sessions' scratch worktrees under the Temp scratchpads) were removed with
+`git worktree remove --force`, and their throwaway `worktree-agent-*` branches (100 local
+refs, every one contained) went with them. What each branch built is in `CHANGELOG.md`;
+the dated checkpoint entries and `docs/archive/` still name them, on purpose.
+
+**Deleted on `origin` and locally (42), by family, with the tip each held:**
+
+| Family | Branches (tip) | Landed in |
+|---|---|---|
+| Phase 0.13 P-packets | `claude/p0-apply-decisions` (`e4dc2fe`), `p1-grade-what-you-said` (`9439385`), `p2-show-me` (`774296c`), `p3-fact-pack-truth` (`eb7bd43`), `p4-swing-variables` (`56b17d2`), `p5-pass-cohorts` (`5d0a9f9`), `p6-preference-to-trade` (`abaf966`), `p6a-tag-backlog` (`b303423`), `p7-setup-registry` (`cb271b0`), `p8-param-grid` (`9629f78`), `p9-quick-like` (`1f3f32b`), `p10-after-the-like` (`d8e310f`) | the 2026-09-02 integration (tabled above) |
+| Review rounds and vision | `claude/r2-guards` (`739ea96`), `r3-narration-budget` (`6deac75`), `r4-fixes` (`0fad834`), `vision-2026-09-02` (`0b073db`), `v1-names-first` (`d5f012f`), `v2-loop-closes` (`35f64b1`), `v3-keep-it-honest` (`2cc94d4`) | 2026-09-02/03 |
+| Desk and capture | `claude/strength-board-into-desk` (`bded98d`), `swing-favorites`, `daytrade-pass-reasons` (`f36ab59`), `focus-declutter-lrsi-htf` (`ce275b1`), `focus-refresh-storm` (`d38ec01`), `f1-desk-freeze` (`a736c1c`), `t1-capture-and-board` (`10db042`), `t2-claim-double-click` (`83f8df3`) | 2026-08-31 to 2026-09-04 |
+| Phase 0.18 Q-packets | `claude/q1-held-honesty` (`f01601e`), `q2-warehouse-eligibility` (`a801396`), `q3-ai-grounding` (`8c5900f`), `q4-overnight-gates` (`2270769`), `q5-scorecard-worker` (`4a88df9`) | `b0db9bbe`, 2026-09-04 |
+| Phase 0.19 / 0.21 M-packets | `claude/m1-band-variant-handoff` (`e744afd`), `m2-unresolved-means-unmeasured` (`de34346`), `m4-lake-band-variant` (`325ad7e`), `m5-shown-and-read` (`05cad91`) | `918445f3`, 2026-09-05 evening (the other lead session) |
+| Phase 0.20 N-packets | `claude/n1-sidecar-aware-read` (`c09d944`), `n2-synthesis-output-cap` (`db5a8f0`), `n3-research-narration-bounded` (`a9ec8ff`) | `b907a801`, 2026-09-05 19:47 PT |
+| Process | `claude/agent-team` (`e4dc48a`), `agent-team-2` (`3b5ea44`), `last-commit-main-dpouod` | 2026-09-02/03 |
+
+**Local-only branches deleted (contained):** `claude/gui-p1-fluidity` (`88a34b7`),
+`gui-phase-0-9` (`48c0ad4`), `group-tape-rebuild` (`cd212bc`), `local-ai-context-64k`
+(`75880d6`), `warehouse-build-memory` (`ae8282d`), `phase05-integration-blitz` (`1a2fbde`),
+`phase05-r2-focus-gating-strength-board` (`a8c696a`), `testing-week-2026-08-24` (`ed277a7`),
+`lead/merge-n` (`b907a80`, the N merge worktree's branch), plus the 100 `worktree-agent-*` refs.
+
+**Kept, and why:**
+
+| Branch | Tip | Why it stays |
+|---|---|---|
+| `claude/s1-quick-verbs` | `0d51053` | NOT contained: S1.1/S1.2 superseded by T1, S1.4 rebuilt as `f903ca4`, S1.3 (ONE Strength surface) still owed a decision - a fresh packet, never a merge (checkpoint). Its two agent worktrees and one detached worktree at the same tip stay with it. |
+| `claude/m3-tracker-keeps-up` | `3881bcc` | CONTAINED (landed in `918445f3`), but its worktree is LOCKED by the other lead session; the refs go when that lock clears. |
+| `claude/avwap-band-challenger` | `9fe444d` | local only, NOT contained; the 2026-08-26 challenger branch this file's first section already records as "not lost" - unchanged. |
+| `testing-week-2026-08-17` | `170172b` | local only, NOT contained; the pre-consolidation chain's first link, kept as the record above says. |
+
+One scratch worktree at a detached `b4ca820b` (another session's Temp scratchpad, not
+contained) was left for that session.
 
 ## Rule going forward
 
