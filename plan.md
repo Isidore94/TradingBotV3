@@ -351,29 +351,32 @@ Results is a trader-readable full readout, the Desk's Working-lately line stays 
 both read ONE evidence snapshot; (2) the build order below; (3) Results opens on Bot setups × Swing ×
 Recent 20 sessions, last choice remembered; (4) the under-chart Journal composer is left as it is.
 
-**Two lanes, one rule.** Lane M (measurement) is the six packets of the tracker prompt: P1 outcome
-meaning and true session horizons, P2 real integer counts and one leader, P3 impossible fills and
-same-day knowledge (golden compare), P4 the opportunity before its outcome (golden compare,
-decision), P5 personal evidence, P6 the V4 evidence snapshot + Desk line + priority switch +
-leader-change event. Lane G (layout): G0 measure first, G1 Weekend Focus Review one table + view
+**Two lanes, one rule.** Lane M (measurement) is the six packets of the tracker prompt, and **it is
+already being built by the OTHER lead session as ST1–ST6** (`.claude/packets/ST0_COMMON.md`,
+`ST1.md`–`ST6.md`, branches `claude/st*`, integration branch `lead/merge-st`): ST1 outcome meaning
+and true session horizons, ST2 real integer counts and one leader, ST3 execution convention and
+level knowledge (golden compare), ST4 first-actionable identity (golden compare, decision), ST5
+personal evidence, ST6 the V4 snapshot + Working-lately strip + priority switch + AWAY Recap +
+leader-change events. This session found that work at 16:45 PT, a quarter-hour after starting a
+duplicate of ST2, and stopped the duplicate; the "P1–P6" names in the 2026-09-06 plan artifact ARE
+ST1–ST6. Lane G (layout, this session): G0 measure first, G1 Weekend Focus Review one table + view
 selector + detail pane, G2 clipped tables (name the text column), G3 Market Journal reader, G4 stale
-Research detail clears on context change, G5 Research › Results landing page, G6 AWAY Recap (V4's
-item, on P6's snapshot), G7 speed pass re-measured against G0. **A G packet may change words,
-widths, positions and defaults and never how a number is computed; an M packet may change exports,
-readers and meanings and never move a widget.** Each is its own branch and worktree through the
-agent team; the desk restarts only on the trader's word.
+Research detail clears on context change (Day-trade Tracker now; the Setup Tracker half is G4b after
+ST6), G5 Research › Results landing page (reads ST2's counts and ST6's snapshot), G7 speed pass
+re-measured against G0. G6 (AWAY Recap reshape) is ST6's item; any layout polish left after it is a
+later G packet. **A G packet may change words, widths, positions and defaults and never how a
+number is computed; an M packet may change exports, readers and meanings and never move a widget.**
+G branches base on `lead/merge-st`, never edit a file ST2/ST6 is rewriting, and the two leads
+coordinate by message; the desk restarts only on the trader's word.
 
-**Order:** G0 → G1 → G4 → G3 → G2, with P2 beside them (Results needs its export) → G5 → P1 → P5 →
-P3 / P4 in parallel (block nothing) → P6 → G6 → G7. Packets live in `.claude/packets/G*.md` /
-`P*.md` (machine-local). P1–P4 touch `master_avwap_lib/legacy.py`: each asks before its first edit
-(file-scoped ask-first rule); this authorization does not answer that question.
+**Order (G lane):** G0 → G1 → G4 → G3 → G2 → G5 (after ST2 + ST6 land) → G4b → G7.
 
 | Packet | State |
 |---|---|
-| G0 measure first | in build 2026-09-06 |
-| G1, G4, G3 | tests being written 2026-09-06 |
-| P2 | tests being written 2026-09-06; builder waits for the `legacy.py` yes |
-| G2, G5, P1, P5, P3, P4, P6, G6, G7 | queued in the order above |
+| G0 measure first | in build 2026-09-06 (base `main` - it edits no panel) |
+| G1, G4, G3 | red tests being written 2026-09-06, based on `lead/merge-st` |
+| P2 | SUPERSEDED by ST2 (the other session) - stopped 16:50 PT, branch deleted, nothing built |
+| G2, G5, G4b, G7 | queued in the order above; G5 and G4b wait for ST2/ST6 in `lead/merge-st` |
 
 ## Phase 0.21 — Measurement audit repairs M2, M3, M5 (2026-09-05) — BUILT, live gates #71, #72, #74 owed
 
