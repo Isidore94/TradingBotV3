@@ -102,3 +102,123 @@ def test_an_unknown_selection_policy_raises_rather_than_falling_back():
         m.build_recent_tracker_setup_family_rows(
             {"a": {}}, selection_policy="closed_first_v2"
         )
+
+
+def test_v2_never_grades_an_episode_whose_representative_is_pending():
+    """Fix round, reviewer blocker 2 on `37e63b9c`.
+
+    ST4.2 stopped `_summarize_tracker_setup_outcome` substituting `avg_closed_r`
+    for an open representative, but the family AGGREGATE put it straight back:
+    `closed_rows` was `closed_setups > 0` (ANY tradeable scenario closed) and
+    the win/loss loop fell back to `avg_closed_r` when
+    `representative_closed_r` was None. On the 2026-09-03 mirror that graded
+    **271 of 2,712** v2 episodes whose representative was still running - 252
+    of them as losses, 19 as wins.
+
+    The fixture is that shape: the representative (`full_band2` on the primary
+    stop) is OPEN at +0.40R, an alternate exit plan closed -1.00R. Under v2 the
+    episode is PENDING and grades nothing; under v1 it is a loss, unchanged.
+    """
+    from datetime import date
+
+    def _scenario(scenario_id, template, status, total_r, exit_date=None):
+        return {
+            "scenario_id": scenario_id, "stop_reference_label": "LOWER_1",
+            "stop_reference_level": 95.0, "stop_source_type": "band",
+            "exit_template_id": template, "exit_template_label": template,
+            "framework_family": "baseline", "framework_version": "baseline",
+            "experimental": False, "tradeable": True, "status": status,
+            "total_r": total_r, "days_held": 4, "entry_price": 100.0,
+            "initial_risk_per_share": 5.0, "initial_risk_usd": 500.0,
+            "direction": 1.0,
+            "events": (
+                [{"trade_date": exit_date, "reason": "STOP", "price": 95.0, "shares": 100}]
+                if exit_date else []
+            ),
+        }
+
+    population = {
+        "s": {
+            "symbol": "NVDA", "side": "LONG", "anchor_date": "2026-01-02",
+            "scan_date": "2026-01-05", "priority_bucket": "tracked",
+            "setup_family": "avwape_bounce", "setup_status": "OPEN",
+            "favorite_signals": [],
+            "scenarios": {
+                "open_rep": _scenario("open_rep", "full_band2", "OPEN", 0.4),
+                "closed_alt": _scenario(
+                    "closed_alt", "full_band3", "STOPPED", -1.0, "2026-01-09"
+                ),
+            },
+        }
+    }
+    kwargs = {"reference_date": date(2026, 1, 20), "lookback_days": 45}
+
+    v2 = m.build_recent_tracker_setup_family_rows(
+        population,
+        selection_policy=selection_policy.SELECTION_FIRST_ACTIONABLE_V2,
+        **kwargs,
+    )[0]
+    assert int(v2["n_episodes"]) == 1
+    assert int(v2["n_pending"]) == 1, "an open representative is pending, not a loss"
+    assert int(v2["n_wins"]) == 0
+    assert int(v2["n_losses"]) == 0
+    assert int(v2["closed_setups"]) == 0
+    assert v2["win_rate_closed_unweighted"] is None
+
+    v1 = m.build_recent_tracker_setup_family_rows(population, **kwargs)[0]
+    assert int(v1["n_pending"]) == 0
+    assert int(v1["n_losses"]) == 1, "characterized: the alternate's -1.00R is today's grade"
+    assert int(v1["closed_setups"]) == 1
+
+
+def test_a_second_stamped_output_never_rewrites_the_first(tmp_path):
+    """Packet test 9's never-overwrite clause, asserted on the FILE COUNT too.
+
+    Two runs inside the same second must produce a second stamped PAIR (the
+    `-2` sibling), never reuse or truncate the first, and the two refusals must
+    still hold once a legitimate output directory exists.
+    """
+    import json
+
+    import tracker_selection_compare as compare
+
+    tracker = tmp_path / "tracker.json"
+    payload = m._default_setup_tracker_payload()
+    payload["data_session"] = "2026-02-02"
+    payload["setups"] = {
+        "s": {
+            "symbol": "AAPL", "side": "LONG", "anchor_date": "2026-01-20",
+            "scan_date": "2026-01-23", "priority_bucket": "tracked",
+            "setup_family": "post_earnings_52w_break", "setup_status": "CLOSED",
+            "favorite_signals": [],
+            "scenarios": {
+                "a": {
+                    "scenario_id": "a", "stop_reference_label": "LOWER_1",
+                    "exit_template_id": "full_band2", "framework_family": "baseline",
+                    "framework_version": "baseline", "experimental": False,
+                    "tradeable": True, "status": "TARGET_HIT", "total_r": 1.1,
+                    "days_held": 4, "entry_price": 100.0,
+                    "initial_risk_per_share": 5.0, "initial_risk_usd": 500.0,
+                    "direction": 1.0,
+                    "events": [{"trade_date": "2026-01-29", "reason": "FINAL_TARGET",
+                                "price": 110.0, "shares": 100}],
+                }
+            },
+        }
+    }
+    tracker.write_text(json.dumps(payload), encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    assert compare.main(["--tracker", str(tracker), "--out", str(out_dir)]) == 0
+    first = {path.name: path.read_bytes() for path in sorted(out_dir.iterdir())}
+    assert len(first) == 2
+
+    assert compare.main(["--tracker", str(tracker), "--out", str(out_dir)]) == 0
+    assert len(list(out_dir.iterdir())) == 4, "the second run wrote a new stamped pair"
+    for name, original in first.items():
+        assert (out_dir / name).read_bytes() == original, f"{name} was rewritten"
+
+    protected = Path(str(compare.PROTECTED_DATA_ROOT))
+    assert compare.main(["--tracker", str(protected / "x.json"), "--out", str(out_dir)]) != 0
+    assert compare.main(["--tracker", str(tracker), "--out", str(protected / "x")]) != 0
+    assert len(list(out_dir.iterdir())) == 4, "a refused run wrote nothing"

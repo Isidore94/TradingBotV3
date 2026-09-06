@@ -784,6 +784,8 @@ TRACKER_POPULATION_EXCLUSION_REASONS = (
     "after_as_of",
     "expired_unmeasured_in_population",
     "no_representative_in_population",
+    "undatable_exit_in_population",
+    "unknown_compact_in_population",
 )
 # Short-horizon (1-2 session) outcome marks. Most tracked setups are swing
 # setups that need days/weeks to resolve; these scalars capture what each setup
@@ -7109,14 +7111,35 @@ def _summarize_tracker_setup_outcome(
         and as_of_day is None
     )
     cached_summary = setup.get("_scoring_outcome_summary")
-    # A cache written before ST4 has none of the new keys; recompute rather
-    # than hand back a summary a reader would have to special-case.
-    if (
-        isinstance(cached_summary, dict)
-        and is_default_read
-        and "representative_status" in cached_summary
-    ):
+    # THE CACHE IS THE RECORD, and a default read takes it unconditionally.
+    #
+    # `_build_scoring_projection` writes a COMPACT projection with no
+    # `scenarios` key at all (`master_avwap_tracker_scoring_snapshot.json`,
+    # 11,372 of them), so for the live scoring path this summary is not an
+    # optimisation - it is the only copy of the answer. An earlier ST4 draft
+    # required `representative_status` in the cache before trusting it and
+    # recomputed otherwise; on the snapshot that recompute found no scenarios,
+    # returned `tradeable_scenario_count == 0`, and every setup was dropped
+    # (32 recent family rows -> 0, 74 nonzero `setup_type` score deltas -> 0),
+    # which the first D1 scan after merge would have written into
+    # `recent_tracker_score_delta` / `setup_type_score_delta`. A missing key is
+    # never a reason to recompute.
+    if isinstance(cached_summary, dict) and is_default_read:
         return copy.deepcopy(cached_summary)
+
+    scenarios_mapping = setup.get("scenarios")
+    if isinstance(cached_summary, dict) and not isinstance(scenarios_mapping, dict):
+        # A compact projection under a NON-default policy or an as_of replay.
+        # Neither can be evaluated without the scenarios, so the honest answer
+        # is the cached one with the challenger's verdict NAMED as unavailable
+        # - never an empty summary, which would silently delete the setup.
+        summary = copy.deepcopy(cached_summary)
+        summary["representative_status"] = "unknown_compact"
+        summary["representative_exit_date"] = ""
+        summary["representative_exit_undatable"] = False
+        summary["selection_policy"] = resolved_policy
+        summary["as_of_session"] = str(as_of_session or "")
+        return summary
 
     def _closed_as_of(scenario: dict) -> bool:
         if not _scenario_is_closed(scenario.get("status")):
@@ -7125,6 +7148,10 @@ def _summarize_tracker_setup_outcome(
             return True
         exit_day = _parse_iso_date_or_none(_scenario_recorded_exit_date(scenario))
         # An exit the replay cannot date is not an exit the replay may claim.
+        # It reads as still running and `representative_exit_undatable` below
+        # says so, because history compaction empties `events`
+        # (`scenario["events"] = []`) and a compacted CLOSED scenario is a
+        # measurement gap, not a trade still on.
         return exit_day is not None and exit_day <= as_of_day
 
     scenarios = [
@@ -7238,6 +7265,17 @@ def _summarize_tracker_setup_outcome(
             _scenario_recorded_exit_date(representative)
             if (representative is not None and rep_is_closed)
             else ""
+        ),
+        # True when the REPLAY could not date this setup's representative exit
+        # - a CLOSED scenario whose `events` history compaction emptied. It
+        # reads as pending for the replay, and this flag is what stops that
+        # being reported as a trade still running.
+        "representative_exit_undatable": bool(
+            representative is not None
+            and as_of_day is not None
+            and not rep_is_closed
+            and _scenario_is_closed(representative.get("status"))
+            and _parse_iso_date_or_none(_scenario_recorded_exit_date(representative)) is None
         ),
         "selection_policy": resolved_policy,
         "as_of_session": str(as_of_session or ""),
@@ -7620,6 +7658,9 @@ def build_recent_tracker_setup_family_rows(
             "representative_status": str(
                 outcome_summary.get("representative_status") or ""
             ),
+            "representative_exit_undatable": bool(
+                outcome_summary.get("representative_exit_undatable")
+            ),
         }
         recent_rows.append(row)
 
@@ -7647,6 +7688,34 @@ def build_recent_tracker_setup_family_rows(
     # Collapse correlated daily re-scans so each independent episode counts once
     # before any baseline/group statistics are computed.
     recent_rows = _dedupe_recent_tracker_family_rows(recent_rows, policy=resolved_policy)
+
+    # WHICH EPISODES THE HEADLINE MAY GRADE.
+    #
+    # Under `closed_first_v1` this is exactly what it has always been - the row
+    # has at least one closed tradeable scenario - and every number below is
+    # unchanged (golden). Under `first_actionable_v2` "pending stays pending"
+    # has to reach the AGGREGATE too, or the rule is decorative: a row whose
+    # representative is still running but whose ALTERNATE exit plan closed had
+    # `closed_setups == 1`, so it was graded from `avg_closed_r` further down,
+    # which is the same substitution ST4.2 removed one level up. Measured on
+    # the 2026-09-03 mirror: 271 of 2,712 v2 episodes had a PENDING
+    # representative and were being graded anyway (252 losses, 19 wins).
+    is_v2 = resolved_policy == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2
+
+    def _row_is_graded(row: dict) -> bool:
+        if is_v2:
+            return str(row.get("representative_status") or "") == "closed"
+        return int(row.get("closed_setups", 0) or 0) > 0
+
+    def _row_is_unmeasurable(row: dict) -> bool:
+        """Neither graded nor pending: the policy could not be evaluated.
+
+        Only reachable under v2, and only on a COMPACT projection whose
+        `_scoring_outcome_summary` is the whole record. Counting it as pending
+        would report a finished trade as still running.
+        """
+        return is_v2 and str(row.get("representative_status") or "") == "unknown_compact"
+
     baseline_groups = {}
     for row in recent_rows:
         baseline_groups.setdefault(
@@ -7655,7 +7724,7 @@ def build_recent_tracker_setup_family_rows(
 
     baseline_map: dict[tuple[str, str], dict[str, object]] = {}
     for context_key, rows_for_context in baseline_groups.items():
-        closed_rows = [row for row in rows_for_context if int(row.get("closed_setups", 0) or 0) > 0]
+        closed_rows = [row for row in rows_for_context if _row_is_graded(row)]
         baseline_map[context_key] = {
             "tracked_setups": len(rows_for_context),
             "closed_setups": len(closed_rows),
@@ -7690,7 +7759,7 @@ def build_recent_tracker_setup_family_rows(
 
     family_rows = []
     for group_key, rows_for_group in grouped.items():
-        closed_rows = [row for row in rows_for_group if int(row.get("closed_setups", 0) or 0) > 0]
+        closed_rows = [row for row in rows_for_group if _row_is_graded(row)]
         baseline = baseline_map.get((group_key[0], group_key[1]), {})
         avg_total_r = _weighted_mean(
             [(row.get("avg_total_r"), row.get("recency_weight")) for row in rows_for_group]
@@ -7734,7 +7803,11 @@ def build_recent_tracker_setup_family_rows(
         latest_measured_session = ""
         for closed_row in closed_rows:
             rep_r = _coerce_float(closed_row.get("representative_closed_r"))
-            if rep_r is None:
+            if rep_r is None and not is_v2:
+                # v1 only. Under v2 this is the SAME substitution ST4.2 removed
+                # one level up - the mean of the alternate exit plans that
+                # happened to close - and it would put it straight back into
+                # the win count.
                 rep_r = _coerce_float(closed_row.get("avg_closed_r"))
             if rep_r is None:
                 # CLOSED and unreadable. Not a loss, and never silently one.
@@ -7776,7 +7849,7 @@ def build_recent_tracker_setup_family_rows(
             sample = f"{row.get('symbol')} {row.get('scan_date')}".strip()
             avg_closed_value = _coerce_float(row.get("avg_closed_r"))
             avg_total_value = _coerce_float(row.get("avg_total_r"))
-            if avg_closed_value is not None and int(row.get("closed_setups", 0) or 0) > 0:
+            if avg_closed_value is not None and _row_is_graded(row):
                 sample += f" ({avg_closed_value:+.2f}R)"
             elif avg_total_value is not None:
                 sample += f" ({avg_total_value:+.2f}R open)"
@@ -7852,7 +7925,15 @@ def build_recent_tracker_setup_family_rows(
         item["n_entry_sessions"] = len(
             {str(row.get("scan_date") or "") for row in rows_for_group}
         )
-        item["n_pending"] = int(n_episodes - len(closed_rows))
+        # `closed_rows` is now "graded", which under v1 is the same set it has
+        # always been. Under v2 an episode the policy could not evaluate at all
+        # (a compact projection) is neither graded nor pending, so it is
+        # subtracted here and NAMED in `excluded_reasons` - reporting a
+        # finished trade as still running would be its own lie. The identity a
+        # reader can check is n_wins + n_losses + n_flats + n_unmeasured +
+        # n_pending + n_unmeasurable == n_episodes.
+        n_unmeasurable = sum(1 for row in rows_for_group if _row_is_unmeasurable(row))
+        item["n_pending"] = int(n_episodes - len(closed_rows) - n_unmeasurable)
         item["win_rate_closed_unweighted"] = (
             n_wins / (n_wins + n_losses) if (n_wins + n_losses) > 0 else None
         )
@@ -7888,6 +7969,20 @@ def build_recent_tracker_setup_family_rows(
         )
         if no_representative_in_population:
             reason_counts["no_representative_in_population"] = no_representative_in_population
+        # The replay could not DATE these exits (history compaction empties
+        # `events`), so they read as pending. Named, because "pending" and "we
+        # cannot see when it closed" are different facts and only one of them
+        # is a trade still on. Measured 2026-09-06: 0 of 75,437 scenarios in
+        # the 28-day window are compacted, but 99,562 of 206,341 across all
+        # history are, so an earlier `as_of_session` or a longer lookback walks
+        # straight into them.
+        undatable_in_population = sum(
+            1 for row in rows_for_group if bool(row.get("representative_exit_undatable"))
+        )
+        if undatable_in_population:
+            reason_counts["undatable_exit_in_population"] = undatable_in_population
+        if n_unmeasurable:
+            reason_counts["unknown_compact_in_population"] = int(n_unmeasurable)
         item["n_excluded"] = int(
             sum(
                 count
@@ -7901,6 +7996,25 @@ def build_recent_tracker_setup_family_rows(
             if reason_counts.get(reason)
         )
         family_rows.append(item)
+
+    # A (side, bucket, family) whose every record was excluded produces NO row,
+    # so its exclusions would vanish with it - the one place this accounting
+    # could still lose a number. The build-level total is stamped on every row
+    # instead, identical on all of them, so a reader of any single row can see
+    # that a whole family went missing.
+    surviving_group_keys = {
+        (
+            str(row.get("side") or ""),
+            str(row.get("priority_bucket") or ""),
+            str(row.get("setup_family") or "general"),
+        )
+        for row in recent_rows
+    }
+    fully_excluded_groups = sum(
+        1 for key in excluded_counts if key not in surviving_group_keys
+    )
+    for item in family_rows:
+        item["fully_excluded_groups"] = int(fully_excluded_groups)
 
     family_rows.sort(
         key=lambda item: (
