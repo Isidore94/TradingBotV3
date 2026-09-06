@@ -183,6 +183,88 @@ def test_a_failed_v2_write_never_costs_the_v1_exports(tmp_path, monkeypatch):
     assert paths["tier_outcomes_path"].exists()
 
 
+def test_two_scans_of_one_symbol_on_one_day_are_two_observations_not_a_duplicate():
+    """The desk ran FIFTEEN scans on 2026-08-31. None of them is a duplicate.
+
+    Row identity is `_scan_factor_row_id` - `symbol:scan_date:run_id` - so two
+    scans of AAA on 2026-06-01 under different run ids are two observations of
+    two different moments, and each one recorded what it saw at the time.
+    Keying the de-duplication on `(symbol, scan_date)` instead reported 475,492
+    duplicates against 109,584 rows on the live history, where the truly
+    repeated `scan_row_id`s numbered 75.
+    """
+    from master_avwap_lib.session_horizon_outcomes import (
+        build_session_horizon_observation_rows,
+    )
+
+    morning = _scan_row("AAA", "2026-06-01", 100.0)
+    afternoon = dict(morning)
+    afternoon["run_id"] = "run-2026-06-01-afternoon"
+    afternoon["run_timestamp"] = "2026-06-01T16:00:00"
+    afternoon["last_close"] = 102.0
+    history = pd.DataFrame([morning, afternoon])
+
+    built = build_session_horizon_observation_rows(
+        history,
+        lambda symbol: {date(2026, 6, 1): 100.0, date(2026, 6, 2): 110.0},
+        horizons=(1,),
+        last_completed_session=date(2026, 6, 30),
+    )
+
+    assert built.dropped_duplicates == 0
+    assert len(built.rows) == 2
+    assert len({row["scan_row_id"] for row in built.rows}) == 2
+    assert len({row["observation_id"] for row in built.rows}) == 2
+    # Both carry the same entry session and the same target session; what
+    # differs is which scan recorded them.
+    assert {row["target_session"] for row in built.rows} == {"2026-06-02"}
+
+
+def test_the_build_is_a_rolling_window_and_counts_what_it_left_out():
+    """Scan dates older than 3 x LATELY_SESSIONS are excluded, and COUNTED.
+
+    Unbounded, this rewrote 146,367 scan rows into 109,584 output rows on every
+    scan (165 s, 33.8 MB) to change nothing outside the newest sessions. The
+    window is declared, and what falls outside it is reported rather than
+    silently missing.
+    """
+    from evidence_stats import LATELY_SESSIONS
+    from master_avwap_lib.session_horizon_outcomes import (
+        BUILD_WINDOW_SESSIONS,
+        build_session_horizon_observation_rows,
+    )
+
+    assert BUILD_WINDOW_SESSIONS == 3 * LATELY_SESSIONS
+
+    history = pd.DataFrame(
+        [
+            _scan_row("OLD", "2026-01-05", 100.0),
+            _scan_row("NEW", "2026-06-01", 100.0),
+        ]
+    )
+    closes = {date(2026, 1, 5): 100.0, date(2026, 6, 1): 100.0, date(2026, 6, 2): 110.0}
+    built = build_session_horizon_observation_rows(
+        history,
+        lambda symbol: closes,
+        horizons=(1,),
+        last_completed_session=date(2026, 6, 30),
+    )
+
+    assert {row["symbol"] for row in built.rows} == {"NEW"}
+    assert built.excluded["outside_build_window"] == 1
+
+    # `None` builds everything, for a caller that wants the whole history.
+    everything = build_session_horizon_observation_rows(
+        history,
+        lambda symbol: closes,
+        horizons=(1,),
+        last_completed_session=date(2026, 6, 30),
+        window_sessions=None,
+    )
+    assert {row["symbol"] for row in everything.rows} == {"NEW", "OLD"}
+    assert everything.excluded["outside_build_window"] == 0
+
+
 def test_the_daily_frame_lookup_reads_closes_and_never_fetches():
     """`closes_from_daily_frames` is the desk's `closes_for`: frames in, dict out."""
     from master_avwap_lib.session_horizon_outcomes import closes_from_daily_frames
@@ -202,32 +284,40 @@ def test_the_daily_frame_lookup_reads_closes_and_never_fetches():
 # ---------------------------------------------------------------------------
 # The describe() line, on all three surfaces
 # ---------------------------------------------------------------------------
+def _outcome_row(index: int, *, stale: str = "False") -> dict:
+    """One tier-outcome row, shaped like the file's."""
+    return {
+        "observation_id": f"OBS{index}:5",
+        "scan_row_id": f"OBS{index}",
+        "scan_date": "2026-06-03",
+        "future_scan_date": "2026-06-10",
+        "horizon_sessions": 5,
+        "tier": "S",
+        "tier_source": "assigned",
+        "symbol": f"SYM{index}",
+        "side": "LONG",
+        "setup_family": "avwap_breakout",
+        "entry_close": 100.0,
+        "future_close": 105.0,
+        "raw_return_pct": 5.0,
+        "side_return_pct": 5.0,
+        "win": "True",
+        "spy_forward_return_pct": "",
+        "spy_relative_side_return_pct": "",
+        "sessions_spanned": 18 if stale.lower() == "true" else 5,
+        "stale_horizon": stale,
+        "positive_scan_factor_match_count": 0,
+        "positive_scan_factor_matches": "",
+        "outcome_kind": "favorable_direction_scanrow_v1",
+    }
+
+
 def _write_v1_csv(path: Path, *, stale_rows: int = 1) -> None:
     columns = list(legacy.TIER_OUTCOME_COLUMNS)
-    rows = []
-    for index in range(6):
-        stale = index < stale_rows
-        rows.append(
-            {
-                "observation_id": f"OBS{index}:5",
-                "scan_row_id": f"OBS{index}",
-                "scan_date": "2026-06-03",
-                "future_scan_date": "2026-06-10",
-                "horizon_sessions": 5,
-                "tier": "S",
-                "tier_source": "assigned",
-                "symbol": f"SYM{index}",
-                "side": "LONG",
-                "setup_family": "avwap_breakout",
-                "entry_close": 100.0,
-                "future_close": 105.0,
-                "side_return_pct": 5.0,
-                "win": "True",
-                "sessions_spanned": 18 if stale else 5,
-                "stale_horizon": "True" if stale else "False",
-                "outcome_kind": "favorable_direction_scanrow_v1",
-            }
-        )
+    rows = [
+        _outcome_row(index, stale="True" if index < stale_rows else "False")
+        for index in range(6)
+    ]
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
@@ -278,6 +368,45 @@ def test_the_away_digest_says_what_it_ranked_on():
     assert "Ranked on:" not in empty
 
 
+def test_the_setups_table_header_takes_its_noun_from_swing_headline():
+    """The header and the cells under it can never disagree about the noun.
+
+    `headline_labels` is the one place the word lives; the table composes its
+    own "Family" around it. A label typed into the model would be a second
+    spelling of the same claim.
+    """
+    pytest.importorskip("PySide6", reason="the setups table is a Qt model")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import swing_headline
+    from ui.models.setup_table_model import FAMILY_RATE_HEADER, SetupTableModel
+
+    labels = swing_headline.headline_labels(swing_headline.OUTCOME_KIND_FAVORABLE_DIRECTION)
+    assert labels[0].lower() in FAMILY_RATE_HEADER.lower()
+    assert swing_headline.headline_labels()[0] == "Win %"  # trade_r keeps its word
+    column = [key for key, _label in SetupTableModel.COLUMNS].index("family_win_rate")
+    assert SetupTableModel.COLUMNS[column][1] == FAMILY_RATE_HEADER
+
+    # And the cell under it uses the same noun, off the row's own outcome kind.
+    cell = swing_headline.format_win_rate(
+        swing_headline.headline_from_tracker_rows(
+            "avwap_breakout", [{"win": "1", "side_return_pct": "2.0"}]
+        ).as_row()
+    )
+    assert labels[0].split()[0].lower() in cell.lower()
+
+
+def test_the_digest_section_note_names_the_policy_rather_than_a_win_rate():
+    """A model reading the index must not call a percent move a win rate."""
+    from ai_jobs.digest import _SECTION_NOTES
+
+    note = _SECTION_NOTES["swing_win_rates"]
+    assert "favorable_direction_scanrow_v1" in note
+    assert "scan-row offset" in note.lower()
+    assert "5 scan rows" in note
+    assert "20 exchange sessions" in note
+    assert "never a stop-rule win rate" in note.lower()
+
+
 def test_the_setups_panel_shows_the_coverage_line():
     pytest.importorskip("PySide6", reason="the setups table is a Qt panel")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -301,17 +430,99 @@ def test_the_setups_panel_shows_the_coverage_line():
         panel.deleteLater()
 
 
-def test_the_three_readers_apply_ONE_policy_object():
-    """The rules live in `swing_evidence`, not written out three times."""
+def test_both_trader_facing_readers_go_THROUGH_the_one_reader(tmp_path, monkeypatch):
+    """Behavioural, not a source scan: replace the reader and watch both follow.
+
+    R4 B4's lesson - a source-text test passes for a verb that never runs the
+    code - so this proves the wiring by making `read_eligible_rows` answer
+    differently and checking that BOTH surfaces answer differently with it.
+    """
     import autopilot_core
     import setup_docs
+    import swing_evidence
 
-    docs_source = (ROOT / "scripts" / "setup_docs.py").read_text(encoding="utf-8")
-    core_source = (ROOT / "scripts" / "autopilot_core.py").read_text(encoding="utf-8")
-    for source in (docs_source, core_source):
-        assert "read_eligible_rows" in source
-        # The hand-written stale filter each of them used to carry is gone.
-        assert 'row.get("stale_horizon") or ""' not in source
+    path = tmp_path / "master_avwap_tier_outcomes.csv"
+    _write_v1_csv(path, stale_rows=0)
+    window = ("2026-06-01", "2026-06-30")
+    calls: list[str] = []
+    real = swing_evidence.read_eligible_rows
 
-    assert callable(setup_docs.family_record_coverage_line)
-    assert callable(autopilot_core.swing_family_read)
+    def only_the_first(rows_or_path, policy, **kwargs):
+        calls.append(str(policy.outcome_kind))
+        read = real(rows_or_path, policy, **kwargs)
+        return swing_evidence.EligibleRead(
+            policy=read.policy,
+            rows=read.rows[:1],
+            pending=read.pending,
+            excluded=read.excluded,
+            source_rows=read.source_rows,
+            window=read.window,
+        )
+
+    monkeypatch.setattr(swing_evidence, "read_eligible_rows", only_the_first)
+    setup_docs.clear_family_outcome_cache()
+    monkeypatch.setattr(setup_docs, "_family_outcomes_path", lambda: path)
+    monkeypatch.setattr(setup_docs, "_family_outcomes_window", lambda: window)
+    try:
+        docs_rows = setup_docs.family_headline_rows()
+        records = autopilot_core.swing_family_records(path, window=window)
+    finally:
+        setup_docs.clear_family_outcome_cache()
+
+    assert len(calls) == 2, "each surface must call the shared reader exactly once"
+    assert docs_rows["avwap_breakout"]["n"] == 1
+    assert records["avwap_breakout"]["wins"] + records["avwap_breakout"]["losses"] == 1
+
+
+def test_the_stale_rule_is_ONE_function_the_reader_and_the_report_both_call(tmp_path):
+    """Change `is_stale_horizon` and both the reader and the export follow it.
+
+    The tier performance export cannot take a whole policy - its cells span
+    every horizon over a 365-day lookback - so what it shares is the MISSINGNESS
+    PREDICATE. If either side spells the rule out for itself, one of them will
+    answer this differently.
+    """
+    import swing_evidence
+    from swing_evidence import POLICY_SCANROW_V1, read_eligible_rows
+
+    rows = [
+        _outcome_row(1, stale="False"),
+        _outcome_row(2, stale="False"),
+        _outcome_row(3, stale="quarantined"),
+    ]
+
+    # The rule as shipped: only an explicit True drops, so "quarantined" stays.
+    assert len(read_eligible_rows(rows, POLICY_SCANROW_V1, window=("2026-06-01", "2026-06-30")).rows) == 3
+    performance = legacy.build_bot_tier_performance_rows(
+        rows, rows, lookback_days=365, reference_date="2026-06-30"
+    )
+    cell = next(
+        row for row in performance
+        if row["tier"] == "S" and row["side"] == "LONG" and row["horizon_sessions"] == 5
+    )
+    assert cell["observation_count"] == 3
+
+    # One rule, one function: widen it and BOTH answers move together.
+    original = swing_evidence.is_stale_horizon
+    try:
+        swing_evidence.is_stale_horizon = lambda row: str(
+            row.get("stale_horizon") or ""
+        ).strip().lower() in {"true", "quarantined"}
+        legacy.is_stale_horizon = swing_evidence.is_stale_horizon
+        read = read_eligible_rows(rows, POLICY_SCANROW_V1, window=("2026-06-01", "2026-06-30"))
+        assert len(read.rows) == 2
+        assert read.excluded["stale_horizon"] == 1
+        widened = legacy.build_bot_tier_performance_rows(
+            rows, rows, lookback_days=365, reference_date="2026-06-30"
+        )
+        widened_cell = next(
+            row for row in widened
+            if row["tier"] == "S" and row["side"] == "LONG" and row["horizon_sessions"] == 5
+        )
+        assert widened_cell["observation_count"] == 2
+        # The BASELINE is filtered like for like - an edge against a baseline
+        # built on other rules is a subtraction of two different populations.
+        assert widened_cell["baseline_observation_count"] == 2
+    finally:
+        swing_evidence.is_stale_horizon = original
+        legacy.is_stale_horizon = original

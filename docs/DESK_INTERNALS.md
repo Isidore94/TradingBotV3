@@ -1992,6 +1992,25 @@ and nothing said so.
   (>=52%, n=90)` for the first and is unchanged for the second; the setups table's header
   is `Family favorable %` with the column key `family_win_rate` untouched, because the
   panel's widths, squeeze order and sort handler are pinned to the key.
+- **The v2 row identity is `(scan_row_id, horizon)`, and nothing coarser.**
+  `_scan_factor_row_id` is `symbol:scan_date:run_id`, so two scans of one symbol on one
+  day are two OBSERVATIONS - each recorded what it saw at the time. The first build keyed
+  de-duplication on `(symbol, scan_date)` the way the v1 frame prep does, and on the live
+  history (146,367 scan rows) that reported **475,492 duplicates against 109,584 rows**
+  when the truly repeated `scan_row_id`s number **75** (300 at four horizons): the desk
+  ran 15 scans on 2026-08-31 and the counter called 14 of each of them a duplicate.
+  `_prepare_session_horizon_frame` is therefore the v1 preparation MINUS the collapse -
+  same validity filter, same sort, same row id - and the file is at the scan-row grain.
+  A four-figure `dropped_duplicates` in the log means the grain has been collapsed again.
+- **The v2 build is a ROLLING WINDOW and the file is not an archive.** It covers scan
+  dates within `BUILD_WINDOW_SESSIONS` (3 x `LATELY_SESSIONS` = 60 exchange sessions,
+  three times the widest window any surface reads) of `last_completed_session`, and what
+  falls outside is COUNTED in `excluded['outside_build_window']`. Measured through the
+  export path on a copy of the live history: 458,336 rows / 13.4 s / 127.5 MB bounded
+  (2026-07-30..2026-09-04) against 584,776 rows / 16.3 s / 162.1 MB unbounded. **The
+  saving is only ~22%**, because the desk's multi-scan days are the recent ones, so most
+  of the volume sits inside any window a reader could use; a settled row's target close
+  does not move, which is what makes the older two thirds pure rewrite.
 - **v2 counts sessions, and it is a second file, never a replacement.**
   `master_avwap_lib/session_horizon_outcomes.py` walks the exchange calendar forward from
   the entry session, reads the bar ON the target session, and answers
@@ -2014,6 +2033,18 @@ and nothing said so.
   (`wrong_horizon`, `outside_window`, `stale_horizon`, `unreadable` - a present-and-empty
   horizon is not a zero -, `duplicate`, `unmeasured:<reason>`). `POLICY_SESSION_V2` reads
   the v2 file and **has no production caller**: it is the seam a later decision flips.
+- **The tier performance export shares the RULE, not the policy - and its BASELINE is
+  filtered like for like.** Its cells span every horizon at once over a 365-day lookback,
+  so a policy's horizon and window clauses do not describe it; what must not differ is
+  what an unmeasurable row means. `read_eligible_rows` and
+  `build_bot_tier_performance_rows` therefore call the SAME function,
+  `swing_evidence.is_stale_horizon`, and the export applies it to the observation rows it
+  builds its baseline from as well. An edge is a cell minus its baseline; a baseline built
+  on different rules makes that subtraction a comparison of two populations.
+- **A coverage line is compared to ANOTHER READER, never to a number written down.** The
+  window rolls on the exchange calendar, so the same file answers `2587 / 0 / 16971` at
+  `end=2026-09-03` and `2462 / 0 / 17096` three days later - both correct. What a gate can
+  check is that two readers of one file, asked in the same minute, say the same thing.
 - **The window is asked of the row's own clock.** v1 has only its scan date; a v2 row
   knows the session it was MEASURED on, so `POLICY_SESSION_V2` windows on
   `target_session`. Maturity is checked BEFORE the window, so a pick whose horizon has

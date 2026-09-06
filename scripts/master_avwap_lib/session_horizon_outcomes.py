@@ -20,7 +20,10 @@ row, every column and every value: re-selecting its future row would silently
 restate every number the tracker has produced, which is a scoring change the
 trader's 2026-09-06 prompt explicitly does not approve. The v2 rows go to their
 own file, `outcome_kind` says which is which, and `observation_id` is computed
-the SAME way for the same `(scan_row_id, horizon)` so the two files join 1:1.
+the SAME way for the same `(scan_row_id, horizon)`, so a v1 row joins its v2
+row EXACTLY - one to one, on `observation_id`. The v1 ids are a SUBSET, not an
+equal set: v1 collapses a day's scans of one symbol to the last of them, and v2
+keeps each scan as its own observation, because that is what its row id means.
 
 **It never fetches.** `closes_for(symbol)` is supplied by the caller and returns
 the COMPLETED daily closes already in hand - on the desk, the frames the scan
@@ -30,6 +33,19 @@ rows, never a network call inside an export (ground rule 8).
 **Completed bars only.** A bar dated after `last_completed_session` is not read
 at all, and a target session after it is `immature` - unmeasured with a reason,
 never the next available bar.
+
+**It is a ROLLING WINDOW, and it says so.** The build covers scan dates within
+`BUILD_WINDOW_SESSIONS` (3 x `LATELY_SESSIONS` = 60 exchange sessions) of
+`last_completed_session`. Unbounded it rewrites the whole feature history on
+every scan to change nothing outside the newest sessions, because a settled
+row's target close does not move. Measured on a copy of the live history
+(146,367 scan rows, 2026-09-04) through the export path: unbounded 584,776 rows,
+16.3 s, 162.1 MB; bounded 458,336 rows, 13.4 s, 127.5 MB, covering
+2026-07-30..2026-09-04. The saving is only ~22% because the desk's multi-scan
+days are the RECENT ones - 15 scans on 2026-08-31 alone - so most of the volume
+lives inside any window a reader could use. Rows older than the window are
+COUNTED (`excluded['outside_build_window']`), never silently skipped, and the
+exported file is a window rather than an archive.
 
 Shadow only: nothing here reaches a detector, a score, a rank that gates, an
 alert, a watchlist, Focus, the review queue or `review_policy.json`.
@@ -46,6 +62,7 @@ from typing import Any, Callable, Mapping
 import pandas as pd
 
 import market_calendar
+from evidence_stats import LATELY_SESSIONS
 from swing_evidence import OUTCOME_KIND_SESSION_V2
 
 #: What was compared with what. One string, on every row.
@@ -87,6 +104,12 @@ REASON_TARGET_OUT_OF_RANGE = "target_session_outside_calendar_range"
 #: Why a scan row produced no rows at all. Counted, never silently skipped.
 EXCLUDED_ENTRY_NOT_A_SESSION = "entry_not_a_session"
 EXCLUDED_ENTRY_OUT_OF_RANGE = "entry_outside_calendar_range"
+
+#: How far back the build reaches, in EXCHANGE SESSIONS ending at
+#: `last_completed_session`. Three times `LATELY_SESSIONS` - three times the
+#: widest window any surface reads - so a reader can always see its whole window
+#: plus two more, and no scan pays to rewrite three years of settled rows.
+BUILD_WINDOW_SESSIONS = 3 * LATELY_SESSIONS
 
 
 @dataclass(frozen=True)
@@ -187,6 +210,7 @@ def build_session_horizon_observation_rows(
     horizons: tuple[int, ...] | None = None,
     last_completed_session: date,
     calendar=market_calendar,
+    window_sessions: int | None = BUILD_WINDOW_SESSIONS,
 ) -> SessionHorizonBuild:
     """One row per `(scan row, horizon)`, on the exchange calendar.
 
@@ -196,10 +220,25 @@ def build_session_horizon_observation_rows(
       scan row's own recorded close and SAYING so (`entry_close_source`);
     * `target_close` = the bar close ON the target session exactly. Missing is
       `measured: False` with a reason - never the next bar, never a later scan.
+
+    **The row identity is `(scan_row_id, horizon)`, and nothing coarser.**
+    `_scan_factor_row_id` is `symbol:scan_date:run_id`, so two scans of the same
+    symbol on the same day are two OBSERVATIONS, not a duplicate - the desk ran
+    15 scans on 2026-08-31 and a `(symbol, scan_date)` key called 14 of each of
+    those a duplicate. Only a repeated `scan_row_id` is one, and the repeat is
+    counted rather than swallowed.
+
+    **`window_sessions` bounds the build to a ROLLING WINDOW** of scan dates
+    ending at `last_completed_session` - by default `3 x LATELY_SESSIONS` (60
+    exchange sessions), three times the widest window any surface reads. The
+    whole history was 146,367 scan rows into 109,584 output rows every scan, and
+    rewriting three years of settled observations to learn nothing new is a cost
+    the trader pays on every scan. Rows older than the window are counted in
+    `excluded['outside_build_window']`, never silently skipped. Pass `None` to
+    build everything.
     """
     from .legacy import (  # local: `legacy` is large and this module is imported lazily
         SCAN_FACTOR_HORIZONS,
-        _prepare_scan_factor_history_frame,
         _scan_factor_text,
         normalize_side,
         tier_for_tracker_row,
@@ -211,20 +250,27 @@ def build_session_horizon_observation_rows(
     if not normalized_horizons:
         return SessionHorizonBuild()
 
-    dropped_duplicates = _count_dropped_duplicates(
-        history_df, len(normalized_horizons), _scan_factor_text
-    )
-
-    frame = _prepare_scan_factor_history_frame(history_df)
-    if frame.empty:
-        return SessionHorizonBuild(dropped_duplicates=dropped_duplicates)
-
     last_complete = last_completed_session
     if isinstance(last_complete, datetime):
         last_complete = last_complete.date()
 
-    rows: list[dict] = []
+    frame = _prepare_session_horizon_frame(history_df)
+    if frame.empty:
+        return SessionHorizonBuild()
+
     excluded: Counter = Counter()
+    window_start = _build_window_start(last_complete, window_sessions, calendar)
+    if window_start is not None:
+        inside = frame["_scan_date_dt"] >= pd.Timestamp(window_start)
+        dropped = int((~inside).sum())
+        if dropped:
+            excluded["outside_build_window"] += dropped * len(normalized_horizons)
+        frame = frame[inside]
+        if frame.empty:
+            return SessionHorizonBuild(excluded=excluded)
+
+    built: dict[tuple[str, int], dict] = {}
+    dropped_duplicates = 0
     entry_is_session: dict[date, bool | None] = {}
     target_cache: dict[tuple[date, int], date | None] = {}
     closes_cache: dict[str, Mapping[date, float] | None] = {}
@@ -320,8 +366,15 @@ def build_session_horizon_observation_rows(
                     row["side_return_pct"] = side_return_pct
                     row["favorable"] = bool(side_return_pct > 0)
                     row["measured"] = True
-            rows.append(row)
+            # THE identity: `(scan_row_id, horizon)`. A repeat is a duplicate and
+            # is counted; the LAST one wins, which is the order
+            # `_prepare_scan_factor_history_frame` keeps for the v1 file.
+            identity = (scan_row_id, int(horizon))
+            if identity in built:
+                dropped_duplicates += 1
+            built[identity] = row
 
+    rows = list(built.values())
     rows.sort(
         key=lambda item: (
             str(item.get("scan_date") or ""),
@@ -334,36 +387,84 @@ def build_session_horizon_observation_rows(
     )
 
 
-def _count_dropped_duplicates(history_df, horizon_count: int, text_of) -> int:
-    """How many `(scan_row_id, horizon)` pairs the input carried twice.
+def _build_window_start(last_complete: date, window_sessions, calendar) -> date | None:
+    """The first scan date the build covers, or None for "everything".
 
-    `_prepare_scan_factor_history_frame` keeps ONE row per `(symbol, scan date)`
-    and says nothing about what it dropped. v2 keeps that identity - the two
-    files must join 1:1 - so the count is taken here, from the same validity
-    rules, before the de-duplication happens.
+    Walked on the exchange calendar, not in calendar days, for the same reason
+    every other window on this desk is: a holiday week would quietly shorten it.
+    A calendar that refuses to answer gives None - an unbounded build is slow,
+    never wrong, and refusing to build at all would be worse.
     """
-    if history_df is None or not isinstance(history_df, pd.DataFrame) or history_df.empty:
-        return 0
-    if not {"symbol", "last_close"}.issubset(set(history_df.columns)):
-        return 0
-    if "last_trade_date" not in history_df.columns and "run_date" not in history_df.columns:
-        return 0
+    if window_sessions is None:
+        return None
     try:
-        symbols = history_df["symbol"].apply(lambda value: text_of(value).upper())
-        source = (
-            history_df["last_trade_date"]
-            if "last_trade_date" in history_df.columns
-            else history_df["run_date"]
-        )
-        stamps = pd.to_datetime(source, errors="coerce")
-        closes = pd.to_numeric(history_df["last_close"], errors="coerce")
-        valid = (symbols != "") & stamps.notna() & closes.notna() & (closes > 0)
-        if not bool(valid.any()):
-            return 0
-        keys = pd.DataFrame(
-            {"symbol": symbols[valid], "scan_date": stamps[valid].dt.strftime("%Y-%m-%d")}
-        )
-        return int((len(keys) - len(keys.drop_duplicates())) * max(1, int(horizon_count)))
-    except Exception:  # noqa: BLE001 - a count that cannot be taken is 0, never a failed build
-        logging.debug("Session-horizon duplicate count failed.", exc_info=True)
-        return 0
+        sessions = int(window_sessions)
+    except (TypeError, ValueError):
+        return None
+    if sessions <= 0:
+        return None
+    cursor = last_complete
+    try:
+        for _ in range(sessions - 1):
+            cursor = calendar.previous_session(cursor)
+    except Exception:  # noqa: BLE001 - outside the validated range: build everything
+        logging.debug("Session-horizon build window unavailable.", exc_info=True)
+        return None
+    return cursor
+
+
+def _prepare_session_horizon_frame(history_df) -> pd.DataFrame:
+    """`_prepare_scan_factor_history_frame`, MINUS the `(symbol, scan date)` collapse.
+
+    The v1 frame keeps one row per symbol per scan date because that is the
+    grain its file is written at. v2's grain is the SCAN ROW: the desk ran 15
+    scans on 2026-08-31 and each one recorded what it saw at the time, under its
+    own `run_id`. Collapsing them here reported 475,492 "duplicates" against
+    109,584 rows on the live history when the truly repeated `scan_row_id`s
+    numbered 75. Everything else - the validity filter, the sort order, the row
+    id - is the v1 rule, so the two files still join on `observation_id`.
+    """
+    from .legacy import _scan_factor_row_id, _scan_factor_text, normalize_side
+
+    if history_df is None or not isinstance(history_df, pd.DataFrame) or history_df.empty:
+        return pd.DataFrame()
+    if not {"symbol", "last_close"}.issubset(set(history_df.columns)):
+        return pd.DataFrame()
+    if "last_trade_date" not in history_df.columns and "run_date" not in history_df.columns:
+        return pd.DataFrame()
+
+    frame = history_df.copy()
+    frame["_input_order"] = range(len(frame))
+    frame["_symbol"] = frame["symbol"].apply(lambda value: _scan_factor_text(value).upper())
+    date_source = (
+        frame["last_trade_date"] if "last_trade_date" in frame.columns else frame["run_date"]
+    )
+    frame["_scan_date_dt"] = pd.to_datetime(date_source, errors="coerce")
+    frame["_scan_date_text"] = frame["_scan_date_dt"].dt.strftime("%Y-%m-%d")
+    frame["_entry_close"] = pd.to_numeric(frame["last_close"], errors="coerce")
+    if "side" in frame.columns:
+        frame["_side"] = frame["side"].apply(normalize_side)
+    else:
+        frame["_side"] = "LONG"
+    frame["_run_id_text"] = (
+        frame["run_id"].fillna("").astype(str) if "run_id" in frame.columns else ""
+    )
+    frame["_run_timestamp_text"] = (
+        frame["run_timestamp"].fillna("").astype(str)
+        if "run_timestamp" in frame.columns
+        else ""
+    )
+    frame = frame[
+        (frame["_symbol"] != "")
+        & frame["_scan_date_dt"].notna()
+        & frame["_entry_close"].notna()
+        & (frame["_entry_close"] > 0)
+    ].copy()
+    if frame.empty:
+        return frame
+    frame.sort_values(
+        ["_symbol", "_scan_date_dt", "_run_timestamp_text", "_run_id_text", "_input_order"],
+        inplace=True,
+    )
+    frame["_scan_row_id"] = frame.apply(_scan_factor_row_id, axis=1)
+    return frame

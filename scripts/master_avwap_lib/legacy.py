@@ -11455,6 +11455,15 @@ def build_bot_tier_performance_rows(
     alert reads it), so the rule that governs the other two governs it.
     Uncertainty still never deletes: only an explicit True drops.
 
+    **It shares the RULE, not the whole policy, and that is deliberate.** These
+    cells span every horizon at once over a 365-day lookback, so
+    `swing_evidence.POLICY_SCANROW_V1`'s horizon and window clauses do not
+    describe them. What must not differ is what an unmeasurable row means, so
+    this calls `swing_evidence.is_stale_horizon` - the same function
+    `read_eligible_rows` calls - and applies it to the BASELINE observations too:
+    an edge is a cell minus its baseline, and a baseline built on other rules
+    makes that subtraction meaningless.
+
     **ST1 item 4:** `assigned_only=True` restricts every cell to rows whose
     `tier_source` is the value the stamper writes, so shipped S/A performance is
     never validated by a label reconstructed from the bucket. The default output

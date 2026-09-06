@@ -80,9 +80,18 @@ which is evidence and must not be loaded as context.
   `no_bar_for_target_session` and NEVER the next bar or a later scan; a target
   past `last_completed_session` is `immature` and lands in `pending`, never in
   the rate; a duplicated `(scan_row_id, horizon)` makes ONE row and is COUNTED
-  (`dropped_duplicates`, because `_prepare_scan_factor_history_frame`
-  de-duplicates silently). `observation_id` matches v1 so the two files join
-  1:1. Written to `master_avwap_session_horizon_outcomes.csv` in the same export
+  (`dropped_duplicates`). **The identity is the SCAN ROW, not the day**:
+  `_scan_factor_row_id` is `symbol:scan_date:run_id`, the desk ran 15 scans on
+  2026-08-31, and each is its own observation - a `(symbol, scan_date)` key
+  reported 475,492 duplicates over the live history where the truly repeated ids
+  number 75 (300 at four horizons). `observation_id` matches v1, so a v1 row
+  joins its v2 row one to one; the v1 ids are a SUBSET, because v1 collapses a
+  day's scans to the last of them. **The build is a declared ROLLING WINDOW** of
+  `3 x LATELY_SESSIONS` (60 sessions), measured through the export path on the
+  live history: 458,336 rows / 13.4 s / 127.5 MB bounded against 584,776 rows /
+  16.3 s / 162.1 MB unbounded, with what falls outside counted in
+  `excluded['outside_build_window']` rather than silently missing.
+  Written to `master_avwap_session_horizon_outcomes.csv` in the same export
   pass, from the daily frames the scan already holds
   (`closes_from_daily_frames`) - it never fetches, and the write is guarded so it
   can never cost the v1 exports or the tracker save. **Shadow: `POLICY_SESSION_V2`
@@ -1321,11 +1330,18 @@ performance."*
   now drops explicit `stale_horizon` rows like the two trader-facing readers - it is a
   report export and its only consumers are the Setup Tracker's Tier performance tab, the
   human-focus comparison table and the AI evidence list; no detector, score, gate or alert
-  reads it. Each read reconciles, and `describe(...)` states outcome kind, horizon in its
-  own unit, window and coverage on the setups panel, the setup docs and the AWAY digest.
-- **The tier split is measured and shown.** Live file 2026-09-06: 2,642 horizon-5 rows in
-  the last 20 sessions, **all `derived_from_bucket`, none `assigned`** (the 341 assigned
-  rows are horizon 1 from 2026-09-02/03), 55 dropped stale, 2,587 eligible.
+  reads it. Its cells span four horizons over a 365-day lookback, so it shares the
+  MISSINGNESS PREDICATE rather than a whole policy: `read_eligible_rows` and the export
+  both call `swing_evidence.is_stale_horizon`, and the export applies it to its BASELINE
+  observations too. Each read reconciles, and `describe(...)` states outcome kind, horizon
+  in its own unit, window and coverage on the setups panel, the setup docs and the AWAY
+  digest. `ai_jobs.digest._SECTION_NOTES["swing_win_rates"]` names the policy so a model
+  reading the index cannot call the rate a win rate either.
+- **The tier split is measured and shown.** Live file at `end=2026-09-03`: 2,642 horizon-5
+  rows in that 20-session window, **all `derived_from_bucket`, none `assigned`** (the 341
+  assigned rows are horizon 1 from 2026-09-02/03), 55 dropped stale, 2,587 eligible. The
+  window rolls, so the triple is only meaningful with its `end` beside it - on the default
+  window (2026-09-06) the same file reads 2,462 / 0 / 17,096.
 - **Deviation from the packet, deliberately:** v1's `sessions_spanned` / `stale_horizon`
   keep the BUSINESS-DAY basis. `horizon_drift` gained `calendar=` and says "exchange
   sessions" when given one, but passing it inside the v1 export would restate 19,558

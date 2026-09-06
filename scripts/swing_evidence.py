@@ -17,6 +17,16 @@ Before this module there were three readings of ONE file
   5,005 rows carry `stale_horizon` True, 2,989 of them at horizon 5 in the last
   20 sessions - one reader's n and another's differ by that much off one file.
 
+**The first two go through :func:`read_eligible_rows`; the third goes through
+the same MISSINGNESS PREDICATE, and this is the honest description of it.** The
+tier performance export asks a different question - every horizon at once, over
+a 365-day lookback, cut into tier x side cells - so the horizon and window
+clauses of a policy do not apply to it. What must be shared is the rule about
+what an unmeasurable row means, so `read_eligible_rows` and that export both
+call :func:`is_stale_horizon`, and the export applies it to its BASELINE
+observations as well - a cell compared against a baseline built on other rules is
+an edge measured against nothing.
+
 **A policy is DECLARED, never inferred.** :class:`SwingOutcomePolicy` names the
 outcome kind, the horizon, the knowledge basis, the maturity rule, the window
 and the missingness rule in one frozen object, and
@@ -256,7 +266,10 @@ def read_eligible_rows(
         if stamp and not (first <= stamp <= last):
             excluded["outside_window"] += 1
             continue
-        if policy.drop_stale_horizon and str(row.get("stale_horizon") or "").strip().lower() == "true":
+        # ONE RULE, ONE FUNCTION. `is_stale_horizon` is what the tier
+        # performance export applies too - see its docstring - so the two can
+        # never drift into two spellings of one sentence.
+        if policy.drop_stale_horizon and is_stale_horizon(row):
             excluded["stale_horizon"] += 1
             continue
         if policy.require_measured and not _is_true(row.get("measured")):
@@ -282,7 +295,15 @@ def _is_true(value: Any) -> bool:
 
 
 def is_stale_horizon(row: Mapping[str, Any]) -> bool:
-    """An EXPLICIT `stale_horizon` True. None means unmeasured, and stays."""
+    """An EXPLICIT `stale_horizon` True. None means unmeasured, and stays.
+
+    **The one missingness rule for this file**, called by
+    :func:`read_eligible_rows` and by
+    `master_avwap_lib.legacy.build_bot_tier_performance_rows` - the export whose
+    cells span four horizons and a 365-day lookback, so it cannot take a whole
+    policy but must take this. Two spellings of one sentence is how the tier
+    report came to count 5,005 rows the trader-facing surfaces dropped.
+    """
     getter = row.get if hasattr(row, "get") else lambda key, default=None: default
     return str(getter("stale_horizon", "") or "").strip().lower() == "true"
 
