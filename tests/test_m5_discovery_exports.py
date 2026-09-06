@@ -218,6 +218,40 @@ def test_every_row_carries_the_one_wilson_lower_bound(tmp_path, monkeypatch):
             assert float(row["win_rate_lb"]) == pytest.approx(wilson_lower_bound(wins, n))
 
 
+def test_every_row_carries_the_population_setup_count(tmp_path, monkeypatch):
+    """Reviewer blocker 2: an EPISODE count is not a SETUP count.
+
+    `n` on a family row is graded episodes - live, 308 of them for the control
+    namespace and 2,600 for the study one. The populations are 401 and 3,992
+    RECORDS. The tab was printing the first under the noun of the second, which
+    reads as "401 setups, all graded" and overstates the evidence by a third.
+    The export has to carry both, because the panel cannot count a namespace it
+    never opens.
+    """
+    _redirect_exports(monkeypatch, tmp_path)
+    tracker = _tracker_with_three_and_three()
+    # A fourth control record with nothing closed: in the population, not graded.
+    tracker["control_setups"]["control:ungraded"] = {
+        "symbol": "GGG",
+        "side": "LONG",
+        "anchor_date": "2026-01-20",
+        "scan_date": "2026-01-21",
+        "setup_family": "post_earnings_52w_break",
+        "is_control": True,
+        "control_reason": "random",
+        "scenarios": {"s1": {"tradeable": True, "status": "OPEN", "total_r": 0.2}},
+    }
+    legacy.export_setup_tracker_views(tracker)
+
+    rows = _all_history(_read_rows(legacy.CONTROL_DISCOVERY_STATS_FILE))
+    assert {int(row["population_setups"]) for row in rows} == {4}
+    families = _family_rows(rows)
+    assert sum(int(row["n"]) for row in families) == 3, "graded episodes, not records"
+
+    study_rows = _all_history(_read_rows(legacy.STUDY_DISCOVERY_STATS_FILE))
+    assert {int(row["population_setups"]) for row in study_rows} == {3}
+
+
 def test_mean_r_stays_beside_the_win_rate(tmp_path, monkeypatch):
     _redirect_exports(monkeypatch, tmp_path)
     legacy.export_setup_tracker_views(_tracker_with_three_and_three())

@@ -54,6 +54,7 @@ DISCOVERY_FIELDS = (
     "meets_n_floor",
     "avg_closed_r",
     "n_expired_unmeasured",
+    "population_setups",
     "flag",
 )
 
@@ -76,6 +77,8 @@ def _discovery_row(family, *, n, wins, win_rate, win_rate_lb, avg_r, kind="famil
         "meets_n_floor": "False",
         "avg_closed_r": str(avg_r),
         "n_expired_unmeasured": "0",
+        # 150 records in the namespace; 92 of them graded into episodes.
+        "population_setups": "150",
         "flag": "",
     }
 
@@ -106,6 +109,7 @@ FRAMEWORK_FIELDS = (
     "stop_out_rate",
     "target_hit_rate",
     "n_expired_unmeasured",
+    "n_filtered_by_experiment",
 )
 
 FRAMEWORK_ROWS = [
@@ -128,6 +132,7 @@ FRAMEWORK_ROWS = [
         "stop_out_rate": "0.4",
         "target_hit_rate": "0.6",
         "n_expired_unmeasured": "0",
+        "n_filtered_by_experiment": "0",
     },
     {
         "framework_family": "comparison_apr2026",
@@ -148,6 +153,7 @@ FRAMEWORK_ROWS = [
         "stop_out_rate": "0.5",
         "target_hit_rate": "0.5",
         "n_expired_unmeasured": "0",
+        "n_filtered_by_experiment": "0",
     },
 ]
 
@@ -270,13 +276,98 @@ def test_each_tab_says_what_its_population_is(panel_module, tmp_path):
     try:
         control = panel.control_discovery_status_label.text().lower()
         assert "reject" in control
-        assert "92 " in control or "92," in control or "92" in control  # 2 + 90 graded
         study = panel.study_discovery_status_label.text().lower()
         assert "study" in study or "never" in study
         framework = panel.exit_framework_status_label.text().lower()
         assert "experimental" in framework
     finally:
         panel.deleteLater()
+
+
+def test_the_sentence_carries_EPISODES_and_SETUPS_and_never_confuses_them(panel_module):
+    """Reviewer blocker 2. 92 graded episodes came from 150 records here.
+
+    Printing 92 under the noun "setups" claims every record was graded and
+    overstates the evidence; printing 150 as the sample overstates it further.
+    Both numbers, both named.
+    """
+    sentence = panel_module.discovery_population_sentence(DISCOVERY_ROWS, kind="control")
+    assert "92" in sentence and "150" in sentence
+    assert "episode" in sentence.lower()
+    # The two must not be transposed - the graded count is the smaller one and
+    # is the one attached to the word "episodes".
+    episodes_first = sentence.index("92") < sentence.index("150")
+    assert episodes_first, sentence
+
+    study = panel_module.discovery_population_sentence(DISCOVERY_ROWS, kind="study")
+    assert "92" in study and "150" in study
+    assert "episode" in study.lower()
+
+
+def test_the_framework_sentence_says_the_pairing_is_minus_the_templates_own_filter(
+    panel_module,
+):
+    """Reviewer blocker 1, the wording half.
+
+    "the SAME setups" was not true: a template carrying `blocked_stop_rules`
+    is measured on the same setups MINUS the ones its own rule skips. The
+    sentence has to say so, or a smaller n reads as a worse result.
+    """
+    sentence = panel_module.exit_framework_population_sentence(FRAMEWORK_ROWS)
+    lowered = sentence.lower()
+    assert "filter" in lowered
+    assert "experimental" in lowered
+    # It must also account for the rows the filter removed, by name.
+    assert "n_filtered_by_experiment" in sentence or "filtered" in lowered
+
+
+def test_the_framework_sentence_counts_the_filtered_scenarios(panel_module):
+    rows = [dict(row) for row in FRAMEWORK_ROWS]
+    rows[1]["n_filtered_by_experiment"] = "98"
+    sentence = panel_module.exit_framework_population_sentence(rows)
+    assert "98" in sentence
+
+
+def test_a_baseline_row_and_its_twin_are_adjacent(panel_module):
+    """Advisory 3: grouped by (side, bucket), then framework, bound inside.
+
+    A table sorted purely by the bound scatters the pairs, and the comparison is
+    the whole point of the tab - two rows a reader has to hunt for are two rows
+    they will not compare.
+    """
+    rows = []
+    for side in ("LONG", "SHORT"):
+        for family, template, bound in (
+            ("baseline", "full_band2", "0.423"),
+            ("comparison_apr2026", "exp_full_band2_hard_stop_125r", "0.331"),
+        ):
+            row = dict(FRAMEWORK_ROWS[0])
+            row.update(
+                {
+                    "framework_family": family,
+                    "exit_template_id": template,
+                    "side": side,
+                    "priority_bucket": "favorite_setup",
+                    # SHORT's baseline outranks every LONG row on the bound, so a
+                    # pure bound sort would interleave the two sides.
+                    "win_rate_lb": ("0.9" if side == "SHORT" and family == "baseline" else bound),
+                    "experimental": "True" if family != "baseline" else "False",
+                }
+            )
+            rows.append(row)
+
+    ranked = panel_module._rank_exit_frameworks(rows)
+    sides = [row["side"] for row in ranked]
+    assert sides in (["SHORT", "SHORT", "LONG", "LONG"], ["LONG", "LONG", "SHORT", "SHORT"]), sides
+    # Within a (side, bucket) block the baseline comes first, then its twin.
+    assert [row["framework_family"] for row in ranked[:2]] == [
+        "baseline",
+        "comparison_apr2026",
+    ]
+    assert [row["framework_family"] for row in ranked[2:]] == [
+        "baseline",
+        "comparison_apr2026",
+    ]
 
 
 @pytest.mark.parametrize(

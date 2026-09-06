@@ -212,6 +212,111 @@ def test_an_expired_unmeasured_record_leaves_both_sides_of_the_fraction():
         assert row["n_expired_unmeasured"] == 1
 
 
+# ---------------------------------------------------------------------------
+# Reviewer blocker 1 - the pairing is NOT equal-n by construction, and the row
+# has to say why.
+#
+# `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav` carries
+# `blocked_stop_rules`, and `_tracker_experimental_filter_reason` sets
+# `cohort_filter_reason` on every scenario the rule skips. That scenario is then
+# built NON-TRADEABLE (`tradeable = bool(not filter_reason and ...)`), so a
+# builder that skips non-tradeable rows drops it silently: live, that template's
+# SHORT / near_favorite_zone cell read n=585 against the baseline's 683, and the
+# 98 missing were the experiment's own filter rather than a difference in
+# outcome. Reading that as "the comparison had fewer setups" is exactly backwards
+# - the filter IS the experiment.
+# ---------------------------------------------------------------------------
+
+
+def _filtered_setup(symbol, *, baseline, side="SHORT", bucket="near_favorite_zone"):
+    """A setup whose COMPARISON scenario the experiment's own rule skipped."""
+    setup = _paired_setup(symbol, baseline=baseline, comparison=("OPEN", 0.0), side=side, bucket=bucket)
+    comparison = setup["scenarios"]["comparison"]
+    comparison["exit_template_id"] = "exp_full_band2_hard_stop_125r_no_sma50_short_nearfav"
+    comparison["cohort_filter_reason"] = (
+        "Filtered by experiment: skip SMA_50 stop for SHORT near-favorite-zone setups"
+    )
+    comparison["tradeable"] = False
+    comparison["status"] = "FILTERED"
+    return setup
+
+
+FILTERED_TEMPLATE = "exp_full_band2_hard_stop_125r_no_sma50_short_nearfav"
+
+
+def test_a_scenario_the_experiment_filtered_is_counted_never_dropped():
+    rows = legacy.build_exit_framework_stats_rows(
+        _setups(_filtered_setup("AAA", baseline=("TARGET_HIT", 1.5)))
+    )
+    by_template = {row["exit_template_id"]: row for row in rows}
+    assert FILTERED_TEMPLATE in by_template, "the filtered group vanished entirely"
+    filtered = by_template[FILTERED_TEMPLATE]
+    assert filtered["n"] == 0
+    assert filtered["n_filtered_by_experiment"] == 1
+    # The baseline is untouched by the experiment's rule.
+    assert by_template[BASELINE_TEMPLATE]["n"] == 1
+    assert by_template[BASELINE_TEMPLATE]["n_filtered_by_experiment"] == 0
+
+
+def test_the_two_denominators_reconcile_against_the_baseline():
+    """The rule gate #67 is restated to: n + n_filtered == the baseline's n.
+
+    Three setups on the filtered side/bucket, two of which the rule skips. The
+    comparison cell must read n=1 with n_filtered=2, and 1 + 2 must equal the
+    baseline's 3 - so a reader can see that the missing rows are the experiment
+    and not a difference in outcome.
+    """
+    setups = _setups(
+        _filtered_setup("AAA", baseline=("TARGET_HIT", 1.5)),
+        _filtered_setup("BBB", baseline=("STOPPED", -1.0)),
+        _paired_setup(
+            "CCC",
+            baseline=("TARGET_HIT", 1.2),
+            comparison=("STOPPED", -1.25),
+            side="SHORT",
+            bucket="near_favorite_zone",
+        ),
+    )
+    # The unfiltered pair uses the same template id as the filtered ones, so all
+    # three land in one comparison group.
+    setups["CCC:2026-01-03"]["scenarios"]["comparison"]["exit_template_id"] = FILTERED_TEMPLATE
+    by_template = {
+        row["exit_template_id"]: row for row in legacy.build_exit_framework_stats_rows(setups)
+    }
+    baseline_n = by_template[BASELINE_TEMPLATE]["n"]
+    comparison = by_template[FILTERED_TEMPLATE]
+    assert baseline_n == 3
+    assert comparison["n"] == 1
+    assert comparison["n_filtered_by_experiment"] == 2
+    assert comparison["n"] + comparison["n_filtered_by_experiment"] == baseline_n
+
+
+def test_a_template_with_no_filter_still_pairs_at_equal_n():
+    """Where no rule applies the denominators must be EQUAL, filter count zero."""
+    setups = _setups(
+        _paired_setup("AAA", baseline=("TARGET_HIT", 1.6), comparison=("STOPPED", -1.25)),
+        _paired_setup("BBB", baseline=("STOPPED", -1.0), comparison=("STOPPED", -1.25)),
+    )
+    rows = legacy.build_exit_framework_stats_rows(setups)
+    assert {row["n"] for row in rows} == {2}
+    assert {row["n_filtered_by_experiment"] for row in rows} == {0}
+
+
+def test_a_filtered_scenario_is_not_confused_with_an_expired_one():
+    """Two different exclusions, two different columns, never pooled."""
+    expired = _paired_setup("EXP", baseline=("OPEN", 0.0), comparison=("OPEN", 0.0))
+    expired["setup_status"] = legacy.SETUP_STATUS_EXPIRED_UNMEASURED
+    rows = legacy.build_exit_framework_stats_rows(
+        _setups(_filtered_setup("AAA", baseline=("TARGET_HIT", 1.5)), expired)
+    )
+    filtered = next(row for row in rows if row["exit_template_id"] == FILTERED_TEMPLATE)
+    assert filtered["n_filtered_by_experiment"] == 1
+    assert filtered["n_expired_unmeasured"] == 0
+    expired_row = next(row for row in rows if row["exit_template_id"] == COMPARISON_TEMPLATE)
+    assert expired_row["n_expired_unmeasured"] == 1
+    assert expired_row["n_filtered_by_experiment"] == 0
+
+
 def test_an_all_expired_group_still_emits_its_row_and_keeps_its_count():
     """M3's reviewer blocker 2, in this export: a dropped group loses its count.
 
