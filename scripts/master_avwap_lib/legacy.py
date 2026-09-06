@@ -50,6 +50,7 @@ from gui_text_highlighter import (
     tree_tags_for_values,
 )
 from .setup_tagging import derive_setup_tag_payload
+from . import selection_policy as selection_policy_lib
 
 from project_paths import (
     LOCAL_SETTINGS_FILE,
@@ -772,6 +773,18 @@ TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
 #: actually have traded - and not the cross-variant average, not a percent move
 #: and not a target-hit rate. Units carry their name: this is R.
 TRACKER_REPRESENTATIVE_OUTCOME_KIND = "trade_r_representative_exit"
+#: Packet ST4.4 (2026-09-06). The order `excluded_reasons` is rendered in, so
+#: two builds of the same population produce the same string. A bare token
+#: counts records the family row never admitted and is summed into
+#: `n_excluded`; an `_in_population` token counts counted episodes a decision
+#: deliberately KEPT and is not summed - `expired_unmeasured_in_population` is
+#: decision (b) of 2026-09-06 and `untradeable` is decision (c).
+TRACKER_POPULATION_EXCLUSION_REASONS = (
+    "untradeable",
+    "after_as_of",
+    "expired_unmeasured_in_population",
+    "no_representative_in_population",
+)
 # Short-horizon (1-2 session) outcome marks. Most tracked setups are swing
 # setups that need days/weeks to resolve; these scalars capture what each setup
 # did in its first 1-2 sessions after entry so a separate short-term playbook
@@ -4693,14 +4706,32 @@ def _protective_band_label(side: str) -> str:
 #: the representative R, so it needs a golden fixture and a sec-7 promotion.
 REPRESENTATIVE_EXIT_TEMPLATE_ID = ""
 
+#: Packet ST4 (2026-09-06): the DECLARED representative exit template under
+#: `first_actionable_v2`. It is the first baseline entry of
+#: `SETUP_EXIT_TEMPLATES`, which is the one dict order has always practically
+#: handed back - so it is declared WITHOUT reading any outcome, and the
+#: comparison it feeds measures a naming, not a new preference. It is reachable
+#: only through an explicit `policy=` argument; `REPRESENTATIVE_EXIT_TEMPLATE_ID`
+#: above stays empty and stays the default.
+REPRESENTATIVE_EXIT_TEMPLATE_ID_V2 = "full_band2"
 
-def _representative_scenario(tradeable: list, primary_stop_label: str):
+
+def _representative_scenario(
+    tradeable: list,
+    primary_stop_label: str,
+    *,
+    policy: str = selection_policy_lib.DEFAULT_SELECTION_POLICY,
+):
     """The one scenario the headline per-setup R is measured on.
 
     You trade one stop and one exit plan, so this is the honest per-setup R.
     The stop is chosen by `_representative_stop_label_for_setup`; the exit
     template is `REPRESENTATIVE_EXIT_TEMPLATE_ID` when it is set, and otherwise
     the first match - which is what the code has always done.
+
+    Under `first_actionable_v2` (packet ST4) the template is
+    `REPRESENTATIVE_EXIT_TEMPLATE_ID_V2` instead, so reordering the `scenarios`
+    dict can no longer move the headline R. The default policy is unchanged.
 
     A configured template that no scenario carries falls back to the first
     match rather than returning nothing: a setup with no representative R would
@@ -4714,7 +4745,10 @@ def _representative_scenario(tradeable: list, primary_stop_label: str):
     ]
     if not matching:
         return None
-    wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
+    if selection_policy_lib._resolve(policy) == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2:
+        wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID_V2 or "").strip()
+    else:
+        wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
     if wanted:
         for scenario in matching:
             if str(scenario.get("exit_template_id") or "") == wanted:
@@ -6394,6 +6428,29 @@ def _scenario_is_closed(status: object) -> bool:
     return str(status or "").upper() in TRACKER_CLOSED_SCENARIO_STATUSES
 
 
+def _scenario_recorded_exit_date(scenario: dict) -> str:
+    """The ISO date a scenario left the trade, or '' when it has not.
+
+    Packet ST4 (2026-09-06). There is NO scalar exit-date field on a scenario:
+    `_apply_scenario_exit_event` appends to `events`, one entry per leg, so the
+    recorded exit is the `trade_date` of the LAST entry. A partial exit leaves
+    an event behind on a scenario that is still running, which is why the
+    status gates the read - a partial's date is not an exit date. An open
+    scenario has `events` PRESENT and EMPTY.
+    """
+    if not isinstance(scenario, dict):
+        return ""
+    if not _scenario_is_closed(scenario.get("status")):
+        return ""
+    events = scenario.get("events")
+    if not isinstance(events, list) or not events:
+        return ""
+    last = events[-1]
+    if not isinstance(last, dict):
+        return ""
+    return str(last.get("trade_date") or "").strip()
+
+
 def _tracker_cost_per_share_per_side(entry_price: object) -> float:
     price = abs(_coerce_float(entry_price) or 0.0)
     return float(TRACKER_COST_COMMISSION_PER_SHARE) + float(TRACKER_SLIPPAGE_FRACTION_PER_SIDE) * price
@@ -7018,10 +7075,58 @@ def _flatten_tracker_daily_marks(setups: dict[str, dict]) -> list[dict]:
     return rows
 
 
-def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool = False) -> dict[str, object]:
+def _summarize_tracker_setup_outcome(
+    setup: dict,
+    *,
+    include_experimental: bool = False,
+    policy: str = selection_policy_lib.DEFAULT_SELECTION_POLICY,
+    as_of_session: str | None = None,
+) -> dict[str, object]:
+    """One setup's headline outcome.
+
+    Packet ST4 (2026-09-06) added two OPT-IN arguments and changed nothing that
+    a default call answers:
+
+    * ``policy`` - under ``first_actionable_v2`` the representative exit
+      template is DECLARED (`REPRESENTATIVE_EXIT_TEMPLATE_ID_V2`) instead of
+      falling out of `scenarios` dict order, and an OPEN representative reports
+      ``representative_closed_r = None`` with ``representative_status
+      "pending"`` instead of borrowing `avg_closed_r` from the alternate exit
+      plans that happened to close. Pending stays pending.
+    * ``as_of_session`` - replay. A scenario whose recorded exit date is AFTER
+      the cutoff reads as still running for this build, from the scenario's own
+      last event; the bars are never re-walked and no R is recomputed.
+
+    ``representative_status``, ``representative_exit_date``,
+    ``selection_policy`` and ``as_of_session`` are additive keys present under
+    both policies.
+    """
+    resolved_policy = selection_policy_lib._resolve(policy)
+    as_of_day = _parse_iso_date_or_none(as_of_session) if as_of_session else None
+    is_default_read = (
+        not include_experimental
+        and resolved_policy == selection_policy_lib.DEFAULT_SELECTION_POLICY
+        and as_of_day is None
+    )
     cached_summary = setup.get("_scoring_outcome_summary")
-    if isinstance(cached_summary, dict) and not include_experimental:
+    # A cache written before ST4 has none of the new keys; recompute rather
+    # than hand back a summary a reader would have to special-case.
+    if (
+        isinstance(cached_summary, dict)
+        and is_default_read
+        and "representative_status" in cached_summary
+    ):
         return copy.deepcopy(cached_summary)
+
+    def _closed_as_of(scenario: dict) -> bool:
+        if not _scenario_is_closed(scenario.get("status")):
+            return False
+        if as_of_day is None:
+            return True
+        exit_day = _parse_iso_date_or_none(_scenario_recorded_exit_date(scenario))
+        # An exit the replay cannot date is not an exit the replay may claim.
+        return exit_day is not None and exit_day <= as_of_day
+
     scenarios = [
         scenario
         for scenario in (setup.get("scenarios") or {}).values()
@@ -7030,11 +7135,13 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     if not include_experimental:
         scenarios = [scenario for scenario in scenarios if not bool(scenario.get("experimental"))]
     tradeable = [scenario for scenario in scenarios if scenario.get("tradeable")]
-    open_tradeable = [scenario for scenario in tradeable if _scenario_is_open(scenario.get("status", ""))]
-    closed = [
+    closed = [scenario for scenario in tradeable if _closed_as_of(scenario)]
+    open_tradeable = [
         scenario
         for scenario in tradeable
-        if _scenario_is_closed(scenario.get("status"))
+        if _scenario_is_open(scenario.get("status", ""))
+        # Replay only: a scenario that closes AFTER the cutoff was open then.
+        or (_scenario_is_closed(scenario.get("status")) and not _closed_as_of(scenario))
     ]
     total_rs = [
         float(scenario.get("total_r", 0.0) or 0.0)
@@ -7069,11 +7176,27 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
     # preference to the cross-variant average (it falls back to the average when
     # the primary stop scenario isn't present).
     primary_stop_label = _representative_stop_label_for_setup(setup)
-    representative = _representative_scenario(tradeable, primary_stop_label)
+    representative = _representative_scenario(
+        tradeable, primary_stop_label, policy=resolved_policy
+    )
     rep_total_r = _clip_tracker_r_value(representative.get("total_r"), TRACKER_SCORING_R_CLIP) if representative else None
-    rep_is_closed = bool(representative and _scenario_is_closed(representative.get("status")))
-    representative_total_r = rep_total_r if rep_total_r is not None else avg_total_r
-    representative_closed_r = rep_total_r if (rep_total_r is not None and rep_is_closed) else avg_closed_r
+    rep_is_closed = bool(representative and _closed_as_of(representative))
+    if resolved_policy == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2:
+        # ST4.2: never substitute a more mature or more attractive alternate
+        # recipe. An open representative is PENDING and grades nothing; a setup
+        # with no representative at all reports nothing rather than the
+        # cross-variant average of exit plans nobody chose.
+        representative_total_r = rep_total_r
+        representative_closed_r = rep_total_r if rep_is_closed else None
+    else:
+        representative_total_r = rep_total_r if rep_total_r is not None else avg_total_r
+        representative_closed_r = rep_total_r if (rep_total_r is not None and rep_is_closed) else avg_closed_r
+    if representative is None:
+        representative_status = ""
+    elif rep_is_closed:
+        representative_status = "closed"
+    else:
+        representative_status = "pending"
     return {
         "representative_stop_label": str(representative.get("stop_reference_label")) if representative else "",
         # WHICH EXIT TEMPLATE the headline R is measured on (P4 B6). It was
@@ -7104,6 +7227,20 @@ def _summarize_tracker_setup_outcome(setup: dict, *, include_experimental: bool 
         "max_days_held": max(days_held_values) if days_held_values else 0,
         "any_target_hit": any(str(scenario.get("status", "")).upper() == "TARGET_HIT" for scenario in tradeable),
         "any_stopped": any(str(scenario.get("status", "")).upper() == "STOPPED" for scenario in tradeable),
+        # ---- ST4, additive: the representative's own state, said out loud ---
+        #
+        # `representative_closed_r` above is a NUMBER under v1 even when the
+        # trade is still running (it borrows `avg_closed_r`), so nothing on the
+        # summary said whether the headline had resolved. These four keys say
+        # it under BOTH policies and move no existing value.
+        "representative_status": representative_status,
+        "representative_exit_date": (
+            _scenario_recorded_exit_date(representative)
+            if (representative is not None and rep_is_closed)
+            else ""
+        ),
+        "selection_policy": resolved_policy,
+        "as_of_session": str(as_of_session or ""),
     }
 
 
@@ -7321,32 +7458,25 @@ def _tracker_episode_key(setup: dict) -> tuple[str, str, str, str]:
     )
 
 
-def _dedupe_recent_tracker_family_rows(rows: list[dict]) -> list[dict]:
+def _dedupe_recent_tracker_family_rows(
+    rows: list[dict],
+    *,
+    policy: str = selection_policy_lib.DEFAULT_SELECTION_POLICY,
+) -> list[dict]:
     """Collapse correlated daily re-scans of the same episode to one
     representative row: prefer a record that has closed (resolved outcome), then
-    the earliest entry (the trade you would actually have taken at first signal)."""
+    the earliest entry (the trade you would actually have taken at first signal).
 
-    groups: dict[tuple, list[dict]] = {}
-    for row in rows:
-        key = (
-            str(row.get("symbol") or ""),
-            str(row.get("side") or ""),
-            str(row.get("anchor_date") or ""),
-            str(row.get("setup_family") or "general"),
-        )
-        groups.setdefault(key, []).append(row)
-    representatives: list[dict] = []
-    for group in groups.values():
-        representatives.append(
-            sorted(
-                group,
-                key=lambda r: (
-                    0 if int(r.get("closed_setups", 0) or 0) > 0 else 1,
-                    str(r.get("scan_date") or ""),
-                ),
-            )[0]
-        )
-    return representatives
+    Packet ST4 (2026-09-06). That default rule reads the OUTCOME to pick the
+    entry: a later rescan that happens to have closed beats the earlier open
+    row a trader could actually have taken. It is unchanged and still the
+    default; `scripts/master_avwap_lib/selection_policy.py` now owns the one
+    implementation of it, and `first_actionable_v2` is an opt-in challenger
+    (earliest row per attempt, one attempt per declared re-entry) reachable
+    only through this keyword. Every returned row is stamped
+    `selection_policy`.
+    """
+    return selection_policy_lib.select_episode_rows(rows, policy=policy)
 
 
 def _coarse_regime_bucket(label: object) -> str:
@@ -7373,10 +7503,29 @@ def build_recent_tracker_setup_family_rows(
     lookback_days: int = TRACKER_RECENT_FAMILY_LOOKBACK_DAYS,
     recency_half_life_days: float = TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS,
     current_regime_label: str | None = None,
+    selection_policy: str = selection_policy_lib.DEFAULT_SELECTION_POLICY,
+    as_of_session: str | None = None,
 ) -> list[dict]:
+    """Recent per-family evidence rows, one per selected episode, aggregated.
+
+    Packet ST4 (2026-09-06) added two OPT-IN arguments and four additive
+    columns; a default call is byte-identical to what shipped
+    (`tests/fixtures/st4_family_rows_golden.csv`, pinned from `main` before any
+    of this existed).
+
+    * ``selection_policy`` names which observation of a thesis becomes the
+      graded episode - see `master_avwap_lib.selection_policy`.
+    * ``as_of_session`` replays the build: scan rows after the cutoff are
+      excluded and a scenario that closed after it reads as still running.
+    * ``n_excluded`` / ``excluded_reasons`` say what the population left out
+      and, with an ``_in_population`` suffix, what it deliberately KEPT.
+    """
     if not isinstance(setups, dict) or not setups:
         return []
 
+    resolved_policy = selection_policy_lib._resolve(selection_policy)
+    as_of_session_text = str(as_of_session or "").strip()
+    as_of_day = _parse_iso_date_or_none(as_of_session_text) if as_of_session_text else None
     reference_day = reference_date or datetime.now().date()
     max_age_days = max(1, int(lookback_days))
     half_life = max(1.0, float(recency_half_life_days))
@@ -7385,6 +7534,25 @@ def build_recent_tracker_setup_family_rows(
     )
     recent_rows = []
     baseline_groups: dict[tuple[str, str], list[dict]] = {}
+    # ST4.4: population accounting. Keyed by the same (side, bucket, family)
+    # group the rows land in, because "how many did this family drop" is only
+    # answerable beside the family that dropped them. A record whose group
+    # cannot be named (no side or no priority bucket) is not attributable and
+    # is not counted here.
+    excluded_counts: dict[tuple[str, str, str], dict[str, int]] = {}
+
+    def _count_excluded(setup_record: dict, reason: str) -> None:
+        try:
+            context = _tracker_setup_context(setup_record)
+        except Exception:
+            return
+        side = str(context.get("side") or "")
+        priority_bucket = str(context.get("priority_bucket") or "").strip()
+        if not side or not priority_bucket:
+            return
+        key = (side, priority_bucket, str(context.get("setup_family") or "general"))
+        bucket = excluded_counts.setdefault(key, {})
+        bucket[reason] = bucket.get(reason, 0) + 1
 
     for setup in setups.values():
         if not isinstance(setup, dict):
@@ -7392,12 +7560,22 @@ def build_recent_tracker_setup_family_rows(
         scan_day = _parse_iso_date_or_none(setup.get("scan_date"))
         if scan_day is None or scan_day > reference_day:
             continue
+        if as_of_day is not None and scan_day > as_of_day:
+            # ST4.3: the replay never saw this scan.
+            _count_excluded(setup, "after_as_of")
+            continue
         age_days = (reference_day - scan_day).days
         if age_days < 0 or age_days > max_age_days:
             continue
 
-        outcome_summary = _summarize_tracker_setup_outcome(setup)
+        outcome_summary = _summarize_tracker_setup_outcome(
+            setup, policy=resolved_policy, as_of_session=as_of_session_text or None
+        )
         if int(outcome_summary.get("tradeable_scenario_count", 0) or 0) <= 0:
+            # Decision (c), 2026-09-06: neither open nor closed is UNTRADEABLE
+            # and was already outside every count through this filter. ST4 only
+            # makes it NAMED - the behaviour is untouched.
+            _count_excluded(setup, "untradeable")
             continue
 
         context = _tracker_setup_context(setup)
@@ -7432,6 +7610,16 @@ def build_recent_tracker_setup_family_rows(
             "any_target_hit": bool(outcome_summary.get("any_target_hit")),
             "any_stopped": bool(outcome_summary.get("any_stopped")),
             "recency_weight": float(recency_weight),
+            # ST4.1: the attempt rule's only input. There is no scalar exit
+            # field on a scenario, so this is stamped here from the
+            # representative's own last recorded event and read by
+            # `selection_policy.assign_attempts`; empty means still running.
+            "representative_exit_date": str(
+                outcome_summary.get("representative_exit_date") or ""
+            ),
+            "representative_status": str(
+                outcome_summary.get("representative_status") or ""
+            ),
         }
         recent_rows.append(row)
 
@@ -7458,7 +7646,7 @@ def build_recent_tracker_setup_family_rows(
 
     # Collapse correlated daily re-scans so each independent episode counts once
     # before any baseline/group statistics are computed.
-    recent_rows = _dedupe_recent_tracker_family_rows(recent_rows)
+    recent_rows = _dedupe_recent_tracker_family_rows(recent_rows, policy=resolved_policy)
     baseline_groups = {}
     for row in recent_rows:
         baseline_groups.setdefault(
@@ -7676,6 +7864,42 @@ def build_recent_tracker_setup_family_rows(
         # is the honest answer and the conservative one: a family whose last
         # entry is old cannot have a newer measured close than its own scan.
         item["latest_measured_session"] = latest_measured_session
+
+        # ---- ST4: which policy chose these episodes, and what it left out ---
+        #
+        # Two grains, and the token names say which: a bare `reason=N` counts
+        # RECORDS the population never admitted and is summed into
+        # `n_excluded`; a `reason_in_population=N` counts COUNTED episodes that
+        # are deliberately still here, so a reader can see a decided case
+        # without mistaking it for a drop. Decisions (b) and (c) of 2026-09-06
+        # are named here, never reopened.
+        item["selection_policy"] = resolved_policy
+        item["as_of_session"] = as_of_session_text
+        reason_counts = dict(excluded_counts.get(group_key, {}))
+        expired_in_population = sum(
+            1
+            for row in rows_for_group
+            if str(row.get("setup_status") or "").upper() == SETUP_STATUS_EXPIRED_UNMEASURED
+        )
+        if expired_in_population:
+            reason_counts["expired_unmeasured_in_population"] = expired_in_population
+        no_representative_in_population = sum(
+            1 for row in rows_for_group if not str(row.get("representative_status") or "")
+        )
+        if no_representative_in_population:
+            reason_counts["no_representative_in_population"] = no_representative_in_population
+        item["n_excluded"] = int(
+            sum(
+                count
+                for reason, count in reason_counts.items()
+                if not reason.endswith("_in_population")
+            )
+        )
+        item["excluded_reasons"] = ";".join(
+            f"{reason}={reason_counts[reason]}"
+            for reason in TRACKER_POPULATION_EXCLUSION_REASONS
+            if reason_counts.get(reason)
+        )
         family_rows.append(item)
 
     family_rows.sort(
