@@ -6,6 +6,10 @@ current behavior while implementation is migrated out of ``legacy`` in stages.
 
 from __future__ import annotations
 
+# Imported eagerly (and BEFORE ``legacy``) so ``from master_avwap_lib import
+# execution_convention`` resolves to the real submodule rather than falling
+# through ``__getattr__`` into ``legacy``'s namespace.
+from . import execution_convention  # noqa: F401
 from . import legacy as _legacy
 
 
