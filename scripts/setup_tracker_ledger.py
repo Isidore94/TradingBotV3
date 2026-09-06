@@ -367,7 +367,12 @@ def sessions_between(start: Any, end: Any, calendar: Iterable[date] | None = Non
 
 
 def horizon_drift(
-    scan_date: Any, future_scan_date: Any, declared_horizon: Any, *, tolerance: float = 2.0
+    scan_date: Any,
+    future_scan_date: Any,
+    declared_horizon: Any,
+    *,
+    tolerance: float = 2.0,
+    calendar: Iterable[date] | None = None,
 ) -> dict[str, Any]:
     """Does this observation's declared horizon match the sessions it spans?
 
@@ -381,8 +386,16 @@ def horizon_drift(
     This MEASURES and FLAGS; it does not re-select the future row. Changing
     which row is compared would silently redefine every number the tracker has
     ever produced, which is a scoring change and not this packet's to make.
+
+    **ST1 item 2: with a `calendar` the span is counted in EXCHANGE SESSIONS and
+    the basis string says so.** Friday 2026-09-04 to Tuesday 2026-09-08 is ONE
+    session - Labor Day is not one - and `numpy.busday_count` answers 2. Without
+    a calendar the business-day fallback stays and still names itself, which is
+    what the v1 observation export deliberately keeps using: its 19,558 rows
+    were written on that basis, and re-counting them would restate the file
+    rather than describe it.
     """
-    spanned = sessions_between(scan_date, future_scan_date)
+    spanned = sessions_between(scan_date, future_scan_date, calendar)
     try:
         declared = int(declared_horizon)
     except (TypeError, ValueError):
@@ -393,11 +406,12 @@ def horizon_drift(
             "stale_horizon": None,
             "basis": "unmeasured: a date could not be read or the horizon is not positive",
         }
+    unit = "exchange sessions" if calendar is not None else "business days"
     return {
         "sessions_spanned": spanned,
         "stale_horizon": bool(spanned > declared * float(tolerance)),
         "basis": (
-            f"business days between the two scan dates; flagged when the span "
+            f"{unit} between the two scan dates; flagged when the span "
             f"exceeds {tolerance:g}x the declared horizon"
         ),
     }

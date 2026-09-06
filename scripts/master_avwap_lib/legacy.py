@@ -104,6 +104,7 @@ from project_paths import (
     MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE,
     MASTER_AVWAP_TIER_LIST_FILE,
     MASTER_AVWAP_TIER_OUTCOMES_FILE,
+    MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE,
     MASTER_AVWAP_TIER_PERFORMANCE_FILE,
     MASTER_AVWAP_TIER_CATCH_RATE_FILE,
     MASTER_AVWAP_SCORING_CONFIG_FILE,
@@ -125,6 +126,17 @@ from project_paths import (
     get_tracker_storage_details,
     open_path_in_file_manager,
     save_tracker_storage_dir,
+)
+
+# ST1: the ONE declared reading of the swing outcome files. Pure arithmetic
+# over `evidence_stats`; it imports nothing from this module, so there is no
+# cycle and no scoring path through it.
+from swing_evidence import (
+    ASSIGNED_TIER_SOURCE,
+    OUTCOME_KIND_SCANROW_V1,
+    is_stale_horizon,
+    outcome_kind_of,
+    tier_split,
 )
 
 from .levels import (
@@ -354,6 +366,9 @@ SCAN_FACTOR_OBSERVATIONS_FILE = MASTER_AVWAP_SCAN_FACTOR_OBSERVATIONS_FILE
 SCAN_FACTOR_LEADERBOARD_FILE = MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE
 TIER_LIST_FILE = MASTER_AVWAP_TIER_LIST_FILE
 TIER_OUTCOMES_FILE = MASTER_AVWAP_TIER_OUTCOMES_FILE
+#: ST1 item 2: the v2 exact-exchange-session file, BESIDE the v1 one and
+#: never instead of it. No production caller reads it yet.
+SESSION_HORIZON_OUTCOMES_FILE = MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE
 TIER_PERFORMANCE_FILE = MASTER_AVWAP_TIER_PERFORMANCE_FILE
 TIER_CATCH_RATE_FILE = MASTER_AVWAP_TIER_CATCH_RATE_FILE
 SETUP_TYPE_STATS_FILE = SETUP_STATS_FILE.with_name("master_avwap_setup_type_stats.csv")
@@ -10103,6 +10118,13 @@ SCAN_FACTOR_OBSERVATION_COLUMNS = [
     # unaffected.
     "sessions_spanned",
     "stale_horizon",
+    # ST1 item 1: WHAT THIS ROW IS. `win` is the sign of a close-to-close
+    # percent move between two of the symbol's own scan rows - not a
+    # stop-rule verdict and not R. The column DECLARES that; it changes no
+    # value. Appended at the END of the header, and a row read with it
+    # missing or empty reads as `favorable_direction_scanrow_v1`
+    # (`swing_evidence.outcome_kind_of`).
+    "outcome_kind",
 ]
 SCAN_FACTOR_LEADERBOARD_COLUMNS = [
     "generated_at",
@@ -10197,6 +10219,13 @@ TIER_OUTCOME_COLUMNS = [
     "stale_horizon",
     "positive_scan_factor_match_count",
     "positive_scan_factor_matches",
+    # ST1 item 1: WHAT THIS ROW IS. `win` is the sign of a close-to-close
+    # percent move between two of the symbol's own scan rows - not a
+    # stop-rule verdict and not R. The column DECLARES that; it changes no
+    # value. Appended at the END of the header, and a row read with it
+    # missing or empty reads as `favorable_direction_scanrow_v1`
+    # (`swing_evidence.outcome_kind_of`).
+    "outcome_kind",
 ]
 TIER_PERFORMANCE_COLUMNS = [
     "generated_at",
@@ -10221,6 +10250,12 @@ TIER_PERFORMANCE_COLUMNS = [
     "spy_relative_edge_pct",
     "positive_scan_factor_match_rate",
     "sample_observations",
+    # ST1 item 4: how much of this cell is a tier somebody RECORDED and how
+    # much is one reconstructed from the bucket. A reconstructed label may
+    # never validate shipped S/A performance, and a cell that does not say
+    # which it is cannot be read either way.
+    "n_assigned_tier",
+    "n_derived_tier",
 ]
 TIER_CATCH_RATE_COLUMNS = [
     "generated_at",
@@ -10704,6 +10739,9 @@ def build_scan_factor_observation_rows(
                         # number the tracker has produced, which is a scoring
                         # change and not this packet's to make.
                         **_horizon_drift_columns(scan_date, future_scan_date, horizon),
+                        # ST1 item 1: the row SAYS what it is. `win` above is the
+                        # sign of this percent move, not a stop-rule verdict.
+                        "outcome_kind": OUTCOME_KIND_SCANROW_V1,
                     }
                 )
 
@@ -11292,6 +11330,9 @@ def build_bot_tier_outcome_rows(
                 "stale_horizon": obs.get("stale_horizon"),
                 "positive_scan_factor_match_count": len(matches),
                 "positive_scan_factor_matches": _format_positive_scan_factor_matches(matches),
+                # ST1 item 1: carried from the observation, never re-decided
+                # here - one row, one declared meaning, both files agreeing.
+                "outcome_kind": outcome_kind_of(obs),
             }
         )
 
@@ -11334,6 +11375,7 @@ def _tier_performance_summary_row(
     )
     match_counts = pd.to_numeric(group_df.get("positive_scan_factor_match_count"), errors="coerce").fillna(0)
     sample_rows = group_df.to_dict("records")
+    tier_counts = tier_split(sample_rows)
     sample_rows.sort(
         key=lambda item: (
             str(item.get("scan_date") or ""),
@@ -11385,6 +11427,11 @@ def _tier_performance_summary_row(
         ),
         "positive_scan_factor_match_rate": float((match_counts > 0).mean()) if len(match_counts) else None,
         "sample_observations": "; ".join(samples),
+        # ST1 item 4. `tier_split` counts `tier_source`, so a cell says how much
+        # of itself is a decision that shipped and how much is a label
+        # reconstructed from the bucket for a row written before B4.
+        "n_assigned_tier": tier_counts["assigned"],
+        "n_derived_tier": tier_counts["derived"],
     }
 
 
@@ -11394,11 +11441,41 @@ def build_bot_tier_performance_rows(
     *,
     lookback_days: int = SCAN_FACTOR_LOOKBACK_DAYS,
     reference_date: date | datetime | str | None = None,
+    assigned_only: bool = False,
 ) -> list[dict]:
+    """Tier x side x horizon cells from the tier outcome rows.
+
+    **ST1 item 3: a row this file counts is a row the other two readers count.**
+    `setup_docs._all_family_outcomes` and `autopilot_core.swing_family_records`
+    drop an explicit `stale_horizon` True; this export dropped nothing, so the
+    tier report counted rows the two trader-facing surfaces had thrown away -
+    5,005 of 19,558 on the live file. It is a REPORT export (its three
+    consumers are the Setup Tracker's Tier performance tab, the human-focus
+    comparison table and the AI evidence list - no detector, score, gate or
+    alert reads it), so the rule that governs the other two governs it.
+    Uncertainty still never deletes: only an explicit True drops.
+
+    **ST1 item 4:** `assigned_only=True` restricts every cell to rows whose
+    `tier_source` is the value the stamper writes, so shipped S/A performance is
+    never validated by a label reconstructed from the bucket. The default output
+    keeps today's population and simply SAYS how it splits, in
+    `n_assigned_tier` / `n_derived_tier`.
+    """
     if not tier_outcome_rows:
         return []
-    tier_df = pd.DataFrame(tier_outcome_rows)
-    all_obs_df = pd.DataFrame(observation_rows or [])
+    tier_rows = [row for row in tier_outcome_rows if not is_stale_horizon(row)]
+    if assigned_only:
+        tier_rows = [
+            row
+            for row in tier_rows
+            if str(row.get("tier_source") or "").strip().lower() == ASSIGNED_TIER_SOURCE
+        ]
+    if not tier_rows:
+        return []
+    tier_df = pd.DataFrame(tier_rows)
+    all_obs_df = pd.DataFrame(
+        [row for row in (observation_rows or []) if not is_stale_horizon(row)]
+    )
     if tier_df.empty or all_obs_df.empty:
         return []
     tier_df["_scan_date_dt"] = pd.to_datetime(tier_df["scan_date"], errors="coerce")

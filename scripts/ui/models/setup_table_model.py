@@ -43,7 +43,14 @@ class SetupTableModel(QAbstractTableModel):
         # setup family the row belongs to, not about this symbol on this day; a
         # column headed "Win %" on a per-symbol row would read as a claim about
         # the name in front of the trader, which it is not.
-        ("family_win_rate", "Family Win %"),
+        #
+        # ST1 item 1: and it says FAVORABLE, not WIN. The number behind this
+        # column is `master_avwap_tier_outcomes.csv`'s `win`, which is the sign
+        # of a close-to-close percent move at a scan-row offset - no stop rule
+        # was ever applied to it. The key stays `family_win_rate` because the
+        # panel's widths, squeeze order and sort handlers are pinned to it; the
+        # LABEL is what the trader reads, and it now matches the measurement.
+        ("family_win_rate", "Family favorable %"),
     )
 
     def __init__(self, rows: list[SetupRow] | None = None, parent=None) -> None:
