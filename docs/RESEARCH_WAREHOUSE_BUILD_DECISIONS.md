@@ -2957,4 +2957,4 @@ in which case the sort key follows the floor rather than being re-argued.
 (`_policy_cell_order_key`, `_after_like_order_key`, `_bounded_narration_view`,
 `narration_view`, `_narration_coverage_lines`, `_evidence_package`,
 `run_setup_research`); tests `tests/test_n3_narration_bounded.py` and
-`tests/test_n3_narration_bounded_edges.py`. Live gate #65.
+`tests/test_n3_narration_bounded_edges.py`. Live gate #67.

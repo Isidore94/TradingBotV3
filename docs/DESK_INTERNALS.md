@@ -1595,3 +1595,41 @@ measurement in `docs/DESK_INTERNALS.md` ("Headline statistics, long form").
   `evidence_stats.WEEK_SESSIONS` (5). The state key, the report header, the CLI flag and every
   renderer say **sessions**.
 
+## N3 - the research narration is bounded, and says what it left out (2026-09-05)
+
+**Rule:** `narration_view` sends a BOUNDED view; the cells that fit are chosen by evidence
+count, never by result, and every surface says `narrated K of N`.
+
+**What broke.** The `setup_research` ledger read `narration absent` four nights running:
+09-02 273,622 chars / 47 cells (the server sheared it at 32k), 09-03 82,192 vs the 78,119
+budget / 69 cells, 09-04 143,636 / 128, 09-05 **658,292 / 619** - gate #59's lake recompute had
+landed 141,299 recipe outcomes overnight (from 23,802). R3 (2026-09-02) had already cut the view
+down from the pack and hoisted the repeated prose; what remained is that the view carried EVERY
+eligible cell and the grid grows with the lake. No budget a 64k-context model can read holds
+658k chars, so the refusal's own advice - "raise the budget or num_ctx" - could never be taken.
+
+**What was built** (`scripts/ai_jobs/setup_research.py`: `_bounded_narration_view`,
+`_policy_cell_order_key`, `_after_like_order_key`; BD-101). The head of the view (everything
+that is not a cell: 11,084 chars live) is encoded first, then eligible policy cells are added in
+order until the next would cross the budget, then the after-like ELIGIBLE cells (P10 C3,
+unchanged) under the same rule. The order is `stats.n` descending, then `recipe_id`, `family`,
+`side` - `stats.n` is the outcome-row count the eligibility floor gates on; `n_episodes` sits
+beside it and was equal on all 619 live cells; the after-like grid is FLAT so it reads its own
+top-level `n_episodes`. **The key knows how MUCH evidence a cell rests on and never how it
+turned out**: gate #43 is a refusal, and a narration ranked by result would hand the model the
+flattering half of a frozen grid. The lead's review perturbed every non-`n` statistic on the
+live pack (26 fields, bootstrap bounds and trimmed means included) and the ORDER was identical;
+only K moved, because the perturbed floats were longer. Coverage is stated as `narrated`
+{K, of, selected_by, after-like K, of} in the view and the `.narration.json`, as one line under
+`## Narration` in the pack markdown (computed BEFORE the file is written, so one pack and one
+`.md` per date still holds), and as `narrated K of N eligible cell(s)` on the ledger reason.
+The refusal narrows to "the head plus the FIRST cell does not fit" and names the head's size,
+so a future `narration absent` says whether the head or the window is the problem. The evidence
+hash is still over the bounded view - what was sent. Live dry run on a copy of the 09-04 pack:
+658,292 -> 77,791 chars, **64 of 619 narrated**, the first five all `m5close_atr*` cells at
+n=621.
+
+**Live gate #67** replaces gate #40's narration clause: the next overnight `setup_research`
+row reads `narrated K of N eligible cell(s)` with a `.narration.json` beside ONE pack for the
+date, and the pack markdown carries the coverage line.
+

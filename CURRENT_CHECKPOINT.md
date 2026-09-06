@@ -19,19 +19,22 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | | |
 |---|---|
-| Latest work | **2026-09-05 repo cleanup** (two commits, docs only, `fa6f90b5` and this one): history under `docs/archive/`, the live files cut to what a session must read. Before it: the 02:00 tracker measurement audit (read-only) and the overnight lake rebuild that met gates #59 and #61. |
-| Working branch | `main`. Phase 0.18 (Q1-Q5) MERGED at `b0db9bbe` on 2026-09-04. Q3's grounding rule stands: a position claim needs a surviving ref in `POSITION_SOURCE_IDS`, which is `journal.trades_and_reviews` only; the executive summary may never assert one. |
-| Unmerged / open | `claude/s1-quick-verbs` is UNMERGED (S1.1/S1.2 superseded by T1, S1.4 rebuilt as `f903ca4`; only S1.3, ONE Strength surface, is owed a decision - a fresh packet, never a merge). Open incident: the F1 reviewer's probe wrote 13 PUBLISH rows into the live lake (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`); retiring them is the trader's call. Every worktree-built manifest carries `git_commit: ""` (noted, not fixed). R4's review advisories stay batched for V4. |
+| Latest work | **2026-09-05 afternoon: Phase 0.20 (N1-N3) MERGED** - the three fixes from the morning's overnight-run assessment, each built by a builder on its own branch from red tests and reviewed by reproduction (N1, N2 by a reviewer agent: GO, no blockers; N3 by the lead after the reviewer hit the session limit). N1: the sidecar completion reads the lake with AWARE bounds and a read fault is `lake_read_failed: <Exc>`, not "unreachable". N2: two local output caps (map 3,500 / synthesis 8,000) and a length stop read BEFORE parsing with ONE shorter retry. N3: the `setup_research` narration is a BOUNDED view selected by evidence count, never by result, and every surface says `narrated K of N`. Defect 4 of that assessment (the tracker purity gate under the Yahoo pin) is packet M3.1 in the other session's Phase 0.19 branch and is NOT rebuilt here. Before it: the 2026-09-05 repo cleanup (`fa6f90b5`, `240ca5b8`). |
+| Working branch | `main`. Phase 0.20 (N1-N3) merged 2026-09-05 afternoon through `lead/merge-n` in a scratch worktree, packet order, control files taken from the cleanup and the N entries re-applied by hand. Phase 0.18 (Q1-Q5) MERGED at `b0db9bbe` on 2026-09-04. Q3's grounding rule stands: a position claim needs a surviving ref in `POSITION_SOURCE_IDS`, which is `journal.trades_and_reviews` only; the executive summary may never assert one. |
+| Unmerged / open | `claude/n1-sidecar-aware-read`, `claude/n2-synthesis-output-cap` and `claude/n3-research-narration-bounded` are CONTAINED in `main`. The other session's `claude/m1`-`m4` band challenger branches and `lead/merge-m` are that session's to merge. **A pre-existing red**: `tests/test_qt_alert_center.py::test_review_chart_auto_refresh_pulls_new_bars` (a 10 s wall-clock `_pump_until` on a chart worker) fails under CPU load - the N1 reviewer reproduced it on `e7b12ebe` itself 3/3 while the N2 reviewer saw it pass 3/3; it is a timing flake, not any packet's. `claude/s1-quick-verbs` is UNMERGED (S1.1/S1.2 superseded by T1, S1.4 rebuilt as `f903ca4`; only S1.3, ONE Strength surface, is owed a decision - a fresh packet, never a merge). Open incident: the F1 reviewer's probe wrote 13 PUBLISH rows into the live lake (`manifest_log.jsonl` seq 2061-2073, empty `git_commit`); retiring them is the trader's call. Every worktree-built manifest carries `git_commit: ""` (noted, not fixed). R4's review advisories stay batched for V4. |
 | Next action | **Phase 0.19 packet B4** (queued by the trader 2026-09-05): fix the band-variant hand-off so the challenger measures something; recon names the root cause first, `runner.py`/`legacy.py` are ask-first and the trader's "add this to the queue" is the recorded yes for the hand-off fix only. Then V4 (Working-lately + the priority switch, the AWAY Recap, the Setup Types tab). |
-| Trader actions owed | Run `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>` from `scripts/` after spot-auditing three packs, or enrichment stays silent. Delete `.test_tmp/` from an admin prompt (sandbox-owned). Decide the 13 probe rows. |
-| Last verified baseline | `main` at the second cleanup commit, 2026-09-05 ~12:45 PT: `pytest tests/ -q` **6710 passed, 1 skipped, 72 subtests, exit 0** (7 min 21 s, desk up and idle); `ruff` clean; CLAUDE.md == AGENTS.md; smoke 7/7 and source selftest unchanged since `b0db9bbe`. |
+| Trader actions owed | **Restart the desk** so N1-N3 reach the nightly runner (the runner imports from the checkout at 22:00, so tonight's run picks them up from `main` even without a restart; the desk itself needs one only for the `pass_bars` writer). Run `python -m ai_jobs.digest approve-audit --pack <d> --pack <d> --pack <d>` from `scripts/` after spot-auditing three packs, or enrichment stays silent. Delete `.test_tmp/` from an admin prompt (sandbox-owned). Decide the 13 probe rows. |
+| Last verified baseline | **`lead/merge-n` (= the Phase 0.20 merge), 2026-09-05 ~15:45 PT, in the SCRATCH merge worktree with the repo venv, nightly AI lock FREE (probed): `pytest tests/ -q` with NOTHING DESELECTED: 6750 passed, 1 skipped, 72 subtests, ZERO failures, exit 0, 5 min 51 s** (the Qt timing flake did not fire this run); `ruff` clean; smoke 7/7; source selftest 74/74; CLAUDE.md == AGENTS.md. Previous: 6710 passed at the second cleanup commit (~12:45 PT). |
 | Frozen exe | No rebuild required: nothing since the 2026-09-02 rebuild (`selftest OK: 74/74 checks passed (frozen)`) added a dependency, a non-`.py` asset or a new top-level package. The desk runs from SOURCE, so a pushed commit is live at the next restart. |
-| Desk | Started 00:27 PT 2026-09-05 on `main` at `a6fb1a8d` (pid 29260) after being down since 14:11 PT 2026-09-04; weekend, Auto Pilot idle. The two cleanup commits change no runtime file, so no restart is owed for them. |
+| Desk | Started 00:27 PT 2026-09-05 on `main` at `a6fb1a8d` (pid 29260) after being down since 14:11 PT 2026-09-04; weekend, Auto Pilot idle. The two cleanup commits change no runtime file. **N1 changes `pass_bars.py`, which the desk's capture rail imports at click time, so a restart is owed for the next capture to write aware stamps**; the nightly runner reads the checkout fresh at 22:00 and needs none. |
 
 ### Open gates, newest first
 
 | # | Gate | Owed by |
 |---|---|---|
+| 67 | **The narration comes back, bounded (N3)** - the next overnight `setup_research` row reads `narrated K of N eligible cell(s)` (expect K about 64, N about 619) with a `.narration.json` beside ONE pack for the date and the pack `.md` carrying the `## Narration` coverage line; a row still reading `narration absent` is the news and its message now names the HEAD's size. Replaces gate #40's narration clause | 2026-09-05 N1-N3 entry |
+| 66 | **The nightly synthesis completes (N2)** - that night's `ai_summary_*.json` has `map_reduce.synthesized: true` (or `synthesis_retry: "shorter"` and a WEIGHED document, not the 12-row pile), `synthesis_stop_reason` present and `""`, and the ledger reason no longer ends "NOT synthesized"; two consecutive synthesized nights close it. Watch `trading_bot.log` for a new prompt-truncation refusal (the reduce call now asks for 8,000 output tokens against 65,536); an EMPTY `slices_retried` is expected | 2026-09-05 N1-N3 entry |
+| 65 | **The sidecar completion finishes a row (N1)** - the first nightly run after merge: the `sidecar_completion` ledger line reads `completed 1 of 1` (or names a reason that is NOT `research_store_unreachable`), and `b9344eb372284d7f98f6083b50178e0b.completed.json` exists under `C:\TradingBotData\trader_annotation_bars\` with ~78 bars whose `dt` strings all carry an offset. `lake_read_failed: <Exc>` is a PASS of the naming half and a FAIL of the read. Clears gate #39's blocker | 2026-09-05 N1-N3 entry |
 | 64 | Q5 scorecard off the Qt thread: one session past the close with no `autopilot_service.py` stall over 1,000 ms, the scorecard lines in the log, one CSV row per pick group, `picks_scored_at` set and never `picks_scoring_failed_at` | 2026-09-04 Q5 entry |
 | 63 | Q4 overnight stages: the first nightly run shows every deterministic ledger row completed before `ai_summary`, `entry_index.json` beside the packs, `python -m ai_jobs.digest gate` printing `sessions_consecutive_clean` and `audit_recorded: false`, and `journal_enrichment` reading `refused: audit not recorded` | 2026-09-04 Q4 entry |
 | 62 | Q3 grounding on a real night: `ai_morning_brief.txt` opens `Analyzed A of N. Membership-only B. Failed C.` with A + B + C == N, every membership-only block leads with `membership only`, every drop named by one of the three detail strings (`position claim without a position source`, `position claim in the executive summary`, `numeric claim without a resolvable metric_ref`); a collapse in the analyzed count means over-drop | 2026-09-04 Q3 entry |
@@ -56,8 +59,8 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 | 43 | REFUSAL (P10 C): no after-like cell is read for a verdict before the declared 20-session window closes | archive: 2026-09-02 P10 entry |
 | 42 | After-like grid collects (P10 C): `bronze_like_occurrence_link` rows and after-like outcome rows inside the reserve, ledger row `collecting` | archive: 2026-09-02 P10 entry |
 | 41 | One like, one dislike from every screen (P10 A): a star, a rail like and a "Not today" each leave EXACTLY ONE annotation row with the right `surface` | archive: 2026-09-02 P10 entry |
-| 40 | Narration fits (R3): one overnight `setup_research` run publishes exactly ONE pack for the date with a `.narration.json` beside it | archive: 2026-09-02 R3 entry |
-| 39 | Quick like (P9): one swing and one M5 quick like reach `trader_annotations.jsonl` with `like_mode` quick, nothing in Focus, and the M5 one's intraday columns are numbers next morning | archive: 2026-09-02 P9 entry |
+| 40 | Narration fits (R3): one overnight `setup_research` run publishes exactly ONE pack for the date with a `.narration.json` beside it | narration clause REPLACED by #67 (N3); one-pack half met 2026-09-05; archive: 2026-09-02 R3 entry |
+| 39 | Quick like (P9): one swing and one M5 quick like reach `trader_annotations.jsonl` with `like_mode` quick, nothing in Focus, and the M5 one's intraday columns are numbers next morning | blocker cleared by N1 (gate #65); archive: 2026-09-02 P9 entry |
 | 38 | Merged tree on the desk (R1, R2): stall watchdog ON and quiet on every new surface; the Setup Tracker's picks count after the first scan | archive: 2026-09-02 R1/R2 entries |
 | 37 | First parameter grid (P8): one overnight run publishes rows for every declared cell inside the reserve, ledger row `collecting`, and no cell is read early | archive: 2026-09-02 P8 entry |
 | 1 | ~~Frozen rebuild + selftest~~ MET AGAIN 2026-09-02 (74/74 frozen) | done |
@@ -103,6 +106,81 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 4 | Group RS/RW tape: one DESK session with the four trader rules | archive: 2026-08-27 group tape entry |
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
+
+### 2026-09-05 (~07:00-15:30 PT) - Phase 0.20: the overnight-run assessment and its three fixes (N1-N3), MERGED
+
+**Trader:** *"assess the AI model run overnight"* (07:00), then *"Yes please"* to the detail page and the fix
+packets, then *"Yahoo is fine. Go ahead and build these fixes out in 4 hours"* (07:20). The assessment is
+the artifact "Overnight Run 2026-09-04" (private page, link in the chat); packets are `.claude/packets/N1-N3.md`,
+machine-local and never committed.
+
+**The night, in one line:** ran 22:00-03:51 PT on `7f2273d3` in decision 0018's order (twelve deterministic
+slots, digest, `ai_summary` 4 h 38 min = 79% of the run, `ticker_briefs` 69 min, then the gated slots);
+`entry_index.json` named 2026-09-04 with a real commit; `digest gate` 10 of 10 clean with `audit_recorded:
+false`; enrichment refused as designed; the morning brief opened `Analyzed 53 of 108. Membership-only 55.
+Failed 0.` with 8 executive summaries withheld and 3 + 2 rows dropped and named. **Gate #63's stage half and
+gate #62 are met by this night.** Four defects surfaced, none in the control docs: (1) the sidecar read,
+(2) the synthesis cut at 3,500 tokens 2 of 4 nights, (3) the research narration at 658k chars vs 78k,
+(4) the tracker purity gate refusing the 13:00 write under the Yahoo pin. The trader's *"Yahoo is fine"*
+answered (4), which the OTHER lead session had already built that morning as M3.1 on
+`claude/m3-tracker-keeps-up` (`259cf42c`); it is not rebuilt here.
+
+**How it was built.** Three testers wrote red tests first (all three were cut off by the account's session
+limit at 07:30 with nothing written and re-run at 10:52), three builders made them pass, two reviewer
+agents returned GO with no blockers (N1, N2), and the N3 reviewer hit the limit again at 103 tests passed,
+so the lead did N3's reproduction itself: the 7 tester tests red at `9d41e454` and green at `a9ec8ff7`,
+103 passed across the six related files, the dry run on a copy of the live 09-04 pack (658,292 -> 77,791
+chars, head 11,084, 64 of 619, first five `m5close_atr*` at n=621), and the ORDER of all 619 cells
+identical after every non-`n` statistic was perturbed (26 fields). Branch tips: N1 `c09d9441`, N2
+`db5a8f01`, N3 `a9ec8ff7`, all off `e7b12ebe`. Merged in packet order into `lead/merge-n` on
+`240ca5b8`; the cleanup had rewritten CLAUDE.md, CURRENT_CHECKPOINT.md, plan.md and DESK_INTERNALS, so
+those took main's version and the N entries were re-applied by hand (this entry, the three gates, the
+Phase 0.20 table, two CLAUDE.md clauses, the N3 DESK_INTERNALS section). The three builders had each
+numbered their gate #65; they are #65 / #66 / #67 here and in the CHANGELOG, plan.md and BD-101.
+
+**N1 - `scripts/ui/annotations/sidecar_completion.py`, `pass_bars.py`.** The sidecar's bar `dt` is naive
+DESK-local (06:30 = the RTH open on a Pacific desk; the tester traced the chain IB `bar.date` ->
+`_parse_ib_bar_datetime` -> `IbBar.dt` -> `capture_rail.cached_m5_bars` -> `write_pass_bars`, no zone
+anywhere). `_lake_bars` passed those bounds to a `tz=UTC` Arrow column, `ArrowInvalid` was swallowed as
+`research_store_unreachable`, and `_session_close` stamped 16:00 in the bar's own zone. Now
+`pass_bars.desk_zone()` (a configured `market_local_timezone` wins; the fallback resolves the offset PER
+MOMENT, because `market_session.get_market_local_timezone()` returns a fixed `-07:00` that would stamp a
+January bar wrong) is ATTACHED, the close is 16:00 in `market_calendar.MARKET_TZ`, new sidecars carry an
+offset, and `REASON_LAKE_READ_FAILED` names a `read_rows` fault with its exception class. Reviewer's
+live checks: 60 lake rows added to the 18 held, close `16:00-04:00`, and `pass_cohort.intraday_pass_outcome`
+now GRADES the SHW pass (close_r 0.51, first_hit SESSION_CLOSE) where it read `sidecar_ends_before_the_entry_bar`.
+Advisories batched: the checkpoint tip sha in the branch's own entry was stale; `desk_zone()` runs per bar
+at click time (~1.5 ms for a real sidecar, memo-able); a completed file carries MIXED offsets (`-07:00`
+held bars, `+00:00` lake bars) - all aware, monotone in instant, never sort them by string;
+`pass_cohort._after`'s docstring still says "market-local by construction" (code right, comment wrong,
+out of scope).
+
+**N2 - `scripts/ai_summary.py`, `scripts/ai_jobs/map_reduce.py`.** One literal `max_tokens: 3500` served
+the map slices and the synthesis; the reduce answer was cut at char 14501 (run of 2026-09-03 02:10) and
+14708 (2026-09-05 02:41), the retry re-sent the identical request with the rejection appended, and the
+designed UNSYNTHESIZED fallback fired 2 of 4 nights. Now `LOCAL_MAP_GENERATION_TOKENS` 3,500 (alias
+`LOCAL_GENERATION_TOKENS` kept - two tests import it) and `LOCAL_SYNTHESIS_GENERATION_TOKENS` 8,000, chosen
+on the `map_reduce_synthesis` scope; `_length_stop_reason` reads `finish_reason` / `done_reason` BEFORE
+parsing; ONE shorter retry (at most 8 findings per section) and a second cut raises
+`LocalOutputLengthError`; the block gains `synthesis_stop_reason`, `synthesis_retry`, `slices_retried`.
+The evidence budget is unchanged (11,066 / 36,856 / 78,119 at 12k / 32k / 64k on both trees). **Item 0
+answered:** the 1-2 map slices that fail each night are Q3 grounding rejections (`numeric claim without a
+resolvable metric_ref`, `executive_summary cannot be blank`), NOT length cuts, so the map half of the
+detection is test-only. Advisory: `currently shorted` now reads as a position claim. Premise corrected:
+there is ONE local call site; line 3246 was the Anthropic branch.
+
+**N3 - `scripts/ai_jobs/setup_research.py`** (BD-101, long form in DESK_INTERNALS). See gate #67 and the
+Phase 0.20 table. `tests/test_r3_narration_budget.py` now passes `budget=10_000_000` explicitly - its
+question is what KIND of thing may be in the view, and unbounded it was measuring whichever budget the
+running machine resolves (11,066 under the test harness, 78,119 on the desk). The tester's fixture gained
+the Milestone 3 contract block `test_fixture_contract.py` demands (keys added, no pinned value changed).
+
+**Also seen and NOT built:** 41 of 53 briefs spend a finding on "the data is truncated" (`MAX_SOURCE_CHARS`
+16,000 and the banner says so); 24 `Outcome ledger mirror failed` sharing-violation errors at 13:05 on
+09-04 (the CSV row stood each time); the 2026-09-02 fact pack counts as clean with `usable: 0`.
+
+**Verification on the merged tree** (`lead/merge-n`, scratch worktree, repo venv, nightly lock free):
+`pytest tests/ -q` 6750 passed / 1 skipped / 72 subtests / exit 0 in 5 min 51 s, lock free; ruff clean; smoke 7/7; selftest 74/74; CLAUDE.md == AGENTS.md.
 
 ### 2026-09-05 (~12:30 PT) - Repo cleanup, commit 2 of 2: the live files cut to what a session must read
 

@@ -1193,6 +1193,22 @@ changed, no test weakened.
 - Not done: `.test_tmp/final_01` (sandbox-owned, needs an admin prompt); relative links
   inside archived files.
 
+### 2026-09-05 - Packet N1: the sidecar completion reads the lake with AWARE bounds (branch `claude/n1-sidecar-aware-read`)
+
+The nightly `sidecar_completion` slot had said `completed 0 of 1; 1 research_store_unreachable` every
+night since 2026-09-02 while the store answered. The sidecar's bar `dt` values are NAIVE desk-local
+(06:30 is the RTH open on this Pacific desk) and `_lake_bars` handed them to a `tz=UTC` Arrow column;
+the `ArrowInvalid` was swallowed as "unreachable", and `_session_close` stamped 16:00 in the bar's own
+zone. Now `pass_bars.desk_zone()` is ATTACHED to a naive stamp (a configured `market_local_timezone`
+wins; the fallback resolves the offset per moment), the close is 16:00 in `market_calendar.MARKET_TZ`,
+new sidecars are written WITH their offset (schema stays 1), and a `read_rows` fault is
+`lake_read_failed: <Exc>` while `research_store_unreachable` means `ResearchStore.open()` only. Live
+DRY read on the SHW row: 60 lake bars, close `16:00-04:00`; `pass_cohort.intraday_pass_outcome` now
+grades that pass (close_r 0.51) where it read `sidecar_ends_before_the_entry_bar`. Tests:
+`tests/test_n1_sidecar_aware_read.py` (8, red first), `tests/test_n1_desk_zone_seam.py` (4);
+`test_p9_sidecar_completion.py` pins `desk_zone` to New York in both modules. Reviewed by reproduction:
+GO. Live gate #65.
+
 ### 2026-09-05 - N2: the synthesis stops shearing at 3,500 tokens (branch `claude/n2-synthesis-output-cap`)
 
 Two of the last four nightly runs published UNSYNTHESIZED. The reduce answer stopped
@@ -1301,7 +1317,7 @@ now opens the budget explicitly - its question is what KIND of thing may be in t
 view, and left alone it would have measured whichever budget the running machine
 resolves (11,066 under the harness' isolated settings, 78,119 on the desk).
 
-**Live gate (#65).** The next overnight `setup_research` row reads `narrated K of N
+**Live gate (#67).** The next overnight `setup_research` row reads `narrated K of N
 eligible cell(s)` with a `.narration.json` beside ONE pack for the date, and the pack
 markdown carries the coverage line.
 
