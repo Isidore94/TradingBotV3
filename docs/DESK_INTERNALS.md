@@ -2001,3 +2001,97 @@ n=621.
 **Live gate #67** replaces gate #40's narration clause: the next overnight `setup_research`
 row reads `narrated K of N eligible cell(s)` with a `.narration.json` beside ONE pack for the
 date, and the pack markdown carries the coverage line.
+
+## ST4 - the rescan that happened to close was the one that counted (2026-09-06)
+
+### What was true, read on `main` @ `84ee24d6`
+
+The Setup Tracker rescans a thesis every day it still looks like a setup, so one
+`(symbol, side, anchor_date, setup_family)` leaves many rows behind and something has to pick
+which one gets graded. Three different places made that pick by reading the OUTCOME.
+
+1. **`_dedupe_recent_tracker_family_rows`** sorted `(0 if closed_setups > 0 else 1, scan_date)`.
+   A closed record wins, and only then does the earliest date. So the 08-10 open entry a trader
+   could actually have taken lost to the 08-15 rescan that had resolved by the time the tracker
+   looked. The docstring called the second key "the trade you would actually have taken at first
+   signal", which is true only when no row in the group has closed.
+2. **`_representative_scenario`** fell to `matching[0]`, and scenario insertion order is
+   `_build_tracker_scenarios`' `for stop in stop_candidates: for template in
+   SETUP_EXIT_TEMPLATES`. `REPRESENTATIVE_EXIT_TEMPLATE_ID` was `""` - the comment above it said
+   the choice was decided by dict order and that nothing had ever said which template the headline
+   R was measured on. Reordering the `scenarios` list moves one setup's headline **from +2.00R to
+   -1.00R** (`tests/test_st4_first_actionable.py::test_representative_exit_template_survives_a_scenario_dict_reorder`
+   pins BOTH readings).
+3. **`_summarize_tracker_setup_outcome`**: `representative_closed_r = rep_total_r if (rep_total_r
+   is not None and rep_is_closed) else avg_closed_r`. When the representative is still OPEN, the
+   headline becomes the mean of the OTHER closed scenarios - the alternate exit plans nobody
+   chose. A setup whose `full_band2` representative sits at +0.40R open, beside a `full_band3`
+   that closed +3.00R, **reports +3.00R for a trade still running**.
+
+### The premise the packet asked to verify
+
+**There is no exit-date field on a scenario.** `_apply_scenario_exit_event` appends one entry per
+exit LEG to `events` (`trade_date`, `reason`, `price`, `shares`, `pnl`, ...), so the recorded exit
+is the `trade_date` of the LAST entry, and an open scenario has that list PRESENT and EMPTY.
+`_scenario_recorded_exit_date` gates that read on the CLOSED status, because a PARTIAL leaves a
+dated event behind on a scenario still in the trade: read as an exit, it would let the challenger
+open a second attempt while the first one was still running - the exact thing the re-entry rule
+exists to prevent.
+
+### The rules this produced
+
+**The default did not move, and that is the point.** `closed_first_v1` is
+`DEFAULT_SELECTION_POLICY` and every caller still gets it, byte-identical
+(`tests/fixtures/st4_family_rows_golden.csv`, pinned from `main` before any of this code existed,
+reproduced under the bare default call AND under an explicit `DEFAULT_SELECTION_POLICY`).
+
+**The shipped rule has exactly ONE implementation.** `_v1_pick` in
+`scripts/master_avwap_lib/selection_policy.py` is the old body moved verbatim; the legacy function
+delegates. A challenger measured against a second copy of the champion measures the copy.
+
+**An episode under `first_actionable_v2` is `(symbol, side, anchor_date, setup_family,
+attempt_index)`.** Attempt 1 is the EARLIEST scan row - chosen on the date alone, before any
+outcome exists. A later row opens attempt k+1 **only** when the previous attempt's representative
+scenario closed strictly before it (`REENTRY_RULE_V2`): that is a declared entry rule, not "the
+rescan that happened to close". A rescan while the attempt is live is one more OBSERVATION of the
+same episode. An open attempt stays `pending` and grades nothing.
+
+**The representative exit is DECLARED, and declaring it reads no outcome.**
+`REPRESENTATIVE_EXIT_TEMPLATE_ID_V2` is `full_band2`, the first baseline entry of
+`SETUP_EXIT_TEMPLATES` - the one dict order has always practically handed back. Naming it fixes
+the answer against a reorder without preferring a better-performing plan.
+
+**`excluded_reasons` has two grains and the token name says which.** A bare `reason=N` counts
+records the population never admitted and is summed into `n_excluded`; an `_in_population` token
+counts counted episodes a decision deliberately KEPT and is never summed. That is how the
+2026-09-06 decisions are NAMED without being reopened: `untradeable` is (c),
+`expired_unmeasured_in_population` is (b) - it stays in the champion's scoring population - and
+(a), swept-measured M5 trades, is in another file and is named in the comparison's README.
+`no_representative_in_population` is a builder addition on the same principle: the packet listed
+`no_representative` as a drop, but no such record is dropped today and making one droppable would
+have changed the default's numbers, so it is named and kept.
+
+### The comparison, measured
+
+A COPY of the live SQLite mirror (`master_avwap_setup_tracker.sqlite`, 1,191,460,864 bytes,
+`data_session` **2026-09-03**, 11,372 setups / 401 controls / 3,992 studies), 5,696 setups in the
+28-day window, both policies at the same `as_of_session` and lookback. **32 cells, 27 changed, 17
+rank moves.**
+
+| | episodes | pending | wins-losses | unweighted win rate | Wilson lower | episode-weighted mean R |
+|---|---|---|---|---|---|---|
+| `closed_first_v1` | 2,249 | 498 | 1,078-673 | 61.6% | 0.593 | -0.150 |
+| `first_actionable_v2` | 2,712 | 644 | 1,313-755 | 63.5% | 0.614 | +0.073 |
+
+`n_excluded` is 22 under both. **v2 grades MORE episodes and the headline moves UP, not down** -
+worth saying because the review's premise was that v1 flatters. It does not flatter the RATE; what
+it does is fold a genuine second entry into its predecessor, so 463 attempts never existed as
+episodes. Most of the mean-R gap is the substitution rule rather than the selection: v1's family
+mean absorbs `avg_closed_r` from setups whose representative never closed, and v2 leaves them out
+as pending. Largest single cell: LONG / favorite_setup / `avwape_to_1stdev`, 1,029 observations,
+301 -> 409 episodes, 61.1% -> 64.1%, mean R -0.269 -> +0.002.
+
+**Live gate #78.** Nothing here promotes. The desk's next persisted tracker write must leave
+`selection_policy = closed_first_v1` on every recent family row; the artifact stays under
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`; and the policy decision is the
+trader's, as a separate change with its own golden fixtures.

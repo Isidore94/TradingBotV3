@@ -4745,7 +4745,7 @@ def _representative_scenario(
     ]
     if not matching:
         return None
-    if selection_policy_lib._resolve(policy) == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2:
+    if selection_policy_lib.resolve_policy(policy) == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2:
         wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID_V2 or "").strip()
     else:
         wanted = str(REPRESENTATIVE_EXIT_TEMPLATE_ID or "").strip()
@@ -7101,7 +7101,7 @@ def _summarize_tracker_setup_outcome(
     ``selection_policy`` and ``as_of_session`` are additive keys present under
     both policies.
     """
-    resolved_policy = selection_policy_lib._resolve(policy)
+    resolved_policy = selection_policy_lib.resolve_policy(policy)
     as_of_day = _parse_iso_date_or_none(as_of_session) if as_of_session else None
     is_default_read = (
         not include_experimental
@@ -7523,7 +7523,7 @@ def build_recent_tracker_setup_family_rows(
     if not isinstance(setups, dict) or not setups:
         return []
 
-    resolved_policy = selection_policy_lib._resolve(selection_policy)
+    resolved_policy = selection_policy_lib.resolve_policy(selection_policy)
     as_of_session_text = str(as_of_session or "").strip()
     as_of_day = _parse_iso_date_or_none(as_of_session_text) if as_of_session_text else None
     reference_day = reference_date or datetime.now().date()

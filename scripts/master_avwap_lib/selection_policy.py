@@ -84,7 +84,7 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
-def _resolve(policy: object) -> str:
+def resolve_policy(policy: object) -> str:
     text = _text(policy) or DEFAULT_SELECTION_POLICY
     if text not in SELECTION_POLICIES:
         raise ValueError(
@@ -144,7 +144,7 @@ def assign_attempts(rows, *, policy: str = DEFAULT_SELECTION_POLICY) -> list[dic
     rows are mutated in place and also returned, because the family builder
     wants the stamps on the rows it is about to aggregate.
     """
-    policy = _resolve(policy)
+    policy = resolve_policy(policy)
     row_list = list(rows)
     groups = _grouped(row_list)
 
@@ -186,7 +186,7 @@ def select_episode_rows(rows, *, policy: str = DEFAULT_SELECTION_POLICY) -> list
     The returned rows are the SAME dict objects that came in, so the caller's
     downstream weighting reads exactly what it read before.
     """
-    policy = _resolve(policy)
+    policy = resolve_policy(policy)
     row_list = list(rows)
     if policy == SELECTION_CLOSED_FIRST_V1:
         selected = [_v1_pick(group) for group in _grouped(row_list).values()]

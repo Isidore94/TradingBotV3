@@ -612,6 +612,21 @@ Each item requires parity/rollback evidence before the next authority cutover.
 3. **P2.3 Repair remaining point-in-time defects.** Cover moving levels, history
    keys, backfill leakage, tracker identity, score ordering, factor horizons,
    corporate actions, and survivorship with intentional-difference fixtures.
+   **Tracker identity: the fixtures exist and the decision is owed** (ST4,
+   2026-09-06, branch `claude/st4-first-actionable`).
+   `scripts/master_avwap_lib/selection_policy.py` names `closed_first_v1` (the
+   shipped rule, still `DEFAULT_SELECTION_POLICY` everywhere) and the opt-in
+   `first_actionable_v2` (fixed first-actionable attempt identity, declared
+   re-entry rule, declared `full_band2` representative exit, pending stays
+   pending, replay through `as_of_session`).
+   `tests/test_st4_first_actionable.py` is the intentional-difference set -
+   every case asserts BOTH readings - and
+   `tests/fixtures/st4_family_rows_golden.csv` is the characterization pinned
+   from `main` before the code existed. `scripts/tracker_selection_compare.py`
+   holds the frozen v1-vs-v2 evidence. **Still owed: the trader's policy
+   decision (live gate #78); a switch is a separate change with its own golden
+   fixtures.** Score ordering, moving levels, backfill leakage, factor
+   horizons, corporate actions and survivorship are untouched.
 4. **P2.4 Make CandidateRegistry authoritative.** Migrate every live candidate writer,
    preserve manual names, prove expiry/restart/rollback, and retire duplicate text-
    file authority only after parity.

@@ -32,6 +32,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 78 | **The selection policy is stamped and the comparison is on the record (ST4)** - nothing live changes and nothing here promotes. (1) The desk's next persisted tracker write leaves `selection_policy = closed_first_v1` on EVERY recent family row (and `as_of_session` empty), which is the proof the default did not move; a row reading `first_actionable_v2` in an export is the defect this gate exists to catch. (2) `n_excluded` and `excluded_reasons` are present on those rows, and where a family dropped an untradeable record the string carries `untradeable=N` - on the 2026-09-03 mirror the whole 28-day window excluded 22 records under BOTH policies, so expect a small number, never zero across all 32 cells. (3) The comparison artifact stays readable at `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\selection_comparison_20260906T113600.json/.csv` with its README block, and its headline numbers are the ones in the 2026-09-06 ST4 entry (32 cells, 27 changed, 17 rank moves; v1 2,249 episodes / 61.6% / Wilson 0.593, v2 2,712 / 63.5% / Wilson 0.614). (4) **The trader's decision is OWED and this gate does not close without it**: keep `closed_first_v1`, or authorize `first_actionable_v2` as a separate change with its own golden fixtures. Until then no export, score, rank or alert may select v2 | 2026-09-06 ST4 entry |
 | 76 | **Real counts on the desk, and one honest leader (ST2)** - after the next persisted tracker write: (1) `master_avwap_setup_type_recent_stats.csv` and `master_avwap_setup_type_stats.csv` both carry `n_wins` / `n_losses` FILLED (not blank), and on the recent file `n_wins + n_losses + n_flats + n_unmeasured + n_pending == n_episodes` on every row, with `n_episodes == tracked_setups`. (2) The recent-types table shows **Win % (unweighted)** and **Win % (recency-weighted)** as two columns whose values DIFFER on at least one family - if every pair is equal the weighting had no bite that day, which is information, not a pass. (3) The Setup Types tab leads with **Win %** and its population sentence names `trade_r_representative_exit` and still ends with M3's `N expired unmeasured, excluded`. (4) The banner prints one of the four verdict states and, when it prints a leader, names the SAME family the recent table lists first by bound (pins are novelty badges and do not count); when it prints `discovery only`, the word "Leader" is absent from that line. (5) No study family is ever named as the leader, and the exclusion count is shown | 2026-09-06 ST2 entry |
 | 74 | **The control and study populations are shown, and the April framework is read (M5)** - restated after the reviewer round so it can PASS (the first wording demanded an equal `n` the framework does not produce). After the next persisted tracker write: (1) `master_avwap_control_discovery.csv` and `master_avwap_study_discovery.csv` exist, the control file carrying its three cohort rows plus one family row per (side, family), in an `all` block AND a `lately` block, every row stamped `population_setups`. (2) The **Controls** tab's sentence reads `N graded episodes from the M control setups the scan REJECTED` with **N < M** and M near 401 (Studies likewise, M near 3,992) - the two numbers are different things and a tab printing one of them twice is the defect this clause replaces. (3) Both tables sort by the Wilson lower bound, not the raw rate. (4) The **Exit frameworks** tab shows `comparison_apr2026` rows beside `baseline` ones, grouped by side and bucket with the baseline above its twin, Experimental reading True. (5) **The denominators reconcile, which is the real check**: on a (side, bucket) where the template has no `blocked_stop_rules`, the comparison's `n` EQUALS the baseline's and `Filtered` is 0; on SHORT / near_favorite_zone for `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav`, `n + Filtered` equals the baseline's `n` (the reviewer measured 585 + 98 = 683 on the live tracker). A smaller `n` with a matching `Filtered` is the experiment working; a smaller `n` with `Filtered` 0 is a defect | 2026-09-05 M5 entry |
 | 73 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
@@ -114,6 +115,83 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-06 (Sunday) - ST4: the selected opportunity is fixed before its outcome is seen (prepared, NOT decided)
+
+**Branch `claude/st4-first-actionable`, NOT merged.** Built on the tester's nine RED tests
+(`tests/test_st4_first_actionable.py`, ten cases with the parametrize) plus the golden
+`tests/fixtures/st4_family_rows_golden.csv` pinned from `main` at `84ee24d6`;
+`origin/claude/st2-real-counts` (`1145d3b7`) merged in first and clean, so both packets' additive
+columns are on the same rows and all three goldens pass. Trader: *"Use a fixed first-actionable
+observation/attempt identity and an explicit representative exit chosen without outcome
+knowledge... Retain existing policy under its old identity."*
+
+**What was true.** Three selections read the outcome to decide what to grade.
+`_dedupe_recent_tracker_family_rows` sorted `(0 if closed_setups > 0 else 1, scan_date)`, so a
+later rescan that happened to close beat the earlier open entry a trader could have taken.
+`_representative_scenario` fell to `matching[0]`, so reordering the `scenarios` dict moved one
+setup's headline from **+2.00R to -1.00R**. `_summarize_tracker_setup_outcome` replaced an OPEN
+representative's R with `avg_closed_r` - **+3.00R reported for a trade still running**. Every one
+of the three is UNCHANGED under `closed_first_v1`, which is `DEFAULT_SELECTION_POLICY` and is
+what every caller still gets.
+
+**What was built.** `scripts/master_avwap_lib/selection_policy.py` names both policies and owns
+the ONE implementation of the shipped rule (`_v1_pick`, moved verbatim, so it cannot drift from
+what the challenger is measured against). `first_actionable_v2` is opt-in only: episode identity
+gains `attempt_index`, attempt 1 is the earliest scan row, a later row opens attempt k+1 only when
+the previous attempt's representative scenario closed strictly before it, a rescan of a live
+attempt is one more OBSERVATION, and an open attempt stays `pending` with no substitution.
+`REPRESENTATIVE_EXIT_TEMPLATE_ID_V2 = "full_band2"` is declared (the first baseline template - the
+one dict order always practically returned, so declaring it reads no outcome).
+`build_recent_tracker_setup_family_rows` gained `selection_policy=` and `as_of_session=` and
+stamps `selection_policy`, `as_of_session`, `n_excluded`, `excluded_reasons` on every row.
+
+**The premise the packet flagged, verified: there is no exit-date field on a scenario.**
+`_apply_scenario_exit_event` appends one entry per exit LEG to `events`, so the recorded exit is
+the LAST entry's `trade_date` and an open scenario has that list present and empty. The new
+`_scenario_recorded_exit_date` gates that read on the CLOSED status, because a PARTIAL leaves a
+dated event on a scenario still in the trade and reading it would let v2 open a second attempt
+mid-trade - pinned by a builder-added test.
+
+**Population accounting names the 2026-09-06 decisions and reopens none.** `excluded_reasons` has
+two grains and the token says which: a bare `reason=N` counts records never admitted and sums into
+`n_excluded` (`untradeable` = decision (c), `after_as_of` = the replay); an `_in_population` token
+counts counted episodes a decision deliberately KEPT (`expired_unmeasured_in_population` =
+decision (b), so `n_excluded` does NOT include it). Decision (a), swept-measured M5 trades, lives
+in another file and is untouched here; it is named in the comparison's README.
+
+**The comparison, on a COPY of the live SQLite mirror** (`master_avwap_setup_tracker.sqlite`,
+1,191,460,864 bytes, `data_session` **2026-09-03**, 11,372 setups / 401 controls / 3,992 studies;
+5,696 setups in the 28-day window), both policies at the same `as_of_session` and lookback.
+Artifacts copied to `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`
+(`selection_comparison_20260906T113600.json` / `.csv`). **32 cells, 27 changed, 17 rank moves.**
+
+| | episodes | pending | wins-losses | unweighted win rate | Wilson lower | episode-weighted mean R |
+|---|---|---|---|---|---|---|
+| `closed_first_v1` | 2,249 | 498 | 1,078-673 | 61.6% | 0.593 | -0.150 |
+| `first_actionable_v2` | 2,712 | 644 | 1,313-755 | 63.5% | 0.614 | +0.073 |
+
+`n_excluded` is **22 under both**. The largest single cell move is LONG / favorite_setup /
+`avwape_to_1stdev`: 1,029 observations, 301 -> 409 episodes, 61.1% -> 64.1%, mean R -0.269 ->
++0.002. **The direction is worth saying out loud: v2 grades MORE episodes and the headline moves
+UP, not down** - a genuine re-entry stops being folded into its predecessor, and most of the mean-R
+gap is the substitution rule rather than the selection (v1's family mean absorbs `avg_closed_r`
+from setups whose representative never closed; v2 leaves them out as pending). The biggest rank
+moves are five places (LONG / favorite_setup / `mid_earnings_ema15_retest` 5 -> 10, LONG /
+favorite_setup / `post_earnings_avwap_bounce` 9 -> 14).
+
+**Shadow only.** No export selects v2; the default is byte-identical (golden reproduced under both
+the bare default call and an explicit `DEFAULT_SELECTION_POLICY`); nothing here reaches a
+detector, score, rank, alert, watchlist, Focus, the review queue or `review_policy.json`. **The
+policy decision is the trader's and is OWED** - gate #78.
+
+**Verification.** `pytest tests/ -q` 6,959 passed, 2 skipped, 72 subtests, exit 0 (lock free);
+`ruff` clean; smoke 7/7; `launch_gui.py --selftest` 74/74. No packaging trigger: two new modules
+inside `scripts/` and `scripts/master_avwap_lib/`, both already collected, no new dependency and
+no non-`.py` asset. Fail-before-fix proven by stashing `scripts/master_avwap_lib/legacy.py` - all
+ten ST4 cases red, restored, all ten green. One pre-existing test needed its DOUBLE widened:
+`tests/test_regime_conditioning.py`'s `_summarize_tracker_setup_outcome` fake took only
+`(setup)`; it now takes `**_policy`. No assertion moved.
 
 ### 2026-09-06 (Sunday) - ST2: real integer counts at each table's own grain, and ONE declared leader
 
