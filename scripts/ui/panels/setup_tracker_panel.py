@@ -1755,7 +1755,7 @@ def _remembered_verdict(panel, rows, *, kind: str, last_completed_session, **kwa
 
 
 def _verdict_block_html(
-    verdict, *, label: str, muted: str, side_color, discovery_note: str = ""
+    verdict, *, label: str, muted: str, side_color
 ) -> str:
     """One horizon's line, straight off a `working_lately.LeaderVerdict`.
 
@@ -1766,7 +1766,7 @@ def _verdict_block_html(
     (re-review blocker 2). The caller used to hardcode "2-session discovery",
     which then sat over a real `leader` verdict and called it discovery.
     """
-    from working_lately import discovery_basis_phrase, verdict_label_suffix
+    from working_lately import discovery_basis_phrase, discovery_note, verdict_label_suffix
 
     label = f"{label}, {verdict_label_suffix(verdict)}"
     if verdict.state in {"leader", "last_reliable_reading"} and verdict.leader is not None:
@@ -1797,10 +1797,12 @@ def _verdict_block_html(
         # just not current, and calling it thin misnames the gate (re-review
         # advisory 1).
         basis = discovery_basis_phrase(reason)
-        # ...and the "no session at all" sentence only belongs on a row that
-        # really has none. Printing it beside "58 sessions behind" was two
-        # contradictory facts in one line.
-        note = discovery_note if reason == "no_session" else ""
+        # ...and the extra sentence a discovery row earns, which for exactly
+        # one reason is "the export carries no measured session". It lives
+        # beside the phrase that names the same gate, so a caller can no longer
+        # pass one that does not match (re-check advisory 2). Printing it beside
+        # "58 sessions behind" was two contradictory facts in one line.
+        note = discovery_note(reason)
         return (
             f"<div style='color:{muted}'><b>{_esc(label)}:</b> {_esc(head)} - "
             f"{_esc(basis)}: "
@@ -1896,19 +1898,19 @@ def _best_now_banner_html(panel: SetupTrackerPanel, verdicts: dict[str, Any] | N
         f"<div style='border:1px solid {favorite_c}; padding:6px; margin-bottom:6px'>",
         f"<b style='color:{favorite_c}; font-size:10pt'>BEST PERFORMING RIGHT NOW</b>",
     ]
+    # **No conditional.** `_verdict_block_html` renders all four states, and the
+    # guard that used to sit here ("a discovery row OR a leader, else a
+    # hardcoded sentence") dropped `no_clear_leader` - today's live short-term
+    # state, 12 eligible families with the top two 0.001 of bound apart - into
+    # "not enough 2-session samples yet", which was false AND contradicted the
+    # card three lines above saying "no clear leader". A renderer that has a
+    # verdict must render the verdict.
     parts.append(
         _verdict_block_html(
             short_verdict,
             label="Short-term (1-2d)",
             muted=muted,
             side_color=_side_color,
-            discovery_note="The 2-session export carries no session, so its freshness is unstated.",
-        )
-        if short_verdict.coverage.get("discovery_leader") is not None
-        or short_verdict.leader is not None
-        else (
-            f"<div style='color:{muted}'><b>Short-term (1-2d):</b> "
-            f"not enough 2-session samples yet (accrues automatically each scan).</div>"
         )
     )
     parts.append(
