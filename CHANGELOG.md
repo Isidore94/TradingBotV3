@@ -45,16 +45,52 @@ which is evidence and must not be loaded as context.
   `setup_docs.family_record_sentence` renders one line per family AT READ TIME,
   at ONE declared horizon (`evidence_stats.SWING_HORIZON_SESSIONS`, 5 - the same
   one the AWAY digest ranks on), from ONE pass over the tracker.
-  **PARTIAL, and what is wired is named** (R4 B3): the AWAY digest ranking, both
+  **WIRED** (R4 B3, completed by ST2): the AWAY digest ranking, both
   setup-doc renderers, the Master AVWAP setups table's **Family Win %** column,
   the Setup Tracker's **Last 30 Days** tab, and all four Weekend Prep cohort
-  tables - each SORTING by the Wilson lower bound. **STILL OWED: the Setup
-  Tracker's Setup Types tab**, because `master_avwap_setup_type_stats.csv` has no
-  win column and the outcomes file cannot be joined at that table's grain (184
-  rows over 71 (side, bucket, family, zone) groups). **ONE Wilson z**:
+  tables - each SORTING by the Wilson lower bound. **The Setup Types tab now
+  counts its own wins at its own grain** (ST2.2, 2026-09-06): the seam V3 left
+  owed, because `master_avwap_setup_type_stats.csv` had no win column and
+  `master_avwap_tier_outcomes.csv` cannot be joined at that table's grain (184
+  rows over 71 (side, bucket, family, zone) groups, so one joined rate would
+  repeat across up to six rows and read as each row's own). **ONE Wilson z**:
   `swing_headline.WILSON_Z` (1.96). `expected_r`'s 1.28 is a parameter of the
   proven-quality score in a fenced scoring file and no trader-facing surface may
   reach for it.
+- **The tracker exports INTEGER counts at each table's own grain, and the
+  weighted rate keeps its own name** (ST2.1/ST2.2, 2026-09-06).
+  `build_recent_tracker_setup_family_rows` and `build_tracker_setup_type_rows`
+  each write `n_wins` / `n_losses` / `n_flats` (representative closed R exactly
+  0) / `n_unmeasured` (closed and unreadable) / `n_pending`, plus - on the
+  recent rows - `n_observations` (pre-dedupe), `n_episodes` (post-dedupe, the
+  true name of today's `tracked_setups`), `n_symbols`, `n_entry_sessions`,
+  `win_rate_closed_unweighted`, `latest_measured_session` and `outcome_kind` =
+  `trade_r_representative_exit`. **A count is never rebuilt from a rate**:
+  `win_rate_closed` is a RECENCY-WEIGHTED mean and
+  `swing_headline.headline_from_rate` used to recover `round(rate * n)` from it,
+  which printed `25% (n=4)` on a family that went 2-2. That function stays for
+  its legitimate callers - the ones whose stored rate IS `wins / n`, now named
+  in its docstring - and the tracker's readers use `headline_from_counts`. A row
+  from an export that predates the columns reads `counts not exported yet`,
+  never a reconstructed number. `win_rate_closed`, `ranking_score`,
+  `score_delta` and every pre-existing column keep their values (goldens).
+- **ONE declared leader, and the banner reads it** (ST2.3, 2026-09-06).
+  `scripts/working_lately.py` is pure (no Qt, no file I/O) and owns the
+  decision: `select_leader(rows, *, kind, last_completed_session, previous=None,
+  min_n=MIN_REPORTABLE_N)` orders eligible rows by the Wilson lower bound on the
+  INTEGER counts and returns one of four states - `leader`, `no_clear_leader`,
+  `last_reliable_reading`, `no_evidence` - each naming the gate that closed.
+  Eligible is `namespace == "live"` AND at or above `min_n` AND fresh within
+  `LEADER_FRESHNESS_SESSIONS` (2) EXCHANGE sessions; the crown needs
+  `LEADER_MARGIN_LB` (0.05) of clear air over the runner-up. Both numbers were
+  declared 2026-09-06 before any forward evaluation and are not tuned to make a
+  winner appear. **A study NEVER leads**, whatever its R, and is counted in
+  `coverage["studies_excluded"]`; a NEW/RISING pin is a novelty badge and is not
+  an input. When nothing is eligible the coverage carries a `discovery_leader`
+  the banner prints as `discovery only` - never as a leader, and never beside
+  one. The banner used to pick `max(avg_closed_r)` across BOTH namespaces while
+  the table under it ranked by the bound, so the two named different families on
+  one screen and a three-example study could be crowned.
 - **MFE after a held level leads every DAY-TRADE surface** (V3 item 2, WIRED by
   R4 A9/A10). The Day Trade Tracker leads with **Held 30m** and Held x Ran and
   opens sorted by the second; the tier statistics stay beside them. **One
@@ -1254,6 +1290,39 @@ sessions of forward accrual start at its first measured row. Their remaining evi
 gates are in `plan.md`.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-06 - ST2: real integer counts at each table's own grain, and ONE honest leader (branch `claude/st2-real-counts`, not merged)
+
+Trader: *"Export true integer wins/losses/flats/unmeasured at each table's actual episode and
+outcome grain... Make the existing banner consume the same declared eligible leader as the
+evidence table... A study must stay labelled study and cannot become the live leader merely by
+having high R."*
+
+- **The recent-types table showed a win count nobody observed.** `win_rate_closed` is a
+  RECENCY-WEIGHTED mean of win flags; the panel handed it to
+  `swing_headline.headline_from_rate`, which rebuilds an integer pair as `round(rate * n)`.
+  Reproduced through the real writer: two 28-day-old wins at weight .25 plus two same-day losses
+  at weight 1.0 give **0.2**, and the cell printed **`25% (>=5%, n=4)`**, Wilson bound and all,
+  where the truth was **2-2, 50%**. The counts are now exported and READ; the weighted rate stays
+  on the table under **Win % (recency-weighted)** beside **Win % (unweighted)**.
+- **The banner and the table named different families on one screen.** `_best_now_banner_html`
+  took `max(avg_closed_r)` over any row with three closed setups, across the live AND study
+  namespaces. On the fixture that reproduces it the table lists `tight_and_hot` (24-6, bound
+  0.627) first and the banner crowned `fat_but_wide` (54-36 at +2.50R, bound 0.497). Both now
+  read `working_lately.select_leader` on the same rows in the same order.
+- **V3 item 1 is COMPLETE.** The Setup Types tab has its own win counts at its own grain, leads
+  with **Win %** and the ONE Wilson bound, sorts by that bound inside each side, and carries a
+  population sentence naming the outcome kind - keeping M3's `N expired unmeasured, excluded`
+  clause verbatim.
+- **Champion preserved, proven.** Two goldens pinned from `main` at `84ee24d6`: every original
+  column byte-identical, the old recent header a PREFIX of the new one, `ranking_score` and
+  `score_delta` compared explicitly. Nineteen tests (eleven from the tester, eight from the
+  builder), each proven red on the un-fixed code first.
+- **Owed at integration:** ST1's `Headline.outcome_kind` wire (ST1 was tests-only when this
+  built, so `outcome_kind` is a row column here). **Open ask:**
+  `build_tracker_short_horizon_rows` is outside the three functions the trader's ST2 decision
+  names, so it was not edited - the two-session export carries no integer counts and no session
+  column, which is why that block can only ever be labelled `2-session, discovery`.
 
 ### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
 

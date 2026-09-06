@@ -1542,6 +1542,70 @@ measurement and the reasoning behind each rule.
 
 **Headline statistics and the priority switch (V3, decision 0016)**
 
+- **The banner crowned max R on three and the table invented a count** (ST2,
+  2026-09-06). Two defects on one screen, both reproduced through the real code
+  before anything was changed.
+
+  *The invented count.* `legacy.build_recent_tracker_setup_family_rows` computes
+  `win_rate_closed` as a RECENCY-WEIGHTED mean of win flags - `exp(-ln2 *
+  age_days / 14.0)` times `TRACKER_REGIME_MISMATCH_WEIGHT` on a regime mismatch -
+  and the Setup Tracker's panel handed that rate to
+  `swing_headline.headline_from_rate`, whose whole job is to recover the integer
+  pair Wilson needs as `round(rate * n)`. That is exact when the stored rate was
+  computed as `wins / n`, which is how the veto and like cohort CSVs write theirs.
+  It is not how this one is written. Measured through the real writer: two
+  28-day-old wins at weight .25 plus two same-day losses at weight 1.0 give
+  **0.2**, and the cell printed **`25% (>=5%, n=4)`** - a 1-of-4 that never
+  happened, carrying a Wilson lower bound computed from it - where the family had
+  gone **2-2, 50%**. The fix is not a better reconstruction; there is no such
+  thing. The builders now export `n_wins` / `n_losses` / `n_flats` /
+  `n_unmeasured` / `n_pending` at each table's own grain, counted in the SAME
+  loop that builds `win_flags` so the counted and the weighted readings can never
+  read different episodes, and the panel uses `headline_from_counts`. The
+  weighted rate stays on the table under **Win % (recency-weighted)** beside
+  **Win % (unweighted)**: it is a real number that answers a different question,
+  and deleting it would be the mirror of the original mistake. A row from an
+  export written before the columns existed says **`counts not exported yet`**.
+  `headline_from_rate` survives for its legitimate callers and its docstring now
+  names them and forbids a weighted rate.
+
+  *The crown on three examples.* `_best_now_banner_html` picked
+  `max(avg_closed_r)` over any row with three closed setups, across the live AND
+  study namespaces, while the table directly underneath already ranked by the
+  Wilson lower bound. On the fixture that reproduces it the table lists
+  `tight_and_hot` (24-6, bound 0.627) first and the banner crowned
+  `fat_but_wide` (54-36 at +2.50R, bound 0.497); worse, a three-example STUDY
+  with a big R could be presented as the desk's best performer, which is exactly
+  the confusion between "interesting" and "working" that plan.md sec 7's
+  promotion ladder exists to prevent. Both now read
+  `working_lately.select_leader` on the same rows in the same order, so they
+  cannot disagree. **`LEADER_MARGIN_LB` = 0.05** (five points of *lower bound*,
+  not of raw rate: two rates can differ by fifteen points and still be one sample
+  apart when one is thin, and the bound is the number that already knows that)
+  and **`LEADER_FRESHNESS_SESSIONS` = 2** (one weekend plus a holiday; the
+  tracker writes at the close slot, so a reading older than that is news about
+  the desk, not about the family) were both declared 2026-09-06 BEFORE any
+  forward evaluation and are not tuned to make a winner appear. Four states, each
+  naming the gate that closed: `leader`, `no_clear_leader` (the reason names BOTH
+  families and the gap - printing the winner of a coin flip is how a banner
+  starts lying), `last_reliable_reading` (a stale input plus a `previous`
+  verdict; the leader and the `as_of` are the previous one's, unchanged) and
+  `no_evidence`. Lead decision the same day: `min_n` is an ARGUMENT (default
+  `MIN_REPORTABLE_N`) so the two-session block passes `SHORT_TERM_MIN_SAMPLES`
+  without declaring a second statistics contract, and a `no_evidence` verdict
+  carries `coverage["discovery_leader"]` - the best live row that was kept out -
+  which the banner prints as `No leader at the n=30 floor - leading on thin
+  evidence: <side> <family> (n=12), discovery only`. **Never the word leader for
+  it, and never beside a real one.** A NEW/RISING pin stays a NOVELTY badge on
+  the table and is not an input to the leader.
+
+  *What was NOT changed.* `ranking_score`, `score_delta`, the Expected-R
+  calibration and every pre-existing column of both exports, pinned byte-identical
+  by two goldens taken from `main` at `84ee24d6`. The two-session block's export,
+  `build_tracker_short_horizon_rows`, is outside the three functions the trader's
+  ST2 decision names, so it was not touched - it carries no integer counts and no
+  session column, which is why `select_leader` can never call one of its rows
+  fresh and that block is labelled `2-session, discovery` by construction.
 - **The priority switch reorders and never withholds** - and it is **NOT BUILT
   YET** (V4 owns it; R4 B3 removed the sentence that cited a test for it). When
   it is built: "prioritise what is working" is display-only (decision 0016
