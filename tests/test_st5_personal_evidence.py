@@ -514,9 +514,17 @@ def test_missing_planned_risk_is_blank_counted_and_never_written(tmp_path, monke
     assert coverage["closed"] == 3
     assert coverage["provisional"] == 2
     assert coverage["planned_risk"] == 0
+    # CONTRACT CHANGED BY THE 2026-09-06 REVIEW (blocker 2), not weakened. The
+    # denominator is now closed OR PARTLY CLOSED for BOTH tag lanes: the live
+    # journal's one confirmed tag sits on a CLOSED_PARTIAL trade (EAT,
+    # 2026-08-21), so counting confirmed over CLOSED and provisional over ALL
+    # dropped it from the numerator and the headline said "No confirmed setup
+    # tags" about a journal that holds one. Every COUNT in this fixture is
+    # unchanged - there is no CLOSED_PARTIAL row here - only the wording.
+    assert coverage["reviewable"] == 3
     assert coverage["line"] == (
-        "Confirmed tags: 0 of 3 closed trades. Provisional awaiting review: 2. "
-        "Planned risk recorded: 0 of 3."
+        "Confirmed tags: 0 of 3 closed or partly closed trades. "
+        "Provisional awaiting review: 2. Planned risk recorded: 0 of 3."
     )
 
     assert calls == []
@@ -551,7 +559,19 @@ def test_an_unknown_instrument_is_uncertain_and_never_pooled_into_complete(popul
 
     summary = journal_analytics.personal_evidence_summary(population_store.list_trades())
     assert unknown["trade_id"] in summary["uncertain"]["trade_ids"]
-    assert unknown["trade_id"] not in summary["complete"]["trade_ids"]
+    # CONTRACT CHANGED BY THE 2026-09-06 REVIEW (blocker 1), not weakened.
+    # `uncertain` is a CROSS-CUTTING label now, not a fourth bucket: the status
+    # populations partition the journal and this trade is CLOSED, so it is
+    # counted in `complete` AND labelled uncertain there. Reproduced on a copy
+    # of the live store: with uncertainty checked first, `uncertain` was n=120
+    # and swallowed 84 CLOSED, all 7 CLOSED_PARTIAL and 29 of 32 OPEN trades -
+    # `partly_closed` read n=0 while seven exist, and open positions' unrealized
+    # marks were summed into one P&L figure and counted as WINNERS. What this
+    # test exists for survives, restated: an uncertain trade is never presented
+    # as a clean result, and it is LABELLED wherever it is counted.
+    assert unknown["trade_id"] in summary["complete"]["trade_ids"]
+    assert unknown["trade_id"] in summary["complete"]["uncertain_trade_ids"]
+    assert summary["uncertain"]["cross_cutting"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -629,12 +649,25 @@ def test_the_four_populations_partition_every_trade(population_store):
     everything = {trade["trade_id"] for trade in trades}
     union = set().union(*buckets.values())
     assert union == everything
-    assert sum(len(ids) for ids in buckets.values()) == len(everything) == 7
+    # CONTRACT CHANGED BY THE 2026-09-06 REVIEW (blocker 1), not weakened. THE
+    # PARTITION IS THE THREE STATUS POPULATIONS; `uncertain` is a cross-cutting
+    # label whose members are already counted in one of them, so the four no
+    # longer sum to the whole and are not meant to. The partition property this
+    # test exists for is asserted exactly as before - over the three that
+    # actually partition.
+    status_names = ("complete", "partly_closed", "open_exposure")
+    assert sum(len(buckets[name]) for name in status_names) == len(everything) == 7
+    assert set().union(*(buckets[name] for name in status_names)) == everything
 
     # AAPL (+250), SPY put (+200) and the DRAM sold put (+100) are the three
     # complete, unambiguous results. MSFT is half out, NVDA never left, TSLA is
     # an unknown instrument and CVNA is a two-contract structure.
-    assert summary["complete"]["n"] == 3
+    # Five CLOSED trades, of which TSLA and CVNA are LABELLED uncertain (blocker
+    # 1's contract change). Three winners, because the two uncertain ones lost -
+    # the winners count is what this line was really guarding and it is
+    # unchanged.
+    assert summary["complete"]["n"] == 5
+    assert summary["complete"]["n_uncertain"] == 2
     assert summary["complete"]["winners"] == 3
     assert summary["partly_closed"]["n"] == 1
     assert summary["open_exposure"]["n"] == 1

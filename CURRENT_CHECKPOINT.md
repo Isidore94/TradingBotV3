@@ -32,7 +32,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 79 | **Personal evidence counts once and refuses to name a best setup (ST5)** - the next nightly `preference_trade_outcomes` slot writes a report whose ledger reason carries `n_trades_matched` beside `n_statements_matched` and names the window as `10 sessions`; on the current store expect **10 trades behind 13 matched statements** over a 45-day read (the pair is what makes the duplicate visible - equal numbers on a quiet window are not a failure, a MISSING `n_trades_matched` is). Then on the desk: Weekend Prep's "Tag this week" lists the **26 provisional rows** with `Week` reading `backlog` on the ones older than the current week, the "Missing planned risk" table lists closed trades with no plan (expect ~165, newest first) and one row opens that trade in the Journal's Trades tab; the coverage line under the verdict card reads `Confirmed tags: 1 of 165 closed trades. Provisional awaiting review: 26. Planned risk recorded: 0 of 165.` and the Analytics tab shows the same sentence with `No confirmed setup tags`-class refusal beside it. **Nothing here is a scoring change**: the champion's scoring population, every detector and every alert are untouched by construction | 2026-09-06 ST5 entry |
+| 79 | **Personal evidence counts once and refuses to name a best setup (ST5)** - the next nightly `preference_trade_outcomes` slot writes a report whose ledger reason carries `n_trades_matched` beside `n_statements_matched` and names the window as `10 sessions`; on the current store expect **10 trades behind 13 matched statements** over a 45-day read (the pair is what makes the duplicate visible - equal numbers on a quiet window are not a failure, a MISSING `n_trades_matched` is). Then on the desk: Weekend Prep's "Tag this week" lists the **26 provisional rows** with `Week` reading `backlog` on the ones older than the current week, the "Missing planned risk" table lists closed trades with no plan (expect ~165, newest first) and one row opens that trade in the Journal's Trades tab; the coverage line under the verdict card reads `Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting review: 26. Planned risk recorded: 0 of 172.` and the Analytics tab shows that sentence beside `1 confirmed setup tag - under the n=30 floor (26 provisional awaiting review) - no personal setup can be called best.` **The Analytics tab's four population numbers must read 165 complete / 7 partly closed / 32 open summing to 204, with `uncertain` a cross-cutting 120 (84 / 7 / 29) carrying NO pooled money** - a `partly_closed` of 0 or an `uncertain` that sums beside the other three is the review's blocker back again. **Nothing here is a scoring change**: the champion's scoring population, every detector and every alert are untouched by construction | 2026-09-06 ST5 entry |
 | 74 | **The control and study populations are shown, and the April framework is read (M5)** - restated after the reviewer round so it can PASS (the first wording demanded an equal `n` the framework does not produce). After the next persisted tracker write: (1) `master_avwap_control_discovery.csv` and `master_avwap_study_discovery.csv` exist, the control file carrying its three cohort rows plus one family row per (side, family), in an `all` block AND a `lately` block, every row stamped `population_setups`. (2) The **Controls** tab's sentence reads `N graded episodes from the M control setups the scan REJECTED` with **N < M** and M near 401 (Studies likewise, M near 3,992) - the two numbers are different things and a tab printing one of them twice is the defect this clause replaces. (3) Both tables sort by the Wilson lower bound, not the raw rate. (4) The **Exit frameworks** tab shows `comparison_apr2026` rows beside `baseline` ones, grouped by side and bucket with the baseline above its twin, Experimental reading True. (5) **The denominators reconcile, which is the real check**: on a (side, bucket) where the template has no `blocked_stop_rules`, the comparison's `n` EQUALS the baseline's and `Filtered` is 0; on SHORT / near_favorite_zone for `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav`, `n + Filtered` equals the baseline's `n` (the reviewer measured 585 + 98 = 683 on the live tracker). A smaller `n` with a matching `Filtered` is the experiment working; a smaller `n` with `Filtered` 0 is a defect | 2026-09-05 M5 entry |
 | 73 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
 | 72 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot, checked against REPRODUCIBLE numbers rather than the audit's prose (reviewer, 2026-09-05: the first wording was unsatisfiable). (1) `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE, with no "refresh skipped" line. (2) The payload's `saved_by` reads `close_slot` and its `saved_at` is market-local with an offset. (3) The three stats CSVs carry that same `tracker_saved_at`, and the Setup Tracker's status line shows BOTH clocks in ONE zone - `Tracker as of ... (close_slot); scan factors as of ...`, the two offsets equal. (4) `trading_bot.log` carries the literal token **`n_expired_unmeasured=`**; on the 2026-09-04 mirror the reproducible counts are **setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7, control 0, 52 total**, so expect ~52 on a tracker of that vintage - not the audit's "37 + 41", which counted a different thing. (5) The Setup Types tab says `N expired unmeasured, excluded` with N matching the summed CSV column (Current Picks deliberately says nothing - different population). (6) Family win rates unchanged to the cent where those setups contributed only a denominator, and the champion's scoring population unchanged by construction. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation, and **the FIRST save after merge rewrites every record's content hash** (`saved_at`/`saved_by` join the header, and `last_replayed_session` / `expiry_reason` / `stale_sessions` join the records), so a large `written` count on that one save is expected and is not a parity failure | 2026-09-05 M3 entry |
@@ -123,8 +123,9 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 The lead merges; both branches carry the same history and the build branch is ahead by two
 commits (`7a8c2ca0`, `6e06d5c2`) plus this documentation commit.
 
-**Baseline:** `pytest tests/ -q` with nothing deselected, nightly AI lock probed FREE:
-**6948 passed, 1 skipped, 72 subtests passed, 0 failed, exit 0**, ~6 min 50 s. `ruff check .`
+**Baseline (after the review round):** `pytest tests/ -q` with nothing deselected, nightly
+AI lock probed FREE: **6955 passed, 1 skipped, 72 subtests passed, 0 failed, exit 0**,
+5 min 51 s. `ruff check .`
 clean. `scripts/smoke_check.py` 7/7. `launch_gui.py --selftest` 74/74. No packaging trigger:
 `scripts/journal_exposure.py` is a new MODULE inside the already-collected top-level
 `scripts/` tree, not a new package, not a new dependency, not a non-`.py` asset, and nothing
@@ -158,14 +159,62 @@ its own label under the card (see the deviation below), and re-run green.
   legs, because a `trade_legs` row is a FILL (39 live option trades carry exactly two).
   `JournalStore.list_trade_legs` gained ONE column, `e.raw_json`, because the contract is
   recorded nowhere else - there are no right/strike/expiry columns on `trades`.
-- **ST5.4** `journal_analytics.personal_evidence_summary(trades)`, four never-pooled
-  populations that partition the input, plus `coverage`, `headline` and `best_setup`. It
+- **ST5.4** `journal_analytics.personal_evidence_summary(trades)`: three STATUS
+  populations that partition the input (`complete` / `partly_closed` / `open_exposure`),
+  uncertainty as a CROSS-CUTTING label, plus `coverage`, `headline` and `best_setup`. It
   rides on `build_analytics_summary` as the additive `personal_evidence` key, so the
   Analytics tab renders it from rows it already loaded - no second query on the Qt thread.
+
+**REVIEW ROUND (NO-GO -> fixed, 2026-09-06).** Two blockers, both reproduced by the
+reviewer on a COPY of the live journal, both fixed on this branch with fail-first tests:
+
+1. **Populations were by uncertainty, not status.** `_population_of` checked
+   `exposure.is_uncertain` BEFORE `status`, which made "uncertain" a fourth bucket that ATE
+   the other three: `uncertain` came out **n=120** holding 84 CLOSED, ALL 7 CLOSED_PARTIAL
+   and 29 of the 32 OPEN trades, so `partly_closed` read **n=0** while seven exist,
+   `open_exposure` read n=3 with a notional of 7,726 against a real 61,662, and ONE pooled
+   P&L figure summed realized results together with open positions' unrealized marks and
+   counted those marks as WINNERS - the exact defect the whole summary exists to prevent,
+   one level down. Now: `complete` = CLOSED, `partly_closed` = CLOSED_PARTIAL,
+   `open_exposure` = everything else, each carrying `n_uncertain` and
+   `uncertain_trade_ids`; the `uncertain` block is cross-cutting, lists every member with
+   the status it is counted under and a `by_population` split, and **pools no money and no
+   winners at all**. Verified on the copy: 165 / 7 / 32 summing to 204, `uncertain` 120
+   split 84 / 7 / 29, `open_exposure` net and winners both `None` with notional 61,662.
+   The tester's fixture used STK for its partly-closed and open rows, which is why it never
+   caught this; the new tests use OPT and BAG there.
+2. **The headline said "No confirmed setup tags" while the journal holds one.** Confirmed
+   was counted over CLOSED and provisional over ALL rows, and the one confirmed tag sits on
+   a CLOSED_PARTIAL trade (EAT, 2026-08-21), so it fell out of the numerator while its 26
+   provisional siblings stayed in. Both lanes now share ONE denominator - closed OR partly
+   closed - and the wording names the count it has. On the copy: `Confirmed tags: 1 of 172
+   closed or partly closed trades. Provisional awaiting review: 26. Planned risk recorded:
+   0 of 172.` and `1 confirmed setup tag - under the n=30 floor (26 provisional awaiting
+   review) - no personal setup can be called best.` "No confirmed setup tags" survives for a
+   true zero only.
+
+**Advisories, all taken.** `classify_all` builds a `(underlying, expiry, session)` index and
+parses each trade's contracts ONCE instead of comparing every option pair and re-parsing:
+the reviewer's **130 ms at 1,020 trades** is now **5.9 ms** (1.1 ms on the real 204), which
+matters because the Analytics tab calls it on the Qt thread. An empty bucket reports
+`net_pnl: None` rather than `0.00`, and `open_exposure` has no winners cell at all. The
+missing-planned-risk table is capped at the newest **50** (`MISSING_RISK_ROWS_SHOWN`) with
+`showing 50 of 165` printed - the packet's ten-row floor was a minimum height, not a licence
+to build 165 `QTableWidgetItem`s on the Qt thread.
+
+**Four assertions in the tester's file encode the SUPERSEDED contract and were updated in
+place, each annotated with the live numbers and the reason.** They are: the coverage-line
+wording (blocker 2); `unknown["trade_id"] not in complete["trade_ids"]`; the four-way
+partition sum; and `complete["n"] == 3`. Nothing was weakened - the properties those lines
+guarded are re-asserted exactly (the three-way partition is checked with the same
+set-union-and-sum, `complete["winners"] == 3` is unchanged, and the uncertain trade is now
+required to be LABELLED in the population that counts it). The lead should read those four
+diffs before merging; if any of them is wrong, the contract is the thing to revisit.
 - **ST5.5** the whole provisional backlog reaches Weekend Prep's tag list (26 waiting
   against a page scoped to one week - gate #36's obstacle), `needs_review` stays
-  week-scoped, and a "Missing planned risk" table refers a trade to the Journal's Trades tab
-  through `openTradeRequested` -> `JournalPanel.show_trade` -> `TradesTab.select_trade`.
+  week-scoped, and a "Missing planned risk" table (newest 50, `showing 50 of 165`) refers a
+  trade to the Journal's Trades tab through `openTradeRequested` -> `JournalPanel.show_trade`
+  -> `TradesTab.select_trade`.
 
 **`partial_of_spread` could not be derived, and is labelled rather than invented.** The
 packet allowed either a sibling seam or a report that it does not exist. It does not: two

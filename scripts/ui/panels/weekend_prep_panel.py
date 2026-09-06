@@ -1379,8 +1379,11 @@ class TagWeekPage(_StepPage):
                 "Missing planned risk: none - every closed trade carries the risk you planned."
             )
             return
+        shown = len(self._risk_rows)
+        total = int(self._risk_rows[0].get("missing_risk_total") or shown)
+        capped = f"showing {shown} of {total}, " if total > shown else ""
         self.risk_note.setText(
-            f"Missing planned risk: {len(self._risk_rows)} closed trade(s), newest first. "
+            f"Missing planned risk: {total} closed trade(s) - {capped}newest first. "
             "Without a planned risk the journal's R is BLANK, not zero - and it stays "
             "blank, because a risk worked backwards from the result is not a plan. "
             "Open a row to type yours in the Trades tab."
@@ -1599,7 +1602,14 @@ def _read_week_tag_rows(bounds, *, store=None, path=None) -> list[dict]:
     return rows
 
 
-def _read_missing_planned_risk_rows(*, store=None, path=None, limit: int = 200) -> list[dict]:
+#: How many missing-risk rows reach the table. The packet's ten-row floor was a
+#: MINIMUM height, not a licence to build 165 `QTableWidgetItem`s on the Qt
+#: thread; the newest fifty is a session's worth of work and what the cap drops
+#: is PRINTED, because a silent top-N reads as "that was all of it".
+MISSING_RISK_ROWS_SHOWN = 50
+
+
+def _read_missing_planned_risk_rows(*, store=None, path=None, limit: int = MISSING_RISK_ROWS_SHOWN) -> list[dict]:
     """Closed trades with no planned risk, newest first (ST5.5).
 
     `planned_risk` is non-null on **0 of 204** live trades (2026-09-06), which is
@@ -1624,7 +1634,13 @@ def _read_missing_planned_risk_rows(*, store=None, path=None, limit: int = 200) 
         key=lambda row: (str(row.get("trade_date") or ""), str(row.get("symbol") or "")),
         reverse=True,
     )
-    return rows[: max(1, int(limit))]
+    total = len(rows)
+    shown = rows[: max(1, int(limit))]
+    # Every row carries the full count, so the note can say what the cap hid
+    # without a second read and without a parallel return value.
+    for row in shown:
+        row["missing_risk_total"] = total
+    return shown
 
 
 def _read_personal_evidence_coverage(*, store=None, path=None) -> str:

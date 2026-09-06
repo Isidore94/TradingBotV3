@@ -271,6 +271,7 @@ def classify_exposure(
     trade: Mapping[str, Any],
     *,
     siblings: Iterable[Mapping[str, Any]] | None = None,
+    _spread_candidate: bool | None = None,
 ) -> Exposure:
     """What this trade owned and what it was betting on.
 
@@ -278,6 +279,10 @@ def classify_exposure(
     never depends on a list a caller might not have. When it is supplied,
     :func:`_looks_like_a_spread_sibling` may raise the structure to
     ``partial_of_spread_candidate`` - the best the store supports.
+
+    ``_spread_candidate`` is :func:`classify_all`'s way of handing in an answer
+    it already computed from an index, so a whole-journal pass is linear rather
+    than quadratic. Private and optional; the public behaviour is identical.
     """
     instrument = _upper(trade.get("security_type")) or "UNKNOWN"
     ownership = _upper(trade.get("direction")) or "UNKNOWN"
@@ -286,6 +291,9 @@ def classify_exposure(
     structure = "single"
     if len(contracts) > 1:
         structure = "multi_leg"
+    elif instrument == "OPT" and _spread_candidate is not None:
+        if _spread_candidate:
+            structure = "partial_of_spread_candidate"
     elif instrument == "OPT" and siblings is not None:
         for other in siblings:
             if isinstance(other, Mapping) and _looks_like_a_spread_sibling(
@@ -345,17 +353,60 @@ def _market_bias(
 def classify_all(trades: Iterable[Mapping[str, Any]]) -> dict[str, Exposure]:
     """``trade_id -> Exposure`` over a whole list, siblings visible.
 
-    One pass, and the sibling search sees the same list the caller is
-    summarising - which is the only place ``partial_of_spread_candidate`` can be
-    observed at all.
+    The sibling search sees the same list the caller is summarising - which is
+    the only place ``partial_of_spread_candidate`` can be observed at all.
+
+    **LINEAR, by an index.** The first cut compared every option trade against
+    every other one and re-parsed the other's legs each time, which the reviewer
+    measured at **130 ms on 1,020 trades** - on the Qt thread, because the
+    Journal's Analytics tab calls this through `build_analytics_summary`. Each
+    trade's contracts are now parsed ONCE, and the sibling question is answered
+    from a `(underlying, expiry, session) -> contract key sets` index. Same
+    answer, one pass.
     """
     rows = [trade for trade in trades if isinstance(trade, Mapping)]
-    option_rows = [row for row in rows if _upper(row.get("security_type")) == "OPT"]
+    contracts_by_id: dict[str, tuple[OptionContract, ...]] = {}
+    for trade in rows:
+        contracts_by_id[_text(trade.get("trade_id"))] = contracts_for(trade)
+
+    # (underlying, expiry, session) -> the distinct contract-key sets seen there.
+    index: dict[tuple[str, str, str], list[frozenset]] = {}
+    for trade in rows:
+        if _upper(trade.get("security_type")) != "OPT":
+            continue
+        session = _session_of(trade)
+        if not session:
+            continue
+        contracts = contracts_by_id[_text(trade.get("trade_id"))]
+        keys = frozenset(contract.key for contract in contracts)
+        if not keys:
+            continue
+        for contract in contracts:
+            if not contract.underlying or not contract.expiry:
+                continue
+            index.setdefault((contract.underlying, contract.expiry, session), []).append(keys)
+
     out: dict[str, Exposure] = {}
     for trade in rows:
-        out[_text(trade.get("trade_id"))] = classify_exposure(
-            trade, siblings=option_rows if option_rows else None
-        )
+        trade_id = _text(trade.get("trade_id"))
+        candidate: bool | None = None
+        if _upper(trade.get("security_type")) == "OPT":
+            contracts = contracts_by_id[trade_id]
+            keys = frozenset(contract.key for contract in contracts)
+            session = _session_of(trade)
+            candidate = False
+            if keys and session:
+                for contract in contracts:
+                    if not contract.underlying or not contract.expiry:
+                        continue
+                    bucket = index.get((contract.underlying, contract.expiry, session), ())
+                    # A DIFFERENT contract set in the same underlying, expiry and
+                    # session. The same set twice is one trade seen twice, or two
+                    # trades in one name - neither is a structure.
+                    if any(other != keys for other in bucket):
+                        candidate = True
+                        break
+        out[trade_id] = classify_exposure(trade, _spread_candidate=candidate)
     return out
 
 

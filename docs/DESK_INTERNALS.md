@@ -1990,27 +1990,55 @@ same session on a different contract - which is equally what two independent ide
 look like. The label is `partial_of_spread_candidate`, it puts the row in the UNCERTAIN
 population so its P&L never lands in a clean total, and it asserts nothing further.
 
-**Four populations, because pooling them is how an open position's unrealized number gets
-read as a result.** `journal_analytics.personal_evidence_summary` partitions every trade into
-`complete` / `partly_closed` / `open_exposure` / `uncertain`. **Uncertainty is checked
-FIRST**: 55 of the 165 live CLOSED trades carry `security_type = 'UNKNOWN'`, and counting them
-as complete puts a quarter of the journal's P&L behind a noun the data does not support. An
-open position's `net_pnl` is `None`, not zero - none, not nothing - and its size travels as
-`notional`.
+**Populations are by STATUS; uncertainty is a LABEL across them - and the first cut had that
+backwards.** `journal_analytics.personal_evidence_summary` partitions every trade into
+`complete` (CLOSED) / `partly_closed` (CLOSED_PARTIAL) / `open_exposure` (everything else),
+and carries the uncertainty question beside each as `n_uncertain` plus a cross-cutting
+`uncertain` block. The first cut checked `exposure.is_uncertain` FIRST, which made uncertainty
+a fourth bucket that ATE the other three. Reproduced on a copy of the live journal 2026-09-06:
+**`uncertain` came out n=120, holding 84 CLOSED trades, ALL 7 CLOSED_PARTIAL and 29 of the 32
+OPEN ones.** So `partly_closed` read **n=0** while seven exist; `open_exposure` read n=3 with
+a notional of 7,726 against a real **61,662**; and ONE pooled P&L figure summed realized
+results together with open positions' unrealized marks and **counted those marks as
+WINNERS** - which is the exact defect this whole summary exists to prevent, one level down.
+The correct numbers are 165 / 7 / 32 summing to 204, with `uncertain` a cross-cutting 120 split
+84 / 7 / 29 that pools no money and no winners at all: its members span three statuses, and one
+figure over a closed result and an open mark is the thing that went wrong. **An open position's
+`net_pnl` AND `winners` are both `None`** - none, not zero - and its size travels as
+`notional`. An EMPTY bucket reports `None` too: a net of 0.00 says "measured, and it came to
+nothing", where a blank says "nothing here". The tester's fixture used STK for its
+partly-closed and open rows, which is why it passed on a broken partition; the regression tests
+use OPT and BAG there.
 
-**No personal setup is called best without confirmed tags at the floor.** Live: **1 confirmed
-tag, 26 provisional, 145 needs_review, `planned_risk` non-null on 0 of 204.** Below
-`evidence_stats.MIN_REPORTABLE_N` (30) `best_setup` is `None` and the headline says why with
-the provisional count beside it; above it the winner ranks on `swing_headline`'s Wilson lower
-bound, which is the same rule every other trader-facing swing surface uses. The coverage line
-- `Confirmed tags: C of T closed trades. Provisional awaiting review: P. Planned risk
-recorded: R of T.` - reaches the Journal's Analytics tab and Weekend Prep through that one
-helper.
+**No personal setup is called best without confirmed tags at the floor, and one tag is not
+zero tags.** Live: **1 confirmed tag, 26 provisional, 145 needs_review, `planned_risk`
+non-null on 0 of 204.** The first cut counted confirmed over CLOSED and provisional over ALL
+rows - and the one confirmed tag sits on a **CLOSED_PARTIAL** trade (EAT, 2026-08-21), so it
+fell out of the numerator while its 26 provisional siblings stayed in and the headline said
+"No confirmed setup tags" about a journal that holds one. That is a false statement about the
+trader's own work, not a conservative one. Both lanes now share ONE denominator - closed OR
+partly closed, 172 - and the headline names the count it has: `1 confirmed setup tag - under
+the n=30 floor (26 provisional awaiting review) - no personal setup can be called best.` "No
+confirmed setup tags" is reserved for a true zero. Below `evidence_stats.MIN_REPORTABLE_N`
+(30) `best_setup` stays `None`; above it the winner ranks on `swing_headline`'s Wilson lower
+bound, the same rule every other trader-facing swing surface uses. The coverage line -
+`Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting review: 26.
+Planned risk recorded: 0 of 172.` - reaches the Journal's Analytics tab and Weekend Prep
+through that one helper.
+
+**The whole-journal pass is linear, because it runs on the Qt thread.** The Journal's Analytics
+tab calls `personal_evidence_summary` through `build_analytics_summary`, so `classify_all` is
+on the paint path. Comparing every option trade against every other one and re-parsing the
+other's legs each time measured **130 ms at 1,020 trades**. Each trade's contracts are now
+parsed once and the sibling question is answered from a `(underlying, expiry, session)` index:
+**5.9 ms at 1,020**, 1.1 ms on the real 204. Same answers.
 
 **A missing plan is a worklist, never a calculation.** `journal_r` is blank on all 538 report
 rows because `planned_risk` is null on all 204 trades. An R worked backwards from what the
 trade did is a statement about the outcome wearing the plan's clothes, so nothing in this
-chain fills it: Weekend Prep lists the closed trades with no plan, newest first, and a row
+chain fills it: Weekend Prep lists the closed trades with no plan, newest first and capped at
+the newest fifty with `showing 50 of 165` printed (the packet's ten-row floor was a MINIMUM
+height, not a licence to build 165 `QTableWidgetItem`s on the Qt thread), and a row
 only REFERS the trade to the Journal's Trades tab where `JournalStore.save_risk_fields` sits
 behind the trader's own hand. Two tests spy that method into a raise and assert every reader
 leaves it uncalled. `journal_feed.suggest_planned_risk`, the only prefill in the chain, was

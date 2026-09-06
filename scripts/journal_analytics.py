@@ -977,28 +977,43 @@ def build_analytics_summary(
     return summary
 
 
-#: The four populations a personal-evidence summary must never pool (ST5.4).
-#: Ordered the way they are read: what finished, what is half out, what is still
-#: on, and what the stores cannot describe.
-PERSONAL_EVIDENCE_POPULATIONS = (
+#: The three populations that PARTITION every trade, by STATUS (ST5.4, fixed
+#: after the reviewer's reproduction 2026-09-06). What finished, what is half
+#: out, and what is still on.
+PERSONAL_EVIDENCE_STATUS_POPULATIONS = (
     "complete",
     "partly_closed",
     "open_exposure",
-    "uncertain",
 )
 
+#: The blocks a reader iterates: the three status populations plus the
+#: CROSS-CUTTING `uncertain` label. `uncertain` is NOT a fourth bucket - its
+#: members are already counted in one of the three - so these four do not sum
+#: to the whole and are not meant to.
+PERSONAL_EVIDENCE_POPULATIONS = PERSONAL_EVIDENCE_STATUS_POPULATIONS + ("uncertain",)
 
-def _population_of(trade: dict[str, Any], exposure) -> str:
-    """Which of the four this trade belongs to. Exactly one, always.
 
-    **Uncertainty is checked FIRST.** A CLOSED trade on an instrument the store
-    cannot name is not a complete result - it is a number under a noun the data
-    does not support, and 55 of the live journal's 165 closed trades are exactly
-    that (``security_type = 'UNKNOWN'``). Reading them as "complete" puts a
-    quarter of the journal's P&L behind a claim nobody made.
+def _population_of(trade: dict[str, Any], exposure=None) -> str:
+    """Which STATUS population this trade belongs to. Exactly one, always.
+
+    **Status decides, and uncertainty is a LABEL on top of it.** The first cut
+    of this function checked ``exposure.is_uncertain`` FIRST, which made
+    "uncertain" a fourth bucket that ate the other three. Reproduced on a copy
+    of the live journal 2026-09-06: `uncertain` came out **n=120** holding 84
+    CLOSED trades, ALL 7 CLOSED_PARTIAL and 29 of the 32 OPEN ones - so
+    `partly_closed` read **n=0** while seven exist, `open_exposure` read n=3
+    with a notional of 7,726 against roughly 9% of the real open exposure, and
+    one pooled P&L figure summed realized results together with OPEN positions'
+    unrealized marks and counted those marks as WINNERS.
+
+    That is the exact defect this whole summary exists to prevent, one level
+    down. So: CLOSED is complete, CLOSED_PARTIAL is partly closed, everything
+    else is open exposure (an unrecognised status is open, never a result), and
+    whether the instrument or the structure can be named is carried beside each
+    of them as ``n_uncertain`` plus the cross-cutting ``uncertain`` block.
+
+    ``exposure`` is accepted and ignored so every existing caller still works.
     """
-    if exposure is not None and exposure.is_uncertain:
-        return "uncertain"
     status = str(trade.get("status") or "").upper()
     if status == "CLOSED":
         return "complete"
@@ -1024,12 +1039,21 @@ def _notional(trade: dict[str, Any]) -> float | None:
 
 
 def _bias_cell(rows: list[dict[str, Any]], *, with_pnl: bool) -> dict[str, Any]:
+    """One cell: how many, how many won, how much - or nothing, said as nothing.
+
+    ``with_pnl`` is False for open exposure, and there it means BOTH halves are
+    absent: ``net_pnl`` is ``None`` and ``winners`` is ``None``. An open
+    position's mark is not a result and counting it as a win is the blocker this
+    cell was rebuilt for. An EMPTY bucket also reports ``None`` rather than
+    ``0.0`` - a blank cell says "nothing here", where a net of 0.00 says
+    "measured, and it came to nothing".
+    """
     pnls = [_cad_pnl(row) for row in rows]
     measured = [value for value in pnls if value is not None]
     return {
         "n": len(rows),
-        "winners": sum(1 for value in measured if value > 0),
-        "net_pnl": (sum(measured) if with_pnl and measured else (None if not with_pnl else 0.0)),
+        "winners": (sum(1 for value in measured if value > 0) if with_pnl else None),
+        "net_pnl": (sum(measured) if with_pnl and measured else None),
         "trade_ids": [str(row.get("trade_id") or "") for row in rows],
     }
 
@@ -1067,26 +1091,31 @@ def personal_evidence_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
     rows = [row for row in trades if isinstance(row, dict)]
     exposures = classify_all(rows)
 
+    def _exposure_of(row):
+        return exposures.get(str(row.get("trade_id") or ""))
+
     buckets: dict[str, list[dict[str, Any]]] = {
-        name: [] for name in PERSONAL_EVIDENCE_POPULATIONS
+        name: [] for name in PERSONAL_EVIDENCE_STATUS_POPULATIONS
     }
     for row in rows:
-        exposure = exposures.get(str(row.get("trade_id") or ""))
-        buckets[_population_of(row, exposure)].append(row)
+        buckets[_population_of(row)].append(row)
 
     summary: dict[str, Any] = {}
     for name, bucket in buckets.items():
+        # OPEN exposure has no result at all: no net, no winners, no USD total.
+        # The other two are measured populations.
         with_pnl = name != "open_exposure"
         by_bias: dict[str, list[dict[str, Any]]] = {BIAS_UNKNOWN: []}
+        structures: dict[str, int] = {}
+        uncertain_rows: list[dict[str, Any]] = []
         for row in bucket:
-            exposure = exposures.get(str(row.get("trade_id") or ""))
+            exposure = _exposure_of(row)
             bias = exposure.market_bias if exposure is not None else BIAS_UNKNOWN
             by_bias.setdefault(bias, []).append(row)
-        structures: dict[str, int] = {}
-        for row in bucket:
-            exposure = exposures.get(str(row.get("trade_id") or ""))
             key = exposure.structure if exposure is not None else "unknown"
             structures[key] = structures.get(key, 0) + 1
+            if exposure is None or exposure.is_uncertain:
+                uncertain_rows.append(row)
         cell = _bias_cell(bucket, with_pnl=with_pnl)
         usd = [_coerce_float(row.get("net_pnl_usd")) for row in bucket]
         cell.update(
@@ -1104,6 +1133,13 @@ def personal_evidence_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
                     for bias, bias_rows in by_bias.items()
                 },
                 "by_structure": structures,
+                # The cross-cutting label, counted where it applies. A reader of
+                # `complete` sees at once how much of that population rests on
+                # an instrument or a structure the store cannot name.
+                "n_uncertain": len(uncertain_rows),
+                "uncertain_trade_ids": [
+                    str(row.get("trade_id") or "") for row in uncertain_rows
+                ],
             }
         )
         if name == "open_exposure":
@@ -1116,19 +1152,96 @@ def personal_evidence_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
             cell["notional_unmeasured"] = sum(1 for value in notionals if value is None)
         summary[name] = cell
 
+    # ------------------------------------------------------------------
+    # `uncertain` - a LABEL across the three, never a bucket beside them
+    # ------------------------------------------------------------------
+    uncertain_all = [
+        row
+        for row in rows
+        if (_exposure_of(row) is None or _exposure_of(row).is_uncertain)
+    ]
+    uncertain_by_bias: dict[str, list[dict[str, Any]]] = {BIAS_UNKNOWN: []}
+    uncertain_structures: dict[str, int] = {}
+    for row in uncertain_all:
+        exposure = _exposure_of(row)
+        bias = exposure.market_bias if exposure is not None else BIAS_UNKNOWN
+        uncertain_by_bias.setdefault(bias, []).append(row)
+        key = exposure.structure if exposure is not None else "unknown"
+        uncertain_structures[key] = uncertain_structures.get(key, 0) + 1
+    # NO POOLED MONEY HERE. Its members span three statuses, and one figure over
+    # a closed result and an open mark is exactly what the reviewer measured.
+    # The money is already reported, once, inside whichever status population
+    # owns the row.
+    uncertain_cell = _bias_cell(uncertain_all, with_pnl=False)
+    uncertain_cell.update(
+        {
+            "net_pnl_usd": None,
+            "cross_cutting": True,
+            "by_market_bias": {
+                bias: _bias_cell(bias_rows, with_pnl=False)
+                for bias, bias_rows in uncertain_by_bias.items()
+            },
+            "by_structure": uncertain_structures,
+            "by_population": {
+                name: summary[name]["n_uncertain"]
+                for name in PERSONAL_EVIDENCE_STATUS_POPULATIONS
+            },
+            # Every member, named with the status it is ALSO counted under, so
+            # nobody has to guess which population a listed trade came from.
+            "members": [
+                {
+                    "trade_id": str(row.get("trade_id") or ""),
+                    "symbol": str(row.get("symbol") or ""),
+                    "status": str(row.get("status") or "").upper(),
+                    "population": _population_of(row),
+                    "instrument": (
+                        _exposure_of(row).instrument if _exposure_of(row) else "UNKNOWN"
+                    ),
+                    "structure": (
+                        _exposure_of(row).structure if _exposure_of(row) else "unknown"
+                    ),
+                    "market_bias": (
+                        _exposure_of(row).market_bias if _exposure_of(row) else BIAS_UNKNOWN
+                    ),
+                }
+                for row in uncertain_all
+            ],
+            "note": (
+                "Counted inside the population its status puts it in; listed here "
+                "because the instrument or the structure cannot be named. No money "
+                "is pooled across the three."
+            ),
+        }
+    )
+    summary["uncertain"] = uncertain_cell
+
+    # ------------------------------------------------------------------
+    # coverage - ONE denominator for both tag lanes
+    # ------------------------------------------------------------------
     closed = [row for row in rows if str(row.get("status") or "").upper() == "CLOSED"]
-    confirmed_rows = [row for row in closed if _confirmed_setup_tags(row)]
-    provisional_rows = [row for row in rows if _provisional_setup_tags(row)]
-    risk_rows = [row for row in closed if _coerce_float(row.get("planned_risk")) is not None]
+    partly = [row for row in rows if str(row.get("status") or "").upper() == "CLOSED_PARTIAL"]
+    # REVIEWABLE = closed OR partly closed. The first cut counted confirmed tags
+    # over CLOSED only and provisional over EVERY row, so the live journal's one
+    # confirmed tag - on a CLOSED_PARTIAL trade, EAT 2026-08-21 - fell out of the
+    # numerator while its 26 provisional siblings stayed in, and the headline
+    # said "No confirmed setup tags" about a journal that holds one. A tag on a
+    # half-closed trade is still the trader's answer.
+    reviewable = closed + partly
+    confirmed_rows = [row for row in reviewable if _confirmed_setup_tags(row)]
+    provisional_rows = [row for row in reviewable if _provisional_setup_tags(row)]
+    risk_rows = [row for row in reviewable if _coerce_float(row.get("planned_risk")) is not None]
+    total = len(reviewable)
     coverage = {
         "confirmed": len(confirmed_rows),
         "closed": len(closed),
+        "partly_closed": len(partly),
+        "reviewable": total,
         "provisional": len(provisional_rows),
         "planned_risk": len(risk_rows),
         "line": (
-            f"Confirmed tags: {len(confirmed_rows)} of {len(closed)} closed trades. "
-            f"Provisional awaiting review: {len(provisional_rows)}. "
-            f"Planned risk recorded: {len(risk_rows)} of {len(closed)}."
+            f"Confirmed tags: {len(confirmed_rows)} of {total} closed or partly "
+            f"closed trades. Provisional awaiting review: {len(provisional_rows)}. "
+            f"Planned risk recorded: {len(risk_rows)} of {total}."
         ),
     }
 
@@ -1139,6 +1252,7 @@ def personal_evidence_summary(trades: list[dict[str, Any]]) -> dict[str, Any]:
     summary["best_setup"] = best
     summary["headline"] = headline
     summary["populations"] = list(PERSONAL_EVIDENCE_POPULATIONS)
+    summary["status_populations"] = list(PERSONAL_EVIDENCE_STATUS_POPULATIONS)
     summary["directional_biases"] = list(DIRECTIONAL_BIASES)
     return summary
 
@@ -1166,9 +1280,13 @@ def _best_confirmed_setup(
             "no personal setup can be called best."
         )
     if confirmed < int(floor):
+        # NAMES THE COUNT IT HAS. "No confirmed setup tags" is reserved for a
+        # true zero: the live journal holds ONE (on a CLOSED_PARTIAL trade, EAT
+        # 2026-08-21) and saying it holds none is a false statement about the
+        # trader's own work, not a conservative one.
+        tags = "tag" if confirmed == 1 else "tags"
         return None, (
-            f"Confirmed setup tags on {confirmed} of {coverage['closed']} closed trades, "
-            f"below the reportable floor of {int(floor)} "
+            f"{confirmed} confirmed setup {tags} - under the n={int(floor)} floor "
             f"({provisional} provisional awaiting review) - "
             "no personal setup can be called best."
         )

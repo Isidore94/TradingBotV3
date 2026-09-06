@@ -774,24 +774,36 @@ which is evidence and must not be loaded as context.
   expiry and session is `partial_of_spread_candidate` - never
   `partial_of_spread` - and lands in the uncertain population rather than
   claiming half a spread.
-- **Four populations, never pooled** (ST5.4, 2026-09-06,
-  `journal_analytics.personal_evidence_summary`, additive on
+- **Three populations by STATUS, and uncertainty is a LABEL across them**
+  (ST5.4, 2026-09-06, `journal_analytics.personal_evidence_summary`, additive on
   `build_analytics_summary` as `personal_evidence`). `complete` (CLOSED) /
-  `partly_closed` (CLOSED_PARTIAL) / `open_exposure` (OPEN) / `uncertain`
-  (UNKNOWN instrument, BAG, CASH, `multi_leg`, `partial_of_spread_candidate`)
-  partition every trade, each with n, winners, CAD and USD P&L and the
-  `market_bias` split with `unknown` printed as its own bucket. **Uncertainty is
-  checked FIRST** - 55 of the 165 live closed trades are `UNKNOWN` instrument
-  and reading them as complete puts a quarter of the journal's P&L behind a noun
-  the data does not support. **An open position has NO result**: `net_pnl` is
-  `None`, not zero, and its size travels as `notional`. **No personal setup is
-  called best without confirmed tags at the floor**: `best_setup` is `None` and
-  the headline says so until CONFIRMED tags reach
+  `partly_closed` (CLOSED_PARTIAL) / `open_exposure` (everything else) PARTITION
+  every trade - each with n, winners, CAD and USD P&L, the `market_bias` split
+  with `unknown` printed as its own bucket, and `n_uncertain` beside it. The
+  cross-cutting `uncertain` block (UNKNOWN instrument, BAG, CASH, `multi_leg`,
+  `partial_of_spread_candidate`) lists its members WITH the status each is
+  counted under and **pools no money at all**, because its members span three
+  statuses. **Checking uncertainty first made it a fourth bucket that ate the
+  other three**: measured on a copy of the live journal, `uncertain` came out
+  n=120 holding 84 CLOSED, all 7 CLOSED_PARTIAL and 29 of 32 OPEN trades, so
+  `partly_closed` read n=0 and one pooled figure summed realized results with
+  open positions' unrealized marks and counted those marks as WINNERS.
+  **An open position has NO result**: `net_pnl` and `winners` are both `None`,
+  never zero, and its size travels as `notional` (61,662 live). An EMPTY bucket
+  reports `None` too - a net of 0.00 says "measured and it came to nothing".
+  **No personal setup is called best without confirmed tags at the floor**:
+  `best_setup` is `None` until CONFIRMED tags reach
   `evidence_stats.MIN_REPORTABLE_N` (30 against 1 live); above it the winner
-  ranks on `swing_headline`'s Wilson lower bound. The coverage line -
-  `Confirmed tags: C of T closed trades. Provisional awaiting review: P. Planned
-  risk recorded: R of T.` - reaches the Journal's Analytics tab and Weekend Prep
-  through that one helper.
+  ranks on `swing_headline`'s Wilson lower bound. **Both tag lanes share ONE
+  denominator, closed OR PARTLY CLOSED** - the live journal's single confirmed
+  tag sits on a CLOSED_PARTIAL trade, and counting confirmed over CLOSED while
+  counting provisional over everything made the headline say "No confirmed setup
+  tags" about a journal that holds one. The coverage line -
+  `Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting
+  review: 26. Planned risk recorded: 0 of 172.` - and the headline `1 confirmed
+  setup tag - under the n=30 floor (...) - no personal setup can be called best`
+  reach the Journal's Analytics tab and Weekend Prep through that one helper;
+  the "No confirmed" wording is reserved for a true zero.
 - **The whole tag backlog reaches the review screen, and a missing plan is a
   worklist** (ST5.5, 2026-09-06, `ui/panels/weekend_prep_panel.py`).
   `_read_week_tag_rows(bounds, *, store=None, path=None)` gained an injection
@@ -801,7 +813,8 @@ which is evidence and must not be loaded as context.
   proposal and would bury the ones that do, and the week's rows sort first with
   a `Week` column naming the population. The new "Missing planned risk" table
   lists closed trades with `planned_risk` null (0 of 204 live), newest first, on
-  the ten-row floor, and a row only REFERS: `openTradeRequested` ->
+  the ten-row floor and capped at the newest `MISSING_RISK_ROWS_SHOWN` (50) with
+  `showing 50 of 165` printed, and a row only REFERS: `openTradeRequested` ->
   `JournalPanel.show_trade` -> `TradesTab.select_trade`, the tab where
   `save_risk_fields` already lives. **Nothing here writes `planned_risk` and
   nothing computes one from an outcome**; a test spies `save_risk_fields` into a
@@ -1356,12 +1369,17 @@ broker call, no auto-confirm, no reconstructed risk.
   nothing links them - so the observable pattern is labelled
   `partial_of_spread_candidate` and lands in the uncertain population.
 - **ST5.4 summaries separate what they can and cannot say.**
-  `journal_analytics.personal_evidence_summary(trades)` returns four never-pooled
-  populations that partition the input. Uncertainty is checked FIRST (86 of 204 live
-  trades are `UNKNOWN` instrument, 55 of them closed). An open position's `net_pnl` is
-  `None`, not zero. `best_setup` is `None` and the headline refuses while confirmed tags
-  (1 live) sit below `MIN_REPORTABLE_N` (30). The coverage line reaches the Analytics tab
-  and Weekend Prep through the one helper.
+  `journal_analytics.personal_evidence_summary(trades)` partitions every trade by STATUS
+  into `complete` / `partly_closed` / `open_exposure` (live: 165 / 7 / 32, summing to 204)
+  and carries uncertainty as a CROSS-CUTTING label - `n_uncertain` on each population plus
+  an `uncertain` block that names each member's status and pools no money (live: 120,
+  split 84 / 7 / 29). An open position's `net_pnl` AND `winners` are both `None`, never
+  zero; its notional is 61,662. Both tag lanes share ONE denominator, closed or partly
+  closed, so the journal's single confirmed tag - on a CLOSED_PARTIAL trade - is counted:
+  `Confirmed tags: 1 of 172 closed or partly closed trades. Provisional awaiting review:
+  26. Planned risk recorded: 0 of 172.` and `1 confirmed setup tag - under the n=30 floor
+  (26 provisional awaiting review) - no personal setup can be called best.` The first cut
+  of both of these was wrong and the review caught it; see the checkpoint entry.
 - **ST5.5 the 26 proposed tags reach the review flow.** Weekend Prep's tag list is widened
   to the whole provisional backlog with an injection seam for tests; `needs_review` stays
   week-scoped (145 rows with no proposal). A "Missing planned risk" table lists the closed
