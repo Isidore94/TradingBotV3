@@ -923,6 +923,23 @@ which is evidence and must not be loaded as context.
 - Master AVWAP tracker staleness catch-up from completed prior-session D1 data with
   explicit `data_session` vintage and no automatic scoring-tuner/prior-refit side
   effects.
+- Setup-tracker purity gate that honours the trader's `daily_bars_source` pin: the
+  pinned source is the declared source of record (PURE), a cache read of the store the
+  pin governs is accepted as the absence of contrary evidence, per-row provenance is
+  read where it exists, a third source still vetoes, and with no pin the gate is the
+  July 2026 one unchanged. The mix and the decision log once per run
+  (`n_ib` / `n_pinned` / `n_other` / `refused`).
+- Tracker save provenance: `saved_at` (market-local) + `saved_by`
+  (`close_slot` / `catch_up_backfill` / `manual`) on every payload and mirrored header,
+  `last_replayed_session` per record, `tracker_saved_at` / `tracker_saved_by` on the
+  three stats CSVs, and the Setup Tracker's two-clock status line.
+- `EXPIRED_UNMEASURED` terminal setup status with `expiry_reason`
+  (`no_replay_stale_sessions` over `evidence_stats.LATELY_SESSIONS` exchange sessions,
+  with the threshold recorded on the row, or `no_baseline_scenarios`),
+  applied after the closure rule. The exclusion is DISPLAY-ONLY and opt-in
+  (`exclude_expired_unmeasured`, default False): the stats exports and the Setup Tracker
+  tabs drop the expired from numerator and denominator, the champion's scoring
+  population keeps them, and `n_expired_unmeasured` is carried either way.
 - Technical Integrity follow-up and breadth-ledger deterministic backfill with
   bounded retries, explicit `capture_mode`, honest gap rows, and live/backfill audit
   separation.
@@ -1156,6 +1173,164 @@ gates are in `plan.md`.
 
 ## Recent changes (2026-08-26 onward)
 
+### 2026-09-05 - M3: the tracker keeps up with its scans, says how old it is, and lets a stuck setup age out
+
+Trader authorization, 2026-09-05: *"Fix all of these failures"* over the lead's
+measurement audit (findings 3 and 4). Branch `claude/m3-tracker-keeps-up`, built on
+M1's tip. No detector, score threshold, rank formula, tier, alert, Focus or
+`review_policy.json` change; the champion's records for setups that are not expired
+are untouched.
+
+**M3.1 - the purity gate was refusing the trader's own decision.** `local_settings.json`
+carries `daily_bars_source: "yahoo"` (R10.0b §1.3). The tracker's purity gate was
+written in July 2026 against a *systemic IB fallback* - an IB client collision routing
+every symbol to Yahoo behind the scanner's back - and it could not tell that from a
+source the trader had declared. On 2026-09-04 the 13:00 run logged "WITH setup-tracker
+write" and then, at 13:03:59, *"Setup tracker refresh skipped ... used non-IBKR daily
+data"* over 139 symbols with `sources=cache`. That happened every day the pin held, so
+the tracker's EFFECTIVE writer became the staleness catch-up - a synthetic replay from
+stored daily bars rather than the scan's own output.
+`evaluate_setup_tracker_purity` now resolves `daily_bars_source_pin()` at run time and
+treats the pinned source as the source of record. `cache` and `unknown` are accepted
+ONLY under a pin and only as the absence of contrary evidence
+(`daily_bar_provenance_for_source` deliberately refuses to map a cache read to a unit);
+where the frame carries per-row provenance in the `source` column, that is what is read,
+so a store holding pre-pin IBKR rows and post-pin Yahoo rows is judged on what it says.
+A third source still vetoes at the same 20% quarantine fraction, and with NO pin the
+gate is byte-for-byte the July one. The decision and the mix log once per run:
+`pin=… n_symbols=… n_ib=… n_pinned=… n_other=… refused=…`.
+
+**M3.2 - two clocks, both named.** Every saved payload carries `saved_at` (market-local,
+`market_calendar.MARKET_TZ`) and `saved_by` in {`close_slot`, `catch_up_backfill`,
+`manual`}; `load_setup_tracker_payload` names them explicitly, because it rebuilds the
+payload field by field and that is exactly how `data_session` was once dropped straight
+back out and the whole vintage fix went inert. `recompute_tracker_setup_record` stamps
+`last_replayed_session` - the newest session whose bars were actually replayed, which
+`scan_date` (creation) never answered. `master_avwap_setup_type_stats.csv`,
+`_recent_stats.csv` and `master_avwap_band_variant_stats.csv` each gain
+`tracker_saved_at` + `tracker_saved_by`, stamped from the SAME instant the save uses
+because the export runs before it. The Setup Tracker's status line now reads
+`Tracker as of <saved_at> (<saved_by>); scan factors as of <mtime>`, so the tables can
+never look as fresh as the last scan when the tracker write was refused.
+`tracker_store.HEADER_FIELDS` gained the two keys - the mirror FOLLOWS the JSON
+(decision 0017), and a header key the JSON carries and the mirror drops would be a
+parity difference `verify` reported forever, which is gate #57's measurement.
+
+**M3.3 - a stuck setup ages out as UNMEASURED, never as a win or a loss.** 37 OPEN
+setups were older than 20 sessions on 2026-09-04, several with scenarios still reading
+"Awaiting update" - never replayed since creation - and 41 more carried no baseline
+scenario at all. All of them sat in denominators as though they were evidence. New
+terminal `setup_status` `EXPIRED_UNMEASURED` with `expiry_reason` in
+{`no_replay_stale_sessions` (more than `TRACKER_STALE_SESSIONS` exchange sessions
+since the last replay, counted with `market_calendar.trading_days_between` and never
+with weekday arithmetic; the constant READS `evidence_stats.LATELY_SESSIONS` because
+"lately" is one number in this codebase, and the threshold is written onto the row as
+`stale_sessions` rather than baked into the reason string, which would become a lie the
+day the number moved), `no_baseline_scenarios` (an empty `scenarios` dict, or nothing
+but experimental / band-variant entries)}. Applied AFTER the closure rule, so a setup
+that closes normally is never expired; a calendar that refuses an endpoint expires
+nothing (uncertainty never deletes). It runs inside the daily recompute AND as a sweep
+over the stored records, because a setup whose daily frame comes back empty is skipped
+before the recompute is ever reached - and those are the records the rule exists for.
+`build_tracker_stats_rows` and `build_band_variant_stats_rows` (both display-only)
+exclude expired records from numerator AND denominator, and
+`build_tracker_setup_type_rows` does so **only when asked**. Each carries
+`n_expired_unmeasured` beside its `n`; the Setup Tracker's Current Picks and Setup Types
+tabs say `N expired unmeasured, excluded`. Rows are never deleted and the status is
+reversible - a replayed scenario comes back through the closure rule, which is the only
+thing that un-expires a record.
+
+**The exclusion is opt-in, and the champion's scoring population never moves** (lead
+ruling, 2026-09-05, over the builder's reported tension). `build_tracker_setup_type_rows`
+is read by two callers with different rights: `export_setup_tracker_views` renders it for
+the trader, but `_load_ranked_tracker_setup_type_rows` -> `rank_tracker_setup_type_rows`
+-> `apply_tracker_setup_type_adjustments` turns it into `row["score"]`, where
+`tracked_setups` is the sort's third key. plan.md sec 5 forbids changing a scoring input
+without golden fixtures first, so `exclude_expired_unmeasured` defaults to **False**; the
+export passes True and the scoring path passes nothing. The export builds the rows twice
+from one tracker (0.449 s per pass over 11,000 setups, after the close, off the Qt
+thread): the CSVs and the panel get the display reading, `payload["setup_type_stats"]`
+keeps the scoring population because `_load_ranked_tracker_setup_type_rows` falls back to
+it. Counting the expired out of the champion's own inputs is a future golden-fixture
+decision.
+
+**Deliberately NOT changed:** `build_recent_tracker_setup_family_rows`, which feeds
+`apply_recent_tracker_setup_family_adjustments` and therefore live scoring. The
+`no_baseline_scenarios` class is already invisible to it (`tradeable_scenario_count`
+is 0), and the packet did not name it. Also unchanged: the two exports
+`analyze_master_avwap_scoring.py` reads (`master_avwap_setup_attributes.csv` and the
+attribute leaderboard) - that script is the only thing that writes live scoring weights,
+and this branch does not touch its inputs.
+
+**Reviewer round (NO-GO on `4108a0a9`, fixed at `cc070819`).** Three blockers. (1) The
+two clocks were rendered in two ZONES - `saved_at` market-local with an offset beside a
+machine-local mtime with none - so on a PT desk the line read a three-hour gap that did
+not exist; both are now market-local ISO with the offset printed, pinned by a test that
+stamps them from one instant and asserts the rendered strings are equal. (2) An
+all-expired group took its own `n_expired_unmeasured` with it: `if not rows_for_group:
+continue` dropped the count along with the group, and `build_tracker_stats_rows` had the
+same dead shape, so the live sentence said 16 where 45 records had expired -
+under-reporting by exactly the worst groups. Both builders now emit the row with zero
+measured setups and blank measures, which needed a `representative_by_group` for identity
+because `rows[0]` does not exist when every row was expired. (3) Gate #69 was
+unsatisfiable as written and is restated to reproducible counts (2026-09-04 mirror: setups
+32 + 13 = 45, study 7, control 0, 52 total). Five advisories taken: the naive timestamp is
+ATTACHED rather than converted (CLAUDE.md's `_gate_moment` rule); a symbol with NO frame
+is `n_no_frame` and out of the purity fraction rather than counted as pinned; the reason
+carries its threshold as a field; the expired sentence is off the Current Picks tab, which
+renders a different population; and `saved_by` rides the scan payload with **absence
+reading as `manual`**, so a hand-run `--run-scan` can never forge `close_slot`.
+
+**Reviewer round 2 (NO-GO on `455dfaa6`, fixed at the tip).** One real defect, and it was
+mine: `saved_by` was added to `run_master` (the manifest WRAPPER) while the name is read
+inside `_run_master_impl` (the scan), which never declared it. That type-checks, imports
+and passes every test that mocks either function - and raises `NameError` on the first
+close-slot scan to reach `if setup_tracker_allowed:`, which is exactly the path M3.1
+re-opens, so the packet's own fix would have taken the tracker write down with it.
+`tests/test_module_globals_resolve.py` catches it module-wide and is what found it; the
+parameter now lives on the function that reads it, with the same `manual` default and for
+the same reason (a caller that did not name its writer has not earned the scheduled
+writer's name).
+
+**The purity fraction's denominator changed under a pin (advisory).** It now divides the
+impure count by the JUDGED symbols - `n_symbols - n_no_frame` - rather than by every
+tracked symbol. That is deliberate (a symbol with no bars cannot vote on whether the
+SOURCE is clean) and it is STRICTER in a run with many missing frames: the same handful of
+third-source symbols is a larger share of a smaller denominator, so a run that would once
+have squeaked under `TRACKER_PURITY_MAX_QUARANTINE_FRACTION` can now refuse. With no pin
+nothing changes - the whole no-frame branch is gated on a pin being in force.
+
+**`build_tracker_stats_rows` gained the same opt-in flag** as
+`build_tracker_setup_type_rows` (default False, the export passes True). Nothing on a
+scoring path reads that export today, but two neighbouring builders with different rules
+is how the next reader picks the wrong one.
+
+**Reviewer round 3 (NO-GO on `dab43e04`): a flake this packet introduced.**
+`test_tracker_staleness_catchup`'s byte-identical characterization compares the whole
+payload text and normalises the write clocks first, and its `_CLOCK_STAMP_FIELDS` knew
+only `updated_at`. `saved_at` is second-resolution, so two backfills that straddled a
+second differed - an intermittent failure that said nothing about the replay. Both new
+stamps now normalise, which is the right place for them: they record WHO wrote the file
+and WHEN, and that test's claim is that the catch-up and the after-close run produce the
+same DATA while being different writers.
+
+**A third population is named and deliberately not expired.** Of the audit's 41 records
+with no open and no closed scenario count, only 13 are `no_baseline_scenarios` on the
+2026-09-04 mirror; **the other 28 DO have baseline scenarios, in a status that is neither
+open nor closed**, so neither rule reaches them. Whether such a record is evidence is a
+trader-and-lead decision, recorded here so it is not rediscovered as a defect.
+
+**Files:** `scripts/master_avwap_lib/runner.py`, `scripts/master_avwap_lib/legacy.py`,
+`scripts/tracker_store.py`, `scripts/ui/panels/setup_tracker_panel.py`,
+`scripts/scan_worker.py`, `scripts/ui/services/scan_service.py`,
+`tests/test_m3_tracker_keeps_up.py` (48 tests: 26 of the first 30 proven RED on
+`e744afd5`, four more RED on `259cf42c` for the lead's ruling, eleven more RED on
+`4108a0a9` for the reviewer round), `tests/test_tracker_store.py` and
+`tests/test_scan_worker_spawn.py` (both fixtures now model the current payload; neither
+assertion weakened).
+
+**Live gate #69** is owed at merge: see `CURRENT_CHECKPOINT.md`.
+
 ### 2026-09-05 - M2: a swept trade that measured its bars is not unresolved
 
 Trader authorization, 2026-09-05: *"Fix all of these failures"* over the lead's
@@ -1298,6 +1473,7 @@ row. Decision record **BD-101**; live gate **#66** owed.
   (13 failed, 5 errors) before the fix; the 19th is the champion golden pin whose
   claim is that no number moved, so it passes on both sides. Two existing tests
   UPDATED - not weakened - because the default recipe set genuinely grew.
+
 
 ### 2026-09-05 - M1: the AVWAP band challenger finally measures, and its view names its coverage
 

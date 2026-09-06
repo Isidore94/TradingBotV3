@@ -77,12 +77,18 @@ def test_the_worker_dispatches_each_branch(monkeypatch):
     scan_worker.run(_payload())
     scan_worker.run(_payload(update_setup_tracker=True))
 
-    assert calls[0] == ("run_master", {})
+    # `saved_by` joined both branches on 2026-09-05 (M3.2). A payload that does
+    # not name a writer reads as `manual`: a hand-run `--run-scan` must never
+    # forge `close_slot` onto a tracker save the scheduler did not ask for.
+    # Still the WHOLE kwargs dict on both sides, so an accidental extra or
+    # missing argument still fails this test.
+    assert calls[0] == ("run_master", {"saved_by": "manual"})
     assert calls[1] == (
         "run_master",
         {
             "update_setup_tracker": True,
             "require_ib_for_setup_tracker": True,
+            "saved_by": "manual",
         },
     )
 

@@ -43,7 +43,11 @@ SCHEMA_VERSION = 1
 #: The three sections whose values are one record per setup key.
 RECORD_SECTIONS = ("setups", "control_setups", "study_setups")
 #: Everything else in the payload is small and stored as one JSON value each.
-HEADER_FIELDS = ("schema_version", "updated_at", "data_session")
+#: `saved_at` / `saved_by` joined on 2026-09-05 (packet M3.2). The mirror
+#: FOLLOWS the JSON (decision 0017): a header key the JSON carries and the
+#: mirror does not is a parity difference `verify` would report forever, which
+#: is gate #57's whole measurement.
+HEADER_FIELDS = ("schema_version", "updated_at", "data_session", "saved_at", "saved_by")
 SECTION_FIELDS = ("daily_watchlists", "stats", "setup_type_stats", "attribute_registry")
 SHADOW_SETTING = "tracker_storage_shadow"
 

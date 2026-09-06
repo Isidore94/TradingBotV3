@@ -140,6 +140,10 @@ class ScanService(QObject):
                 run_id=self._active_run_id,
                 trigger=self._active_label,
                 on_process_started=self._record_worker_pid,
+                # The tree's own distinction, reused rather than re-invented:
+                # a run with no scheduled slot is already `manual_master_scan`
+                # to the job ledger, so it is a manual tracker write too.
+                saved_by="close_slot" if scheduled_slot else "manual",
             ),
             label,
             job_type="swing_scan" if scheduled_slot else "manual_master_scan",
@@ -156,6 +160,9 @@ class ScanService(QObject):
                 run_id=self._active_run_id,
                 trigger=self._active_label,
                 on_process_started=self._record_worker_pid,
+                saved_by=(
+                    "manual" if str(slot_label).startswith("manual ") else "close_slot"
+                ),
             ),
             label,
             job_type="swing_scan" if not str(slot_label).startswith("manual ") else "manual_master_scan",
@@ -663,6 +670,7 @@ def _scan_child_env(*, run_id: str = "", trigger: str = "") -> dict[str, str]:
 def _run_master_scan_subprocess(
     *,
     update_setup_tracker: bool | None = None,
+    saved_by: str = "close_slot",
     run_id: str = "",
     trigger: str = "",
     on_process_started: Callable[[int], None] | None = None,
@@ -670,6 +678,7 @@ def _run_master_scan_subprocess(
     """Run scanner work outside the Qt process so native faults do not close the GUI."""
     payload = json.dumps(
         {
+            "saved_by": str(saved_by or "manual"),
             "update_setup_tracker": (
                 None if update_setup_tracker is None else bool(update_setup_tracker)
             ),

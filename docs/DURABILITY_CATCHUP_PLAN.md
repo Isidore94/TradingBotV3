@@ -57,6 +57,37 @@ given dataset produces — same scoring path, same data vintage discipline.
 A characterization test pins that: catch-up refresh from session N-1 bars ==
 the after-close refresh from session N-1 bars, byte-identical tracker.
 
+**Amended 2026-09-05 (packet M3).** Two facts this section could not have known.
+
+*(a) The catch-up became the tracker's EFFECTIVE writer, and now says so.* The
+purity gate (`runner.evaluate_setup_tracker_purity`) refused the scheduled
+close-slot write on every day the trader's `daily_bars_source: "yahoo"` pin was
+in force — 2026-09-04 13:03:59, 139 symbols, `sources=cache` — so this recovery
+path, designed for a missed close, was doing the routine write. M3.1 taught the
+gate that the pinned source is the declared source of record, which restores the
+close slot as the writer. M3.2 makes the difference visible either way: every
+payload carries `saved_by`, and this path passes **`catch_up_backfill`** while
+the scan's own pass passes `close_slot` and the GUI backfill `manual`. 
+
+That has a consequence for the byte-identical characterization above, and the
+first version of this note got it wrong. **That test compares the WHOLE payload
+text**, not the vintage — so it normalises the wall clocks first, and it knew
+only about `updated_at`. `saved_at` is second-resolution, so two backfills that
+straddled a second produced different text and the test failed intermittently:
+a flake that said nothing about the replay. `saved_at` and `saved_by` are now in
+its `_CLOCK_STAMP_FIELDS` alongside `updated_at`, which is the correct place for
+them — they record WHO wrote the file and WHEN, and the claim this test exists to
+make is that the catch-up and the after-close run produce the same DATA while
+being different writers.
+
+*(b) A record this replay cannot reach now ages out rather than staying OPEN
+forever.* A setup whose daily frame comes back empty is skipped before the
+recompute is reached; after `TRACKER_STALE_SESSIONS` (20) exchange sessions with
+no replay it becomes `EXPIRED_UNMEASURED` and leaves every champion aggregate's
+numerator AND denominator. That is a statement about measurement, not about the
+setup: it is never a win and never a loss, the row is never deleted, and a later
+replay un-expires it through the normal closure rule.
+
 **Amended 2026-08-08 (checkpoint review second review — retraction).** The
 "timing-only" claim above was true of the *replay* and false of the *call*.
 Two defects, both now repaired on this branch:

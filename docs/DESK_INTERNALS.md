@@ -1210,6 +1210,214 @@ scan date the cost is roughly 1 MB per session, on records written from now on.
 
 ---
 
+## M3 - the tracker that could not be written, and the setup nobody measured (2026-09-05)
+
+Three findings from the lead's measurement audit of 2026-09-05 (~02:00 PT), all
+authorized by the trader with *"Fix all of these failures"*.
+
+### The purity gate was refusing the trader's own decision
+
+`local_settings.json` carries `daily_bars_source: "yahoo"` — the R10.0b §1.3
+interim pin. The durable daily-bar store is mixed because IB returns
+regular-session volume in ROUND LOTS (`useRTH=1`, `whatToShow="TRADES"`) and
+Yahoo returns the full consolidated session in SHARES, and the observed ratio is
+symbol-dependent (SPY 1.0x, TSLA 56x, AAPL 81x, A 162x, NVDA 188x), so no
+constant converts one into the other. That is why it is a pin and not a rescale.
+
+The setup tracker's purity gate was written in July 2026 against a completely
+different problem: an IB client collision routing every symbol to Yahoo behind
+the scanner's back. Its shape is a small dirty tail QUARANTINED (1-2 chronic
+symbols like LC and BF.B always fall back) and a large non-IB fraction VETOING
+the whole write, because that is the systemic-fallback signature. It had no way
+to tell a fallback from a declaration.
+
+So with the pin in force it refused the scheduled write every day. The 2026-09-04
+13:00 run logged "WITH setup-tracker write" and then, at 13:03:59, *"Setup
+tracker refresh skipped for this mini-PC run because tracked setups used
+non-IBKR daily data"* over 139 symbols with `sources=cache`. The tracker JSON and
+its SQLite mirror had last been written at 07:46-07:47 that morning — by the
+staleness catch-up, a synthetic replay from stored daily bars. **A recovery path
+had quietly become the routine writer.**
+
+The fix is narrow. The pinned source is a source of record; a symbol on it is
+PURE. `cache` and `unknown` are accepted ONLY under a pin and only as the absence
+of contrary evidence — `daily_bar_provenance_for_source` deliberately refuses to
+map a cache read to a volume unit, because reading a row off disk tells you it
+came off disk and not what wrote it. Where the frame carries per-row provenance
+in the `source` column, that is what is read, so a store holding pre-pin IBKR
+rows and post-pin Yahoo rows is judged on what it actually says. Anything that is
+neither IBKR nor the pin is still a fallback nobody declared and still vetoes at
+the same 20% fraction. **With no pin the gate is byte-for-byte the July one**,
+and two of the tests written for this packet were green before the fix precisely
+to hold that.
+
+### Two clocks, and the page was showing the wrong one
+
+The Setup Tracker page read one mtime across eleven exports. The
+`scan_factor_*` files are rewritten by every scan; the tracker's own snapshot is
+rewritten only by a pass that actually replayed it. On the days the write was
+refused outright, the page therefore claimed to be as fresh as the last scan.
+
+`saved_at` (market-local) and `saved_by` (`close_slot` / `catch_up_backfill` /
+`manual`) now ride on the payload, and the three stats CSVs carry
+`tracker_saved_at` / `tracker_saved_by` so the panel can name the snapshot's
+clock **without opening the 1.1 GB JSON**. The status line is
+`Tracker as of <saved_at> (<saved_by>); scan factors as of <mtime>`.
+
+Two details that are load-bearing rather than incidental:
+
+* the stamp is passed to `export_setup_tracker_views` explicitly, because the
+  export runs BEFORE the save — reading `saved_at` off the payload there would
+  stamp the CSVs with the previous save's clock;
+* `load_setup_tracker_payload` names both keys. It rebuilds the payload field by
+  field from a fixed default, and that is exactly how `data_session` was once
+  written and dropped straight back out, leaving the whole vintage fix inert in
+  production.
+
+`tracker_store.HEADER_FIELDS` gained the two keys as well: the mirror FOLLOWS the
+JSON (decision 0017), so a header key the JSON carries and the mirror does not
+would be a parity difference `verify` reported forever — which is gate #57's
+entire measurement.
+
+### A setup that stops being measured is not a loss
+
+37 OPEN setups were older than 20 sessions on 2026-09-04, going back to
+2026-05-06 (CTRA, KALV, MU, PWR …), several with scenarios whose `last_action`
+still read "Awaiting update" — never replayed since creation. 41 more had
+`open_scenario_count == closed_scenario_count == 0`: some with an empty
+`scenarios` dict (CLF, OKLO, GNTX), some whose every scenario was experimental or
+band-variant (MU 06-04, GBTG 07-01 carry 12-18 scenarios and not one baseline).
+`setup_status` was pure scenario closure with no time term, so all 78 sat in
+denominators as though they were evidence.
+
+`EXPIRED_UNMEASURED` is the third answer. `expiry_reason` is
+`no_replay_20_sessions` (more than `TRACKER_STALE_SESSIONS` = 20 exchange
+sessions since `last_replayed_session`, counted with
+`market_calendar.trading_days_between` — weekday arithmetic counts Thanksgiving
+as a session) or `no_baseline_scenarios`.
+
+The rules around it matter more than the status:
+
+* **It is applied AFTER the closure rule**, so a setup that closes normally is
+  never expired.
+* **Uncertainty never deletes.** A date the calendar refuses, an unparseable one
+  or a missing one all leave the record exactly where the closure rule put it.
+* **It runs in the recompute AND as a sweep.** A setup whose daily frame comes
+  back empty — a delisted symbol, a fetch that failed — is skipped before
+  `recompute_tracker_setup_record` is ever called, and those are precisely the
+  "Awaiting update" records the rule exists for.
+* **It leaves numerator and denominator both**, and every export carries
+  `n_expired_unmeasured` beside its `n`. An exclusion nobody can see would be a
+  second version of the defect it fixes.
+* **Nothing is deleted and only the closure rule un-expires a record.** A
+  replayed scenario comes back through the recompute as OPEN or CLOSED and the
+  reason is cleared.
+
+### What the reviewer caught, and why each one hid
+
+Three blockers on the first build, all of them the same species: a number that
+looked right in a unit test and was wrong on the live file.
+
+**Two clocks, two zones.** The point of the two-clock line was that the tracker
+snapshot and the scan factors have different ages. `saved_at` was rendered
+market-local with an offset and the scan-factor mtime machine-local with none,
+so on this PT desk the pair read *three hours apart for the same instant* — the
+line invented a staleness it existed to disprove. Both are market-local ISO with
+the offset printed now. The test stamps both from ONE instant and asserts the two
+rendered strings are equal, because asserting a format would have passed.
+
+**An all-expired group took its own count with it.** `if not rows_for_group:
+continue` looked like a guard against an empty row; it was actually the branch
+that dropped `expired_rows`. `build_tracker_stats_rows` had the identical dead
+shape one level down (`grouped.setdefault(key, [])` followed by `if not rows:
+continue`). Every unit test passed because every fixture had at least one
+surviving record per group. On the live 2026-09-04 mirror the sentence said
+**16 where 45 records had expired** — under-reporting by exactly the groups that
+were worst, which is the direction that hides a problem. Both builders now emit
+the row: zero measured setups, blank measures, the real count. The stats builder
+needed a `representative_by_group` to do it, because `rows[0]` does not exist
+when every row in the group was expired.
+
+**A gate nobody could satisfy.** The first #69 asked for `n_expired_unmeasured
+>= 37 + 41` from the audit's prose. Those two numbers counted different things
+from what the implemented rules count, so the gate could not pass however
+correct the code was. It is restated to numbers reproducible from the mirror
+(setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7,
+control 0, 52 total), and the expiry now logs the literal token
+`n_expired_unmeasured=N` — unconditionally, including zero, since an absent line
+and a count of nought are different facts and a gate is checked by grep.
+
+Two advisories are worth keeping as rules rather than fixes. A naive moment is
+**attached** to market-local, never converted — the `_gate_moment` rule, and
+`astimezone` on a naive value silently read it as machine-local. And a symbol
+with **no frame at all** is `n_no_frame`, excluded from the purity fraction: it
+is neither the declared source nor a fallback, and counting it as pinned would
+have reported a symbol the scan never saw as evidence that the pin was working.
+
+**A third population exists and is deliberately untouched.** The audit counted 41
+records with no open and no closed scenario. Only 13 are `no_baseline_scenarios`;
+**the other 28 have baseline scenarios in a status that is neither open nor
+closed**, so neither expiry rule reaches them. What that status means, and
+whether such a record is evidence, is a trader-and-lead question. It is written
+down here so the next reader meets it as a known open question rather than as a
+fresh defect.
+
+### The exclusion is opt-in, because one function serves two masters
+
+The builder shipped M3.3 excluding the expired everywhere and reported the
+tension rather than hiding it; the lead ruled on the same day, and the ruling is
+the rule now.
+
+`build_tracker_setup_type_rows` is read by two callers with different rights.
+`export_setup_tracker_views` renders it for the trader. But
+`_load_ranked_tracker_setup_type_rows` -> `rank_tracker_setup_type_rows` ->
+`apply_tracker_setup_type_adjustments` turns it into `row["score"]`, and
+`tracked_setups` is the third key that ranking sorts on. Dropping records from it
+is therefore a scoring change, and plan.md sec 5 forbids one without golden
+fixtures first.
+
+So `exclude_expired_unmeasured` defaults to **False**. The export passes True;
+nothing on the scoring path passes anything. `export_setup_tracker_views` builds
+the rows twice from one tracker — measured at 0.449 s per pass over 11,000
+setups, in the after-close export and off the Qt thread — because
+`payload["setup_type_stats"]` is what `_load_ranked_tracker_setup_type_rows`
+falls back to and it must keep the champion's population.
+`n_expired_unmeasured` is carried in both readings: "19 setups, 3 of them
+unmeasured" is a fact the scoring row is entitled to state while it still counts
+all 19. `build_tracker_stats_rows` and `build_band_variant_stats_rows` keep the
+exclusion unconditionally, and that was checked rather than assumed — the only
+thing that writes live scoring weights is `analyze_master_avwap_scoring.py`, and
+it reads the ATTRIBUTE exports, which this work never touches.
+
+`open_setups` does follow the status, and that is display-only by inspection:
+`_compute_tracker_setup_type_ranking_score` reads `tracked_setups`, the metric
+pair and its baselines, `target_hit_rate`, `stop_rate` and `closed_setups`, and
+the sort reads `ranking_score`, `closed_setups`, `tracked_setups`,
+`avg_closed_r` and `type_label`. Neither mentions it. The test asserts that
+`open_setups`, `n_expired_unmeasured` and `sample_setups` are the ONLY cells that
+differ, so a third one moving is a failure rather than a discovery.
+
+**Counting the expired out of the champion's own inputs is a future
+golden-fixture decision, not something to do in passing.**
+
+One note on the test, because it took three attempts to make it capable of
+failing — the 2026-09-02 lesson about tests written by the agent that wrote the
+fix. The first fixture put every setup in one rank group, so `score_delta` was 0
+on both sides and nothing could move. The second put the two families in
+different groups, because `_tracker_priority_bucket` demotes `favorite_setup` to
+`near_favorite_zone` for any family outside `MAIN_SWING_SETUP_FAMILIES`. The
+third works: three families in one (side, bucket), a third family dragging the
+baseline so two carry an identical positive edge, tying their `ranking_score` and
+`closed_setups` so `tracked_setups` is the only separator, and `zeta_pattern`
+sorting after `alpha_pattern` by `type_label` so dropping its stale records
+reverses the two. `score_delta` is confidence-capped at 3 either way, so the test
+asserts the rank published into `symbol_entry["priority_setup_type_rank"]` — the
+value that actually moves — and asserts the delta is non-zero first so it can
+never pass vacuously.
+
+`build_recent_tracker_setup_family_rows` (the other live scoring input, which the
+packet did not name) was left untouched throughout.
+
 ## Headline statistics, long form (moved verbatim from CLAUDE.md on 2026-09-03, F1 docs packet)
 
 `CLAUDE.md` keeps the rules of this block; this is the block as it stood, with every

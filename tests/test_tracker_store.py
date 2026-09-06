@@ -38,6 +38,10 @@ def _payload() -> dict:
         "schema_version": 2,
         "updated_at": "2026-09-03T07:15:53",
         "data_session": "2026-09-02",
+        # M3.2 (2026-09-05) joined the header: the mirror follows the JSON, so a
+        # key the payload carries and the mirror drops is a parity difference.
+        "saved_at": "2026-09-03T07:15:53-04:00",
+        "saved_by": "close_slot",
         "daily_watchlists": {"2026-09-02": {"symbols": ["AAPL", "MSFT"]}},
         "setups": {
             "2026-09-02:AAPL:LONG:2026-06-01:favorite_setup": _record("AAPL", "2026-09-02"),

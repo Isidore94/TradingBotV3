@@ -30,6 +30,55 @@ globals().update(
 # Yahoo) the gate was built to catch.
 TRACKER_PURITY_MAX_QUARANTINE_FRACTION = 0.2
 
+# Packet M3.1 (2026-09-05). The gate above was written against a SYSTEMIC IB
+# FALLBACK - an IB client collision routing every symbol to Yahoo behind the
+# scanner's back. It was never written against a source the TRADER DECLARED.
+#
+# `local_settings.json` `daily_bars_source: "yahoo"` is exactly that declaration
+# (R10.0b §1.3): the durable daily-bar store is pinned to one source because IB
+# reports regular-session volume in round lots and Yahoo the consolidated
+# session in shares, and no constant converts one into the other. With the pin
+# in force the scheduled tracker write was refused EVERY DAY - 2026-09-04
+# 13:03:59, 139 symbols, `sources=cache` - so the tracker's effective writer
+# became the catch-up backfill, a synthetic replay rather than the scan's own
+# output.
+#
+# So: the pinned source is a source of record, not a fallback. A symbol whose
+# bars came from it is PURE. Anything that is neither IBKR nor the pin is still
+# a fallback nobody declared, and still vetoes. With NO pin the gate is
+# byte-for-byte the one that shipped in July.
+#
+# `cache` and `unknown` are accepted ONLY under a pin, and only as the absence
+# of contrary evidence: `daily_bar_provenance_for_source` deliberately refuses
+# to map a cache read to a unit, because reading a row off disk tells you it
+# came off disk and not what wrote it. Under a declared pin, the store those
+# rows were read from is the pinned store. Where the frame DOES carry per-row
+# provenance, that is what is read - so a store holding pre-pin IBKR rows and
+# post-pin Yahoo rows is judged on what it actually says.
+TRACKER_PURITY_PIN_NEUTRAL_SOURCES = frozenset(
+    {DAILY_BAR_SOURCE_CACHE, DAILY_BAR_SOURCE_UNKNOWN, ""}
+)
+
+
+def _tracker_purity_frame_sources(frame) -> set[str]:
+    """Every source ``frame`` claims, normalized and lower-cased.
+
+    The frame-level declaration wins when it names a real provider. When it says
+    ``cache`` (or says nothing), the per-row provenance column is consulted,
+    because that column is the one thing that survives a merge of two sources -
+    and a merge of two sources is exactly what the durable store is.
+    """
+    declared = _get_daily_bar_source(frame)
+    if declared and declared != DAILY_BAR_SOURCE_CACHE:
+        return {declared}
+    row_sources: set[str] = set()
+    if isinstance(frame, pd.DataFrame) and DAILY_BAR_SOURCE_COLUMN in getattr(frame, "columns", ()):
+        for value in frame[DAILY_BAR_SOURCE_COLUMN].dropna().unique().tolist():
+            text = str(value).strip().lower()
+            if text and text != DAILY_BAR_SOURCE_UNKNOWN:
+                row_sources.add(text)
+    return row_sources or {declared}
+
 
 # ---------------------------------------------------------------------------
 # AVWAP band challenger (plan.md Phase 0.10 / T3 in docs/AVWAP_BAND_VARIANT_STUDY.md).
@@ -61,40 +110,88 @@ def evaluate_setup_tracker_purity(
     daily_frames_by_symbol,
     *,
     max_quarantine_fraction=TRACKER_PURITY_MAX_QUARANTINE_FRACTION,
+    pinned_source=None,
 ):
     """(allowed, quarantined_symbols, skip_reason) for the purity gate.
 
     allowed=True with a non-empty quarantine list means: write the tracker for
     the pure symbols and leave the quarantined ones untouched this run.
+
+    ``pinned_source`` is the trader's declared daily-bar source of record; it is
+    resolved from ``daily_bars_source_pin()`` when not supplied, and ``"auto"``
+    (or anything falsy) means no pin, in which case this function behaves
+    exactly as it did before packet M3. See the block above the constants.
+
+    The decision and the source mix are logged ONCE - this is called once per
+    run - so a refusal can be read off `trading_bot.log` without inference.
     """
+    pin = str(
+        pinned_source if pinned_source is not None else daily_bars_source_pin() or ""
+    ).strip().lower()
+    if pin == "auto":
+        pin = ""
     symbols = sorted(
         {str(symbol or "").strip().upper() for symbol in tracked_symbols if str(symbol or "").strip()}
     )
-    non_ib = [
-        symbol
-        for symbol in symbols
-        if _get_daily_bar_source(daily_frames_by_symbol.get(symbol)) != DAILY_BAR_SOURCE_IBKR
-    ]
-    if not non_ib:
-        return True, [], ""
-    sources = sorted(
-        {
-            _get_daily_bar_source(daily_frames_by_symbol.get(symbol)) or "unknown"
-            for symbol in non_ib
-        }
+    accepted = {DAILY_BAR_SOURCE_IBKR}
+    if pin:
+        accepted |= {pin} | set(TRACKER_PURITY_PIN_NEUTRAL_SOURCES)
+
+    n_ib = 0
+    n_pinned = 0
+    no_frame: list[str] = []
+    impure: list[str] = []
+    impure_sources: set[str] = set()
+    for symbol in symbols:
+        frame = daily_frames_by_symbol.get(symbol)
+        if pin and (frame is None or not isinstance(frame, pd.DataFrame) or frame.empty):
+            # NO BARS AT ALL is not "bars from the declared source". Counting it
+            # as pinned would report a symbol the scan never saw as evidence
+            # that the pin is working. It is reported on its own and left out
+            # of the fraction entirely - it is neither pure nor a fallback, and
+            # a symbol with no data cannot vote on whether the SOURCE is clean.
+            no_frame.append(symbol)
+            continue
+        frame_sources = _tracker_purity_frame_sources(frame)
+        if frame_sources == {DAILY_BAR_SOURCE_IBKR}:
+            n_ib += 1
+            continue
+        if frame_sources <= accepted:
+            # Pure, but not IBKR: the trader's declared source (or a cache read
+            # of the store that pin governs).
+            n_pinned += 1
+            continue
+        impure.append(symbol)
+        impure_sources |= {value or DAILY_BAR_SOURCE_UNKNOWN for value in frame_sources}
+
+    judged = len(symbols) - len(no_frame)
+    fraction = (len(impure) / float(judged)) if judged else 0.0
+    refused = bool(impure) and fraction > float(max_quarantine_fraction)
+    logging.info(
+        "Setup tracker purity: pin=%s n_symbols=%d n_ib=%d n_pinned=%d n_other=%d "
+        "n_no_frame=%d refused=%s%s",
+        pin or "none",
+        len(symbols),
+        n_ib,
+        n_pinned,
+        len(impure),
+        len(no_frame),
+        refused,
+        f" sources={', '.join(sorted(impure_sources))}" if impure_sources else "",
     )
-    fraction = len(non_ib) / float(len(symbols)) if symbols else 1.0
-    if fraction > float(max_quarantine_fraction):
+    if not impure:
+        return True, [], ""
+    if refused:
         return (
             False,
-            non_ib,
+            impure,
             "Setup tracker refresh skipped for this mini-PC run because tracked setups "
-            f"used non-IBKR daily data (symbols={', '.join(non_ib)}; "
-            f"sources={', '.join(sources)}).",
+            f"used non-IBKR daily data (symbols={', '.join(impure)}; "
+            f"sources={', '.join(sorted(impure_sources))}).",
         )
     return (
         True,
-        non_ib,
+        impure,
         "",
     )
 
@@ -308,6 +405,11 @@ def _maybe_run_setup_tracker_catchup(
             # scan must not also retune live scoring weights or refit the
             # Expected-R priors (checkpoint review 2026-08-08 addendum, P0-1).
             run_scoring_side_effects=False,
+            # M3.2: this path is the tracker's EFFECTIVE writer whenever the
+            # close slot is blocked, and until now the payload it wrote was
+            # indistinguishable from the scan's own. A synthetic replay from
+            # stored daily bars must say that it is one.
+            saved_by=TRACKER_SAVED_BY_CATCH_UP,
         )
         sessions = list((result or {}).get("dates") or [])
         outcome["ran"] = bool(sessions)
@@ -564,7 +666,20 @@ def _run_master_impl(
     shorts_path: Path | None = None,
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
+    saved_by: str = TRACKER_SAVED_BY_MANUAL,
 ):
+    """The scan itself. ``run_master`` is the manifest wrapper around it.
+
+    ``saved_by`` is declared HERE because this is the function that reads it,
+    at the ``update_setup_tracker_from_scan`` call below. It was briefly on the
+    wrapper alone, which type-checks, imports and passes every test that mocks
+    either function - and raises ``NameError`` on the first real close-slot
+    scan that reaches the tracker write.
+
+    The default is ``manual`` rather than ``close_slot`` for the same reason the
+    scan payload's is: a caller that did not say which writer it is has not
+    earned the scheduled writer's name.
+    """
     _run_t0 = time.perf_counter()
     _phase_t = _run_t0
     reset_ibkr_historical_failure_circuit()
@@ -2310,6 +2425,7 @@ def _run_master_impl(
             control_rows=control_rows,
             study_rows=study_rows,
             tracker_payload=tracker_payload,
+            saved_by=saved_by,
         )
         run_result["setup_tracker_updated"] = True
         run_result["control_setups_tracked"] = len(control_rows)
@@ -2902,12 +3018,20 @@ def main():
         logging.info("Starting hourly Master AVWAP loop (once per hour)...")
         while True:
             start = time.time()
-            run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
+            run_master(
+                update_setup_tracker=True if args.force_setup_tracker_update else None,
+                saved_by=TRACKER_SAVED_BY_MANUAL,
+            )
             elapsed = time.time() - start
             sleep_seconds = max(0, 3600 - elapsed)
             logging.info(f"Sleeping {int(sleep_seconds)} seconds until next run...")
             time.sleep(sleep_seconds)
-    run_master(update_setup_tracker=True if args.force_setup_tracker_update else None)
+    # The CLI is a person at a keyboard, so its tracker write says `manual`
+    # rather than claiming to be the desk's close slot (M3.2).
+    run_master(
+        update_setup_tracker=True if args.force_setup_tracker_update else None,
+        saved_by=TRACKER_SAVED_BY_MANUAL,
+    )
 
 
 def run_master(
@@ -2915,6 +3039,7 @@ def run_master(
     shorts_path: Path | None = None,
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
+    saved_by: str = TRACKER_SAVED_BY_CLOSE_SLOT,
 ):
     """Manifest-wrapped Master scan (plan.md Phase 1): every run writes one
     structured run manifest - success or failure - with phase timings."""
@@ -2944,6 +3069,7 @@ def run_master(
             shorts_path=shorts_path,
             update_setup_tracker=update_setup_tracker,
             require_ib_for_setup_tracker=require_ib_for_setup_tracker,
+            saved_by=saved_by,
         )
         if isinstance(result, dict):
             recorder.set_counter(

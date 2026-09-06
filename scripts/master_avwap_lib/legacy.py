@@ -648,6 +648,71 @@ TRACKER_FORWARD_MARK_BUFFER_DAYS = 2
 # being replayed every scan -- this also avoids refetching daily bars for symbols
 # long gone from the watchlist. Kept comfortably above the restatement buffer.
 TRACKER_SEALED_SETUP_MIN_AGE_DAYS = 21
+
+# ---------------------------------------------------------------------------
+# Packet M3 (2026-09-05): the tracker's own clock, and the setup that ages out.
+# ---------------------------------------------------------------------------
+#
+# WHO wrote the tracker. Three writers exist and until now none of them said so,
+# which is how the catch-up backfill - a synthetic replay from stored daily bars
+# - became the tracker's effective writer for weeks without anybody being able
+# to see it on the page. `manual` is the GUI backfill the trader asks for.
+def _evidence_lately_sessions() -> int:
+    """`evidence_stats.LATELY_SESSIONS`, read at import.
+
+    A function rather than a top-level import because this module is imported
+    very early and `evidence_stats` is not one of its existing dependencies;
+    the fallback keeps a partial environment from breaking the scanner, and the
+    equality is pinned by a test so the fallback can never drift silently.
+    """
+    try:
+        from evidence_stats import LATELY_SESSIONS
+
+        return int(LATELY_SESSIONS)
+    except Exception:  # pragma: no cover - defensive, pinned by a test
+        return 20
+
+
+TRACKER_SAVED_BY_CLOSE_SLOT = "close_slot"
+TRACKER_SAVED_BY_CATCH_UP = "catch_up_backfill"
+TRACKER_SAVED_BY_MANUAL = "manual"
+TRACKER_SAVED_BY_VALUES = (
+    TRACKER_SAVED_BY_CLOSE_SLOT,
+    TRACKER_SAVED_BY_CATCH_UP,
+    TRACKER_SAVED_BY_MANUAL,
+)
+
+# A setup whose scenarios have not been replayed against a bar for this many
+# EXCHANGE SESSIONS has stopped being measured. Counted with
+# `market_calendar.trading_days_between` and never with weekday arithmetic:
+# twenty weekdays counts Thanksgiving as a session.
+#
+# It IS `evidence_stats.LATELY_SESSIONS`, imported rather than repeated:
+# "lately" is ONE number in this codebase (CLAUDE.md) and a second literal 20
+# beside it is a copy waiting to drift.
+TRACKER_STALE_SESSIONS = _evidence_lately_sessions()
+
+#: A terminal status that is NEITHER a win nor a loss. 37 OPEN setups were older
+#: than 20 sessions on 2026-09-04, several with scenarios still reading
+#: "Awaiting update" - never replayed since creation - and 41 more carried no
+#: baseline scenario at all (an empty `scenarios` dict, or nothing but
+#: experimental / band-variant entries). All 78 sat in denominators as though
+#: they were evidence. Uncertainty is not an outcome: an expired record is
+#: excluded from numerator AND denominator wherever the champion is aggregated,
+#: and every export carries `n_expired_unmeasured` beside its `n` so the
+#: exclusion is visible rather than silent. Rows are never deleted, and the
+#: status is reversible - a later replay re-runs the closure rule first.
+SETUP_STATUS_EXPIRED_UNMEASURED = "EXPIRED_UNMEASURED"
+#: The threshold is a FIELD on the record (`stale_sessions`), never baked
+#: into the reason string. A reason that spells its own number becomes a
+#: lie the day the number changes, and every row already written keeps
+#: claiming the old one.
+TRACKER_EXPIRY_REASON_NO_REPLAY = "no_replay_stale_sessions"
+TRACKER_EXPIRY_REASON_NO_BASELINE = "no_baseline_scenarios"
+TRACKER_EXPIRY_REASONS = (
+    TRACKER_EXPIRY_REASON_NO_REPLAY,
+    TRACKER_EXPIRY_REASON_NO_BASELINE,
+)
 # Main (favorite-path) setups retention. Unlike control/study these were never
 # pruned, so the namespace accumulated every setup since inception and the tracker
 # JSON ballooned. The longest aggregation lookback over setups is
@@ -5034,10 +5099,189 @@ def apply_priority_attribute_adjustments(row: dict, symbol_entry: dict) -> None:
     symbol_entry["priority_adaptive_score_note"] = row["adaptive_score_note"]
 
 
+def tracker_save_timestamp(now: datetime | None = None) -> str:
+    """The wall clock a tracker save happened at, in MARKET-LOCAL time.
+
+    Market-local rather than machine-local because every other clock the trader
+    reads on this desk is: the sessions the tracker replays, the close slot that
+    writes it, and the `scan factors as of` mtime it is shown beside. Two clocks
+    in two zones on one status line would be worse than one clock.
+    """
+    from market_calendar import MARKET_TZ
+
+    moment = now or datetime.now(tz=MARKET_TZ)
+    if moment.tzinfo is None:
+        # ATTACH, never convert. CLAUDE.md's `_gate_moment` rule: a naive
+        # moment in this codebase is already market-local, and `astimezone`
+        # would read it as machine-local and shift it three hours on this desk.
+        moment = moment.replace(tzinfo=MARKET_TZ)
+    else:
+        moment = moment.astimezone(MARKET_TZ)
+    return moment.replace(microsecond=0).isoformat()
+
+
+def _normalized_tracker_saved_by(value) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in TRACKER_SAVED_BY_VALUES else TRACKER_SAVED_BY_MANUAL
+
+
+def _tracker_setup_baseline_scenarios(setup: dict) -> list[dict]:
+    """The champion's own scenarios on ``setup``.
+
+    Experimental scenarios and the band-variant challenger are both excluded -
+    `_is_band_variant_scenario` is the shadow fence, and a record carrying
+    nothing but shadow scenarios has measured nothing the champion can be
+    graded on.
+    """
+    return [
+        scenario
+        for scenario in (setup.get("scenarios") or {}).values()
+        if isinstance(scenario, dict)
+        and not bool(scenario.get("experimental"))
+        and not _is_band_variant_scenario(scenario)
+    ]
+
+
+def _tracker_setup_replay_session(setup: dict) -> str:
+    """The newest session this record's scenarios were replayed against.
+
+    `last_replayed_session` is stamped by `recompute_tracker_setup_record`; a
+    record written before packet M3 carries none, so the newest forward mark is
+    the honest second answer and `scan_date` (creation) the third. Never a
+    guess at "today": a record nobody replayed must read as old, not as fresh.
+    """
+    for value in (
+        setup.get("last_replayed_session"),
+        _tracker_setup_last_mark_date(setup),
+        setup.get("scan_date"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def evaluate_tracker_setup_expiry(setup: dict, as_of_session) -> str:
+    """The expiry reason for ``setup`` as of ``as_of_session``, or ``""``.
+
+    Pure. Ordered AFTER the closure rule by every caller, so a setup that closes
+    normally is never expired.
+
+    Uncertainty never deletes (plan.md sec 5): a session the exchange calendar
+    refuses, an unparseable date or a missing one all return ``""``, leaving the
+    record exactly where the closure rule put it.
+    """
+    if not isinstance(setup, dict):
+        return ""
+    if not _tracker_setup_baseline_scenarios(setup):
+        return TRACKER_EXPIRY_REASON_NO_BASELINE
+    if str(setup.get("setup_status") or "").upper() != "OPEN":
+        return ""
+    replayed = _parse_iso_date_or_none(_tracker_setup_replay_session(setup))
+    reference = as_of_session
+    if isinstance(reference, str):
+        reference = _parse_iso_date_or_none(reference)
+    if isinstance(reference, datetime):
+        reference = reference.date()
+    if replayed is None or reference is None:
+        return ""
+    try:
+        from market_calendar import trading_days_between
+
+        sessions = trading_days_between(replayed, reference)
+    except Exception:
+        # Includes SessionCalendarError for an endpoint outside the calendar's
+        # validated range. A clock that cannot answer expires nothing.
+        return ""
+    if sessions > TRACKER_STALE_SESSIONS:
+        return TRACKER_EXPIRY_REASON_NO_REPLAY
+    return ""
+
+
+def apply_tracker_setup_expiry(setup: dict, as_of_session) -> bool:
+    """Stamp (or clear) ``setup``'s expiry in place. True when it is expired.
+
+    Idempotent, and reversible: a record whose scenarios were replayed since the
+    last pass comes back through the closure rule as OPEN/CLOSED and this
+    function clears the reason rather than remembering it.
+    """
+    if not isinstance(setup, dict):
+        return False
+    reason = evaluate_tracker_setup_expiry(setup, as_of_session)
+    if reason:
+        setup["setup_status"] = SETUP_STATUS_EXPIRED_UNMEASURED
+        setup["expiry_reason"] = reason
+        if reason == TRACKER_EXPIRY_REASON_NO_REPLAY:
+            # The threshold this record was judged against, recorded beside the
+            # reason so a row stays readable after the constant moves.
+            setup["stale_sessions"] = int(TRACKER_STALE_SESSIONS)
+        return True
+    if _tracker_setup_is_expired_unmeasured(setup):
+        # Only the closure rule un-expires a record, and every caller runs it
+        # BEFORE this. Reaching here with the expired status still standing
+        # means no scenario was replayed, so it stands.
+        return True
+    setup["expiry_reason"] = ""
+    return False
+
+
+def _tracker_setup_is_expired_unmeasured(record) -> bool:
+    """True for a setup record OR a flattened row carrying its status."""
+    if not isinstance(record, dict):
+        return False
+    return str(record.get("setup_status") or "").upper() == SETUP_STATUS_EXPIRED_UNMEASURED
+
+
+def apply_tracker_expiry_sweep(tracker: dict, as_of_session) -> int:
+    """Run the expiry over every namespace; return the count now expired.
+
+    The recompute loop is not enough on its own: a setup whose daily frame comes
+    back empty (a delisted symbol, a fetch that failed) is `continue`d before
+    `recompute_tracker_setup_record` is ever called, and those are exactly the
+    records with scenarios reading "Awaiting update". They are the population
+    this rule exists for, so the sweep runs over the stored records too. It is
+    idempotent for anything the recompute already stamped.
+    """
+    if not isinstance(tracker, dict):
+        return 0
+    expired = 0
+    for namespace in ("setups", "control_setups", "study_setups"):
+        for setup in (tracker.get(namespace) or {}).values():
+            if not isinstance(setup, dict):
+                continue
+            if apply_tracker_setup_expiry(setup, as_of_session):
+                expired += 1
+    return expired
+
+
+def log_tracker_expiry_summary(expired_records: int) -> None:
+    """One line per tracker pass, carrying a token the live gate can grep.
+
+    The count is written as the literal `n_expired_unmeasured=N` because gate
+    #69 is verified by grepping `trading_bot.log`, and a sentence that spells
+    the number in prose is not something a gate can check without a human
+    reading it.
+    """
+    logging.info(
+        "Setup tracker expiry: n_expired_unmeasured=%d record(s) carry %s "
+        "(excluded from every trader-facing aggregate, numerator and denominator; "
+        "the champion's scoring population is unchanged).",
+        int(expired_records or 0),
+        SETUP_STATUS_EXPIRED_UNMEASURED,
+    )
+
+
 def _default_setup_tracker_payload() -> dict:
     return {
         "schema_version": SETUP_TRACKER_SCHEMA_VERSION,
         "updated_at": None,
+        # Packet M3.2: the tracker's own clock. `updated_at` is a machine-local
+        # write stamp nothing renders; these two are what the Setup Tracker
+        # page shows beside the scan-factor mtime, so the tables can never look
+        # fresher than the snapshot behind them. None means "unknown", which is
+        # exactly what a pre-M3 payload is.
+        "saved_at": None,
+        "saved_by": None,
         # The data vintage: the completed session whose bars produced this
         # payload. None means "unknown", which is exactly what a legacy
         # payload is; it must never silently read as "today".
@@ -5132,6 +5376,12 @@ def load_setup_tracker_payload() -> dict:
     # this function, so the catch-up kept falling back to the updated_at write
     # clock exactly as before (Sol 5.6 verification review, surviving P0).
     tracker["data_session"] = _normalized_tracker_data_session(payload.get("data_session")) or None
+    # Same lesson as `data_session` above: this loader rebuilds field by field,
+    # so a key it does not name is dropped on read and the whole stamp becomes
+    # inert in production. `None` for a pre-M3 payload - never a guess at now.
+    tracker["saved_at"] = str(payload.get("saved_at") or "").strip() or None
+    saved_by = str(payload.get("saved_by") or "").strip().lower()
+    tracker["saved_by"] = saved_by if saved_by in TRACKER_SAVED_BY_VALUES else None
     tracker["setups"] = payload.get("setups", {}) if isinstance(payload.get("setups"), dict) else {}
     tracker["control_setups"] = payload.get("control_setups", {}) if isinstance(payload.get("control_setups"), dict) else {}
     tracker["study_setups"] = payload.get("study_setups", {}) if isinstance(payload.get("study_setups"), dict) else {}
@@ -5258,6 +5508,8 @@ def save_setup_tracker_payload(
     *,
     allow_empty: bool = False,
     data_session: str | date | None = None,
+    saved_by: str = TRACKER_SAVED_BY_MANUAL,
+    saved_at: str | None = None,
 ) -> None:
     """Persist the tracker.
 
@@ -5269,9 +5521,19 @@ def save_setup_tracker_payload(
     Friday was already reflected and suppress the real Friday refresh. Callers
     that know the vintage pass it; when omitted, any vintage already on the
     payload is preserved (legacy payloads simply carry none).
+
+    ``saved_by`` / ``saved_at`` are packet M3.2's clock: WHO wrote this payload
+    and WHEN, market-local. They are distinct from ``data_session`` (which
+    session's bars it reflects) and from ``updated_at`` (a machine-local write
+    stamp nothing renders). ``saved_at`` is a parameter so the caller can hand
+    the SAME instant to `export_setup_tracker_views`, which runs before this and
+    stamps it onto the stats CSVs - the page must not show the CSVs one save
+    behind the JSON.
     """
     payload["schema_version"] = SETUP_TRACKER_SCHEMA_VERSION
     payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    payload["saved_by"] = _normalized_tracker_saved_by(saved_by)
+    payload["saved_at"] = str(saved_at or "").strip() or tracker_save_timestamp()
     resolved_session = _normalized_tracker_data_session(data_session)
     if resolved_session:
         payload["data_session"] = resolved_session
@@ -6395,7 +6657,15 @@ def recompute_tracker_setup_record(
     indicator_frame: pd.DataFrame | None = None,
     band_history_cache: dict | None = None,
     replay_cache: dict | None = None,
+    as_of_session=None,
 ) -> dict:
+    """Replay ``setup``'s scenarios over ``df`` and restate its record.
+
+    ``as_of_session`` (packet M3.3) is the session this pass is being run FOR.
+    When given, the staleness rule runs after the closure rule at the end of
+    this function; when omitted the record's status is decided by the closure
+    rule alone, exactly as before.
+    """
     if df is None or df.empty:
         return setup
 
@@ -6575,6 +6845,14 @@ def recompute_tracker_setup_record(
 
     setup["scenarios"] = working_scenarios
     setup["daily_marks"] = daily_marks
+    # M3.2: the newest session whose bars were actually replayed against this
+    # record's scenarios. `scan_date` is creation and answers a different
+    # question; without this stamp there was no way to tell a setup being
+    # advanced every day from one whose scenarios still read "Awaiting update".
+    if daily_marks:
+        last_replayed = str(daily_marks[-1].get("trade_date") or "").strip()
+        if last_replayed:
+            setup["last_replayed_session"] = last_replayed
     if daily_marks and isinstance(daily_marks[0].get("feature_snapshot"), dict):
         setup["entry_feature_snapshot"] = copy.deepcopy(daily_marks[0]["feature_snapshot"])
     setup["latest_snapshot"] = daily_marks[-1] if daily_marks else {}
@@ -6596,6 +6874,11 @@ def recompute_tracker_setup_record(
         setup["setup_status"] = "UNTRADEABLE"
     else:
         setup["setup_status"] = "CLOSED"
+    # M3.3, AFTER the closure rule: a setup that closed normally is never
+    # expired, and a setup that was replayed today comes out of here OPEN with
+    # its expiry reason cleared.
+    if as_of_session is not None:
+        apply_tracker_setup_expiry(setup, as_of_session)
     return setup
 
 
@@ -6613,6 +6896,11 @@ def _flatten_tracker_scenarios(setups: dict[str, dict]) -> list[dict]:
                     "side": setup.get("side"),
                     "priority_bucket": setup.get("priority_bucket"),
                     "setup_family": setup.get("setup_family"),
+                    # M3.3: carried so `build_tracker_stats_rows` can exclude an
+                    # EXPIRED_UNMEASURED record without re-opening the setups
+                    # dict. The ROW is still written - nothing is deleted; it is
+                    # the AGGREGATE that must not count uncertainty.
+                    "setup_status": setup.get("setup_status"),
                     "entry_price": setup.get("entry_price"),
                     "anchor_date": setup.get("anchor_date"),
                     "retest_reference_level": setup.get("retest_reference_level"),
@@ -8801,7 +9089,23 @@ def _attribute_leaderboard_evidence(closed_values, *, closed_setups: int) -> dic
         return {"meets_n_floor": "0", "evidence_label": ""}
 
 
-def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
+def build_tracker_stats_rows(
+    scenario_rows: list[dict],
+    *,
+    exclude_expired_unmeasured: bool = False,
+) -> list[dict]:
+    """Per (stop label, exit template) scenario statistics.
+
+    ``exclude_expired_unmeasured`` mirrors `build_tracker_setup_type_rows`
+    exactly (lead ruling, 2026-09-05): True is the DISPLAY reading and the
+    default is the population as it has always been. Nothing on a scoring path
+    reads this export today - `analyze_master_avwap_scoring.py`, the only
+    writer of live scoring weights, reads the ATTRIBUTE exports - but the two
+    builders sitting side by side with different rules is how the next reader
+    picks the wrong one. Same flag, same default, same meaning.
+
+    ``n_expired_unmeasured`` is carried either way.
+    """
     if not scenario_rows:
         return []
 
@@ -8810,12 +9114,32 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
         return value if value is not None else -9999.0
 
     grouped = {}
+    expired_by_group: dict[str, set] = {}
+    #: One row per group for its IDENTITY fields (stop label, exit template,
+    #: framework). Taken from whatever row appeared first, expired or not,
+    #: because a group whose every record aged out still has to name itself.
+    representative_by_group: dict[str, dict] = {}
     for row in scenario_rows:
         key = f"{row.get('stop_reference_label')}__{row.get('exit_template_id')}"
+        representative_by_group.setdefault(key, row)
+        # M3.3: an EXPIRED_UNMEASURED record is uncertainty, not an outcome. It
+        # leaves the numerator AND the denominator, and is counted beside them
+        # so the exclusion is visible rather than silent.
+        if _tracker_setup_is_expired_unmeasured(row):
+            expired_by_group.setdefault(key, set()).add(str(row.get("setup_id") or ""))
+            if exclude_expired_unmeasured:
+                continue
         grouped.setdefault(key, []).append(row)
+    # A group with nothing but expired rows keeps its place. Dropping it here
+    # was the same defect as the `continue` in `build_tracker_setup_type_rows`:
+    # the count vanished with the group, so the total under-reported by exactly
+    # the worst groups.
+    for key in expired_by_group:
+        grouped.setdefault(key, [])
 
     stats_rows = []
     for key, rows in grouped.items():
+        identity = rows[0] if rows else representative_by_group.get(key, {})
         tradeable = [row for row in rows if bool(row.get("tradeable", int(row.get("shares", 0) or 0) > 0))]
         closed = [row for row in tradeable if _scenario_is_closed(row.get("status"))]
         open_rows = [row for row in tradeable if _scenario_is_open(row.get("status", ""))]
@@ -8836,14 +9160,15 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
         stats_rows.append(
             {
                 "scenario_group": key,
-                "stop_reference_label": rows[0].get("stop_reference_label"),
-                "exit_template_id": rows[0].get("exit_template_id"),
-                "exit_template_label": rows[0].get("exit_template_label"),
-                "framework_family": rows[0].get("framework_family", ""),
-                "framework_version": rows[0].get("framework_version", ""),
-                "experimental": bool(rows[0].get("experimental")),
-                "hard_stop_r_multiple": _coerce_float(rows[0].get("hard_stop_r_multiple")),
+                "stop_reference_label": identity.get("stop_reference_label"),
+                "exit_template_id": identity.get("exit_template_id"),
+                "exit_template_label": identity.get("exit_template_label"),
+                "framework_family": identity.get("framework_family", ""),
+                "framework_version": identity.get("framework_version", ""),
+                "experimental": bool(identity.get("experimental")),
+                "hard_stop_r_multiple": _coerce_float(identity.get("hard_stop_r_multiple")),
                 "tracked_setups": len(rows),
+                "n_expired_unmeasured": len(expired_by_group.get(key, ())),
                 "tradeable_setups": len(tradeable),
                 "closed_setups": len(closed),
                 "open_setups": len(open_rows),
@@ -9470,7 +9795,33 @@ def build_tracker_short_horizon_rows(
     return short_rows
 
 
-def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
+def build_tracker_setup_type_rows(
+    setups: dict[str, dict],
+    *,
+    exclude_expired_unmeasured: bool = False,
+) -> list[dict]:
+    """Per (side, bucket, family, zone, retest, compression) rows over ``setups``.
+
+    **This function is read by TWO callers with different rights** (lead ruling,
+    2026-09-05). `export_setup_tracker_views` renders it for the trader; but
+    `_load_ranked_tracker_setup_type_rows` -> `rank_tracker_setup_type_rows` ->
+    `apply_tracker_setup_type_adjustments` turns it into `row["score"]`, where
+    `tracked_setups` is a sort tiebreak and `avg_total_r` feeds the ranking
+    metric. plan.md sec 5 forbids changing a scoring input without golden
+    fixtures first.
+
+    So M3.3's exclusion is OPT-IN. ``exclude_expired_unmeasured=True`` is the
+    DISPLAY reading: an `EXPIRED_UNMEASURED` record leaves every measure and
+    every denominator. The default is the CHAMPION'S POPULATION and is
+    unchanged from before the status existed - flipping a record's status must
+    not move a single number the scorer sees. Counting the expired out of the
+    champion's own inputs is a future golden-fixture decision, not this
+    packet's.
+
+    ``n_expired_unmeasured`` is emitted EITHER WAY, because the count is
+    evidence in both readings: "5 setups, 2 of them unmeasured" is a fact the
+    scoring row is entitled to carry even while it still counts all five.
+    """
     if not isinstance(setups, dict) or not setups:
         return []
 
@@ -9496,6 +9847,10 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
             "compression_label": context["compression_label"],
             "compression_flag": context["compression_flag"],
             "setup_status": str(setup.get("setup_status") or ""),
+            # M3.3: kept on the row so the grouping below can count it and then
+            # leave it out of every measure. Never dropped before grouping - a
+            # count nobody can see is the defect this replaces.
+            "expired_unmeasured": _tracker_setup_is_expired_unmeasured(setup),
             "priority_score": _coerce_float(setup.get("priority_score")),
             "tradeable": int(outcome_summary.get("tradeable_scenario_count", 0) or 0) > 0,
             "closed": int(outcome_summary.get("closed_tradeable_scenario_count", 0) or 0) > 0,
@@ -9512,7 +9867,8 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
             ),
         }
         setup_rows.append(row)
-        baseline_groups.setdefault((str(context["side"]), str(context["priority_bucket"])), []).append(row)
+        if not (exclude_expired_unmeasured and row["expired_unmeasured"]):
+            baseline_groups.setdefault((str(context["side"]), str(context["priority_bucket"])), []).append(row)
 
     baseline_map: dict[tuple[str, str], dict[str, float | None]] = {}
     for baseline_key, rows_for_baseline in baseline_groups.items():
@@ -9556,7 +9912,23 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
         grouped.setdefault(key, []).append(row)
 
     setup_type_rows = []
-    for group_key, rows_for_group in grouped.items():
+    for group_key, all_rows_for_group in grouped.items():
+        # M3.3: counted always, excluded only when the caller asked for the
+        # display reading. Numerator and denominator both, when excluded.
+        expired_rows = [row for row in all_rows_for_group if row.get("expired_unmeasured")]
+        rows_for_group = (
+            [row for row in all_rows_for_group if not row.get("expired_unmeasured")]
+            if exclude_expired_unmeasured
+            else all_rows_for_group
+        )
+        # NO `continue` when the group empties out. A group whose every record
+        # aged out still has to report its own count, or the page's sentence
+        # under-reports by exactly the groups that were WORST - on the live
+        # 2026-09-04 mirror the sentence said 16 where 45 records had expired.
+        # The row it writes carries zero measured setups and blank measures,
+        # which is the honest shape: "three setups here, none of them
+        # measurable". Unreachable when `exclude_expired_unmeasured` is False,
+        # so the scoring population never sees a zero row.
         tradeable_rows = [row for row in rows_for_group if row.get("tradeable")]
         closed_rows = [row for row in rows_for_group if row.get("closed")]
         open_rows = [row for row in rows_for_group if str(row.get("setup_status") or "").upper() == "OPEN"]
@@ -9630,6 +10002,7 @@ def build_tracker_setup_type_rows(setups: dict[str, dict]) -> list[dict]:
                 "retest_label": group_key[4],
                 "compression_label": group_key[5],
                 "tracked_setups": len(rows_for_group),
+                "n_expired_unmeasured": len(expired_rows),
                 "tradeable_setups": len(tradeable_rows),
                 "closed_setups": len(closed_rows),
                 "open_setups": len(open_rows),
@@ -11506,6 +11879,10 @@ BAND_VARIANT_STATS_COLUMNS = (
     "priority_bucket",
     "exit_template_id",
     "n",
+    #: M3.3 (2026-09-05): setups in this cell that aged out UNMEASURED and are
+    #: therefore in neither `n` nor any rate below. A cell whose evidence was
+    #: dropped must say how much.
+    "n_expired_unmeasured",
     "n_variant",
     "n_variant_unmeasured",
     "top_unmeasured_reason",
@@ -11631,12 +12008,18 @@ def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
             {
                 "exit_template_id": template,
                 "n": 0,
+                "n_expired_unmeasured": 0,
                 "n_variant_unmeasured": 0,
                 "unmeasured_reasons": collections.Counter(),
                 "champion": [],
                 "variant": [],
             },
         )
+        # M3.3: an EXPIRED_UNMEASURED record grades neither side of this
+        # comparison. Counted so the cell says how much it left out.
+        if _tracker_setup_is_expired_unmeasured(setup):
+            group["n_expired_unmeasured"] += 1
+            continue
         group["n"] += 1
         group["champion"].append((setup, champion))
         if variant is None:
@@ -11669,6 +12052,7 @@ def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
             "priority_bucket": bucket,
             "exit_template_id": group["exit_template_id"],
             "n": group["n"],
+            "n_expired_unmeasured": group["n_expired_unmeasured"],
             "n_variant": len(group["variant"]),
             "n_variant_unmeasured": group["n_variant_unmeasured"],
             "top_unmeasured_reason": _band_variant_top_reason(group["unmeasured_reasons"]),
@@ -11712,20 +12096,60 @@ def build_band_variant_stats_rows(setups: dict[str, dict]) -> list[dict]:
     return rows
 
 
-def export_setup_tracker_views(payload: dict) -> None:
+#: The stats exports that carry the tracker's own clock (M3.2). These three are
+#: what the Setup Tracker page reads to answer "as of when?"; they are stamped
+#: rather than left to a file mtime because the CSV is rewritten by every pass,
+#: including passes that changed nothing, while `saved_at` is the moment the
+#: snapshot behind the numbers was taken.
+TRACKER_SAVED_AT_COLUMN = "tracker_saved_at"
+TRACKER_SAVED_BY_COLUMN = "tracker_saved_by"
+
+
+def _stamp_tracker_clock(rows: list[dict], saved_at: str, saved_by: str) -> list[dict]:
+    """Same value on every row - it describes the FILE, not the row.
+
+    A blank stays blank: an export written by a payload that carries no stamp
+    must read as unknown on the page, never as "now".
+    """
+    for row in rows:
+        if isinstance(row, dict):
+            row[TRACKER_SAVED_AT_COLUMN] = saved_at
+            row[TRACKER_SAVED_BY_COLUMN] = saved_by
+    return rows
+
+
+def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = None) -> None:
     setups = payload.get("setups", {}) if isinstance(payload, dict) else {}
+    saved_at = str(
+        tracker_saved_at if tracker_saved_at is not None else (payload or {}).get("saved_at") or ""
+    ).strip()
+    saved_by = str((payload or {}).get("saved_by") or "").strip().lower()
     attribute_registry = payload.get("attribute_registry", {}) if isinstance(payload, dict) else {}
     scenario_rows = _flatten_tracker_scenarios(setups)
     daily_rows = _flatten_tracker_daily_marks(setups)
     attribute_rows = _flatten_tracker_attributes(setups, attribute_registry)
     attribute_leaderboard_rows = _build_tracker_attribute_leaderboard_rows(attribute_rows)
-    stats_rows = build_tracker_stats_rows(scenario_rows)
-    setup_type_rows = build_tracker_setup_type_rows(setups)
-    recent_setup_type_rows = build_recent_setup_type_stat_rows(payload)
+    # Two readings, exactly as for the setup-type rows below: the CSV drops the
+    # expired, `payload["stats"]` keeps the population it has always had.
+    scoring_stats_rows = build_tracker_stats_rows(scenario_rows)
+    stats_rows = build_tracker_stats_rows(scenario_rows, exclude_expired_unmeasured=True)
+    # TWO readings of one tracker (lead ruling, 2026-09-05). The CSV and the
+    # panel drop the expired; `payload["setup_type_stats"]` below is the
+    # CHAMPION'S SCORING POPULATION - `_load_ranked_tracker_setup_type_rows`
+    # falls back to it - so it keeps every record it has always kept.
+    scoring_setup_type_rows = build_tracker_setup_type_rows(setups)
+    setup_type_rows = _stamp_tracker_clock(
+        build_tracker_setup_type_rows(setups, exclude_expired_unmeasured=True),
+        saved_at,
+        saved_by,
+    )
+    recent_setup_type_rows = _stamp_tracker_clock(
+        build_recent_setup_type_stat_rows(payload), saved_at, saved_by
+    )
     playbook_rows = build_tracker_playbook_rows(setups)
     short_horizon_rows = build_tracker_short_horizon_rows(setups)
-    payload["stats"] = stats_rows
-    payload["setup_type_stats"] = setup_type_rows
+    payload["stats"] = scoring_stats_rows
+    payload["setup_type_stats"] = scoring_setup_type_rows
 
     SETUP_SCENARIOS_FILE.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(scenario_rows).to_csv(SETUP_SCENARIOS_FILE, index=False)
@@ -11765,7 +12189,12 @@ def export_setup_tracker_views(payload: dict) -> None:
     # still fail loudly.
     try:
         pd.DataFrame(
-            build_band_variant_stats_rows(setups), columns=list(BAND_VARIANT_STATS_COLUMNS)
+            _stamp_tracker_clock(build_band_variant_stats_rows(setups), saved_at, saved_by),
+            columns=[
+                *BAND_VARIANT_STATS_COLUMNS,
+                TRACKER_SAVED_AT_COLUMN,
+                TRACKER_SAVED_BY_COLUMN,
+            ],
         ).to_csv(SETUP_BAND_VARIANT_STATS_FILE, index=False)
     except Exception as exc:
         logging.warning("Could not write the band variant stats export (%s).", exc)
@@ -11916,7 +12345,14 @@ def update_setup_tracker_from_scan(
     control_rows: list[dict] | None = None,
     study_rows: list[dict] | None = None,
     tracker_payload: dict | None = None,
+    saved_by: str = TRACKER_SAVED_BY_CLOSE_SLOT,
 ) -> None:
+    """Fold this scan's tracked rows into the tracker, replay, export and save.
+
+    ``saved_by`` names the writer (M3.2). The default is the close slot because
+    that is this function's scheduled caller; the catch-up backfill and the
+    manual GUI backfill each pass their own.
+    """
     tracker = tracker_payload if isinstance(tracker_payload, dict) else load_setup_tracker_payload()
     symbol_map = ai_state.get("symbols", {}) if isinstance(ai_state, dict) else {}
     now_iso = datetime.now().isoformat(timespec="seconds")
@@ -12162,6 +12598,7 @@ def update_setup_tracker_from_scan(
                 indicator_frame=indicator_frame,
                 band_history_cache=band_history_cache,
                 replay_cache=replay_context_caches.setdefault(symbol, {}),
+                as_of_session=target_scan_date,
             )
 
     _recompute_namespace(tracker.get("setups"))
@@ -12182,7 +12619,21 @@ def update_setup_tracker_from_scan(
             compacted_records,
         )
 
-    export_setup_tracker_views(tracker)
+    # M3.3: the recompute above reaches every record it could fetch bars for.
+    # The records this rule exists for are precisely the ones it could NOT -
+    # a symbol whose frame came back empty is `continue`d before the recompute
+    # runs - so the sweep runs over the stored records too. Idempotent.
+    # Logged unconditionally, including a zero: the live gate greps for the
+    # token, and an absent line and a count of nought are different facts.
+    log_tracker_expiry_summary(apply_tracker_expiry_sweep(tracker, target_scan_date))
+
+    # One instant for the CSVs and the JSON: the export runs BEFORE the save, so
+    # reading `saved_at` off the payload here would stamp the CSVs with the
+    # PREVIOUS save's clock.
+    saved_at = tracker_save_timestamp()
+    tracker["saved_at"] = saved_at
+    tracker["saved_by"] = _normalized_tracker_saved_by(saved_by)
+    export_setup_tracker_views(tracker, tracker_saved_at=saved_at)
     try:
         write_control_discovery_report(CONTROL_DISCOVERY_FILE, tracker)
     except Exception as exc:
@@ -12193,7 +12644,12 @@ def update_setup_tracker_from_scan(
         logging.warning("Could not write study report (%s).", exc)
     # The scan date this pass evaluated *is* the data vintage: every record
     # written above came from that session's completed bars.
-    save_setup_tracker_payload(tracker, data_session=target_scan_date)
+    save_setup_tracker_payload(
+        tracker,
+        data_session=target_scan_date,
+        saved_by=saved_by,
+        saved_at=saved_at,
+    )
     if auto_tune:
         tuner_output = run_priority_scoring_tuner(
             apply_changes=True,
@@ -25020,6 +25476,7 @@ def backfill_setup_tracker_from_recent_sessions(
     shorts_path: Path | None = None,
     end_date: date | None = None,
     run_scoring_side_effects: bool = True,
+    saved_by: str = TRACKER_SAVED_BY_MANUAL,
 ) -> dict:
     """Rebuild the setup tracker from the most recent completed sessions.
 
@@ -25039,6 +25496,12 @@ def backfill_setup_tracker_from_recent_sessions(
     vintage a missed after-close run would have produced, not to retune the
     live scoring model on the way past. The caller decides; the default keeps
     the manual path unchanged.
+
+    ``saved_by`` (M3.2) names the writer on every payload this replay saves. It
+    defaults to ``manual`` because the GUI backfill is what the trader asks for
+    by hand; the staleness catch-up passes ``catch_up_backfill``, which is what
+    made it visible that the catch-up - not the close slot - had become the
+    tracker's effective writer.
     """
     lookback_sessions = max(1, int(lookback_sessions))
     long_paths, short_paths, watchlist_label = resolve_master_scan_watchlist_paths(
@@ -25159,6 +25622,7 @@ def backfill_setup_tracker_from_recent_sessions(
                     ib,
                     scan_date=evaluation_date.isoformat(),
                     auto_tune=False,
+                    saved_by=saved_by,
                 )
                 watchlists_by_date[evaluation_date.isoformat()] = []
                 continue
@@ -25217,6 +25681,7 @@ def backfill_setup_tracker_from_recent_sessions(
                 scan_date=evaluation_date.isoformat(),
                 auto_tune=False,
                 control_rows=control_rows,
+                saved_by=saved_by,
             )
             watchlists_by_date[evaluation_date.isoformat()] = tracked_symbols
             logging.info(

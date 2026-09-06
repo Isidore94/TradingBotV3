@@ -171,7 +171,15 @@ def _with_forming_bar(frame: pd.DataFrame, session: date) -> pd.DataFrame:
 #: Wall-clock stamps the writer takes from ``datetime.now()``. They record when
 #: the file was written, not what the data says, so they are normalised before
 #: the byte comparison -- and nothing else is.
-_CLOCK_STAMP_FIELDS = ("updated_at",)
+#:
+#: ``saved_at`` and ``saved_by`` joined on 2026-09-05 (packet M3.2). ``saved_at``
+#: is SECOND-resolution market-local, so two backfills that straddle a second
+#: produced different text and this comparison failed intermittently - a flake
+#: that says nothing about the replay. ``saved_by`` is here for the same reason
+#: it is a write stamp at all: it names the WRITER, and the whole point of this
+#: test is that the catch-up and the after-close run produce the same DATA while
+#: being different writers.
+_CLOCK_STAMP_FIELDS = ("updated_at", "saved_at", "saved_by")
 
 
 def _normalize_write_clock(payload_text: str) -> str:
