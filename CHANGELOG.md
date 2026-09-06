@@ -1487,7 +1487,7 @@ overwrite live historical results or promote the repaired simulation into scorin
   `literal_level_v1`, which is what the desk runs, those bars are still read for fills,
   excursions and marks. A machine-local cache read, not a claim about the tracker or the
   durable store, and outside ST3's scope - recorded because the counter is what made it
-  visible.
+  visible. **The reviewer's read-only sweep of the whole cache (all 1,980 files) widened it: 100 files end in an invalid candle, always the LAST row and one per file, on SEVEN sessions - 2026-09-04 x89, 09-02 x3, 09-01 x3, 08-20 x2, 07-07, 06-08, 05-15 - so it is a recurring mid-session write, not one day's glitch; it needs its own packet.**
 
 ### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
 

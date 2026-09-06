@@ -326,7 +326,7 @@ the low since the snapshot rather than the day's. **Under `literal_level_v1` - w
 what the desk runs today - those bars are still read for fills, excursions and marks.**
 This is a READ of a machine-local cache and NOT a claim about the tracker or the durable
 store; it is an advisory finding for the lead, outside ST3's scope, and the counter is
-what made it visible at all.
+what made it visible at all. **The reviewer's read-only sweep of the whole cache (all 1,980 files) widened it: 100 files end in an invalid candle, always the LAST row and one per file, on SEVEN sessions - 2026-09-04 x89, 09-02 x3, 09-01 x3, 08-20 x2, 07-07, 06-08, 05-15 - so it is a recurring mid-session write, not one day's glitch; it needs its own packet.**
 
 **Nothing here is authorization.** No production caller passes a non-default policy; the
 desk's next tracker write must carry no `execution_convention` key on any record. Whether
