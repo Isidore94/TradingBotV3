@@ -666,7 +666,20 @@ def _run_master_impl(
     shorts_path: Path | None = None,
     update_setup_tracker: bool | None = None,
     require_ib_for_setup_tracker: bool = False,
+    saved_by: str = TRACKER_SAVED_BY_MANUAL,
 ):
+    """The scan itself. ``run_master`` is the manifest wrapper around it.
+
+    ``saved_by`` is declared HERE because this is the function that reads it,
+    at the ``update_setup_tracker_from_scan`` call below. It was briefly on the
+    wrapper alone, which type-checks, imports and passes every test that mocks
+    either function - and raises ``NameError`` on the first real close-slot
+    scan that reaches the tracker write.
+
+    The default is ``manual`` rather than ``close_slot`` for the same reason the
+    scan payload's is: a caller that did not say which writer it is has not
+    earned the scheduled writer's name.
+    """
     _run_t0 = time.perf_counter()
     _phase_t = _run_t0
     reset_ibkr_historical_failure_circuit()
@@ -3056,6 +3069,7 @@ def run_master(
             shorts_path=shorts_path,
             update_setup_tracker=update_setup_tracker,
             require_ib_for_setup_tracker=require_ib_for_setup_tracker,
+            saved_by=saved_by,
         )
         if isinstance(result, dict):
             recorder.set_counter(

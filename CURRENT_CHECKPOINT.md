@@ -166,6 +166,15 @@ merges.** Tip `cb7dded7` + docs.
   expired sentence is off Current Picks (wrong population), and `saved_by` rides the scan
   payload with ABSENCE READING AS `manual` so a hand-run `--run-scan` cannot forge
   `close_slot`. Eleven tests, all proven RED on `4108a0a9`.
+- **Reviewer round 2 (NO-GO on `455dfaa6`): one real defect, mine.** `saved_by` was
+  declared on `run_master` (the manifest wrapper) while the name is READ inside
+  `_run_master_impl`, which never took it - a `NameError` waiting on the first close-slot
+  scan to reach the tracker write, which is precisely the path M3.1 re-opens. Caught by
+  `tests/test_module_globals_resolve.py`, a guard that already existed and that I had not
+  run. The parameter now sits on the function that reads it. Also: the purity fraction now
+  divides by JUDGED symbols (`n_symbols - n_no_frame`), which is **stricter** in a
+  no-frame-heavy run and is noted in the CHANGELOG; and `build_tracker_stats_rows` gained
+  the same opt-in flag as its neighbour for symmetry.
 - **A THIRD POPULATION IS NAMED AND NOT EXPIRED; a decision is owed.** The audit counted
   41 setups with `open_scenario_count == closed_scenario_count == 0`. On the 2026-09-04
   mirror only 13 of them are `no_baseline_scenarios`. **The other 28 DO have baseline
@@ -176,7 +185,8 @@ merges.** Tip `cb7dded7` + docs.
 - **Verification:** `tests/test_m3_tracker_keeps_up.py` (31 tests), 26 of the first 30
   proven RED on `e744afd5` before any fix existed and committed red as `60161275`; four
   more for the lead's ruling, RED on `259cf42c`; eleven more for the reviewer round, RED
-  on `4108a0a9`. **48 tests in that file, all green.** Ruff clean. No packaging trigger.
+  on `4108a0a9`; four more for round 2, RED on `455dfaa6`. **52 tests in that file, all
+  green.** Ruff clean. No packaging trigger.
 
 ### 2026-09-05 - M1 BUILT: the band challenger's hand-off, on `claude/m1-band-variant-handoff`
 

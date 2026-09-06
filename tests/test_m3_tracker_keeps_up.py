@@ -842,7 +842,9 @@ def test_the_scenario_stats_export_excludes_expired_records_and_counts_them():
     )
     setups = {s["setup_id"]: s for s in graded + [expired]}
 
-    rows = legacy.build_tracker_stats_rows(legacy._flatten_tracker_scenarios(setups))
+    rows = legacy.build_tracker_stats_rows(
+        legacy._flatten_tracker_scenarios(setups), exclude_expired_unmeasured=True
+    )
 
     assert len(rows) == 1
     assert rows[0]["tracked_setups"] == 2
@@ -1094,7 +1096,9 @@ def test_the_scenario_stats_export_keeps_an_all_expired_groups_count():
             for scenario in setup["scenarios"].values():
                 scenario["stop_reference_label"] = "SMA_50"
 
-    rows = legacy.build_tracker_stats_rows(legacy._flatten_tracker_scenarios(setups))
+    rows = legacy.build_tracker_stats_rows(
+        legacy._flatten_tracker_scenarios(setups), exclude_expired_unmeasured=True
+    )
 
     assert sum(int(row["n_expired_unmeasured"]) for row in rows) == 4
     orphan = [row for row in rows if row["stop_reference_label"] == "SMA_50"]
@@ -1209,3 +1213,100 @@ def test_the_scanner_cli_declares_itself_manual():
 
     source = inspect.getsource(runner.main)
     assert "TRACKER_SAVED_BY_MANUAL" in source
+
+
+# ===========================================================================
+# Reviewer round 2, 2026-09-05: `saved_by` was read where it was never bound.
+#
+# `_run_master_impl` reads `saved_by` at its `update_setup_tracker_from_scan`
+# call, and I had added the parameter to the WRAPPER (`run_master`) instead of
+# to the function that reads it. The first close-slot scan to reach
+# `if setup_tracker_allowed:` would have raised NameError - on exactly the path
+# M3.1 re-opens, so the packet's own fix would have taken the write down with
+# it. Every test I had written mocked `update_setup_tracker_from_scan` or the
+# whole of `_run_master_impl`, so none of them could see it.
+# ===========================================================================
+
+def _impl_scope_names():
+    """Every name `_run_master_impl` READS, and every name it BINDS."""
+    import ast
+    import builtins
+
+    tree = ast.parse((SCRIPTS_DIR / "master_avwap_lib" / "runner.py").read_text(encoding="utf-8"))
+    func = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_run_master_impl"
+    )
+    bound: set[str] = {arg.arg for arg in func.args.args}
+    bound |= {arg.arg for arg in func.args.kwonlyargs}
+    read: set[str] = set()
+    for node in ast.walk(func):
+        if isinstance(node, ast.Name):
+            (bound if isinstance(node.ctx, (ast.Store, ast.Del)) else read).add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node is not func:
+            bound.add(node.name)
+            bound |= {arg.arg for arg in node.args.args}
+    return read - bound - set(dir(builtins))
+
+
+def test_the_scan_reads_no_name_it_never_binds():
+    """Scoped to the one function, so the failure names it.
+
+    `test_module_globals_resolve.py` catches this module-wide and is what found
+    the defect; this one exists because that test's message points at the
+    module and a reader has to go hunting for the function.
+    """
+    import master_avwap_lib.runner as runner_module
+
+    unresolved = {
+        name for name in _impl_scope_names() if not hasattr(runner_module, name)
+    }
+
+    assert not unresolved, (
+        "_run_master_impl reads name(s) bound nowhere in it and absent from the "
+        f"module: {sorted(unresolved)}"
+    )
+
+
+def test_the_writer_is_declared_on_the_function_that_reads_it():
+    import inspect
+
+    impl = inspect.signature(runner._run_master_impl).parameters
+    assert "saved_by" in impl, "the function that READS saved_by must declare it"
+    assert impl["saved_by"].default == legacy.TRACKER_SAVED_BY_MANUAL
+
+
+def test_run_master_forwards_the_writer_to_the_function_that_uses_it(monkeypatch, tmp_path):
+    """The wrapper accepting an argument it drops is how this got through."""
+    import diagnostics.run_manifest as rm
+
+    monkeypatch.setattr(rm, "default_manifest_dir", lambda: tmp_path)
+    seen: list[dict] = []
+    monkeypatch.setattr(runner, "_run_master_impl", lambda **kw: seen.append(kw) or {})
+
+    runner.run_master(saved_by=legacy.TRACKER_SAVED_BY_CLOSE_SLOT)
+
+    assert seen and seen[0]["saved_by"] == legacy.TRACKER_SAVED_BY_CLOSE_SLOT
+
+
+# --- reviewer round 2, advisory 2: symmetry with the setup-type builder ----
+
+def test_the_scenario_stats_builder_takes_the_same_opt_in_flag():
+    setups = _mixed_and_all_expired()
+    scenario_rows = legacy._flatten_tracker_scenarios(setups)
+
+    scoring = legacy.build_tracker_stats_rows(scenario_rows)
+    display = legacy.build_tracker_stats_rows(scenario_rows, exclude_expired_unmeasured=True)
+
+    # Default keeps them in the population, exactly like the setup-type builder.
+    assert sum(int(row["tracked_setups"]) for row in scoring) == 6
+    assert sum(int(row["tracked_setups"]) for row in display) == 2
+    # The count is carried either way.
+    for rows in (scoring, display):
+        assert sum(int(row["n_expired_unmeasured"]) for row in rows) == 4

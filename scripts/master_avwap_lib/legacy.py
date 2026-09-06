@@ -9089,7 +9089,23 @@ def _attribute_leaderboard_evidence(closed_values, *, closed_setups: int) -> dic
         return {"meets_n_floor": "0", "evidence_label": ""}
 
 
-def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
+def build_tracker_stats_rows(
+    scenario_rows: list[dict],
+    *,
+    exclude_expired_unmeasured: bool = False,
+) -> list[dict]:
+    """Per (stop label, exit template) scenario statistics.
+
+    ``exclude_expired_unmeasured`` mirrors `build_tracker_setup_type_rows`
+    exactly (lead ruling, 2026-09-05): True is the DISPLAY reading and the
+    default is the population as it has always been. Nothing on a scoring path
+    reads this export today - `analyze_master_avwap_scoring.py`, the only
+    writer of live scoring weights, reads the ATTRIBUTE exports - but the two
+    builders sitting side by side with different rules is how the next reader
+    picks the wrong one. Same flag, same default, same meaning.
+
+    ``n_expired_unmeasured`` is carried either way.
+    """
     if not scenario_rows:
         return []
 
@@ -9111,7 +9127,8 @@ def build_tracker_stats_rows(scenario_rows: list[dict]) -> list[dict]:
         # so the exclusion is visible rather than silent.
         if _tracker_setup_is_expired_unmeasured(row):
             expired_by_group.setdefault(key, set()).add(str(row.get("setup_id") or ""))
-            continue
+            if exclude_expired_unmeasured:
+                continue
         grouped.setdefault(key, []).append(row)
     # A group with nothing but expired rows keeps its place. Dropping it here
     # was the same defect as the `continue` in `build_tracker_setup_type_rows`:
@@ -12112,7 +12129,10 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
     daily_rows = _flatten_tracker_daily_marks(setups)
     attribute_rows = _flatten_tracker_attributes(setups, attribute_registry)
     attribute_leaderboard_rows = _build_tracker_attribute_leaderboard_rows(attribute_rows)
-    stats_rows = build_tracker_stats_rows(scenario_rows)
+    # Two readings, exactly as for the setup-type rows below: the CSV drops the
+    # expired, `payload["stats"]` keeps the population it has always had.
+    scoring_stats_rows = build_tracker_stats_rows(scenario_rows)
+    stats_rows = build_tracker_stats_rows(scenario_rows, exclude_expired_unmeasured=True)
     # TWO readings of one tracker (lead ruling, 2026-09-05). The CSV and the
     # panel drop the expired; `payload["setup_type_stats"]` below is the
     # CHAMPION'S SCORING POPULATION - `_load_ranked_tracker_setup_type_rows`
@@ -12128,7 +12148,7 @@ def export_setup_tracker_views(payload: dict, *, tracker_saved_at: str | None = 
     )
     playbook_rows = build_tracker_playbook_rows(setups)
     short_horizon_rows = build_tracker_short_horizon_rows(setups)
-    payload["stats"] = stats_rows
+    payload["stats"] = scoring_stats_rows
     payload["setup_type_stats"] = scoring_setup_type_rows
 
     SETUP_SCENARIOS_FILE.parent.mkdir(parents=True, exist_ok=True)

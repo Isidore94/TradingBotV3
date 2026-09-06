@@ -1243,6 +1243,30 @@ carries its threshold as a field; the expired sentence is off the Current Picks 
 renders a different population; and `saved_by` rides the scan payload with **absence
 reading as `manual`**, so a hand-run `--run-scan` can never forge `close_slot`.
 
+**Reviewer round 2 (NO-GO on `455dfaa6`, fixed at the tip).** One real defect, and it was
+mine: `saved_by` was added to `run_master` (the manifest WRAPPER) while the name is read
+inside `_run_master_impl` (the scan), which never declared it. That type-checks, imports
+and passes every test that mocks either function - and raises `NameError` on the first
+close-slot scan to reach `if setup_tracker_allowed:`, which is exactly the path M3.1
+re-opens, so the packet's own fix would have taken the tracker write down with it.
+`tests/test_module_globals_resolve.py` catches it module-wide and is what found it; the
+parameter now lives on the function that reads it, with the same `manual` default and for
+the same reason (a caller that did not name its writer has not earned the scheduled
+writer's name).
+
+**The purity fraction's denominator changed under a pin (advisory).** It now divides the
+impure count by the JUDGED symbols - `n_symbols - n_no_frame` - rather than by every
+tracked symbol. That is deliberate (a symbol with no bars cannot vote on whether the
+SOURCE is clean) and it is STRICTER in a run with many missing frames: the same handful of
+third-source symbols is a larger share of a smaller denominator, so a run that would once
+have squeaked under `TRACKER_PURITY_MAX_QUARANTINE_FRACTION` can now refuse. With no pin
+nothing changes - the whole no-frame branch is gated on a pin being in force.
+
+**`build_tracker_stats_rows` gained the same opt-in flag** as
+`build_tracker_setup_type_rows` (default False, the export passes True). Nothing on a
+scoring path reads that export today, but two neighbouring builders with different rules
+is how the next reader picks the wrong one.
+
 **A third population is named and deliberately not expired.** Of the audit's 41 records
 with no open and no closed scenario count, only 13 are `no_baseline_scenarios` on the
 2026-09-04 mirror; **the other 28 DO have baseline scenarios, in a status that is neither
