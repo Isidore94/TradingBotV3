@@ -394,3 +394,159 @@ def test_bar_is_valid_reads_a_missing_open_as_unknown_not_as_broken():
     assert ec.bar_is_valid({"open": 105.0, "high": 101.0, "low": 99.0, "close": 100.0}) is False
     assert ec.bar_is_valid({"high": 99.0, "low": 101.0, "close": 100.0}) is False
     assert ec.bar_is_valid({"high": 101.0, "low": 99.0, "close": float("nan")}) is False
+
+
+# ---------------------------------------------------------------------------
+# Review fix round (2026-09-06), advisories 2 and 3
+# ---------------------------------------------------------------------------
+def test_the_deferral_flag_never_labels_an_exit_that_is_not_a_time_stop():
+    """A deferred maximum-hold close is not a licence to relabel other exits.
+
+    The flag says "an unusable bar sat on the max-hold index". It must reach
+    the `TIME_STOP` and NOTHING else: an exit that fires ahead of the time stop
+    on the same bar is its own decision, and it must clear the flag rather than
+    leave a stale `time_stop_deferred: True` on a closed record.
+    """
+    levels = {"bands": {"LOWER_1": 99.0}}
+    broken = _bar(open_=93, high=90, low=95, close=92)
+
+    scenario = _scenario(close_failure_limit=1)
+    assert m._evaluate_tracker_scenario_bar(
+        scenario, "LONG", "2026-01-05", broken, levels, None,
+        is_entry_day=False, bar_index=m.TRACKER_MAX_HOLD_DAYS,
+        execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    ) == []
+    assert scenario["time_stop_deferred"] is True
+
+    # The next bar closes under the protective stop, so the two-closes stop
+    # fires BEFORE the time stop is reached.
+    events = m._evaluate_tracker_scenario_bar(
+        scenario,
+        "LONG",
+        "2026-01-06",
+        _bar(open_=99.5, high=100.0, low=97.0, close=98.0),
+        levels,
+        None,
+        is_entry_day=False,
+        bar_index=m.TRACKER_MAX_HOLD_DAYS + 1,
+        execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    )
+    assert [event["reason"] for event in events] == ["STOP_FAIL"]
+    assert events[0]["fill_basis"] == ec.FILL_BASIS_CLOSE
+    assert events[0]["fill_basis"] != ec.FILL_BASIS_DEFERRED_INVALID_BAR
+    assert "time_stop_deferred" not in scenario
+
+
+def test_the_deferral_flag_is_cleared_when_a_hard_stop_closes_the_scenario():
+    broken = _bar(open_=93, high=90, low=95, close=92)
+    scenario = _scenario(hard_stop_r_multiple=1.0)
+    m._evaluate_tracker_scenario_bar(
+        scenario, "LONG", "2026-01-05", broken, None, None,
+        is_entry_day=False, bar_index=m.TRACKER_MAX_HOLD_DAYS,
+        execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    )
+    assert scenario["time_stop_deferred"] is True
+
+    events = m._evaluate_tracker_scenario_bar(
+        scenario,
+        "LONG",
+        "2026-01-06",
+        _bar(open_=80.0, high=85.0, low=79.0, close=82.0),
+        None,
+        None,
+        is_entry_day=False,
+        bar_index=m.TRACKER_MAX_HOLD_DAYS + 1,
+        execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    )
+    assert [event["reason"] for event in events] == ["HARD_STOP"]
+    assert events[0]["fill_basis"] == ec.FILL_BASIS_GAP_OPEN
+    assert "time_stop_deferred" not in scenario
+
+
+def test_the_deferral_flag_is_cleared_when_a_final_target_closes_the_scenario():
+    levels = {"bands": {"UPPER_3": 110.0}}
+    broken = _bar(open_=93, high=90, low=95, close=92)
+    scenario = _scenario(final_target_label="UPPER_3")
+    m._evaluate_tracker_scenario_bar(
+        scenario, "LONG", "2026-01-05", broken, levels, None,
+        is_entry_day=False, bar_index=m.TRACKER_MAX_HOLD_DAYS,
+        execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    )
+    assert scenario["time_stop_deferred"] is True
+
+    events = m._evaluate_tracker_scenario_bar(
+        scenario,
+        "LONG",
+        "2026-01-06",
+        _bar(open_=114.0, high=116.0, low=112.0, close=115.0),
+        levels,
+        None,
+        is_entry_day=False,
+        bar_index=m.TRACKER_MAX_HOLD_DAYS + 1,
+        execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    )
+    assert [event["reason"] for event in events] == ["FINAL_TARGET"]
+    assert events[0]["fill_basis"] == ec.FILL_BASIS_GAP_OPEN
+    assert "time_stop_deferred" not in scenario
+
+
+def test_an_invalid_bar_is_counted_the_way_a_missing_prior_level_is():
+    """A skipped bar that is not counted is indistinguishable from a quiet one.
+
+    `no_prior_session_level` is counted, so `invalid_bar` is too - in the
+    sibling `skipped_bar_reasons`, because an invalid candle skips the WHOLE
+    bar (excursion and unrealized mark included), not just an intrabar test.
+    """
+    broken = _bar(open_=93, high=90, low=95, close=92)
+
+    # v1 books through it and counts nothing: the count is a v2 idea.
+    v1 = _scenario(hard_stop_r_multiple=1.0)
+    m._evaluate_tracker_scenario_bar(
+        v1, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2
+    )
+    assert "skipped_bar_reasons" not in v1
+
+    v2 = _scenario(hard_stop_r_multiple=1.0)
+    assert m._evaluate_tracker_scenario_bar(
+        v2, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    ) == []
+    assert v2["skipped_bar_reasons"] == {ec.FILL_BASIS_INVALID_BAR: 1}
+
+    # A second unusable bar accumulates; a usable one adds nothing.
+    m._evaluate_tracker_scenario_bar(
+        v2, "LONG", "2026-01-06", _bar(high=99.0, low=101.0, close=100.0), None, None,
+        is_entry_day=False, bar_index=3, execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    )
+    assert v2["skipped_bar_reasons"] == {ec.FILL_BASIS_INVALID_BAR: 2}
+    m._evaluate_tracker_scenario_bar(
+        v2, "LONG", "2026-01-07", _bar(open_=101, high=103, low=99, close=102), None, None,
+        is_entry_day=False, bar_index=4, execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    )
+    assert v2["skipped_bar_reasons"] == {ec.FILL_BASIS_INVALID_BAR: 2}
+
+
+def test_an_invalid_bar_under_v2_skips_the_excursion_and_the_unrealized_mark():
+    """The consequence advisory 4 asks to be STATED, pinned so it stays true.
+
+    v1 reads an excursion off a candle whose low is above its own high. v2
+    reads nothing off it at all - which is the point, and is also why the
+    skip has to be counted.
+    """
+    broken = _bar(open_=93, high=90, low=95, close=92)
+
+    v1 = _scenario()
+    m._evaluate_tracker_scenario_bar(
+        v1, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2
+    )
+    assert v1["max_adverse_r"] > 0.0
+    assert v1["unrealized_pnl"] != 0.0
+
+    v2 = _scenario()
+    m._evaluate_tracker_scenario_bar(
+        v2, "LONG", "2026-01-05", broken, None, None, is_entry_day=False, bar_index=2,
+        execution_convention=ec.EXECUTION_GAP_AWARE_V2,
+    )
+    assert "max_adverse_r" not in v2
+    assert "max_favorable_r" not in v2
+    assert "unrealized_pnl" not in v2

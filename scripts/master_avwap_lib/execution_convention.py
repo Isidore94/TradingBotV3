@@ -38,7 +38,18 @@ is opt-in and the shipped behaviour keeps its own name:
        cannot answer "was the stop hit"; the honest answer is "unknown", not a
        fill. The HOLD CLOCK STILL ADVANCES, so the maximum-hold force close is
        preserved: an unusable bar delays the time stop to the next usable bar
-       (basis ``deferred_invalid_bar``), it never cancels it.
+       (basis ``deferred_invalid_bar``), it never cancels it, and the deferral
+       label reaches the ``TIME_STOP`` and no other exit.
+
+       **An invalid bar skips the WHOLE bar, not just the fill.** Under v2 the
+       tracker replay reads NO excursion off it - ``max_favorable_r`` and
+       ``max_adverse_r`` are not updated - and writes NO unrealized mark from
+       it, because every one of those numbers would be derived from the same
+       contradictory prices. Under v1 they are all still taken, which is the
+       difference the two conventions are named to keep visible. The skip is
+       counted on the scenario as ``skipped_bar_reasons["invalid_bar"]``, a
+       sibling of ``intrabar_skip_reasons``: a skip nobody counted is
+       indistinguishable from a bar on which nothing happened.
 
     Under v2 the fill price is ALWAYS inside ``[low, high]``. The function
     asserts it, and clamps rather than trusting the assertion.

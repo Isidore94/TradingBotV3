@@ -214,15 +214,21 @@ def _event_reasons(record: dict) -> list[str]:
     return reasons
 
 
+#: Every counter a v2 replay can leave on a scenario. Both are read, because a
+#: skip that reaches no column is a skip nobody can audit.
+SKIP_COUNTER_KEYS = ("intrabar_skip_reasons", "skipped_bar_reasons")
+
+
 def _skip_reasons(record: dict) -> dict[str, int]:
     totals: dict[str, int] = {}
     for scenario in (record.get("scenarios") or {}).values():
         if not isinstance(scenario, dict):
             continue
-        skips = scenario.get("intrabar_skip_reasons")
-        if isinstance(skips, dict):
-            for reason, count in skips.items():
-                totals[str(reason)] = totals.get(str(reason), 0) + int(count or 0)
+        for key in SKIP_COUNTER_KEYS:
+            skips = scenario.get(key)
+            if isinstance(skips, dict):
+                for reason, count in skips.items():
+                    totals[str(reason)] = totals.get(str(reason), 0) + int(count or 0)
     return totals
 
 
@@ -412,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
     rows: list[dict[str, Any]] = []
     skipped_no_bars = 0
     skipped_untradeable = 0
+    replay_failed = 0
     for setup_id, setup in selected:
         symbol = str(setup.get("symbol") or "").strip().upper()
         scenarios = setup.get("scenarios") or {}
@@ -426,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
             old_record = _replay(setup, frame, ec.EXECUTION_LITERAL_LEVEL_V1, ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1)
             new_record = _replay(setup, frame, new_convention, new_knowledge)
         except Exception as exc:  # a bad record never stops the comparison
+            replay_failed += 1
             print(f"  {setup_id}: replay failed ({exc})", file=sys.stderr)
             continue
         old_r = _representative_r(old_record)
@@ -459,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
                 "reasons_new": "|".join(_event_reasons(new_record)),
                 "fill_bases_new": "|".join(_fill_bases(new_record)),
                 "no_prior_session_level": int(skips.get(ec.NO_PRIOR_SESSION_LEVEL, 0)),
+                "invalid_bar_skipped": int(skips.get(ec.FILL_BASIS_INVALID_BAR, 0)),
             }
         )
 
@@ -503,8 +512,16 @@ def main(argv: list[str] | None = None) -> int:
     headline = {
         "n_setups": len(rows),
         "n_changed": sum(1 for row in rows if row["changed"]),
+        "n_offered": len(selected),
         "n_skipped_no_bars": skipped_no_bars,
         "n_skipped_untradeable": skipped_untradeable,
+        "n_replay_failed": replay_failed,
+        "population_note": (
+            "n_setups is the DENOMINATOR for every number in this file: the "
+            "records actually replayed under both policies. It is not --limit, "
+            "which is n_offered; the difference is n_skipped_untradeable + "
+            "n_skipped_no_bars + n_replay_failed."
+        ),
         "n_groups": len(group_rows),
         "n_groups_rank_moved": sum(1 for group in group_rows if group["rank_move"] != 0),
         "max_rank_move": max((abs(group["rank_move"]) for group in group_rows), default=0),
@@ -561,7 +578,7 @@ def main(argv: list[str] | None = None) -> int:
         "entry_trade_date", "r_old", "r_new", "r_delta",
         "r_old_raw", "r_new_raw", "r_delta_raw", "changed",
         "status_old", "status_new", "reasons_old", "reasons_new",
-        "fill_bases_new", "no_prior_session_level",
+        "fill_bases_new", "no_prior_session_level", "invalid_bar_skipped",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=field_names)
@@ -575,6 +592,17 @@ def main(argv: list[str] | None = None) -> int:
     def _fmt(value, digits: int = 4) -> str:
         return "-" if value is None else f"{value:.{digits}f}"
 
+    # The DENOMINATOR is stated, and it is the artifact's own `n_setups` - not
+    # `--limit`, which is how many records were OFFERED to the replay. The two
+    # differ by every record dropped before it could be compared, and a summary
+    # that quotes the limit invites a reader to divide by the wrong number.
+    print(
+        f"population: n_setups {headline['n_setups']} compared"
+        f" (offered {len(selected)}"
+        f", untradeable skipped {headline['n_skipped_untradeable']}"
+        f", no cached bars skipped {headline['n_skipped_no_bars']}"
+        f", replay failed {headline['n_replay_failed']})"
+    )
     print(f"changed {headline['n_changed']} of {headline['n_setups']}")
     print(
         f"  clipped (what scoring reads, clip {headline['r_clip']}): "

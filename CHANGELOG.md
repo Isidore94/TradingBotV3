@@ -1319,24 +1319,37 @@ overwrite live historical results or promote the repaired simulation into scorin
   lands on the maximum-hold index books nothing and the `TIME_STOP` fires on the next
   VALID bar with `fill_basis` `deferred_invalid_bar`. Maximum hold is preserved, never
   cancelled, and the record says which bar could not answer.
-- **The comparison, on copies, 800 setups sampled seed 20260906 across the whole
-  11,372-record mirror COPY** with daily bars from the machine cache
-  (`comparison_20260906T065720.json`; the first draft reported `min R -4.0 -> -4.0`,
-  which is `TRACKER_SCORING_R_CLIP` and not a tail, so the artifact now carries the
-  CLIPPED and the RAW R side by side, never blended):
+- **The comparison, on copies, seed 20260906 across the whole 11,372-record mirror COPY**
+  with daily bars from the machine cache. **`n_setups` 794 is the denominator** - 800
+  records were offered, 6 carry no tradeable scenario, 0 lacked bars, 0 failed to replay;
+  `--limit` is what was OFFERED and is never the denominator, so the CLI prints the whole
+  split and the JSON carries a `population_note` saying so. The three JSON/CSV pairs are
+  copied to `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\`
+  (`both__comparison_20260906T110731.*`, `exec_only__…110814.*`, `levels_only__…110855.*`).
+  The first draft reported `min R -4.0 -> -4.0`, which is `TRACKER_SCORING_R_CLIP` and not
+  a tail, so the artifact carries the CLIPPED and the RAW R side by side, never blended:
 
   | run | changed | expectancy (raw) | win rate | R < -2 | groups moved rank |
   |---|---|---|---|---|---|
-  | both repairs | 475 of 800 | -0.0961 → **-0.1175** | 0.575 → 0.595 | 47 → 48 | 44 of 52, max 14 |
-  | execution only (`gap_aware_v2`) | 90 of 800 | -0.0961 → **-0.0790** | 0.575 → 0.596 | 47 → 47 | 35 of 52, max 10 |
-  | level knowledge only (`prior_session_v2`) | 461 of 800 | -0.0961 → **-0.1473** | 0.575 → 0.547 | 47 → 48 | 39 of 52, max 17 |
+  | both repairs | 472 of 794 | -0.0981 → **-0.1192** | 0.576 → 0.596 | 47 → 48 | 43 of 50, max 14 |
+  | execution only (`gap_aware_v2`) | 89 of 794 | -0.0981 → **-0.0811** | 0.576 → 0.597 | 47 → 47 | 33 of 50, max 9 |
+  | level knowledge only (`prior_session_v2`) | 458 of 794 | -0.0981 → **-0.1491** | 0.576 → 0.548 | 47 → 48 | 40 of 50, max 17 |
 
   **The gap-aware convention is symmetric by design and, in this sample, mostly
-  HELPS**: of the 90 setups it moved, 85 got better and 5 got worse, because a resting
+  HELPS**: of the 89 setups it moved, 84 got better and 5 got worse, because a resting
   limit that opens through its price fills BETTER than the level and target gaps
-  outnumber stop gaps 169 to a handful. The prior-session level knowledge is what costs
-  expectancy (416 of 461 moved setups worse). Both numbers are evidence for a decision
+  outnumber stop gaps 166 to a handful. The prior-session level knowledge is what costs
+  expectancy (413 of 458 moved setups worse). Both numbers are evidence for a decision
   the trader has not taken; nothing here promotes anything.
+- **The `invalid_bar` counter found a real one on its first run.** It fired 380
+  scenario-bars over 26 setups / 22 symbols, and each of those 22 cached daily-bar files
+  holds **exactly one invalid candle, all dated 2026-09-04**, every one with `low > open`
+  or `high < open` (AEE `O=105.81 H=106.96 L=106.11`; TWLO `O=239.52 H=239.29`) - the
+  signature of a FORMING bar written into `machine_cache\daily_bars` mid-session. Under
+  `literal_level_v1`, which is what the desk runs, those bars are still read for fills,
+  excursions and marks. A machine-local cache read, not a claim about the tracker or the
+  durable store, and outside ST3's scope - recorded because the counter is what made it
+  visible.
 
 ### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
 

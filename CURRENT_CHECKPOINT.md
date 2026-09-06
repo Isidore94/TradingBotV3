@@ -32,7 +32,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
-| 77 | **The repaired execution convention is EVIDENCE and the desk did not move (ST3)** - not a live behaviour gate: (1) the artifact exists, `comparison_20260906T065720.json` in the session scratchpad with the headline copied into the 2026-09-06 ST3 entry (475 of 800 changed; raw expectancy -0.0961 -> -0.1175; 44 of 52 groups moved rank; the two single-axis runs beside it), and (2) **the desk's next persisted tracker write carries NO `execution_convention` and NO `level_knowledge` key on any record** and no event dict carries a `fill_basis` - the default path is what runs. A record that grew either key is the failure this gate exists to catch. The trader's DECISION on whether `gap_aware_v2` / `prior_session_v2` becomes the scoring convention is asked separately and is not part of this gate | 2026-09-06 ST3 entry |
+| 77 | **The repaired execution convention is EVIDENCE and the desk did not move (ST3)** - not a live behaviour gate: (1) the artifacts exist and are READABLE by the lead - three JSON/CSV pairs in `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\` (`both__comparison_20260906T110731.*`, `exec_only__…110814.*`, `levels_only__…110855.*`), with the headline copied into the 2026-09-06 ST3 entry: **472 of 794 changed** (`n_setups` 794 is the artifact's OWN denominator - 800 were offered and 6 carried no tradeable scenario; `--limit` is never the denominator), raw expectancy -0.0981 -> -0.1192, 43 of 50 groups moved rank, plus the two single-axis runs, and (2) **the desk's next persisted tracker write carries NO `execution_convention` and NO `level_knowledge` key on any record** and no event dict carries a `fill_basis` - the default path is what runs. A record that grew either key is the failure this gate exists to catch. The trader's DECISION on whether `gap_aware_v2` / `prior_session_v2` becomes the scoring convention is asked separately and is not part of this gate | 2026-09-06 ST3 entry |
 | 74 | **The control and study populations are shown, and the April framework is read (M5)** - restated after the reviewer round so it can PASS (the first wording demanded an equal `n` the framework does not produce). After the next persisted tracker write: (1) `master_avwap_control_discovery.csv` and `master_avwap_study_discovery.csv` exist, the control file carrying its three cohort rows plus one family row per (side, family), in an `all` block AND a `lately` block, every row stamped `population_setups`. (2) The **Controls** tab's sentence reads `N graded episodes from the M control setups the scan REJECTED` with **N < M** and M near 401 (Studies likewise, M near 3,992) - the two numbers are different things and a tab printing one of them twice is the defect this clause replaces. (3) Both tables sort by the Wilson lower bound, not the raw rate. (4) The **Exit frameworks** tab shows `comparison_apr2026` rows beside `baseline` ones, grouped by side and bucket with the baseline above its twin, Experimental reading True. (5) **The denominators reconcile, which is the real check**: on a (side, bucket) where the template has no `blocked_stop_rules`, the comparison's `n` EQUALS the baseline's and `Filtered` is 0; on SHORT / near_favorite_zone for `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav`, `n + Filtered` equals the baseline's `n` (the reviewer measured 585 + 98 = 683 on the live tracker). A smaller `n` with a matching `Filtered` is the experiment working; a smaller `n` with `Filtered` 0 is a defect | 2026-09-05 M5 entry |
 | 73 | **Both band families measured, side by side (M4)** - after the next nightly build and a forced `recompute-outcomes --apply` on the trader's go: `band-coverage --compare swing_house_v1 swing_house_variant_v1 --month 2026-09` prints both recipes on the SAME occurrences with the Wilson lower bounds and a `not_paired` count, and `feature_snapshot_daily` rows for that session carry BOTH band families (`avwape_*` and `avwap_variant_*` with `avwap_variant_formula_version` = `avwap_bands_oneoption_bb20_v1`). **Expect `not_paired` to be non-zero on the first pass and to shrink**: only sessions rebuilt after M4 carry the challenger's bands, and an August occurrence has none. A twin row on an occurrence whose challenger bands are NULL is `plain_no_target` by design, not a defect. **Nothing may be read for a verdict** before the declared 20 forward sessions counted from the first session carrying both families - T4's criteria decide | 2026-09-05 M4 entry |
 | 72 | **The tracker keeps up and says how old it is (M3)** - the next 13:00 PT close slot, checked against REPRODUCIBLE numbers rather than the audit's prose (reviewer, 2026-09-05: the first wording was unsatisfiable). (1) `trading_bot.log` carries `Setup tracker purity: pin=yahoo ... refused=False` and then the tracker WRITE, with no "refresh skipped" line. (2) The payload's `saved_by` reads `close_slot` and its `saved_at` is market-local with an offset. (3) The three stats CSVs carry that same `tracker_saved_at`, and the Setup Tracker's status line shows BOTH clocks in ONE zone - `Tracker as of ... (close_slot); scan factors as of ...`, the two offsets equal. (4) `trading_bot.log` carries the literal token **`n_expired_unmeasured=`**; on the 2026-09-04 mirror the reproducible counts are **setups 32 `no_replay_stale_sessions` + 13 `no_baseline_scenarios` = 45, study 7, control 0, 52 total**, so expect ~52 on a tracker of that vintage - not the audit's "37 + 41", which counted a different thing. (5) The Setup Types tab says `N expired unmeasured, excluded` with N matching the summed CSV column (Current Picks deliberately says nothing - different population). (6) Family win rates unchanged to the cent where those setups contributed only a denominator, and the champion's scoring population unchanged by construction. **`python scripts/tracker_store.py verify` must still print `"ok": true`** - the mirror gained two header keys, so this write is also gate #57's next observation, and **the FIRST save after merge rewrites every record's content hash** (`saved_at`/`saved_by` join the header, and `last_replayed_session` / `expiry_reason` / `stale_sessions` join the records), so a large `written` count on that one save is expected and is not a parity failure | 2026-09-05 M3 entry |
@@ -158,25 +158,46 @@ maximum-hold index books nothing, and the `TIME_STOP` fires on the next VALID ba
 
 **The comparison (ST3.3), on copies, live gate #77's artifact.** 800 setups sampled seed
 20260906 across the whole 11,372-record COPY of the SQLite mirror, daily bars from the
-machine cache (632 symbols, 0 setups skipped for missing bars). Artifacts in the session
-scratchpad under `.../scratchpad/st3/out*/comparison_20260906T06*.json`. The first draft
-reported `min R -4.0 -> -4.0`, which is `TRACKER_SCORING_R_CLIP` (4.0) inside
-`_summarize_tracker_setup_outcome` and not a tail; the artifact now carries the CLIPPED R
-(what scoring reads) and the RAW R (where the tail lives) side by side, never blended.
+machine cache (633 symbols). **The denominator is `n_setups` 794, the artifact's own**:
+800 records were OFFERED and 6 carry no tradeable scenario, 0 were missing bars, 0 failed
+to replay. `--limit` is what was offered and is never the denominator - the CLI now prints
+the whole split (`population: n_setups 794 compared (offered 800, untradeable skipped 6,
+no cached bars skipped 0, replay failed 0)`) and the JSON carries a `population_note`
+saying the same thing, because the first write-up quoted 800 and invited exactly this
+confusion. **The three JSON/CSV pairs are copied where the lead can read them**, machine-local
+and outside the repo: `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\` -
+`both__comparison_20260906T110731.*`, `exec_only__comparison_20260906T110814.*`,
+`levels_only__comparison_20260906T110855.*`. The first draft reported `min R -4.0 -> -4.0`,
+which is `TRACKER_SCORING_R_CLIP` (4.0) inside `_summarize_tracker_setup_outcome` and not a
+tail; the artifact carries the CLIPPED R (what scoring reads) and the RAW R (where the tail
+lives) side by side, never blended.
 
 | run | changed | expectancy (raw) | win rate (Wilson) | R < -2 | rank moves |
 |---|---|---|---|---|---|
-| both repairs | 475 of 800 | -0.0961 → **-0.1175** | 0.575 → 0.595 (0.540 → 0.561) | 47 → 48 | 44 of 52 groups, max 14 |
-| execution only | 90 of 800 | -0.0961 → **-0.0790** | 0.575 → 0.596 (0.540 → 0.562) | 47 → 47 | 35 of 52, max 10 |
-| level knowledge only | 461 of 800 | -0.0961 → **-0.1473** | 0.575 → 0.547 (0.540 → 0.513) | 47 → 48 | 39 of 52, max 17 |
+| both repairs | 472 of 794 | -0.0981 → **-0.1192** | 0.576 → 0.596 (0.541 → 0.561) | 47 → 48 | 43 of 50 groups, max 14 |
+| execution only | 89 of 794 | -0.0981 → **-0.0811** | 0.576 → 0.597 (0.541 → 0.562) | 47 → 47 | 33 of 50, max 9 |
+| level knowledge only | 458 of 794 | -0.0981 → **-0.1491** | 0.576 → 0.548 (0.541 → 0.513) | 47 → 48 | 40 of 50, max 17 |
 
 `min R` is **-65.6011 under every policy** - the worst trade in the sample was already
-filled inside its bar, so the repair does not touch it. Of the 90 setups the execution
-repair moved, **85 got BETTER and 5 got worse**: the convention is symmetric by design, a
+filled inside its bar, so the repair does not touch it. Of the 89 setups the execution
+repair moved, **84 got BETTER and 5 got worse**: the convention is symmetric by design, a
 resting limit that opens through its price fills better than the level, and in this sample
-target gaps (169 setups touched `gap_open`) outnumber stop gaps. `no_prior_session_level`
-fired 4 bar-tests over 1 setup, so the skip counter is real but rare. The largest single
-rank move is `LONG|favorite_zone_watch|favorite_setup` 26 → 40 under both repairs.
+target gaps (166 setups touched `gap_open`) outnumber stop gaps. The largest single rank
+move is `LONG|favorite_zone_watch|favorite_setup` 26 → 40 under both repairs.
+
+**The two skip counters, and what one of them found.** `no_prior_session_level` fired 4
+bar-tests over 1 setup - real but rare, as expected, since the band history almost always
+covers the previous session. `invalid_bar` fired **380 scenario-bars over 26 setups (22
+symbols)**, and the cause is specific: each of those 22 cached daily-bar files carries
+**exactly ONE invalid candle, all of them dated 2026-09-04**, every one with `low > open`
+or `high < open` - AEE `O=105.81 H=106.96 L=106.11`, TWLO `O=239.52 H=239.29 L=231.21`,
+GPGI `O=14.195 H=13.925`. That is the signature of a FORMING bar written into
+`%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` mid-session, where the "low" is
+the low since the snapshot rather than the day's. **Under `literal_level_v1` - which is
+what the desk runs today - those bars are still read for fills, excursions and marks.**
+This is a READ of a machine-local cache and NOT a claim about the tracker or the durable
+store; it is an advisory finding for the lead, outside ST3's scope, and the counter is
+what made it visible at all.
 
 **Nothing here is authorization.** No production caller passes a non-default policy; the
 desk's next tracker write must carry no `execution_convention` key on any record. Whether
