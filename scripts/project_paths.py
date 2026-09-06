@@ -534,6 +534,14 @@ MASTER_AVWAP_SCAN_FACTOR_OBSERVATIONS_FILE = PERSISTENT_RUNTIME_DATA_DIR / "mast
 MASTER_AVWAP_SCAN_FACTOR_LEADERBOARD_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scan_factor_leaderboard.csv"
 MASTER_AVWAP_TIER_LIST_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tier_list.csv"
 MASTER_AVWAP_TIER_OUTCOMES_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tier_outcomes.csv"
+# ST1 item 2 (2026-09-06): the SAME question asked of the exchange calendar - the
+# close on the entry session against the close on the N-th session after it, holidays
+# skipped, a missing target bar left unmeasured with a reason. Written BESIDE the tier
+# outcomes in the same export pass and joined to them on `observation_id`; shadow only,
+# with no production reader until a decision moves one.
+MASTER_AVWAP_SESSION_HORIZON_OUTCOMES_FILE = (
+    PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_session_horizon_outcomes.csv"
+)
 MASTER_AVWAP_TIER_PERFORMANCE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tier_performance.csv"
 MASTER_AVWAP_TIER_CATCH_RATE_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_tier_catch_rate.csv"
 MASTER_AVWAP_SCORING_CONFIG_FILE = PERSISTENT_RUNTIME_DATA_DIR / "master_avwap_scoring_config.json"

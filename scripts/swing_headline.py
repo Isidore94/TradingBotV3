@@ -63,6 +63,24 @@ WILSON_Z = 1.959963984540054
 HEADLINE_COLUMNS = ("win_rate", "win_rate_lb", "n", "avg_r", "avg_unit", "meets_floor")
 HEADLINE_LABELS = ("Win %", "Win % (low)", "n", "Avg", "unit", "")
 
+#: ST1 item 1. **A PERCENT MOVE IS NOT A WIN RATE.** The tracker's `win` column
+#: is the sign of a close-to-close move measured at a scan-row offset; the
+#: stop-at-a-level, two-closes grading lives on the tracker JSON scenarios, a
+#: different export entirely. A headline built from the first says "favorable";
+#: only a headline built from graded R says "win rate".
+OUTCOME_KIND_FAVORABLE_DIRECTION = "favorable_direction"
+OUTCOME_KIND_TRADE_R = "trade_r"
+
+#: The same six columns, headed the way the outcome kind earns.
+FAVORABLE_HEADLINE_LABELS = ("Favorable %", "Favorable % (low)", "n", "Avg", "unit", "")
+
+
+def headline_labels(outcome_kind: str = OUTCOME_KIND_TRADE_R) -> tuple[str, ...]:
+    """The column labels for one outcome kind. Never a local string on a surface."""
+    if str(outcome_kind or "").strip() == OUTCOME_KIND_FAVORABLE_DIRECTION:
+        return FAVORABLE_HEADLINE_LABELS
+    return HEADLINE_LABELS
+
 
 @dataclass(frozen=True)
 class Headline:
@@ -85,6 +103,11 @@ class Headline:
     #: kind of number this packet exists to stop. Set by whichever constructor
     #: knows, never guessed from the magnitude.
     avg_unit: str = "R"
+    #: What the RATE is - ST1 item 1. `trade_r` is a win rate over graded trades;
+    #: `favorable_direction` is the share of favorable close-to-close moves, and
+    #: is never printed as a win rate. Set by the constructor that knows which
+    #: file it read, never guessed.
+    outcome_kind: str = OUTCOME_KIND_TRADE_R
 
     @property
     def n(self) -> int:
@@ -113,15 +136,27 @@ class Headline:
             "avg_unit": self.avg_unit,
             "meets_floor": self.meets_floor,
             "sessions": self.sessions,
+            "outcome_kind": self.outcome_kind,
         }
+
+    @property
+    def is_favorable_direction(self) -> bool:
+        return self.outcome_kind == OUTCOME_KIND_FAVORABLE_DIRECTION
 
     def sentence(self) -> str:
         """One line for a setup doc or a card. Says when it cannot say.
 
         `setup_docs` renders this at READ TIME from the tracker file, so a doc
         never carries a hardcoded number that quietly ages.
+
+        **ST1 item 1: the words follow the outcome kind.** A favorable-direction
+        headline says "favorable moves" and names its own basis - a
+        price-direction rate measured close to close - because calling it a win
+        rate claims a stop rule that was never applied.
         """
         if not self.n:
+            # Unchanged for both kinds: "nothing graded" makes no claim about a
+            # rate, so it needs no relabelling and every caller keeps its words.
             return f"{self.name}: no graded swings in the last {self.sessions} sessions."
         rate = self.win_rate or 0.0
         bound = self.win_rate_lb or 0.0
@@ -129,6 +164,13 @@ class Headline:
         mean = (
             f", avg {self.avg_r:+.2f}{self.avg_unit}" if self.avg_r is not None else ""
         )
+        if self.is_favorable_direction:
+            return (
+                f"{self.name}: {rate * 100:.0f}% favorable moves over the last "
+                f"{self.sessions} sessions (n={self.n}, at least {bound * 100:.0f}%{mean})"
+                f"{tail} - a price-direction rate measured close to close, not a "
+                f"stop-rule verdict."
+            )
         return (
             f"{self.name}: {rate * 100:.0f}% win rate over the last {self.sessions} "
             f"sessions (n={self.n}, at least {bound * 100:.0f}%{mean}){tail}."
@@ -299,10 +341,21 @@ def headline_from_tracker_rows(
 ) -> Headline:
     """Count from the tracker's own `win` column and `side_return_pct`.
 
-    The tracker already decides what a win IS - its stop-at-a-level, two-closes
-    rule, which is the same rule decision 0016 answer 3 describes - so this reads
-    that verdict rather than re-deriving one from a return. Two definitions of a
-    win in one program is how two screens end up disagreeing.
+    **ST1 item 1 - what that column actually is.** This docstring used to say
+    the tracker "decides what a win is - its stop-at-a-level, two-closes rule".
+    That was false, and the wording was how a percent move became a win rate on
+    four surfaces. `master_avwap_tier_outcomes.csv`'s `win` is
+    `side_return_pct > 0`: the SIGN OF A CLOSE-TO-CLOSE PERCENT MOVE between two
+    of that symbol's own scan rows (`legacy.build_scan_factor_observation_rows`).
+    A long that broke its D1 support intraday and closed higher counts as a
+    `win` there; a stop-at-a-level rule would have been out. The stop/two-closes
+    grading is real but lives on the tracker JSON scenarios
+    (`_summarize_tracker_setup_outcome`), a different export with a different
+    grain.
+
+    So the headline this builds declares `favorable_direction`, and every
+    surface fed by it says "favorable" rather than "win rate". The NUMBER is
+    unchanged; only the claim it makes is.
 
     A row whose `win` cannot be read is counted in NEITHER: unmeasured is not a
     loss, and folding it into the denominator drifts every rate downward by
@@ -333,6 +386,7 @@ def headline_from_tracker_rows(
         sessions=sessions,
         # PERCENT MOVE, not R: `side_return_pct` is what the tracker grades in.
         avg_unit="%",
+        outcome_kind=OUTCOME_KIND_FAVORABLE_DIRECTION,
     )
 
 
@@ -355,11 +409,20 @@ def as_rows(headlines: Iterable[Headline]) -> list[dict[str, Any]]:
 
 
 def format_win_rate(row: Mapping[str, Any]) -> str:
-    """`62% (>=52%, n=90)`, or a dash. The one spelling every surface uses."""
+    """`62% (>=52%, n=90)`, or a dash. The one spelling every surface uses.
+
+    ST1 item 1: a favorable-direction row reads `62% favorable (>=52%, n=90)`.
+    The word comes from the row's own `outcome_kind`, so a surface can never
+    relabel a rate with a local string - and an old row without the key reads as
+    a trade-R win rate, which is what every caller of this function meant before
+    the column existed.
+    """
     rate = row.get("win_rate")
     if rate is None:
         return "-"
     bound = row.get("win_rate_lb")
     count = row.get("n") or 0
     tail = f">={bound * 100:.0f}%, " if bound is not None else ""
-    return f"{float(rate) * 100:.0f}% ({tail}n={count})"
+    kind = str(row.get("outcome_kind") or "").strip()
+    noun = " favorable" if kind == OUTCOME_KIND_FAVORABLE_DIRECTION else ""
+    return f"{float(rate) * 100:.0f}%{noun} ({tail}n={count})"

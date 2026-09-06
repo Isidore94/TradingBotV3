@@ -203,7 +203,13 @@ def test_a_setup_doc_states_its_record_and_never_hardcodes_it():
             {"win": "1", "side_return_pct": "0.8"},
         ],
     )
-    assert "67% win rate" in sentence
+    # ST1 item 1 (2026-09-06): the NUMBER is unchanged and the noun is corrected.
+    # These rows are the tracker's `win` column, which is the sign of a
+    # close-to-close percent move at a scan-row offset - a favorable-direction
+    # rate, never a stop-rule win rate. The claim this test makes is the same
+    # one: the sentence states the measured rate and n, and is never hardcoded.
+    assert "67% favorable" in sentence
+    assert "win rate" not in sentence.lower()
     assert "n=3" in sentence
     assert "discovery" in sentence, "it must say when it is under the floor"
 

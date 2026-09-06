@@ -111,7 +111,11 @@ def test_the_setups_table_shows_the_familys_record_and_sorts_by_the_bound():
     )
 
     column = [key for key, _label in model.COLUMNS].index("family_win_rate")
-    assert model.COLUMNS[column][1] == "Family Win %"
+    # ST1 item 1 (2026-09-06): the column is the same column and the header now
+    # names what it measures - a favorable close-to-close move, not a stop-rule
+    # win. The KEY is unchanged (`family_win_rate`), which is what the panel's
+    # widths, squeeze order and sort handler are pinned to.
+    assert model.COLUMNS[column][1] == "Family favorable %"
 
     def _cell(row, role):
         return model.data(model.index(row, column), role)

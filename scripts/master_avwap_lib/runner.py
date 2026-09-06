@@ -2921,14 +2921,27 @@ def _run_master_impl(
         logging.exception("Scan factor tracker export failed.")
     _output_t = _log_phase_duration("output/scan-factors", _output_t)
     try:
+        # ST1 item 2: the v2 session-horizon file is written in this same pass,
+        # from the daily frames THIS SCAN ALREADY FETCHED. No network call is
+        # made inside the export - a symbol with no frame in hand produces
+        # `no_bar_for_target_session` rows, which is the honest answer.
+        from .session_horizon_outcomes import closes_from_daily_frames
+
         tier_tracker_result = export_bot_tier_tracker_views(
             history_df=shared_history_df,
             observation_rows=shared_observation_rows,
             leaderboard_rows=shared_leaderboard_rows,
+            closes_for=closes_from_daily_frames(daily_frames_by_symbol),
         )
         run_result["tier_pick_count"] = int(tier_tracker_result.get("tier_pick_count", 0) or 0)
         run_result["tier_outcome_count"] = int(tier_tracker_result.get("tier_outcome_count", 0) or 0)
         run_result["tier_catch_rate_count"] = int(tier_tracker_result.get("tier_catch_rate_count", 0) or 0)
+        run_result["session_horizon_outcome_count"] = int(
+            tier_tracker_result.get("session_horizon_outcome_count", 0) or 0
+        )
+        run_result["session_horizon_measured_count"] = int(
+            tier_tracker_result.get("session_horizon_measured_count", 0) or 0
+        )
         logging.info(
             "Bot tier tracker exported %s current pick(s), %s outcome row(s), and %s catch-rate row(s).",
             run_result["tier_pick_count"],

@@ -39,9 +39,18 @@ which is evidence and must not be loaded as context.
   3). `scripts/swing_headline.py` is the one implementation: win rate first, `n`
   and a **Wilson lower bound** beside it, mean R beside that and never instead of
   it. **Sorting is by the LOWER BOUND** - the raw rate puts a 100%-on-three cell
-  above a 62%-on-ninety every time. It reads the TRACKER'S OWN `win` verdict
-  rather than re-deriving one, and the average carries its unit, because a column
-  headed "Avg R" showing a percent is a number that lies.
+  above a 62%-on-ninety every time. It reads the TRACKER'S OWN verdict rather
+  than re-deriving one, and the average carries its unit, because a column headed
+  "Avg R" showing a percent is a number that lies. **That verdict is a
+  FAVORABLE-DIRECTION flag, not a win** (ST1, 2026-09-06): the tier outcomes
+  `win` column is `side_return_pct > 0`, the sign of a close-to-close percent
+  move measured at a SCAN-ROW offset, so `outcome_kind` now declares it
+  (`favorable_direction_scanrow_v1`, additive, an empty cell reading as v1),
+  `Headline.outcome_kind` decides the words, and every surface fed by that file
+  says **favorable** - `62% favorable (>=52%, n=90)`, the setups table's **Family
+  favorable %**, the setup-doc sentence and the AWAY digest's ranking line. Only
+  a `trade_r` headline says "win rate". Decision 0016 answer 3 is unchanged; the
+  number is unchanged; the claim it makes is now the one that was measured.
   `setup_docs.family_record_sentence` renders one line per family AT READ TIME,
   at ONE declared horizon (`evidence_stats.SWING_HORIZON_SESSIONS`, 5 - the same
   one the AWAY digest ranks on), from ONE pass over the tracker.
@@ -56,7 +65,39 @@ which is evidence and must not be loaded as context.
   repeat across up to six rows and read as each row's own). **ONE Wilson z**:
   `swing_headline.WILSON_Z` (1.96). `expected_r`'s 1.28 is a parameter of the
   proven-quality score in a fenced scoring file and no trader-facing surface may
-  reach for it.
+  reach for it. **ONE eligible-row reader** (ST1): `scripts/swing_evidence.py`
+  declares the policy (`SwingOutcomePolicy`: outcome kind, horizon, knowledge
+  basis, maturity rule, window, missingness) and `read_eligible_rows` applies it
+  for `setup_docs`, `autopilot_core` and `build_bot_tier_performance_rows` -
+  which now DROPS explicit `stale_horizon` rows like the other two, so one file
+  no longer gives two answers. The read RECONCILES (eligible + pending +
+  sum(excluded) == source rows, every exclusion named) and `describe(...)` puts
+  that on the surface in one line, horizon stated in its own unit ("5 scan rows",
+  never "5 sessions").
+- **Exact exchange-session horizons, versioned beside v1** (ST1 item 2,
+  2026-09-06). `scripts/master_avwap_lib/session_horizon_outcomes.py` asks the
+  same question of the EXCHANGE CALENDAR: the entry session's close against the
+  close ON the N-th session after it, holidays skipped, `sessions_spanned ==
+  horizon_sessions` by construction. A missing target bar is
+  `no_bar_for_target_session` and NEVER the next bar or a later scan; a target
+  past `last_completed_session` is `immature` and lands in `pending`, never in
+  the rate; a duplicated `(scan_row_id, horizon)` makes ONE row and is COUNTED
+  (`dropped_duplicates`, because `_prepare_scan_factor_history_frame`
+  de-duplicates silently). `observation_id` matches v1 so the two files join
+  1:1. Written to `master_avwap_session_horizon_outcomes.csv` in the same export
+  pass, from the daily frames the scan already holds
+  (`closes_from_daily_frames`) - it never fetches, and the write is guarded so it
+  can never cost the v1 exports or the tracker save. **Shadow: `POLICY_SESSION_V2`
+  has no production caller**, and v1 keeps every row, column and value (pinned by
+  `tests/fixtures/st1_tier_outcomes_golden.csv`, generated from the pre-fix code).
+- **A reconstructed tier never validates a shipped one** (ST1 item 4).
+  `swing_evidence.tier_split` counts `tier_source`, every
+  `build_bot_tier_performance_rows` row carries `n_assigned_tier` /
+  `n_derived_tier`, and `assigned_only=True` restricts a cell to the tier that
+  shipped. Measured on the live file 2026-09-06: of the 2,642 horizon-5 rows in
+  the last 20 sessions, **2,642 are `derived_from_bucket` and 0 are `assigned`** -
+  the 341 assigned rows in the whole file are horizon 1 from 2026-09-02/03, so
+  every recent S/A cell today is entirely reconstructed labels.
 - **The tracker exports INTEGER counts at each table's own grain, and the
   weighted rate keeps its own name** (ST2.1/ST2.2, 2026-09-06).
   `build_recent_tracker_setup_family_rows` and `build_tracker_setup_type_rows`
@@ -1323,6 +1364,43 @@ having high R."*
   `build_tracker_short_horizon_rows` is outside the three functions the trader's ST2 decision
   names, so it was not edited - the two-session export carries no integer counts and no session
   column, which is why that block can only ever be labelled `2-session, discovery`.
+
+### 2026-09-06 - ST1: each outcome gets its true meaning and its true clock (branch `claude/st1-outcome-clock-build`)
+
+Trader, 2026-09-06: *"Name and version favorable price-direction observations separately
+from simulated trade outcomes. Percent moves must not become realized R or stop-rule win
+rates through wording."* ... *"Define exact exchange-session horizons from the entry
+session and completed-bar data, independent of later scan membership."* ... *"Centralize
+eligible-row reading."* ... *"Never use reconstructed labels to validate shipped S/A
+performance."*
+
+- **The `win` column was never a win.** `master_avwap_tier_outcomes.csv`'s `win` is
+  `side_return_pct > 0` - the sign of a close-to-close percent move between two of a
+  symbol's OWN scan rows - while `swing_headline.headline_from_tracker_rows` told four
+  surfaces it was "the stop-at-a-level, two-closes rule". `outcome_kind` is APPENDED to
+  both writers (v1 value `favorable_direction_scanrow_v1`; an absent or empty cell reads
+  as v1 through `swing_evidence.outcome_kind_of`), `Headline.outcome_kind` decides the
+  words, and the setups table's header is now **Family favorable %**. Every existing
+  value and column is byte-identical - pinned by a golden generated from the pre-fix code.
+- **v2 walks the exchange calendar** (`master_avwap_lib/session_horizon_outcomes.py`,
+  new file `master_avwap_session_horizon_outcomes.csv`, no production reader). Missing
+  target-session data stays unmeasured with a reason; an unarrived horizon is `pending`,
+  never a loss; duplicates are counted, not swallowed.
+- **One eligible-row reader** (`scripts/swing_evidence.py`). `build_bot_tier_performance_rows`
+  now drops explicit `stale_horizon` rows like the two trader-facing readers - it is a
+  report export and its only consumers are the Setup Tracker's Tier performance tab, the
+  human-focus comparison table and the AI evidence list; no detector, score, gate or alert
+  reads it. Each read reconciles, and `describe(...)` states outcome kind, horizon in its
+  own unit, window and coverage on the setups panel, the setup docs and the AWAY digest.
+- **The tier split is measured and shown.** Live file 2026-09-06: 2,642 horizon-5 rows in
+  the last 20 sessions, **all `derived_from_bucket`, none `assigned`** (the 341 assigned
+  rows are horizon 1 from 2026-09-02/03), 55 dropped stale, 2,587 eligible.
+- **Deviation from the packet, deliberately:** v1's `sessions_spanned` / `stale_horizon`
+  keep the BUSINESS-DAY basis. `horizon_drift` gained `calendar=` and says "exchange
+  sessions" when given one, but passing it inside the v1 export would restate 19,558
+  historical rows, which the trader's prompt explicitly does not approve; the golden
+  proves the file unchanged. v2 needs no drift call - its span is the horizon.
+- Live gate **#75** owed at the next persisted tracker write (Tuesday 2026-09-08).
 
 ### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
 

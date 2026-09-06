@@ -2001,3 +2001,98 @@ n=621.
 **Live gate #67** replaces gate #40's narration clause: the next overnight `setup_research`
 row reads `narrated K of N eligible cell(s)` with a `.narration.json` beside ONE pack for the
 date, and the pack markdown carries the coverage line.
+
+## ST1 - the family win was a favorable move at a scan-row offset (2026-09-06)
+
+Trader, 2026-09-06: *"Name and version favorable price-direction observations separately
+from simulated trade outcomes. Percent moves must not become realized R or stop-rule win
+rates through wording."*
+
+### What was measured, on `main` @ `84ee24d6`
+
+`master_avwap_tier_outcomes.csv`, 19,558 rows, written 2026-09-04 13:07.
+
+The `win` column is one line of `legacy.build_scan_factor_observation_rows`:
+`"win": side_return_pct > 0`, where `side_return_pct` is the close-to-close move between
+the scan row at `idx` and the scan row at `idx + horizon` - **that symbol's own scan
+rows**, not exchange sessions. A long that broke its D1 support intraday and closed
+higher on the target row is a `win` there; the stop-at-a-level, two-closes rule that
+`swing_headline.headline_from_tracker_rows`' docstring claimed to be reading lives on
+the tracker JSON scenarios (`_summarize_tracker_setup_outcome`), a different export at a
+different grain. Four surfaces printed the first under the name of the second: the setup
+docs sentence, the AWAY digest ranking, the Master AVWAP setups table's `Family Win %`
+column and the Setup Tracker's family rows.
+
+**The clock.** Of the 2,989 horizon-5 rows over the last 20 SCAN DATES, `sessions_spanned`
+was 5 on 1,128, 6 on 699, 7 on 626, 8 on 409, 9 on 34, 10 on 20 and 11-18 on 73. The
+`stale_horizon` flag fires at `spanned > 2x declared`, so it caught 2.4% of that: a
+"5-session" cell is mostly 5 to 8 sessions, and the flag is not the thing that would tell
+you. Over the desk's own "lately" window instead (20 exchange sessions,
+2026-08-07..2026-09-03) the file has 2,642 horizon-5 rows, of which 55 are flagged stale.
+
+**Three readings of one file.** `setup_docs._all_family_outcomes` and
+`autopilot_core.swing_family_records` each wrote out the same three rules (one horizon,
+drop explicit `stale_horizon`, bound to the lately window);
+`legacy.build_bot_tier_performance_rows` read the same rows with no stale filter. One
+file, one question, two answers - 5,005 flagged rows across the file.
+
+**The tiers.** `tier_source` over the whole file is 19,217 `derived_from_bucket` and 341
+`assigned`, and all 341 are horizon 1 from 2026-09-02 and 2026-09-03 (the first scans
+after `assigned_tier` reached the feature history). So **every horizon-5 S/A cell the
+desk shows today is built entirely from labels reconstructed from the priority bucket**,
+and nothing said so.
+
+### The rules this produced
+
+- **A percent move is labelled a percent move.** `outcome_kind` is appended to the
+  observation and tier-outcome headers with the v1 value
+  `favorable_direction_scanrow_v1`; `swing_evidence.outcome_kind_of` reads a missing or
+  empty cell as that, because every historical row was written before the column existed.
+  `win` keeps its name and its value - identity and history are preserved - and the
+  sibling column declares what it always meant.
+- **The words follow the outcome kind, never a local string on a surface.**
+  `Headline.outcome_kind` is `favorable_direction` from `headline_from_tracker_rows` and
+  `trade_r` from `headline_from_outcomes`; `format_win_rate` renders `62% favorable
+  (>=52%, n=90)` for the first and is unchanged for the second; the setups table's header
+  is `Family favorable %` with the column key `family_win_rate` untouched, because the
+  panel's widths, squeeze order and sort handler are pinned to the key.
+- **v2 counts sessions, and it is a second file, never a replacement.**
+  `master_avwap_lib/session_horizon_outcomes.py` walks the exchange calendar forward from
+  the entry session, reads the bar ON the target session, and answers
+  `no_bar_for_target_session` rather than reaching for the next bar. `sessions_spanned ==
+  horizon_sessions` by construction. A target session after `last_completed_session` is
+  `immature` and lands in `pending` - "the horizon has not arrived" and "the horizon
+  arrived and could not be read" are different facts, and neither is a loss. A duplicated
+  `(scan_row_id, horizon)` makes ONE row and is COUNTED, because
+  `_prepare_scan_factor_history_frame` de-duplicates silently and a row nobody can
+  reconcile is a row nobody can check. `observation_id` is computed the v1 way, so the
+  two files join 1:1.
+- **The export never fetches, and the shadow never costs the champion.** `closes_for` is
+  supplied by the caller from the frames the scan already walked
+  (`closes_from_daily_frames`); a symbol with no frame yields unmeasured rows with a
+  reason. The whole v2 write is wrapped so a failure logs and returns - the v1 CSVs and
+  the tracker save are never at risk for a file with no production reader.
+- **One eligible-row reader, and it reconciles.** `swing_evidence.SwingOutcomePolicy`
+  declares the six things the trader listed and `read_eligible_rows` applies them;
+  eligible + pending + sum(excluded) == source rows, and every exclusion is named
+  (`wrong_horizon`, `outside_window`, `stale_horizon`, `unreadable` - a present-and-empty
+  horizon is not a zero -, `duplicate`, `unmeasured:<reason>`). `POLICY_SESSION_V2` reads
+  the v2 file and **has no production caller**: it is the seam a later decision flips.
+- **The window is asked of the row's own clock.** v1 has only its scan date; a v2 row
+  knows the session it was MEASURED on, so `POLICY_SESSION_V2` windows on
+  `target_session`. Maturity is checked BEFORE the window, so a pick whose horizon has
+  not arrived is pending rather than "too recent to count".
+- **A reconstructed tier never validates a shipped one.** Every tier-performance row
+  carries `n_assigned_tier` / `n_derived_tier` from `swing_evidence.tier_split`, and
+  `assigned_only=True` restricts a cell to the tier that shipped. A `tier_source` cell
+  that is present and empty is UNKNOWN, never assigned.
+- **v1's drift columns keep the business-day basis, deliberately.** `horizon_drift` gained
+  `calendar=` and says "exchange sessions" when it is given one - Friday 2026-09-04 to
+  Tuesday 2026-09-08 is ONE session and `numpy.busday_count` answers 2 - but the v1 export
+  does not pass it. Doing so would rewrite `sessions_spanned` and `stale_horizon` on
+  19,558 rows written on the other basis, which is a restatement of the file rather than a
+  description of it, and the trader's 2026-09-06 prompt excludes exactly that.
+
+**Live gate #75** is owed at the next persisted tracker write: the v2 file beside the tier
+outcomes with `sessions_spanned == horizon_sessions` on every measured row, a reason on
+every other, and the three readers printing the same `eligible / pending / excluded` line.
