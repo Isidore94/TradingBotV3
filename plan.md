@@ -246,7 +246,8 @@ where the phase says so; it never authorizes an early promotion.
 | **0.8** | GUI fluidity Wave P1 | Repair the measured Standard-mode stalls and three verified GUI defects |
 | **0.13** | Grade what the trader already said (P0-P10) | Every verdict gets a forward record; a like starts a five-session watch. **MERGED; live gates #29-#43 owed** |
 | **0.16** | Capture and board rules (packets T1 + T2) | A veto with no box, a quick like that stays, a claimed like that is one double-click and advances, a board click that queues nothing, the TC2000 board on M5 Focus. **BUILT; live gate #58 owed** |
-| **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1–V3/R4 merged; V4's Working-lately switch and AWAY Recap remain NOT BUILT** |
+| **0.14** | Names first (V1, V2, V3) | Decision 0016: the names shown come before the entry taken. **V1–V3/R4 merged; V4's Working-lately switch and AWAY Recap remain NOT BUILT - they are P6 and G6 of Phase 0.22** |
+| **0.22** | Desk reshape + tracker evidence repairs (G0–G7, P1–P6) | Two lanes that never share a branch: the layout lane (Weekend overlap, clipped tables, Market Journal reader, stale Research detail, a Research › Results landing page, AWAY Recap, speed) and the measurement lane (the six Setup Tracker packets). **AUTHORIZED 2026-09-06; G0 in build** |
 | **0.12** | Focus de-clutter + HTF LRSI research | Make the Focus feed, the Armed board and the Focus list readable again; ask in shadow whether a higher-timeframe LRSI entry pays |
 | **1 — NEXT** | Reliable development baseline | Make tests offline/deterministic and close measured cleanup questions |
 | **2** | Authoritative foundations | One correct provider, time, candidate, SPY/RS, and Greatness data path |
@@ -338,6 +339,41 @@ comparison must condition on the entry's position relative to the band.
 Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
+
+## Phase 0.22 — Desk reshape and tracker evidence repairs (2026-09-06) — AUTHORIZED, in build
+
+Trader, 2026-09-06: *"lets use your recommendations for all 4 decsions. then go ahead and start the
+build order"* over the lead's Desk Reshape Plan (an artifact, per the 2026-09-04 rule; its inputs
+were the two external reviews `GUI_REVIEW_2026-09-06.md` and `SETUP_TRACKER_REVIEW_2026-09-06.md`
+plus the `FABLE_SETUP_TRACKER_PROMPT_2026-09-06.md` packets, all outside the repo). The four
+decisions taken with the lead's recommendation: (1) decision 0016 answer 7 is AMENDED - Research ›
+Results is a trader-readable full readout, the Desk's Working-lately line stays the primary surface,
+both read ONE evidence snapshot; (2) the build order below; (3) Results opens on Bot setups × Swing ×
+Recent 20 sessions, last choice remembered; (4) the under-chart Journal composer is left as it is.
+
+**Two lanes, one rule.** Lane M (measurement) is the six packets of the tracker prompt: P1 outcome
+meaning and true session horizons, P2 real integer counts and one leader, P3 impossible fills and
+same-day knowledge (golden compare), P4 the opportunity before its outcome (golden compare,
+decision), P5 personal evidence, P6 the V4 evidence snapshot + Desk line + priority switch +
+leader-change event. Lane G (layout): G0 measure first, G1 Weekend Focus Review one table + view
+selector + detail pane, G2 clipped tables (name the text column), G3 Market Journal reader, G4 stale
+Research detail clears on context change, G5 Research › Results landing page, G6 AWAY Recap (V4's
+item, on P6's snapshot), G7 speed pass re-measured against G0. **A G packet may change words,
+widths, positions and defaults and never how a number is computed; an M packet may change exports,
+readers and meanings and never move a widget.** Each is its own branch and worktree through the
+agent team; the desk restarts only on the trader's word.
+
+**Order:** G0 → G1 → G4 → G3 → G2, with P2 beside them (Results needs its export) → G5 → P1 → P5 →
+P3 / P4 in parallel (block nothing) → P6 → G6 → G7. Packets live in `.claude/packets/G*.md` /
+`P*.md` (machine-local). P1–P4 touch `master_avwap_lib/legacy.py`: each asks before its first edit
+(file-scoped ask-first rule); this authorization does not answer that question.
+
+| Packet | State |
+|---|---|
+| G0 measure first | in build 2026-09-06 |
+| G1, G4, G3 | tests being written 2026-09-06 |
+| P2 | tests being written 2026-09-06; builder waits for the `legacy.py` yes |
+| G2, G5, P1, P5, P3, P4, P6, G6, G7 | queued in the order above |
 
 ## Phase 0.21 — Measurement audit repairs M2, M3, M5 (2026-09-05) — BUILT, live gates #71, #72, #74 owed
 
