@@ -277,6 +277,10 @@ EXIT_FRAMEWORK_COLUMNS = (
     ("stop_out_rate", "Stop%"),
     ("target_hit_rate", "Target%"),
     ("n_expired_unmeasured", "Expired"),
+    # Reviewer blocker 1: the column that explains a smaller denominator. A
+    # template with `blocked_stop_rules` skips scenarios BY DEFINITION, and
+    # `n + Filtered` is what reconciles to the baseline's n.
+    ("n_filtered_by_experiment", "Filtered"),
 )
 
 ATTRIBUTE_LEADERBOARD_COLUMNS = (
@@ -586,8 +590,13 @@ class SetupTrackerPanel(QFrame):
                 "row per framework / template / side / bucket. The `comparison_apr2026` rows "
                 "are EXPERIMENTAL: a 1.25R hard stop and an SMA_50 short-near-favorite skip, "
                 "simulated since April and never taken. They are excluded from every champion "
-                "aggregate by design and this is the first surface that reads them. Nothing "
-                "here scores, ranks, gates or alerts, and nothing here retires evidence.",
+                "aggregate by design and this is the first surface that reads them. THE PAIRING "
+                "IS THE SAME SETUPS MINUS THE TEMPLATE'S OWN FILTER: a template that skips "
+                "scenarios by definition has a smaller n, and Filtered carries the difference so "
+                "n + Filtered equals the baseline's n - a smaller denominator here is the "
+                "experiment working, not a worse result. Rows are grouped by side and bucket with "
+                "the baseline above its twin. Nothing here scores, ranks, gates or alerts, and "
+                "nothing here retires evidence.",
                 self.exit_framework_table,
                 status=self.exit_framework_status_label,
             ),
@@ -1174,23 +1183,57 @@ def _rank_discovery_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _rank_exit_frameworks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Same bound, same reason. Ties keep the framework/template order stable."""
-    return sorted(
-        rows,
-        key=lambda row: (
+    """Grouped by (side, bucket), then framework, ranked by the bound INSIDE.
+
+    Reviewer advisory 3 (2026-09-05). A pure bound sort is right for a table
+    whose rows are independent, and wrong for this one: every row here exists to
+    be read AGAINST its twin, and sorting the whole table by the bound
+    interleaves the sides - one live ordering came out SHORT, LONG, LONG, SHORT.
+    Two rows a reader has to hunt for are two rows they will not compare, which
+    would leave this tab as unread as the framework it was built to surface.
+
+    So: the (side, bucket) blocks are ordered by the BEST bound in each, so the
+    strongest pairing is still on top; inside a block the BASELINE comes first
+    and its comparison twin follows, because the reference belongs before the
+    challenger; and inside a framework the bound orders the templates. Blank
+    bounds sort last at every level - a cell nothing graded has nothing to rank
+    on and is not an edge of zero. Presentation only.
+    """
+    best_in_block: dict[tuple[str, str], float] = {}
+    for row in rows:
+        block = (str(row.get("side") or ""), str(row.get("priority_bucket") or ""))
+        bound = _lower_bound(row)
+        if bound is not None:
+            best_in_block[block] = max(best_in_block.get(block, bound), bound)
+
+    def _key(row: dict[str, Any]):
+        block = (str(row.get("side") or ""), str(row.get("priority_bucket") or ""))
+        block_best = best_in_block.get(block)
+        family = str(row.get("framework_family") or "")
+        return (
+            block_best is None,
+            -(block_best or 0.0),
+            block,
+            # The champion's own record is the reference and reads first.
+            0 if family == "baseline" else 1,
+            family,
             _lower_bound(row) is None,
             -(_lower_bound(row) or 0.0),
-            -_float(row.get("n_closed"), 0.0),
-            str(row.get("framework_family") or ""),
             str(row.get("exit_template_id") or ""),
-            str(row.get("side") or ""),
-            str(row.get("priority_bucket") or ""),
-        ),
-    )
+        )
+
+    return sorted(rows, key=_key)
 
 
 def _graded_episodes(rows: list[dict[str, Any]]) -> int:
-    """Total n across the all-history FAMILY rows - the population's real size.
+    """Total n across the all-history FAMILY rows - the GRADED EPISODE count.
+
+    **Not the population size** (reviewer blocker 2, 2026-09-05): this is what
+    was graded, and most records in either namespace never close. Live it is 308
+    against 401 control records and 2,600 against 3,992 study ones, so printing
+    it under the noun "setups" claims every record was graded and overstates the
+    evidence by about a third. `_population_setups` is the other number and the
+    sentence carries both.
 
     Family rows only: the control export's cohort rows partition the same
     episodes a second way, and adding the two together would double-count every
@@ -1203,25 +1246,54 @@ def _graded_episodes(rows: list[dict[str, Any]]) -> int:
     )
 
 
+def _population_setups(rows: list[dict[str, Any]]) -> int:
+    """How many RECORDS the namespace holds, from the export's own column.
+
+    Same value on every row of a window - it describes the file - so the first
+    all-history row that carries one answers it. The panel must never count the
+    namespace itself: that means opening the 1.1 GB tracker JSON.
+    """
+    for row in rows:
+        if str(row.get("window") or "") != "all":
+            continue
+        text = str(row.get("population_setups") or "").strip()
+        if text:
+            try:
+                return int(float(text))
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
 def discovery_population_sentence(rows: list[dict[str, Any]], *, kind: str) -> str:
     """One sentence naming the population, so a control is never read as a pick.
+
+    Carries BOTH counts and names each: the graded episodes are the sample the
+    numbers rest on, and the record count is the population they were drawn
+    from. A sentence with only one of them is wrong whichever one it keeps.
 
     Pure, and built from the export's OWN counts - it never re-reads the file
     and never opens the 1.1 GB tracker JSON.
     """
+    if not rows:
+        return (
+            CONTROL_DISCOVERY_NO_EXPORT_SENTENCE
+            if kind == "control"
+            else STUDY_DISCOVERY_NO_EXPORT_SENTENCE
+        )
+    episodes = _graded_episodes(rows)
+    population = _population_setups(rows)
     if kind == "control":
-        if not rows:
-            return CONTROL_DISCOVERY_NO_EXPORT_SENTENCE
         head = (
-            f"{_graded_episodes(rows)} control setups the scan REJECTED, graded on their "
-            "own scenarios - never picks, and nothing here scores, ranks or alerts."
+            f"{episodes} graded episodes from the {population} control setups the scan "
+            "REJECTED, graded on their own scenarios - never picks, and nothing here "
+            "scores, ranks or alerts."
         )
     else:
-        if not rows:
-            return STUDY_DISCOVERY_NO_EXPORT_SENTENCE
         head = (
-            f"{_graded_episodes(rows)} study setups - ideas that have never been promoted "
-            "and touch no score. Measured here BEFORE any of them could."
+            f"{episodes} graded episodes from the {population} study setups - ideas that "
+            "have never been promoted and touch no score. Measured here BEFORE any of "
+            "them could."
         )
     return f"{head} {_discovery_window_suffix(rows)}".strip()
 
@@ -1245,22 +1317,39 @@ def exit_framework_population_sentence(rows: list[dict[str, Any]]) -> str:
     """What the Exit frameworks table is, in one line.
 
     Names the EXPERIMENTAL rows explicitly: they are exits that were simulated,
-    never taken, on the same setups as the baseline. A reader who takes one for
-    the champion's record has read a what-if as a result.
+    never taken. A reader who takes one for the champion's record has read a
+    what-if as a result.
+
+    **It no longer says "the SAME setups", because that was not true** (reviewer
+    blocker 1, 2026-09-05). A template carrying `blocked_stop_rules` is DEFINED
+    to skip some scenarios - live, `..._no_sma50_short_nearfav` skipped 98 of
+    683 on SHORT / near_favorite_zone - so its `n` is legitimately smaller and
+    reading that as a worse result is exactly backwards. The wording is "the
+    same setups MINUS the template's own filter", with the filtered count
+    printed so the two denominators reconcile.
     """
     if not rows:
         return EXIT_FRAMEWORK_NO_EXPORT_SENTENCE
     experimental = sum(
         1 for row in rows if str(row.get("experimental") or "").strip().lower() in {"true", "1"}
     )
+    filtered = sum(int(_float(row.get("n_filtered_by_experiment"), 0.0)) for row in rows)
     families = sorted(
         {str(row.get("framework_family") or "").strip() for row in rows} - {""}
     )
+    tail = (
+        f" {filtered} scenario(s) were skipped by a template's own "
+        "`blocked_stop_rules` and are counted in n_filtered_by_experiment, so n plus that "
+        "column reconciles to the baseline's n."
+        if filtered
+        else " Where a template has no filter of its own, the two n's are EQUAL."
+    )
     return (
         f"{len(rows)} exit-template groups across {len(families)} framework(s): "
-        f"{', '.join(families)}. {experimental} row(s) are EXPERIMENTAL - what-if exits "
-        "simulated on the SAME setups as the baseline, never taken, and excluded from "
-        "every champion aggregate. Nothing here scores, ranks or alerts."
+        f"{', '.join(families)}. {experimental} row(s) are EXPERIMENTAL - what-if exits, "
+        "never taken, simulated on the same setups as the baseline MINUS the ones each "
+        f"template's own filter skips, and excluded from every champion aggregate.{tail} "
+        "Nothing here scores, ranks or alerts."
     )
 
 

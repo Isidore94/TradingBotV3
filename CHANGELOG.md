@@ -1140,7 +1140,11 @@ which is evidence and must not be loaded as context.
   `build_study_discovery_rows` are unchanged and are CALLED by the new builders.
   Win rate leads with `n` and the ONE Wilson bound (`swing_headline`), mean R beside it,
   the window in SESSIONS, an all-history block and a `lately` block side by side, and
-  **each tab carries a population sentence** so a control is never read as a pick.
+  **each tab carries a population sentence** so a control is never read as a pick - naming
+  the graded EPISODES and the RECORD count separately, because they differ by about a
+  third. The framework rows carry `n_filtered_by_experiment`, so a template that skips
+  scenarios by its own `blocked_stop_rules` has its smaller `n` explained rather than
+  read as a worse result.
   `experimental` is a COLUMN, so a what-if can never read as the champion's record. The
   framework export is built from `_flatten_tracker_scenarios`, inside the band-variant
   fence. Shadow only: no detector, score, tier, alert, watchlist, Focus, review queue or
@@ -1190,7 +1194,16 @@ under `scripts/`.** `build_exit_framework_stats_rows` writes
 `master_avwap_exit_framework_stats.csv`, one row per `(framework_family,
 exit_template_id, side, priority_bucket)` with n, closed n, win rate + Wilson, mean R,
 stop-out rate and target-hit rate, so a baseline template and its comparison twin sit
-side by side **on the SAME setups with the same n**. A NEW FILE rather than columns on
+side by side **on the same setups MINUS what each template's own filter skips**. That
+qualifier is the reviewer's blocker 1 and it is load-bearing:
+`exp_full_band2_hard_stop_125r_no_sma50_short_nearfav` carries `blocked_stop_rules`, so
+`_tracker_experimental_filter_reason` marks the scenarios its rule skips and
+`_build_tracker_scenario` builds them non-tradeable - live, 98 of 683 on SHORT /
+near_favorite_zone. A builder that skipped non-tradeable rows dropped them in silence and
+the cell read n=585 with nothing to explain it, which reads as a worse result when it is
+the experiment doing exactly what it was defined to do. `n_filtered_by_experiment` now
+carries the difference, so `n + n_filtered_by_experiment` reconciles to the baseline's
+`n` where a filter applies and the two are EQUAL where none does. A NEW FILE rather than columns on
 `master_avwap_setup_type_stats.csv`: that export's grain is the setup family and the
 offline tuner reads it into live scoring weights, so widening it would be a champion
 change wearing an evidence-only label. `experimental` is a COLUMN, never a filter, so a
@@ -1203,9 +1216,17 @@ be the eighth unfenced reader `test_band_variant_fence_guard.py` exists to preve
 CSV readers like every other section on the page. Win rate leads with its `n` and its
 bound, **the sort IS the bound** (a 100% on two rejected setups is not better than a 60%
 on ninety), the Weekend Prep ten-row floor, and **ONE population sentence above each
-table** naming what the rows ARE - "N control setups the scan REJECTED, graded on their
-own scenarios - never picks". A control row and a pick look identical in a table; the
-sentence is the only thing that keeps them apart. An absent export renders the sentence,
+table** naming what the rows ARE - "N graded episodes from the M control setups the scan
+REJECTED - never picks". A control row and a pick look identical in a table; the sentence
+is the only thing that keeps them apart. **Both numbers, both named** (reviewer blocker
+2): `n` on a family row counts graded EPISODES - live 308 control and 2,600 study - while
+the namespaces hold 401 and 3,992 RECORDS, and printing the first under the noun of the
+second claims every record was graded and overstates the evidence by about a third. The
+export carries `population_setups` because the panel must never open the 1.1 GB tracker
+JSON to count a namespace. The Exit frameworks rows are grouped by (side, bucket) with
+the baseline above its twin, ranked by the bound inside the block: a pure bound sort
+scatters the pairs, and two rows a reader has to hunt for are two rows they will not
+compare. An absent export renders the sentence,
 never a blank table.
 
 **What holds.** Every champion aggregate is byte-identical, checked by REPRODUCTION

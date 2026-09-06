@@ -315,10 +315,14 @@ def test_the_framework_sentence_says_the_pairing_is_minus_the_templates_own_filt
     """
     sentence = panel_module.exit_framework_population_sentence(FRAMEWORK_ROWS)
     lowered = sentence.lower()
-    assert "filter" in lowered
     assert "experimental" in lowered
-    # It must also account for the rows the filter removed, by name.
-    assert "n_filtered_by_experiment" in sentence or "filtered" in lowered
+    # The load-bearing word: not "the same setups", but the same setups MINUS
+    # what each template's own filter skips.
+    assert "minus" in lowered
+    assert "filter" in lowered
+    # These fixture rows have nothing filtered, so the sentence must say the
+    # denominators are EQUAL rather than invent a caveat that does not apply.
+    assert "equal" in lowered
 
 
 def test_the_framework_sentence_counts_the_filtered_scenarios(panel_module):

@@ -12135,6 +12135,7 @@ EXIT_FRAMEWORK_STATS_COLUMNS = (
     "stop_out_rate",
     "target_hit_rate",
     "n_expired_unmeasured",
+    "n_filtered_by_experiment",
 )
 
 
@@ -12159,6 +12160,14 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
     record. Nothing here scores, ranks, gates or alerts, and nothing here
     deletes evidence: if the trader reads this and retires the framework, that
     is a later decision with a number behind it.
+
+    **The pairing is the same setups MINUS the template's own filter, and the
+    row says which.** A template carrying `blocked_stop_rules` is DEFINED to
+    skip some scenarios, so its `n` is legitimately smaller than the baseline's;
+    `n_filtered_by_experiment` carries the difference, and
+    `n + n_filtered_by_experiment` reconciles to the baseline's `n`. Without
+    that column a smaller denominator reads as a worse result, which is the
+    opposite of what it means.
     """
 
     groups: dict[tuple[str, str, str, str], dict] = {}
@@ -12177,6 +12186,7 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
                 "framework_version": row.get("framework_version") or "",
                 "rows": [],
                 "n_expired_unmeasured": 0,
+                "n_filtered_by_experiment": 0,
             },
         )
         # M3.3's rule, in an export: an EXPIRED_UNMEASURED record is
@@ -12184,6 +12194,25 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
         # denominator and is counted beside them.
         if _tracker_setup_is_expired_unmeasured(row):
             group["n_expired_unmeasured"] += 1
+            continue
+        # Reviewer blocker 1 (2026-09-05): the pairing is NOT equal-n by
+        # construction, and the difference is the experiment itself.
+        #
+        # `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav` carries
+        # `blocked_stop_rules`. `_tracker_experimental_filter_reason` stamps
+        # `cohort_filter_reason` on every scenario the rule skips, and
+        # `_build_tracker_scenario` builds it NON-TRADEABLE - so the
+        # `tradeable` skip below was swallowing them. Live, that template's
+        # SHORT / near_favorite_zone cell read n=585 against the baseline's 683
+        # and nothing on the row explained the 98.
+        #
+        # It is counted SEPARATELY from the expired count and BEFORE the
+        # tradeable skip, because the two exclusions answer different questions:
+        # an expired record is uncertainty, a filtered one is the experiment
+        # doing exactly what it was defined to do. `n + n_filtered_by_experiment`
+        # is what reconciles to the baseline's `n`.
+        if str(row.get("cohort_filter_reason") or "").strip():
+            group["n_filtered_by_experiment"] += 1
             continue
         if not bool(row.get("tradeable")):
             continue
@@ -12224,6 +12253,7 @@ def build_exit_framework_stats_rows(setups: dict[str, dict]) -> list[dict]:
             "stop_out_rate": (stopped / len(closed)) if closed else None,
             "target_hit_rate": (targeted / len(closed)) if closed else None,
             "n_expired_unmeasured": group["n_expired_unmeasured"],
+            "n_filtered_by_experiment": group["n_filtered_by_experiment"],
         }
         row.update(
             _discovery_headline_fields(
@@ -13242,6 +13272,13 @@ DISCOVERY_STATS_COLUMNS = (
     "meets_n_floor",
     "avg_closed_r",
     "n_expired_unmeasured",
+    #: Reviewer blocker 2 (2026-09-05): the SIZE OF THE POPULATION, which is
+    #: not `n`. `n` counts graded EPISODES (live: 308 control, 2,600 study)
+    #: and the namespaces hold 401 and 3,992 RECORDS. The panel cannot count
+    #: a namespace it never opens - it must never touch the 1.1 GB tracker
+    #: JSON - so the export carries it. Same value on every row of a window:
+    #: it describes the FILE, like the clock stamp does.
+    "population_setups",
     "flag",
 )
 
@@ -13250,10 +13287,22 @@ DISCOVERY_STATS_COLUMNS = (
 #: family; `lately` is kept beside it because a two-year average cannot answer
 #: "is this working now". Replacing either with the other loses a real question.
 DISCOVERY_WINDOW_ALL_HISTORY = "all"
-#: NOT named `*LATELY*`: `test_r4b_one_lately_window.py` reserves that spelling
-#: for `evidence_stats`, so no module can grow a second definition of the 20.
-#: This is the VALUE the column carries - the trader's own word - and the
-#: session count behind it is imported, never restated.
+#: DELIBERATELY NOT NAMED `*LATELY*`, and the reason is worth stating because
+#: the name reads like a mistake next to its own value (reviewer advisory 2,
+#: 2026-09-05).
+#:
+#: `test_r4b_one_lately_window.py::test_lately_has_exactly_one_home` refuses any
+#: assignment matching `^\s*[A-Z_]*LATELY[A-Z_]*\s*=` outside `evidence_stats.py`.
+#: The guard matches on the NAME, and it is right to: what it is preventing is a
+#: module growing its own `LATELY_SESSIONS = 20`, after which two screens can
+#: disagree about what the trader's own word means. A label that merely spells
+#: the word would be a false positive for the guard, but a guard that has to
+#: reason about intent is not a guard, so the name moves rather than the rule.
+#:
+#: **The number is IMPORTED, never restated here**: `_build_discovery_stats_rows`
+#: reads `LATELY_SESSIONS` and `lately_window` from `evidence_stats`, which is
+#: what the guard actually exists to protect. This constant is only the VALUE
+#: the `window` column carries - the trader's own word, which every surface says.
 DISCOVERY_WINDOW_ROLLING = "lately"
 
 
@@ -13336,12 +13385,14 @@ def _discovery_rows_for_window(
     last: str,
     expired: dict[tuple[str, str], int],
     flag_key: str,
+    population_setups: int,
 ) -> list[dict]:
     header = {
         "window": window,
         "window_sessions": sessions if sessions is not None else "",
         "window_start": first,
         "window_end": last,
+        "population_setups": int(population_setups),
     }
     rows: list[dict] = []
     for cohort in discovery.get("cohorts", ()) or ():
@@ -13424,6 +13475,7 @@ def _build_discovery_stats_rows(
         last="",
         expired=_discovery_expired_counts(namespace),
         flag_key=flag_key,
+        population_setups=len(namespace or {}),
     )
     first, last = lately_window()
     lately_tracker = dict(tracker)
@@ -13438,6 +13490,7 @@ def _build_discovery_stats_rows(
             last=last,
             expired=_discovery_expired_counts(lately_tracker[namespace_key]),
             flag_key=flag_key,
+            population_setups=len(lately_tracker[namespace_key] or {}),
         )
     )
     return rows
