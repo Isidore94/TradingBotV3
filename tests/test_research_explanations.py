@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -60,24 +61,43 @@ def test_plain_english_summary_respects_quality_and_sample_floors():
     assert "honest result" in empty["bullets"][0]
     assert "minimum sample floor" in empty["bullets"][1]
 
+    # ST2 fix round (2026-09-06): both leader bullets now go through
+    # `working_lately.select_leader`, the same decision the Setup Tracker's
+    # banner reads, so a qualified family has to look like a row from the
+    # CURRENT exports - a namespace, integer counts and a measured session.
+    # Every assertion below is this test's original one; only the fixture moved
+    # to the shape the tracker writes.
+    import market_calendar
+
+    session = market_calendar.last_completed_session(
+        datetime.now(market_calendar.MARKET_TZ)
+    ).isoformat()
     summary = build_plain_english_whats_working(
         current_rows=[{"symbol": "AAA", "tier": "A"}],
         short_term_rows=[
             {
                 "side": "LONG",
+                "namespace": "live",
                 "setup_family": "avwap_band_bounce",
                 "samples_2d": 14,
                 "avg_r_2d": 0.55,
                 "win_rate_2d": 0.64,
+                "n_wins": 9,
+                "n_losses": 5,
+                "latest_measured_session": session,
             }
         ],
         recent_rows=[
             {
                 "side": "SHORT",
+                "namespace": "live",
                 "setup_family": "ema15_retest",
-                "closed_setups": 7,
+                "closed_setups": 40,
                 "avg_closed_r": 0.8,
                 "target_hit_rate": 0.57,
+                "n_wins": 24,
+                "n_losses": 16,
+                "latest_measured_session": session,
             }
         ],
     )

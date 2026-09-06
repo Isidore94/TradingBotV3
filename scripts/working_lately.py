@@ -77,7 +77,20 @@ LEADER_MARGIN_LB = 0.05
 #: so a reading older than that means the tracker did not write, which is news
 #: about the desk and not about the family. Counted on the exchange calendar
 #: (``market_calendar``), never in calendar days.
+#:
+#: **What is measured is the ENTRY session**, not the exit. The tracker's family
+#: rows carry no exit date, so ``latest_measured_session`` is the newest
+#: scan_date among the episodes that produced a readable R. That is the
+#: conservative reading - a family whose newest ENTRY is old cannot have a newer
+#: measured close than its own scan - and every surface that shows a verdict
+#: says so in words, because "fresh" without its clock is not a fact.
 LEADER_FRESHNESS_SESSIONS = 2
+
+#: How the freshness rule reads in a sentence, for every surface that shows one.
+FRESHNESS_SENTENCE = (
+    f"fresh = an entry inside {LEADER_FRESHNESS_SESSIONS} exchange sessions of "
+    f"the last completed one"
+)
 
 #: The states ``select_leader`` can return.
 LEADER_STATES = ("leader", "no_clear_leader", "last_reliable_reading", "no_evidence")
@@ -207,7 +220,7 @@ def _policy_line(row: Mapping[str, Any], *, kind: str, last_completed_session: d
     measured = _text(row.get("latest_measured_session"))
     bits.append(
         f"window through {measured or 'an unstated session'}"
-        f" (read against {last_completed_session.isoformat()})"
+        f" (read against {last_completed_session.isoformat()}; {FRESHNESS_SENTENCE})"
     )
     coverage_bits = [f"{wins + losses} graded ({wins}W/{losses}L)"]
     for label, key in (
@@ -278,10 +291,18 @@ def select_leader(
     counted = [row for row in live if counted_pair(row) is not None]
     uncounted = len(live) - len(counted)
 
+    # **The floor is judged BEFORE freshness**, because a family that has not
+    # been measured enough times is under the floor whatever the clock says, and
+    # telling a reader "not fresh" about three samples answers a question they
+    # did not ask. Freshness only ever decides between families that already
+    # have enough evidence to be compared.
+    at_floor = [row for row in counted if sum(counted_pair(row) or (0, 0)) >= floor]
+    under_floor = [row for row in counted if sum(counted_pair(row) or (0, 0)) < floor]
+
     fresh: list[Mapping[str, Any]] = []
     stale: list[Mapping[str, Any]] = []
     undated: list[Mapping[str, Any]] = []
-    for row in counted:
+    for row in at_floor:
         behind = _sessions_stale(row, last_completed_session)
         if behind is None:
             undated.append(row)
@@ -303,8 +324,8 @@ def select_leader(
 
         return sorted(candidates, key=key)
 
-    eligible = _order([row for row in fresh if sum(counted_pair(row) or (0, 0)) >= floor])
-    thin = _order([row for row in fresh if sum(counted_pair(row) or (0, 0)) < floor])
+    eligible = _order(fresh)
+    thin = _order(under_floor)
 
     coverage: dict[str, Any] = {
         "kind": kind,
@@ -386,35 +407,28 @@ def select_leader(
     # Nothing eligible. Name the best live row that was kept out - as DISCOVERY,
     # with the gate that kept it out - then say which gate closed, in the order
     # a reader would ask.
-    if thin:
-        coverage["discovery_reason"] = "floor"
-    elif stale:
+    # A row that CLEARS the floor and is merely old is a better discovery note
+    # than a current row with three samples, so the stale and undated pools are
+    # preferred and the thin one is the last resort. The reason names whichever
+    # pool the shown row came from.
+    if stale:
         coverage["discovery_reason"] = "not_fresh"
     elif undated:
         coverage["discovery_reason"] = "no_session"
-    # Fresh-but-thin beats stale beats undated, so the row shown as discovery is
-    # always the one whose single missing gate is the one named beside it.
-    discovery_pool = _order(thin) or _order(stale) or _order(undated)
+    elif thin:
+        coverage["discovery_reason"] = "floor"
+    # **`min_n` binds the stale and undated pools too** (fix round): `stale` and
+    # `undated` are drawn from `at_floor` above, so a family with three samples
+    # can never be shown as a stale discovery under a floor of six - a floor
+    # that only holds when the clock is right is not a floor. `thin` is the one
+    # pool below the floor, by definition, and the sentence beside it says so.
+    discovery_pool = _order(stale) or _order(undated) or _order(thin)
     coverage["discovery_leader"] = discovery_pool[0] if discovery_pool else None
 
-    if thin:
-        wins, losses = counted_pair(thin[0]) or (0, 0)
-        return LeaderVerdict(
-            state="no_evidence",
-            leader=None,
-            runner_up=None,
-            reason=(
-                f"no live family reached the n={floor} floor; the best live row "
-                f"is {_describe(thin[0])} on n={wins + losses}, which is "
-                f"discovery, not a leader."
-            ),
-            as_of="",
-            policy_line=_policy_line(
-                thin[0], kind=kind, last_completed_session=last_completed_session
-            ),
-            coverage=coverage,
-        )
-
+    # The branches below are in the SAME order as the discovery pools above, so
+    # the reason a verdict gives always names the gate that kept out the row it
+    # is showing. Rows that cleared the floor come first: "measured enough, just
+    # old" is a different piece of news from "not measured enough yet".
     if stale or undated:
         source = (stale or undated)[0]
         if stale:
@@ -454,6 +468,24 @@ def select_leader(
             ),
             as_of="",
             policy_line="",
+            coverage=coverage,
+        )
+
+    if thin:
+        wins, losses = counted_pair(thin[0]) or (0, 0)
+        return LeaderVerdict(
+            state="no_evidence",
+            leader=None,
+            runner_up=None,
+            reason=(
+                f"no live family reached the n={floor} floor; the best live row "
+                f"is {_describe(thin[0])} on n={wins + losses}, which is "
+                f"discovery, not a leader."
+            ),
+            as_of="",
+            policy_line=_policy_line(
+                thin[0], kind=kind, last_completed_session=last_completed_session
+            ),
             coverage=coverage,
         )
 
@@ -506,20 +538,19 @@ def short_term_evidence_rows(
 ) -> list[dict[str, Any]]:
     """Short-horizon rows in the shape ``select_leader`` reads.
 
-    ``legacy.build_tracker_short_horizon_rows`` writes ``samples_2d`` and
-    ``win_rate_2d``, where the rate is a PLAIN unweighted mean of ``1.0 if
-    value > 0 else 0.0`` over exactly ``samples_2d`` values (``legacy.py``, the
-    ``win_rate_2d`` line in that builder). So ``round(rate * n)`` is EXACT here
-    - this is the legitimate case ``swing_headline.headline_from_rate``
-    documents, not the recency-weighted one ST2.1 removed. When the export ever
-    grows its own integer columns they win outright.
+    ``legacy.build_tracker_short_horizon_rows`` writes its OWN ``n_wins`` /
+    ``n_losses`` / ``n_flats`` / ``n_unmeasured`` and its own
+    ``latest_measured_session`` since the ST2 fix round (2026-09-06, the ask
+    answered yes), so a row from a current export is read exactly like a recent
+    row: counts, freshness, floor.
 
-    **It carries no session**, so ``latest_measured_session`` is empty and every
-    row is UNDATED. ``select_leader`` therefore never calls one of these a
-    leader; the panel renders the best of them as a labelled two-session
-    DISCOVERY reading. Giving the export a session column means editing
-    ``build_tracker_short_horizon_rows``, which the trader's ST2 decision does
-    not name - it is an ask, recorded in the ST2 handoff, not an edit.
+    **A row from an OLDER export has neither.** For those, and only those, the
+    pair is derived from ``win_rate_2d`` x ``samples_2d`` - the one case where
+    ``round(rate * n)`` is EXACT, because that rate is a plain unweighted mean
+    of ``1.0 if value > 0 else 0.0`` over exactly ``samples_2d`` values, which
+    is the legitimate use ``swing_headline.headline_from_rate`` documents and
+    not the recency-weighted one ST2.1 removed. Such a row still carries no
+    session, so it stays UNDATED and can only ever be shown as discovery.
     """
     from swing_headline import headline_from_rate
 
@@ -531,7 +562,8 @@ def short_term_evidence_rows(
         adapted.setdefault("namespace", "live")
         adapted["latest_measured_session"] = _text(row.get("latest_measured_session"))
         adapted["outcome_kind"] = _text(row.get("outcome_kind")) or "trade_r_close_2d"
-        adapted.setdefault("horizon_basis", "2 sessions after entry, close to close")
+        if not _text(adapted.get("horizon_basis")):
+            adapted["horizon_basis"] = "2 sessions after entry, close to close"
         if counted_pair(row) is None:
             record = headline_from_rate(
                 _text(row.get("setup_family")),

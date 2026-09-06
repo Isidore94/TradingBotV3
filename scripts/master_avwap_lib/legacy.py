@@ -779,6 +779,67 @@ STUDY_SETUP_MAX_RECORDS = 4000
 STUDY_DISCOVERY_MIN_CLOSED_EPISODES = 5
 TRACKER_RECENT_FAMILY_LOOKBACK_DAYS = 28
 TRACKER_RECENT_FAMILY_RECENCY_HALF_LIFE_DAYS = 14.0
+#: The ST2 count columns, in the order they are appended.
+#:
+#: They must land at the END of the SHIPPED header of each export, not at the
+#: end of the builder that first computes them - the recent rows gain
+#: `namespace` / `status` from `build_recent_setup_type_stat_rows` afterwards,
+#: and the setup-type rows gain `ranking_score` / `score_delta` from
+#: `rank_tracker_setup_type_rows` afterwards, so appending inside the inner
+#: builder wedged the new columns into the MIDDLE of the file a reader opens
+#: (index 26 of 31, and index 31 of 39). `_move_keys_to_end` is applied once
+#: per export, at the last hand that touches the row.
+TRACKER_RECENT_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "n_observations",
+    "n_episodes",
+    "n_symbols",
+    "n_entry_sessions",
+    "n_pending",
+    "win_rate_closed_unweighted",
+    "win_rate_closed_basis",
+    "outcome_kind",
+    "horizon_basis",
+    "latest_measured_session",
+)
+
+TRACKER_SETUP_TYPE_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "n_pending",
+    "win_rate",
+    "outcome_kind",
+)
+
+TRACKER_SHORT_HORIZON_COUNT_COLUMNS = (
+    "n_wins",
+    "n_losses",
+    "n_flats",
+    "n_unmeasured",
+    "outcome_kind",
+    "horizon_basis",
+    "latest_measured_session",
+)
+
+
+def _move_keys_to_end(row: dict, keys) -> dict:
+    """Re-insert ``keys`` at the end of ``row``, in order. Values untouched.
+
+    A dict preserves insertion order and `pd.DataFrame(rows)` writes the CSV
+    header in that order, so this is what decides where a column lands in the
+    file the trader opens.
+    """
+    for key in keys:
+        if key in row:
+            row[key] = row.pop(key)
+    return row
+
+
 #: WHAT a win on a tracker family / setup-type row IS (ST2, 2026-09-06).
 #:
 #: One string, stamped on both exports, because "win rate" without its outcome
@@ -9863,6 +9924,29 @@ def build_tracker_short_horizon_rows(
         avg_r_2d = mean(r2_values) if r2_values else None
         median_r_2d = median(r2_values) if r2_values else None
         win_rate_2d = mean(1.0 if value > 0 else 0.0 for value in r2_values) if r2_values else None
+        # ---- ST2 fix round: this export's OWN integer counts ---------------
+        #
+        # The trader's ST2 requirement is "true integer wins/losses/flats/
+        # unmeasured at EACH table's actual episode and outcome grain", and the
+        # ask to extend it here was answered yes on 2026-09-06. Purely additive:
+        # `win_rate_2d` above keeps its value, INCLUDING its treatment of an
+        # exactly-flat 2-session close as a zero flag - it is an existing
+        # column and moving it would be a scoring change. The counts below hold
+        # a flat apart, because a scratch is not a loss.
+        #
+        # `latest_measured_session` is the newest ENTRY session among the
+        # episodes that produced a readable 2-session close. Without it
+        # `working_lately.select_leader` could never call this block fresh, and
+        # the banner could only ever label it discovery.
+        n_wins_2d = sum(1 for value in r2_values if value > 0)
+        n_losses_2d = sum(1 for value in r2_values if value < 0)
+        n_flats_2d = sum(1 for value in r2_values if value == 0)
+        n_unmeasured_2d = len(rows_for_group) - len(r2_rows)
+        latest_measured_session = ""
+        for measured_row in r2_rows:
+            session = str(measured_row.get("scan_date") or "")
+            if session > latest_measured_session:
+                latest_measured_session = session
         short_term_score = None
         if avg_r_2d is not None:
             short_term_score = (
@@ -9896,6 +9980,16 @@ def build_tracker_short_horizon_rows(
                 "recent_avg_r_2d": mean(recent_r2_values) if recent_r2_values else None,
                 "short_term_score": short_term_score,
                 "sample_setups": "; ".join(sample_examples),
+                # ST2 fix round, additive AT THE END of the shipped header.
+                # Golden: `tests/fixtures/st2_short_horizon_golden.csv`, pinned
+                # from the code as it stood BEFORE these seven columns existed.
+                "n_wins": int(n_wins_2d),
+                "n_losses": int(n_losses_2d),
+                "n_flats": int(n_flats_2d),
+                "n_unmeasured": int(n_unmeasured_2d),
+                "outcome_kind": "trade_r_close_2d",
+                "horizon_basis": "2 sessions after entry, close to close",
+                "latest_measured_session": latest_measured_session,
             }
         )
 
@@ -10221,7 +10315,14 @@ def build_tracker_setup_type_rows(
             }
         )
 
-    return rank_tracker_setup_type_rows(setup_type_rows)
+    ranked = rank_tracker_setup_type_rows(setup_type_rows)
+    # ST2 fix round: `rank_tracker_setup_type_rows` appends `compression_flag`,
+    # `ranking_score`, `score_delta` and the rank columns, so the count columns
+    # are moved AFTER it and land at the end of the shipped header rather than
+    # in the middle of the file a reader opens.
+    for ranked_row in ranked:
+        _move_keys_to_end(ranked_row, TRACKER_SETUP_TYPE_COUNT_COLUMNS)
+    return ranked
 
 
 SCAN_FACTOR_HORIZONS = (1, 3, 5, 10)
@@ -12177,6 +12278,10 @@ def build_recent_setup_type_stat_rows(payload: dict) -> list[dict]:
         row["is_new_family"] = is_new
         row["is_rising_non_favorite"] = is_rising
         row["status"] = " ".join(part for part, flag in (("NEW", is_new), ("RISING", is_rising)) if flag)
+        # ST2 fix round: this is the LAST hand on the row, so the count columns
+        # are moved here and land at the end of the SHIPPED header rather than
+        # in the middle of the file, ahead of `namespace` and `status`.
+        _move_keys_to_end(row, TRACKER_RECENT_COUNT_COLUMNS)
 
     # Highlighted rows (with at least a little closed evidence) pin to the
     # top; below them the usual evidence-first ordering.
