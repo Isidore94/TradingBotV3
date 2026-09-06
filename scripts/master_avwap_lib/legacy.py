@@ -11815,6 +11815,7 @@ def export_bot_tier_tracker_views(
         "session_horizon_outcome_count": int(session_horizon.get("rows", 0) or 0),
         "session_horizon_measured_count": int(session_horizon.get("measured", 0) or 0),
         "session_horizon_dropped_duplicates": int(session_horizon.get("duplicates", 0) or 0),
+        "session_horizon_collapsed_same_session": int(session_horizon.get("collapsed", 0) or 0),
         "session_horizon_outcomes_path": str(session_horizon_path),
     }
 
@@ -11829,7 +11830,7 @@ def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
     """
     from datetime import datetime as _datetime
 
-    result = {"rows": 0, "measured": 0, "duplicates": 0}
+    result = {"rows": 0, "measured": 0, "duplicates": 0, "collapsed": 0}
     try:
         from .session_horizon_outcomes import (
             SESSION_HORIZON_OUTCOME_COLUMNS,
@@ -11851,10 +11852,17 @@ def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
         result["rows"] = len(built.rows)
         result["measured"] = sum(1 for row in built.rows if row.get("measured") is True)
         result["duplicates"] = int(built.dropped_duplicates)
+        result["collapsed"] = int(built.collapsed_same_session)
+        # BOTH numbers, under their own names: a same-session collapse is the
+        # desk having scanned again, and a duplicate is the input recording one
+        # scan twice. Reporting them as one number is how 14 honest re-scans
+        # became "475,492 duplicates".
         logging.info(
-            "Session-horizon outcomes exported %s row(s), %s measured, %s duplicate(s) dropped.",
+            "Session-horizon outcomes exported %s row(s), %s measured, "
+            "%s same-session scan row(s) collapsed, %s true duplicate(s) dropped.",
             result["rows"],
             result["measured"],
+            result["collapsed"],
             result["duplicates"],
         )
     except Exception:

@@ -20,10 +20,8 @@ row, every column and every value: re-selecting its future row would silently
 restate every number the tracker has produced, which is a scoring change the
 trader's 2026-09-06 prompt explicitly does not approve. The v2 rows go to their
 own file, `outcome_kind` says which is which, and `observation_id` is computed
-the SAME way for the same `(scan_row_id, horizon)`, so a v1 row joins its v2
-row EXACTLY - one to one, on `observation_id`. The v1 ids are a SUBSET, not an
-equal set: v1 collapses a day's scans of one symbol to the last of them, and v2
-keeps each scan as its own observation, because that is what its row id means.
+the SAME way for the same `(scan_row_id, horizon)`, so a v1 row joins its v2 row
+**one to one**: both keep the session's LAST scan row, so both name it the same.
 
 **It never fetches.** `closes_for(symbol)` is supplied by the caller and returns
 the COMPLETED daily closes already in hand - on the desk, the frames the scan
@@ -34,18 +32,30 @@ rows, never a network call inside an export (ground rule 8).
 at all, and a target session after it is `immature` - unmeasured with a reason,
 never the next available bar.
 
+**ONE ROW PER SESSION, and it says how many scans stand behind it.** The
+measurement for a `(symbol, side, scan_date, horizon)` is the same number for
+every scan the desk ran that day - it is the entry session's close against the
+target session's close, and neither moves because the desk looked again at
+11:15. So the build keeps the session's LAST scan row (v1's choice, off the same
+sort) and each row carries `collapsed_same_session`, the number of other scan
+rows it speaks for. That is NOT a duplicate count: `dropped_duplicates` stays
+the true `(scan_row_id, horizon)` repeat count and the two are reported
+separately, because "the desk scanned 15 times that day" and "the input recorded
+one scan twice" are different facts.
+
 **It is a ROLLING WINDOW, and it says so.** The build covers scan dates within
-`BUILD_WINDOW_SESSIONS` (3 x `LATELY_SESSIONS` = 60 exchange sessions) of
-`last_completed_session`. Unbounded it rewrites the whole feature history on
-every scan to change nothing outside the newest sessions, because a settled
-row's target close does not move. Measured on a copy of the live history
-(146,367 scan rows, 2026-09-04) through the export path: unbounded 584,776 rows,
-16.3 s, 162.1 MB; bounded 458,336 rows, 13.4 s, 127.5 MB, covering
-2026-07-30..2026-09-04. The saving is only ~22% because the desk's multi-scan
-days are the RECENT ones - 15 scans on 2026-08-31 alone - so most of the volume
-lives inside any window a reader could use. Rows older than the window are
-COUNTED (`excluded['outside_build_window']`), never silently skipped, and the
-exported file is a window rather than an archive.
+`BUILD_WINDOW_SESSIONS` (30 exchange sessions, 1.5x the widest window any
+surface reads) of `last_completed_session`, because a settled row's target close
+does not move and rewriting three years of them on every scan buys nothing.
+Measured through the export path on a copy of the live history (146,367 scan
+rows, 2026-09-04, `last_completed_session` 2026-09-03): **91,116 rows, 5.3 s,
+25.6 MB** at the shipped settings, against 110,308 rows / 5.7 s / 30.9 MB with
+the same collapse and no window, and 458,336 rows / 13.4 s / 127.5 MB before the
+collapse at a 60-session window. The collapse does most of the work (91,880 scan
+rows folded, 300 true duplicates); the window takes the last 17% and keeps the
+file from growing without bound. Rows older than the window are COUNTED
+(`excluded['outside_build_window']`), never silently skipped, and the exported
+file is a window rather than an archive.
 
 Shadow only: nothing here reaches a detector, a score, a rank that gates, an
 alert, a watchlist, Focus, the review queue or `review_policy.json`.
@@ -62,7 +72,6 @@ from typing import Any, Callable, Mapping
 import pandas as pd
 
 import market_calendar
-from evidence_stats import LATELY_SESSIONS
 from swing_evidence import OUTCOME_KIND_SESSION_V2
 
 #: What was compared with what. One string, on every row.
@@ -94,6 +103,10 @@ SESSION_HORIZON_OUTCOME_COLUMNS = [
     "priority_bucket",
     "setup_family",
     "favorite_zone",
+    # How many OTHER scan rows of the same (symbol, side, session) this row
+    # speaks for. The measurement does not change when the desk scans again, so
+    # the session has ONE row and it says how many looks stand behind it.
+    "collapsed_same_session",
 ]
 
 #: Why a row could not be measured. Every unmeasured row carries exactly one.
@@ -106,10 +119,13 @@ EXCLUDED_ENTRY_NOT_A_SESSION = "entry_not_a_session"
 EXCLUDED_ENTRY_OUT_OF_RANGE = "entry_outside_calendar_range"
 
 #: How far back the build reaches, in EXCHANGE SESSIONS ending at
-#: `last_completed_session`. Three times `LATELY_SESSIONS` - three times the
-#: widest window any surface reads - so a reader can always see its whole window
-#: plus two more, and no scan pays to rewrite three years of settled rows.
-BUILD_WINDOW_SESSIONS = 3 * LATELY_SESSIONS
+#: `last_completed_session`. 1.5x `LATELY_SESSIONS` (20) - half a window wider
+#: than the widest any surface reads - so every reader sees its whole window with
+#: room to spare, and no scan pays to rewrite three years of settled rows whose
+#: target closes cannot move. The trader's lead set this on 2026-09-06, after 60
+#: sessions without the same-session collapse measured 127.5 MB per scan for a
+#: file no reader opens yet.
+BUILD_WINDOW_SESSIONS = 30
 
 
 @dataclass(frozen=True)
@@ -117,10 +133,16 @@ class SessionHorizonBuild:
     """The rows, and everything that did not become one."""
 
     rows: list[dict] = field(default_factory=list)
-    #: `(scan_row_id, horizon)` pairs the input carried twice. Counted here
-    #: because `_prepare_scan_factor_history_frame` de-duplicates SILENTLY, and
-    #: a row nobody can reconcile is a row nobody can check.
+    #: TRUE REPEATS: `(scan_row_id, horizon)` pairs the input carried twice - the
+    #: same scan row recorded twice, which is a defect in the input. Counted
+    #: because `_prepare_scan_factor_history_frame` de-duplicates SILENTLY, and a
+    #: row nobody can reconcile is a row nobody can check.
     dropped_duplicates: int = 0
+    #: SCAN ROWS folded into a session's representative, because the measurement
+    #: is the same number for every scan that day. NOT a duplicate and never
+    #: counted as one. In scan rows, so it equals the sum of the row column over
+    #: any ONE horizon rather than over the whole file.
+    collapsed_same_session: int = 0
     #: Scan rows that produced no row at all, by reason.
     excluded: Counter = field(default_factory=Counter)
 
@@ -221,21 +243,32 @@ def build_session_horizon_observation_rows(
     * `target_close` = the bar close ON the target session exactly. Missing is
       `measured: False` with a reason - never the next bar, never a later scan.
 
-    **The row identity is `(scan_row_id, horizon)`, and nothing coarser.**
-    `_scan_factor_row_id` is `symbol:scan_date:run_id`, so two scans of the same
-    symbol on the same day are two OBSERVATIONS, not a duplicate - the desk ran
-    15 scans on 2026-08-31 and a `(symbol, scan_date)` key called 14 of each of
-    those a duplicate. Only a repeated `scan_row_id` is one, and the repeat is
-    counted rather than swallowed.
+    **A REPEAT and a COLLAPSE are different things, and each is counted under
+    its own name** (trader's lead, 2026-09-06). `_scan_factor_row_id` is
+    `symbol:scan_date:run_id`, so two scans of one symbol on one day are two
+    scan rows, NOT a duplicate - the desk ran 15 scans on 2026-08-31 and a
+    `(symbol, scan_date)` key called 14 of each of those a duplicate.
+
+    * `dropped_duplicates` is the true repeat count: the same `scan_row_id`
+      present twice, at `(scan_row_id, horizon)` grain. That is an input defect.
+    * `collapsed_same_session` is the honest name for the rest. THE MEASUREMENT
+      IS THE SAME NUMBER FOR EVERY SCAN THAT DAY - it is the entry session's
+      close against the target session's close, and neither moves because the
+      desk looked again at 11:15 - so the build keeps ONE row per
+      `(symbol, side, scan_date, horizon)`, the session's LAST scan row, exactly
+      as `_prepare_scan_factor_history_frame` chooses v1's. Every row says how
+      many scan rows it represents, and the builder totals it in SCAN ROWS.
+
+    Keeping the last row is also what restores the 1:1 join: v1's
+    `observation_id` for a session is that same row's.
 
     **`window_sessions` bounds the build to a ROLLING WINDOW** of scan dates
-    ending at `last_completed_session` - by default `3 x LATELY_SESSIONS` (60
-    exchange sessions), three times the widest window any surface reads. The
-    whole history was 146,367 scan rows into 109,584 output rows every scan, and
-    rewriting three years of settled observations to learn nothing new is a cost
-    the trader pays on every scan. Rows older than the window are counted in
-    `excluded['outside_build_window']`, never silently skipped. Pass `None` to
-    build everything.
+    ending at `last_completed_session` - by default `BUILD_WINDOW_SESSIONS`
+    (30 exchange sessions), 1.5x the widest window any surface reads. Rewriting
+    three years of settled observations on every scan is a cost the trader pays
+    for nothing: a settled row's target close does not move. Rows older than the
+    window are counted in `excluded['outside_build_window']`, never silently
+    skipped. Pass `None` to build everything.
     """
     from .legacy import (  # local: `legacy` is large and this module is imported lazily
         SCAN_FACTOR_HORIZONS,
@@ -269,8 +302,24 @@ def build_session_horizon_observation_rows(
         if frame.empty:
             return SessionHorizonBuild(excluded=excluded)
 
+    # THE TRUE REPEAT COUNT, taken before the collapse: the same `scan_row_id`
+    # present twice is the input recording one observation twice. It is a subset
+    # of what the collapse folds, and it is the only part of it that is a defect.
+    dropped_duplicates = (
+        len(frame) - int(frame["_scan_row_id"].nunique())
+    ) * len(normalized_horizons)
+
+    # THE COLLAPSE: one row per (symbol, side, scan date), the session's LAST -
+    # the same choice `_prepare_scan_factor_history_frame` makes for v1, off the
+    # same sort, so v1's `observation_id` is this row's.
+    group_keys = ["_symbol", "_side", "_scan_date_text"]
+    group_sizes = frame.groupby(group_keys, sort=False)["_scan_row_id"].transform("size")
+    frame = frame.assign(_collapsed_same_session=group_sizes.astype(int) - 1)
+    representatives = frame.drop_duplicates(group_keys, keep="last")
+    collapsed_same_session = len(frame) - len(representatives)
+    frame = representatives
+
     built: dict[tuple[str, int], dict] = {}
-    dropped_duplicates = 0
     entry_is_session: dict[date, bool | None] = {}
     target_cache: dict[tuple[date, int], date | None] = {}
     closes_cache: dict[str, Mapping[date, float] | None] = {}
@@ -334,6 +383,9 @@ def build_session_horizon_observation_rows(
                 "target_session": target_day.isoformat() if target_day else "",
                 "horizon_sessions": int(horizon),
                 "sessions_spanned": int(horizon),
+                # How many OTHER scan rows of this session this row speaks for.
+                # 0 on a day the desk scanned once; 14 on 2026-08-31.
+                "collapsed_same_session": int(entry.get("_collapsed_same_session") or 0),
                 "entry_close": float(entry_close),
                 "entry_close_source": entry_close_source,
                 "target_close": "",
@@ -366,12 +418,13 @@ def build_session_horizon_observation_rows(
                     row["side_return_pct"] = side_return_pct
                     row["favorable"] = bool(side_return_pct > 0)
                     row["measured"] = True
-            # THE identity: `(scan_row_id, horizon)`. A repeat is a duplicate and
-            # is counted; the LAST one wins, which is the order
-            # `_prepare_scan_factor_history_frame` keeps for the v1 file.
+            # THE FILE's identity is `(scan_row_id, horizon)` - that is what
+            # `observation_id` is, and two rows may never share one. After the
+            # collapse the only way to collide is one run recording a symbol on
+            # both sides; it is counted rather than silently overwritten.
             identity = (scan_row_id, int(horizon))
             if identity in built:
-                dropped_duplicates += 1
+                excluded["observation_id_collision"] += 1
             built[identity] = row
 
     rows = list(built.values())
@@ -383,7 +436,10 @@ def build_session_horizon_observation_rows(
         )
     )
     return SessionHorizonBuild(
-        rows=rows, dropped_duplicates=dropped_duplicates, excluded=excluded
+        rows=rows,
+        dropped_duplicates=dropped_duplicates,
+        collapsed_same_session=collapsed_same_session,
+        excluded=excluded,
     )
 
 

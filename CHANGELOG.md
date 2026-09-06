@@ -79,18 +79,22 @@ which is evidence and must not be loaded as context.
   horizon_sessions` by construction. A missing target bar is
   `no_bar_for_target_session` and NEVER the next bar or a later scan; a target
   past `last_completed_session` is `immature` and lands in `pending`, never in
-  the rate; a duplicated `(scan_row_id, horizon)` makes ONE row and is COUNTED
-  (`dropped_duplicates`). **The identity is the SCAN ROW, not the day**:
-  `_scan_factor_row_id` is `symbol:scan_date:run_id`, the desk ran 15 scans on
-  2026-08-31, and each is its own observation - a `(symbol, scan_date)` key
-  reported 475,492 duplicates over the live history where the truly repeated ids
-  number 75 (300 at four horizons). `observation_id` matches v1, so a v1 row
-  joins its v2 row one to one; the v1 ids are a SUBSET, because v1 collapses a
-  day's scans to the last of them. **The build is a declared ROLLING WINDOW** of
-  `3 x LATELY_SESSIONS` (60 sessions), measured through the export path on the
-  live history: 458,336 rows / 13.4 s / 127.5 MB bounded against 584,776 rows /
-  16.3 s / 162.1 MB unbounded, with what falls outside counted in
-  `excluded['outside_build_window']` rather than silently missing.
+  the rate. **A REPEAT and a COLLAPSE are counted separately, under their own
+  names.** `_scan_factor_row_id` is `symbol:scan_date:run_id` and the desk ran 15
+  scans on 2026-08-31, so a `(symbol, scan_date)` key reported 475,492
+  "duplicates" over the live history where the truly repeated ids number 75 (300
+  at four horizons): `dropped_duplicates` is now that true repeat count only.
+  The measurement is the same number for every scan that day - entry-session
+  close to target-session close - so the build keeps ONE row per
+  `(symbol, side, scan_date, horizon)`, the session's LAST scan row exactly as
+  v1 chooses it (so `observation_id` joins **1:1**), and both the row and the
+  builder report `collapsed_same_session`, how many scan rows stand behind it.
+  **The build is a declared ROLLING WINDOW** of `BUILD_WINDOW_SESSIONS` (30
+  sessions, 1.5x the widest window any reader uses), with what falls outside
+  counted in `excluded['outside_build_window']`. Measured through the export path
+  on the live history (146,367 scan rows): **91,116 rows / 5.3 s / 25.6 MB**,
+  against 110,308 / 5.7 s / 30.9 MB collapsed but unbounded and 458,336 / 13.4 s
+  / 127.5 MB before the collapse - 91,880 scan rows folded, 300 true duplicates.
   Written to `master_avwap_session_horizon_outcomes.csv` in the same export
   pass, from the daily frames the scan already holds
   (`closes_from_daily_frames`) - it never fetches, and the write is guarded so it

@@ -112,6 +112,10 @@ def test_the_export_writes_the_v2_file_beside_the_tier_outcomes(tmp_path, monkey
     assert rows, "the v2 export wrote no rows"
     assert result["session_horizon_outcome_count"] == len(rows)
     assert result["session_horizon_measured_count"] >= 1
+    # Both counts reach the caller under their own names, so the log line and
+    # the run result can never report a re-scan as a duplicate.
+    assert result["session_horizon_dropped_duplicates"] == 0
+    assert result["session_horizon_collapsed_same_session"] == 0
 
     for row in rows:
         assert row["outcome_kind"] == "favorable_direction_session_v2"
@@ -183,15 +187,22 @@ def test_a_failed_v2_write_never_costs_the_v1_exports(tmp_path, monkeypatch):
     assert paths["tier_outcomes_path"].exists()
 
 
-def test_two_scans_of_one_symbol_on_one_day_are_two_observations_not_a_duplicate():
+def test_two_scans_of_one_symbol_on_one_day_are_COLLAPSED_never_duplicates():
     """The desk ran FIFTEEN scans on 2026-08-31. None of them is a duplicate.
 
     Row identity is `_scan_factor_row_id` - `symbol:scan_date:run_id` - so two
-    scans of AAA on 2026-06-01 under different run ids are two observations of
-    two different moments, and each one recorded what it saw at the time.
-    Keying the de-duplication on `(symbol, scan_date)` instead reported 475,492
-    duplicates against 109,584 rows on the live history, where the truly
+    scans of AAA on 2026-06-01 under different run ids are two SCAN ROWS, not
+    one recorded twice. Keying de-duplication on `(symbol, scan_date)` reported
+    475,492 duplicates against 109,584 rows on the live history, where the truly
     repeated `scan_row_id`s numbered 75.
+
+    The trader's lead, 2026-09-06, on what to do with them: the MEASUREMENT is
+    the same number for every scan that day - entry-session close to
+    target-session close - so the file keeps ONE row per
+    `(symbol, side, scan_date, horizon)`, the session's LAST scan row, and says
+    how many looks stand behind it. **`collapsed_same_session`, never
+    `dropped_duplicates`**: the second number stays the count of a real input
+    defect, and 127.5 MB of re-scans per export was the cost of confusing them.
     """
     from master_avwap_lib.session_horizon_outcomes import (
         build_session_horizon_observation_rows,
@@ -211,22 +222,68 @@ def test_two_scans_of_one_symbol_on_one_day_are_two_observations_not_a_duplicate
         last_completed_session=date(2026, 6, 30),
     )
 
+    # NOT a duplicate. That number is reserved for a repeated `scan_row_id`.
     assert built.dropped_duplicates == 0
-    assert len(built.rows) == 2
-    assert len({row["scan_row_id"] for row in built.rows}) == 2
-    assert len({row["observation_id"] for row in built.rows}) == 2
-    # Both carry the same entry session and the same target session; what
-    # differs is which scan recorded them.
-    assert {row["target_session"] for row in built.rows} == {"2026-06-02"}
+    assert built.collapsed_same_session == 1
+    assert len(built.rows) == 1
+    row = built.rows[0]
+    assert row["collapsed_same_session"] == 1
+    # The session's LAST scan row is the representative - v1's choice too.
+    assert row["scan_row_id"].endswith("run-2026-06-01-afternoon")
+    assert row["target_session"] == "2026-06-02"
+
+
+def test_the_collapsed_row_is_the_one_v1_names_so_the_files_join_1_to_1():
+    """v1's `observation_id` IS the v2 row's, on a day the desk scanned twice.
+
+    Both keep the session's last scan row off the same sort, so the join is one
+    to one rather than one to many - which is what makes `outcome_kind` a
+    comparison between two measurements of the same decision.
+    """
+    from master_avwap_lib.session_horizon_outcomes import (
+        build_session_horizon_observation_rows,
+    )
+
+    rows = []
+    for index, day in enumerate(JUNE_SESSIONS[:6]):
+        rows.append(_scan_row("JOIN", day, 100.0 + index))
+        second = dict(rows[-1])
+        second["run_id"] = f"run-{day}-second"
+        second["run_timestamp"] = f"{day}T16:00:00"
+        second["last_close"] = 100.0 + index
+        rows.append(second)
+    history = pd.DataFrame(rows)
+    closes = {
+        date.fromisoformat(day): 100.0 + index for index, day in enumerate(JUNE_SESSIONS)
+    }
+
+    v1 = legacy.build_scan_factor_observation_rows(history, horizons=(1,))
+    built = build_session_horizon_observation_rows(
+        history,
+        lambda symbol: closes,
+        horizons=(1,),
+        last_completed_session=date(2026, 6, 30),
+    )
+
+    v1_ids = [row["observation_id"] for row in v1]
+    v2_ids = [row["observation_id"] for row in built.rows]
+    assert len(v1_ids) == len(set(v1_ids))
+    assert len(v2_ids) == len(set(v2_ids))
+    # ONE TO ONE on the sessions both cover: v1 has no row for the last session
+    # (no later scan row to compare against), v2 has no row for a target that
+    # has not closed - neither is a join failure.
+    assert set(v1_ids).issubset(set(v2_ids))
+    assert built.collapsed_same_session == 6
+    assert all(row["collapsed_same_session"] == 1 for row in built.rows)
 
 
 def test_the_build_is_a_rolling_window_and_counts_what_it_left_out():
-    """Scan dates older than 3 x LATELY_SESSIONS are excluded, and COUNTED.
+    """Scan dates older than the declared window are excluded, and COUNTED.
 
-    Unbounded, this rewrote 146,367 scan rows into 109,584 output rows on every
-    scan (165 s, 33.8 MB) to change nothing outside the newest sessions. The
-    window is declared, and what falls outside it is reported rather than
-    silently missing.
+    Unbounded, this rewrote the whole feature history on every scan to change
+    nothing outside the newest sessions, because a settled row's target close
+    does not move. The window is declared, and what falls outside it is reported
+    rather than silently missing.
     """
     from evidence_stats import LATELY_SESSIONS
     from master_avwap_lib.session_horizon_outcomes import (
@@ -234,7 +291,9 @@ def test_the_build_is_a_rolling_window_and_counts_what_it_left_out():
         build_session_horizon_observation_rows,
     )
 
-    assert BUILD_WINDOW_SESSIONS == 3 * LATELY_SESSIONS
+    # 1.5x the widest window any reader uses - the lead's number, 2026-09-06.
+    assert BUILD_WINDOW_SESSIONS == 30
+    assert BUILD_WINDOW_SESSIONS > LATELY_SESSIONS
 
     history = pd.DataFrame(
         [

@@ -1992,25 +1992,33 @@ and nothing said so.
   (>=52%, n=90)` for the first and is unchanged for the second; the setups table's header
   is `Family favorable %` with the column key `family_win_rate` untouched, because the
   panel's widths, squeeze order and sort handler are pinned to the key.
-- **The v2 row identity is `(scan_row_id, horizon)`, and nothing coarser.**
+- **A REPEAT and a COLLAPSE are different facts and are counted under different names.**
   `_scan_factor_row_id` is `symbol:scan_date:run_id`, so two scans of one symbol on one
-  day are two OBSERVATIONS - each recorded what it saw at the time. The first build keyed
-  de-duplication on `(symbol, scan_date)` the way the v1 frame prep does, and on the live
-  history (146,367 scan rows) that reported **475,492 duplicates against 109,584 rows**
-  when the truly repeated `scan_row_id`s number **75** (300 at four horizons): the desk
-  ran 15 scans on 2026-08-31 and the counter called 14 of each of them a duplicate.
-  `_prepare_session_horizon_frame` is therefore the v1 preparation MINUS the collapse -
-  same validity filter, same sort, same row id - and the file is at the scan-row grain.
-  A four-figure `dropped_duplicates` in the log means the grain has been collapsed again.
+  day are two SCAN ROWS, not one recorded twice. The first build keyed de-duplication on
+  `(symbol, scan_date)` the way the v1 frame prep does, and on the live history (146,367
+  scan rows) that reported **475,492 duplicates against 109,584 rows** when the truly
+  repeated `scan_row_id`s number **75** (300 at four horizons): the desk ran 15 scans on
+  2026-08-31 and the counter called 14 of each of them a duplicate. So
+  `dropped_duplicates` is the true `(scan_row_id, horizon)` repeat count and nothing else.
+- **One row per session, and it says how many scans stand behind it** (the trader's lead,
+  2026-09-06, on a 127.5 MB-per-scan export: *"the v2 MEASUREMENT for one (symbol, side,
+  scan_date, horizon) is the same number for every scan run that day"*). It is the entry
+  session's close against the target session's close; neither moves because the desk
+  looked again at 11:15. The build keeps ONE row per `(symbol, side, scan_date, horizon)`,
+  the session's LAST scan row - the same choice `_prepare_scan_factor_history_frame` makes
+  for v1, off the same sort, which is what makes the two files join **1:1** on
+  `observation_id` - and `collapsed_same_session` carries the fold on the row AND as a
+  builder total in SCAN ROWS. The log line names both counts; reporting them as one is how
+  fourteen honest re-scans became "475,492 duplicates".
 - **The v2 build is a ROLLING WINDOW and the file is not an archive.** It covers scan
-  dates within `BUILD_WINDOW_SESSIONS` (3 x `LATELY_SESSIONS` = 60 exchange sessions,
-  three times the widest window any surface reads) of `last_completed_session`, and what
-  falls outside is COUNTED in `excluded['outside_build_window']`. Measured through the
-  export path on a copy of the live history: 458,336 rows / 13.4 s / 127.5 MB bounded
-  (2026-07-30..2026-09-04) against 584,776 rows / 16.3 s / 162.1 MB unbounded. **The
-  saving is only ~22%**, because the desk's multi-scan days are the recent ones, so most
-  of the volume sits inside any window a reader could use; a settled row's target close
-  does not move, which is what makes the older two thirds pure rewrite.
+  dates within `BUILD_WINDOW_SESSIONS` (30 exchange sessions, 1.5x the widest window any
+  surface reads) of `last_completed_session`, and what falls outside is COUNTED in
+  `excluded['outside_build_window']`. Measured through the export path on a copy of the
+  live history at the shipped settings: **91,116 rows / 5.3 s / 25.6 MB** (91,880 scan
+  rows folded, 300 true duplicates), against 110,308 / 5.7 s / 30.9 MB collapsed but
+  unbounded and 458,336 / 13.4 s / 127.5 MB at the scan-row grain over 60 sessions. The
+  collapse does most of the work and the window takes the last 17%; a settled row's target
+  close does not move, which is what makes an unbounded rebuild pure rewrite.
 - **v2 counts sessions, and it is a second file, never a replacement.**
   `master_avwap_lib/session_horizon_outcomes.py` walks the exchange calendar forward from
   the entry session, reads the bar ON the target session, and answers
