@@ -233,6 +233,16 @@ an earlier cutoff or a longer lookback walks straight into them. The row therefo
    (golden). Pinned by `test_v2_never_grades_an_episode_whose_representative_is_pending`, red on
    `37e63b9c`.
 
+**RE-REVIEW ROUND (GO), one edit.** `tracker_selection_compare` now REFUSES a `--tracker` whose
+setups carry `_scoring_outcome_summary` and no `scenarios` - a scoring snapshot is not a tracker,
+and on one v1 answers every setup from a cache the cutoff never touched (4 projections graded 3-1)
+while v2 zeroes, so the report reads "v2 is broken" when the input was the wrong file. One line to
+stderr, exit 2, nothing written. And `_row_is_unmeasurable` applies under BOTH policies for an
+`as_of_session` replay, so a v1 replay of a compact record grades nothing either; the default read
+(v1, no `as_of`) is untouched because `unknown_compact` is a status only the bypass path can write,
+and the default there still names its gap `no_representative_in_population`. Both pinned in
+`tests/test_st4_compact_projection.py` (now 6 cases) and both red before the edit.
+
 Advisories done: the `--tracker` / `--out` refusals and the never-overwrite stamping are asserted
 on the file COUNT too (two runs in one second write a second `-2` pair; a refused run writes
 nothing); `undatable_exit_in_population` and `unknown_compact_in_population` joined

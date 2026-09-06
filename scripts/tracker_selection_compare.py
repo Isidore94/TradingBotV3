@@ -285,6 +285,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"REFUSING: {tracker_path} carries no `setups` mapping.", file=sys.stderr)
         return 2
 
+    # A SCORING SNAPSHOT IS NOT A TRACKER, and comparing on one produces a
+    # confident lie. `master_avwap_tracker_scoring_snapshot.json` holds compact
+    # projections: `_scoring_outcome_summary` and NO `scenarios`. v1 would
+    # answer every setup straight out of that cache - a cache the `as_of`
+    # cutoff never touched, so the replay would grade trades it could not see -
+    # while v2 cannot evaluate a scenario-less record at all and zeroes. The
+    # output would read "v2 is broken" when the input was simply the wrong file.
+    compact_projections = sum(
+        1
+        for setup in setups.values()
+        if isinstance(setup, dict)
+        and "_scoring_outcome_summary" in setup
+        and not isinstance(setup.get("scenarios"), dict)
+    )
+    if compact_projections:
+        print(
+            f"REFUSING: {tracker_path} holds {compact_projections} COMPACT scoring "
+            "projections (a `_scoring_outcome_summary` and no `scenarios`) - that is "
+            "master_avwap_tracker_scoring_snapshot.json, not a setup tracker, and a "
+            "policy comparison on it is meaningless. Pass a COPY of "
+            "master_avwap_setup_tracker.json or an extract of the SQLite mirror.",
+            file=sys.stderr,
+        )
+        return 2
+
     data_session = str((payload.get("data_session") or "")).strip()
     as_of_session = str(args.as_of or "").strip() or data_session or None
     reference_day = None

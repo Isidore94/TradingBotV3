@@ -7772,19 +7772,32 @@ def build_recent_tracker_setup_family_rows(
     # representative and were being graded anyway (252 losses, 19 wins).
     is_v2 = resolved_policy == selection_policy_lib.SELECTION_FIRST_ACTIONABLE_V2
 
+    def _row_is_unmeasurable(row: dict) -> bool:
+        """Neither graded nor pending: this build could not evaluate the row.
+
+        Only ever true of a COMPACT record whose `_scoring_outcome_summary` is
+        the whole story - there are no scenarios to read - and only on a build
+        that had to look at the scenarios: **the challenger, OR a replay under
+        EITHER policy**. A v1 replay is the case that made this matter: v1
+        answers such a record straight out of the cache, and that cache was
+        written without the cutoff, so the replay would grade trades it could
+        not have seen. Counting it as pending would be the other lie - it says
+        "still running" about a trade that finished.
+
+        The DEFAULT read (v1, no `as_of`) never reaches here: it returns the
+        cache verbatim and `unknown_compact` is a status only the bypass path
+        can write, so every shipped number is untouched.
+        """
+        if str(row.get("representative_status") or "") != "unknown_compact":
+            return False
+        return is_v2 or as_of_day is not None
+
     def _row_is_graded(row: dict) -> bool:
+        if _row_is_unmeasurable(row):
+            return False
         if is_v2:
             return str(row.get("representative_status") or "") == "closed"
         return int(row.get("closed_setups", 0) or 0) > 0
-
-    def _row_is_unmeasurable(row: dict) -> bool:
-        """Neither graded nor pending: the policy could not be evaluated.
-
-        Only reachable under v2, and only on a COMPACT projection whose
-        `_scoring_outcome_summary` is the whole record. Counting it as pending
-        would report a finished trade as still running.
-        """
-        return is_v2 and str(row.get("representative_status") or "") == "unknown_compact"
 
     baseline_groups = {}
     for row in recent_rows:

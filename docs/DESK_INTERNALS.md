@@ -2179,6 +2179,21 @@ different facts and only one of them is a trade still on. Related: a `(side, buc
 whose every record was excluded produces NO row, so the build-level `fully_excluded_groups` is
 stamped on every row - the one number this accounting could otherwise lose with the group.
 
+### A scoring snapshot is not a tracker, and the tool says so
+
+The same compact-projection fact has a third edge, found on the re-review. Hand
+`tracker_selection_compare` a copy of `master_avwap_tracker_scoring_snapshot.json` and the two
+policies disagree for a reason that has nothing to do with either: v1 answers every setup out of
+the cached summary - a cache written with no cutoff, so a replay grades trades it could not have
+seen - while v2 cannot evaluate a scenario-less record and zeroes. Measured on the four-projection
+fixture: `v1 episodes 4 pending 0 wins 3 losses 1` beside `v2 episodes 4 pending 0 wins 0 losses
+0`. That report reads "v2 is broken" when the input was simply the wrong file. The CLI now counts
+setups carrying `_scoring_outcome_summary` with no `scenarios`, prints one line naming the
+snapshot, exits 2 and writes nothing. And `_row_is_unmeasurable` applies under **both** policies
+whenever an `as_of_session` is given, so a v1 replay of a compact record grades nothing either -
+the default read (v1, no `as_of`) is untouched, because `unknown_compact` is a status only the
+bypass path can write.
+
 **Live gate #78.** Nothing here promotes. The desk's next persisted tracker write must leave
 `selection_policy = closed_first_v1` on every recent family row AND leave the scan's
 `recent_tracker_score_delta` / `setup_type_score_delta` nonzero (32 / 74 on the 2026-09-05

@@ -1422,6 +1422,15 @@ a cleanup."*
   names `undatable_exit_in_population=N` instead of inflating pending. `fully_excluded_groups` is
   stamped on every row because a `(side, bucket, family)` whose every record was excluded produces
   no row at all.
+- **A scoring snapshot is not a tracker** (re-review). Handed a copy of
+  `master_avwap_tracker_scoring_snapshot.json`, `tracker_selection_compare` would have produced a
+  confident lie: v1 answers every setup from a cache the cutoff never touched (4 projections graded
+  3-1) while v2 zeroes on the same input, so the report reads "v2 is broken" when the input was the
+  wrong file. The CLI now counts setups carrying `_scoring_outcome_summary` with no `scenarios`,
+  prints one line naming the snapshot, exits 2 and writes nothing. `_row_is_unmeasurable` applies
+  under **both** policies for an `as_of_session` replay, so a v1 replay of a compact record grades
+  nothing either; the default read (v1, no `as_of`) is untouched because `unknown_compact` is a
+  status only the bypass path can write.
 
 ### 2026-09-06 - ST2: real integer counts at each table's own grain, and ONE honest leader (branch `claude/st2-real-counts`, not merged)
 

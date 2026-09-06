@@ -212,3 +212,107 @@ def test_a_challenger_read_of_a_compact_record_is_named_not_empty():
         assert int(row["n_pending"]) == 0
         assert f"unknown_compact_in_population={n_episodes}" in str(row["excluded_reasons"])
         assert int(row["n_wins"]) == 0 and int(row["n_losses"]) == 0
+
+
+def test_a_v1_REPLAY_of_a_compact_record_grades_nothing_either():
+    """Re-review round.
+
+    v1 answers a compact record straight out of its cached summary, and that
+    cache was written WITHOUT any cutoff. So a v1 replay would have graded
+    trades the `as_of_session` could not have seen - a confident wrong number,
+    and the mirror image of v2 zeroing on the same input. `unknown_compact` is
+    therefore unmeasurable under BOTH policies whenever an `as_of_session` is
+    given.
+
+    The DEFAULT read (v1, no `as_of`) is untouched: it returns the cache
+    verbatim, so `unknown_compact` never appears and every shipped number
+    stands - the assertions at the end are that guard.
+    """
+    population = _snapshot_population()
+    kwargs = {"reference_date": REFERENCE_DATE, "lookback_days": 45}
+
+    replayed = m.build_recent_tracker_setup_family_rows(
+        population, as_of_session="2026-01-20", **kwargs
+    )
+    assert replayed, "a replay must still produce rows, just ungraded ones"
+    for row in replayed:
+        n_episodes = int(row["n_episodes"])
+        assert row["selection_policy"] == selection_policy.SELECTION_CLOSED_FIRST_V1
+        assert int(row["n_wins"]) == 0, "a v1 replay may not grade from an uncut cache"
+        assert int(row["n_losses"]) == 0
+        assert int(row["closed_setups"]) == 0
+        assert int(row["n_pending"]) == 0, "not pending either - it is unmeasurable"
+        assert f"unknown_compact_in_population={n_episodes}" in str(row["excluded_reasons"])
+
+    # ...and the default build over the same population still grades normally.
+    default = m.build_recent_tracker_setup_family_rows(population, **kwargs)
+    assert sum(int(row["n_wins"]) for row in default) == 3
+    assert sum(int(row["n_losses"]) for row in default) == 1
+    for row in default:
+        # A pre-ST4 cache carries no `representative_status`, so the default
+        # read names the gap as `no_representative_in_population` - counted,
+        # kept, graded, and NEVER `unknown_compact`, which only the bypass path
+        # can write. This is the line that says the default did not move.
+        assert "unknown_compact" not in str(row["excluded_reasons"])
+        assert (
+            f"no_representative_in_population={int(row['n_episodes'])}"
+            in str(row["excluded_reasons"])
+        )
+        assert int(row["n_excluded"]) == 0, "a named population fact is not a drop"
+
+
+def test_the_compare_cli_refuses_a_scoring_snapshot(tmp_path, capsys):
+    """Re-review round: a scoring snapshot is not a tracker.
+
+    Handed one, v1 would answer every setup from a cache the cutoff never
+    touched while v2 zeroes, and the report would read "v2 is broken" when the
+    input was the wrong file. Refuse it by NAME, before anything is written.
+    """
+    import json
+
+    import tracker_selection_compare as compare
+
+    snapshot = tmp_path / "master_avwap_tracker_scoring_snapshot.json"
+    snapshot.write_text(
+        json.dumps({"data_session": "2026-02-02", "setups": _snapshot_population()}),
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "out"
+
+    rc = compare.main(["--tracker", str(snapshot), "--out", str(out_dir)])
+
+    assert rc == 2
+    assert not out_dir.exists(), "a refused run writes nothing"
+    message = capsys.readouterr().err
+    assert "REFUSING" in message
+    assert "_scoring_outcome_summary" in message
+    assert "master_avwap_tracker_scoring_snapshot.json" in message
+
+    # A real tracker record - scenarios present - is still accepted.
+    tracker = tmp_path / "tracker.json"
+    real = {
+        "s": {
+            "symbol": "AAPL", "side": "LONG", "anchor_date": "2026-01-20",
+            "scan_date": "2026-01-23", "priority_bucket": "tracked",
+            "setup_family": "post_earnings_52w_break", "setup_status": "CLOSED",
+            "favorite_signals": [],
+            "scenarios": {
+                "a": {
+                    "scenario_id": "a", "stop_reference_label": "LOWER_1",
+                    "exit_template_id": "full_band2", "framework_family": "baseline",
+                    "framework_version": "baseline", "experimental": False,
+                    "tradeable": True, "status": "TARGET_HIT", "total_r": 1.1,
+                    "days_held": 4, "entry_price": 100.0,
+                    "initial_risk_per_share": 5.0, "initial_risk_usd": 500.0,
+                    "direction": 1.0,
+                    "events": [{"trade_date": "2026-01-29", "reason": "FINAL_TARGET",
+                                "price": 110.0, "shares": 100}],
+                }
+            },
+        }
+    }
+    tracker.write_text(
+        json.dumps({"data_session": "2026-02-02", "setups": real}), encoding="utf-8"
+    )
+    assert compare.main(["--tracker", str(tracker), "--out", str(out_dir)]) == 0
+    assert len(list(out_dir.iterdir())) == 2
