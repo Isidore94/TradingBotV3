@@ -142,6 +142,17 @@ class JournalPanel(QFrame):
         self.tabs.setCurrentWidget(self.trades_tab)
         self.trades_tab.reload()
 
+    def show_trade(self, trade_id: str) -> bool:
+        """Open the Trades tab on one trade. ST5.5's referral door.
+
+        Weekend Prep's "Missing planned risk" list ends here, on the tab where
+        the trader types the plan. This panel does not write `planned_risk` -
+        `TradesTab` already owns that seam through `save_risk_fields`, and this
+        only chooses the row.
+        """
+        self.tabs.setCurrentWidget(self.trades_tab)
+        return bool(self.trades_tab.select_trade(trade_id))
+
     def _set_status(self, message: str) -> None:
         self.statusChanged.emit(f"Journal: {message}")
 

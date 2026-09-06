@@ -969,6 +969,11 @@ def build_analytics_summary(
     #: setups" is otherwise two answers to the same question with nothing to
     #: separate them.
     summary["provisional_groups"] = ["provisional setups"]
+    # ST5.4: the four never-pooled populations, the coverage line and the
+    # refusal to name a best setup, computed over the SAME rows this summary
+    # already holds. Additive - every existing key is untouched - and it costs
+    # one pass in memory, so the tab that renders it opens no second query.
+    summary["personal_evidence"] = personal_evidence_summary(trades)
     return summary
 
 
