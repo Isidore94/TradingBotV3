@@ -1653,6 +1653,10 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
         recent_rows=panel.recent_type_rows,
         playbook_rows=panel.playbook_rows,
         short_term_min_samples=SHORT_TERM_MIN_SAMPLES,
+        # ST6.4: the desk's shared snapshot, so this card and the banner three
+        # lines below it render the SAME verdict. Empty means the panel read,
+        # which the banner labels `panel read` for the same reason.
+        working_lately=getattr(panel, "_working_lately_snapshot", None) or None,
     )
     parts.append(f"<div style='border:1px solid {favorite_c}; padding:7px; margin-bottom:7px'>")
     parts.append(f"<h3 style='margin:0; color:{favorite_c}'>{_esc(plain['headline'])}</h3><ul>")

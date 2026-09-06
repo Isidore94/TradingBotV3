@@ -155,6 +155,88 @@ which is evidence and must not be loaded as context.
   plain-English block, which had the same defect three lines higher up. **The
   floor is judged BEFORE freshness**, and freshness is measured on the ENTRY
   session with the rule stated in words (`FRESHNESS_SENTENCE`).
+- **ONE Working-lately snapshot, and four surfaces print its id** (ST6,
+  2026-09-06; plan.md Phase 0.14 V1 item 4 and V2 item 3). `working_lately`
+  gained `EvidenceCell` / `EvidenceSnapshot` / `build_snapshot`, and
+  `build_snapshot` is PURE - no file, no thread, no clock that decides anything;
+  the caller reads and hands the rows in. **`snapshot_id` is a sha1 over the
+  SORTED cell tuples, the declared policy lines and `as_of` and nothing else** -
+  not `built_at`, not a source's mtime, not the verdicts - so a half-hourly tick
+  cannot move it and the events file stays a record of the evidence rather than
+  a log of the timer. Three kinds (`swing_trade_r` from ST2's recent rows,
+  `swing_favorable` from ST1's `read_eligible_rows`, `daytrade_held_run` from
+  `held_run_score.dimension_summaries`, SIDED cells only - the pooled `all` row
+  is the same episodes under a second name) get three verdicts and are **never
+  pooled**: `pool_cells` RAISES across kind, side or outcome kind and names the
+  axis. Each cell states its side/family, population, outcome version, knowledge
+  basis, horizon IN ITS OWN UNIT, window, latest measured session, maturity and
+  coverage counts, name/day concentration, statistic and uncertainty.
+  **Dependence is answered by REFUSING, not by a new interval**: a cell whose
+  top symbol or top session supplies MORE than `CONCENTRATION_LIMIT` (0.5) of
+  its own sample cannot lead (`concentrated`), and the multiple-testing exposure
+  is PRINTED - `observational leader among K cells` - rather than corrected
+  away. `LEADER_PERSISTENCE_SNAPSHOTS` (2) holds a NEW leader until it has led
+  in two snapshots with a DISTINCT `as_of`; both numbers were declared
+  2026-09-06 before any forward evaluation. Nothing is called proven.
+- **The snapshot is built off the Qt thread and persisted small** (ST6.3).
+  `scripts/ui/services/working_lately_service.py` is owned by `MainWindow`
+  (four surfaces read it), reads the three sources on ONE worker and writes
+  `%LOCALAPPDATA%\TradingBotV3\working_lately\snapshot_latest.json`
+  (temp-and-rename) plus an append-only `leader_change_events.jsonl`. The GUI
+  slot emits and does nothing else. Four triggers - the first `showEvent`, the
+  day roll, `scan_service.finished` and a 30-minute timer - fold through ONE
+  `SignalCoalescer`, and a build in flight is single-flight. An event is
+  `{ts, kind, prior_leader, new_leader, prior_snapshot_id, new_snapshot_id,
+  cause, as_of}`, written when the leader NAME moved or the STATE moved with a
+  name on one side, deduplicated on
+  `(kind, prior_leader, new_leader, new_snapshot_id)` so a restart replays
+  nothing. **Cause precedence is REFUSAL-FIRST**: `lost_coverage`,
+  `corrected_data`, `window_rollover`, `new_outcomes` - `as_of` moves on nearly
+  every build, so checking the rollover first would make the two interesting
+  causes unreachable. A `lost_coverage` event carries the SAME name in both
+  slots; a session bucket that merely EMPTIED while the source's total held
+  steady is a window moving forward, not a correction.
+- **Held x Ran carries its identities, and stays name-selection evidence**
+  (ST6.2). `held_run_score.Segment` gained `symbols_of_held` /
+  `sessions_of_held`, appended in the same breath as each MFE value (parallel is
+  the contract - `session_block_bootstrap` refuses when the lists differ in
+  length), and `summary()` passes them to `evidence_stats.summarize`. Before
+  this the call carried the VALUES ALONE, so `concentration.by_symbol`,
+  `concentration.by_session` and the session-block `bootstrap` came back
+  UNMEASURED for every held x ran cell the desk has ever shown - the day-trade
+  headline had no way to say it was one name six times. The summary also gained
+  `n_floor`, `n_symbols`, `n_sessions` and `latest_session`. The cell's
+  `statistic_name` is `held_run_score (P(held 30m) x trimmed MFE_R)` and a test
+  asserts the dataclass has NO P&L field. `evidence_stats._concentration` now
+  rounds a share to ten places rather than four: the share is a DECISION input
+  here (compared against a declared 0.5 and hashed into a snapshot id) and a
+  display rounding inside a decision is how a cell sitting on the limit lands on
+  the wrong side of it.
+- **The priority switch is BUILT, and it only reorders** (ST6.5). The
+  `local_settings` key `prioritise_working_lately`, default OFF, READ AT SORT
+  TIME and never at write time. ON, the M5 bar, the WAITING review list (sorted
+  where `_advance_review_queue` picks the next chart, never where a row is
+  written) and the Master AVWAP setups table are stably re-ordered by the
+  snapshot's own verdict order, ties keeping arrival order and the report's own
+  ranking as the secondary key. The tier gate, movers-only and the repetition
+  fold are untouched; no row is hidden, parked, muted or dropped; the
+  identical-visible-rows test CLAUDE.md owed WITH the switch exists and checks
+  the fold counts and the hidden set byte-for-byte both ways.
+- **The desk surface, and the AWAY Recap** (ST6.4/ST6.6). A one-line **Working
+  lately** strip sits at the TOP of the M5 alerts column - mounted INSIDE
+  `M5AlertBar` rather than as a third child of the saved two-pane splitter -
+  with every cell in its tooltip, and clicks through to the Setup Tracker. The
+  tracker banner renders the SHARED payload and labels its own CSV pass `panel
+  read`; the Summary card three lines above it takes the same verdict. Weekend
+  Prep prints the line as its HEAD line and only when a snapshot exists (the
+  card's eight-line cap holds). The AWAY Recap leads its summary with the line
+  and that session's leader changes WITH THEIR CAUSE, lists every ranked swing
+  row (there was no top-five cap here to remove - the cap is the PHONE
+  digest's), and carries the `alert_cell` + held x ran suffix the M5 row already
+  showed in an eighth column inserted BEFORE the chart affordance.
+  `autopilot_today.txt` gains `== WORKING LATELY ==` in its EXISTING body:
+  **no new push**, AWAY-only routine output, already inside the rule, and an
+  absent snapshot is an ABSENT SECTION.
 - **MFE after a held level leads every DAY-TRADE surface** (V3 item 2, WIRED by
   R4 A9/A10). The Day Trade Tracker leads with **Held 30m** and Held x Ran and
   opens sorted by the second; the tier statistics stay beside them. **One
@@ -1354,6 +1436,39 @@ sessions of forward accrual start at its first measured row. Their remaining evi
 gates are in `plan.md`.
 
 ## Recent changes (the last two build days)
+
+### 2026-09-06 - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders (branch `claude/st6-working-lately`, not merged)
+
+Trader: *"Implement the already-owed desk Working-lately surface, priority switch, and Away Recap
+around one deterministic evidence snapshot ... Reuse and correct the existing best-now banner rather
+than leaving competing leaders ... Any new confidence calculation must account for shared sessions
+and overlapping holdings and must be validated; ordinary Wilson bounds alone do not solve dependence
+or multiple testing ... Choose any margin/persistence rule before inspecting its forward evaluation.
+The first release can report an observational leader or no clear leader; do not call every winner
+proven."*
+
+Closes plan.md Phase 0.14 **V1 item 4** (Working-lately + priority switch) and **V2 item 3** (AWAY
+Recap) - the last two "V4, NOT BUILT" rows apart from Weekend Prep's takes table. Live gate **#80**
+is owed at the first DESK session after merge.
+
+- **No new confidence calculation was written, on purpose.** The trader's own condition made one
+  unaffordable, so dependence is answered by REFUSING (`CONCENTRATION_LIMIT` 0.5) and multiple
+  testing by PRINTING (`observational leader among K cells`). `LEADER_PERSISTENCE_SNAPSHOTS` = 2
+  and the concentration limit were declared before any forward evaluation and neither was tuned.
+- **The day-trade headline had never measured its own concentration.**
+  `held_run_score.py`'s `summarize` call carried no `symbols=` / `sessions=`, so every held x ran
+  cell the desk has shown came back with an unmeasured concentration and an unmeasured
+  session-block bootstrap. The episodes have carried the identities since V1; this hands them over.
+- **The banner and the card cannot disagree, in either direction.** ST2's fix round put the Setup
+  Tracker's Summary card and its banner on one `select_leader`; ST6 would have split them again the
+  first time the persistence rule held a new leader back, so the card takes the SHARED verdict when
+  one is present. `research_explanations.verdict_sentence` is the split-out renderer both use.
+- **Fail-before-fix, proven twice.** The tester's eleven (`tests/test_st6_working_lately.py`,
+  committed red at `1323d5b0`) plus fourteen builder tests
+  (`tests/test_st6_service_and_surfaces.py`); all of them were re-run against `1323d5b0`'s
+  `scripts/` and failed, then passed on the branch.
+- Merged in: ST1 at `5cf0e681` and ST2 at `22aac5fb`, doc conflicts resolved by keeping both
+  entries.
 
 ### 2026-09-06 - ST2: real integer counts at each table's own grain, and ONE honest leader (branch `claude/st2-real-counts`, not merged)
 

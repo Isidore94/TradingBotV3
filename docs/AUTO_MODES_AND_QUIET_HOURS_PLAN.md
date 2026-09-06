@@ -324,8 +324,10 @@ and auto desk is for when I am actively trading. Only auto desk should send
 
 What this changes, and what it deliberately does not:
 
-- **Changes (BUILD PENDING — the AWAY day-recap packet,
-  `docs/archive/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` sec 5, absorbs this):**
+- **Changes (BUILT — the AWAY day-recap packet landed with V2 item 3 and was
+  completed by ST6.6, 2026-09-06;
+  `docs/archive/analysis/AI_DIRECTION_DECISIONS_2026-08-24.md` sec 5 absorbed
+  this):**
   in AWAY, the chart-review queue is not the return surface. Alerts do not
   accumulate as 317 pending review items; the return surface is the EOD recap —
   the day's best-ranked output (staged picks, classified D1 events, the
@@ -346,6 +348,25 @@ What this changes, and what it deliberately does not:
   The phone remains the deliberate remote surface while AWAY; the desk stops
   hoarding a queue for the return.
 
+**ST6.6 (2026-09-06) completed the recap and added one line to the digest.** The
+recap's summary now leads with the desk's SHARED Working-lately snapshot line and
+its `snapshot_id`, then names that session's leader changes **with their cause**
+(`new_outcomes` / `window_rollover` / `corrected_data` / `lost_coverage`) - a
+restatement is not news about the market, and a recap that called it new outcomes
+would teach the trader that the desk had found something. The best-swings table
+lists EVERY ranked row from `autopilot_today.txt` (there was no top-five cap in
+the recap to remove; the cap the trader remembers is the PHONE digest's and it is
+untouched), and the classified alerts carry the `alert_cell` and the held x ran
+suffix the M5 row already showed, TRAVELLING from the Alert Center rather than
+recomputed here.
+
+`autopilot_today.txt` gains a `== WORKING LATELY ==` section **in its existing
+body**. This is not a new push and does not need one of the two exceptions: it is
+the single verified home-folder digest AWAY already writes and the phone already
+reads, so the line rides output that is already inside the rule. An absent
+snapshot is an ABSENT SECTION - a phone report is the worst possible place to
+invent a sentence about evidence nobody read.
+
 The 2026-08-15 §1 matrix rows for AWAY remain accurate for what is BUILT
-today; this amendment governs the recap packet's build and the queue-routing
-change that lands with it.
+today; this amendment governed the recap packet's build and the queue-routing
+change that landed with it.

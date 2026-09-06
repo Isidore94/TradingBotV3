@@ -433,6 +433,48 @@ def test_the_tracker_banner_labels_its_own_read_and_drops_the_label_with_a_snaps
     assert "alpha" in shared
 
 
+def test_the_summary_card_and_the_banner_render_one_verdict_not_two(tmp_path):
+    """ST2's fix round put the Summary card and the banner on ONE `select_leader`.
+
+    ST6 must not undo that by a different door: with a snapshot present the
+    banner renders the SHARED verdict, so the card three lines above it has to
+    render the same one. The case that would have split them is the persistence
+    rule - a family the panel's own read crowns while the snapshot is still
+    holding it for a second distinct `as_of`.
+    """
+    import research_explanations
+    from ui.panels import setup_tracker_panel
+    import working_lately
+
+    payload = _snapshot_payload(tmp_path)
+    verdict = working_lately.verdicts_from_payload(payload)["swing_trade_r"]
+    assert verdict.state == "leader" and verdict.leader is not None
+
+    card = research_explanations.build_plain_english_whats_working(
+        recent_rows=[],  # deliberately EMPTY: the card must not re-decide
+        working_lately=payload,
+    )
+    swing_bullets = [
+        line for line in card["bullets"] if line.startswith("Among recently closed swings")
+    ]
+    assert len(swing_bullets) == 1, card["bullets"]
+    assert "alpha" in swing_bullets[0], swing_bullets[0]
+
+    panel = setup_tracker_panel.SetupTrackerPanel()
+    try:
+        panel.set_working_lately_snapshot(payload)
+        html = setup_tracker_panel._best_now_banner_html(panel)
+    finally:
+        panel.shutdown()
+        panel.deleteLater()
+    assert "alpha" in html
+    # The panel read alone, with no rows, could never have named a family.
+    empty = research_explanations.build_plain_english_whats_working(recent_rows=[])
+    assert not any(
+        "alpha" in line for line in empty["bullets"]
+    ), "the card named a family it was not handed - it re-decided"
+
+
 def test_the_persisted_snapshot_is_small_enough_to_read_by_eye(tmp_path):
     """Ground rule: a display cache is not an evidence store. Two families and
     two kinds of absent source must not produce a file nobody will ever open."""

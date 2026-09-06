@@ -32,6 +32,7 @@ gate; the clause behind a gate lives in the dated entry named beside it.
 
 | # | Gate | Owed by |
 |---|---|---|
+| 80 | **One reading, four surfaces, and a switch that only reorders (ST6)** - first DESK session after merge. (1) The **Working lately** strip at the TOP of the M5 alerts column shows a verdict per kind and ends `as of <the last completed session>` plus `observational leader among K cells`; the word *proven* appears nowhere on it. (2) `%LOCALAPPDATA%\TradingBotV3\working_lately\snapshot_latest.json` exists and its `snapshot_id[:8]` is the SAME eight characters the Setup Tracker banner prints, with the words `panel read` ABSENT from that banner (their presence means the service never reached the page, which is the failure this clause is for). (3) Clicking the strip lands on the Setup Tracker tab. (4) The switch ON reorders the M5 list with the SAME row count and the same x N badges, and OFF restores the arrival order exactly. (5) `leader_change_events.jsonl` gains **at most one line per kind per session** and a desk RESTART adds none - the dedupe key is `(kind, prior_leader, new_leader, new_snapshot_id)`. **Expect the first session's swing verdict to read `awaiting persistence (1 of 2)` rather than naming a leader**: `LEADER_PERSISTENCE_SNAPSHOTS` is 2 and the first build has no predecessor, so a named leader on day one would mean the rule did not run. Expect `daytrade_held_run` to name a cell only if one clears its own floor un-concentrated; a `concentrated` refusal is the rule working | 2026-09-06 ST6 entry |
 | 76 | **Real counts on the desk, and one honest leader (ST2)** - after the next persisted tracker write: (1) `master_avwap_setup_type_recent_stats.csv` and `master_avwap_setup_type_stats.csv` both carry `n_wins` / `n_losses` FILLED (not blank), and on the recent file `n_wins + n_losses + n_flats + n_unmeasured + n_pending == n_episodes` on every row, with `n_episodes == tracked_setups`. (2) The recent-types table shows **Win % (unweighted)** and **Win % (recency-weighted)** as two columns whose values DIFFER on at least one family - if every pair is equal the weighting had no bite that day, which is information, not a pass. (3) The Setup Types tab leads with **Win %**, and its population sentence names `trade_r_representative_exit`, states its window (`ALL HISTORY`) and ends with the expired clause - **`N expired unmeasured, excluded` when N > 0 and the literal `0 expired unmeasured` when none, never an empty tail** (M3's gate #72 clause 5 reads the first form). (4) The banner prints one of the four verdict states and, when it prints a leader, names the SAME family the recent table lists first by bound (pins are novelty badges and do not count); when it prints `discovery only`, the word "Leader" is absent from that line. (5) No study family is ever named as the leader, and the exclusion count is shown. (6) **The Summary card above the banner agrees with it** - its "Among recently closed swings" bullet names the same family or the same verdict state, its "Setup types working" block shows BOTH sides, and the Best Type Edge tile reads the biggest `score_delta` (live base `SHORT +23`), not the table's first row. (7) `master_avwap_setup_short_horizon.csv` carries `n_wins` / `n_losses` / `latest_measured_session` filled | 2026-09-06 ST2 entry |
 | 75 | **Each outcome carries its own clock (ST1)** - after the next persisted tracker write (Tuesday 2026-09-08 13:00 PT): (1) `master_avwap_session_horizon_outcomes.csv` exists beside `master_avwap_tier_outcomes.csv`, with `sessions_spanned == horizon_sessions` on EVERY measured row and a populated `unmeasured_reason` on every other one (expect `target_session_not_complete` on the newest scan dates and `no_bar_for_target_session` for symbols the scan held no frame for). (2) the v1 counts logged by the tier tracker on the same pass are UNCHANGED in shape. (3) The tier outcomes file's new `outcome_kind` column reads `favorable_direction_scanrow_v1` on every row, and the Master AVWAP setups table's header reads **Family favorable %** with a coverage line beside the status bar. (4) `setup_docs.family_record_coverage_line()` and `autopilot_core.swing_family_record_line()`, called in the same minute, print lines that are IDENTICAL TO EACH OTHER, and the tier performance export's population agrees with them on the stale rule. **Compare them to each other, never to a number written down here**: the window moves with the calendar, so the triple changes every session (`2587 / 0 / 16971` at `end=2026-09-03`, `2462 / 0 / 17096` on today's default window - both correct, and either would fail a stored-string check). (5) **`trading_bot.log` carries EXACTLY ONE line for this export**, and it is `Session-horizon outcomes exported N row(s), M measured, C same-session scan row(s) collapsed, D true duplicate(s) dropped` - the two counts SEPARATE. Expect D small (300 over the whole live history, 75 ids at four horizons) and C large (91,880); a four-figure D means a re-scan is being reported as a duplicate again. On a 30-session window over a history of this size, expect roughly 90,000 rows and ~25 MB. A run where the export FAILED logs `Session-horizon outcome export failed` instead and the run result carries `session_horizon_export_error` with NO counts - an absent count and a zero are different claims. **Nothing here promotes**: `POLICY_SESSION_V2` still has no production caller, and a decision to read v2 is the trader's | 2026-09-06 ST1 entry |
 | 74 | **The control and study populations are shown, and the April framework is read (M5)** - restated after the reviewer round so it can PASS (the first wording demanded an equal `n` the framework does not produce). After the next persisted tracker write: (1) `master_avwap_control_discovery.csv` and `master_avwap_study_discovery.csv` exist, the control file carrying its three cohort rows plus one family row per (side, family), in an `all` block AND a `lately` block, every row stamped `population_setups`. (2) The **Controls** tab's sentence reads `N graded episodes from the M control setups the scan REJECTED` with **N < M** and M near 401 (Studies likewise, M near 3,992) - the two numbers are different things and a tab printing one of them twice is the defect this clause replaces. (3) Both tables sort by the Wilson lower bound, not the raw rate. (4) The **Exit frameworks** tab shows `comparison_apr2026` rows beside `baseline` ones, grouped by side and bucket with the baseline above its twin, Experimental reading True. (5) **The denominators reconcile, which is the real check**: on a (side, bucket) where the template has no `blocked_stop_rules`, the comparison's `n` EQUALS the baseline's and `Filtered` is 0; on SHORT / near_favorite_zone for `exp_full_band2_hard_stop_125r_no_sma50_short_nearfav`, `n + Filtered` equals the baseline's `n` (the reviewer measured 585 + 98 = 683 on the live tracker). A smaller `n` with a matching `Filtered` is the experiment working; a smaller `n` with `Filtered` 0 is a defect | 2026-09-05 M5 entry |
@@ -115,6 +116,88 @@ Still owed and unchanged since they were written; nothing here was closed by mov
 | 3 | Desk memory: the first swing-scan slot without the 8-13 GB jump | archive: 2026-08-27 memory entry |
 | 2 | Warehouse canary: one post-scan run verifying writes and bounded memory, then every bucket filled, then a fact pack against warehouse counts | archive: 2026-08-27 tracker entry |
 
+
+### 2026-09-06 (Sunday) - ST6: one Working-lately snapshot, four surfaces, and a switch that only reorders
+
+**Branch `claude/st6-working-lately`, NOT merged.** Packet ST6, on the trader's
+*"Implement the already-owed desk Working-lately surface, priority switch, and Away Recap around
+one deterministic evidence snapshot ... Reuse and correct the existing best-now banner rather than
+leaving competing leaders ... Persist a small, deduplicated leader-change event with prior/new
+leader, snapshot IDs, timestamp, and cause ... Choose any margin/persistence rule before inspecting
+its forward evaluation. The first release can report an observational leader or no clear leader; do
+not call every winner proven."* Closes plan.md Phase 0.14 **V1 item 4** and **V2 item 3**, the last
+two "V4, NOT BUILT" rows other than Weekend Prep's takes table. Built on the tester's ELEVEN red
+tests (`tests/test_st6_working_lately.py`, committed red at `1323d5b0`); thirteen builder tests were
+added (`tests/test_st6_service_and_surfaces.py`) and all twenty-four were re-run RED against
+`1323d5b0`'s `scripts/` before the fix stayed in.
+
+**The snapshot is the whole packet.** `working_lately.build_snapshot` is PURE - no file, no thread,
+no clock that decides anything - and `snapshot_id` is a sha1 over the SORTED cell tuples, the
+declared policy lines and `as_of` and **nothing else**. Not `built_at`, not a source's mtime, not
+the verdicts: a snapshot whose identity moved on every half-hourly tick would make the events file a
+log of the timer, and one that moved when a file was merely re-saved would announce news that never
+happened. Three kinds - `swing_trade_r` (ST2's recent rows), `swing_favorable` (ST1's
+`read_eligible_rows`, and the cell says `favorable`, never `win`) and `daytrade_held_run` - get three
+verdicts and are NEVER pooled: `pool_cells` raises across kind, side or outcome kind and names the
+axis.
+
+**Dependence and multiple testing are answered by refusing and by printing, not by a new formula.**
+The trader asked that any new confidence calculation account for shared sessions and overlapping
+holdings and be validated; none was written. A cell whose top symbol or top session supplies MORE
+than `CONCENTRATION_LIMIT` (0.5) of its own sample cannot lead, reason `concentrated`;
+`LEADER_PERSISTENCE_SNAPSHOTS` (2) holds a NEW leader until it has led in two snapshots with a
+distinct `as_of`; both numbers were **declared 2026-09-06 before any forward evaluation** and neither
+was tuned to make a winner appear. Every surface prints `observational leader among K cells`, and the
+word *proven* is absent by test.
+
+**ST6.2 - the day-trade headline had never measured its own concentration.**
+`held_run_score.Segment.summary` called `evidence_stats.summarize` with the VALUES ALONE, so
+`concentration.by_symbol`, `concentration.by_session` and the session-block `bootstrap` came back
+UNMEASURED for every held x ran cell the desk has ever shown - the headline had no way to say it was
+one name six times. The episodes have carried `symbol` and `trade_date` since V1; `symbols_of_held`
+and `sessions_of_held` are appended in the same breath as each MFE value (parallel is the contract -
+`session_block_bootstrap` refuses when the lists differ in length) and handed over. Held x Ran stays
+NAME-SELECTION evidence: `statistic_name` is `held_run_score (P(held 30m) x trimmed MFE_R)` and a
+test asserts the cell dataclass has no P&L field. `evidence_stats._concentration` now rounds a share
+to ten places rather than four, because the share is a DECISION input here - compared against a
+declared 0.5 and hashed into a snapshot id - and a display rounding inside a decision is how a cell
+sitting on the limit lands on the wrong side of it.
+
+**ST6.3 - the service.** `ui/services/working_lately_service.py` is owned by `MainWindow` (four
+surfaces read it; no one panel is their parent). Everything expensive is on its worker; the GUI slot
+emits and does nothing else, proven by monkeypatching the three readers to RAISE and driving the
+slot. Four triggers - the first `showEvent`, the day roll, `scan_service.finished` (which is what
+rewrites the tracker exports) and a 30-minute timer - all fold through ONE `SignalCoalescer`.
+`snapshot_latest.json` is temp-and-rename; `leader_change_events.jsonl` is append-only and
+deduplicated on `(kind, prior_leader, new_leader, new_snapshot_id)`, so a restart replays nothing.
+**Cause precedence is REFUSAL-FIRST** - `lost_coverage`, `corrected_data`, `window_rollover`,
+`new_outcomes` - because `as_of` moves on nearly every build and the packet's own order would have
+made the two interesting causes unreachable. A `lost_coverage` event carries the SAME name in both
+slots: nothing new was learned, the desk stopped being able to read it. A bucket that merely EMPTIED
+while the source's total held steady is a window moving forward, not a correction.
+
+**ST6.4/6.5/6.6 - the surfaces.** The strip is mounted INSIDE `M5AlertBar` at layout index 0 rather
+than as a third child of the M5 column's splitter: that splitter is a saved two-pane drag and a third
+child would replay the trader's own sizes onto a layout they never dragged. The Setup Tracker banner
+renders the shared payload and labels its own CSV pass `panel read`; the Summary card three lines
+above it takes the SAME verdict, or ST2's fix round would have been undone by a different door the
+first time the persistence rule held a leader back. Weekend Prep's card prints the line as its HEAD
+line and **only when a snapshot exists**, so the trader's eight-line cap holds. The AWAY Recap reads
+the published files through two MODULE functions (its worker runs off the GUI thread, where
+constructing a QObject with a QTimer child to read two files is a Qt object with no event loop) and
+`autopilot_today.txt` gains `== WORKING LATELY ==` in its EXISTING body - **no new push**. There was
+no top-five cap in the recap to remove.
+
+**Merged in:** ST1 at its final tip `5cf0e681` and ST2 at `22aac5fb`, doc conflicts resolved by
+keeping both entries; gates #75 and #76 both stand.
+
+**Deviations recorded.** (1) The lead's decision that sides are normalised to one case *inside* the
+snapshot is NOT what shipped: the tester's assertions require `LONG alpha` for the swing cells and
+`long ema_15` for the day-trade cells, so a cell keeps the case ITS OWN SOURCE spells - rewriting it
+would make the cell disagree with the file a reader opens next - and every COMPARISON upper-cases
+(`EvidenceCell.name`, `pool_cells`, `priority_rank`). (2) `swing_headline` now re-exports
+`SWING_HORIZON_SESSIONS` from `evidence_stats` (the tester's module docstring imports it from
+there); it is a re-export, never a second literal.
 
 ### 2026-09-06 (Sunday) - ST2: real integer counts at each table's own grain, and ONE declared leader
 

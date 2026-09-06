@@ -271,6 +271,19 @@ def _verdict_bullet(
     verdict = select_leader(
         rows, kind=kind, last_completed_session=last_completed_session, min_n=min_n
     )
+    return verdict_sentence(verdict, label=label, min_n=min_n)
+
+
+def verdict_sentence(verdict, *, label: str, min_n: int) -> str:
+    """One plain-English line for a verdict that has ALREADY been decided.
+
+    Split out of `_verdict_bullet` by ST6 so the desk's SHARED Working-lately
+    snapshot can be printed by the same words. `_verdict_bullet` still decides
+    when nobody handed this card a verdict; when one is handed over, the card
+    and the banner beneath it are rendering the same object and cannot come to
+    name different families - which is the whole of what ST2's fix round and
+    ST6.4 are both about.
+    """
 
     def _mean_r(row) -> str:
         """Mean R beside the win rate, never instead of it (decision 0016)."""
@@ -314,6 +327,7 @@ def build_plain_english_whats_working(
     playbook_rows: Sequence[Mapping[str, Any]] = (),
     short_term_min_samples: int = 6,
     last_completed_session=None,
+    working_lately: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Summarize qualified measured leaders without filling empty slots.
 
@@ -321,6 +335,13 @@ def build_plain_english_whats_working(
     `working_lately.select_leader`, the one decision the Setup Tracker's banner
     also reads, so this card and the banner beneath it can never name different
     families or crown a study (ST2 fix round, 2026-09-06).
+
+    **And when the desk hands over its SHARED snapshot, the swing bullet is that
+    snapshot's verdict** (ST6.4). Without this the card would re-decide from the
+    same rows while the banner three lines below rendered the shared reading, and
+    the two would disagree the first time the snapshot's persistence rule held a
+    new leader back - which is the same defect ST2's fix round removed, arriving
+    by a different door.
     """
 
     bullets: list[str] = []
@@ -342,15 +363,27 @@ def build_plain_english_whats_working(
             last_completed_session=last_completed_session,
         )
     )
-    bullets.append(
-        _verdict_bullet(
-            recent_rows,
-            kind="swing",
-            label="Among recently closed swings",
-            min_n=MIN_REPORTABLE_N,
-            last_completed_session=last_completed_session,
+    shared = None
+    if working_lately:
+        import working_lately as _wl
+
+        shared = _wl.verdicts_from_payload(working_lately).get("swing_trade_r")
+    if shared is not None:
+        bullets.append(
+            verdict_sentence(
+                shared, label="Among recently closed swings", min_n=MIN_REPORTABLE_N
+            )
         )
-    )
+    else:
+        bullets.append(
+            _verdict_bullet(
+                recent_rows,
+                kind="swing",
+                label="Among recently closed swings",
+                min_n=MIN_REPORTABLE_N,
+                last_completed_session=last_completed_session,
+            )
+        )
 
     play_candidates = [
         row
