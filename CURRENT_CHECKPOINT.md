@@ -202,6 +202,40 @@ Trader: *"What documents/files are unnecessary repo clutter? ... make it easier 
 - **`.codex/agents/*.toml` committed** (the four Codex roles, twin of `.claude/agents/`); `.gitignore` now mirrors the `.claude` rule for `.codex`, lists `.ruff_cache/` and `.test_tmp/`, and no longer lists `dist`/`build` twice. `desk_report.xml` (345 KB gitignored run artifact from 08-22) deleted from disk. **`.test_tmp/final_01` could not be deleted** - owned by a sandbox account, `takeown` refused without elevation - so it is ignored instead; the trader can remove it from an admin prompt.
 - Verification: `pytest tests/ -q` **6710 passed, 1 skipped, 72 subtests, exit 0, 5 min 58 s**; `ruff` clean; CLAUDE.md == AGENTS.md.
 
+### 2026-09-05 (19:56-20:03 PT) - INCIDENT: a reviewer's scratch harness overwrote the live setup tracker; restored from the mirror copy
+
+**What happened.** The M3 reviewer (Opus, `claude/m3-tracker-keeps-up` round 3) imported
+`tests/test_tracker_staleness_catchup.py`'s backfill harness from a scratch script OUTSIDE
+pytest. `tests/conftest.py` sets `TRADINGBOTV3_DATA_DIR` at import, so a bare script resolves
+`project_paths` to the REAL `C:\TradingBotData`; the harness saved a 1-setup tracker over the
+live store at ~19:56 PT: `master_avwap_setup_tracker.json` (1,175,261,529 B) and its `.bak`
+(2026-09-03 vintage) were rotated away, the SQLite mirror went to 1 record, the scoring
+snapshot to 943 B and the transition sidecar to 303 B. The branch and the suite are innocent.
+
+**Restore (lead, 20:02-20:03 PT, `scratchpad/restore_tracker.py`).** The reviewer's read-only
+COPY of the mirror (taken 11:06, 2026-09-04 07:47 vintage, 15,765 records = 11,372 / 401 /
+3,992) was the only complete source. Damaged files QUARANTINED (renamed
+`*.damaged-20260905T200233`, nothing deleted); the copy put back as the mirror; the payload
+rebuilt with `TrackerStore.load_payload()` (12 keys, `data_session` 2026-09-03); the
+transition sidecar pre-written from that payload so the save emitted ZERO spurious events
+(one `run_summary` row only); then `save_setup_tracker_payload` on production code
+(`a6fb1a8d`) wrote the JSON - **1,175,261,529 bytes, the original size to the byte** - the
+mirror (`15765 seen, 0 written`) and the 18,987,204 B scoring snapshot; `verify` ok
+15,765 = 15,765, 0 differences. `updated_at` now reads 2026-09-05T20:02:49; `data_session`
+unchanged. **Lost for good: the `.bak` (2026-09-03 vintage) and the 1-setup save's ledger
+rows** (append-only evidence; recorded, not rewritten). **This is decision 0017's gate #57 in
+practice: the mirror restored the JSON byte-exact.**
+
+**Rule added** (CLAUDE.md / AGENTS.md working agreement, `docs/AGENT_TEAM.md`): a scratch
+script that imports anything under `scripts/` sets `TRADINGBOTV3_DATA_DIR` to scratch BEFORE
+the import and aborts if `project_paths.DATA_DIR` resolves under `C:\TradingBotData`; test
+harnesses are never imported outside pytest.
+
+Also this evening: `%TEMP%\tradingbotv3-writer-locks` held 89,800 zero-byte `.lock` files
+(oldest 2026-08-31; `local_writer_lock` never unlinks them) and suites were crawling at ~2%
+CPU; the lead removed the 89,406 older than an hour (1 held file skipped). A sweep-on-release
+or a startup prune is owed - a small packet, not yet written.
+
 ### 2026-09-05 (~02:00 PT) - Measurement audit of the setup tracker (recon, read-only; nothing fixed)
 
 Trader: *"I want us to compare both [AVWAP bands] to see what is better ... Add this to the queue.
