@@ -25,6 +25,7 @@ on) before the fix existed.
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import os
 import sys
@@ -1208,11 +1209,58 @@ def test_a_scan_payload_without_a_writer_reads_as_manual():
     )
 
 
-def test_the_scanner_cli_declares_itself_manual():
-    import inspect
+def test_the_scanner_cli_declares_itself_manual(monkeypatch):
+    """Driven, not grepped.
 
-    source = inspect.getsource(runner.main)
-    assert "TRACKER_SAVED_BY_MANUAL" in source
+    This asserted `"TRACKER_SAVED_BY_MANUAL" in inspect.getsource(runner.main)`,
+    which passes on a mention in a comment and fails on a correct rename. Drive
+    the real argv parsing instead and read the kwarg that comes out.
+    """
+    calls: list[dict] = []
+    monkeypatch.setattr(runner, "run_master", lambda **kw: calls.append(kw))
+    monkeypatch.setattr(sys, "argv", ["master_avwap.py", "--once"])
+
+    runner.main()
+
+    assert calls and calls[0]["saved_by"] == legacy.TRACKER_SAVED_BY_MANUAL
+
+
+# ===========================================================================
+# Reviewer round 3: M3's new write stamps made a characterization test flaky.
+#
+# `test_tracker_staleness_catchup` compares the WHOLE payload text of two
+# backfills and normalises the wall clocks first. It knew about `updated_at`;
+# M3 added `saved_at`, which is second-resolution, so two runs that straddle a
+# second differed and the comparison failed intermittently. A write stamp is
+# not data, and this is the list that says so.
+# ===========================================================================
+
+def test_every_write_stamp_m3_added_is_normalised_before_the_byte_comparison():
+    from test_tracker_staleness_catchup import _CLOCK_STAMP_FIELDS, _normalize_write_clock
+
+    assert {"saved_at", "saved_by"} <= set(_CLOCK_STAMP_FIELDS)
+
+    # The real shape of the flake: same data, two different write clocks.
+    first = json.dumps(
+        {
+            "updated_at": "2026-09-05T13:02:11",
+            "saved_at": "2026-09-05T13:02:11-04:00",
+            "saved_by": "catch_up_backfill",
+            "data_session": "2026-09-04",
+            "setups": {},
+        }
+    )
+    second = json.dumps(
+        {
+            "updated_at": "2026-09-05T13:02:12",
+            "saved_at": "2026-09-05T13:02:12-04:00",
+            "saved_by": "manual",
+            "data_session": "2026-09-04",
+            "setups": {},
+        }
+    )
+
+    assert _normalize_write_clock(first) == _normalize_write_clock(second)
 
 
 # ===========================================================================

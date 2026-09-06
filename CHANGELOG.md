@@ -1267,6 +1267,15 @@ nothing changes - the whole no-frame branch is gated on a pin being in force.
 scoring path reads that export today, but two neighbouring builders with different rules
 is how the next reader picks the wrong one.
 
+**Reviewer round 3 (NO-GO on `dab43e04`): a flake this packet introduced.**
+`test_tracker_staleness_catchup`'s byte-identical characterization compares the whole
+payload text and normalises the write clocks first, and its `_CLOCK_STAMP_FIELDS` knew
+only `updated_at`. `saved_at` is second-resolution, so two backfills that straddled a
+second differed - an intermittent failure that said nothing about the replay. Both new
+stamps now normalise, which is the right place for them: they record WHO wrote the file
+and WHEN, and that test's claim is that the catch-up and the after-close run produce the
+same DATA while being different writers.
+
 **A third population is named and deliberately not expired.** Of the audit's 41 records
 with no open and no closed scenario count, only 13 are `no_baseline_scenarios` on the
 2026-09-04 mirror; **the other 28 DO have baseline scenarios, in a status that is neither

@@ -175,6 +175,16 @@ merges.** Tip `cb7dded7` + docs.
   divides by JUDGED symbols (`n_symbols - n_no_frame`), which is **stricter** in a
   no-frame-heavy run and is noted in the CHANGELOG; and `build_tracker_stats_rows` gained
   the same opt-in flag as its neighbour for symmetry.
+- **Reviewer round 3 (NO-GO on `dab43e04`): a FLAKE this packet introduced.**
+  `test_tracker_staleness_catchup`'s characterization compares the WHOLE payload text and
+  normalises the wall clocks first; it knew only `updated_at`. M3's `saved_at` is
+  second-resolution, so two backfills straddling a second differed and the test failed
+  intermittently (1 failed / 6776 passed on that tip). `saved_at` and `saved_by` joined
+  `_CLOCK_STAMP_FIELDS` - they are write stamps, and the claim that test makes is that the
+  catch-up and the after-close run produce the same DATA while being different writers.
+  The sentence in `docs/DURABILITY_CATCHUP_PLAN.md` that said the characterization was
+  unaffected was wrong and is corrected. Also took the advisory: the scanner-CLI test now
+  DRIVES `runner.main`'s argv parsing instead of grepping its source.
 - **A THIRD POPULATION IS NAMED AND NOT EXPIRED; a decision is owed.** The audit counted
   41 setups with `open_scenario_count == closed_scenario_count == 0`. On the 2026-09-04
   mirror only 13 of them are `no_baseline_scenarios`. **The other 28 DO have baseline
@@ -185,8 +195,8 @@ merges.** Tip `cb7dded7` + docs.
 - **Verification:** `tests/test_m3_tracker_keeps_up.py` (31 tests), 26 of the first 30
   proven RED on `e744afd5` before any fix existed and committed red as `60161275`; four
   more for the lead's ruling, RED on `259cf42c`; eleven more for the reviewer round, RED
-  on `4108a0a9`; four more for round 2, RED on `455dfaa6`. **52 tests in that file, all
-  green.** Ruff clean. No packaging trigger.
+  on `4108a0a9`; four more for round 2, RED on `455dfaa6`; one more for round 3, RED on
+  `dab43e04`. **53 tests in that file, all green.** Ruff clean. No packaging trigger.
 
 ### 2026-09-05 - M1 BUILT: the band challenger's hand-off, on `claude/m1-band-variant-handoff`
 

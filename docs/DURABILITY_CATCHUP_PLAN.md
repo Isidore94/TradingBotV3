@@ -67,9 +67,18 @@ path, designed for a missed close, was doing the routine write. M3.1 taught the
 gate that the pinned source is the declared source of record, which restores the
 close slot as the writer. M3.2 makes the difference visible either way: every
 payload carries `saved_by`, and this path passes **`catch_up_backfill`** while
-the scan's own pass passes `close_slot` and the GUI backfill `manual`. The
-byte-identical characterization above is unaffected — `saved_by` and `saved_at`
-describe the WRITE, not the data, and the test compares vintages.
+the scan's own pass passes `close_slot` and the GUI backfill `manual`. 
+
+That has a consequence for the byte-identical characterization above, and the
+first version of this note got it wrong. **That test compares the WHOLE payload
+text**, not the vintage — so it normalises the wall clocks first, and it knew
+only about `updated_at`. `saved_at` is second-resolution, so two backfills that
+straddled a second produced different text and the test failed intermittently:
+a flake that said nothing about the replay. `saved_at` and `saved_by` are now in
+its `_CLOCK_STAMP_FIELDS` alongside `updated_at`, which is the correct place for
+them — they record WHO wrote the file and WHEN, and the claim this test exists to
+make is that the catch-up and the after-close run produce the same DATA while
+being different writers.
 
 *(b) A record this replay cannot reach now ages out rather than staying OPEN
 forever.* A setup whose daily frame comes back empty is skipped before the
