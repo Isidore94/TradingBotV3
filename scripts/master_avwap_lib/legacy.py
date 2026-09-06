@@ -129,6 +129,9 @@ from project_paths import (
 
 # Packet ST3. Leaf module (stdlib only), so no cycle: it names the tracker
 # replay's execution convention and level knowledge, both default-preserving.
+# The four policy names are imported even where this module does not branch on
+# them, so `master_avwap.<NAME>` resolves for a caller that only ever sees the
+# compatibility entrypoint; `execution_convention` remains their one home.
 from .execution_convention import (
     DEFAULT_EXECUTION_CONVENTION,
     DEFAULT_LEVEL_KNOWLEDGE,
