@@ -141,6 +141,12 @@ def _load_bars(bars_dir: Path, symbol: str, frame_cache: dict[str, Any]):
 
 
 def _representative_r(record: dict) -> float | None:
+    """The CLIPPED representative R - the number the champion's scoring reads.
+
+    ``_summarize_tracker_setup_outcome`` clips at ``TRACKER_SCORING_R_CLIP``,
+    so this column answers "what would scoring see" and DELIBERATELY cannot
+    show a tail past the clip. ``_representative_raw_r`` is the companion.
+    """
     import master_avwap as m
 
     probe = dict(record)
@@ -152,6 +158,36 @@ def _representative_r(record: dict) -> float | None:
     value = summary.get("representative_total_r")
     try:
         return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _representative_raw_r(record: dict) -> float | None:
+    """The same scenario's UNCLIPPED total R.
+
+    The whole point of ST3 is the tail, and the clip is exactly where a tail
+    goes to hide: a -6R gap fill and a -4R one are both -4.0 after clipping. So
+    the comparison carries both, never blended, each named for what it is.
+    """
+    import master_avwap as m
+
+    scenarios = [
+        scenario
+        for scenario in (record.get("scenarios") or {}).values()
+        if isinstance(scenario, dict)
+        and scenario.get("tradeable")
+        and not m._is_band_variant_scenario(scenario)
+        and not bool(scenario.get("experimental"))
+    ]
+    if not scenarios:
+        return None
+    representative = m._representative_scenario(
+        scenarios, m._representative_stop_label_for_setup(record)
+    )
+    if not representative:
+        return None
+    try:
+        return float(representative.get("total_r"))
     except (TypeError, ValueError):
         return None
 
@@ -300,6 +336,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None, help="replay at most N tradeable setups")
     parser.add_argument("--sample-seed", type=int, default=None, help="deterministic random sample")
     parser.add_argument("--symbols", default="", help="comma-separated symbol filter")
+    # The repaired side defaults to BOTH repairs at once, which is the pair the
+    # packet asks for. Overriding one of them isolates that axis, which is the
+    # only honest way to say which repair moved a number.
+    parser.add_argument(
+        "--new-execution-convention",
+        default=None,
+        help="override the repaired side's execution convention (default gap_aware_v2)",
+    )
+    parser.add_argument(
+        "--new-level-knowledge",
+        default=None,
+        help="override the repaired side's level knowledge (default prior_session_v2)",
+    )
     return parser
 
 
@@ -341,6 +390,15 @@ def main(argv: list[str] | None = None) -> int:
     import master_avwap as m
     from master_avwap_lib import execution_convention as ec
 
+    new_convention = str(args.new_execution_convention or ec.EXECUTION_GAP_AWARE_V2)
+    new_knowledge = str(args.new_level_knowledge or ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2)
+    if new_convention not in ec.EXECUTION_CONVENTIONS:
+        print(f"REFUSED: unknown execution convention {new_convention!r}", file=sys.stderr)
+        return 2
+    if new_knowledge not in ec.LEVEL_KNOWLEDGE_POLICIES:
+        print(f"REFUSED: unknown level knowledge {new_knowledge!r}", file=sys.stderr)
+        return 2
+
     setups = _load_tracker_setups(tracker_path)
     selected = _select_setups(
         setups,
@@ -366,14 +424,18 @@ def main(argv: list[str] | None = None) -> int:
             continue
         try:
             old_record = _replay(setup, frame, ec.EXECUTION_LITERAL_LEVEL_V1, ec.LEVEL_KNOWLEDGE_SAME_SESSION_V1)
-            new_record = _replay(setup, frame, ec.EXECUTION_GAP_AWARE_V2, ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2)
+            new_record = _replay(setup, frame, new_convention, new_knowledge)
         except Exception as exc:  # a bad record never stops the comparison
             print(f"  {setup_id}: replay failed ({exc})", file=sys.stderr)
             continue
         old_r = _representative_r(old_record)
         new_r = _representative_r(new_record)
-        changed = (old_r is None) != (new_r is None) or (
-            old_r is not None and new_r is not None and abs(old_r - new_r) > 1e-9
+        old_raw = _representative_raw_r(old_record)
+        new_raw = _representative_raw_r(new_record)
+        # "Changed" is judged on the RAW R: a move the clip flattens is still a
+        # move, and calling it unchanged would understate the repair.
+        changed = (old_raw is None) != (new_raw is None) or (
+            old_raw is not None and new_raw is not None and abs(old_raw - new_raw) > 1e-9
         )
         skips = _skip_reasons(new_record)
         rows.append(
@@ -387,6 +449,9 @@ def main(argv: list[str] | None = None) -> int:
                 "r_old": old_r,
                 "r_new": new_r,
                 "r_delta": (new_r - old_r) if (old_r is not None and new_r is not None) else None,
+                "r_old_raw": old_raw,
+                "r_new_raw": new_raw,
+                "r_delta_raw": (new_raw - old_raw) if (old_raw is not None and new_raw is not None) else None,
                 "changed": changed,
                 "status_old": str(old_record.get("setup_status") or ""),
                 "status_new": str(new_record.get("setup_status") or ""),
@@ -415,6 +480,12 @@ def main(argv: list[str] | None = None) -> int:
                 "n_changed": sum(1 for row in members if row["changed"]),
                 POLICY_OLD: _cell_stats(old_values),
                 POLICY_NEW: _cell_stats(new_values),
+                f"{POLICY_OLD}_raw": _cell_stats(
+                    [row["r_old_raw"] for row in members if row["r_old_raw"] is not None]
+                ),
+                f"{POLICY_NEW}_raw": _cell_stats(
+                    [row["r_new_raw"] for row in members if row["r_new_raw"] is not None]
+                ),
             }
         )
 
@@ -427,6 +498,8 @@ def main(argv: list[str] | None = None) -> int:
 
     all_old = [row["r_old"] for row in rows if row["r_old"] is not None]
     all_new = [row["r_new"] for row in rows if row["r_new"] is not None]
+    all_old_raw = [row["r_old_raw"] for row in rows if row["r_old_raw"] is not None]
+    all_new_raw = [row["r_new_raw"] for row in rows if row["r_new_raw"] is not None]
     headline = {
         "n_setups": len(rows),
         "n_changed": sum(1 for row in rows if row["changed"]),
@@ -437,6 +510,14 @@ def main(argv: list[str] | None = None) -> int:
         "max_rank_move": max((abs(group["rank_move"]) for group in group_rows), default=0),
         POLICY_OLD: _cell_stats(all_old),
         POLICY_NEW: _cell_stats(all_new),
+        f"{POLICY_OLD}_raw": _cell_stats(all_old_raw),
+        f"{POLICY_NEW}_raw": _cell_stats(all_new_raw),
+        "r_clip": float(m.TRACKER_SCORING_R_CLIP),
+        "r_clip_note": (
+            "the non-_raw cells are CLIPPED at r_clip, which is what scoring "
+            "reads; the _raw cells are the same scenarios unclipped, which is "
+            "where the tail actually lives"
+        ),
     }
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -456,8 +537,8 @@ def main(argv: list[str] | None = None) -> int:
                 "note": "what ships and scores today",
             },
             POLICY_NEW: {
-                "execution_convention": ec.EXECUTION_GAP_AWARE_V2,
-                "level_knowledge": ec.LEVEL_KNOWLEDGE_PRIOR_SESSION_V2,
+                "execution_convention": new_convention,
+                "level_knowledge": new_knowledge,
                 "note": "the repair, shadow only",
             },
         },
@@ -477,7 +558,8 @@ def main(argv: list[str] | None = None) -> int:
 
     field_names = list(rows[0].keys()) if rows else [
         "setup_id", "symbol", "side", "setup_family", "priority_bucket",
-        "entry_trade_date", "r_old", "r_new", "r_delta", "changed",
+        "entry_trade_date", "r_old", "r_new", "r_delta",
+        "r_old_raw", "r_new_raw", "r_delta_raw", "changed",
         "status_old", "status_new", "reasons_old", "reasons_new",
         "fill_bases_new", "no_prior_session_level",
     ]
@@ -487,12 +569,29 @@ def main(argv: list[str] | None = None) -> int:
         for row in rows:
             writer.writerow(row)
 
+    old_cell, new_cell = headline[POLICY_OLD], headline[POLICY_NEW]
+    old_raw_cell, new_raw_cell = headline[f"{POLICY_OLD}_raw"], headline[f"{POLICY_NEW}_raw"]
+
+    def _fmt(value, digits: int = 4) -> str:
+        return "-" if value is None else f"{value:.{digits}f}"
+
+    print(f"changed {headline['n_changed']} of {headline['n_setups']}")
     print(
-        f"changed {headline['n_changed']} of {headline['n_setups']}; "
-        f"expectancy {headline[POLICY_OLD]['expectancy_r']} -> {headline[POLICY_NEW]['expectancy_r']}; "
-        f"min R {headline[POLICY_OLD]['min_r']} -> {headline[POLICY_NEW]['min_r']}; "
-        f"R < -2 {headline[POLICY_OLD]['n_r_below_minus_2']} -> {headline[POLICY_NEW]['n_r_below_minus_2']}; "
-        f"{headline['n_groups_rank_moved']} of {headline['n_groups']} groups moved rank"
+        f"  clipped (what scoring reads, clip {headline['r_clip']}): "
+        f"expectancy {_fmt(old_cell['expectancy_r'])} -> {_fmt(new_cell['expectancy_r'])}; "
+        f"win rate {_fmt(old_cell['win_rate'], 3)} -> {_fmt(new_cell['win_rate'], 3)} "
+        f"(Wilson {_fmt(old_cell['win_rate_wilson_lower'], 3)} -> {_fmt(new_cell['win_rate_wilson_lower'], 3)})"
+    )
+    print(
+        f"  raw (where the tail lives): "
+        f"expectancy {_fmt(old_raw_cell['expectancy_r'])} -> {_fmt(new_raw_cell['expectancy_r'])}; "
+        f"min R {_fmt(old_raw_cell['min_r'])} -> {_fmt(new_raw_cell['min_r'])}; "
+        f"p5 R {_fmt(old_raw_cell['p5_r'])} -> {_fmt(new_raw_cell['p5_r'])}; "
+        f"R < -2 {old_raw_cell['n_r_below_minus_2']} -> {new_raw_cell['n_r_below_minus_2']}"
+    )
+    print(
+        f"  rank impact: {headline['n_groups_rank_moved']} of {headline['n_groups']} "
+        f"groups moved, largest move {headline['max_rank_move']}"
     )
     print(f"wrote {json_path}")
     print(f"wrote {csv_path}")
