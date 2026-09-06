@@ -339,6 +339,24 @@ Gates: T4's three criteria decide, and a pass is the input to a plan.md §7
 promotion decision whose shape is an ADDITIONAL level family, never a swap of σ
 inside the champion. ≥ 20 sessions of forward accrual owed before T3 counts.
 
+## Phase 0.21 — Measurement audit repairs M2, M3, M5 (2026-09-05) — BUILT, live gates #71, #72, #74 owed
+
+Trader, 2026-09-05 ~02:10 PT, over the lead's measurement audit (CURRENT_CHECKPOINT.md, the
+~02:00 entry): *"Fix all of these failures including the one we just queued."* Built through the
+agent team (`.claude/packets/M2.md`, `M3.md`, `M5.md`, machine-local), every branch reviewed by
+reproduction.
+
+| Packet | Audit finding | What it changes | State |
+|---|---|---|---|
+| M2 | 48% of recent M5 alerts ended `unresolved` - 88% of them had measured their bars and were finalized by the bar-less sweep | `status` `swept_measured` for a swept trade with a measurement, `unresolved` only when nothing was measured; `outcome_semantics.terminal_kind` for every reader (history read correctly without a rewrite); the sweep log names the four-way split; coverage sentence on the Daytrade Tracker and the AWAY digest | **BUILT**, reviewer GO; gate #71. **Left on the table, golden fixture first**: the champion aggregator still counts `eod_complete` only |
+| M3 | the only slot allowed to save the tracker (13:00 close) was refused by the purity gate because the daily bars are pinned to Yahoo; the stats CSVs ran three scans behind; 37 setups open since May, 41 with no baseline scenario | the purity gate honours `daily_bars_source_pin` (a third source still refuses; `n_no_frame` excluded from the fraction); `saved_at` / `saved_by` / `last_replayed_session` and two clocks in one zone on the panel; `EXPIRED_UNMEASURED` (`no_replay_stale_sessions` / `no_baseline_scenarios`) excluded from EXPORTS only - the champion's scoring population is byte-identical (lead ruling) | **BUILT**, reviewer GO after three blocker rounds (a `saved_by` NameError on the re-opened write path among them); gate #72. **Named, not decided**: 28 of the 41 have baseline scenarios neither open nor closed |
+| M5 | 401 control and 3,992 study setups graded and never shown; the April `comparison_apr2026` exit framework (91,674 scenario rows) written and never read | `master_avwap_control_discovery.csv`, `master_avwap_study_discovery.csv`, `master_avwap_exit_framework_stats.csv` in the tracker's export pass (display-only, never a scoring input); Controls, Studies and Exit frameworks tabs, Wilson-sorted, with population sentences (`N graded episodes from the M setups ...`) and `n_filtered_by_experiment` so a template's own filter explains its smaller n | **BUILT**, reviewer GO after one round; gate #74 |
+
+**Also that evening, not a packet:** two reviewer scratch scripts overwrote the live tracker and
+the leaderboard CSVs (restored byte-exact from the SQLite mirror copy - decision 0017's first
+real proof); `%TEMP%\tradingbotv3-writer-locks` held 89,800 stale lock files (cleaned by hand;
+a sweep-on-release packet is owed).
+
 ## Phase 0.20 — Overnight-assessment packets N1-N3 (2026-09-05) — BUILT, live gates #65-#67 owed
 
 Trader, 2026-09-05, after the lead's overnight assessment of four nights of nightly output:
@@ -356,7 +374,7 @@ rejections (`numeric claim without a resolvable metric_ref`, `executive_summary 
 `every citing statement was unsupported`), which the existing rejection-feedback retry handles.
 The map half of N2's length detection is therefore **unobserved live** and covered by test only.
 
-## Phase 0.19 — AVWAP band challenger: make the comparison measure (QUEUED by the trader 2026-09-05)
+## Phase 0.19 — AVWAP band challenger: make the comparison measure (2026-09-05) — BUILT (M1 + M4), live gates #70 and #73 owed
 
 Trader, 2026-09-05 ~01:45 PT, after the lead reported the comparison is built but empty:
 *"I want us to compare both to see what is better"* ... *"Add this to the queue."*
@@ -370,7 +388,7 @@ same anchor date 2026-08-10, stdev 4.72 in the AI state and "no block" in the se
 `band_variant` stop scenario has ever been built and the challenger has measured nothing. The lake
 has no challenger columns (T3 step 4 / B-4, NOT started).
 
-**Packet (to write): B4.** (1) Fix the hand-off so `build_tracker_setup_record` receives the block the
+**BUILT 2026-09-05 evening as packets M1 (`claude/m1-band-variant-handoff`, the scanner hand-off) and M4 (`claude/m4-lake-band-variant`, the lake columns and the twin recipe `swing_house_variant_v1`, BD-102), both reviewer GO.** Live gates #70 (the band-variant stats fill at the next persisted tracker write) and #73 (`band-coverage --compare` after the next nightly build and a forced recompute). T4's 20-session clock starts at the first measured row. Original packet text: **Packet B4.** (1) Fix the hand-off so `build_tracker_setup_record` receives the block the
 scan computed - root cause named by recon first; fail-first test on a record built from a live-shaped
 `ai_state` entry; the champion's records, scores and events byte-identical (the existing parity
 fixture). (2) The warehouse: additive `avwap_variant_upper_1..3` / `lower_1..3` +
