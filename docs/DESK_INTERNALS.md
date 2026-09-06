@@ -2326,3 +2326,167 @@ words `panel read` absent from it), the switch reordering the M5 list with the s
 count, at most one event per kind per session, and a restart adding none. Expect the first
 session's swing verdict to read `awaiting persistence (1 of 2)`: the first build has no
 predecessor, so a named leader on day one would mean the rule did not run.
+
+## ST4 - the rescan that happened to close was the one that counted (2026-09-06)
+
+### What was true, read on `main` @ `84ee24d6`
+
+The Setup Tracker rescans a thesis every day it still looks like a setup, so one
+`(symbol, side, anchor_date, setup_family)` leaves many rows behind and something has to pick
+which one gets graded. Three different places made that pick by reading the OUTCOME.
+
+1. **`_dedupe_recent_tracker_family_rows`** sorted `(0 if closed_setups > 0 else 1, scan_date)`.
+   A closed record wins, and only then does the earliest date. So the 08-10 open entry a trader
+   could actually have taken lost to the 08-15 rescan that had resolved by the time the tracker
+   looked. The docstring called the second key "the trade you would actually have taken at first
+   signal", which is true only when no row in the group has closed.
+2. **`_representative_scenario`** fell to `matching[0]`, and scenario insertion order is
+   `_build_tracker_scenarios`' `for stop in stop_candidates: for template in
+   SETUP_EXIT_TEMPLATES`. `REPRESENTATIVE_EXIT_TEMPLATE_ID` was `""` - the comment above it said
+   the choice was decided by dict order and that nothing had ever said which template the headline
+   R was measured on. Reordering the `scenarios` list moves one setup's headline **from +2.00R to
+   -1.00R** (`tests/test_st4_first_actionable.py::test_representative_exit_template_survives_a_scenario_dict_reorder`
+   pins BOTH readings).
+3. **`_summarize_tracker_setup_outcome`**: `representative_closed_r = rep_total_r if (rep_total_r
+   is not None and rep_is_closed) else avg_closed_r`. When the representative is still OPEN, the
+   headline becomes the mean of the OTHER closed scenarios - the alternate exit plans nobody
+   chose. A setup whose `full_band2` representative sits at +0.40R open, beside a `full_band3`
+   that closed +3.00R, **reports +3.00R for a trade still running**.
+
+### The premise the packet asked to verify
+
+**There is no exit-date field on a scenario.** `_apply_scenario_exit_event` appends one entry per
+exit LEG to `events` (`trade_date`, `reason`, `price`, `shares`, `pnl`, ...), so the recorded exit
+is the `trade_date` of the LAST entry, and an open scenario has that list PRESENT and EMPTY.
+`_scenario_recorded_exit_date` gates that read on the CLOSED status, because a PARTIAL leaves a
+dated event behind on a scenario still in the trade: read as an exit, it would let the challenger
+open a second attempt while the first one was still running - the exact thing the re-entry rule
+exists to prevent.
+
+### The rules this produced
+
+**The default did not move, and that is the point.** `closed_first_v1` is
+`DEFAULT_SELECTION_POLICY` and every caller still gets it, byte-identical
+(`tests/fixtures/st4_family_rows_golden.csv`, pinned from `main` before any of this code existed,
+reproduced under the bare default call AND under an explicit `DEFAULT_SELECTION_POLICY`).
+
+**The shipped rule has exactly ONE implementation.** `_v1_pick` in
+`scripts/master_avwap_lib/selection_policy.py` is the old body moved verbatim; the legacy function
+delegates. A challenger measured against a second copy of the champion measures the copy.
+
+**An episode under `first_actionable_v2` is `(symbol, side, anchor_date, setup_family,
+attempt_index)`.** Attempt 1 is the EARLIEST scan row - chosen on the date alone, before any
+outcome exists. A later row opens attempt k+1 **only** when the previous attempt's representative
+scenario closed strictly before it (`REENTRY_RULE_V2`): that is a declared entry rule, not "the
+rescan that happened to close". A rescan while the attempt is live is one more OBSERVATION of the
+same episode. An open attempt stays `pending` and grades nothing.
+
+**The representative exit is DECLARED, and declaring it reads no outcome.**
+`REPRESENTATIVE_EXIT_TEMPLATE_ID_V2` is `full_band2`, the first baseline entry of
+`SETUP_EXIT_TEMPLATES` - the one dict order has always practically handed back. Naming it fixes
+the answer against a reorder without preferring a better-performing plan.
+
+**`excluded_reasons` has two grains and the token name says which.** A bare `reason=N` counts
+records the population never admitted and is summed into `n_excluded`; an `_in_population` token
+counts counted episodes a decision deliberately KEPT and is never summed. That is how the
+2026-09-06 decisions are NAMED without being reopened: `untradeable` is (c),
+`expired_unmeasured_in_population` is (b) - it stays in the champion's scoring population - and
+(a), swept-measured M5 trades, is in another file and is named in the comparison's README.
+`no_representative_in_population` is a builder addition on the same principle: the packet listed
+`no_representative` as a drop, but no such record is dropped today and making one droppable would
+have changed the default's numbers, so it is named and kept.
+
+### The comparison, measured
+
+Provenance, precisely: the live SQLite mirror (`master_avwap_setup_tracker.sqlite`, 1,191,460,864
+bytes, `data_session` **2026-09-03**, 11,372 setups / 401 controls / 3,992 studies) was COPIED,
+and a scratch script read the copy through `TrackerStore.load_records("setups",
+scan_dates=<28-day window>)` and wrote a **windowed JSON extract of 5,696 setups**. The CLI ran on
+that extract, not on the mirror. Both policies at the same `as_of_session` (2026-09-03) and the
+same 28-day lookback. **32 cells, 27 changed, 26 rank moves.**
+
+| | episodes | pending | wins-losses | unweighted win rate | Wilson lower | episode-weighted mean R |
+|---|---|---|---|---|---|---|
+| `closed_first_v1` | 2,249 | 498 | 1,078-673 | 61.6% | 0.593 | -0.150 |
+| `first_actionable_v2` | 2,712 | 915 | 1,294-503 | 72.0% | 0.699 | +0.073 |
+
+`n_excluded` is 22 under both and `fully_excluded_groups` is 0. Largest single cell: LONG /
+favorite_setup / `avwape_to_1stdev`, 1,029 observations, 301 -> 409 episodes, 61.1% -> 73.4%,
+mean R -0.269 -> +0.002.
+
+**v2 bundles TWO policy questions, so the move is decomposed and neither half is answered here.**
+
+1. *Selection, or pending-stays-pending?* Overwhelmingly the second. Hold v2's SELECTION fixed and
+   grade it the old substituting way: 1,313-755, 63.5%, mean R **-0.138**. Honour
+   `representative_status`: 1,294-503, 72.0%, mean R **+0.044**. On the family-weighted figure the
+   whole move is -0.150 -> +0.073 and the substitution part is **+0.182 of +0.193, 94.2%**.
+2. *Is the win-rate move the 463 re-entries?* Under the OLD aggregation it is nothing else:
+   attempt >= 2 graded **72.5%** (235-89) against attempt 1 at **61.8%** (1,078-666), and v1's own
+   rate on those same 2,249 theses is 61.6%. After the fix both rise and the gap survives: attempt
+   1 **70.5%** (1,061-445), attempt >= 2 **80.1%** (233-58). Histogram: 2,249 first attempts, 393
+   seconds, 61 thirds, 9 fourths. **A second attempt exists only because the first one CLOSED, so
+   the attempt >= 2 population is survivorship by construction.** That is a question for the
+   trader; naming it is this packet's job, answering it is not.
+
+So the review's premise - that v1 flatters the rate - is not what the measurement shows. v1
+under-counts EPISODES (a genuine second entry is folded into its predecessor) and it over-counts
+GRADED ones (a pending representative was graded from the alternate plan's R). Those pull in
+opposite directions on the headline.
+
+### The two the reviewer caught
+
+**The compact scoring projection IS the record.** `_build_scoring_projection` writes a projection
+with no `scenarios` key and a `_scoring_outcome_summary`;
+`master_avwap_tracker_scoring_snapshot.json` holds 11,372 of them, and that summary is the only
+copy of the answer. The first ST4 build refused a cache lacking `representative_status` and
+recomputed, which on a scenario-less record returned `tradeable_scenario_count == 0` and dropped
+every setup: on a COPY of the live snapshot, `build_recent_tracker_setup_family_rows` gave **32
+rows on base and 0 on the branch** and `build_tracker_setup_type_rows` **74 nonzero `score_delta`
+on base and 0 on the branch**, which `runner.py`'s first D1 scan after a merge would have written
+into live `recent_tracker_score_delta` / `setup_type_score_delta`. **A missing key is never a
+reason to recompute.** A default read with no `as_of` takes the cache exactly as it did before
+ST4; a challenger or replay read of a scenario-less record answers `representative_status:
+"unknown_compact"` over the cached numbers, and under v2 such an episode is neither graded nor
+pending but NAMED (`unknown_compact_in_population`).
+
+**Pending has to stay pending in the AGGREGATE too, or the rule is decorative.** ST4.2 stopped the
+per-setup substitution, but the family loop selected `closed_rows` on `closed_setups > 0` (any
+tradeable scenario closed) and fell back to `avg_closed_r` when the representative's R was None -
+the same substitution, one level down, grading **271 of 2,712** v2 episodes whose representative
+was still running, 252 of them as losses. `_row_is_graded` is the single seam; under v1 it is the
+identical `closed_setups` test and every number is unchanged (golden).
+
+### A replay is blind to a compacted record
+
+History compaction empties a scenario's `events` (`scenario["events"] = []`), and
+`_scenario_recorded_exit_date` reads the last event, so a compacted CLOSED scenario cannot be
+dated and an `as_of_session` build reads it as still running. **0 of the 141,324 scenarios in the
+28-day window are compacted**, so the comparison above is unaffected; **99,562 of 206,341 across
+all history are**, so an earlier cutoff or a longer lookback walks straight into them. The rule:
+the row carries `representative_exit_undatable` and the family row names
+`undatable_exit_in_population=N`, because "still running" and "we cannot see when it closed" are
+different facts and only one of them is a trade still on. Related: a `(side, bucket, family)`
+whose every record was excluded produces NO row, so the build-level `fully_excluded_groups` is
+stamped on every row - the one number this accounting could otherwise lose with the group.
+
+### A scoring snapshot is not a tracker, and the tool says so
+
+The same compact-projection fact has a third edge, found on the re-review. Hand
+`tracker_selection_compare` a copy of `master_avwap_tracker_scoring_snapshot.json` and the two
+policies disagree for a reason that has nothing to do with either: v1 answers every setup out of
+the cached summary - a cache written with no cutoff, so a replay grades trades it could not have
+seen - while v2 cannot evaluate a scenario-less record and zeroes. Measured on the four-projection
+fixture: `v1 episodes 4 pending 0 wins 3 losses 1` beside `v2 episodes 4 pending 0 wins 0 losses
+0`. That report reads "v2 is broken" when the input was simply the wrong file. The CLI now counts
+setups carrying `_scoring_outcome_summary` with no `scenarios`, prints one line naming the
+snapshot, exits 2 and writes nothing. And `_row_is_unmeasurable` applies under **both** policies
+whenever an `as_of_session` is given, so a v1 replay of a compact record grades nothing either -
+the default read (v1, no `as_of`) is untouched, because `unknown_compact` is a status only the
+bypass path can write.
+
+**Live gate #78.** Nothing here promotes. The desk's next persisted tracker write must leave
+`selection_policy = closed_first_v1` on every recent family row AND leave the scan's
+`recent_tracker_score_delta` / `setup_type_score_delta` nonzero (32 / 74 on the 2026-09-05
+snapshot is the reproducible check); the artifact stays under
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`; and the policy decision is the
+trader's, as a separate change with its own golden fixtures.

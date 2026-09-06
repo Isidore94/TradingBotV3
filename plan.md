@@ -620,6 +620,29 @@ Each item requires parity/rollback evidence before the next authority cutover.
    reads, because re-selecting its future row restates every historical number.
    What remains here is the DECISION to move a reader to `POLICY_SESSION_V2`,
    which needs the two files compared side by side over a declared window first.
+
+   **Tracker identity: the fixtures exist and the decision is owed** (ST4,
+   2026-09-06, branch `claude/st4-first-actionable`).
+   `scripts/master_avwap_lib/selection_policy.py` names `closed_first_v1` (the
+   shipped rule, still `DEFAULT_SELECTION_POLICY` everywhere) and the opt-in
+   `first_actionable_v2` (fixed first-actionable attempt identity, declared
+   re-entry rule, declared `full_band2` representative exit, pending stays
+   pending, replay through `as_of_session`).
+   `tests/test_st4_first_actionable.py` is the intentional-difference set -
+   every case asserts BOTH readings - and
+   `tests/fixtures/st4_family_rows_golden.csv` is the characterization pinned
+   from `main` before the code existed. `scripts/tracker_selection_compare.py`
+   holds the frozen v1-vs-v2 evidence, and `tests/test_st4_compact_projection.py`
+   pins that a compact scoring projection's `_scoring_outcome_summary` IS the
+   record. **Still owed: the trader's policy decision (live gate #78), and it
+   is TWO questions - the selection, and pending-stays-pending, which is 94% of
+   the measured mean-R move. A switch is a separate change with its own golden
+   fixtures.** A replay is blind to a COMPACTED record and names it
+   `undatable_exit_in_population`, so the point-in-time work here is honest for
+   the recent window and explicitly incomplete further back. Score ordering,
+   moving levels, backfill leakage, factor horizons and corporate actions are
+   untouched; **survivorship is now NAMED but not repaired** - a v2 second
+   attempt exists only because the first one closed.
 4. **P2.4 Make CandidateRegistry authoritative.** Migrate every live candidate writer,
    preserve manual names, prove expiry/restart/rollback, and retire duplicate text-
    file authority only after parity.
