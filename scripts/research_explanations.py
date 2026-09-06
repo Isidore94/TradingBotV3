@@ -238,6 +238,7 @@ def _verdict_bullet(
     label: str,
     min_n: int,
     last_completed_session=None,
+    verdict=None,
 ) -> str:
     """One plain-English line straight off `working_lately.select_leader`.
 
@@ -251,8 +252,14 @@ def _verdict_bullet(
 
     It now reads the SAME verdict as the banner, so the two cannot disagree, and
     a state that is not `leader` is printed as the state - never as a crown.
+
+    **``verdict`` is passed in by the Setup Tracker**, which computes both
+    horizons once per page (re-review blocker 1). Computing it here instead
+    dropped the caller's ``previous``, so on a stale refresh this card printed
+    "no clear leader ... discovery only" three lines above the banner's "last
+    reliable reading". Only a caller with no verdict of its own makes one here.
     """
-    from working_lately import select_leader
+    from working_lately import discovery_basis_phrase, select_leader
 
     if last_completed_session is None:
         from datetime import datetime
@@ -264,13 +271,15 @@ def _verdict_bullet(
                 datetime.now(market_calendar.MARKET_TZ)
             )
         except Exception:
-            from datetime import date
+            # MARKET-local, the same fallback the panel uses. `date.today()` is
+            # machine-local, and on this desk (PT) that is a different day from
+            # market-local for three hours every evening (advisory 3).
+            last_completed_session = datetime.now(market_calendar.MARKET_TZ).date()
 
-            last_completed_session = date.today()
-
-    verdict = select_leader(
-        rows, kind=kind, last_completed_session=last_completed_session, min_n=min_n
-    )
+    if verdict is None:
+        verdict = select_leader(
+            rows, kind=kind, last_completed_session=last_completed_session, min_n=min_n
+        )
 
     def _mean_r(row) -> str:
         """Mean R beside the win rate, never instead of it (decision 0016)."""
@@ -297,8 +306,11 @@ def _verdict_bullet(
     if discovery is not None:
         wins = _int(discovery.get("n_wins"))
         losses = _int(discovery.get("n_losses"))
+        # The SAME phrase the banner uses, from the same helper, so the two
+        # never name the gate differently (advisory 1).
+        basis = discovery_basis_phrase(verdict.coverage.get("discovery_reason"))
         return (
-            f"{label}: no clear leader. Leading on thin evidence, "
+            f"{label}: no clear leader. {basis.capitalize()}, "
             f"{_text(discovery.get('side')).upper()} "
             f"{_text(discovery.get('setup_family'))} on n={wins + losses} - "
             f"discovery only.{floor_note}{_mean_r(discovery)}"
@@ -314,6 +326,7 @@ def build_plain_english_whats_working(
     playbook_rows: Sequence[Mapping[str, Any]] = (),
     short_term_min_samples: int = 6,
     last_completed_session=None,
+    verdicts: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Summarize qualified measured leaders without filling empty slots.
 
@@ -333,6 +346,7 @@ def build_plain_english_whats_working(
 
     from working_lately import short_term_evidence_rows
 
+    supplied = verdicts or {}
     bullets.append(
         _verdict_bullet(
             short_term_evidence_rows(short_term_rows),
@@ -340,6 +354,7 @@ def build_plain_english_whats_working(
             label="For the first two sessions",
             min_n=short_term_min_samples,
             last_completed_session=last_completed_session,
+            verdict=supplied.get("swing_short_term"),
         )
     )
     bullets.append(
@@ -349,6 +364,7 @@ def build_plain_english_whats_working(
             label="Among recently closed swings",
             min_n=MIN_REPORTABLE_N,
             last_completed_session=last_completed_session,
+            verdict=supplied.get("swing"),
         )
     )
 

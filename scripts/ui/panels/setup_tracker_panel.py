@@ -1627,18 +1627,22 @@ def _summary_html(panel: SetupTrackerPanel) -> str:
     favorite_c = theme.color("favorite")
 
     parts = [f"<body style='color:{body}; font-size:9pt'>"]
+    # ONE computation per page, handed to BOTH renderers - the card and the
+    # banner are three lines apart and may never disagree (re-review blocker 1).
+    verdicts = panel_verdicts(panel)
     plain = build_plain_english_whats_working(
         current_rows=panel.current_pick_rows,
         short_term_rows=panel.short_term_rows,
         recent_rows=panel.recent_type_rows,
         playbook_rows=panel.playbook_rows,
         short_term_min_samples=SHORT_TERM_MIN_SAMPLES,
+        verdicts=verdicts,
     )
     parts.append(f"<div style='border:1px solid {favorite_c}; padding:7px; margin-bottom:7px'>")
     parts.append(f"<h3 style='margin:0; color:{favorite_c}'>{_esc(plain['headline'])}</h3><ul>")
     parts.extend(f"<li>{_esc(item)}</li>" for item in plain["bullets"])
     parts.append(f"</ul><div style='color:{muted}'>{_esc(plain['caution'])}</div></div>")
-    parts.append(_best_now_banner_html(panel))
+    parts.append(_best_now_banner_html(panel, verdicts))
     parts.append("<table width='100%' cellspacing='0' cellpadding='4'><tr>")
     parts.append("<td valign='top' width='35%'>")
     parts.append(f"<h3 style='margin:0; color:{favorite_c}'>Current S/A picks</h3>")
@@ -1757,13 +1761,20 @@ def _verdict_block_html(
 
     Four states, four sentences, and the word "leader" never appears beside a
     row that is not one.
+
+    **`label` is the HORIZON only**; the state is appended here from the verdict
+    (re-review blocker 2). The caller used to hardcode "2-session discovery",
+    which then sat over a real `leader` verdict and called it discovery.
     """
+    from working_lately import discovery_basis_phrase, verdict_label_suffix
+
+    label = f"{label}, {verdict_label_suffix(verdict)}"
     if verdict.state in {"leader", "last_reliable_reading"} and verdict.leader is not None:
         row = verdict.leader
         stamp = (
             ""
             if verdict.state == "leader"
-            else f" <span style='color:{muted}'>[last reliable reading, as of {_esc(verdict.as_of)}]</span>"
+            else f" <span style='color:{muted}'>[as of {_esc(verdict.as_of)}]</span>"
         )
         return (
             f"<div><b>{_esc(label)}:</b> "
@@ -1782,14 +1793,22 @@ def _verdict_block_html(
             if reason == "floor"
             else "No leader"
         )
+        # A row kept out for being OLD is not thin - it has the evidence, it is
+        # just not current, and calling it thin misnames the gate (re-review
+        # advisory 1).
+        basis = discovery_basis_phrase(reason)
+        # ...and the "no session at all" sentence only belongs on a row that
+        # really has none. Printing it beside "58 sessions behind" was two
+        # contradictory facts in one line.
+        note = discovery_note if reason == "no_session" else ""
         return (
             f"<div style='color:{muted}'><b>{_esc(label)}:</b> {_esc(head)} - "
-            f"leading on thin evidence: "
+            f"{_esc(basis)}: "
             f"<span style='color:{side_color(discovery.get('side'))}'>"
             f"<b>{_esc(discovery.get('side'))}</b></span> "
             f"<b>{_esc(discovery.get('setup_family'))}</b> "
             f"(n={wins + losses}), discovery only."
-            f"{(' ' + _esc(discovery_note)) if discovery_note else ''}"
+            f"{(' ' + _esc(note)) if note else ''}"
             f"<div style='margin-left:14px'>{_esc(verdict.reason)}</div></div>"
         )
     return (
@@ -1808,7 +1827,45 @@ _VERDICT_HEADLINES = {
 }
 
 
-def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
+def panel_verdicts(panel: SetupTrackerPanel) -> dict[str, Any]:
+    """Both horizons' verdicts, computed ONCE for the whole Summary page.
+
+    **Re-review blocker 1.** The banner went through `_remembered_verdict` (which
+    carries a `previous`, so a stale refresh becomes `last_reliable_reading`)
+    while the plain-English card called `select_leader` directly with no
+    `previous` - so on the stale path the card printed *"no clear leader.
+    Leading on thin evidence, SHORT general on n=88 - discovery only"* directly
+    above the banner's *"SHORT general [last reliable reading, as of
+    2026-09-04]"*. Two renderers computing the same thing will disagree the
+    moment one of them gains an argument; there is now exactly one computation
+    per page and both renderers are handed the same objects.
+    """
+    from working_lately import short_term_evidence_rows
+
+    last_session = _last_completed_session_or_today()
+    return {
+        "swing": _remembered_verdict(
+            panel,
+            panel.recent_type_rows,
+            kind="swing",
+            last_completed_session=last_session,
+        ),
+        # The two-session block reads the same function with its own floor - the
+        # panel's `SHORT_TERM_MIN_SAMPLES`, passed in rather than re-declared.
+        # Since the ST2 fix round the short-horizon export carries its own
+        # counts and its own MEASURED session, so this block is judged for
+        # freshness too; a row from an OLDER file stays undated.
+        "swing_short_term": _remembered_verdict(
+            panel,
+            short_term_evidence_rows(panel.short_term_rows),
+            kind="swing_short_term",
+            last_completed_session=last_session,
+            min_n=SHORT_TERM_MIN_SAMPLES,
+        ),
+    }
+
+
+def _best_now_banner_html(panel: SetupTrackerPanel, verdicts: dict[str, Any] | None = None) -> str:
     """One unmissable line per horizon, and it agrees with the table beneath it.
 
     **ST2.3.** This used to pick `max(avg_closed_r)` over any row with three
@@ -1822,8 +1879,6 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
     counted out loud; and when nothing is eligible the banner says which gate
     closed instead of crowning whoever was left.
     """
-    from working_lately import short_term_evidence_rows
-
     muted = theme.color("text_secondary")
     favorite_c = theme.color("favorite")
     long_c = theme.color("long")
@@ -1832,25 +1887,10 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
     def _side_color(side: Any) -> str:
         return long_c if str(side or "").upper() == "LONG" else short_c
 
-    last_session = _last_completed_session_or_today()
-    swing_verdict = _remembered_verdict(
-        panel,
-        panel.recent_type_rows,
-        kind="swing",
-        last_completed_session=last_session,
-    )
-    # The two-session block reads the same function with its own floor - the
-    # panel's `SHORT_TERM_MIN_SAMPLES`, passed in rather than re-declared here.
-    # Since the ST2 fix round the short-horizon export carries its own counts
-    # and its own session, so this block can be judged for freshness too; a row
-    # from an OLDER file stays undated and can only be shown as discovery.
-    short_verdict = _remembered_verdict(
-        panel,
-        short_term_evidence_rows(panel.short_term_rows),
-        kind="swing_short_term",
-        last_completed_session=last_session,
-        min_n=SHORT_TERM_MIN_SAMPLES,
-    )
+    if verdicts is None:
+        verdicts = panel_verdicts(panel)
+    swing_verdict = verdicts["swing"]
+    short_verdict = verdicts["swing_short_term"]
 
     parts = [
         f"<div style='border:1px solid {favorite_c}; padding:6px; margin-bottom:6px'>",
@@ -1859,7 +1899,7 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
     parts.append(
         _verdict_block_html(
             short_verdict,
-            label="Short-term (1-2d), 2-session discovery",
+            label="Short-term (1-2d)",
             muted=muted,
             side_color=_side_color,
             discovery_note="The 2-session export carries no session, so its freshness is unstated.",
@@ -1867,7 +1907,7 @@ def _best_now_banner_html(panel: SetupTrackerPanel) -> str:
         if short_verdict.coverage.get("discovery_leader") is not None
         or short_verdict.leader is not None
         else (
-            f"<div style='color:{muted}'><b>Short-term (1-2d), 2-session discovery:</b> "
+            f"<div style='color:{muted}'><b>Short-term (1-2d):</b> "
             f"not enough 2-session samples yet (accrues automatically each scan).</div>"
         )
     )

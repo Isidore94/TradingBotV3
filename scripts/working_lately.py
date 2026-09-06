@@ -95,6 +95,40 @@ FRESHNESS_SENTENCE = (
 #: The states ``select_leader`` can return.
 LEADER_STATES = ("leader", "no_clear_leader", "last_reliable_reading", "no_evidence")
 
+#: The one spelling of each state, for a label that must follow the verdict.
+#:
+#: Re-review blocker 2: a caller hardcoded "2-session discovery" into its label
+#: and then printed it over a real `leader` verdict. A label that does not come
+#: from the verdict will eventually contradict it.
+_STATE_WORDS = {
+    "leader": "leader",
+    "no_clear_leader": "no clear leader",
+    "last_reliable_reading": "last reliable reading",
+    "no_evidence": "no evidence",
+}
+
+
+def verdict_label_suffix(verdict: "LeaderVerdict") -> str:
+    """What this verdict IS, in two or three words, for a surface's label."""
+    if verdict.state == "no_evidence" and verdict.coverage.get("discovery_leader") is not None:
+        return "discovery"
+    return _STATE_WORDS.get(verdict.state, "no verdict")
+
+
+def discovery_basis_phrase(discovery_reason: Any) -> str:
+    """How to describe the evidence behind a discovery row, by the gate it failed.
+
+    Re-review advisory 1: a row kept out for being OLD is not thin. It has the
+    evidence - it is simply not current - and calling it thin names the wrong
+    gate, which is the same class of error as calling a weighted rate a count.
+    """
+    reason = _text(discovery_reason)
+    if reason == "not_fresh":
+        return "leading on older evidence"
+    if reason == "no_session":
+        return "leading on undated evidence"
+    return "leading on thin evidence"
+
 
 @dataclass(frozen=True)
 class LeaderVerdict:
