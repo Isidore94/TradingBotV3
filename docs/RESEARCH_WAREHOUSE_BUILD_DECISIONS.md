@@ -2904,3 +2904,57 @@ maintenance command under the lock and never a step in the nightly build.
 
 **Reopen if** the daily-feature partition is ever re-keyed by month, which
 would let `rebuild-month` own it directly and delete the carry.
+
+## BD-101 — The narration selects by EVIDENCE COUNT, never by result
+
+**Decision (2026-09-05, packet N3).** The `setup_research` narration view is
+bounded to the local model's budget, and the cells that survive the cut are
+chosen by **`stats.n` descending, then `recipe_id`, then `family`, then `side`**
+(`setup_research._policy_cell_order_key`; the after-like grid's flat cells use
+their own top-level `n_episodes` in `_after_like_order_key`). The head — gate,
+coverage, evidence shape, excluded families, hoisted conventions — is encoded
+first and cells are added until the next would cross the budget. `narrated`
+{`eligible_policy_cells`, `of`, `selected_by`, `after_like_cells`,
+`of_after_like`} travels in the view, in the narration json and, as a sentence,
+in the pack markdown and the nightly ledger reason.
+
+**Why a size rule and not a ranking.** Gate #43 is a **refusal**: no cell of a
+frozen research grid may be read for a verdict before its declared 20-session
+window closes, including by the code that assembles the narration and including
+if an early cell looks good. Ordering the model's input by `mean_r`, `win_rate`,
+`profit_factor`, `expectancy`, a bootstrap bound or a trimmed mean would hand it
+the flattering half of the grid and call it a selection — a post-hoc ranking
+laundered into a "narration", which is exactly the shape the frozen window
+exists to prevent. `stats.n` is not a result: it is the outcome-row count the
+eligibility floor itself already gates on (`n >= 30 OUTCOME ROWS`), so the cut
+keeps the most-MEASURED evidence and is blind to how it turned out. The
+tie-breaks are identifiers, so the order is total and the same list comes back
+on every run of the same pack — a reviewer can reproduce the selection without
+the model.
+
+**Why not the alternatives.** *Raise the budget*: the 2026-09-05 view was
+658,292 chars against 78,119 and the grid grows every night — no 64k-context
+model reaches it, and a bigger number would only move the night it breaks.
+*Send a random or round-robin sample*: not reproducible, and it would put n=30
+cells beside n=621 ones with nothing to distinguish them. *Order by
+`n_episodes`*: identical on all 619 live cells today, and it does not gate — if
+the floor ever moves onto it (BD-81), this key moves with it. *Summarise the
+cells into aggregates first*: that is arithmetic the deterministic pack has not
+been asked for, and inventing it inside a narration step would make the model's
+words rest on numbers no reviewer could trace.
+
+**What it is not.** It is not a change to the deterministic pack — same schema,
+same rows, same `built_by_commit`, same one file per date (gate #40) — and it
+touches nothing live: no detector, score, alert, watchlist, Focus list, review
+queue or `review_policy.json`. The cells NOT sent are still published in full.
+
+**Reopen if** a local model with a materially larger context lands on the desk
+(the cut would loosen or disappear, and the honest test is whether K reaches N
+on a live pack), or if the eligibility floor moves from `n` onto `n_episodes`,
+in which case the sort key follows the floor rather than being re-argued.
+
+**Where it lives.** `scripts/ai_jobs/setup_research.py`
+(`_policy_cell_order_key`, `_after_like_order_key`, `_bounded_narration_view`,
+`narration_view`, `_narration_coverage_lines`, `_evidence_package`,
+`run_setup_research`); tests `tests/test_n3_narration_bounded.py` and
+`tests/test_n3_narration_bounded_edges.py`. Live gate #65.
