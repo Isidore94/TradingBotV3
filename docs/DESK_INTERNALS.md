@@ -2056,6 +2056,33 @@ and nothing said so.
   (>=52%, n=90)` for the first and is unchanged for the second; the setups table's header
   is `Family favorable %` with the column key `family_win_rate` untouched, because the
   panel's widths, squeeze order and sort handler are pinned to the key.
+- **A REPEAT and a COLLAPSE are different facts and are counted under different names.**
+  `_scan_factor_row_id` is `symbol:scan_date:run_id`, so two scans of one symbol on one
+  day are two SCAN ROWS, not one recorded twice. The first build keyed de-duplication on
+  `(symbol, scan_date)` the way the v1 frame prep does, and on the live history (146,367
+  scan rows) that reported **475,492 duplicates against 109,584 rows** when the truly
+  repeated `scan_row_id`s number **75** (300 at four horizons): the desk ran 15 scans on
+  2026-08-31 and the counter called 14 of each of them a duplicate. So
+  `dropped_duplicates` is the true `(scan_row_id, horizon)` repeat count and nothing else.
+- **One row per session, and it says how many scans stand behind it** (the trader's lead,
+  2026-09-06, on a 127.5 MB-per-scan export: *"the v2 MEASUREMENT for one (symbol, side,
+  scan_date, horizon) is the same number for every scan run that day"*). It is the entry
+  session's close against the target session's close; neither moves because the desk
+  looked again at 11:15. The build keeps ONE row per `(symbol, side, scan_date, horizon)`,
+  the session's LAST scan row - the same choice `_prepare_scan_factor_history_frame` makes
+  for v1, off the same sort, which is what makes the two files join **1:1** on
+  `observation_id` - and `collapsed_same_session` carries the fold on the row AND as a
+  builder total in SCAN ROWS. The log line names both counts; reporting them as one is how
+  fourteen honest re-scans became "475,492 duplicates".
+- **The v2 build is a ROLLING WINDOW and the file is not an archive.** It covers scan
+  dates within `BUILD_WINDOW_SESSIONS` (30 exchange sessions, 1.5x the widest window any
+  surface reads) of `last_completed_session`, and what falls outside is COUNTED in
+  `excluded['outside_build_window']`. Measured through the export path on a copy of the
+  live history at the shipped settings: **91,116 rows / 5.3 s / 25.6 MB** (91,880 scan
+  rows folded, 300 true duplicates), against 110,308 / 5.7 s / 30.9 MB collapsed but
+  unbounded and 458,336 / 13.4 s / 127.5 MB at the scan-row grain over 60 sessions. The
+  collapse does most of the work and the window takes the last 17%; a settled row's target
+  close does not move, which is what makes an unbounded rebuild pure rewrite.
 - **v2 counts sessions, and it is a second file, never a replacement.**
   `master_avwap_lib/session_horizon_outcomes.py` walks the exchange calendar forward from
   the entry session, reads the bar ON the target session, and answers
@@ -2078,6 +2105,18 @@ and nothing said so.
   (`wrong_horizon`, `outside_window`, `stale_horizon`, `unreadable` - a present-and-empty
   horizon is not a zero -, `duplicate`, `unmeasured:<reason>`). `POLICY_SESSION_V2` reads
   the v2 file and **has no production caller**: it is the seam a later decision flips.
+- **The tier performance export shares the RULE, not the policy - and its BASELINE is
+  filtered like for like.** Its cells span every horizon at once over a 365-day lookback,
+  so a policy's horizon and window clauses do not describe it; what must not differ is
+  what an unmeasurable row means. `read_eligible_rows` and
+  `build_bot_tier_performance_rows` therefore call the SAME function,
+  `swing_evidence.is_stale_horizon`, and the export applies it to the observation rows it
+  builds its baseline from as well. An edge is a cell minus its baseline; a baseline built
+  on different rules makes that subtraction a comparison of two populations.
+- **A coverage line is compared to ANOTHER READER, never to a number written down.** The
+  window rolls on the exchange calendar, so the same file answers `2587 / 0 / 16971` at
+  `end=2026-09-03` and `2462 / 0 / 17096` three days later - both correct. What a gate can
+  check is that two readers of one file, asked in the same minute, say the same thing.
 - **The window is asked of the row's own clock.** v1 has only its scan date; a v2 row
   knows the session it was MEASURED on, so `POLICY_SESSION_V2` windows on
   `target_session`. Maturity is checked BEFORE the window, so a pick whose horizon has

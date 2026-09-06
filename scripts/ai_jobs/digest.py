@@ -1700,9 +1700,16 @@ _SECTION_NOTES = {
     ),
     "swing_win_rates": (
         "EMPTY BY CONSTRUCTION: the daily fact pack carries CHAMPION INTRADAY "
-        "outcomes only (answer 3), so no swing win rate is derivable from it. "
+        "outcomes only (answer 3), so no swing rate is derivable from it. "
         "The swing record lives in master_avwap_tier_outcomes.csv and is read "
-        "through swing_headline; it is not restated here from a different grain."
+        "through swing_headline; it is not restated here from a different grain. "
+        "AND IT IS NOT A WIN RATE (ST1, 2026-09-06): that file's declared policy "
+        "is swing_evidence.POLICY_SCANROW_V1 - outcome kind "
+        "favorable_direction_scanrow_v1, the sign of a close-to-close percent "
+        "move at a SCAN-ROW offset, one declared horizon of 5 scan rows, the "
+        "lately window of 20 exchange sessions, explicit stale_horizon rows "
+        "dropped. A model reading this index must call it a favorable-direction "
+        "rate and never a stop-rule win rate or R."
     ),
     "preference_observations": (
         "The trader's own verdicts, classified by review_learning's TAKE/REJECT "
