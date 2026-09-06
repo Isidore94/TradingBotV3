@@ -291,10 +291,18 @@ def select_leader(
     counted = [row for row in live if counted_pair(row) is not None]
     uncounted = len(live) - len(counted)
 
+    # **The floor is judged BEFORE freshness**, because a family that has not
+    # been measured enough times is under the floor whatever the clock says, and
+    # telling a reader "not fresh" about three samples answers a question they
+    # did not ask. Freshness only ever decides between families that already
+    # have enough evidence to be compared.
+    at_floor = [row for row in counted if sum(counted_pair(row) or (0, 0)) >= floor]
+    under_floor = [row for row in counted if sum(counted_pair(row) or (0, 0)) < floor]
+
     fresh: list[Mapping[str, Any]] = []
     stale: list[Mapping[str, Any]] = []
     undated: list[Mapping[str, Any]] = []
-    for row in counted:
+    for row in at_floor:
         behind = _sessions_stale(row, last_completed_session)
         if behind is None:
             undated.append(row)
@@ -316,8 +324,8 @@ def select_leader(
 
         return sorted(candidates, key=key)
 
-    eligible = _order([row for row in fresh if sum(counted_pair(row) or (0, 0)) >= floor])
-    thin = _order([row for row in fresh if sum(counted_pair(row) or (0, 0)) < floor])
+    eligible = _order(fresh)
+    thin = _order(under_floor)
 
     coverage: dict[str, Any] = {
         "kind": kind,
@@ -399,46 +407,28 @@ def select_leader(
     # Nothing eligible. Name the best live row that was kept out - as DISCOVERY,
     # with the gate that kept it out - then say which gate closed, in the order
     # a reader would ask.
-    if thin:
-        coverage["discovery_reason"] = "floor"
-    elif stale:
+    # A row that CLEARS the floor and is merely old is a better discovery note
+    # than a current row with three samples, so the stale and undated pools are
+    # preferred and the thin one is the last resort. The reason names whichever
+    # pool the shown row came from.
+    if stale:
         coverage["discovery_reason"] = "not_fresh"
     elif undated:
         coverage["discovery_reason"] = "no_session"
-    # Fresh-but-thin beats stale beats undated, so the row shown as discovery is
-    # always the one whose single missing gate is the one named beside it.
-    #
-    # **`min_n` binds the stale and undated pools too** (fix round): without it
-    # a 2-session family with three samples could be shown as discovery under a
-    # floor of six, which is a floor that does not hold. `thin` is exempt by
-    # definition - being under the floor IS what put it there, and the sentence
-    # beside it says so.
-    def _at_floor(candidates):
-        return [row for row in candidates if sum(counted_pair(row) or (0, 0)) >= floor]
-
-    discovery_pool = (
-        _order(thin) or _order(_at_floor(stale)) or _order(_at_floor(undated))
-    )
+    elif thin:
+        coverage["discovery_reason"] = "floor"
+    # **`min_n` binds the stale and undated pools too** (fix round): `stale` and
+    # `undated` are drawn from `at_floor` above, so a family with three samples
+    # can never be shown as a stale discovery under a floor of six - a floor
+    # that only holds when the clock is right is not a floor. `thin` is the one
+    # pool below the floor, by definition, and the sentence beside it says so.
+    discovery_pool = _order(stale) or _order(undated) or _order(thin)
     coverage["discovery_leader"] = discovery_pool[0] if discovery_pool else None
 
-    if thin:
-        wins, losses = counted_pair(thin[0]) or (0, 0)
-        return LeaderVerdict(
-            state="no_evidence",
-            leader=None,
-            runner_up=None,
-            reason=(
-                f"no live family reached the n={floor} floor; the best live row "
-                f"is {_describe(thin[0])} on n={wins + losses}, which is "
-                f"discovery, not a leader."
-            ),
-            as_of="",
-            policy_line=_policy_line(
-                thin[0], kind=kind, last_completed_session=last_completed_session
-            ),
-            coverage=coverage,
-        )
-
+    # The branches below are in the SAME order as the discovery pools above, so
+    # the reason a verdict gives always names the gate that kept out the row it
+    # is showing. Rows that cleared the floor come first: "measured enough, just
+    # old" is a different piece of news from "not measured enough yet".
     if stale or undated:
         source = (stale or undated)[0]
         if stale:
@@ -478,6 +468,24 @@ def select_leader(
             ),
             as_of="",
             policy_line="",
+            coverage=coverage,
+        )
+
+    if thin:
+        wins, losses = counted_pair(thin[0]) or (0, 0)
+        return LeaderVerdict(
+            state="no_evidence",
+            leader=None,
+            runner_up=None,
+            reason=(
+                f"no live family reached the n={floor} floor; the best live row "
+                f"is {_describe(thin[0])} on n={wins + losses}, which is "
+                f"discovery, not a leader."
+            ),
+            as_of="",
+            policy_line=_policy_line(
+                thin[0], kind=kind, last_completed_session=last_completed_session
+            ),
             coverage=coverage,
         )
 

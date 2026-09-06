@@ -271,6 +271,14 @@ def _verdict_bullet(
     verdict = select_leader(
         rows, kind=kind, last_completed_session=last_completed_session, min_n=min_n
     )
+
+    def _mean_r(row) -> str:
+        """Mean R beside the win rate, never instead of it (decision 0016)."""
+        for field in ("avg_closed_r", "avg_r_2d"):
+            if row.get(field) not in (None, ""):
+                return f" Mean {_signed(row.get(field), 'R')}."
+        return ""
+
     if verdict.state in {"leader", "last_reliable_reading"} and verdict.leader is not None:
         row = verdict.leader
         stamp = (
@@ -278,9 +286,14 @@ def _verdict_bullet(
         )
         return (
             f"{label}: {_text(row.get('side')).upper()} {_text(row.get('setup_family'))} "
-            f"leads{stamp}. {verdict.policy_line}."
+            f"leads{stamp}. {verdict.policy_line}.{_mean_r(row)}"
         )
     discovery = verdict.coverage.get("discovery_leader")
+    floor_note = (
+        f" It is under the minimum sample floor of n={min_n}, so read it as discovery."
+        if verdict.coverage.get("discovery_reason") == "floor"
+        else ""
+    )
     if discovery is not None:
         wins = _int(discovery.get("n_wins"))
         losses = _int(discovery.get("n_losses"))
@@ -288,9 +301,9 @@ def _verdict_bullet(
             f"{label}: no clear leader. Leading on thin evidence, "
             f"{_text(discovery.get('side')).upper()} "
             f"{_text(discovery.get('setup_family'))} on n={wins + losses} - "
-            f"discovery only. {verdict.reason}"
+            f"discovery only.{floor_note}{_mean_r(discovery)}"
         )
-    return f"{label}: no clear leader. {verdict.reason}"
+    return f"{label}: no clear leader. {verdict.reason}{floor_note}"
 
 
 def build_plain_english_whats_working(

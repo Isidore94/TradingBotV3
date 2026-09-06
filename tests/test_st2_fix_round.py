@@ -481,41 +481,49 @@ def test_the_panel_carries_its_last_fresh_verdict_into_a_stale_refresh(
 # ===========================================================================
 
 
-def test_a_discovery_row_below_the_floor_is_not_shown_from_a_stale_pool():
-    from working_lately import select_leader
-
+def test_min_n_binds_the_stale_pool_so_a_thin_row_is_never_a_stale_discovery():
+    """`thin_and_stale` (2-1) has the better Wilson bound of the two stale rows
+    at 2/3 vs 8/12, and it is under the floor of six. The row shown as the stale
+    discovery must be `fat_and_stale` - a floor that only holds when the clock
+    is right is not a floor."""
     import market_calendar
+
+    from working_lately import select_leader
 
     last_session = _last_completed_session()
     stale_day = last_session
     for _ in range(6):
         stale_day = market_calendar.previous_session(stale_day)
 
-    thin_and_stale = [
-        _evidence_row("thin_and_stale", wins=2, losses=1, session=stale_day.isoformat())
+    rows = [
+        _evidence_row("thin_and_stale", wins=2, losses=1, session=stale_day.isoformat()),
+        _evidence_row("fat_and_stale", wins=8, losses=4, session=stale_day.isoformat()),
     ]
     verdict = select_leader(
-        thin_and_stale,
-        kind="swing_short_term",
-        last_completed_session=last_session,
-        min_n=6,
+        rows, kind="swing_short_term", last_completed_session=last_session, min_n=6
     )
     assert verdict.state == "no_evidence"
-    assert verdict.coverage["discovery_leader"] is None, (
-        "a floor that does not bind the discovery row is not a floor"
-    )
-
-    # At the floor, the same stale row IS worth showing as discovery.
-    fat_and_stale = [
-        _evidence_row("fat_and_stale", wins=8, losses=4, session=stale_day.isoformat())
-    ]
-    verdict = select_leader(
-        fat_and_stale,
-        kind="swing_short_term",
-        last_completed_session=last_session,
-        min_n=6,
-    )
+    assert verdict.coverage["discovery_reason"] == "not_fresh"
     assert verdict.coverage["discovery_leader"]["setup_family"] == "fat_and_stale"
+    assert verdict.coverage["under_floor"] == 1
+    assert verdict.coverage["not_fresh"] == 1
+
+
+def test_the_floor_is_judged_before_the_clock():
+    """A family with three samples is under the floor whether or not its
+    evidence is fresh. Telling the reader "not fresh" about three samples
+    answers a question they did not ask."""
+    from working_lately import select_leader
+
+    rows = [_evidence_row("three_samples", wins=2, losses=1, session="")]
+    verdict = select_leader(
+        rows, kind="swing_short_term", last_completed_session=_last_completed_session(), min_n=6
+    )
+    assert verdict.state == "no_evidence"
+    assert verdict.coverage["discovery_reason"] == "floor", verdict.reason
+    assert "floor" in verdict.reason.lower(), verdict.reason
+    assert "not fresh" not in verdict.reason.lower(), verdict.reason
+    assert verdict.coverage["discovery_leader"]["setup_family"] == "three_samples"
 
 
 # ===========================================================================
