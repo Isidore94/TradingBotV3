@@ -465,6 +465,14 @@ def test_classify_all_is_linear_not_quadratic():
     input must not quadruple the work. A quadratic pass takes ~4x; the index
     takes ~2x, and the bar is set loose enough that a slow machine still passes
     while an n-squared regression cannot.
+
+    **EVERY ROW GETS ITS OWN UNDERLYING** (`A{i}X...`). The first cut of this
+    test gave them all one underlying and expiry, which is the one shape the OLD
+    code was fast on - its inner loop broke on the FIRST sibling it found, so it
+    was linear on that input and the test could not have failed. On distinct
+    underlyings nothing matches and the old loop runs to the end: the reviewer
+    measured 532 ms and 2,124 ms (**4.0x**) on exactly this shape, so the bar
+    below bites.
     """
     import time
 
@@ -474,7 +482,7 @@ def test_classify_all_is_linear_not_quadratic():
         return [
             {
                 "trade_id": f"t{index}",
-                "symbol": f"AA2609{18:02d}C{index:08d}",
+                "symbol": f"A{index}X260918C00060000",
                 "security_type": "OPT",
                 "direction": "LONG",
                 "status": "CLOSED",

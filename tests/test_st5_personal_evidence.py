@@ -538,7 +538,7 @@ def test_missing_planned_risk_is_blank_counted_and_never_written(tmp_path, monke
 # ---------------------------------------------------------------------------
 # ST5.3 - an unknown instrument stays unknown
 # ---------------------------------------------------------------------------
-def test_an_unknown_instrument_is_uncertain_and_never_pooled_into_complete(population_store):
+def test_an_unknown_instrument_is_labelled_uncertain_wherever_it_is_counted(population_store):
     """86 of the 204 live trades carry `security_type = 'UNKNOWN'`; 55 of those
     are CLOSED. Counting them under "complete" would put a quarter of the
     journal's P&L behind a noun the data does not support.
