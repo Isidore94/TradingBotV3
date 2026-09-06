@@ -38,6 +38,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+import market_calendar
 from project_paths import OUTPUT_DIR
 
 _log = logging.getLogger(__name__)
@@ -51,9 +52,22 @@ REPORT_FILE = OUTPUT_DIR / "preference_trade_outcomes.csv"
 #: idea's life, short enough that the file stays readable.
 DEFAULT_WINDOW_DAYS = 45
 
-#: How many sessions after the statement a trade may open and still count as
+#: How many SESSIONS after the statement a trade may open and still count as
 #: acting on it. A trade three weeks later is a different decision.
-TRADE_WINDOW_DAYS = 10
+#:
+#: ST5.1: the constant was named ``_DAYS`` and the arithmetic was
+#: ``timedelta(days=10)`` while every docstring in the module said "sessions".
+#: Over a Labor Day week that is five real sessions thrown away - a statement on
+#: Friday 2026-09-04 reached only 2026-09-14 when ten sessions run to
+#: 2026-09-21, so a trade taken on the 18th read as "never taken".
+TRADE_WINDOW_SESSIONS = 10
+
+#: Deprecated alias kept for one release in case a caller outside this repo
+#: imported the old name. Nothing in `scripts/` reads it (grep, 2026-09-06).
+TRADE_WINDOW_DAYS = TRADE_WINDOW_SESSIONS
+
+#: The window, spelled the way the report has to name it. Units carry their name.
+TRADE_WINDOW_NOTE = f"{TRADE_WINDOW_SESSIONS} sessions"
 
 COLUMNS = [
     "schema",
@@ -297,14 +311,49 @@ def _feedback_statements(since: date, until: date, path: Path | None) -> list[di
 # ---------------------------------------------------------------------------
 # what you did
 # ---------------------------------------------------------------------------
+def statement_window_end(said_on: date, sessions: int = TRADE_WINDOW_SESSIONS) -> date:
+    """The last calendar date a trade may OPEN on and still count as acting.
+
+    ST5.1. Ten SESSIONS walked on the exchange calendar, never ten calendar
+    days: ``market_calendar.trading_days_between(said_on, result) == sessions``
+    by construction, so a Labor Day inside the window pushes the end out rather
+    than eating a session. ``said_on`` itself is never counted (the calendar's
+    own convention), which also answers the non-session case for free - a
+    statement made on a Saturday starts counting at the next session.
+
+    A calendar that refuses (outside its validated 2000-2032 range) is
+    uncertainty, and uncertainty here must not silently widen the window into a
+    match that was never made: the fallback is the OLD calendar-day arithmetic,
+    which is strictly narrower, and it is logged.
+    """
+    wanted = max(1, int(sessions))
+    try:
+        cursor = said_on
+        counted = 0
+        # A ten-session window cannot exceed a fortnight of weekends plus the
+        # longest holiday cluster; the bound exists so a calendar bug cannot
+        # become an infinite loop.
+        for _ in range(wanted * 3 + 30):
+            cursor += timedelta(days=1)
+            if market_calendar.is_session(cursor):
+                counted += 1
+                if counted >= wanted:
+                    return cursor
+    except market_calendar.SessionCalendarError as exc:
+        _log.debug("Session window fell back to calendar days for %s: %s", said_on, exc)
+    else:
+        _log.debug("Session window for %s never reached %d sessions", said_on, wanted)
+    return said_on + timedelta(days=wanted)
+
+
 def match_trade(statement: Mapping[str, Any], trades: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     """The trade that acted on this statement, with a stated confidence.
 
     Never a hard link. The best available evidence is (symbol, side, a trade
-    opened on or within ``TRADE_WINDOW_DAYS`` sessions after the statement), and
-    that is a JUDGEMENT: the trader could have taken the name for an unrelated
-    reason the same week. So the row carries what the match rested on and how
-    firm it is, and a reader can discount it.
+    opened on or within ``TRADE_WINDOW_SESSIONS`` sessions after the statement),
+    and that is a JUDGEMENT: the trader could have taken the name for an
+    unrelated reason the same week. So the row carries what the match rested on
+    and how firm it is, and a reader can discount it.
 
     * symbol + side + same day -> 0.9, "symbol+side+same_session"
     * symbol + side + inside the window -> 0.7, "symbol+side+window"
@@ -318,7 +367,7 @@ def match_trade(statement: Mapping[str, Any], trades: Iterable[Mapping[str, Any]
     if not symbol or not isinstance(said_on, date):
         return {"trade": None, "confidence": 0.0, "basis": "no match"}
 
-    window_end = said_on + timedelta(days=TRADE_WINDOW_DAYS)
+    window_end = statement_window_end(said_on)
     best: tuple[float, str, Mapping[str, Any]] | None = None
     for trade in trades:
         if _symbol(trade.get("symbol")) != symbol:
@@ -448,6 +497,81 @@ def build_rows(
     return rows
 
 
+def trade_level_summary(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Counts and money BY TRADE, over a file that is one row per STATEMENT.
+
+    ST5.2. Both grains are real and neither replaces the other: a statement is
+    what the trader said, and three statements about one name are three
+    statements. But the P&L belongs to the TRADE, and summing the statement rows
+    counted it once per thing the trader said about it. Live on 2026-09-06:
+    **13 rows with ``traded=yes`` over 10 distinct ``trade_id``s**, so a
+    statement-grain total was three trades' P&L too large.
+
+    Every count here says its grain, and ``duplicate_statement_rows`` is the
+    difference between the two - the number a reader needs to see that the file
+    has more rows than trades ON PURPOSE.
+
+    ``planned_risk_recorded`` counts distinct matched trades whose ``journal_r``
+    is present. Blank R means the trader never typed a plan; it is silence, not
+    a zero, and nothing here fills it (ST5.5's invariant).
+    """
+    statements_per_trade: dict[str, int] = {}
+    net_by_trade: dict[str, float] = {}
+    risk_by_trade: dict[str, bool] = {}
+    matched = 0
+    all_rows = list(rows)
+    for row in all_rows:
+        trade_id = str((row or {}).get("trade_id") or "").strip()
+        if not trade_id:
+            continue
+        matched += 1
+        statements_per_trade[trade_id] = statements_per_trade.get(trade_id, 0) + 1
+        # ONCE per trade. `setdefault` is the whole fix: the second statement
+        # about a trade contributes a row and no money.
+        if trade_id not in net_by_trade:
+            try:
+                net_by_trade[trade_id] = float((row or {}).get("journal_net_pnl"))
+            except (TypeError, ValueError):
+                net_by_trade[trade_id] = 0.0
+        if trade_id not in risk_by_trade:
+            risk_by_trade[trade_id] = bool(str((row or {}).get("journal_r") or "").strip())
+
+    n_trades = len(statements_per_trade)
+    recorded = sum(1 for present in risk_by_trade.values() if present)
+    return {
+        "n_statements": len(all_rows),
+        "n_statements_matched": matched,
+        "n_trades_matched": n_trades,
+        "net_pnl": sum(net_by_trade.values()),
+        "duplicate_statement_rows": matched - n_trades,
+        "statements_per_trade": statements_per_trade,
+        "planned_risk_recorded": recorded,
+        "planned_risk_note": (
+            f"planned risk recorded on {recorded} of {n_trades} matched trades"
+        ),
+        "window_note": TRADE_WINDOW_NOTE,
+    }
+
+
+def summary_note(rows: Iterable[Mapping[str, Any]], summary: Mapping[str, Any] | None = None) -> str:
+    """The report's summary block, in one sentence per grain (ST5.2).
+
+    Both denominators are named, because "13 statements" and "10 trades" are
+    two answers to two different questions and a reader given one of them will
+    read it as the other.
+    """
+    rows = list(rows)
+    summary = dict(summary) if summary is not None else trade_level_summary(rows)
+    return (
+        f"{len(rows)} statement(s) inside a {TRADE_WINDOW_NOTE} window; "
+        f"{summary['n_statements_matched']} matched a trade over "
+        f"{summary['n_trades_matched']} distinct trade(s) "
+        f"({summary['duplicate_statement_rows']} extra statement row(s) about a "
+        f"trade already counted); P&L is summed once per trade. "
+        f"{summary['planned_risk_note']}."
+    )
+
+
 def write_rows(rows: list[dict[str, Any]], path: Path | None = None) -> bool:
     """Publish the report atomically. Returns whether it was written."""
     import os
@@ -507,15 +631,26 @@ def run_preference_trade_outcomes(
     rows = build_rows(statements, trades, grades=load_paper_grades(), now=moment)
     written = write_rows(rows, report_path)
     taken = sum(1 for row in rows if row["traded"] == "yes")
+    # ST5.2 / live gate #79: BOTH grains travel out of the slot, so the ledger
+    # line and the Weekend Prep note can print `n_trades` beside `n_statements`
+    # instead of leaving a reader to assume they are the same number.
+    summary = trade_level_summary(rows)
     return {
         "status": "ok" if written else "degraded",
         "rows": len(rows),
         "taken": taken,
         "not_taken": len(rows) - taken,
+        "n_statements_matched": summary["n_statements_matched"],
+        "n_trades_matched": summary["n_trades_matched"],
+        "duplicate_statement_rows": summary["duplicate_statement_rows"],
+        "net_pnl_by_trade": summary["net_pnl"],
+        "planned_risk_recorded": summary["planned_risk_recorded"],
+        "window": TRADE_WINDOW_NOTE,
         "reason": (
-            f"{len(rows)} statement(s) between {since} and {until}; {taken} were traded, "
-            f"{len(rows) - taken} were not"
-            + ("" if written else "; the report could not be written")
+            f"{len(rows)} statement(s) between {since} and {until} matched inside a "
+            f"{TRADE_WINDOW_NOTE} window; {taken} were traded, "
+            f"{len(rows) - taken} were not. " + summary_note(rows, summary)
+            + ("" if written else " The report could not be written.")
         ),
     }
 
@@ -526,10 +661,15 @@ __all__ = [
     "REPORT_FILE",
     "SCHEMA",
     "TRADE_WINDOW_DAYS",
+    "TRADE_WINDOW_NOTE",
+    "TRADE_WINDOW_SESSIONS",
     "build_rows",
     "collect_statements",
     "load_paper_grades",
     "match_trade",
     "run_preference_trade_outcomes",
+    "statement_window_end",
+    "summary_note",
+    "trade_level_summary",
     "write_rows",
 ]
