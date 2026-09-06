@@ -3480,14 +3480,50 @@ def swing_family_records(
     window: Any = None,
     horizon: int = SWING_DIGEST_HORIZON_SESSIONS,
 ) -> dict[str, dict[str, int]]:
-    """`{setup_family: {"wins": w, "losses": l}}` from the tracker's own grading.
+    """`{setup_family: {"wins": w, "losses": l}}`. See :func:`swing_family_read`."""
+    records, _read = swing_family_read(path, window=window, horizon=horizon)
+    return records
+
+
+def swing_family_record_line(
+    path: Any = None,
+    *,
+    window: Any = None,
+    horizon: int = SWING_DIGEST_HORIZON_SESSIONS,
+) -> str:
+    """The one-line description of what the digest just ranked on - ST1 item 3."""
+    _records, read = swing_family_read(path, window=window, horizon=horizon)
+    if read is None:
+        return ""
+    from swing_evidence import describe
+
+    return describe(read.policy, read)
+
+
+def swing_family_read(
+    path: Any = None,
+    *,
+    window: Any = None,
+    horizon: int = SWING_DIGEST_HORIZON_SESSIONS,
+):
+    """`(records, EligibleRead)` from the tracker's own grading. ONE file read.
+
+    The caller that needs both the ranking and the line saying what was ranked
+    (`ui/services/autopilot_service`) takes them from here rather than opening
+    the 7.9 MB CSV twice.
 
     R4 A11. The digest ranks by the record the tracker MEASURED, so the record
     has to be read from the file the tracker writes -
     `master_avwap_tier_outcomes.csv`, which is where `setup_docs` already reads
-    the same verdict from. The tracker decides what a win IS (its stop-at-a-level,
-    two-closes rule); nothing here re-derives one from a return, because two
-    definitions of a win in one program is how two screens end up disagreeing.
+    the same verdict from. Nothing here re-derives a verdict from a return,
+    because two definitions of one word in one program is how two screens end up
+    disagreeing.
+
+    **ST1 item 1: that verdict is a FAVORABLE DIRECTION, not a win.** This
+    docstring used to say the tracker grades by "its stop-at-a-level, two-closes
+    rule". The `win` column is `side_return_pct > 0` - the sign of a
+    close-to-close percent move at a scan-row offset - so the digest's ranking
+    line says "favorable", and `outcome_kind` on the row says which kind it is.
 
     **ONE DECLARED HORIZON** (:data:`SWING_DIGEST_HORIZON_SESSIONS`), because
     that file carries one row per `(scan_row_id, horizon)`. The first version of
@@ -3508,44 +3544,46 @@ def swing_family_records(
     SESSIONS - so the digest ranks on what has been working recently rather than
     on a year.
 
-    Returns {} for anything it cannot read. A digest that failed to render
-    because a CSV moved would be worse than one ranked by expected R alone,
-    which is what an empty mapping degrades to.
+    **ST1 item 3: the horizon, the stale rule and the window are no longer
+    written out here.** They are `swing_evidence.POLICY_SCANROW_V1`, applied by
+    `swing_evidence.read_eligible_rows` - the same object `setup_docs` and the
+    tier performance export read this file with. The eligible set and every
+    number the digest ranks on are unchanged.
+
+    Returns `({}, None)` for anything it cannot read. A digest that failed to
+    render because a CSV moved would be worse than one ranked by expected R
+    alone, which is what an empty mapping degrades to.
     """
     try:
-        import csv as _csv
+        from dataclasses import replace
 
         from evidence_stats import lately_window
         from project_paths import MASTER_AVWAP_TIER_OUTCOMES_FILE
+        from swing_evidence import POLICY_SCANROW_V1, read_eligible_rows
 
         first, last = window or lately_window()
-        wanted_horizon = str(int(horizon))
         target = Path(path or MASTER_AVWAP_TIER_OUTCOMES_FILE)
+        policy = POLICY_SCANROW_V1
+        if int(horizon) != int(policy.horizon_sessions):
+            policy = replace(policy, horizon_sessions=int(horizon))
+        read = read_eligible_rows(target, policy, window=(first, last))
         records: dict[str, dict[str, int]] = {}
-        with open(target, newline="", encoding="utf-8-sig") as handle:
-            for row in _csv.DictReader(handle):
-                stamp = str(row.get("scan_date") or "")[:10]
-                if stamp and not (first <= stamp <= last):
-                    continue
-                if str(row.get("horizon_sessions") or "").strip() != wanted_horizon:
-                    continue
-                if str(row.get("stale_horizon") or "").strip().lower() == "true":
-                    continue
-                family = normalize_family_key(row.get("setup_family"))
-                if not family:
-                    continue
-                verdict = str(row.get("win") if row.get("win") is not None else "").strip().lower()
-                entry = records.setdefault(family, {"wins": 0, "losses": 0})
-                if verdict in {"1", "true", "yes", "win"}:
-                    entry["wins"] += 1
-                elif verdict in {"0", "false", "no", "loss"}:
-                    entry["losses"] += 1
-                # Anything else is UNMEASURED and counts in neither - folding it
-                # into the denominator drifts every rate downward by however
-                # much the data is missing.
-        return records
+        for row in read.rows:
+            family = normalize_family_key(row.get("setup_family"))
+            if not family:
+                continue
+            verdict = str(row.get("win") if row.get("win") is not None else "").strip().lower()
+            entry = records.setdefault(family, {"wins": 0, "losses": 0})
+            if verdict in {"1", "true", "yes", "win"}:
+                entry["wins"] += 1
+            elif verdict in {"0", "false", "no", "loss"}:
+                entry["losses"] += 1
+            # Anything else is UNMEASURED and counts in neither - folding it
+            # into the denominator drifts every rate downward by however
+            # much the data is missing.
+        return records, read
     except Exception:  # noqa: BLE001 - the digest never fails on a reader
-        return {}
+        return {}, None
 
 
 def normalize_family_key(family: Any) -> str:
@@ -3884,6 +3922,11 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
     if picks_symbols:
         picks_lines.append("TV paste: " + ",".join(picks_symbols))
 
+    # ST1 item 3: the digest says what it ranked on. `describe(...)` names the
+    # outcome kind, the horizon IN ITS OWN UNIT ("5 scan rows", not "5
+    # sessions"), the window and the coverage, so a phone reader can tell a
+    # favorable-direction rate from a trade record without opening the file.
+    record_line = str(payload.get("swing_family_record_line") or "").strip()
     swing_data_line = str(payload.get("swing_data_line") or "")
     if picks_lines:
         swing_lines = picks_lines
@@ -3893,6 +3936,8 @@ def render_away_report(payload: Mapping[str, Any]) -> str:
         swing_lines = ["No qualified current-session swing opportunity."]
     if swing_data_line:
         swing_lines = [*swing_lines, swing_data_line]
+    if record_line and picks_lines:
+        swing_lines = [*swing_lines, f"Ranked on: {record_line}"]
 
     def _tv_line(items: Iterable[str]) -> str:
         items = [str(item).strip().upper() for item in items if str(item).strip()]
