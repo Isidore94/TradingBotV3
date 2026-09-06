@@ -2936,12 +2936,20 @@ def _run_master_impl(
         run_result["tier_pick_count"] = int(tier_tracker_result.get("tier_pick_count", 0) or 0)
         run_result["tier_outcome_count"] = int(tier_tracker_result.get("tier_outcome_count", 0) or 0)
         run_result["tier_catch_rate_count"] = int(tier_tracker_result.get("tier_catch_rate_count", 0) or 0)
-        run_result["session_horizon_outcome_count"] = int(
-            tier_tracker_result.get("session_horizon_outcome_count", 0) or 0
-        )
-        run_result["session_horizon_measured_count"] = int(
-            tier_tracker_result.get("session_horizon_measured_count", 0) or 0
-        )
+        # Absent, not zero, when the shadow export failed: the run result
+        # carries the error instead, so nothing reads "measured nothing" off a
+        # write that never happened.
+        if "session_horizon_export_error" in tier_tracker_result:
+            run_result["session_horizon_export_error"] = str(
+                tier_tracker_result["session_horizon_export_error"]
+            )
+        else:
+            run_result["session_horizon_outcome_count"] = int(
+                tier_tracker_result.get("session_horizon_outcome_count", 0) or 0
+            )
+            run_result["session_horizon_measured_count"] = int(
+                tier_tracker_result.get("session_horizon_measured_count", 0) or 0
+            )
         logging.info(
             "Bot tier tracker exported %s current pick(s), %s outcome row(s), and %s catch-rate row(s).",
             run_result["tier_pick_count"],

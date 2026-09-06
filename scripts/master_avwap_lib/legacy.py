@@ -11803,7 +11803,7 @@ def export_bot_tier_tracker_views(
     session_horizon = _write_session_horizon_outcomes(
         session_horizon_path, history_df, closes_for
     )
-    return {
+    result = {
         "tier_pick_count": len(tier_pick_rows),
         "tier_outcome_count": len(tier_outcome_rows),
         "tier_performance_count": len(tier_performance_rows),
@@ -11812,12 +11812,22 @@ def export_bot_tier_tracker_views(
         "tier_outcomes_path": str(tier_outcomes_path),
         "tier_performance_path": str(tier_performance_path),
         "tier_catch_rate_path": str(tier_catch_rate_path),
-        "session_horizon_outcome_count": int(session_horizon.get("rows", 0) or 0),
-        "session_horizon_measured_count": int(session_horizon.get("measured", 0) or 0),
-        "session_horizon_dropped_duplicates": int(session_horizon.get("duplicates", 0) or 0),
-        "session_horizon_collapsed_same_session": int(session_horizon.get("collapsed", 0) or 0),
         "session_horizon_outcomes_path": str(session_horizon_path),
     }
+    # A failed v2 export reports the FAILURE, and no counts. Reporting zeros
+    # there would say "measured nothing", which is a different claim.
+    if "error" in session_horizon:
+        result["session_horizon_export_error"] = str(session_horizon["error"])
+    else:
+        result["session_horizon_outcome_count"] = int(session_horizon.get("rows", 0) or 0)
+        result["session_horizon_measured_count"] = int(session_horizon.get("measured", 0) or 0)
+        result["session_horizon_dropped_duplicates"] = int(
+            session_horizon.get("duplicates", 0) or 0
+        )
+        result["session_horizon_collapsed_same_session"] = int(
+            session_horizon.get("collapsed", 0) or 0
+        )
+    return result
 
 
 def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
@@ -11830,7 +11840,6 @@ def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
     """
     from datetime import datetime as _datetime
 
-    result = {"rows": 0, "measured": 0, "duplicates": 0, "collapsed": 0}
     try:
         from .session_horizon_outcomes import (
             SESSION_HORIZON_OUTCOME_COLUMNS,
@@ -11839,7 +11848,7 @@ def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
 
         if history_df is None:
             _write_scan_factor_csv(path, [], SESSION_HORIZON_OUTCOME_COLUMNS)
-            return result
+            return {"rows": 0, "measured": 0, "duplicates": 0, "collapsed": 0}
         import market_calendar
 
         last_complete = market_calendar.last_completed_session(_datetime.now())
@@ -11849,10 +11858,17 @@ def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
             last_completed_session=last_complete,
         )
         _write_scan_factor_csv(path, built.rows, SESSION_HORIZON_OUTCOME_COLUMNS)
-        result["rows"] = len(built.rows)
-        result["measured"] = sum(1 for row in built.rows if row.get("measured") is True)
-        result["duplicates"] = int(built.dropped_duplicates)
-        result["collapsed"] = int(built.collapsed_same_session)
+        # ONE ASSIGNMENT, AFTER the builder has answered. Filling these in one by
+        # one meant a failure partway reported the counts it had reached and a
+        # silent ZERO for the rest - the reviewer hit exactly that: the export
+        # test passed with `collapsed == 0` against a module that had no such
+        # count at all. A number that was never measured must be ABSENT.
+        result = {
+            "rows": len(built.rows),
+            "measured": sum(1 for row in built.rows if row.get("measured") is True),
+            "duplicates": int(built.dropped_duplicates),
+            "collapsed": int(built.collapsed_same_session),
+        }
         # BOTH numbers, under their own names: a same-session collapse is the
         # desk having scanned again, and a duplicate is the input recording one
         # scan twice. Reporting them as one number is how 14 honest re-scans
@@ -11865,9 +11881,12 @@ def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
             result["collapsed"],
             result["duplicates"],
         )
-    except Exception:
+        return result
+    except Exception as exc:
         logging.exception("Session-horizon outcome export failed (shadow file; v1 unaffected).")
-    return result
+        # No counts at all: "the export failed" and "the export measured zero"
+        # are different facts, and a zero here would be read as the second.
+        return {"error": f"{type(exc).__name__}: {exc}"}
 
 
 def _load_csv_dict_rows(path: Path | str | None) -> list[dict]:

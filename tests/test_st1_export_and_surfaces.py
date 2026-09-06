@@ -165,7 +165,12 @@ def test_the_export_never_fetches_and_survives_a_closes_lookup_that_raises(tmp_p
 
 
 def test_a_failed_v2_write_never_costs_the_v1_exports(tmp_path, monkeypatch):
-    """The guard, proven by breaking the builder the export calls."""
+    """The guard, proven by breaking the builder the export calls.
+
+    A failure reports the FAILURE and no counts: "the export failed" and "the
+    export measured zero" are different facts, and a zero would be read as the
+    second.
+    """
     import market_calendar
 
     from master_avwap_lib import session_horizon_outcomes
@@ -183,8 +188,54 @@ def test_a_failed_v2_write_never_costs_the_v1_exports(tmp_path, monkeypatch):
     )
 
     assert result["tier_outcome_count"] > 0
-    assert result["session_horizon_outcome_count"] == 0
     assert paths["tier_outcomes_path"].exists()
+    assert "boom" in result["session_horizon_export_error"]
+    for key in (
+        "session_horizon_outcome_count",
+        "session_horizon_measured_count",
+        "session_horizon_dropped_duplicates",
+        "session_horizon_collapsed_same_session",
+    ):
+        assert key not in result, f"{key} must be ABSENT after a failed export, not 0"
+
+
+def test_a_PARTLY_failed_v2_export_reports_no_counts_rather_than_some(tmp_path, monkeypatch):
+    """A count the builder never produced must not come back as a zero.
+
+    This is the reviewer's own miss, made into a test: the result dict used to
+    be filled key by key inside the try, so a builder that answered `rows` and
+    `dropped_duplicates` but had no `collapsed_same_session` reported the first
+    two and a silent `collapsed == 0` - and the export test passed against a
+    module that had never counted a collapse at all. The dict is now built in
+    ONE assignment after the builder returns, so a half-answer is no answer.
+    """
+    import market_calendar
+
+    from master_avwap_lib import session_horizon_outcomes
+
+    class _HalfBuild:
+        """What the pre-collapse builder returned: no `collapsed_same_session`."""
+
+        rows = [{"measured": True}]
+        dropped_duplicates = 0
+
+    paths = _export_paths(tmp_path)
+    monkeypatch.setattr(market_calendar, "last_completed_session", lambda now: date(2026, 6, 30))
+    monkeypatch.setattr(
+        session_horizon_outcomes,
+        "build_session_horizon_observation_rows",
+        lambda *args, **kwargs: _HalfBuild(),
+    )
+
+    result = legacy.export_bot_tier_tracker_views(
+        history_df=_history(), closes_for=lambda symbol: None, **paths
+    )
+
+    assert result["tier_outcome_count"] > 0
+    assert "AttributeError" in result["session_horizon_export_error"]
+    assert "session_horizon_collapsed_same_session" not in result
+    # And nothing partial leaks through either - not even the count it reached.
+    assert "session_horizon_outcome_count" not in result
 
 
 def test_two_scans_of_one_symbol_on_one_day_are_COLLAPSED_never_duplicates():
