@@ -616,6 +616,17 @@ Each item requires parity/rollback evidence before the next authority cutover.
 3. **P2.3 Repair remaining point-in-time defects.** Cover moving levels, history
    keys, backfill leakage, tracker identity, score ordering, factor horizons,
    corporate actions, and survivorship with intentional-difference fixtures.
+   **Partly done (packet ST3, 2026-09-06):** the tracker replay's two worst
+   point-in-time defects have their intentional-difference fixtures and a
+   versioned, opt-in repair - `literal_level_v1` / `gap_aware_v2` for the fill
+   and `same_session_v1` / `prior_session_v2` for the level, both defaulting to
+   what ships, with `tests/fixtures/st3_replay_golden.json` pinning the default
+   path byte-identical and `scripts/tracker_execution_compare.py` producing the
+   comparison. **Still owed here:** the trader's decision on whether the
+   repaired pair becomes the scoring convention (a sec-7 promotion if yes, with
+   a historical restatement question of its own), and the rest of the P2.3 list
+   - backfill leakage, tracker identity, score ordering, factor horizons,
+   corporate actions and survivorship - which ST3 did not touch. Live gate #77.
 4. **P2.4 Make CandidateRegistry authoritative.** Migrate every live candidate writer,
    preserve manual names, prove expiry/restart/rollback, and retire duplicate text-
    file authority only after parity.

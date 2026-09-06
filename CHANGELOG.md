@@ -1325,6 +1325,45 @@ which is evidence and must not be loaded as context.
   cost the tracker save, and the champion aggregates are pinned byte-identical by a
   two-directory reproduction test. Live gate #67.
 
+- **The tracker replay has a VERSIONED execution convention and level knowledge**
+  (packet ST3, 2026-09-06). `scripts/master_avwap_lib/execution_convention.py` names four
+  policies on two independent axes: `literal_level_v1` (DEFAULT, today's behaviour - a
+  touched level fills AT the level) / `gap_aware_v2`, and `same_session_v1` (DEFAULT -
+  bar D's high/low tested against day D's own bands) / `prior_session_v2`. Under
+  `gap_aware_v2` a bar that opened through the level fills at the OPEN (`gap_open`,
+  both directions - a stop gap and a target gap are the same mechanic), a bar with no
+  usable open fills at the level CLAMPED into `[low, high]` (`clamped_no_open`), and an
+  INVALID candle (`low <= open, close <= high` broken, or a NaN among high/low/close)
+  books NOTHING (`invalid_bar`) while the hold clock keeps running - an invalid bar on
+  the maximum-hold index DEFERS the `TIME_STOP` to the next valid bar
+  (`deferred_invalid_bar`), never cancels it. The fill price is always inside the bar
+  and `resolve_fill` raises rather than trusting a comment. Under `prior_session_v2` the
+  INTRABAR target tests read the LAST COMPLETED session's levels (a daily anchored-VWAP
+  band for day D is computed with day D's own bar folded in, so it is not knowable
+  intrabar); the hard stop is level-free and untouched, and the two-closes protective
+  stop and the maximum-hold force close stay CLOSE-based on day D. A prior-session level
+  that does not exist counts `intrabar_skip_reasons["no_prior_session_level"]` on the
+  scenario rather than reading as "not hit". `_evaluate_tracker_scenario_bar` and
+  `recompute_tracker_setup_record` take the two policies as keyword arguments; the
+  record carries `execution_convention` / `level_knowledge` ONLY for a non-default run
+  and a default run POPS them, so a record replayed once under v2 cannot keep a label
+  the desk did not use. `_apply_scenario_exit_event`'s `fill_basis` /
+  `execution_convention` are keyword-only and add a key only when passed. **The default
+  path is byte-identical and pinned** by `tests/fixtures/st3_replay_golden.json`, taken
+  from `main` before the repair existed. `scripts/tracker_execution_compare.py` is the
+  evidence CLI: it replays COPIES under both policy pairs and writes a stamped
+  `comparison_<stamp>.json` + `.csv` with per-setup R (clipped AND raw, never blended -
+  `TRACKER_SCORING_R_CLIP` is 4.0 and the tail hides behind it), changed flag, fill
+  bases, and per `(side, setup_family, priority_bucket)` n / changed n / expectancy /
+  win rate with the ONE Wilson bound / tail / rank impact; `--new-execution-convention`
+  and `--new-level-knowledge` isolate one axis. It prints `project_paths.DATA_DIR` and
+  REFUSES if it, `--out`, `--tracker` or `--bars` is under `C:\TradingBotData`; a SQLite
+  mirror is opened `mode=ro&immutable=1`. **Shadow only and NOT authorization**: nothing
+  in production passes a non-default policy, `calc_anchored_vwap_bands` and
+  `calc_anchored_vwap_band_history` are untouched (decision 0008), the cost model is
+  one, stop-first ordering is kept, and whether `gap_aware_v2` / `prior_session_v2`
+  becomes the scoring convention is the trader's separate decision. Live gate #77.
+
 Neither of the first two challengers is promoted, and the band challenger's ≥ 20
 sessions of forward accrual start at its first measured row. Their remaining evidence
 gates are in `plan.md`.
@@ -1393,6 +1432,62 @@ broker call, no auto-confirm, no reconstructed risk.
   and two tests pin it; a ninth line broke `test_one_unreadable_store_still_leaves_a_card`.
   The sentence sits in its own label directly UNDER the card, filled from the tag page's
   existing worker through `coverageChanged` - same screen, same seam, no second read.
+### 2026-09-06 - Packet ST3: no impossible fills, no same-day knowledge (builder, branch `claude/st3-gap-aware-fills`)
+
+Trader: *"Declare a versioned execution convention for long/short stop gaps, missing opens,
+invalid OHLC, and target gaps. Never book a fill outside the available bar through the
+current literal-level assumption."* ... *"Resolve intrabar target levels only from
+information available before they could be hit."* ... *"This is not authorization to
+overwrite live historical results or promote the repaired simulation into scoring."*
+
+- **The defect, reproduced on the real function.** Entry 100, risk 5, hard stop 95, next
+  bar O80/H85/L79/C82: `_evaluate_tracker_scenario_bar` booked `HARD_STOP` at **95**, a
+  price the bar never traded, for **-1.014R** after costs. The honest fill is the open at
+  80, for **-4.014R**. Separately, `calc_anchored_vwap_band_history` folds day D's own
+  OHLC and volume into the cumulative sums BEFORE writing `history[D]`, and the replay
+  tested day D's high/low against `history[D]` - a level knowable only at D's close.
+- **The repair is additive, opt-in and versioned**, and the DEFAULT path is byte-identical
+  (see the inventory bullet above for the full contract). Two axes:
+  `literal_level_v1` / `gap_aware_v2` for the fill, `same_session_v1` /
+  `prior_session_v2` for the level. Stop-first ordering, the maximum-hold force close,
+  the ONE cost model and the frozen AVWAP formula are all untouched; only WHICH DAY's
+  level a bar is tested against and WHAT PRICE a touch books can change, and only when a
+  caller asks.
+- **The lead's decision on the packet's one ambiguity (2026-09-06):** an INVALID bar that
+  lands on the maximum-hold index books nothing and the `TIME_STOP` fires on the next
+  VALID bar with `fill_basis` `deferred_invalid_bar`. Maximum hold is preserved, never
+  cancelled, and the record says which bar could not answer.
+- **The comparison, on copies, seed 20260906 across the whole 11,372-record mirror COPY**
+  with daily bars from the machine cache. **`n_setups` 794 is the denominator** - 800
+  records were offered, 6 carry no tradeable scenario, 0 lacked bars, 0 failed to replay;
+  `--limit` is what was OFFERED and is never the denominator, so the CLI prints the whole
+  split and the JSON carries a `population_note` saying so. The three JSON/CSV pairs are
+  copied to `%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\`
+  (`both__comparison_20260906T110731.*`, `exec_only__…110814.*`, `levels_only__…110855.*`).
+  The first draft reported `min R -4.0 -> -4.0`, which is `TRACKER_SCORING_R_CLIP` and not
+  a tail, so the artifact carries the CLIPPED and the RAW R side by side, never blended:
+
+  | run | changed | expectancy (raw) | win rate | R < -2 | groups moved rank |
+  |---|---|---|---|---|---|
+  | both repairs | 472 of 794 | -0.0981 → **-0.1192** | 0.576 → 0.596 | 47 → 48 | 43 of 50, max 14 |
+  | execution only (`gap_aware_v2`) | 89 of 794 | -0.0981 → **-0.0811** | 0.576 → 0.597 | 47 → 47 | 33 of 50, max 9 |
+  | level knowledge only (`prior_session_v2`) | 458 of 794 | -0.0981 → **-0.1491** | 0.576 → 0.548 | 47 → 48 | 40 of 50, max 17 |
+
+  **The gap-aware convention is symmetric by design and, in this sample, mostly
+  HELPS**: of the 89 setups it moved, 84 got better and 5 got worse, because a resting
+  limit that opens through its price fills BETTER than the level and target gaps
+  outnumber stop gaps 166 to a handful. The prior-session level knowledge is what costs
+  expectancy (413 of 458 moved setups worse). Both numbers are evidence for a decision
+  the trader has not taken; nothing here promotes anything.
+- **The `invalid_bar` counter found a real one on its first run.** It fired 380
+  scenario-bars over 26 setups / 22 symbols, and each of those 22 cached daily-bar files
+  holds **exactly one invalid candle, all dated 2026-09-04**, every one with `low > open`
+  or `high < open` (AEE `O=105.81 H=106.96 L=106.11`; TWLO `O=239.52 H=239.29`) - the
+  signature of a FORMING bar written into `machine_cache\daily_bars` mid-session. Under
+  `literal_level_v1`, which is what the desk runs, those bars are still read for fills,
+  excursions and marks. A machine-local cache read, not a claim about the tracker or the
+  durable store, and outside ST3's scope - recorded because the counter is what made it
+  visible.
 
 ### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
 

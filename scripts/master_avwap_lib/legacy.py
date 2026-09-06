@@ -127,6 +127,30 @@ from project_paths import (
     save_tracker_storage_dir,
 )
 
+# Packet ST3. Leaf module (stdlib only), so no cycle: it names the tracker
+# replay's execution convention and level knowledge, both default-preserving.
+# The four policy names are imported even where this module does not branch on
+# them, so `master_avwap.<NAME>` resolves for a caller that only ever sees the
+# compatibility entrypoint; `execution_convention` remains their one home.
+from .execution_convention import (
+    DEFAULT_EXECUTION_CONVENTION,
+    DEFAULT_LEVEL_KNOWLEDGE,
+    EXECUTION_GAP_AWARE_V2,
+    EXECUTION_LITERAL_LEVEL_V1,
+    FILL_BASIS_CLOSE,
+    FILL_BASIS_DEFERRED_INVALID_BAR,
+    FILL_BASIS_INVALID_BAR,
+    FILL_KIND_STOP,
+    FILL_KIND_TARGET,
+    LEVEL_KNOWLEDGE_PRIOR_SESSION_V2,
+    LEVEL_KNOWLEDGE_SAME_SESSION_V1,
+    NO_PRIOR_SESSION_LEVEL,
+    bar_is_valid,
+    is_gap_aware,
+    resolve_fill,
+    uses_prior_session_levels,
+)
+
 from .levels import (
     CLOUD_TOL_ATR_FRACTION,
     HV_RELVOL_GREEN,
@@ -6409,7 +6433,22 @@ def _bar_hits_stop_level(side: str, bar_row: pd.Series, stop_level: float | None
     return _coerce_float(bar_row.get("high")) is not None and float(bar_row["high"]) >= float(stop_level)
 
 
-def _apply_scenario_exit_event(scenario: dict, qty: int, exit_price: float, trade_date: str, reason: str) -> dict:
+def _apply_scenario_exit_event(
+    scenario: dict,
+    qty: int,
+    exit_price: float,
+    trade_date: str,
+    reason: str,
+    *,
+    fill_basis: str | None = None,
+    execution_convention: str | None = None,
+) -> dict:
+    """Book one exit leg. The cost model is unchanged and there is only one.
+
+    ``fill_basis`` / ``execution_convention`` (packet ST3) are ADDITIVE and
+    keyword-only: a caller that passes neither - which is every production
+    caller - writes exactly the event dict this function has always written.
+    """
     qty = int(max(0, qty))
     if qty <= 0:
         return {}
@@ -6433,6 +6472,10 @@ def _apply_scenario_exit_event(scenario: dict, qty: int, exit_price: float, trad
         "gross_pnl": float(gross_pnl),
         "cost": float(trade_cost),
     }
+    if fill_basis is not None:
+        event["fill_basis"] = str(fill_basis)
+    if execution_convention is not None:
+        event["execution_convention"] = str(execution_convention)
     scenario.setdefault("events", []).append(event)
     scenario["last_action"] = f"{reason} @ {exit_price:.2f} on {trade_date}"
     return event
@@ -6448,7 +6491,51 @@ def _evaluate_tracker_scenario_bar(
     is_entry_day: bool,
     dynamic_level_overrides: dict[str, float] | None = None,
     bar_index: int = 0,
+    execution_convention: str = DEFAULT_EXECUTION_CONVENTION,
+    level_knowledge: str = DEFAULT_LEVEL_KNOWLEDGE,
+    prior_session_levels: dict | None = None,
 ) -> list[dict]:
+    """Advance one scenario over one daily bar.
+
+    Packet ST3 added three keyword arguments, all of them default-preserving:
+
+    ``execution_convention``
+        ``literal_level_v1`` (default) books a touched level AT the level,
+        exactly as this function always has. ``gap_aware_v2`` routes every
+        level fill through :func:`master_avwap_lib.execution_convention.
+        resolve_fill`, so a bar that gapped through the level books the open,
+        a bar with no open books a clamped price, and an invalid candle books
+        nothing while the hold clock keeps running. **An invalid candle skips
+        the WHOLE bar under v2**: no excursion (``max_favorable_r`` /
+        ``max_adverse_r``) is read off it and no unrealized mark is written
+        from it, because both would come from the same contradictory prices.
+        The skip is counted as ``skipped_bar_reasons["invalid_bar"]``, and the
+        deferral label reaches the ``TIME_STOP`` and no other exit.
+    ``level_knowledge``
+        ``same_session_v1`` (default) tests this bar's high/low against the
+        levels the caller passed for THIS day. ``prior_session_v2`` tests them
+        against ``prior_session_levels`` instead - the last completed session's
+        - because a daily anchored-VWAP band for day D is computed with day D's
+        own bar folded in and is not knowable intrabar.
+    ``prior_session_levels``
+        ``{"anchor_levels", "indicator_row", "dynamic_level_overrides",
+        "trade_date"}`` for the session strictly before this bar, or None when
+        there is none. Read only under ``prior_session_v2``.
+
+    WHICH CHECKS ARE INTRABAR (level knowledge applies) and which are
+    CLOSE-BASED (day D's levels stay, because at the close they are known):
+
+    * INTRABAR - the partial-target touch and the final-target touch, both
+      ``_bar_hits_target`` against a ``_resolve_dynamic_level`` result.
+    * NOT LEVEL-DEPENDENT - the hard stop. Its level is ``entry_price`` minus
+      ``initial_risk_per_share * hard_stop_r_multiple``, fixed at entry, so it
+      is point-in-time clean already and ``prior_session_v2`` leaves it alone.
+      The excursion (``max_favorable_r`` / ``max_adverse_r``) is high/low
+      against ``entry_price`` and is likewise level-free.
+    * CLOSE-BASED - the two-closes protective stop (``close`` vs
+      ``active_stop_level``), the recorded ``active_stop_level`` itself, and
+      the maximum-hold force close at the bar's close.
+    """
     if not scenario.get("tradeable"):
         scenario["status"] = str(scenario.get("inactive_status") or "UNTRADEABLE")
         if scenario.get("inactive_reason"):
@@ -6456,6 +6543,131 @@ def _evaluate_tracker_scenario_bar(
         return []
 
     events = []
+    gap_aware = is_gap_aware(execution_convention)
+    prior_session = uses_prior_session_levels(level_knowledge)
+
+    def _count_reason(key: str, reason: str) -> None:
+        """Accumulate one named skip on the scenario.
+
+        A skip that is not counted is indistinguishable from a bar on which
+        nothing happened, and "nothing happened" is an answer this function is
+        not entitled to give.
+        """
+        skips = scenario.get(key)
+        if not isinstance(skips, dict):
+            skips = {}
+            scenario[key] = skips
+        skips[reason] = int(skips.get(reason, 0) or 0) + 1
+
+    def _count_intrabar_skip(reason: str) -> None:
+        _count_reason("intrabar_skip_reasons", reason)
+
+    if gap_aware and not bar_is_valid(bar_row):
+        # A candle whose own four prices contradict each other answers no
+        # question about this bar. Nothing is booked from it, AND - the part
+        # worth saying out loud - no excursion (`max_favorable_r` /
+        # `max_adverse_r`) is read off it and no unrealized mark is written
+        # from it, because every one of those numbers would be derived from
+        # the same contradictory prices. That is why the skip is COUNTED, in
+        # `skipped_bar_reasons` rather than `intrabar_skip_reasons`: an
+        # invalid candle skips the WHOLE bar, not just one intrabar test.
+        # The clock still runs: if this unusable bar was the maximum-hold bar,
+        # the force close is DEFERRED to the next usable one, never skipped.
+        if _scenario_is_open(scenario.get("status", "OPEN")):
+            _count_reason("skipped_bar_reasons", FILL_BASIS_INVALID_BAR)
+        if (
+            not is_entry_day
+            and _scenario_is_open(scenario.get("status", "OPEN"))
+            and int(scenario.get("remaining_shares", 0)) > 0
+            and int(bar_index) >= TRACKER_MAX_HOLD_DAYS
+        ):
+            scenario["time_stop_deferred"] = True
+        return events
+
+    def _clear_deferral_if_closed() -> None:
+        """The deferral is a fact about an OPEN trade's clock.
+
+        Once the scenario has closed - by ANY route, not just the time stop -
+        the flag has no meaning, and leaving it on the dict would put a stale
+        `time_stop_deferred: True` into the persisted record. Called after
+        every status assignment that can close the scenario.
+        """
+        if not _scenario_is_open(scenario.get("status", "OPEN")):
+            scenario.pop("time_stop_deferred", None)
+
+    def _intrabar_level(label: str, *, count_skip: bool = True):
+        """The level an INTRABAR high/low test may legitimately be run against.
+
+        Under ``same_session_v1`` this is literally ``_resolve_dynamic_level``
+        with the arguments the caller passed - byte-identical to what shipped.
+        """
+        same_session = _resolve_dynamic_level(
+            label,
+            current_anchor_levels,
+            indicator_row,
+            dynamic_level_overrides=dynamic_level_overrides,
+        )
+        if not prior_session:
+            return same_session
+        context = prior_session_levels if isinstance(prior_session_levels, dict) else None
+        prior_value = None
+        if context is not None:
+            prior_value = _resolve_dynamic_level(
+                label,
+                context.get("anchor_levels"),
+                context.get("indicator_row"),
+                dynamic_level_overrides=context.get("dynamic_level_overrides"),
+            )
+        if prior_value is None and same_session is not None and count_skip:
+            # The test was answerable today and is not answerable from the
+            # prior session. Skipping it silently would read as "not hit",
+            # which is a made-up answer; count the reason instead.
+            _count_intrabar_skip(NO_PRIOR_SESSION_LEVEL)
+        return prior_value
+
+    def _fill_kwargs(
+        kind: str,
+        level: float,
+        *,
+        close_based: bool = False,
+        deferrable: bool = False,
+    ) -> dict | None:
+        """Price + additive event keys for one booked exit, or None to skip.
+
+        v1 returns the literal level and NO extra keys, so the event dict is
+        the one this function has always written.
+
+        ``deferrable`` is passed by the maximum-hold force close and by NOTHING
+        else. The deferral flag says "an unusable bar sat on the max-hold
+        index", which is a fact about the TIME_STOP; an exit that fires ahead
+        of it on the same bar is its own decision and must not wear that label.
+        """
+        if not gap_aware:
+            return {"price": float(level), "extra": {}}
+        if close_based:
+            basis = (
+                FILL_BASIS_DEFERRED_INVALID_BAR
+                if deferrable and scenario.get("time_stop_deferred")
+                else FILL_BASIS_CLOSE
+            )
+            return {
+                "price": float(level),
+                "extra": {
+                    "fill_basis": basis,
+                    "execution_convention": EXECUTION_GAP_AWARE_V2,
+                },
+            }
+        fill = resolve_fill(side, kind, level, bar_row)
+        if not fill.booked:  # pragma: no cover - the invalid bar returned above
+            return None
+        return {
+            "price": float(fill.price),
+            "extra": {
+                "fill_basis": fill.basis,
+                "execution_convention": EXECUTION_GAP_AWARE_V2,
+            },
+        }
+
     entry_price = float(scenario.get("entry_price"))
     initial_risk_per_share = float(scenario.get("initial_risk_per_share", 0.0) or 0.0)
     direction = float(scenario.get("direction", 1.0) or 1.0)
@@ -6489,17 +6701,14 @@ def _evaluate_tracker_scenario_bar(
         scenario["total_r"] = float(scenario.get("realized_r", 0.0))
         return events
 
-    partial_target_level = _resolve_dynamic_level(
-        str(scenario.get("partial_target_label") or ""),
-        current_anchor_levels,
-        indicator_row,
-        dynamic_level_overrides=dynamic_level_overrides,
-    )
-    final_target_level = _resolve_dynamic_level(
-        str(scenario.get("final_target_label") or ""),
-        current_anchor_levels,
-        indicator_row,
-        dynamic_level_overrides=dynamic_level_overrides,
+    # INTRABAR: both target touches are tested against a bar's own high/low, so
+    # under prior_session_v2 they read the last completed session's levels.
+    partial_target_level = _intrabar_level(str(scenario.get("partial_target_label") or ""))
+    # This first final-target resolution is superseded below (the label can move
+    # when a partial trails the stop), so it never counts a skip - the live one
+    # does, and counting here would report every bar twice.
+    final_target_level = _intrabar_level(
+        str(scenario.get("final_target_label") or ""), count_skip=False
     )
     active_stop_label = str(scenario.get("active_stop_label") or scenario.get("stop_reference_label") or "")
     active_stop_level = _resolve_dynamic_level(
@@ -6521,16 +6730,21 @@ def _evaluate_tracker_scenario_bar(
         hard_stop_level = float(entry_price - (initial_risk_per_share * hard_stop_r_multiple * direction))
     scenario["hard_stop_level"] = hard_stop_level
     if int(scenario.get("remaining_shares", 0)) > 0 and _bar_hits_stop_level(side, bar_row, hard_stop_level):
+        fill = _fill_kwargs(FILL_KIND_STOP, float(hard_stop_level))
+        if fill is None:  # pragma: no cover - unreachable; the bar was valid
+            return events
         event = _apply_scenario_exit_event(
             scenario,
             int(scenario.get("remaining_shares", 0)),
-            float(hard_stop_level),
+            fill["price"],
             trade_date,
             "HARD_STOP",
+            **fill["extra"],
         )
         if event:
             events.append(event)
         scenario["status"] = "STOPPED"
+        _clear_deferral_if_closed()
         scenario["unrealized_pnl"] = 0.0
         scenario["unrealized_r"] = 0.0
         scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -6540,7 +6754,12 @@ def _evaluate_tracker_scenario_bar(
     if not scenario.get("partial_taken") and partial_target_level is not None and _bar_hits_target(side, bar_row, partial_target_level):
         qty = max(1, int(scenario.get("remaining_shares", 0)) // 2)
         qty = min(qty, int(scenario.get("remaining_shares", 0)))
-        event = _apply_scenario_exit_event(scenario, qty, float(partial_target_level), trade_date, "PARTIAL_TARGET")
+        fill = _fill_kwargs(FILL_KIND_TARGET, float(partial_target_level))
+        if fill is None:  # pragma: no cover - unreachable; the bar was valid
+            return events
+        event = _apply_scenario_exit_event(
+            scenario, qty, fill["price"], trade_date, "PARTIAL_TARGET", **fill["extra"]
+        )
         if event:
             events.append(event)
         scenario["partial_taken"] = True
@@ -6549,24 +6768,25 @@ def _evaluate_tracker_scenario_bar(
             scenario["active_stop_label"] = str(scenario.get("trail_after_partial_label"))
             scenario["close_failure_count"] = 0
         scenario["status"] = "PARTIAL" if int(scenario.get("remaining_shares", 0)) > 0 else "TARGET_HIT"
+        _clear_deferral_if_closed()
 
-    final_target_level = _resolve_dynamic_level(
-        str(scenario.get("final_target_label") or ""),
-        current_anchor_levels,
-        indicator_row,
-        dynamic_level_overrides=dynamic_level_overrides,
-    )
+    final_target_level = _intrabar_level(str(scenario.get("final_target_label") or ""))
     if int(scenario.get("remaining_shares", 0)) > 0 and final_target_level is not None and _bar_hits_target(side, bar_row, final_target_level):
+        fill = _fill_kwargs(FILL_KIND_TARGET, float(final_target_level))
+        if fill is None:  # pragma: no cover - unreachable; the bar was valid
+            return events
         event = _apply_scenario_exit_event(
             scenario,
             int(scenario.get("remaining_shares", 0)),
-            float(final_target_level),
+            fill["price"],
             trade_date,
             "FINAL_TARGET",
+            **fill["extra"],
         )
         if event:
             events.append(event)
         scenario["status"] = "TARGET_HIT"
+        _clear_deferral_if_closed()
         scenario["unrealized_pnl"] = 0.0
         scenario["unrealized_r"] = 0.0
         scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -6589,16 +6809,22 @@ def _evaluate_tracker_scenario_bar(
         )
         if scenario["close_failure_count"] >= close_failure_limit and int(scenario.get("remaining_shares", 0)) > 0:
             reason = "TRAIL_STOP" if scenario.get("partial_taken") and active_stop_label != scenario.get("stop_reference_label") else "STOP_FAIL"
+            # CLOSE-BASED: the decision is made at the close, so the close is
+            # the fill and no gap logic applies. Day D's own level is legitimate
+            # here under either level-knowledge policy.
+            fill = _fill_kwargs(FILL_KIND_STOP, float(close_value), close_based=True)
             event = _apply_scenario_exit_event(
                 scenario,
                 int(scenario.get("remaining_shares", 0)),
-                float(close_value),
+                fill["price"],
                 trade_date,
                 reason,
+                **fill["extra"],
             )
             if event:
                 events.append(event)
             scenario["status"] = "STOPPED"
+            _clear_deferral_if_closed()
             scenario["unrealized_pnl"] = 0.0
             scenario["unrealized_r"] = 0.0
             scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -6609,16 +6835,24 @@ def _evaluate_tracker_scenario_bar(
     # held the maximum window, so the outcome resolves instead of staying OPEN and
     # being silently dropped from closed-sample statistics.
     if int(scenario.get("remaining_shares", 0)) > 0 and int(bar_index) >= TRACKER_MAX_HOLD_DAYS:
+        # CLOSE-BASED, and the one place the deferral lands: under gap_aware_v2
+        # an invalid bar on the maximum-hold index books nothing, so this force
+        # close arrives on the next usable bar carrying `deferred_invalid_bar`.
+        fill = _fill_kwargs(
+            FILL_KIND_STOP, float(close_value), close_based=True, deferrable=True
+        )
         event = _apply_scenario_exit_event(
             scenario,
             int(scenario.get("remaining_shares", 0)),
-            float(close_value),
+            fill["price"],
             trade_date,
             "TIME_STOP",
+            **fill["extra"],
         )
         if event:
             events.append(event)
         scenario["status"] = "TIME_STOP"
+        _clear_deferral_if_closed()
         scenario["unrealized_pnl"] = 0.0
         scenario["unrealized_r"] = 0.0
         scenario["total_pnl"] = float(scenario.get("realized_pnl", 0.0))
@@ -6675,6 +6909,8 @@ def recompute_tracker_setup_record(
     band_history_cache: dict | None = None,
     replay_cache: dict | None = None,
     as_of_session=None,
+    execution_convention: str = DEFAULT_EXECUTION_CONVENTION,
+    level_knowledge: str = DEFAULT_LEVEL_KNOWLEDGE,
 ) -> dict:
     """Replay ``setup``'s scenarios over ``df`` and restate its record.
 
@@ -6682,6 +6918,15 @@ def recompute_tracker_setup_record(
     When given, the staleness rule runs after the closure rule at the end of
     this function; when omitted the record's status is decided by the closure
     rule alone, exactly as before.
+
+    ``execution_convention`` / ``level_knowledge`` (packet ST3) select the
+    replay's policies. Both default to what ships, and a DEFAULT run writes the
+    record it has always written - the two keys appear on the record only when
+    a non-default policy produced it, so nothing downstream can mistake shadow
+    evidence for the champion's own numbers. Under ``prior_session_v2`` the
+    INTRABAR target tests read the last completed session's bands; the daily
+    marks, the feature snapshots and the close-based decisions keep day D's,
+    because a mark is a record of the day rather than a decision taken inside it.
     """
     if df is None or df.empty:
         return setup
@@ -6821,6 +7066,38 @@ def recompute_tracker_setup_record(
             dynamic_level_overrides[POST_EARNINGS_STOP_LABEL] = _anchor_level_value(post_earnings_levels, "AVWAPE")
             for label in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
                 dynamic_level_overrides[label] = _anchor_level_value(post_earnings_levels, label)
+        # ST3.2: the last completed session's levels, for the INTRABAR tests
+        # under `prior_session_v2` only. `entry_start_pos + idx` is this bar's
+        # position in the full frame, so the prior key is the frame's own
+        # previous session - not a calendar guess, and never a date filter.
+        prior_session_levels = None
+        if uses_prior_session_levels(level_knowledge):
+            frame_pos = entry_start_pos + idx
+            prior_date = bar_date_strs[frame_pos - 1] if frame_pos > 0 else None
+            if prior_date is not None:
+                prior_overrides = {}
+                prior_post_earnings = post_earnings_history.get(prior_date)
+                if prior_post_earnings and is_post_earnings_setup:
+                    prior_overrides[POST_EARNINGS_STOP_LABEL] = _anchor_level_value(
+                        prior_post_earnings, "AVWAPE"
+                    )
+                    for label in ("UPPER_1", "UPPER_2", "UPPER_3", "LOWER_1", "LOWER_2", "LOWER_3"):
+                        prior_overrides[label] = _anchor_level_value(prior_post_earnings, label)
+                # TWO INDEX SPACES, and they agree where it matters.
+                # `frame_pos` walks the FULL frame (`bar_date_strs`), which is
+                # what `prior_date` has to come from - the previous session may
+                # sit before the entry and so outside the trade slice.
+                # `idx - 1` walks the TRADE SLICE, and `indicator_trade` was
+                # sliced at the same entry date as `trade_df`, so for
+                # `idx >= 1` the two point at the same session. `idx == 0` is
+                # the entry day, which returns before any intrabar test runs,
+                # so a None indicator row there is never read.
+                prior_session_levels = {
+                    "trade_date": prior_date,
+                    "anchor_levels": current_history.get(prior_date),
+                    "indicator_row": indicator_trade.iloc[idx - 1] if idx >= 1 else None,
+                    "dynamic_level_overrides": prior_overrides,
+                }
         for scenario in working_scenarios.values():
             was_open = _scenario_is_open(scenario.get("status", "OPEN")) and bool(scenario.get("tradeable"))
             bar_events = _evaluate_tracker_scenario_bar(
@@ -6833,6 +7110,9 @@ def recompute_tracker_setup_record(
                 is_entry_day=(trade_date == entry_trade_date),
                 dynamic_level_overrides=dynamic_level_overrides,
                 bar_index=idx,
+                execution_convention=execution_convention,
+                level_knowledge=level_knowledge,
+                prior_session_levels=prior_session_levels,
             )
             # The shadow IS graded here - the call above is what accrues its R -
             # but its events stay off the champion's daily mark, which is a
@@ -6862,6 +7142,18 @@ def recompute_tracker_setup_record(
 
     setup["scenarios"] = working_scenarios
     setup["daily_marks"] = daily_marks
+    # ST3: the record NAMES a non-default policy and stays silent about the
+    # default one. Popping on the default path matters as much as writing on
+    # the other: a record replayed once under gap_aware_v2 and then replayed
+    # again by the desk must not keep carrying a label the desk did not use.
+    if str(execution_convention) != DEFAULT_EXECUTION_CONVENTION:
+        setup["execution_convention"] = str(execution_convention)
+    else:
+        setup.pop("execution_convention", None)
+    if str(level_knowledge) != DEFAULT_LEVEL_KNOWLEDGE:
+        setup["level_knowledge"] = str(level_knowledge)
+    else:
+        setup.pop("level_knowledge", None)
     # M3.2: the newest session whose bars were actually replayed against this
     # record's scenarios. `scan_date` is creation and answers a different
     # question; without this stamp there was no way to tell a setup being

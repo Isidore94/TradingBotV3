@@ -46,8 +46,18 @@ def _open_scenario(**overrides):
     return scenario
 
 
-def _bar(high, low, close):
-    return pd.Series({"high": float(high), "low": float(low), "close": float(close)})
+def _bar(high, low, close, open=None):
+    """A daily bar row.
+
+    ``open`` is optional (packet ST3.4) and is OMITTED when not given, so every
+    call already in this file builds exactly the row it always built. The
+    shipped `literal_level_v1` convention never reads it; `gap_aware_v2` does,
+    which is why the helper can now supply it.
+    """
+    row = {"high": float(high), "low": float(low), "close": float(close)}
+    if open is not None:
+        row["open"] = float(open)
+    return pd.Series(row)
 
 
 class CostModelTests(unittest.TestCase):

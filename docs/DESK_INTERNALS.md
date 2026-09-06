@@ -2061,3 +2061,111 @@ the tag page's existing worker through `TagWeekPage.coverageChanged` - same scre
 worker seam, no second read of the journal.
 
 **Live gate #79.**
+## ST3 - a stop filled at a level the bar never traded (2026-09-06)
+
+### What was measured, on `main` @ `84ee24d6`
+
+The review's fixture, reproduced by running the shipped `_evaluate_tracker_scenario_bar`
+itself rather than reading the code:
+
+| | entry | risk | hard stop | next bar | booked | R after the shipped costs |
+|---|---|---|---|---|---|---|
+| LONG, `literal_level_v1` | 100 | 5 | 95 | O80 / H85 / L79 / C82 | `HARD_STOP` @ **95** | **-1.014R** |
+| LONG, the honest fill | 100 | 5 | 95 | same bar | the open, **80** | **-4.014R** |
+| SHORT mirror | 100 | 5 | 105 | O120 / H121 / L115 / C118 | `HARD_STOP` @ **105** | 120 under v2 |
+
+The bar traded between 79 and 85. Nothing traded at 95. Three more shapes behaved the same
+way: a bar carrying no `open` at all still booked 95, a bar whose `open` was NaN still
+booked 95, and a candle whose own prices contradict each other (O93 / H90 / L95 / C92,
+`low` above both its `high` and its `open`) booked a fill off that `low`.
+
+Separately, `calc_anchored_vwap_band_history` folds day D's own OHLC and volume into the
+cumulative sums BEFORE it writes `history[D]`, so `history[D]` is a number that exists only
+once D has closed - and `recompute_tracker_setup_record` handed exactly that dict to the
+evaluator, whose target tests read the SAME day's `high` and `low`. The test that pins this
+builds a day whose typical price sits on the running VWAP with three times the accumulated
+volume, so folding it in leaves the VWAP where it was and halves the running deviation; the
+day's own `UPPER_3` then sits INSIDE its own range while the previous day's sits above it.
+`same_session_v1` books a target there. `prior_session_v2` does not.
+
+### The rules this produced
+
+- **A fill is a price that traded.** Under `gap_aware_v2` a bar that opened through the
+  level fills at the OPEN (basis `gap_open`), a bar with no usable open fills at the level
+  CLAMPED into `[low, high]` (`clamped_no_open`), and the price is always inside the bar -
+  `resolve_fill` raises rather than returning one that is not.
+- **The convention is SYMMETRIC.** A stop gap and a target gap are the same mechanic: a
+  resting order whose price is already through at the open fills at the open. That makes
+  the repair better for the trade as often as it is worse, and the measurement below says
+  which dominates. An asymmetric "stops honest, targets at the level" convention is a
+  different policy and would be a different version.
+- **An invalid candle answers nothing and cancels nothing.** It books no fill
+  (`invalid_bar`), no excursion is read off it, and the hold clock still advances: an
+  invalid bar on the maximum-hold index DEFERS the `TIME_STOP` to the next valid bar with
+  basis `deferred_invalid_bar` (lead decision, 2026-09-06).
+- **Only the INTRABAR tests move under `prior_session_v2`** - the partial-target and
+  final-target touches. The hard stop is `entry_price - risk x multiple`, fixed at entry
+  and point-in-time clean already. The two-closes protective stop, the recorded
+  `active_stop_level` and the maximum-hold force close are CLOSE-based and keep day D's
+  levels, because at the close day D's levels are known.
+- **A skip is counted, never read as "not hit".** A prior-session level that does not exist
+  increments `intrabar_skip_reasons["no_prior_session_level"]` on the scenario.
+- **A default run leaves no label.** The record carries `execution_convention` /
+  `level_knowledge` only for a non-default run, and a default run POPS them, so a record
+  replayed once under v2 cannot keep a name the desk did not use.
+- **An invalid bar skips the WHOLE bar, not just the fill.** Under v2 no excursion
+  (`max_favorable_r` / `max_adverse_r`) is read off an invalid candle and no unrealized
+  mark is written from it, because both would be derived from the same contradictory
+  prices. Under v1 all three are still taken - that difference is the point of naming the
+  two conventions. The skip is counted as `skipped_bar_reasons["invalid_bar"]`.
+- **The deferral label reaches the `TIME_STOP` and no other exit.** `time_stop_deferred`
+  says "an unusable bar sat on the max-hold index"; an exit that fires ahead of the time
+  stop on the same bar is its own decision and books `close` (or its own gap basis). The
+  flag is cleared on EVERY path that closes the scenario, so a closed record never carries
+  a stale `time_stop_deferred: True`.
+
+### The comparison, on copies (ST3.3)
+
+Seed 20260906 across the whole 11,372-record COPY of the SQLite mirror, daily bars from
+the machine cache (633 symbols). **The denominator is `n_setups` 794** - 800 records were
+OFFERED, 6 carry no tradeable scenario, 0 lacked bars, 0 failed to replay. `--limit` is
+what was offered and is never the denominator; the first write-up quoted 800 and invited
+exactly that confusion, so the CLI now prints
+`population: n_setups 794 compared (offered 800, untradeable skipped 6, no cached bars
+skipped 0, replay failed 0)` and the JSON carries a `population_note` saying the same.
+The three JSON/CSV pairs live at
+`%LOCALAPPDATA%\TradingBotV3\diagnostics\st3_execution_compare\`.
+
+| run | changed | expectancy (raw) | win rate (Wilson lower) | R < -2 | groups moved rank |
+|---|---|---|---|---|---|
+| both repairs | 472 of 794 | -0.0981 -> -0.1192 | 0.576 -> 0.596 (0.541 -> 0.561) | 47 -> 48 | 43 of 50, max 14 |
+| `gap_aware_v2` only | 89 of 794 | -0.0981 -> -0.0811 | 0.576 -> 0.597 (0.541 -> 0.562) | 47 -> 47 | 33 of 50, max 9 |
+| `prior_session_v2` only | 458 of 794 | -0.0981 -> -0.1491 | 0.576 -> 0.548 (0.541 -> 0.513) | 47 -> 48 | 40 of 50, max 17 |
+
+Three things the numbers say that the code alone does not. **The clip hides the tail**: the
+first draft reported `min R -4.0 -> -4.0`, which is `TRACKER_SCORING_R_CLIP` (4.0) inside
+`_summarize_tracker_setup_outcome`, not a measurement - a -6R gap fill and a -4R one are the
+same number after clipping, so the artifact carries the CLIPPED R (what scoring reads) and
+the RAW R (where the tail lives) side by side and never blends them. **The execution
+repair mostly HELPS**: of the 89 setups it moved, 84 got better and 5 got worse, because
+166 setups touched a `gap_open` and most of those are targets opening through their price.
+The prior-session level knowledge is what costs expectancy (413 of its 458 moved setups are
+worse). `min R` is -65.6011 under every policy - the sample's worst trade was already filled
+inside its own bar.
+
+And **the `invalid_bar` counter earned itself on the first run**: 380 scenario-bars over 26
+setups / 22 symbols, and each of those 22 cached daily-bar files holds exactly ONE invalid
+candle, all of them dated **2026-09-04**, every one with `low > open` or `high < open` -
+AEE `O=105.81 H=106.96 L=106.11`, TWLO `O=239.52 H=239.29 L=231.21`, GPGI `O=14.195
+H=13.925`. That is the signature of a FORMING bar written into
+`%LOCALAPPDATA%\TradingBotV3\machine_cache\daily_bars` mid-session, where the "low" is the
+low since the snapshot rather than the day's. Under `literal_level_v1` - what the desk runs
+today - those bars are still read for fills, excursions and marks. This is a read of a
+machine-local cache and NOT a claim about the tracker or the durable store; it is outside
+ST3's scope and is recorded because an uncounted skip would have hidden it.
+`no_prior_session_level`, by contrast, fired 4 bar-tests over 1 setup - real, and rare.
+
+**Live gate #77** is the artifact plus a negative: the desk's next persisted tracker write
+must carry no `execution_convention` and no `level_knowledge` key on any record, and no
+event dict a `fill_basis`. The trader's decision on whether the repaired pair becomes the
+scoring convention is asked separately; nothing on this branch takes it.
