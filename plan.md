@@ -623,10 +623,17 @@ Each item requires parity/rollback evidence before the next authority cutover.
    every case asserts BOTH readings - and
    `tests/fixtures/st4_family_rows_golden.csv` is the characterization pinned
    from `main` before the code existed. `scripts/tracker_selection_compare.py`
-   holds the frozen v1-vs-v2 evidence. **Still owed: the trader's policy
-   decision (live gate #78); a switch is a separate change with its own golden
-   fixtures.** Score ordering, moving levels, backfill leakage, factor
-   horizons, corporate actions and survivorship are untouched.
+   holds the frozen v1-vs-v2 evidence, and `tests/test_st4_compact_projection.py`
+   pins that a compact scoring projection's `_scoring_outcome_summary` IS the
+   record. **Still owed: the trader's policy decision (live gate #78), and it
+   is TWO questions - the selection, and pending-stays-pending, which is 94% of
+   the measured mean-R move. A switch is a separate change with its own golden
+   fixtures.** A replay is blind to a COMPACTED record and names it
+   `undatable_exit_in_population`, so the point-in-time work here is honest for
+   the recent window and explicitly incomplete further back. Score ordering,
+   moving levels, backfill leakage, factor horizons and corporate actions are
+   untouched; **survivorship is now NAMED but not repaired** - a v2 second
+   attempt exists only because the first one closed.
 4. **P2.4 Make CandidateRegistry authoritative.** Migrate every live candidate writer,
    preserve manual names, prove expiry/restart/rollback, and retire duplicate text-
    file authority only after parity.

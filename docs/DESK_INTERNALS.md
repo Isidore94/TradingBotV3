@@ -1599,13 +1599,48 @@ measurement and the reasoning behind each rule.
   it, and never beside a real one.** A NEW/RISING pin stays a NOVELTY badge on
   the table and is not an input to the leader.
 
+  *The same defect, three more times.* The reviewer's NO-GO found it surviving
+  wherever the packet had not looked, which is the lesson worth keeping: fixing
+  the surface a defect was REPORTED on does not fix the defect. The Summary
+  card's plain-English block (`research_explanations`) sat THREE LINES ABOVE the
+  repaired banner still crowning `max(avg_closed_r)` on three closes across both
+  namespaces - live it read *"LONG top_pattern leads at +0.99R ... 3 closes"*
+  under a banner saying *"SHORT general"*, with 10 of its 17 candidates studies.
+  The **Best Type Edge** tile read `setup_type_rows[0]`, so ST2.2's new
+  bound-first sort silently moved it from `SHORT +23` to `LONG +14` - a tile
+  that borrows another surface's ordering has no meaning of its own, and it now
+  picks max `score_delta` explicitly. The Summary's **Setup types working**
+  block took `rows[:8]` of that same side-first list and so showed eight LONG
+  rows and no SHORT one (the first SHORT row sat at index 68 of 117); the CARD
+  now picks its eight by the bound across BOTH books, with the side shown, while
+  the TAB keeps side-first - a table you scroll and a card that shows eight are
+  different questions asked of the same rows.
+
+  *The floor is judged BEFORE the clock.* A family with three samples is under
+  the floor whatever the clock says, and answering "not fresh" to three samples
+  answers a question the reader did not ask. So `select_leader` splits
+  `at_floor` / `under_floor` first and only dates the at-floor rows; the
+  discovery pools and the reason branches run in the same order (stale, undated,
+  thin), so the sentence a verdict prints always names the gate that kept out the
+  row it is showing, and a row that CLEARS the floor and is merely old outranks a
+  current row with three samples. `min_n` therefore binds the stale and undated
+  pools by construction. **Freshness is measured on the ENTRY session** - these
+  rows carry no exit date, so `latest_measured_session` is the newest scan_date
+  among the episodes that produced a readable R, which is the conservative
+  reading - and `FRESHNESS_SENTENCE` says so on every surface, because "fresh"
+  without its clock is not a fact.
+
   *What was NOT changed.* `ranking_score`, `score_delta`, the Expected-R
-  calibration and every pre-existing column of both exports, pinned byte-identical
-  by two goldens taken from `main` at `84ee24d6`. The two-session block's export,
-  `build_tracker_short_horizon_rows`, is outside the three functions the trader's
-  ST2 decision names, so it was not touched - it carries no integer counts and no
-  session column, which is why `select_leader` can never call one of its rows
-  fresh and that block is labelled `2-session, discovery` by construction.
+  calibration and every pre-existing column of all THREE exports, pinned
+  byte-identical by goldens taken from `main` at `84ee24d6`: the two row goldens,
+  a shipped-header golden (the count columns belong at the END of the header the
+  trader opens, not at the end of the inner builder - they had landed at index 26
+  of 31 and 31 of 39), and `st2_short_horizon_golden.csv`. The two-session
+  export gained the same additive counts plus its own `latest_measured_session`
+  on the trader's answered ask, so that block is freshness-checked rather than
+  discovery by construction; `win_rate_2d` keeps its value, including its
+  treatment of an exactly-flat close as a zero flag, because moving it would be a
+  scoring change and this packet may not make one.
 - **The priority switch reorders and never withholds** - and it is **NOT BUILT
   YET** (V4 owns it; R4 B3 removed the sentence that cited a test for it). When
   it is built: "prioritise what is working" is display-only (decision 0016
@@ -2073,25 +2108,80 @@ have changed the default's numbers, so it is named and kept.
 
 ### The comparison, measured
 
-A COPY of the live SQLite mirror (`master_avwap_setup_tracker.sqlite`, 1,191,460,864 bytes,
-`data_session` **2026-09-03**, 11,372 setups / 401 controls / 3,992 studies), 5,696 setups in the
-28-day window, both policies at the same `as_of_session` and lookback. **32 cells, 27 changed, 17
-rank moves.**
+Provenance, precisely: the live SQLite mirror (`master_avwap_setup_tracker.sqlite`, 1,191,460,864
+bytes, `data_session` **2026-09-03**, 11,372 setups / 401 controls / 3,992 studies) was COPIED,
+and a scratch script read the copy through `TrackerStore.load_records("setups",
+scan_dates=<28-day window>)` and wrote a **windowed JSON extract of 5,696 setups**. The CLI ran on
+that extract, not on the mirror. Both policies at the same `as_of_session` (2026-09-03) and the
+same 28-day lookback. **32 cells, 27 changed, 26 rank moves.**
 
 | | episodes | pending | wins-losses | unweighted win rate | Wilson lower | episode-weighted mean R |
 |---|---|---|---|---|---|---|
 | `closed_first_v1` | 2,249 | 498 | 1,078-673 | 61.6% | 0.593 | -0.150 |
-| `first_actionable_v2` | 2,712 | 644 | 1,313-755 | 63.5% | 0.614 | +0.073 |
+| `first_actionable_v2` | 2,712 | 915 | 1,294-503 | 72.0% | 0.699 | +0.073 |
 
-`n_excluded` is 22 under both. **v2 grades MORE episodes and the headline moves UP, not down** -
-worth saying because the review's premise was that v1 flatters. It does not flatter the RATE; what
-it does is fold a genuine second entry into its predecessor, so 463 attempts never existed as
-episodes. Most of the mean-R gap is the substitution rule rather than the selection: v1's family
-mean absorbs `avg_closed_r` from setups whose representative never closed, and v2 leaves them out
-as pending. Largest single cell: LONG / favorite_setup / `avwape_to_1stdev`, 1,029 observations,
-301 -> 409 episodes, 61.1% -> 64.1%, mean R -0.269 -> +0.002.
+`n_excluded` is 22 under both and `fully_excluded_groups` is 0. Largest single cell: LONG /
+favorite_setup / `avwape_to_1stdev`, 1,029 observations, 301 -> 409 episodes, 61.1% -> 73.4%,
+mean R -0.269 -> +0.002.
+
+**v2 bundles TWO policy questions, so the move is decomposed and neither half is answered here.**
+
+1. *Selection, or pending-stays-pending?* Overwhelmingly the second. Hold v2's SELECTION fixed and
+   grade it the old substituting way: 1,313-755, 63.5%, mean R **-0.138**. Honour
+   `representative_status`: 1,294-503, 72.0%, mean R **+0.044**. On the family-weighted figure the
+   whole move is -0.150 -> +0.073 and the substitution part is **+0.182 of +0.193, 94.2%**.
+2. *Is the win-rate move the 463 re-entries?* Under the OLD aggregation it is nothing else:
+   attempt >= 2 graded **72.5%** (235-89) against attempt 1 at **61.8%** (1,078-666), and v1's own
+   rate on those same 2,249 theses is 61.6%. After the fix both rise and the gap survives: attempt
+   1 **70.5%** (1,061-445), attempt >= 2 **80.1%** (233-58). Histogram: 2,249 first attempts, 393
+   seconds, 61 thirds, 9 fourths. **A second attempt exists only because the first one CLOSED, so
+   the attempt >= 2 population is survivorship by construction.** That is a question for the
+   trader; naming it is this packet's job, answering it is not.
+
+So the review's premise - that v1 flatters the rate - is not what the measurement shows. v1
+under-counts EPISODES (a genuine second entry is folded into its predecessor) and it over-counts
+GRADED ones (a pending representative was graded from the alternate plan's R). Those pull in
+opposite directions on the headline.
+
+### The two the reviewer caught
+
+**The compact scoring projection IS the record.** `_build_scoring_projection` writes a projection
+with no `scenarios` key and a `_scoring_outcome_summary`;
+`master_avwap_tracker_scoring_snapshot.json` holds 11,372 of them, and that summary is the only
+copy of the answer. The first ST4 build refused a cache lacking `representative_status` and
+recomputed, which on a scenario-less record returned `tradeable_scenario_count == 0` and dropped
+every setup: on a COPY of the live snapshot, `build_recent_tracker_setup_family_rows` gave **32
+rows on base and 0 on the branch** and `build_tracker_setup_type_rows` **74 nonzero `score_delta`
+on base and 0 on the branch**, which `runner.py`'s first D1 scan after a merge would have written
+into live `recent_tracker_score_delta` / `setup_type_score_delta`. **A missing key is never a
+reason to recompute.** A default read with no `as_of` takes the cache exactly as it did before
+ST4; a challenger or replay read of a scenario-less record answers `representative_status:
+"unknown_compact"` over the cached numbers, and under v2 such an episode is neither graded nor
+pending but NAMED (`unknown_compact_in_population`).
+
+**Pending has to stay pending in the AGGREGATE too, or the rule is decorative.** ST4.2 stopped the
+per-setup substitution, but the family loop selected `closed_rows` on `closed_setups > 0` (any
+tradeable scenario closed) and fell back to `avg_closed_r` when the representative's R was None -
+the same substitution, one level down, grading **271 of 2,712** v2 episodes whose representative
+was still running, 252 of them as losses. `_row_is_graded` is the single seam; under v1 it is the
+identical `closed_setups` test and every number is unchanged (golden).
+
+### A replay is blind to a compacted record
+
+History compaction empties a scenario's `events` (`scenario["events"] = []`), and
+`_scenario_recorded_exit_date` reads the last event, so a compacted CLOSED scenario cannot be
+dated and an `as_of_session` build reads it as still running. **0 of the 141,324 scenarios in the
+28-day window are compacted**, so the comparison above is unaffected; **99,562 of 206,341 across
+all history are**, so an earlier cutoff or a longer lookback walks straight into them. The rule:
+the row carries `representative_exit_undatable` and the family row names
+`undatable_exit_in_population=N`, because "still running" and "we cannot see when it closed" are
+different facts and only one of them is a trade still on. Related: a `(side, bucket, family)`
+whose every record was excluded produces NO row, so the build-level `fully_excluded_groups` is
+stamped on every row - the one number this accounting could otherwise lose with the group.
 
 **Live gate #78.** Nothing here promotes. The desk's next persisted tracker write must leave
-`selection_policy = closed_first_v1` on every recent family row; the artifact stays under
+`selection_policy = closed_first_v1` on every recent family row AND leave the scan's
+`recent_tracker_score_delta` / `setup_type_score_delta` nonzero (32 / 74 on the 2026-09-05
+snapshot is the reproducible check); the artifact stays under
 `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`; and the policy decision is the
 trader's, as a separate change with its own golden fixtures.

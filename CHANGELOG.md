@@ -72,8 +72,14 @@ which is evidence and must not be loaded as context.
   its legitimate callers - the ones whose stored rate IS `wins / n`, now named
   in its docstring - and the tracker's readers use `headline_from_counts`. A row
   from an export that predates the columns reads `counts not exported yet`,
-  never a reconstructed number. `win_rate_closed`, `ranking_score`,
-  `score_delta` and every pre-existing column keep their values (goldens).
+  never a reconstructed number - and `working_lately.counted_pair` is the ONE
+  reader of these columns, strict in both directions, so an exported integer 0
+  is a count and only a missing or blank cell is "not exported".
+  **The new columns sit at the END of each SHIPPED header**, after
+  `namespace`/`status` and after the rank columns. `win_rate_closed`,
+  `ranking_score`, `score_delta` and every pre-existing column keep their values
+  (goldens). `build_tracker_short_horizon_rows` carries the same counts plus its
+  own `latest_measured_session`.
 - **Which observation of a thesis becomes the graded episode is now a NAMED
   policy, and today's answer is unchanged** (ST4, 2026-09-06).
   `scripts/master_avwap_lib/selection_policy.py` owns both:
@@ -143,7 +149,11 @@ which is evidence and must not be loaded as context.
   the banner prints as `discovery only` - never as a leader, and never beside
   one. The banner used to pick `max(avg_closed_r)` across BOTH namespaces while
   the table under it ranked by the bound, so the two named different families on
-  one screen and a three-example study could be crowned.
+  one screen and a three-example study could be crowned. **Every leader surface
+  on the page reads this one function** - the banner AND the Summary card's
+  plain-English block, which had the same defect three lines higher up. **The
+  floor is judged BEFORE freshness**, and freshness is measured on the ENTRY
+  session with the rule stated in words (`FRESHNESS_SENTENCE`).
 - **MFE after a held level leads every DAY-TRADE surface** (V3 item 2, WIRED by
   R4 A9/A10). The Day Trade Tracker leads with **Held 30m** and Held x Ran and
   opens sorted by the second; the tier statistics stay beside them. **One
@@ -1372,18 +1382,46 @@ a cleanup."*
   `_scenario_recorded_exit_date` gates the read on the CLOSED status, because a partial leaves a
   dated event behind on a scenario still in the trade - reading it would let v2 open a second
   attempt while the first was still running, which is exactly what the rule forbids.
-- **The comparison, run on a COPY of the live SQLite mirror** (1,191,460,864 bytes, `data_session`
-  **2026-09-03**, 11,372 setups; 5,696 in the 28-day window), artifacts under
-  `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`. **32 cells, 27 changed, 17
-  rank moves.** v1: **2,249 episodes, 498 pending, 1,078-673, unweighted 61.6%, Wilson lower
-  0.593**. v2: **2,712 episodes, 644 pending, 1,313-755, unweighted 63.5%, Wilson lower 0.614**.
-  Episode-weighted mean R **-0.150 -> +0.073**. v2 grades MORE episodes because a genuine
-  re-entry stops being folded into its predecessor, and the headline moves UP, not down - the mean
-  R gap is mostly the substitution rule (v1's family mean absorbs `avg_closed_r` from setups whose
-  representative never closed; v2 leaves them out because they are pending). Largest single move:
-  LONG / favorite_setup / `avwape_to_1stdev`, 1,029 observations, 301 -> 409 episodes, 61.1% ->
-  64.1%, mean R -0.269 -> +0.002. **Nothing is promoted and no export switches**; the lead asks
-  the trader the decision.
+- **The comparison, run on a windowed JSON extract of 5,696 setups taken from a COPY of the live
+  SQLite mirror** (`master_avwap_setup_tracker.sqlite`, 1,191,460,864 bytes, `data_session`
+  **2026-09-03**, 11,372 setups), artifacts under
+  `%LOCALAPPDATA%\TradingBotV3\diagnostics\st4_selection_compare\`. **32 cells, 27 changed, 26
+  rank moves**, `n_excluded` 22 and `fully_excluded_groups` 0 under both. v1: **2,249 episodes,
+  498 pending, 1,078-673, unweighted 61.6%, Wilson lower 0.593**. v2: **2,712 episodes, 915
+  pending, 1,294-503, unweighted 72.0%, Wilson lower 0.699**. Episode-weighted mean R **-0.150 ->
+  +0.073**. **v2 bundles TWO policy questions and both decompositions are on the record**: (1)
+  holding v2's SELECTION fixed and grading it the old substituting way gives 63.5% / mean R
+  -0.138, so **94.2% of the mean-R move is pending-stays-pending**, not the selection; (2) the
+  win-rate move is the 463 re-entries - under the old aggregation attempt >= 2 graded 72.5% while
+  attempt 1 graded 61.8%, which is v1's own 61.6% to within rounding, and after the fix the gap
+  survives (attempt 1 70.5%, attempt >= 2 80.1%; histogram 2,249 / 393 / 61 / 9). **A second
+  attempt exists only because the first CLOSED, so that population is survivorship by
+  construction** - the trader's question, not this packet's. **Nothing is promoted and no export
+  switches**; the lead asks the decision.
+- **Reviewer round (NO-GO on `37e63b9c`, fixed at the tip). Two blockers.** (1) **The compact
+  scoring projection IS the record.** `_build_scoring_projection` writes a projection with **no
+  `scenarios` key** plus a `_scoring_outcome_summary`, and
+  `master_avwap_tracker_scoring_snapshot.json` holds 11,372 of them. The first build refused a
+  cached summary lacking `representative_status` and recomputed; with no scenarios the recompute
+  returned `tradeable_scenario_count == 0` and dropped every setup - measured on a COPY of the
+  live snapshot, `build_recent_tracker_setup_family_rows` **32 rows -> 0** and
+  `build_tracker_setup_type_rows` **74 nonzero `score_delta` -> 0**, which the first D1 scan after
+  merge would have written into live `recent_tracker_score_delta` / `setup_type_score_delta`.
+  **A missing key is never a reason to recompute**: a default read with no `as_of` takes the cache
+  exactly as it did before ST4, and a challenger or replay read of a scenario-less record answers
+  `representative_status: "unknown_compact"` over the cached numbers rather than an empty summary.
+  (2) **v2's headline substituted one level down**: `closed_rows` was `closed_setups > 0` and the
+  win/loss loop fell back to `avg_closed_r`, grading **271 of 2,712** v2 episodes whose
+  representative was still running (252 losses, 19 wins). The aggregate now honours
+  `representative_status` under v2; v1 is unchanged and byte-identical.
+- **A replay is blind to a COMPACTED record and says so.** History compaction empties
+  `scenario["events"]`, so `_scenario_recorded_exit_date` cannot date a compacted CLOSED scenario
+  and an `as_of_session` build reads it as still running. 0 of the 141,324 scenarios in the 28-day
+  window are compacted, but 99,562 of 206,341 across all history are, so an earlier cutoff or a
+  longer lookback meets them: the row carries `representative_exit_undatable` and the family row
+  names `undatable_exit_in_population=N` instead of inflating pending. `fully_excluded_groups` is
+  stamped on every row because a `(side, bucket, family)` whose every record was excluded produces
+  no row at all.
 
 ### 2026-09-06 - ST2: real integer counts at each table's own grain, and ONE honest leader (branch `claude/st2-real-counts`, not merged)
 
@@ -1412,11 +1450,34 @@ having high R."*
   column byte-identical, the old recent header a PREFIX of the new one, `ranking_score` and
   `score_delta` compared explicitly. Nineteen tests (eleven from the tester, eight from the
   builder), each proven red on the un-fixed code first.
+- **The fix round after the reviewer's NO-GO** found the same defect surviving in three places
+  the packet had not named: the Summary card's plain-English block crowned max-R-on-three THREE
+  LINES above the fixed banner (live: *"LONG top_pattern ... 3 closes"* against the banner's
+  *"SHORT general"*, 10 of 17 candidates studies), the **Best Type Edge** tile read
+  `setup_type_rows[0]` and so followed ST2.2's new sort from `SHORT +23` to `LONG +14`, and the
+  Summary's **Setup types working** block showed eight LONG rows and no SHORT one because it took
+  `rows[:8]` of a side-first list (first SHORT at index 68 of 117). All three now read their own
+  meaning: the card reads the SAME `select_leader` verdict as the banner, the tile picks max
+  `score_delta` explicitly, and the card's eight are chosen by the bound across both books while
+  the TAB keeps its side-first order.
+- **The count columns are at the END of each SHIPPED header**, not the inner builder's
+  (`_move_keys_to_end`; golden `tests/fixtures/st2_shipped_headers_golden.json`, contract-bearing
+  and pinned from `84ee24d6`). **The floor is judged BEFORE freshness**: a family with three
+  samples is under the floor whatever the clock says. `min_n` binds the stale and undated
+  discovery pools by construction. `working_lately.FRESHNESS_SENTENCE` states the rule in words -
+  *fresh = an entry inside 2 exchange sessions of the last completed one* - and rides in every
+  policy line, because the tracker's rows carry no exit date and the ENTRY session is what is
+  actually measured. The panel remembers its last FRESH leader per horizon so
+  `last_reliable_reading` is reachable (in-memory; ST6 persists it).
+- **The 2-session export counts its own wins** (the ask, answered 2026-09-06).
+  `build_tracker_short_horizon_rows` gained additive `n_wins` / `n_losses` / `n_flats` /
+  `n_unmeasured` / `outcome_kind` / `horizon_basis` / `latest_measured_session` at the end of its
+  shipped header, golden-pinned from the code BEFORE the edit
+  (`tests/fixtures/st2_short_horizon_golden.csv`); `win_rate_2d` is byte-identical and still
+  counts an exactly-flat close as a zero flag. With a session on the row the freshness rule
+  applies to that block too, so it is no longer discovery by construction.
 - **Owed at integration:** ST1's `Headline.outcome_kind` wire (ST1 was tests-only when this
-  built, so `outcome_kind` is a row column here). **Open ask:**
-  `build_tracker_short_horizon_rows` is outside the three functions the trader's ST2 decision
-  names, so it was not edited - the two-session export carries no integer counts and no session
-  column, which is why that block can only ever be labelled `2-session, discovery`.
+  built, so `outcome_kind` is a row column here).
 
 ### 2026-09-06 - The digest spot-audit, two stale packs rebuilt, and three scoring questions decided (lead, on the trader's delegation)
 

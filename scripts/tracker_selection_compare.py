@@ -101,6 +101,8 @@ CSV_COLUMNS = (
     "mean_r_v2",
     "n_excluded_v1",
     "n_excluded_v2",
+    "fully_excluded_groups_v1",
+    "fully_excluded_groups_v2",
     "excluded_reasons_v1",
     "excluded_reasons_v2",
     "rank_v1",
@@ -161,6 +163,7 @@ def _cell_stats(row: dict | None) -> dict[str, object]:
         return {
             "n_episodes": 0,
             "n_pending": 0,
+            "fully_excluded_groups": 0,
             "n_wins": 0,
             "n_losses": 0,
             "n_flats": 0,
@@ -178,6 +181,7 @@ def _cell_stats(row: dict | None) -> dict[str, object]:
     return {
         "n_episodes": _int(row, "n_episodes"),
         "n_pending": _int(row, "n_pending"),
+        "fully_excluded_groups": _int(row, "fully_excluded_groups"),
         "n_wins": wins,
         "n_losses": losses,
         "n_flats": _int(row, "n_flats"),
@@ -352,6 +356,13 @@ def main(argv: list[str] | None = None) -> int:
             "n_wins": wins,
             "n_losses": losses,
             "n_excluded": sum(int(cell.get("n_excluded") or 0) for cell in stats.values()),
+            # Build-level, identical on every row: a (side, bucket, family)
+            # whose every record was excluded produces no row at all, so this
+            # is the only place it is visible.
+            "fully_excluded_groups": max(
+                (int(cell.get("fully_excluded_groups") or 0) for cell in stats.values()),
+                default=0,
+            ),
             "win_rate_unweighted": (wins / graded) if graded else None,
             "wilson_lower": swing_headline.wilson_lower_bound(wins, graded) if graded else None,
         }
@@ -405,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
                     left["wilson_lower"], right["wilson_lower"],
                     left["mean_r"], right["mean_r"],
                     left["n_excluded"], right["n_excluded"],
+                    left["fully_excluded_groups"], right["fully_excluded_groups"],
                     left["excluded_reasons"], right["excluded_reasons"],
                     cell["rank_v1"], cell["rank_v2"], cell["rank_move"],
                     "True" if cell["changed"] else "False",
