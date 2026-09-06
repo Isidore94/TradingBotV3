@@ -11733,18 +11733,34 @@ def export_bot_tier_tracker_views(
     history_df: pd.DataFrame | None = None,
     observation_rows: list[dict] | None = None,
     leaderboard_rows: list[dict] | None = None,
+    closes_for=None,
+    session_horizon_path: Path | None = None,
 ) -> dict:
+    """Write the tier tracker's four CSVs, and the v2 session-horizon one beside them.
+
+    `closes_for(symbol) -> {date: close} | None` supplies the COMPLETED daily
+    bars the caller already holds (ST1 item 2). It is never fetched here: an
+    export that opens a socket is an export that can hang the scan, so a symbol
+    with no frame in hand simply produces `no_bar_for_target_session` rows. With
+    no `closes_for` at all the v2 file is still written, every row unmeasured
+    and saying why.
+
+    The v2 write is GUARDED end to end: it is a shadow file with no production
+    reader, and it may never cost the v1 exports or the tracker save.
+    """
     history_path = Path(history_path or D1_FEATURE_HISTORY_FILE)
     tier_list_path = Path(tier_list_path or TIER_LIST_FILE)
     tier_outcomes_path = Path(tier_outcomes_path or TIER_OUTCOMES_FILE)
     tier_performance_path = Path(tier_performance_path or TIER_PERFORMANCE_FILE)
     tier_catch_rate_path = Path(tier_catch_rate_path or TIER_CATCH_RATE_FILE)
+    session_horizon_path = Path(session_horizon_path or SESSION_HORIZON_OUTCOMES_FILE)
 
     if history_df is None and (not history_path.exists() or history_path.stat().st_size == 0):
         _write_scan_factor_csv(tier_list_path, [], TIER_LIST_COLUMNS)
         _write_scan_factor_csv(tier_outcomes_path, [], TIER_OUTCOME_COLUMNS)
         _write_scan_factor_csv(tier_performance_path, [], TIER_PERFORMANCE_COLUMNS)
         _write_scan_factor_csv(tier_catch_rate_path, [], TIER_CATCH_RATE_COLUMNS)
+        _write_session_horizon_outcomes(session_horizon_path, None, None)
         return {"tier_pick_count": 0, "tier_outcome_count": 0, "tier_performance_count": 0, "tier_catch_rate_count": 0}
 
     if history_df is None:
@@ -11775,6 +11791,9 @@ def export_bot_tier_tracker_views(
     _write_scan_factor_csv(tier_outcomes_path, tier_outcome_rows, TIER_OUTCOME_COLUMNS)
     _write_scan_factor_csv(tier_performance_path, tier_performance_rows, TIER_PERFORMANCE_COLUMNS)
     _write_scan_factor_csv(tier_catch_rate_path, tier_catch_rate_rows, TIER_CATCH_RATE_COLUMNS)
+    session_horizon = _write_session_horizon_outcomes(
+        session_horizon_path, history_df, closes_for
+    )
     return {
         "tier_pick_count": len(tier_pick_rows),
         "tier_outcome_count": len(tier_outcome_rows),
@@ -11784,7 +11803,54 @@ def export_bot_tier_tracker_views(
         "tier_outcomes_path": str(tier_outcomes_path),
         "tier_performance_path": str(tier_performance_path),
         "tier_catch_rate_path": str(tier_catch_rate_path),
+        "session_horizon_outcome_count": int(session_horizon.get("rows", 0) or 0),
+        "session_horizon_measured_count": int(session_horizon.get("measured", 0) or 0),
+        "session_horizon_dropped_duplicates": int(session_horizon.get("duplicates", 0) or 0),
+        "session_horizon_outcomes_path": str(session_horizon_path),
     }
+
+
+def _write_session_horizon_outcomes(path: Path, history_df, closes_for) -> dict:
+    """The ST1 item 2 v2 export. GUARDED: it may never cost the v1 exports.
+
+    Shadow only - no production reader - so a failure here is logged and
+    swallowed. It fetches nothing: `closes_for` is the caller's own completed
+    bars, and a symbol with no frame in hand yields unmeasured rows with a
+    reason rather than a network call inside an export.
+    """
+    from datetime import datetime as _datetime
+
+    result = {"rows": 0, "measured": 0, "duplicates": 0}
+    try:
+        from .session_horizon_outcomes import (
+            SESSION_HORIZON_OUTCOME_COLUMNS,
+            build_session_horizon_observation_rows,
+        )
+
+        if history_df is None:
+            _write_scan_factor_csv(path, [], SESSION_HORIZON_OUTCOME_COLUMNS)
+            return result
+        import market_calendar
+
+        last_complete = market_calendar.last_completed_session(_datetime.now())
+        built = build_session_horizon_observation_rows(
+            history_df,
+            closes_for if callable(closes_for) else (lambda symbol: None),
+            last_completed_session=last_complete,
+        )
+        _write_scan_factor_csv(path, built.rows, SESSION_HORIZON_OUTCOME_COLUMNS)
+        result["rows"] = len(built.rows)
+        result["measured"] = sum(1 for row in built.rows if row.get("measured") is True)
+        result["duplicates"] = int(built.dropped_duplicates)
+        logging.info(
+            "Session-horizon outcomes exported %s row(s), %s measured, %s duplicate(s) dropped.",
+            result["rows"],
+            result["measured"],
+            result["duplicates"],
+        )
+    except Exception:
+        logging.exception("Session-horizon outcome export failed (shadow file; v1 unaffected).")
+    return result
 
 
 def _load_csv_dict_rows(path: Path | str | None) -> list[dict]:
